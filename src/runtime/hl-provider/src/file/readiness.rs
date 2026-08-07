@@ -37,6 +37,8 @@ impl FileReadiness {
         }
     }
 
+    // Takes the observer by value so the subscription owns its share of the handle.
+    #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn subscribe(
         &self,
         observer: Arc<dyn ReadinessObserver>,

@@ -176,7 +176,7 @@ impl ClientState {
             key,
             active: true,
             observer,
-            events: Default::default(),
+            events: std::collections::VecDeque::default(),
             lost: 0,
             callbacks: 0,
         });

@@ -319,6 +319,7 @@ impl SharedMemoryNamespace {
         Ok(id)
     }
 
+    #[allow(clippy::unused_self)]
     fn require(
         &self,
         metadata: &SharedMemoryMetadata,

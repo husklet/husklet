@@ -300,7 +300,6 @@ impl TimerFd {
             link_count: 1,
         }
     }
-    #[must_use]
     pub fn snapshot(&self) -> Result<TimerFdSnapshot, TimerFdError> {
         let mut state = self
             .inner

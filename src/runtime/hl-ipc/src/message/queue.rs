@@ -10,6 +10,8 @@ use crate::{Credentials, IPC_PRIVATE, IpcKey, PreparedMessageReceive};
 use hl_sync::WaitQueue;
 
 #[derive(Clone, Debug)]
+// `message_type` mirrors the SysV `mtype` field name the guest ABI uses.
+#[allow(clippy::struct_field_names)]
 pub(crate) struct Message {
     pub(crate) message_type: i64,
     pub(crate) bytes: Vec<u8>,
@@ -270,7 +272,10 @@ impl MessageQueueNamespace {
         Ok(())
     }
 
+    // Receivers kept so the lifecycle hooks read uniformly across IPC objects.
+    #[allow(clippy::unused_self)]
     pub const fn fork(&self, _parent: u32, _child: u32) {}
+    #[allow(clippy::unused_self)]
     pub const fn exit(&self, _pid: u32) {}
 
     fn create(&self, state: &mut State, request: MsgGetRequest) -> Result<MessageQueueId, MessageError> {

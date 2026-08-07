@@ -54,6 +54,7 @@ impl SemaphoreNamespace {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn register(
         &self,
         state: &mut State,

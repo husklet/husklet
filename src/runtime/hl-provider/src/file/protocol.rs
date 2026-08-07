@@ -13,6 +13,8 @@ const CLOSE: u8 = 7;
 pub(crate) struct Protocol;
 pub(crate) type FileProtocol = Protocol;
 
+// Each decoder consumes the reply it decodes, so the caller cannot reuse a spent one.
+#[allow(clippy::needless_pass_by_value)]
 impl FileProtocol {
     pub(crate) fn open(service: u64, access: u8) -> Vec<u8> {
         let mut payload = vec![OPEN];

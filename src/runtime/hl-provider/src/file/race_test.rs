@@ -32,6 +32,7 @@ impl RaceFixture {
         server.send_frame(FrameKind::Reply, request.1, &[7]);
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn read_reply(server: &Endpoint, request: (FrameKind, u64, Vec<u8>), byte: u8) {
         assert_eq!(request.2[0], 2);
         let reply = [2, 1, 0, 0, 0, byte];

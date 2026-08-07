@@ -196,6 +196,8 @@ impl std::fmt::Debug for SignalFd {
 }
 
 impl SignalFd {
+    // Takes the queue by value so the instance owns its share of the handle.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(mask: SignalMask, flags: SignalFdFlags, queue: Arc<dyn SignalQueue>) -> Result<Self, SignalFdError> {
         if !flags.valid() {
             return Err(SignalFdError::InvalidArgument);

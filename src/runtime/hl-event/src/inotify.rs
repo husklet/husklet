@@ -141,6 +141,8 @@ impl std::fmt::Debug for Inotify {
 }
 
 impl Inotify {
+    // Takes the source by value so the instance owns its share of the handle.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(nonblocking: bool, limits: InotifyLimits, source: Arc<dyn WatchSource>) -> Result<Self, InotifyError> {
         if limits.watches == 0
             || limits.queued_events < 2

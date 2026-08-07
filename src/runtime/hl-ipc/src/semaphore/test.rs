@@ -296,8 +296,7 @@ fn concurrent_atomic_increments() {
         .collect();
     let successes = workers
         .into_iter()
-        .map(|worker| worker.join().unwrap())
-        .filter(Result::is_ok)
+        .filter_map(|worker| worker.join().unwrap().ok())
         .count();
     assert_eq!(successes, 64);
     assert_eq!(namespace.get_value(id, 0, OWNER), Ok(64));

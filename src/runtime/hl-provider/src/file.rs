@@ -266,7 +266,6 @@ impl<T: ProviderTransport> ProjectedFile<T> {
         ))
     }
 
-    #[must_use]
     pub fn snapshot(&self) -> Result<FileSnapshot, FileError> {
         let state = self.state();
         let handle = state.handle.ok_or(FileError::Retired)?;
@@ -308,6 +307,8 @@ impl<T: ProviderTransport> ProjectedFile<T> {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    // Consumes the error it classifies.
+    #[allow(clippy::needless_pass_by_value)]
     fn object_error(error: FileError) -> ObjectError {
         match error {
             FileError::Linux(4) => ObjectError::Interrupted,

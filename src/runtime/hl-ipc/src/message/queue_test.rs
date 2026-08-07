@@ -252,8 +252,7 @@ fn concurrent_senders_respect() {
         .collect();
     let successes = workers
         .into_iter()
-        .map(|worker| worker.join().unwrap())
-        .filter(Result::is_ok)
+        .filter_map(|worker| worker.join().unwrap().ok())
         .count();
     assert_eq!(successes, 64);
     assert_eq!(namespace.metadata(id).unwrap().messages, 64);

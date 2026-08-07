@@ -13,8 +13,8 @@ struct PipeObject {
     pipe: Arc<Pipe>,
     reader: IpcResourceKey,
     writer: IpcResourceKey,
-    _reader_binding: Arc<dyn PipeEndpointBinding>,
-    _writer_binding: Arc<dyn PipeEndpointBinding>,
+    reader_binding: Arc<dyn PipeEndpointBinding>,
+    writer_binding: Arc<dyn PipeEndpointBinding>,
 }
 
 struct ClosedBinding;
@@ -184,8 +184,8 @@ impl IpcCatalog {
                 pipe,
                 reader,
                 writer,
-                _reader_binding: reader_binding,
-                _writer_binding: writer_binding,
+                reader_binding,
+                writer_binding,
             }),
             _admission: admission,
             published: false,
@@ -222,8 +222,8 @@ impl IpcCatalog {
             pipe,
             reader,
             writer,
-            _reader_binding: reader_binding,
-            _writer_binding: writer_binding,
+            reader_binding,
+            writer_binding,
         });
         Ok(IpcPipeId {
             slot: index as u32,
@@ -380,8 +380,8 @@ impl IpcCatalog {
                 pipe,
                 reader: item.reader,
                 writer: item.writer,
-                _reader_binding: reader_binding,
-                _writer_binding: writer_binding,
+                reader_binding,
+                writer_binding,
             });
         }
         let next_resource = image
@@ -414,8 +414,8 @@ impl IpcCatalog {
                 slot: slot as u32,
                 generation: entry.generation,
             };
-            object._reader_binding.attach(weak.clone(), id)?;
-            object._writer_binding.attach(weak.clone(), id)?;
+            object.reader_binding.attach(weak.clone(), id)?;
+            object.writer_binding.attach(weak.clone(), id)?;
         }
         drop(pipes);
         Ok(catalog)

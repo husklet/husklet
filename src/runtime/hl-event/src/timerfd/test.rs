@@ -15,6 +15,7 @@ struct ManualClock {
     generation: AtomicU64,
     wake_token: AtomicU64,
     scheduled: Mutex<Vec<(u64, u64)>>,
+    #[allow(clippy::type_complexity)]
     callbacks: Mutex<Vec<(u64, u64, Arc<dyn Fn() + Send + Sync>)>>,
     canceled: Mutex<Vec<u64>>,
 }

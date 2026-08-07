@@ -372,6 +372,8 @@ impl<T: ProviderTransport> ClientCore<T> {
         }
     }
 
+    // Consumes the error that stops the client.
+    #[allow(clippy::needless_pass_by_value)]
     fn stop(&self, error: ProviderError) {
         let mut state = self.lock();
         if state.stopping {
