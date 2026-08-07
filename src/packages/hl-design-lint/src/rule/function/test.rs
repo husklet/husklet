@@ -66,3 +66,26 @@ fn flag(deserializer: u8) -> bool {
     };
     assert!(finding.related.is_empty());
 }
+
+#[test]
+fn a_local_binding_is_not_related_context() {
+    let values = findings(
+        r"
+fn flag(value: u8) -> bool {
+    value == 0
+}
+fn read() -> bool {
+    flag(1)
+}
+fn shadow() -> u8 {
+    let flag = 2;
+    flag
+}
+",
+    );
+    let [finding] = &values[..] else {
+        panic!("one candidate, got {}", values.len());
+    };
+    assert_eq!(finding.subject, "flag");
+    assert_eq!(finding.related.len(), 1);
+}

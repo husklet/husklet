@@ -28,7 +28,9 @@ impl Rule for FreeFunction {
         let mut gated = HashSet::new();
         for source in workspace.production() {
             let mut functions = Functions {
+                path: &source.path,
                 test_scope: false,
+                nesting: Vec::new(),
                 values: Vec::new(),
             };
             functions.visit_file(&source.syntax);
@@ -51,10 +53,12 @@ impl Rule for FreeFunction {
             .into_iter()
             .map(|(source, candidate)| {
                 let ambiguous = definitions.get(&candidate.name).copied().unwrap_or(0) != 1;
+                let owner = candidate.module.clone();
                 let usages = references
                     .get(&candidate.name)
                     .into_iter()
                     .flatten()
+                    .filter(|usage| usage.module.as_ref().is_none_or(|module| *module == owner))
                     .filter(|usage| !ambiguous || usage.location.path == source.path);
                 candidate.finding(self.id(), source, usages, ambiguous)
             })
@@ -66,6 +70,7 @@ struct Candidate {
     name: String,
     arguments: usize,
     span: proc_macro2::Span,
+    module: String,
     dependencies: Vec<String>,
     classification: Option<Classification>,
     platform: bool,
@@ -132,12 +137,14 @@ impl Candidate {
     }
 }
 
-struct Functions {
+struct Functions<'a> {
+    path: &'a std::path::Path,
     test_scope: bool,
+    nesting: Vec<String>,
     values: Vec<Candidate>,
 }
 
-impl<'ast> Visit<'ast> for Functions {
+impl<'ast> Visit<'ast> for Functions<'_> {
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
         if !self.test_scope && !requires_test(&function.attrs) && candidate(function) {
             let mut dependencies = Dependencies::default();
@@ -151,6 +158,7 @@ impl<'ast> Visit<'ast> for Functions {
                 name: function.sig.ident.to_string(),
                 arguments: function.sig.inputs.len(),
                 span,
+                module: crate::rule::references::module(self.path, &self.nesting),
                 dependencies: dependencies.names.into_iter().collect(),
                 classification: classification(function),
                 platform: platform_gated(&function.attrs),
@@ -162,7 +170,9 @@ impl<'ast> Visit<'ast> for Functions {
     fn visit_item_mod(&mut self, module: &'ast ItemMod) {
         let previous = self.test_scope;
         self.test_scope |= requires_test(&module.attrs);
+        self.nesting.push(module.ident.to_string());
         syn::visit::visit_item_mod(self, module);
+        self.nesting.pop();
         self.test_scope = previous;
     }
 }

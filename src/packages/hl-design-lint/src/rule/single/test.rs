@@ -294,3 +294,95 @@ fn build() -> u16 {
         ["helper"]
     );
 }
+
+#[test]
+fn a_same_named_method_is_a_caller_not_a_self_reference() {
+    assert_eq!(
+        subjects(
+            r"
+fn helper(value: u16) -> u16 {
+    value
+}
+struct Holder;
+impl Holder {
+    fn helper(&self) -> u16 {
+        helper(1)
+    }
+}
+",
+        ),
+        ["helper"]
+    );
+}
+
+#[test]
+fn a_local_binding_owns_its_name() {
+    assert_eq!(
+        subjects(
+            r"
+fn helper() -> u16 {
+    1
+}
+fn build() -> u16 {
+    helper()
+}
+fn shadow() -> u16 {
+    let helper = 2;
+    helper
+}
+fn closed() -> u16 {
+    let read = |helper: u16| helper;
+    read(3)
+}
+",
+        ),
+        ["helper"]
+    );
+}
+
+#[test]
+fn a_module_qualified_reference_names_that_module() {
+    assert_eq!(
+        subjects(
+            r"
+fn helper(value: u16) -> u16 {
+    value
+}
+fn build() -> u16 {
+    helper(1)
+}
+mod other {
+    pub fn helper(value: u16) -> u16 {
+        value
+    }
+}
+fn extra() -> u16 {
+    other::helper(2)
+}
+",
+        ),
+        ["helper"]
+    );
+}
+
+#[test]
+fn an_unqualified_cross_module_use_still_counts() {
+    assert!(
+        subjects(
+            r"
+fn helper(value: u16) -> u16 {
+    value
+}
+fn build() -> u16 {
+    helper(1)
+}
+mod inner {
+    pub(crate) fn call() -> u16 {
+        super::helper(2)
+    }
+}
+",
+        )
+        .is_empty()
+    );
+}
