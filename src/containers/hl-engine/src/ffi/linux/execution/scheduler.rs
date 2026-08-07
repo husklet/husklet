@@ -229,11 +229,13 @@ impl NativePool {
         self.executors.get(&process)
     }
 
-    fn record_fallback(&mut self, entry: NativeSite, instruction: NativeSite) {
+    /// Suppression is reserved for entries whose run retired too little to be worth
+    /// re-entering, so a run that did substantial native work keeps its entry.
+    fn record_fallback(&mut self, entry: NativeSite, instruction: NativeSite, executed: u64, budget: u64) {
         if self.diagnostics {
             *self.fallback_weight.entry(instruction.4).or_default() += 1;
         }
-        if self.suppressed.len() < NATIVE_SITE_LIMIT {
+        if Self::fallback_suppresses(executed, budget) && self.suppressed.len() < NATIVE_SITE_LIMIT {
             self.suppressed.insert(entry);
         }
         if self.fallbacks.len() < NATIVE_SITE_LIMIT {
@@ -244,6 +246,13 @@ impl NativePool {
     /// The observation table is a warm-up heuristic keyed by mapping generation,
     /// so a remapping workload fills it with keys no lookup can match again.
     /// Reclaim those instead of giving up native execution for the whole process.
+    /// Declining an entry hands the turn a whole `SLICE_BUDGET` interpreter slice, while a
+    /// fallback yields only what the run retired plus one interpreted instruction, so a
+    /// retry only pays for itself once it retires a substantial part of its budget.
+    const fn fallback_suppresses(executed: u64, budget: u64) -> bool {
+        executed * 2 < budget
+    }
+
     fn observe(&mut self, key: NativeSite) -> u8 {
         let (process, lease, ledger, _, _) = key;
         if !self.observations.contains_key(&key) && self.observations.len() >= NATIVE_SITE_LIMIT {
@@ -1425,7 +1434,7 @@ impl GuestExecutor {
                 crate::native::NativeExit::Yield => StepOutcome::Yield,
                 crate::native::NativeExit::Fallback | crate::native::NativeExit::Fault => {
                     fallback = true;
-                    fallback_pc = Some(result.instruction);
+                    fallback_pc = Some((result.instruction, result.executed));
                     StepOutcome::Continue
                 }
                 crate::native::NativeExit::Epoch | crate::native::NativeExit::Interrupt => {
@@ -1454,7 +1463,7 @@ impl GuestExecutor {
         }
         if fallback {
             pool.counters.fallbacks += 1;
-            if let Some(pc) = fallback_pc {
+            if let Some((pc, executed)) = fallback_pc {
                 let instruction = (
                     run.process,
                     lease.generation(),
@@ -1462,7 +1471,7 @@ impl GuestExecutor {
                     token.version,
                     pc,
                 );
-                pool.record_fallback(fallback_key, instruction);
+                pool.record_fallback(fallback_key, instruction, executed, native_budget);
             }
             Some(run.machine.run_step(1, memory))
         } else {
@@ -1643,12 +1652,12 @@ impl GuestExecutor {
                     }
                 }
                 crate::native::NativeExit::Yield if Self::x86_yield_needs_interpreter(result.exit, result.executed) => {
-                    fallback = Some(result.instruction);
+                    fallback = Some((result.instruction, result.executed));
                     StepOutcome::Continue
                 }
                 crate::native::NativeExit::Yield => StepOutcome::Yield,
                 crate::native::NativeExit::Fallback | crate::native::NativeExit::Fault => {
-                    fallback = Some(result.instruction);
+                    fallback = Some((result.instruction, result.executed));
                     StepOutcome::Continue
                 }
                 crate::native::NativeExit::Epoch => {
@@ -1686,7 +1695,7 @@ impl GuestExecutor {
             boundaries.push(record);
         }
         drop(stack_projection);
-        if let Some(fallback_pc) = fallback {
+        if let Some((fallback_pc, executed)) = fallback {
             pool.counters.fallbacks += 1;
             pool.record_fallback(
                 key,
@@ -1697,6 +1706,8 @@ impl GuestExecutor {
                     token.version,
                     fallback_pc,
                 ),
+                executed,
+                native_budget,
             );
             Some(run.machine.run_step(1, memory))
         } else {
@@ -1979,9 +1990,35 @@ mod tests {
         let entry = (process, 2, 3, 4, 0x400990);
         let instruction = (process, 2, 3, 4, 0x40b0c0);
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
-        pool.record_fallback(entry, instruction);
+        pool.record_fallback(entry, instruction, 0, SLICE_BUDGET);
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
+    }
+
+    /// A run that retired at least half its budget is worth re-entering, because declining
+    /// the entry would have bought only a `SLICE_BUDGET` interpreter slice instead.
+    #[test]
+    fn a_fallback_that_retired_most_of_its_budget_keeps_the_entry_but_records_the_site() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let entry = (process, 2, 3, 4, 0x1055286);
+        let instruction = (process, 2, 3, 4, 0x40b0c0);
+        let mut pool = NativePool::new(GuestIsa::X86_64, &plan(crate::options::Options::default()), None);
+        pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2, NATIVE_SOLO_BUDGET);
+        assert!(pool.suppressed.is_empty());
+        assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
+        // One instruction short of half the budget is not worth the entry.
+        pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2 - 1, NATIVE_SOLO_BUDGET);
+        assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+    }
+
+    /// The threshold is a share of the budget, so a short-budget run cannot dodge
+    /// suppression by retiring a handful of instructions.
+    #[test]
+    fn a_fallback_that_retired_a_handful_of_instructions_still_suppresses_the_entry() {
+        assert!(NativePool::fallback_suppresses(0, SLICE_BUDGET));
+        assert!(NativePool::fallback_suppresses(37, SLICE_BUDGET));
+        assert!(NativePool::fallback_suppresses(37, NATIVE_SOLO_BUDGET));
+        assert!(!NativePool::fallback_suppresses(SLICE_BUDGET, SLICE_BUDGET));
     }
 
     #[test]
