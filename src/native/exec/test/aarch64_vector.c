@@ -13,6 +13,10 @@
     (0x0e200400u | ((uint32_t)(q) << 30) | ((uint32_t)(u) << 29) | \
      ((uint32_t)(size) << 22) | ((uint32_t)(opcode) << 11) | \
      ((uint32_t)(rm) << 16) | ((uint32_t)(rn) << 5) | (rd))
+#define ZERO(q, u, size, opcode, rn, rd) \
+    (0x0e200800u | ((uint32_t)(q) << 30) | ((uint32_t)(u) << 29) | \
+     ((uint32_t)(size) << 22) | ((uint32_t)(opcode) << 12) | \
+     ((uint32_t)(rn) << 5) | (rd))
 
 static void execute(hl_native_aarch64_cpu *cpu, void *address) {
     void (*entry)(void);
@@ -40,6 +44,13 @@ int main(void) {
         COMPARE(0, 1, 0, 0x11, 30, 28, 6),
         COMPARE(1, 0, 3, 0x06, 30, 28, 7),
         0x6e208c23u, /* cmeq v3.16b,v1.16b,v0.16b */
+        ZERO(1, 0, 0, 0x08, 28, 16), /* cmgt v16.16b, v28.16b, #0 */
+        ZERO(1, 0, 0, 0x09, 28, 17), /* cmeq v17.16b, v28.16b, #0 */
+        ZERO(1, 0, 0, 0x0a, 28, 18), /* cmlt v18.16b, v28.16b, #0 */
+        ZERO(1, 1, 0, 0x08, 28, 19), /* cmge v19.16b, v28.16b, #0 */
+        ZERO(1, 1, 0, 0x09, 28, 20), /* cmle v20.16b, v28.16b, #0 */
+        ZERO(1, 0, 3, 0x09, 28, 21), /* cmeq v21.2d, v28.2d, #0 */
+        ZERO(0, 0, 0, 0x09, 28, 22), /* cmeq v22.8b, v28.8b, #0 */
     };
     size_t offsets[sizeof(words) / sizeof(words[0])];
     long page = sysconf(_SC_PAGESIZE);
@@ -97,6 +108,27 @@ int main(void) {
     CHECK(cpu.flags == UINT64_C(0xa0000000));
     CHECK(cpu.tls == UINT64_C(0x123456789abcdef0));
     CHECK(cpu.registers[0] == UINT64_C(0x8877665544332211));
+
+    /* Compare against zero. Lanes hold 0x00, 0x80 (negative) and 0x7f so each
+     * polarity yields a distinct mask, and 2D reads the same bytes as one lane. */
+    vector(&cpu, 28, UINT64_C(0x0000000000807f00), UINT64_C(0x7f80000000000000));
+    execute(&cpu, code + offsets[10]);
+    CHECK(cpu.vectors[32] == UINT64_C(0x000000000000ff00) && cpu.vectors[33] == UINT64_C(0xff00000000000000));
+    execute(&cpu, code + offsets[11]);
+    CHECK(cpu.vectors[34] == UINT64_C(0xffffffffff0000ff) && cpu.vectors[35] == UINT64_C(0x0000ffffffffffff));
+    execute(&cpu, code + offsets[12]);
+    CHECK(cpu.vectors[36] == UINT64_C(0x0000000000ff0000) && cpu.vectors[37] == UINT64_C(0x00ff000000000000));
+    execute(&cpu, code + offsets[13]);
+    CHECK(cpu.vectors[38] == UINT64_C(0xffffffffff00ffff) && cpu.vectors[39] == UINT64_C(0xff00ffffffffffff));
+    execute(&cpu, code + offsets[14]);
+    CHECK(cpu.vectors[40] == UINT64_C(0xffffffffffff00ff) && cpu.vectors[41] == UINT64_C(0x00ffffffffffffff));
+    vector(&cpu, 28, 0, 5);
+    execute(&cpu, code + offsets[15]);
+    CHECK(cpu.vectors[42] == UINT64_MAX && cpu.vectors[43] == 0);
+    vector(&cpu, 28, UINT64_C(0x0000000000807f00), UINT64_MAX);
+    execute(&cpu, code + offsets[16]);
+    CHECK(cpu.vectors[44] == UINT64_C(0xffffffffff0000ff) && cpu.vectors[45] == 0);
+    CHECK(cpu.flags == UINT64_C(0xa0000000));
     CHECK(munmap(code, capacity) == 0);
 
     uint8_t short_buffer[HL_A64_SIMD_COMPARE_MAX_BYTES - 1];
@@ -109,6 +141,14 @@ int main(void) {
     CHECK(hl_a64_assembler_size(&assembler) == 0);
     CHECK(hl_a64_assembler_begin(&assembler, short_buffer, short_buffer, sizeof(short_buffer)));
     CHECK(!hl_a64_simd_compare_emit(&assembler, 0x4e20e420u, 0x9000));
+    CHECK(hl_a64_assembler_begin(&assembler, short_buffer, short_buffer, sizeof(short_buffer)));
+    CHECK(!hl_a64_simd_compare_emit(&assembler, ZERO(0, 0, 3, 0x09, 1, 0), 0x9000)); /* 1D has no vector form */
+    CHECK(hl_a64_assembler_begin(&assembler, short_buffer, short_buffer, sizeof(short_buffer)));
+    CHECK(!hl_a64_simd_compare_emit(&assembler, ZERO(1, 1, 0, 0x0a, 1, 0), 0x9000)); /* unallocated */
+    CHECK(hl_a64_assembler_begin(&assembler, short_buffer, short_buffer, sizeof(short_buffer)));
+    CHECK(!hl_a64_simd_compare_emit(&assembler, ZERO(1, 0, 0, 0x0b, 1, 0), 0x9000)); /* ABS is not a compare */
+    CHECK(hl_a64_assembler_begin(&assembler, short_buffer, short_buffer, sizeof(short_buffer)));
+    CHECK(!hl_a64_simd_compare_emit(&assembler, ZERO(1, 0, 0, 0x07, 1, 0), 0x9000)); /* below the family */
     return 0;
 #endif
 }

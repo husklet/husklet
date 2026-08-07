@@ -156,6 +156,114 @@ fn aarch64_aes_rounds_and_vector_memory_match_interpreter_at_each_boundary() {
     }
 }
 
+/// The AArch64 compare-against-zero family __strlen_asimd runs, in its memory
+/// form: a pre-index vector load feeds every element width and all five
+/// polarities, and the results are folded and stored. The operand straddles zero
+/// so a wrong polarity or element width cannot produce the same mask, and the
+/// pre-index writeback is checked because it addresses the store.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn aarch64_compare_against_zero_matches_interpreter_at_each_boundary() {
+    let words: [u32; 14] = [
+        0xadc1_0821, // ldp q1, q2, [x1, #32]!
+        0x6e22_ac20, // uminp v0.16b, v1.16b, v2.16b
+        0x0e20_9800, // cmeq v0.8b, v0.8b, #0
+        0x4ea0_8823, // cmgt v3.4s, v1.4s, #0
+        0x4e60_a844, // cmlt v4.8h, v2.8h, #0
+        0x6ee0_8825, // cmge v5.2d, v1.2d, #0
+        0x6e20_9846, // cmle v6.16b, v2.16b, #0
+        0x4e20_9827, // cmeq v7.16b, v1.16b, #0
+        0x6e23_1c00, // eor v0.16b, v0.16b, v3.16b
+        0x6e24_1c00, // eor v0.16b, v0.16b, v4.16b
+        0x6e25_1c00, // eor v0.16b, v0.16b, v5.16b
+        0x6e26_1c00, // eor v0.16b, v0.16b, v6.16b
+        0x6e27_1c00, // eor v0.16b, v0.16b, v7.16b
+        0x3d80_0420, // str q0, [x1, #16]
+    ];
+    let mut bytes = Vec::new();
+    for word in words {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    let mut initial = Aarch64CpuState {
+        pc: 0x4000,
+        ..Aarch64CpuState::default()
+    };
+    initial.registers[1] = 0x7000;
+    // Zero, negative and positive lanes at every width, so each polarity and
+    // each element size produces a distinct mask.
+    let operand: [u8; 96] = std::array::from_fn(|index| match index % 8 {
+        0 | 3 => 0,
+        1 => 0x80,
+        2 => 0xff,
+        _ => (index as u8).wrapping_mul(37).wrapping_add(1),
+    });
+
+    for count in 1..=words.len() as u64 {
+        let mut native = initial.clone();
+        let mut storage = operand;
+        let spans = [SourceSpan {
+            guest_first: 0x4000,
+            bytes: bytes.as_ptr(),
+            size: bytes.len(),
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
+        }];
+        let source = Source {
+            spans: spans.as_ptr(),
+            span_count: spans.len(),
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
+        };
+        let view = ProjectionView {
+            guest_first: 0x7000,
+            guest_last: 0x7060,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 1,
+            permissions: 3,
+            write_policy: super::WRITE_EXACT,
+            write_index: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 1,
+            active: 0,
+        };
+        let executor = Executor::create().expect("native executor");
+        executor.reset(1).expect("native reset");
+        let outcome = executor
+            .run_aarch64(&mut native, &source, Some(&projection), 1, count, None, None)
+            .expect("native run");
+        assert_eq!(outcome.0, Exit::Yield, "boundary {count} outcome {:?}", outcome.0);
+
+        let mut memory = ReplayMemory {
+            sources: vec![ReplaySource {
+                first: 0x4000,
+                bytes: bytes.clone(),
+            }],
+            data: vec![ReplayView {
+                first: 0x7000,
+                data: operand.to_vec(),
+            }],
+            generation: 1,
+        };
+        let machine = ExecutionMachine::new(ExecutionSnapshot {
+            version: EXECUTION_SNAPSHOT_VERSION,
+            cpu: ExecutionCpuSnapshot::Aarch64(initial.clone()),
+            cache_epoch: 1,
+            fault: None,
+        })
+        .expect("interpreter");
+        assert_eq!(machine.run_slice(1, count, &mut memory), StepOutcome::Yield, "boundary {count}");
+        machine.freeze().expect("interpreter freeze");
+        let ExecutionCpuSnapshot::Aarch64(interpreted) = machine.snapshot().expect("snapshot").cpu else {
+            unreachable!()
+        };
+        assert_eq!(native, interpreted, "first state divergence after instruction {count}");
+        assert_eq!(storage.as_slice(), memory.data[0].data.as_slice(), "memory divergence after instruction {count}");
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TraceCheckpoint {
     instruction_count: u64,
