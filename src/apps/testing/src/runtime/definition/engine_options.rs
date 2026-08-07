@@ -2,11 +2,14 @@
 
 use super::super::Error;
 use super::environment::EnvironmentEntry;
-use hl_container::{Isolation, Mount, NetworkMode, Resources, Sandbox};
+use hl_container::{EndpointSpec, Isolation, Mount, NetworkMode, NetworkSpec, Resources, Sandbox, Subnet};
 use std::path::PathBuf;
 
 /// Names hl-container can honour, and the ones it cannot express yet.
-const SUPPORTED: [&str; 10] = [
+const SUPPORTED: [&str; 13] = [
+    "HL_NETNS",
+    "HL_NETBR",
+    "HL_IP",
     "HL_UNTRUSTED",
     "HL_SANDBOX",
     "HL_NET_ISOLATE",
@@ -19,7 +22,7 @@ const SUPPORTED: [&str; 10] = [
     "HL_PCACHE_DIR",
 ];
 /// Recognised engine options with no hl-container expression; a case asking for one cannot run.
-const UNWIRED: [&str; 4] = ["HL_NETNS", "HL_NETBR", "HL_IP", "HL_ULIMITS"];
+const UNWIRED: [&str; 1] = ["HL_ULIMITS"];
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct EngineOptions {
@@ -32,6 +35,8 @@ pub(crate) struct EngineOptions {
     cpu_count: Option<u32>,
     memory_bytes: Option<u64>,
     translation_cache: Option<PathBuf>,
+    bridge: Option<String>,
+    address: Option<std::net::Ipv4Addr>,
     /// Recognised but unwired names, retained so the case fails by name rather than silently.
     unwired: Vec<String>,
 }
@@ -74,6 +79,17 @@ impl EngineOptions {
             "HL_CPUS" => self.cpu_count = Some(setting.number()?),
             "HL_MEM_MAX" => self.memory_bytes = Some(setting.number()?),
             "HL_PCACHE_DIR" => self.translation_cache = Some(PathBuf::from(value)),
+            // Every non-host container already owns a network namespace, so the legacy name is satisfied on arrival.
+            "HL_NETNS" if value.is_empty() => return Err("HL_NETNS is empty".into()),
+            "HL_NETNS" => {}
+            "HL_NETBR" => self.bridge = Some(value.to_owned()),
+            "HL_IP" => {
+                self.address = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("HL_IP is not an IPv4 address: {value:?}"))?,
+                );
+            }
             "HL_VOLUMES" => {
                 self.mounts = value
                     .split(',')
@@ -131,6 +147,23 @@ impl EngineOptions {
             },
             ..base
         }
+    }
+
+    /// The bridge network this case asked to be attached to, addressed inside a /24 around `HL_IP`.
+    pub(crate) fn bridge(&self) -> Result<Option<(NetworkSpec, EndpointSpec)>, Error> {
+        let Some(bridge) = self.bridge.as_ref() else {
+            return Ok(None);
+        };
+        let address = self
+            .address
+            .ok_or_else(|| format!("HL_NETBR {bridge:?} has no HL_IP address"))?;
+        let octets = address.octets();
+        let subnet = Subnet::new(std::net::Ipv4Addr::new(octets[0], octets[1], octets[2], 0), 24)
+            .map_err(|error| format!("HL_IP {address} has no /24 subnet: {error}"))?;
+        Ok(Some((
+            NetworkSpec::bridge(bridge.clone(), subnet),
+            EndpointSpec::default().address(address),
+        )))
     }
 
     pub(crate) const fn network_mode(&self) -> NetworkMode {
@@ -247,8 +280,20 @@ mod tests {
 
     #[test]
     fn an_unwired_option_is_named_rather_than_dropped() {
-        let (_, options) = EngineOptions::split(&entries(&[("HL_NETNS", "hlc228")])).unwrap();
-        assert!(options.unwired().unwrap().contains("HL_NETNS"), "{options:?}");
+        let (_, options) = EngineOptions::split(&entries(&[("HL_ULIMITS", "nofile=1024:2048")])).unwrap();
+        assert!(options.unwired().unwrap().contains("HL_ULIMITS"), "{options:?}");
+    }
+
+    #[test]
+    fn a_bridge_address_selects_its_own_slash_24() {
+        let (_, options) =
+            EngineOptions::split(&entries(&[("HL_NETBR", "hlc228br"), ("HL_IP", "172.28.0.5")])).unwrap();
+        let (network, endpoint) = options.bridge().unwrap().unwrap();
+        assert_eq!(network.name, "hlc228br");
+        let subnet = network.subnet.unwrap();
+        assert_eq!((subnet.address, subnet.prefix), ("172.28.0.0".parse().unwrap(), 24));
+        assert_eq!(endpoint.address, Some("172.28.0.5".parse().unwrap()));
+        assert!(options.unwired().is_none());
     }
 
     #[test]

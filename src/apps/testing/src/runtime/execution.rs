@@ -216,6 +216,11 @@ impl<'a> CaseExecution<'a> {
 
     async fn execute(&self, spec: ContainerSpec, name: &str, timeout: Duration) -> Result<(), Error> {
         self.containers.create(spec).await?;
+        if let Some((network, endpoint)) = self.case.engine_options.bridge()? {
+            let networks = self.containers.networks();
+            let created = networks.create(network).await?;
+            networks.connect(&created.name, name, endpoint).await?;
+        }
         self.containers.start(name).await?;
         let status = self.wait(name, timeout).await?;
         let logs = self.containers.logs(name).await?;
