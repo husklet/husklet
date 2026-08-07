@@ -746,6 +746,34 @@ impl Decoder {
                 )
             }
             (3, 0x0f, 1) => Self::binary(decoded, source, length, VexOperation::Align),
+            (3, 0x14..=0x17, 1) if length == 0 && source == 0 => {
+                let bytes = match decoded.opcode {
+                    0x14 => 1,
+                    0x15 => 2,
+                    0x16 if w => 8,
+                    _ => 4,
+                };
+                Ok(ScalarInstruction::VectorLaneExtract {
+                    source: decoded.register.ok_or(ScalarIrError::Invalid)?,
+                    destination: decoded
+                        .register_operand
+                        .map(|register| ScalarOperand::Register(ScalarRegister::General(register)))
+                        .or_else(|| decoded.address.map(ScalarOperand::Memory))
+                        .ok_or(ScalarIrError::Invalid)?,
+                    bytes,
+                    lane: decoded.immediate.ok_or(ScalarIrError::Invalid)?.0 as u8 & (16 / bytes - 1),
+                })
+            }
+            (1, 0xc5, 1) if length == 0 && source == 0 && decoded.register_operand.is_some() => {
+                Ok(ScalarInstruction::VectorLaneExtract {
+                    source: decoded.register_operand.ok_or(ScalarIrError::Invalid)?,
+                    destination: ScalarOperand::Register(ScalarRegister::General(
+                        decoded.register.ok_or(ScalarIrError::Invalid)?,
+                    )),
+                    bytes: 2,
+                    lane: decoded.immediate.ok_or(ScalarIrError::Invalid)?.0 as u8 & 7,
+                })
+            }
             (1, 0x74..=0x76, 1) => Self::binary(
                 decoded,
                 source,

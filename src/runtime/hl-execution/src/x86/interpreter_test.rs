@@ -16402,3 +16402,115 @@ fn vex_widen_family() {
         );
     }
 }
+
+/// `vpextrb/w/d/q`, `vextractps` and the `0f c5` form of `vpextrw`, each against the
+/// legacy encoding it inherits, in both the register and the memory destination form.
+#[test]
+fn vex_lane_extract_family() {
+    let value = 0x8090_a0b0_c0d0_e0f0_0110_2130_4150_6170_u128;
+    for (opcode, vex_prefix, bytes) in [
+        (0x14_u8, 0x79_u8, 1_u8),
+        (0x15, 0x79, 2),
+        (0x16, 0x79, 4),
+        (0x16, 0xf9, 8),
+        (0x17, 0x79, 4),
+    ] {
+        for lane in 0..16 / bytes {
+            let mut legacy_cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            legacy_cpu.vectors[0] = value;
+            let rex: &[u8] = if bytes == 8 { &[0x48] } else { &[] };
+            let mut legacy_bytes = vec![0x66_u8];
+            legacy_bytes.extend_from_slice(rex);
+            legacy_bytes.extend_from_slice(&[0x0f, 0x3a, opcode, 0xc1, lane]);
+            let decoded = X86ScalarDecoder::decode(&legacy_bytes, legacy_cpu.rip).unwrap();
+            let mut memory = ModelMemory {
+                base: 0,
+                bytes: vec![],
+                fail_read: false,
+                fail_write: false,
+                commits: 0,
+            };
+            assert_eq!(
+                ScalarInterpreter::execute(&mut legacy_cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+
+            let mut cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            cpu.vectors[0] = value;
+            let decoded =
+                X86ScalarDecoder::decode(&[0xc4, 0xe3, vex_prefix, opcode, 0xc1, lane], cpu.rip).unwrap();
+            assert_eq!(
+                ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+            assert_eq!(
+                cpu.registers[1], legacy_cpu.registers[1],
+                "{opcode:#x} bytes {bytes} lane {lane}"
+            );
+
+            // Memory destination, sized to exactly the architectural write.
+            let mut store = ModelMemory {
+                base: 0x1000,
+                bytes: vec![0xcc; usize::from(bytes)],
+                fail_read: false,
+                fail_write: false,
+                commits: 0,
+            };
+            let mut cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            cpu.registers[3] = 0x1000;
+            cpu.vectors[0] = value;
+            let decoded =
+                X86ScalarDecoder::decode(&[0xc4, 0xe3, vex_prefix, opcode, 0x03, lane], cpu.rip).unwrap();
+            assert_eq!(
+                ScalarInterpreter::execute(&mut cpu, &mut store, decoded),
+                ExecutionExit::Continue
+            );
+            assert_eq!(
+                store.bytes,
+                legacy_cpu.registers[1].to_le_bytes()[..usize::from(bytes)],
+                "{opcode:#x} memory bytes {bytes} lane {lane}"
+            );
+        }
+    }
+
+    for lane in 0..8_u8 {
+        let mut legacy_cpu = CpuState {
+            rip: 0x7000,
+            ..Default::default()
+        };
+        legacy_cpu.vectors[1] = value;
+        let mut memory = ModelMemory {
+            base: 0,
+            bytes: vec![],
+            fail_read: false,
+            fail_write: false,
+            commits: 0,
+        };
+        let decoded = X86ScalarDecoder::decode(&[0x66, 0x0f, 0xc5, 0xc1, lane], legacy_cpu.rip).unwrap();
+        assert_eq!(
+            ScalarInterpreter::execute(&mut legacy_cpu, &mut memory, decoded),
+            ExecutionExit::Continue
+        );
+
+        let mut cpu = CpuState {
+            rip: 0x7000,
+            ..Default::default()
+        };
+        cpu.vectors[1] = value;
+        let decoded = X86ScalarDecoder::decode(&[0xc5, 0xf9, 0xc5, 0xc1, lane], cpu.rip).unwrap();
+        assert_eq!(
+            ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+            ExecutionExit::Continue
+        );
+        assert_eq!(cpu.registers[0], legacy_cpu.registers[0], "vpextrw lane {lane}");
+    }
+}
