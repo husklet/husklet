@@ -1460,6 +1460,9 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
         upper.vector_subopcode = 31u;
     } else if (item->vector_kind == VECTOR_BLEND_IMMEDIATE && item->condition == 0u) {
         upper.vector_immediate = (uint8_t)(item->vector_immediate >> (16u / item->vector_lane));
+    } else if (item->vector_kind == VECTOR_SHUFFLE_DOUBLE) {
+        /* VSHUFPD selects the upper lane with immediate bits 3:2. */
+        upper.vector_immediate = (uint8_t)(item->vector_immediate >> 2);
     }
     emit_vector_operation(words, cursor, &upper);
     hl_x86_emit_vector_upper_store(words, cursor, 20u, item->destination);
