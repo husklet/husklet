@@ -233,6 +233,11 @@ cases:
     build: { source: selfenviron.c, output: selfenviron, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfenviron }
     run: []
+    environment:
+      - name: HUSKLET_SELFENVIRON
+        value: present
+      - name: PATH
+        value: /usr/bin:/bin
     expect: { exit: 0, stdout: golden/shared/selfenviron.out }
   - id: runtime/procfs/selfoom
     status: active
