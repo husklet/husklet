@@ -7,6 +7,7 @@
 #include "decode.h"
 #include "frontend/private.h"
 #include "word.h"
+#include "../../state.h"
 
 /* The only register-only vector lowerings that can leave the block are the double and packed float
    arithmetic forms, which bail to the interpreter on an unordered result. */
@@ -83,6 +84,7 @@ void hl_x86_prepare_vector_immediate(instruction *item, uint8_t modrm, uint8_t r
 
 static void decode_block(const hl_x86_a64_request *request, decode *block) {
     size_t cursor = 0;
+    size_t refusal = 0;
     memset(block, 0, sizeof *block);
     block->next_pc = request->guest_pc;
     block->exit = HL_X86_A64_FALLTHROUGH;
@@ -90,6 +92,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
     while (cursor < request->guest_size && block->count < request->max_instructions) {
         size_t start = cursor;
         uint8_t operand_16 = 0;
+        refusal = start;
         uint8_t address_32 = 0;
         uint8_t overlong = 0;
         uint8_t semantic_prefix = 0;
@@ -630,6 +633,81 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 item->memory_operand = 1u;
                 item->source = 16u;
             }
+        } else if (semantic_prefix == 0u && operand_16 != 0u && opcode == 0x0fu &&
+                   cursor + 1u < request->guest_size && request->guest_bytes[cursor] == 0x38u &&
+                   request->guest_bytes[cursor + 1u] == 0x00u) {
+            uint8_t modrm;
+            cursor += 2u;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR;
+            item->width = 16u;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_kind = VECTOR_SHUFFLE_BYTE;
+            if ((modrm >> 6) == 3u) {
+                ++cursor;
+            } else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
+                item->operation = OP_VECTOR;
+                item->width = 16u;
+                item->memory_operand = 1u;
+                item->source = 16u;
+            }
+        } else if (semantic_prefix == 0u && operand_16 != 0u && opcode == 0x0fu &&
+                   cursor + 1u < request->guest_size &&
+                   request->guest_bytes[cursor] >= 0x71u && request->guest_bytes[cursor] <= 0x73u &&
+                   (request->guest_bytes[cursor + 1u] >> 6) == 3u &&
+                   (((request->guest_bytes[cursor + 1u] >> 3) & 7u) == 2u ||
+                    ((request->guest_bytes[cursor + 1u] >> 3) & 7u) == 6u ||
+                    (((request->guest_bytes[cursor + 1u] >> 3) & 7u) == 4u &&
+                     request->guest_bytes[cursor] != 0x73u))) {
+            uint8_t extension = request->guest_bytes[cursor];
+            uint8_t modrm = request->guest_bytes[cursor + 1u];
+            cursor += 2u;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            item->operation = OP_VECTOR;
+            item->width = 16u;
+            item->vector_kind = VECTOR_SHIFT_IMMEDIATE;
+            item->vector_lane = extension == 0x71u ? 2u : extension == 0x72u ? 4u : 8u;
+            item->vector_subopcode = (uint8_t)((modrm >> 3) & 7u);
+            item->destination = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->source = item->destination;
+            item->vector_immediate = request->guest_bytes[cursor++];
+        } else if (semantic_prefix == 0u && operand_16 != 0u && opcode == 0x0fu &&
+                   cursor < request->guest_size && request->guest_bytes[cursor] == 0xc4u) {
+            uint8_t modrm;
+            ++cursor;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR;
+            item->width = 2u;
+            item->vector_kind = VECTOR_INSERT_WORD;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            if ((modrm >> 6) == 3u) {
+                ++cursor;
+            } else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
+                item->operation = OP_VECTOR;
+                item->width = 2u;
+                item->memory_operand = 1u;
+                item->source = 16u;
+            }
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            item->vector_immediate = request->guest_bytes[cursor++];
         } else if (opcode == 0x0fu && cursor < request->guest_size &&
                    request->guest_bytes[cursor] == 0x5bu &&
                    (semantic_prefix == 0u || semantic_prefix == 0xf3u)) {
@@ -1060,8 +1138,18 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             if (opcode == 0x0fu) { extension = request->guest_bytes[cursor]; ++cursor; }
             if (!hl_x86_decode_imul(request, block, item, extension, rex, operand_16,
                                     address_32, start, &cursor)) break;
-        } else if (opcode == 0x90u && rex == 0) {
-            item->operation = OP_NOP;
+        } else if (opcode >= 0x90u && opcode <= 0x97u && semantic_prefix == 0u) {
+            /* 90+r exchanges rAX with the named register and is never locked;
+             * only the rAX-with-rAX encoding is the architectural nop. */
+            uint8_t other = (uint8_t)((opcode - 0x90u) | ((rex & 1u) << 3));
+            if (other == 0u) {
+                item->operation = OP_NOP;
+            } else {
+                item->operation = OP_EXCHANGE;
+                item->width = (rex & 8u) != 0u ? 8u : operand_16 != 0u ? 2u : 4u;
+                item->destination = 0u;
+                item->source = other;
+            }
         } else if ((opcode == 0x98u || opcode == 0x99u) && semantic_prefix == 0u) {
             item->operation = OP_ACCUMULATOR;
             item->width = (rex & 8u) != 0u ? 8u : operand_16 != 0u ? 2u : 4u;
@@ -1653,6 +1741,11 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         }
         ++block->count;
     }
+    /* Recorded before the body-truncation status is folded back to OK, so a
+     * refused opcode is still distinguishable from a short read. */
+    if (block->status == HL_X86_A64_UNSUPPORTED && refusal < request->guest_size)
+        hl_native_state_untranslatable_x86(&request->guest_bytes[refusal],
+                                           request->guest_size - refusal, block->count == 0);
     if (block->count != 0 && block->status == HL_X86_A64_UNSUPPORTED)
         block->status = HL_X86_A64_OK;
 }
@@ -1760,6 +1853,10 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         } else if (block.instructions[index].operation == OP_XCHG) {
             words += hl_x86_xchg_words(&block.instructions[index]);
             dirty |= UINT32_C(1) << block.instructions[index].destination;
+        } else if (block.instructions[index].operation == OP_EXCHANGE) {
+            words += 3u;
+            dirty |= UINT32_C(1) << block.instructions[index].destination;
+            dirty |= UINT32_C(1) << block.instructions[index].source;
         } else if (block.instructions[index].operation == OP_XADD) {
             words += hl_x86_xadd_words(&block.instructions[index]);
             dirty |= UINT32_C(1) << block.instructions[index].source;
@@ -1945,6 +2042,10 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         } else if (item->operation == OP_XCHG) {
             hl_x86_emit_xchg(request->host_words, &words, item);
             dirty |= UINT32_C(1) << item->destination;
+        } else if (item->operation == OP_EXCHANGE) {
+            hl_x86_emit_exchange(request->host_words, &words, item);
+            dirty |= UINT32_C(1) << item->destination;
+            dirty |= UINT32_C(1) << item->source;
         } else if (item->operation == OP_XADD) {
             hl_x86_emit_xadd(request->host_words, &words, item);
             if (item->has_immediate == 0u) dirty |= UINT32_C(1) << item->source;

@@ -505,6 +505,24 @@ uint32_t hl_x86_xchg_words(const instruction *item) {
            (item->live_chain != 0u ? 38u : 0u);
 }
 
+/* The 90+r form carries no implicit lock, so this is a plain three-move swap
+ * through x16; a 16-bit exchange keeps the upper half of both registers. */
+void hl_x86_emit_exchange(uint32_t *words, uint32_t *cursor, const instruction *item) {
+    unsigned destination = item->destination;
+    unsigned source = item->source;
+    uint32_t move = item->width == 8u ? UINT32_C(0xaa0003e0) : UINT32_C(0x2a0003e0);
+
+    if (item->width == 2u) {
+        words[(*cursor)++] = UINT32_C(0xaa0003e0) | destination << 16 | 16u;
+        words[(*cursor)++] = UINT32_C(0xb3403c00) | source << 5 | destination;
+        words[(*cursor)++] = UINT32_C(0xb3403c00) | 16u << 5 | source;
+        return;
+    }
+    words[(*cursor)++] = move | destination << 16 | 16u;
+    words[(*cursor)++] = move | source << 16 | destination;
+    words[(*cursor)++] = move | 16u << 16 | source;
+}
+
 void hl_x86_emit_xchg(uint32_t *words, uint32_t *cursor, const instruction *item) {
     uint32_t *below, *overflow, *above, *readable, *writable, *unaligned, *done;
     unsigned source = item->source;
@@ -935,6 +953,8 @@ static uint32_t vector_operation_words(const instruction *item) {
         return 11u + constant_words(UINT64_C(0x4f000000)) +
                constant_words(UINT64_C(0x80000000));
     case VECTOR_STRING_EQUAL_EACH: return 96u;
+    case VECTOR_SHUFFLE_BYTE: return 3u;
+    case VECTOR_SHIFT_IMMEDIATE: return 1u;
     case VECTOR_INSERT_WORD: return 1u;
     case VECTOR_MULTIPLY_HIGH_WORD:
     case VECTOR_MULTIPLY_EVEN_DWORD: return 3u;
@@ -1319,6 +1339,33 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
                         lane == 4u ? UINT32_C(0x4e803800) : UINT32_C(0x4ec03800);
         if (item->vector_kind == VECTOR_UNPACK_HIGH) base += UINT32_C(0x4000);
         words[(*cursor)++] = base | source << 16 | first << 5 | destination;
+    } else if (item->vector_kind == VECTOR_SHUFFLE_BYTE) {
+        /* Masking the control with 0x8f folds x86's "bit 7 selects zero" into
+         * TBL's out-of-range rule, since 0x80..0x8f are all at least 16. */
+        words[(*cursor)++] = UINT32_C(0x4f00e400) | 4u << 16 | 15u << 5 | 17u; /* movi v17.16b,#0x8f */
+        words[(*cursor)++] = UINT32_C(0x4e201c00) | 17u << 16 | source << 5 | 18u;
+        words[(*cursor)++] = UINT32_C(0x4e000000) | 18u << 16 | destination << 5 | destination;
+    } else if (item->vector_kind == VECTOR_SHIFT_IMMEDIATE) {
+        uint32_t element = (uint32_t)lane * 8u;
+        uint32_t count = item->vector_immediate;
+        if (count == 0u) {
+            words[(*cursor)++] = UINT32_C(0x4ea01c00) | source << 16 | source << 5 | destination;
+        } else if (item->vector_subopcode == 6u) {
+            /* SHL cannot encode a count of the element width, and x86 zeroes there. */
+            if (count >= element)
+                words[(*cursor)++] = UINT32_C(0x6e201c00) | destination << 16 |
+                                     destination << 5 | destination;
+            else
+                words[(*cursor)++] = UINT32_C(0x4f005400) | (element + count) << 16 |
+                                     source << 5 | destination;
+        } else {
+            /* USHR by the element width yields zero and SSHR replicates the sign,
+             * which is exactly what x86 does for an oversized count. */
+            uint32_t clamped = count > element ? element : count;
+            words[(*cursor)++] = (item->vector_subopcode == 4u ? UINT32_C(0x4f000400) :
+                                                                 UINT32_C(0x6f000400)) |
+                                 (2u * element - clamped) << 16 | source << 5 | destination;
+        }
     } else if (item->vector_kind == VECTOR_INSERT_WORD) {
         uint32_t insert_lane = item->vector_immediate & 7u;
         words[(*cursor)++] = UINT32_C(0x4e001c00) | ((insert_lane << 2) | 2u) << 16 |

@@ -15,4 +15,10 @@ void hl_native_state_untranslatable(uint32_t word, int head);
 int hl_native_state_untranslatable_report(uint32_t index, uint32_t *word, uint64_t *head,
                                           uint64_t *body);
 
+/* Same census for x86, keyed by the first eight bytes of the refused instruction
+ * including its prefixes, since guest instructions there are variable length. */
+void hl_native_state_untranslatable_x86(const uint8_t *bytes, size_t length, int head);
+int hl_native_state_untranslatable_x86_report(uint32_t index, uint64_t *bytes, uint64_t *head,
+                                              uint64_t *body);
+
 #endif

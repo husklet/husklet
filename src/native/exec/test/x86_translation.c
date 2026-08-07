@@ -6,6 +6,7 @@
 #include "../src/arch/x86_64/frontend/private.h"
 #include "../include/cpu.h"
 #include "../include/executor.h"
+#include "../src/state.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -2746,10 +2747,10 @@ static int vector_immediate_staging_contract(void) {
 
     {
         static const uint8_t unsupported[][5] = {
-            {0x0f, 0x71, 0xd1, 1, 0},       /* bare MMX shift */
-            {0x66, 0x0f, 0xc4, 0xc1, 0},   /* future XMM PINSRW */
+            {0x0f, 0x71, 0xd1, 1, 0},      /* bare MMX shift */
+            {0x0f, 0x38, 0x00, 0xc1, 0},   /* bare MMX PSHUFB */
         };
-        static const size_t sizes[] = {4, 5};
+        static const size_t sizes[] = {4, 4};
         unsigned index;
         for (index = 0; index < 2u; ++index) {
             uint32_t host[64] = {0};
@@ -5355,6 +5356,31 @@ static int imul_differential(void) {
 #endif
 }
 
+/* The census keys on the refusing instruction's bytes and splits a refusal that
+ * blocks a whole block from one that only truncates its body. */
+static int census_contract(void) {
+    static const uint8_t head[] = {0x0f, 0x0b};
+    static const uint8_t body[] = {0x48, 0x31, 0xc0, 0x0f, 0x0b};
+    uint32_t host[256] = {0};
+    hl_x86_a64_provenance provenance[8] = {0};
+    hl_x86_a64_result result;
+    hl_x86_a64_request request = request_for(head, sizeof head, host, provenance);
+    uint32_t index;
+    uint64_t bytes = 0, blocked = 0, truncated = 0;
+
+    CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+    request = request_for(body, sizeof body, host, provenance);
+    CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK && result.instruction_count == 1);
+    for (index = 0;; ++index) {
+        CHECK(index < 512u);
+        if (!hl_native_state_untranslatable_x86_report(index, &bytes, &blocked, &truncated)) continue;
+        if ((bytes & UINT64_C(0xffff)) != UINT64_C(0x0b0f)) continue;
+        CHECK(blocked == 1 && truncated == 1);
+        break;
+    }
+    return 0;
+}
+
 static int multibyte_nop_contract(void) {
     static const struct { uint8_t bytes[10]; uint8_t size; } cases[] = {
         {{0x0f, 0x1f, 0x00}, 3}, {{0x0f, 0x1f, 0x44, 0x00, 0x00}, 5},
@@ -6437,6 +6463,8 @@ int main(void) {
     status = imul_differential();
     if (status != 0) return status;
     status = multibyte_nop_contract();
+    if (status != 0) return status;
+    status = census_contract();
     if (status != 0) return status;
     return 0;
 }
