@@ -89,6 +89,22 @@ impl PosixShm {
         })
     }
 
+    /// Materialises guest `/dev/pts` so a devpts listing has a directory to open.
+    /// The slave and ptmx nodes themselves stay synthetic.
+    pub(super) fn create_devpts(root: &File) -> Result<(), RuntimePathError> {
+        let device = Self::directory(root.as_raw_fd(), c"dev", 0o755)?;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: device and the name remain live for openat, which retains neither.
+        let existing = unsafe { libc::openat(device.as_raw_fd(), c"pts".as_ptr(), flags) };
+        if existing >= 0 {
+            // SAFETY: successful openat returned one unowned descriptor.
+            drop(unsafe { File::from_raw_fd(existing) });
+            return Ok(());
+        }
+        drop(Self::directory(device.as_raw_fd(), c"pts", 0o755)?);
+        Ok(())
+    }
+
     /// Materialises guest `/tmp`, which the tmpfs budget already accounts for.
     pub(super) fn create_tmp(root: &File) -> Result<(), RuntimePathError> {
         let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
@@ -394,5 +410,35 @@ impl State {
             self.bytes = self.bytes.saturating_sub(entry.size);
             let _ = entry.object;
         }
+    }
+}
+
+#[cfg(test)]
+mod devpts_tests {
+    use super::PosixShm;
+    use std::fs::File;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn devpts_directory_is_materialised_and_idempotent() {
+        let root = std::env::temp_dir().join(format!(
+            "hl-devpts-root-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let pin = File::open(&root).unwrap();
+
+        PosixShm::create_devpts(&pin).unwrap();
+        assert!(
+            root.join("dev/pts").is_dir(),
+            "a guest that opendir()s /dev/pts needs the directory to exist"
+        );
+        PosixShm::create_devpts(&pin).unwrap();
+        assert!(root.join("dev/pts").is_dir());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

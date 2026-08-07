@@ -344,6 +344,10 @@ impl AlarmRegistry {
         }
     }
 
+    /// Wakes only threads that can actually take a signal now.
+    ///
+    /// A blocked timer signal stays pending and must not abort an
+    /// interruptible sleep with EINTR the way an unconditional wake does.
     fn interrupt_process(&self, process: ProcessId) {
         let threads = self
             .tasks
@@ -352,6 +356,11 @@ impl AlarmRegistry {
             .into_iter()
             .filter(|thread| thread.process == process)
             .map(|thread| thread.id)
+            .filter(|thread| {
+                self.tasks
+                    .has_deliverable_except(*thread, hl_task::SignalMask::from_bits(0))
+                    .unwrap_or(true)
+            })
             .collect::<Vec<_>>();
         let mut interruptions = self
             .interruptions
@@ -453,6 +462,31 @@ mod tests {
             alarms.current_cpu(process, 1, 120_000_000).value,
             hl_time::Timespec::default()
         );
+    }
+
+    #[test]
+    fn blocked_timer_signal_does_not_wake_an_interruptible_sleeper() {
+        let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+        let credentials = ProcessCredentials::new(0, 0, &[], 65_536).unwrap();
+        let (process, thread) = tasks.create_init(credentials, ProcessLimits::default()).unwrap();
+        let alarms = AlarmRegistry::new(Arc::clone(&tasks), Arc::new(Scheduler));
+        let interruption = Arc::new(Interruption::new());
+        alarms.register_interruption(thread, Arc::clone(&interruption));
+
+        let signal = SignalNumber::new(37).unwrap();
+        tasks
+            .set_signal_mask(thread, SignalMask::from_bits(0).with(signal))
+            .unwrap();
+
+        alarms.deliver_timer_signal(PendingTarget::Process(process), SignalInfo::bare(signal));
+        assert!(
+            !interruption.is_pending(),
+            "a blocked timer signal must stay pending instead of aborting the sleep with EINTR"
+        );
+
+        tasks.set_signal_mask(thread, SignalMask::from_bits(0)).unwrap();
+        alarms.deliver_timer_signal(PendingTarget::Process(process), SignalInfo::bare(signal));
+        assert!(interruption.is_pending(), "a deliverable timer signal must wake the sleeper");
     }
 
     #[test]
