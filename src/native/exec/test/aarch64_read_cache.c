@@ -4,6 +4,7 @@
  * view carrying only write permission must never satisfy a load. */
 #include "../include/executor.h"
 #include "../src/arch/aarch64/assembler.h"
+#include "../src/arch/aarch64/entry.h"
 #include "../src/arch/aarch64/guard.h"
 #include "../src/arch/aarch64/projection.h"
 #include "../src/executor.h"
@@ -177,9 +178,36 @@ static int measure(int mode, arm_result *result) {
     return 0;
 }
 
+/* The entry trampoline proves the table once and parks the usable count. An
+ * unpublished, stale or oversized table must leave zero, so every guard in the
+ * entry exhausts its scan on the first slot and falls closed to the window. */
+static int proof(void) {
+    hl_native_aarch64_cpu state;
+    const struct { uint64_t token, incarnation, count, expected; } cases[] = {
+        {11, 11, 3, 3},        /* published, current, in capacity */
+        {0, 11, 3, 0},         /* never published */
+        {7, 11, 3, 0},         /* belongs to a retired mapping */
+        {11, 11, 5, 0},        /* count beyond the four slots */
+        {11, 11, 4, 4},        /* exactly at capacity */
+        {11, 11, UINT64_MAX, 0},
+    };
+    for (unsigned index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        memset(&state, 0, sizeof(state));
+        state.read_token = cases[index].token;
+        state.read_incarnation = cases[index].incarnation;
+        state.read_count = cases[index].count;
+        state.read_valid_count = UINT64_MAX;
+        /* br x1 straight to the epilogue: the preamble is the whole subject. */
+        hl_native_aarch64_enter(&state, (void (*)(void))hl_native_aarch64_return);
+        CHECK(state.read_valid_count == cases[index].expected);
+    }
+    return 0;
+}
+
 int main(void) {
     const unsigned rounds = 200;
     arm_result distinct = {0}, shared = {0}, denied = {0};
+    if (proof() != 0) return 1;
     if (measure(0, &distinct) != 0 || measure(1, &shared) != 0 || measure(2, &denied) != 0)
         return 1;
     /* Three owners in one entry: the cache resolves every load itself, so none

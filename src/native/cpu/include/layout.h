@@ -91,6 +91,7 @@ typedef struct hl_native_aarch64_cpu {
     uint64_t fault_completed;
     uint64_t ibtc_base;
     uint64_t execution_identity;
+    uint64_t read_valid_count;
 } hl_native_aarch64_cpu;
 
 typedef struct hl_native_x86_64_cpu {
@@ -245,7 +246,8 @@ HL_CPU_ASSERT(hl_native_aarch64_cpu, entry_certificate_identity, 2368);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, fault_completed, 2376);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, ibtc_base, 2384);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, execution_identity, 2392);
-_Static_assert(sizeof(hl_native_aarch64_cpu) == 2400, "aarch64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_aarch64_cpu, read_valid_count, 2400);
+_Static_assert(sizeof(hl_native_aarch64_cpu) == 2408, "aarch64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_aarch64_cpu) == 8, "aarch64 native CPU prefix alignment drifted");
 

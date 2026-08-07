@@ -18,6 +18,7 @@
 #define OFFSET_READ_TOKEN ((int)offsetof(hl_native_aarch64_cpu, read_token))
 #define OFFSET_READ_INCARNATION ((int)offsetof(hl_native_aarch64_cpu, read_incarnation))
 #define OFFSET_READ_COUNT ((int)offsetof(hl_native_aarch64_cpu, read_count))
+#define OFFSET_READ_VALID_COUNT ((int)offsetof(hl_native_aarch64_cpu, read_valid_count))
 #define OFFSET_READ_VIEWS ((int)offsetof(hl_native_aarch64_cpu, read_views))
 #define OFFSET_READ_VIEW_PUBLICATION ((int)offsetof(hl_native_aarch64_cpu, read_view_publication))
 #define OFFSET_WRITE_POLICY ((int)offsetof(hl_native_aarch64_cpu, memory_write_policy))
@@ -415,7 +416,7 @@ static void link(hl_a64_assembler *assembler, uint32_t *instruction, const uint8
 /* The view payload is immutable for a whole entry, so the scan is a count-driven
  * loop over x30 rather than four unrolled copies of the same twelve words. */
 static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **hit) {
-    uint32_t *active[4 + 1];
+    uint32_t *active[1];
     uint32_t *exhausted;
     uint32_t *below;
     uint32_t *above;
@@ -431,22 +432,9 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     hl_a64_emit32(assembler, 0xEB10013Fu); /* cmp x9,x16: end wrapped */
     active[active_count++] = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
-    /* The release-published token orders the immutable view payload. An LDAR
-     * of that token provides the required acquire without a global DMB on
-     * every translated read. */
-    hl_a64_addi(assembler, 17, CPU, OFFSET_READ_TOKEN);
-    hl_a64_emit32(assembler, UINT32_C(0xc8dffe31)); /* ldar x17,[x17] */
-    hl_a64_emit32(assembler, 0xF100023Fu); /* cmp x17,#0 */
-    active[active_count++] = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    hl_a64_ldr(assembler, 18, CPU, OFFSET_READ_INCARNATION);
-    hl_a64_emit32(assembler, 0xEB12023Fu); /* cmp x17,x18 */
-    active[active_count++] = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_READ_COUNT);
-    hl_a64_emit32(assembler, 0xF100123Fu); /* cmp x17,#4 */
-    active[active_count++] = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
+    /* The entry trampoline already acquired the token and proved the table; a
+     * zero count here exhausts the scan on its first pass and fails closed. */
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_READ_VALID_COUNT);
 
     hl_a64_addi(assembler, 30, CPU, OFFSET_READ_VIEWS);
     loop = assembler->cursor;
@@ -484,9 +472,6 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     uint8_t *active_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
     condition(assembler, active[0], active_target, 3u);
-    condition(assembler, active[1], active_target, 0u);
-    condition(assembler, active[2], active_target, 1u);
-    condition(assembler, active[3], active_target, 8u);
     condition(assembler, exhausted, active_target, 3u);
     condition(assembler, below, following, 3u);
     condition(assembler, above, following, 8u);
@@ -502,7 +487,7 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
  * view absent from this bounded, generation-qualified cache. */
 static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc,
                         const uint8_t *resume, uint8_t **archive) {
-    uint32_t *inactive[4];
+    uint32_t *inactive[1];
     uint32_t *exhausted;
     uint32_t *below;
     uint32_t *above;
@@ -516,20 +501,8 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     hl_a64_emit32(assembler, 0xEB10013Fu); /* cmp end,address: wrapped */
     inactive[0] = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
-    /* Match read_cache's acquire of the release-published view payload. */
-    hl_a64_addi(assembler, 17, CPU, OFFSET_READ_TOKEN);
-    hl_a64_emit32(assembler, UINT32_C(0xc8dffe31)); /* ldar x17,[x17] */
-    hl_a64_emit32(assembler, 0xF100023Fu); /* cmp token,#0 */
-    inactive[1] = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    hl_a64_ldr(assembler, 18, CPU, OFFSET_READ_INCARNATION);
-    hl_a64_emit32(assembler, 0xEB12023Fu); /* cmp token,incarnation */
-    inactive[2] = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_READ_COUNT);
-    hl_a64_emit32(assembler, 0xF100123Fu); /* cmp count,#4 */
-    inactive[3] = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
+    /* Match read_cache: the entry trampoline proved the table for this entry. */
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_READ_VALID_COUNT);
 
     hl_a64_addi(assembler, 30, CPU, OFFSET_READ_VIEWS);
     loop = assembler->cursor;
@@ -558,7 +531,7 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     uint8_t *selected_target = assembler->cursor;
     /* The countdown consumed the slot number the unrolled scan used to
      * materialise, so recover it as read_count - remaining - 1. */
-    hl_a64_ldr(assembler, 18, CPU, OFFSET_READ_COUNT);
+    hl_a64_ldr(assembler, 18, CPU, OFFSET_READ_VALID_COUNT);
     hl_a64_emit32(assembler, UINT32_C(0xcb110252)); /* sub x18,x18,x17 */
     hl_a64_subi(assembler, 9, 18, 1);
     /* archive_dirty uses x9 while scanning records. Preserve the selected
@@ -599,9 +572,6 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     branch(assembler, chosen, selected_target);
     branch(assembler, retry, resume);
     condition(assembler, inactive[0], miss, 3u);
-    condition(assembler, inactive[1], miss, 0u);
-    condition(assembler, inactive[2], miss, 1u);
-    condition(assembler, inactive[3], miss, 8u);
     condition(assembler, exhausted, miss, 3u);
     condition(assembler, below, following, 3u);
     condition(assembler, above, following, 8u);

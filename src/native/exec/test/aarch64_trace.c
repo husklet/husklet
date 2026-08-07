@@ -736,8 +736,10 @@ int main(void) {
         0x2140, (const uint8_t *)guarded_words, sizeof(guarded_words), 3, 4};
     const hl_a64_source guarded_source = {&guarded_span, 1, 3, 4};
     CHECK(mprotect(code, capacity, PROT_READ | PROT_WRITE) == 0);
+    /* Half the buffer no longer holds a full-length guarded read trace, so the
+     * capacity bound still has to reject it rather than overrun. */
     CHECK(!hl_a64_trace_build(&guarded_source, 0x2140, HL_A64_TRACE_MAX_WORDS,
-                              code, capacity, &trace));
+                              code, capacity / 2, &trace));
     CHECK(!hl_a64_trace_build(&guarded_source, 0x2140, 1, code,
                               HL_A64_STUB_MAX_BYTES + 32, &trace));
     uint32_t guarded_write_words[HL_A64_TRACE_MAX_WORDS];

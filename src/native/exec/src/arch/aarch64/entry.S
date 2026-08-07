@@ -24,6 +24,18 @@ hl_native_aarch64_enter:
     /* host_stack is the caller's sp; the fpcr/fpsr pair sits just below it. */
     add x9,sp,#16
     str x9,[x0,#280]
+    /* Prove the view table once per entry -- published, current, in capacity --
+     * and leave the usable count at 2400, zero when it cannot be trusted. */
+    add x9,x0,#1688
+    ldar x9,[x9]
+    ldr x10,[x0,#1696]
+    cmp x9,#0
+    ccmp x9,x10,#0,ne
+    ldr x9,[x0,#1704]
+    csel x9,x9,xzr,eq
+    cmp x9,#4
+    csel x9,x9,xzr,ls
+    str x9,[x0,#2400]
     br x1
 .size hl_native_aarch64_enter,.-hl_native_aarch64_enter
 
