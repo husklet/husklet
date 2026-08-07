@@ -24,6 +24,9 @@ pub(in crate::ffi::linux::execution) struct NativeFile {
     link_target: Mutex<Option<Vec<u8>>>,
     pub(super) path_only: AtomicBool,
     pub(super) anonymous_exclusive: AtomicBool,
+    /// Hidden name standing in for an `O_TMPFILE` inode the host filesystem cannot create anonymously.
+    #[cfg(target_os = "linux")]
+    pub(super) anonymous_name: super::pin::AnonymousSlot,
     pub(super) writes: lease::Registry,
     pub(super) write_lease: Mutex<Option<lease::WriteLease>>,
     ownership: Arc<metadata::Registry>,
@@ -75,6 +78,16 @@ impl NativeFile {
         Ok(self.watches.subscribe_dnotify(self.path.clone(), mask, callback))
     }
 
+    #[cfg(target_os = "linux")]
+    fn anonymous(&self) -> bool {
+        self.anonymous_name.present()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    const fn anonymous(&self) -> bool {
+        false
+    }
+
     pub(super) fn xattr_file(&self) -> Result<File, ObjectError> {
         self.io()?;
         self.file
@@ -101,6 +114,8 @@ impl NativeFile {
             link_target: Mutex::new(None),
             path_only: AtomicBool::new(false),
             anonymous_exclusive: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            anonymous_name: super::pin::AnonymousSlot::default(),
             writes,
             write_lease: Mutex::new(None),
             ownership,
@@ -164,13 +179,17 @@ impl fmt::Debug for NativeFile {
 
 impl Drop for NativeFile {
     fn drop(&mut self) {
-        let links = self
-            .file
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .and_then(|file| file.metadata().ok())
-            .map_or(0, |value| value.nlink());
+        // The hidden name is removed as this object drops, so the inode retains no link.
+        let links = if self.anonymous() {
+            0
+        } else {
+            self.file
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .and_then(|file| file.metadata().ok())
+                .map_or(0, |value| value.nlink())
+        };
         if let Some(lease) = self
             .shm_lease
             .get_mut()
@@ -365,6 +384,8 @@ impl OpenFileDescription for NativeFile {
         Ok(Some(Arc::new(mutation::NativeLink::new(
             file,
             self.anonymous_exclusive.load(Ordering::Acquire),
+            #[cfg(target_os = "linux")]
+            self.anonymous_name.clone(),
         ))))
     }
 
@@ -595,7 +616,8 @@ impl OpenFileDescription for NativeFile {
                 8
             },
             permissions: (value.mode() & 0o7777) as u16,
-            links: value.nlink(),
+            // An emulated anonymous inode still carries its hidden name, which the guest must not observe.
+            links: if self.anonymous() { 0 } else { value.nlink() },
             user: value.uid(),
             group: value.gid(),
             special_device: value.rdev(),

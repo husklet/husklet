@@ -167,6 +167,15 @@ impl PreparedPathOpen for PendingOpen {
             self.path = pin::Host::mutation_path(&self.parent, &self.name)?;
         }
         let created = temporary || bits & OpenIntent::CREATE != 0 && !self.exists()?;
+        #[cfg(target_os = "linux")]
+        let opened = if temporary {
+            let (opened, anonymous) = pin::Host::open_temporary(&self.parent, &self.name, self.intent, self.mode)?;
+            self.file.anonymous_name.set(anonymous);
+            opened
+        } else {
+            pin::Host::open(&self.parent, &self.name, self.intent, self.mode)?
+        };
+        #[cfg(not(target_os = "linux"))]
         let opened = pin::Host::open(&self.parent, &self.name, self.intent, self.mode)?;
         if created && !temporary {
             // The name is visible before quota admission and descriptor-table

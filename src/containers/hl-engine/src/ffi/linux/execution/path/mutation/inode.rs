@@ -13,13 +13,21 @@ use super::super::{HostError, NativePath, overlay_lease::ParentLease, pin};
 pub(in crate::ffi::linux::execution::path) struct NativeLink {
     file: std::fs::File,
     anonymous_exclusive: bool,
+    #[cfg(target_os = "linux")]
+    anonymous_name: pin::AnonymousSlot,
 }
 
 impl NativeLink {
-    pub(in crate::ffi::linux::execution::path) const fn new(file: std::fs::File, anonymous_exclusive: bool) -> Self {
+    pub(in crate::ffi::linux::execution::path) const fn new(
+        file: std::fs::File,
+        anonymous_exclusive: bool,
+        #[cfg(target_os = "linux")] anonymous_name: pin::AnonymousSlot,
+    ) -> Self {
         Self {
             file,
             anonymous_exclusive,
+            #[cfg(target_os = "linux")]
+            anonymous_name,
         }
     }
 
@@ -103,6 +111,8 @@ pub(in crate::ffi::linux::execution::path) fn prepare_inode_link(
         parent,
         name,
         anonymous_exclusive: native.anonymous_exclusive,
+        #[cfg(target_os = "linux")]
+        anonymous_name: native.anonymous_name.clone(),
     }))
 }
 
@@ -112,12 +122,24 @@ struct PendingInodeLink {
     parent: ParentLease,
     name: CString,
     anonymous_exclusive: bool,
+    #[cfg(target_os = "linux")]
+    anonymous_name: pin::AnonymousSlot,
 }
 
 impl PreparedPathMutation for PendingInodeLink {
     fn commit(&mut self) -> Result<(), RuntimePathError> {
         if self.anonymous_exclusive {
             return Err(RuntimePathError::NotFound);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let parent = self.parent.mutation()?;
+            if let Some(result) = self.anonymous_name.materialize(parent.as_raw_fd(), &self.name) {
+                if result.is_ok() {
+                    self.parent.publish();
+                }
+                return result;
+            }
         }
         Self::publish(&self.source, &self.parent, &self.name)
     }
