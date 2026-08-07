@@ -2342,10 +2342,13 @@ impl Executor {
         }
         views.sort_unstable_by_key(|view| view.guest_first);
         let direct_literal = direct_literal_target(state.pc, sources, primary_range.0, primary_range.1);
+        // The authority identity is cache-wide: a per-entry narrowing of the same window
+        // reissues it and resets every translation, so admit the whole lease instead.
         let direct_protection = self
             .direct_scalar_trace(state.pc, sources)
             .or_else(|| direct_literal.then_some(Protection::READ))
-            .filter(|required| lease.allows(*required));
+            .filter(|required| lease.allows(*required))
+            .map(|_| lease.authority());
         let active_range = if direct_protection.is_some() {
             primary_range
         } else {
