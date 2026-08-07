@@ -979,10 +979,12 @@ uint32_t hl_x86_vector_words(const instruction *item) {
            (item->live_chain != 0u ? 19u : 0u) +
            constant_words(item->pc) +
            (item->vector_kind != VECTOR_COPY && item->memory_write == 0u ? operation : 0u) + aligned +
-           /* Only VECTOR_COPY reassembles the loaded upper half. */
+           /* Only VECTOR_COPY reassembles the loaded upper half; every other kind just
+            * rescues it out of the read cache's v17 for the VEX completion. */
            (width != 32u ? 0u :
             item->memory_write != 0u ? 3u :
-            item->vector_kind == VECTOR_COPY ? 4u : 1u);
+            item->vector_kind == VECTOR_COPY ? 4u :
+            item->vector_vex != 0u ? 2u : 1u);
     return words;
 }
 
@@ -1423,10 +1425,12 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
         hl_x86_emit_vector_upper_zero(words, cursor, item->destination);
         return;
     }
+    /* v29..v31 carry the upper operands because the per-kind emitters treat
+     * v16..v25 as free temporaries. */
     upper = *item; upper.width = 16u; upper.vector_memory_width = 0u;
     upper.memory_operand = 0u; upper.destination = 20u;
-    if (memory_upper != 0u) upper.source = 17u;
-    else { hl_x86_emit_vector_upper_load(words, cursor, 18u, item->source); upper.source = 18u; }
+    if (memory_upper != 0u) upper.source = 29u;
+    else { hl_x86_emit_vector_upper_load(words, cursor, 29u, item->source); upper.source = 29u; }
     if (item->vector_kind == VECTOR_SHUFFLE_FLOAT || item->vector_kind == VECTOR_SHUFFLE_DOUBLE ||
         item->vector_kind == VECTOR_ADD || item->vector_kind == VECTOR_SUBTRACT ||
         item->vector_kind == VECTOR_MULTIPLY_EVEN_SIGNED_DWORD ||
@@ -1448,12 +1452,12 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
         item->vector_kind == VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE ||
         item->vector_kind == VECTOR_BLEND_IMMEDIATE ||
         item->vector_kind == VECTOR_BLEND_VARIABLE) {
-        hl_x86_emit_vector_upper_load(words, cursor, 19u, item->vector_source_one);
-        upper.vector_source_one = 19u;
+        hl_x86_emit_vector_upper_load(words, cursor, 30u, item->vector_source_one);
+        upper.vector_source_one = 30u;
     } else upper.vector_source_one = upper.source;
     if (item->vector_kind == VECTOR_BLEND_VARIABLE) {
-        hl_x86_emit_vector_upper_load(words, cursor, 21u, item->vector_subopcode);
-        upper.vector_subopcode = 21u;
+        hl_x86_emit_vector_upper_load(words, cursor, 31u, item->vector_subopcode);
+        upper.vector_subopcode = 31u;
     } else if (item->vector_kind == VECTOR_BLEND_IMMEDIATE && item->condition == 0u) {
         upper.vector_immediate = (uint8_t)(item->vector_immediate >> (16u / item->vector_lane));
     }
@@ -1535,6 +1539,8 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
             hl_x86_emit_vector_upper_store(words, cursor, 17u, item->destination);
         } else if (item->vector_kind != VECTOR_COPY) {
             loaded_operation = &words[*cursor];
+            if (width == 32u && item->vector_vex != 0u)
+                words[(*cursor)++] = UINT32_C(0x4ea01c00) | 17u << 16 | 17u << 5 | 29u;
             emit_vector_operation(words, cursor, item);
             emit_vex_completion(words, cursor, item, width == 32u);
         }
