@@ -21,23 +21,20 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Err(error) => return LinuxResult::Error(error),
         };
         let wait_options = Self::wait_options(plan.options, false);
-        // Every arm returns; the loop shape is kept so a retry can be added without reflow.
-        #[allow(clippy::never_loop)]
-        loop {
-            if let Some(result) = self.trace_wait4(pid, status) {
-                return result;
-            }
-            let Ok(prepared) = self.tasks.prepare_wait_child(self.process, selector, wait_options) else {
-                return LinuxResult::Error(Errno::ECHILD);
-            };
-            if let Some(result) = self.finish_prepared_wait(prepared, pid, status, usage) {
-                return result;
-            }
-            if let Some(result) = self.wait_interruption() {
-                return result;
-            }
-            return LinuxResult::Restart(RestartKind::NoInterrupt);
+        if let Some(result) = self.trace_wait4(pid, status) {
+            return result;
         }
+        let Ok(prepared) = self.tasks.prepare_wait_child(self.process, selector, wait_options) else {
+            return LinuxResult::Error(Errno::ECHILD);
+        };
+        if let Some(result) = self.finish_prepared_wait(prepared, pid, status, usage) {
+            return result;
+        }
+        if let Some(result) = self.wait_interruption() {
+            return result;
+        }
+        // Blocking is a dispatcher-level syscall restart, not an in-handler retry.
+        LinuxResult::Restart(RestartKind::NoInterrupt)
     }
 
     fn wait_interruption(&self) -> Option<LinuxResult> {
@@ -183,35 +180,32 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Err(error) => return LinuxResult::Error(error),
         };
         let options = Self::wait_options(plan.options, plan.keep_waitable);
-        // Every arm returns; the loop shape is kept so a retry can be added without reflow.
-        #[allow(clippy::never_loop)]
-        loop {
-            let Ok(prepared) = self.tasks.prepare_wait_child(self.process, selector, options) else {
-                return LinuxResult::Error(Errno::ECHILD);
-            };
-            match prepared {
-                PreparedChildWait::Selection(selection) => {
-                    return self.finish_waitid(selection, plan.information, plan.usage);
-                }
-                PreparedChildWait::NoChange => {
-                    let zero = [0_u8; 128];
-                    let faulted = GuestMarshaller::new(&self.memory, self.architecture)
-                        .copy_to(plan.information, &zero)
-                        .fault
-                        .is_some();
-                    return if faulted {
-                        LinuxResult::Error(Errno::EFAULT)
-                    } else {
-                        LinuxResult::Value(0)
-                    };
-                }
-                PreparedChildWait::WouldBlock => {}
+        let Ok(prepared) = self.tasks.prepare_wait_child(self.process, selector, options) else {
+            return LinuxResult::Error(Errno::ECHILD);
+        };
+        match prepared {
+            PreparedChildWait::Selection(selection) => {
+                return self.finish_waitid(selection, plan.information, plan.usage);
             }
-            if let Some(result) = self.wait_interruption() {
-                return result;
+            PreparedChildWait::NoChange => {
+                let zero = [0_u8; 128];
+                let faulted = GuestMarshaller::new(&self.memory, self.architecture)
+                    .copy_to(plan.information, &zero)
+                    .fault
+                    .is_some();
+                return if faulted {
+                    LinuxResult::Error(Errno::EFAULT)
+                } else {
+                    LinuxResult::Value(0)
+                };
             }
-            return LinuxResult::Restart(RestartKind::NoInterrupt);
+            PreparedChildWait::WouldBlock => {}
         }
+        if let Some(result) = self.wait_interruption() {
+            return result;
+        }
+        // Blocking is a dispatcher-level syscall restart, not an in-handler retry.
+        LinuxResult::Restart(RestartKind::NoInterrupt)
     }
 
     fn finish_waitid(&self, selection: PreparedWaitSelection<'_>, information: u64, usage: u64) -> LinuxResult {
