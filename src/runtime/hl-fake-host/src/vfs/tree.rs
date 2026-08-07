@@ -97,7 +97,7 @@ impl Tree {
         Self::node(&state, target)?;
         let directory = Self::directory_mut(&mut state, parent)?;
         if directory.entries.contains_key(name.as_bytes()) {
-            return Err(FakeHostError::InvalidResource);
+            return Err(FakeHostError::invalid("vfs", parent.inode));
         }
         directory.entries.insert(name.as_bytes().to_vec(), target.inode);
         state.nodes.get_mut(&target.inode).expect("validated target").links += 1;
@@ -118,12 +118,12 @@ impl Tree {
             .entries
             .get(source.as_bytes())
             .copied()
-            .ok_or(FakeHostError::InvalidResource)?;
+            .ok_or(FakeHostError::invalid("vfs", source_parent.inode))?;
         if Self::directory_node(&state, target_parent)?
             .entries
             .contains_key(target.as_bytes())
         {
-            return Err(FakeHostError::InvalidResource);
+            return Err(FakeHostError::invalid("vfs", target_parent.inode));
         }
         Self::directory_mut(&mut state, source_parent)?
             .entries
@@ -142,7 +142,7 @@ impl Tree {
         let inode = Self::directory_mut(&mut state, parent)?
             .entries
             .remove(name.as_bytes())
-            .ok_or(FakeHostError::InvalidResource)?;
+            .ok_or(FakeHostError::invalid("vfs", parent.inode))?;
         let node = state.nodes.get_mut(&inode).expect("directory owned node");
         node.links -= 1;
         if node.links == 0 && !state.pins.values().any(|pin| pin.inode == inode) {
@@ -191,7 +191,7 @@ impl Tree {
         let node = Self::node(&state, identity)?;
         (node.kind == NodeKind::File)
             .then(|| node.data.clone())
-            .ok_or(FakeHostError::InvalidResource)
+            .ok_or(FakeHostError::invalid("vfs", identity.inode))
     }
 
     pub fn xattr(&self, identity: InodeIdentity, name: &XattrName) -> Result<Option<Vec<u8>>, FakeHostError> {
@@ -266,7 +266,7 @@ impl Tree {
                 .entries
                 .contains_key(name.as_bytes())
         {
-            return Err(FakeHostError::InvalidResource);
+            return Err(FakeHostError::invalid("vfs", parent.inode));
         }
         let inode = state.next_inode;
         state.next_inode += 1;
@@ -342,7 +342,7 @@ impl Tree {
             .nodes
             .get(&identity.inode)
             .filter(|node| node.identity == identity)
-            .ok_or(FakeHostError::InvalidResource)
+            .ok_or(FakeHostError::invalid("vfs", identity.inode))
     }
 
     fn node_mut(state: &mut TreeState, identity: InodeIdentity) -> Result<&mut Node, FakeHostError> {
@@ -350,14 +350,14 @@ impl Tree {
             .nodes
             .get_mut(&identity.inode)
             .filter(|node| node.identity == identity)
-            .ok_or(FakeHostError::InvalidResource)
+            .ok_or(FakeHostError::invalid("vfs", identity.inode))
     }
 
     fn directory_node(state: &TreeState, identity: InodeIdentity) -> Result<&Node, FakeHostError> {
         Self::node(state, identity).and_then(|node| {
             (node.kind == NodeKind::Directory)
                 .then_some(node)
-                .ok_or(FakeHostError::InvalidResource)
+                .ok_or(FakeHostError::invalid("vfs", identity.inode))
         })
     }
 
@@ -365,7 +365,7 @@ impl Tree {
         Self::node_mut(state, identity).and_then(|node| {
             (node.kind == NodeKind::Directory)
                 .then_some(node)
-                .ok_or(FakeHostError::InvalidResource)
+                .ok_or(FakeHostError::invalid("vfs", identity.inode))
         })
     }
 

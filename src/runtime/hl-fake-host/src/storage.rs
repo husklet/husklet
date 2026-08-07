@@ -40,7 +40,7 @@ impl StorageAdapter {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&token)
             .cloned()
-            .ok_or(FakeHostError::InvalidResource)?;
+            .ok_or(FakeHostError::invalid("directory", token.0))?;
         self.host
             .record("directory", "snapshot", token.0, entries.len(), entries.len())?;
         Ok(entries)
@@ -57,7 +57,7 @@ impl StorageAdapter {
 
     pub fn read(&self, token: FileToken, offset: usize, output: &mut [u8]) -> Result<usize, FakeHostError> {
         let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let file = files.get(&token).ok_or(FakeHostError::InvalidResource)?;
+        let file = files.get(&token).ok_or(FakeHostError::invalid("file", token.0))?;
         let available = file.len().saturating_sub(offset);
         let count = available.min(output.len()).min(self.maximum_transfer);
         self.host.record("file", "read", token.0, output.len(), count)?;
@@ -69,7 +69,7 @@ impl StorageAdapter {
         let count = input.len().min(self.maximum_transfer);
         self.host.record("file", "write", token.0, input.len(), count)?;
         let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let file = files.get_mut(&token).ok_or(FakeHostError::InvalidResource)?;
+        let file = files.get_mut(&token).ok_or(FakeHostError::invalid("file", token.0))?;
         file.resize(file.len().max(offset + count), 0);
         file[offset..offset + count].copy_from_slice(&input[..count]);
         Ok(count)
@@ -80,7 +80,7 @@ impl StorageAdapter {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&token)
-            .ok_or(FakeHostError::InvalidResource)?;
+            .ok_or(FakeHostError::invalid("file", token.0))?;
         self.host.release("file", ResourceKind::File, token.0)
     }
 
@@ -89,7 +89,7 @@ impl StorageAdapter {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&token)
-            .ok_or(FakeHostError::InvalidResource)?;
+            .ok_or(FakeHostError::invalid("directory", token.0))?;
         self.host.release("directory", ResourceKind::Directory, token.0)
     }
 }

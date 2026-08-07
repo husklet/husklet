@@ -47,8 +47,14 @@ impl ProviderEndpoint {
 
     fn transport_error(error: FakeHostError) -> TransportError {
         match error {
-            FakeHostError::Fault(Fault::Interrupted) => TransportError::Interrupted,
-            FakeHostError::Fault(Fault::WouldBlock) => TransportError::WouldBlock,
+            FakeHostError::Fault {
+                fault: Fault::Interrupted,
+                ..
+            } => TransportError::Interrupted,
+            FakeHostError::Fault {
+                fault: Fault::WouldBlock,
+                ..
+            } => TransportError::WouldBlock,
             FakeHostError::Closed => TransportError::Closed,
             _ => TransportError::Failed,
         }
@@ -163,8 +169,14 @@ impl SocketAdapter {
 
     fn socket_error(error: FakeHostError) -> SocketHostError {
         match error {
-            FakeHostError::Fault(Fault::Interrupted) => SocketHostError::Interrupted,
-            FakeHostError::Fault(Fault::WouldBlock) => SocketHostError::WouldBlock,
+            FakeHostError::Fault {
+                fault: Fault::Interrupted,
+                ..
+            } => SocketHostError::Interrupted,
+            FakeHostError::Fault {
+                fault: Fault::WouldBlock,
+                ..
+            } => SocketHostError::WouldBlock,
             _ => SocketHostError::Io,
         }
     }

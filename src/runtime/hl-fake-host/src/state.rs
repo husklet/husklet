@@ -21,9 +21,24 @@ pub enum Fault {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FakeHostError {
-    Fault(Fault),
-    InvalidResource,
+    Fault {
+        fault: Fault,
+        capability: &'static str,
+        operation: &'static str,
+        resource: u64,
+    },
+    InvalidResource {
+        capability: &'static str,
+        resource: u64,
+    },
     Closed,
+}
+
+impl FakeHostError {
+    #[must_use]
+    pub const fn invalid(capability: &'static str, resource: u64) -> Self {
+        Self::InvalidResource { capability, resource }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -165,7 +180,7 @@ impl FakeHost {
             state.next_resource = state
                 .next_resource
                 .checked_add(1)
-                .ok_or(FakeHostError::InvalidResource)?;
+                .ok_or(FakeHostError::InvalidResource { capability, resource })?;
             resource
         };
         self.call(capability, "open", resource, 0, 0)?;
@@ -177,7 +192,7 @@ impl FakeHost {
         self.call(capability, "close", resource, 0, 0)?;
         let mut state = self.lock();
         if resource == 0 || !state.resources.entry(kind).or_default().remove(&resource) {
-            return Err(FakeHostError::InvalidResource);
+            return Err(FakeHostError::InvalidResource { capability, resource });
         }
         Ok(())
     }
@@ -213,7 +228,14 @@ impl FakeHost {
             completed: if fault.is_some() { 0 } else { completed },
             fault,
         });
-        fault.map_or(Ok(()), |fault| Err(FakeHostError::Fault(fault)))
+        fault.map_or(Ok(()), |fault| {
+            Err(FakeHostError::Fault {
+                fault,
+                capability,
+                operation,
+                resource,
+            })
+        })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {

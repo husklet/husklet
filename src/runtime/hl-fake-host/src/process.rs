@@ -41,7 +41,7 @@ impl ProcessAdapter {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&process)
             .copied()
-            .ok_or(FakeHostError::InvalidResource)?;
+            .ok_or(FakeHostError::invalid("process", process.0))?;
         self.host.record("process", "wait", process.0, 0, 0)?;
         Ok(exit)
     }
@@ -53,7 +53,7 @@ impl ProcessAdapter {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get_mut(&process)
-            .ok_or(FakeHostError::InvalidResource)? = ProcessExit::Signal(signal);
+            .ok_or(FakeHostError::invalid("process", process.0))? = ProcessExit::Signal(signal);
         Ok(())
     }
 
@@ -62,7 +62,7 @@ impl ProcessAdapter {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&process)
-            .ok_or(FakeHostError::InvalidResource)?;
+            .ok_or(FakeHostError::invalid("process", process.0))?;
         self.host.release("process", ResourceKind::Process, process.0)
     }
 }

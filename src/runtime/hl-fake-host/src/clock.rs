@@ -20,7 +20,10 @@ impl VirtualClock {
 
     fn error(error: FakeHostError) -> ClockError {
         match error {
-            FakeHostError::Fault(Fault::Interrupted) => ClockError::Interrupted,
+            FakeHostError::Fault {
+                fault: Fault::Interrupted,
+                ..
+            } => ClockError::Interrupted,
             _ => ClockError::Failed,
         }
     }

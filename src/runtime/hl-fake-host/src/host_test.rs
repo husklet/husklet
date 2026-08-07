@@ -15,7 +15,12 @@ fn transcript_and_failure() {
     host.fail_at(3, Fault::Interrupted);
     assert_eq!(
         storage.read(file, 0, &mut output),
-        Err(FakeHostError::Fault(Fault::Interrupted))
+        Err(FakeHostError::Fault {
+            fault: Fault::Interrupted,
+            capability: "file",
+            operation: "read",
+            resource: file.0,
+        })
     );
     assert_eq!(storage.read(file, 0, &mut output).unwrap(), 3);
     assert_eq!(
