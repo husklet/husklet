@@ -131,6 +131,26 @@ fn barriers_and_registers() {
     }
 }
 
+/// The portless interpreter entry points have no counter, so counter reads must
+/// refuse rather than answer with a third timebase of their own.
+#[test]
+fn portless_counter_reads_refuse_instead_of_inventing_a_timebase() {
+    for word in [0xd53b_e000_u32, 0xd53b_e040, 0xd53b_e020, 0xd53b_e0c0] {
+        let mut cpu = Aarch64CpuState {
+            pc: 0x6000,
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::Aarch64Interpreter::execute_word(&mut cpu, &crate::aarch64::coordinate::Identity, word),
+            Aarch64ExecutionExit::UnsupportedInstruction {
+                instruction: 0x6000,
+                word
+            }
+        );
+        assert_eq!(cpu.pc, 0x6000);
+    }
+}
+
 #[test]
 fn instruction_cache() {
     let mut system = System::default();

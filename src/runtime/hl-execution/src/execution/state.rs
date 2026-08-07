@@ -15,6 +15,10 @@ pub enum CpuSnapshot {
 }
 pub type ExecutionCpuSnapshot = CpuSnapshot;
 
+/// The one frequency `cntfrq_el0` reports to the guest, on every execution path.
+/// It is 1GHz because [`ArchitecturalCounter`] ticks are nanoseconds.
+pub const GUEST_COUNTER_FREQUENCY_HZ: u64 = 1_000_000_000;
+
 /// Supplies the host monotonic timeline projected as the guest architectural
 /// counter. Values are nanoseconds and must never decrease.
 pub trait ArchitecturalCounter: std::fmt::Debug + Send + Sync {

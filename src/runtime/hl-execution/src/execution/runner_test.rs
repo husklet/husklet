@@ -933,6 +933,51 @@ fn counter_fork_progress() {
     assert_eq!(cpu.registers[2], 1_000_000_000);
 }
 
+/// The guest timebase contract: `cntfrq_el0` is [`crate::GUEST_COUNTER_FREQUENCY_HZ`]
+/// and `cntvct_el0` delivers [`crate::ArchitecturalCounter`] nanoseconds unscaled, so
+/// a counter difference divided by the frequency is the elapsed seconds the guest saw.
+#[test]
+fn guest_timebase_is_nanoseconds_against_the_declared_frequency() {
+    #[derive(Debug)]
+    struct Counter(std::sync::atomic::AtomicU64);
+    impl crate::ArchitecturalCounter for Counter {
+        fn read(&self) -> u64 {
+            self.0.fetch_add(250_000_000, std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    let mut memory = Memory::new(0x2000);
+    memory.put(0x1000, &0xd53b_e040_u32.to_le_bytes()); // mrs x0, cntvct_el0
+    memory.put(0x1004, &0xd53b_e041_u32.to_le_bytes()); // mrs x1, cntvct_el0
+    memory.put(0x1008, &0xd53b_e002_u32.to_le_bytes()); // mrs x2, cntfrq_el0
+    let counter: std::sync::Arc<dyn crate::ArchitecturalCounter> =
+        std::sync::Arc::new(Counter(std::sync::atomic::AtomicU64::new(1_000_000_000)));
+    let machine = ExecutionMachine::new_with_counter(
+        ExecutionSnapshot {
+            version: EXECUTION_SNAPSHOT_VERSION,
+            cpu: ExecutionCpuSnapshot::Aarch64(Aarch64CpuState {
+                pc: 0x1000,
+                ..Aarch64CpuState::default()
+            }),
+            cache_epoch: 1,
+            fault: None,
+        },
+        counter,
+    )
+    .unwrap();
+    for _ in 0..3 {
+        assert_eq!(machine.run_step(1, &mut memory), StepOutcome::Continue);
+    }
+    machine.freeze().unwrap();
+    let ExecutionCpuSnapshot::Aarch64(cpu) = machine.snapshot().unwrap().cpu else {
+        panic!()
+    };
+    assert_eq!(cpu.registers[2], crate::GUEST_COUNTER_FREQUENCY_HZ);
+    assert_eq!(cpu.registers[1] - cpu.registers[0], 250_000_000);
+    let observed_us = (cpu.registers[1] - cpu.registers[0]) * 1_000_000 / cpu.registers[2];
+    assert_eq!(observed_us, 250_000);
+}
+
 #[test]
 fn slice_yield_fetch() {
     let mut memory = Memory::new(0x1001);

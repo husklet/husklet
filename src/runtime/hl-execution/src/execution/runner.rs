@@ -257,7 +257,7 @@ impl<'a> RunnerSystem<'a> {
 impl GuestSystemPort for RunnerSystem<'_> {
     fn barrier(&mut self, _kind: crate::BarrierKind, _option: u8) {}
     fn counter_frequency(&self) -> u64 {
-        1_000_000_000
+        crate::GUEST_COUNTER_FREQUENCY_HZ
     }
     fn counter_value(&self) -> u64 {
         if let Some(value) = self.sampled.get() {

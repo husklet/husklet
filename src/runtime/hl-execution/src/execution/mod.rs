@@ -11,7 +11,7 @@ pub use runner::{
 };
 pub use state::{
     ArchitecturalCounter, EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionMachine, ExecutionSnapshot,
-    ExecutionStateError,
+    ExecutionStateError, GUEST_COUNTER_FREQUENCY_HZ,
 };
 
 #[cfg(test)]

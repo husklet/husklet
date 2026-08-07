@@ -34,6 +34,8 @@ pub enum Register {
 impl Register {
     pub(crate) const ZERO_BLOCK_BYTES: u64 = 64;
 
+    /// `None` for the counter registers: they have no value without a [`Port`],
+    /// and inventing one here would be a second guest timebase.
     pub(crate) fn read_local(self, cpu: &Aarch64CpuState) -> Option<u64> {
         match self {
             Self::CacheType => Some(0x9444_c004),
