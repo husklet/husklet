@@ -40,7 +40,10 @@ pub(crate) struct Header {
 
 impl Header {
     pub(crate) fn encode(kind: FrameKind, size: usize, request: u64) -> Result<[u8; HEADER_SIZE], ProviderError> {
-        let size = u32::try_from(size).map_err(|_| ProviderError::PayloadTooLarge)?;
+        let size = u32::try_from(size).map_err(|_| ProviderError::PayloadTooLarge {
+            size,
+            maximum: u32::MAX as usize,
+        })?;
         let mut bytes = [0_u8; HEADER_SIZE];
         bytes[0..4].copy_from_slice(&MAGIC.to_le_bytes());
         bytes[4..6].copy_from_slice(&VERSION.to_le_bytes());
@@ -51,20 +54,25 @@ impl Header {
     }
 
     pub(crate) fn decode(bytes: &[u8; HEADER_SIZE], maximum_payload: usize) -> Result<Self, ProviderError> {
-        if u32::from_le_bytes(bytes[0..4].try_into().unwrap()) != MAGIC {
-            return Err(ProviderError::MalformedFrame);
+        let magic = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+        if magic != MAGIC {
+            return Err(ProviderError::MalformedFrame(crate::FrameFault::Magic(magic)));
         }
-        if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) != VERSION {
-            return Err(ProviderError::UnsupportedVersion);
+        let version = u16::from_le_bytes(bytes[4..6].try_into().unwrap());
+        if version != VERSION {
+            return Err(ProviderError::UnsupportedVersion(version));
         }
         if bytes[20..32].iter().any(|byte| *byte != 0) {
-            return Err(ProviderError::MalformedFrame);
+            return Err(ProviderError::MalformedFrame(crate::FrameFault::Reserved));
         }
         let raw_kind = u16::from_le_bytes(bytes[6..8].try_into().unwrap());
         let kind = FrameKind::from_raw(raw_kind).ok_or(ProviderError::UnknownFrame(raw_kind))?;
         let size = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
         if size > maximum_payload {
-            return Err(ProviderError::PayloadTooLarge);
+            return Err(ProviderError::PayloadTooLarge {
+                size,
+                maximum: maximum_payload,
+            });
         }
         Ok(Self {
             kind,

@@ -15,7 +15,10 @@ impl<T: ProviderTransport> ClientCore<T> {
     ) -> Result<ProviderSubscription, ProviderError> {
         let _admission = self.activity.admit();
         if payload.is_empty() || payload.len() > self.limits.payload_bytes {
-            return Err(ProviderError::PayloadTooLarge);
+            return Err(ProviderError::PayloadTooLarge {
+                size: payload.len(),
+                maximum: self.limits.payload_bytes,
+            });
         }
         let key = self.lock().reserve_subscription(identity, observer)?;
         if let Err(error) = self.send(FrameKind::Subscribe, key.id(), payload) {

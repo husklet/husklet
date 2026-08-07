@@ -15,8 +15,8 @@ use hl_descriptor::{
 use self::protocol::FileProtocol;
 use self::readiness::{FileEventObserver, FileReadiness};
 use crate::{
-    FileAccess, FileError, FileMetadata, FileRebind, FileSnapshot, Handle, HandleKind, HandleNamespace, Provider,
-    ProviderError, ProviderSubscription, ProviderTransport, RemoteId, SubscriptionIdentity,
+    CallArgument, FileAccess, FileError, FileMetadata, FileRebind, FileSnapshot, Handle, HandleKind, HandleNamespace,
+    Provider, ProviderError, ProviderSubscription, ProviderTransport, RemoteId, SubscriptionIdentity,
 };
 
 const SEQUENTIAL: u64 = u64::MAX;
@@ -109,7 +109,7 @@ impl<T: ProviderTransport> ProjectedFiles<T> {
         path: &[u8],
     ) -> Result<Arc<ProjectedFile<T>>, FileError> {
         if path.len() > PATH_MAXIMUM {
-            return Err(FileError::InvalidArgument);
+            return Err(FileError::InvalidArgument(CallArgument::PathLength(path.len())));
         }
         let reservation = self.handles.reserve(HandleKind::File)?;
         let reply = self.client.request(&FileProtocol::open(service, access.wire()))?;
@@ -126,8 +126,18 @@ impl<T: ProviderTransport> ProjectedFiles<T> {
 
     pub fn rebind(&self, value: FileRebind) -> Result<Arc<ProjectedFile<T>>, (FileError, FileRebind)> {
         let FileRebind { snapshot, capability } = value;
-        if snapshot.identity_namespace != self.identity_namespace || snapshot.path.len() > PATH_MAXIMUM {
-            return Err((FileError::InvalidArgument, FileRebind { snapshot, capability }));
+        if snapshot.identity_namespace != self.identity_namespace {
+            return Err((
+                FileError::InvalidArgument(CallArgument::IdentityNamespace),
+                FileRebind { snapshot, capability },
+            ));
+        }
+        if snapshot.path.len() > PATH_MAXIMUM {
+            let length = snapshot.path.len();
+            return Err((
+                FileError::InvalidArgument(CallArgument::PathLength(length)),
+                FileRebind { snapshot, capability },
+            ));
         }
         let handle = match self.handles.accept(capability) {
             Ok(handle) => handle,
@@ -163,7 +173,7 @@ impl<T: ProviderTransport> ProjectedFiles<T> {
         path: &[u8],
     ) -> Result<Arc<ProjectedFile<T>>, FileError> {
         if path.len() > PATH_MAXIMUM {
-            return Err(FileError::InvalidArgument);
+            return Err(FileError::InvalidArgument(CallArgument::PathLength(path.len())));
         }
         let path = Arc::from(path);
         Ok(Arc::new(ProjectedFile {
@@ -188,10 +198,9 @@ impl<T: ProviderTransport> ProjectedFiles<T> {
     }
 
     fn close_unbound(&self, remote: RemoteId) {
-        let _ = self
-            .client
-            .request(&FileProtocol::close(remote))
-            .and_then(|reply| FileProtocol::close_reply(reply).map_err(|_| ProviderError::UnexpectedFrame));
+        let _ = self.client.request(&FileProtocol::close(remote)).and_then(|reply| {
+            FileProtocol::close_reply(reply).map_err(|_| ProviderError::UnexpectedFrame(crate::FrameKind::Reply))
+        });
     }
 }
 
@@ -201,7 +210,10 @@ impl<T: ProviderTransport> ProjectedFile<T> {
             return Err(FileError::Linux(9));
         }
         if output.len() > self.io_limit {
-            return Err(FileError::PayloadTooLarge);
+            return Err(FileError::PayloadTooLarge {
+                size: output.len(),
+                maximum: self.io_limit,
+            });
         }
         let remote = self.remote()?;
         let reply = self.client.request(&FileProtocol::read(remote, offset, output.len()))?;
@@ -215,7 +227,10 @@ impl<T: ProviderTransport> ProjectedFile<T> {
             return Err(FileError::Linux(9));
         }
         if input.len() > self.io_limit {
-            return Err(FileError::PayloadTooLarge);
+            return Err(FileError::PayloadTooLarge {
+                size: input.len(),
+                maximum: self.io_limit,
+            });
         }
         let remote = self.remote()?;
         let reply = self.client.request(&FileProtocol::write(remote, offset, input))?;
@@ -224,7 +239,7 @@ impl<T: ProviderTransport> ProjectedFile<T> {
 
     pub fn seek(&self, offset: i64, whence: u8) -> Result<u64, FileError> {
         if whence > 2 {
-            return Err(FileError::InvalidArgument);
+            return Err(FileError::InvalidArgument(CallArgument::Whence(whence)));
         }
         let _sequence = self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let remote = self.remote()?;
@@ -390,7 +405,9 @@ impl<T: ProviderTransport> OpenFileDescription for ProjectedFile<T> {
         let _ = self
             .client
             .request(&FileProtocol::close(close.remote()))
-            .and_then(|reply| FileProtocol::close_reply(reply).map_err(|_| ProviderError::UnexpectedFrame));
+            .and_then(|reply| {
+                FileProtocol::close_reply(reply).map_err(|_| ProviderError::UnexpectedFrame(crate::FrameKind::Reply))
+            });
     }
 }
 

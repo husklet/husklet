@@ -95,23 +95,37 @@ impl ClientLimits {
     }
 }
 
+/// Names the header field that rejected a frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameFault {
+    Magic(u32),
+    Reserved,
+}
+
+/// Names the transfer direction that stalled.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Direction {
+    Read,
+    Write,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProviderError {
     InvalidLimits,
-    PayloadTooLarge,
+    PayloadTooLarge { size: usize, maximum: usize },
     Capacity,
     Closed,
     Canceled,
-    InvalidTicket,
+    InvalidTicket(u64),
     InvalidSubscription,
     DuplicateSubscription,
     AlreadyComplete,
     CheckpointBusy,
-    MalformedFrame,
-    UnsupportedVersion,
+    MalformedFrame(FrameFault),
+    UnsupportedVersion(u16),
     UnknownFrame(u16),
-    UnexpectedFrame,
-    ZeroProgress,
+    UnexpectedFrame(crate::FrameKind),
+    ZeroProgress(Direction),
     Transport(TransportError),
 }
 

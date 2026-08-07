@@ -120,7 +120,10 @@ fn capacity_cancellation_late() {
     let request = server.receive_frame();
     server.send_frame(FrameKind::Reply, request.1, b"ok");
     assert_eq!(provider.wait(second).unwrap().payload, b"ok");
-    assert_eq!(provider.wait(first), Err(ProviderError::InvalidTicket));
+    assert_eq!(
+        provider.wait(first),
+        Err(ProviderError::InvalidTicket(first.request().get()))
+    );
     assert_eq!(provider.late_replies(), 1);
     provider.close();
 }
@@ -181,7 +184,10 @@ fn reversed_reply_model() {
     });
     for (index, ticket) in tickets.into_iter().enumerate() {
         assert_eq!(provider.wait(ticket).unwrap().payload, [index as u8]);
-        assert_eq!(provider.wait(ticket), Err(ProviderError::InvalidTicket));
+        assert_eq!(
+            provider.wait(ticket),
+            Err(ProviderError::InvalidTicket(ticket.request().get()))
+        );
     }
     peer.join().unwrap();
     provider.close();
@@ -192,7 +198,10 @@ fn request_payload_and() {
     assert!(ClientLimits::new(0, 1).is_err());
     assert!(ClientLimits::new(1, 0).is_err());
     let (provider, _server) = Fixture::client(8, 1);
-    assert_eq!(provider.begin(&[0; 65]), Err(ProviderError::PayloadTooLarge));
+    assert_eq!(
+        provider.begin(&[0; 65]),
+        Err(ProviderError::PayloadTooLarge { size: 65, maximum: 64 })
+    );
     provider.close();
 }
 

@@ -109,7 +109,10 @@ impl<T: ProviderTransport> Provider<T> {
     pub fn begin(&self, payload: &[u8]) -> Result<Ticket, ProviderError> {
         let _admission = self.shared.activity.admit();
         if payload.len() > self.shared.limits.payload_bytes {
-            return Err(ProviderError::PayloadTooLarge);
+            return Err(ProviderError::PayloadTooLarge {
+                size: payload.len(),
+                maximum: self.shared.limits.payload_bytes,
+            });
         }
         let ticket = {
             let mut state = self.shared.lock();
@@ -162,8 +165,13 @@ impl<T: ProviderTransport> Provider<T> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         let slot = &mut state.slots[ticket.slot as usize];
-        let waiter = slot.waiter.take().ok_or(ProviderError::InvalidTicket)?;
-        waiter.completion.ok_or(ProviderError::InvalidTicket)?
+        let waiter = slot
+            .waiter
+            .take()
+            .ok_or(ProviderError::InvalidTicket(ticket.request.get()))?;
+        waiter
+            .completion
+            .ok_or(ProviderError::InvalidTicket(ticket.request.get()))?
     }
 
     pub fn cancel(&self, ticket: Ticket) -> Result<(), ProviderError> {
@@ -266,7 +274,10 @@ impl<T: ProviderTransport> ClientCore<T> {
 
     pub(crate) fn send(&self, kind: FrameKind, request: u64, payload: &[u8]) -> Result<(), ProviderError> {
         if payload.len() > self.limits.payload_bytes {
-            return Err(ProviderError::PayloadTooLarge);
+            return Err(ProviderError::PayloadTooLarge {
+                size: payload.len(),
+                maximum: self.limits.payload_bytes,
+            });
         }
         let header = Header::encode(kind, payload.len(), request)?;
         let _guard = self.write.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -278,9 +289,9 @@ impl<T: ProviderTransport> ClientCore<T> {
         let mut offset = 0;
         while offset < bytes.len() {
             match self.transport.write(&bytes[offset..]) {
-                Ok(0) => return Err(ProviderError::ZeroProgress),
+                Ok(0) => return Err(ProviderError::ZeroProgress(crate::Direction::Write)),
                 Ok(count) if count <= bytes.len() - offset => offset += count,
-                Ok(_) => return Err(ProviderError::ZeroProgress),
+                Ok(_) => return Err(ProviderError::ZeroProgress(crate::Direction::Write)),
                 Err(TransportError::Interrupted) => {}
                 Err(TransportError::WouldBlock) => self.transport.wait_writable()?,
                 Err(error) => return Err(error.into()),
@@ -295,7 +306,7 @@ impl<T: ProviderTransport> ClientCore<T> {
             match self.transport.read(&mut bytes[offset..]) {
                 Ok(0) => return Err(ProviderError::Closed),
                 Ok(count) if count <= bytes.len() - offset => offset += count,
-                Ok(_) => return Err(ProviderError::ZeroProgress),
+                Ok(_) => return Err(ProviderError::ZeroProgress(crate::Direction::Read)),
                 Err(TransportError::Interrupted) => {}
                 Err(TransportError::WouldBlock) => self.transport.wait_readable()?,
                 Err(error) => return Err(error.into()),
@@ -327,14 +338,14 @@ impl<T: ProviderTransport> ClientCore<T> {
         self.read_exact(&mut header_bytes)?;
         let header = Header::decode(&header_bytes, self.limits.payload_bytes)?;
         if header.request == 0 || !matches!(header.kind, FrameKind::Reply | FrameKind::Event) {
-            return Err(ProviderError::UnexpectedFrame);
+            return Err(ProviderError::UnexpectedFrame(header.kind));
         }
         let mut payload = vec![0_u8; header.size];
         self.read_exact(&mut payload)?;
         match header.kind {
             FrameKind::Reply => Ok(IncomingFrame::Reply(header.request, payload)),
             FrameKind::Event => Ok(IncomingFrame::Event(header.request, payload)),
-            _ => Err(ProviderError::UnexpectedFrame),
+            kind => Err(ProviderError::UnexpectedFrame(kind)),
         }
     }
 

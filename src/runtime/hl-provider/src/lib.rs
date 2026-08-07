@@ -21,7 +21,7 @@ pub use checkpoint::{
     ProviderClientCheckpoint, ProviderFileCheckpoint, ProviderRemoteRestore, ProviderResourceKey,
     ProviderResourceReference, ProviderSubscriptionCheckpoint,
 };
-pub use client::model::{ClientLimits, ProviderError, Reply, RequestId, Ticket};
+pub use client::model::{ClientLimits, Direction, FrameFault, ProviderError, Reply, RequestId, Ticket};
 pub use client::subscription::{
     EventObserver, ProviderEvent, SubscriptionIdentity, SubscriptionKey, SubscriptionSnapshot,
 };
@@ -30,7 +30,7 @@ pub use epoll_registry::{
     CallbackLease, EpollRegistry, ReadyEvent, RegistryError, RegistrySnapshot, WatchConfig, WatchIdentity,
     WatchSnapshot, WatchToken,
 };
-pub use file::model::{FileAccess, FileError, FileMetadata, FileRebind, FileSnapshot};
+pub use file::model::{CallArgument, FileAccess, FileError, FileMetadata, FileRebind, FileSnapshot, ReplyOperation};
 pub use file::{ProjectedFile, ProjectedFiles};
 pub use namespace::{
     Close, Handle, HandleKind, HandleNamespace, HandleReservation, NamespaceError, NamespaceForkPlan, NamespaceLimits,

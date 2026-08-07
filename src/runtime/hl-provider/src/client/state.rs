@@ -127,10 +127,13 @@ impl ClientState {
         let slot = self
             .slots
             .get(ticket.slot as usize)
-            .ok_or(ProviderError::InvalidTicket)?;
-        let waiter = slot.waiter.as_ref().ok_or(ProviderError::InvalidTicket)?;
+            .ok_or(ProviderError::InvalidTicket(ticket.request.get()))?;
+        let waiter = slot
+            .waiter
+            .as_ref()
+            .ok_or(ProviderError::InvalidTicket(ticket.request.get()))?;
         if waiter.generation != ticket.generation || waiter.request != ticket.request {
-            return Err(ProviderError::InvalidTicket);
+            return Err(ProviderError::InvalidTicket(ticket.request.get()));
         }
         Ok(waiter)
     }
@@ -139,10 +142,13 @@ impl ClientState {
         let slot = self
             .slots
             .get_mut(ticket.slot as usize)
-            .ok_or(ProviderError::InvalidTicket)?;
-        let waiter = slot.waiter.as_mut().ok_or(ProviderError::InvalidTicket)?;
+            .ok_or(ProviderError::InvalidTicket(ticket.request.get()))?;
+        let waiter = slot
+            .waiter
+            .as_mut()
+            .ok_or(ProviderError::InvalidTicket(ticket.request.get()))?;
         if waiter.generation != ticket.generation || waiter.request != ticket.request {
-            return Err(ProviderError::InvalidTicket);
+            return Err(ProviderError::InvalidTicket(ticket.request.get()));
         }
         Ok(waiter)
     }

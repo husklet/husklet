@@ -52,14 +52,34 @@ impl FileRebind {
     }
 }
 
+/// Names the file operation whose reply failed to decode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplyOperation {
+    Open,
+    Read,
+    Write,
+    Seek,
+    Stat,
+    Poll,
+    Close,
+}
+
+/// Names the argument a caller supplied out of range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CallArgument {
+    PathLength(usize),
+    Whence(u8),
+    IdentityNamespace,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
     Provider(ProviderError),
     Namespace(NamespaceError),
     Linux(i32),
-    MalformedReply,
-    InvalidArgument,
-    PayloadTooLarge,
+    MalformedReply(ReplyOperation),
+    InvalidArgument(CallArgument),
+    PayloadTooLarge { size: usize, maximum: usize },
     Retired,
 }
 pub type FileError = Error;

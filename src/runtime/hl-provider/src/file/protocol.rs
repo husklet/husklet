@@ -1,6 +1,6 @@
 //! C provider-files operation payloads and strict reply decoding.
 
-use crate::{FileError, FileMetadata, RemoteId, Reply};
+use crate::{FileError, FileMetadata, RemoteId, Reply, ReplyOperation};
 
 const OPEN: u8 = 1;
 const READ: u8 = 2;
@@ -24,9 +24,10 @@ impl FileProtocol {
     pub(crate) fn open_reply(reply: Reply) -> Result<RemoteId, FileError> {
         Self::success(&reply)?;
         if reply.payload.len() != 9 || reply.payload[0] != OPEN {
-            return Err(FileError::MalformedReply);
+            return Err(FileError::MalformedReply(ReplyOperation::Open));
         }
-        RemoteId::new(Bytes::read_u64(&reply.payload, 1)?).ok_or(FileError::MalformedReply)
+        RemoteId::new(Bytes::read_u64(&reply.payload, 1, ReplyOperation::Open)?)
+            .ok_or(FileError::MalformedReply(ReplyOperation::Open))
     }
 
     pub(crate) fn read(remote: RemoteId, offset: u64, size: usize) -> Vec<u8> {
@@ -40,11 +41,11 @@ impl FileProtocol {
     pub(crate) fn read_reply(reply: Reply, maximum: usize) -> Result<Vec<u8>, FileError> {
         Self::success(&reply)?;
         if reply.payload.len() < 5 || reply.payload[0] != READ {
-            return Err(FileError::MalformedReply);
+            return Err(FileError::MalformedReply(ReplyOperation::Read));
         }
-        let size = Bytes::read_u32(&reply.payload, 1)? as usize;
+        let size = Bytes::read_u32(&reply.payload, 1, ReplyOperation::Read)? as usize;
         if size > maximum || reply.payload.len() != 5 + size {
-            return Err(FileError::MalformedReply);
+            return Err(FileError::MalformedReply(ReplyOperation::Read));
         }
         Ok(reply.payload[5..].to_vec())
     }
@@ -62,11 +63,11 @@ impl FileProtocol {
     pub(crate) fn write_reply(reply: Reply, maximum: usize) -> Result<usize, FileError> {
         Self::success(&reply)?;
         if reply.payload.len() != 5 || reply.payload[0] != WRITE {
-            return Err(FileError::MalformedReply);
+            return Err(FileError::MalformedReply(ReplyOperation::Write));
         }
-        let count = Bytes::read_u32(&reply.payload, 1)? as usize;
+        let count = Bytes::read_u32(&reply.payload, 1, ReplyOperation::Write)? as usize;
         if count > maximum {
-            return Err(FileError::MalformedReply);
+            return Err(FileError::MalformedReply(ReplyOperation::Write));
         }
         Ok(count)
     }
@@ -82,9 +83,9 @@ impl FileProtocol {
     pub(crate) fn seek_reply(reply: Reply) -> Result<u64, FileError> {
         Self::success(&reply)?;
         if reply.payload.len() != 9 || reply.payload[0] != SEEK {
-            return Err(FileError::MalformedReply);
+            return Err(FileError::MalformedReply(ReplyOperation::Seek));
         }
-        Bytes::read_u64(&reply.payload, 1)
+        Bytes::read_u64(&reply.payload, 1, ReplyOperation::Seek)
     }
 
     pub(crate) fn stat(remote: RemoteId) -> Vec<u8> {
@@ -96,13 +97,13 @@ impl FileProtocol {
     pub(crate) fn stat_reply(reply: Reply, remote: RemoteId) -> Result<FileMetadata, FileError> {
         Self::success(&reply)?;
         if reply.payload.len() != 21 || reply.payload[0] != STAT {
-            return Err(FileError::MalformedReply);
+            return Err(FileError::MalformedReply(ReplyOperation::Stat));
         }
         Ok(FileMetadata {
-            permissions: Bytes::read_u32(&reply.payload, 1)?,
-            user: Bytes::read_u32(&reply.payload, 5)?,
-            group: Bytes::read_u32(&reply.payload, 9)?,
-            size: Bytes::read_u64(&reply.payload, 13)?,
+            permissions: Bytes::read_u32(&reply.payload, 1, ReplyOperation::Stat)?,
+            user: Bytes::read_u32(&reply.payload, 5, ReplyOperation::Stat)?,
+            group: Bytes::read_u32(&reply.payload, 9, ReplyOperation::Stat)?,
+            size: Bytes::read_u64(&reply.payload, 13, ReplyOperation::Stat)?,
             stable_object: remote.get(),
         })
     }
@@ -117,7 +118,7 @@ impl FileProtocol {
     pub(crate) fn poll_reply(reply: Reply) -> Result<u8, FileError> {
         Self::success(&reply)?;
         if reply.payload.len() != 2 || reply.payload[0] != POLL {
-            return Err(FileError::MalformedReply);
+            return Err(FileError::MalformedReply(ReplyOperation::Poll));
         }
         Ok(reply.payload[1])
     }
@@ -131,7 +132,7 @@ impl FileProtocol {
     pub(crate) fn close_reply(reply: Reply) -> Result<(), FileError> {
         Self::success(&reply)?;
         if reply.payload != [CLOSE] {
-            return Err(FileError::MalformedReply);
+            return Err(FileError::MalformedReply(ReplyOperation::Close));
         }
         Ok(())
     }
@@ -155,13 +156,17 @@ impl Bytes {
         output.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn read_u32(input: &[u8], offset: usize) -> Result<u32, FileError> {
-        let bytes = input.get(offset..offset + 4).ok_or(FileError::MalformedReply)?;
+    fn read_u32(input: &[u8], offset: usize, operation: ReplyOperation) -> Result<u32, FileError> {
+        let bytes = input
+            .get(offset..offset + 4)
+            .ok_or(FileError::MalformedReply(operation))?;
         Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
     }
 
-    fn read_u64(input: &[u8], offset: usize) -> Result<u64, FileError> {
-        let bytes = input.get(offset..offset + 8).ok_or(FileError::MalformedReply)?;
+    fn read_u64(input: &[u8], offset: usize, operation: ReplyOperation) -> Result<u64, FileError> {
+        let bytes = input
+            .get(offset..offset + 8)
+            .ok_or(FileError::MalformedReply(operation))?;
         Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
     }
 }
