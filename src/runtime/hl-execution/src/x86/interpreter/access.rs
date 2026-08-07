@@ -6,8 +6,7 @@ use crate::{
 
 impl ScalarInterpreter {
     pub(super) fn vector_move<M: GuestOperandMemory>(
-        staged: &mut CpuState,
-        cpu: &CpuState,
+        cpu: &mut CpuState,
         memory: &M,
         vector: u8,
         scalar: ScalarOperand,
@@ -18,11 +17,11 @@ impl ScalarInterpreter {
     ) -> Result<Staged<M::Reservation, M::BatchReservation>, ExecutionExit> {
         if to_vector {
             let value = Self::read(cpu, memory, scalar, width, next, instruction)?;
-            staged.vectors[usize::from(vector)] = u128::from(value);
+            cpu.vectors[usize::from(vector)] = u128::from(value);
             Ok(Staged::Cpu)
         } else {
-            let value = staged.vectors[usize::from(vector)] as u64;
-            Self::write(staged, memory, scalar, width, value, next, instruction)
+            let value = cpu.vectors[usize::from(vector)] as u64;
+            Self::write(cpu, memory, scalar, width, value, next, instruction)
         }
     }
     pub(super) fn leave<M: GuestOperandMemory>(

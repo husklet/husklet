@@ -17562,3 +17562,57 @@ fn scalar_state_is_a_small_fraction_of_cpu_state() {
         "scalar half {scalar} is no longer small next to {full}"
     );
 }
+
+/// The in-place vector staging path has no rollback surface, so every fault must
+/// leave the architectural state exactly as it was.
+#[test]
+fn in_place_vector_staging_rolls_back_on_faults() {
+    let sequences: &[(&[u8], bool)] = &[
+        (&[0x0f, 0x10, 0x0b], false),       // movups xmm1, [rbx]
+        (&[0x0f, 0x11, 0x0b], true),        // movups [rbx], xmm1
+        (&[0x66, 0x0f, 0x6e, 0x03], false), // movd xmm0, [rbx]
+        (&[0x66, 0x0f, 0x7e, 0x03], true),  // movd [rbx], xmm0
+        (&[0x66, 0x0f, 0x60, 0x03], false), // punpcklbw xmm0, [rbx]
+        (&[0x66, 0x0f, 0xef, 0x03], false), // pxor xmm0, [rbx]
+    ];
+    for (bytes, store) in sequences {
+        let mut cpu = CpuState {
+            scalar: ScalarState {
+                rip: 0x8000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        cpu.registers[3] = 0x100;
+        cpu.vectors[0] = 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210;
+        cpu.vectors[1] = 0xdead_beef_cafe_f00d_0f0f_0f0f_0f0f_0f0f;
+        let mut memory = ModelMemory {
+            base: 0,
+            bytes: vec![0x5a; 0x200],
+            fail_read: !store,
+            fail_write: *store,
+            commits: 0,
+        };
+        let decoded = X86ScalarDecoder::decode(bytes, cpu.rip).unwrap();
+        let original = cpu.clone();
+        assert!(
+            matches!(
+                ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+                ExecutionExit::OperandFault(_)
+            ),
+            "{bytes:x?} did not fault"
+        );
+        assert_eq!(cpu, original, "{bytes:x?} mutated state on a fault");
+        assert_eq!(memory.commits, 0, "{bytes:x?} committed a write on a fault");
+
+        memory.fail_read = false;
+        memory.fail_write = false;
+        let decoded = X86ScalarDecoder::decode(bytes, cpu.rip).unwrap();
+        assert_eq!(
+            ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+            ExecutionExit::Continue,
+            "{bytes:x?} did not retire"
+        );
+        assert_eq!(cpu.rip, 0x8000 + bytes.len() as u64, "{bytes:x?} rip");
+    }
+}

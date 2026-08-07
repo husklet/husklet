@@ -1,6 +1,6 @@
 use crate::{
     AccessKind, CpuState, ExclusiveMemory, ExecutionExit, GuestOperandMemory, ScalarInstruction, ScalarIr,
-    ScalarOperand, Staged,
+    ScalarOperand, Staged, VectorMemory,
 };
 mod access;
 mod endian;
@@ -154,6 +154,62 @@ impl ScalarInterpreter {
             }
             Ok(None) => {}
             Err(exit) => return exit,
+        }
+        // These classes read every operand before touching the destination lanes, so they
+        // can stage in place and skip the full `CpuState` round-trip.
+        match ir.instruction {
+            ScalarInstruction::VectorTransport {
+                vector,
+                operand,
+                store,
+                aligned,
+            } => {
+                return match VectorMemory::staged_transfer(
+                    cpu,
+                    memory,
+                    vector,
+                    operand,
+                    store,
+                    aligned,
+                    next,
+                    instruction,
+                )
+                .and_then(|staged| Self::commit(memory, staged, instruction))
+                {
+                    Ok(()) => {
+                        cpu.rip = next;
+                        ExecutionExit::Continue
+                    }
+                    Err(exit) => exit,
+                };
+            }
+            ScalarInstruction::VectorMove {
+                vector,
+                scalar,
+                to_vector,
+            } => {
+                return match Self::vector_move(cpu, memory, vector, scalar, to_vector, ir.width, next, instruction)
+                    .and_then(|staged| Self::commit(memory, staged, instruction))
+                {
+                    Ok(()) => {
+                        cpu.rip = next;
+                        ExecutionExit::Continue
+                    }
+                    Err(exit) => exit,
+                };
+            }
+            operation @ (ScalarInstruction::VectorUnpack { .. } | ScalarInstruction::VectorBitwise { .. }) => {
+                return match crate::x86::vector::Executor::stage(cpu, memory, operation, next, instruction)
+                    .and_then(|staged| Self::commit(memory, staged, instruction))
+                {
+                    Ok(()) => {
+                        cpu.rip = next;
+                        ExecutionExit::Continue
+                    }
+                    Err(exit) => exit,
+                };
+            }
+            _ => {}
         }
         let mut staged = cpu.clone();
         staged.rip = next;

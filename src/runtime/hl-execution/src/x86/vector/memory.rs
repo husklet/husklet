@@ -42,8 +42,7 @@ impl Memory {
     }
 
     pub fn staged_transfer<M: GuestOperandMemory>(
-        staged: &mut CpuState,
-        cpu: &CpuState,
+        cpu: &mut CpuState,
         memory: &M,
         vector: u8,
         operand: VectorSource,
@@ -52,7 +51,7 @@ impl Memory {
         next: u64,
         instruction: u64,
     ) -> Result<Staged<M::Reservation, M::BatchReservation>, ExecutionExit> {
-        match Self::transfer(staged, cpu, memory, vector, operand, store, aligned, next, instruction)? {
+        match Self::transfer(cpu, memory, vector, operand, store, aligned, next, instruction)? {
             Transfer::Cpu => Ok(Staged::Cpu),
             Transfer::Batch(reservation, values, address) => Ok(Staged::Batch(reservation, values, address, 16)),
         }
@@ -106,8 +105,7 @@ impl Memory {
     }
 
     pub fn transfer<M: GuestOperandMemory>(
-        staged: &mut CpuState,
-        cpu: &CpuState,
+        cpu: &mut CpuState,
         memory: &M,
         vector: u8,
         operand: VectorSource,
@@ -118,7 +116,7 @@ impl Memory {
     ) -> Result<Transfer<M::BatchReservation>, ExecutionExit> {
         if let VectorSource::Register(index) = operand {
             let value = cpu.vectors[usize::from(if store { vector } else { index })];
-            staged.vectors[usize::from(if store { index } else { vector })] = value;
+            cpu.vectors[usize::from(if store { index } else { vector })] = value;
             return Ok(Transfer::Cpu);
         }
         let VectorSource::Memory(address) = operand else {
@@ -135,7 +133,8 @@ impl Memory {
             });
         }
         if !store {
-            staged.vectors[usize::from(vector)] = VectorLane::read(cpu, memory, operand, next, instruction)?;
+            let value = VectorLane::read(cpu, memory, operand, next, instruction)?;
+            cpu.vectors[usize::from(vector)] = value;
             return Ok(Transfer::Cpu);
         }
         let value = cpu.vectors[usize::from(vector)];

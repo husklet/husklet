@@ -25,17 +25,7 @@ impl ScalarInterpreter {
                 vector,
                 scalar,
                 to_vector,
-            } => Self::vector_move(
-                staged,
-                cpu,
-                memory,
-                vector,
-                scalar,
-                to_vector,
-                ir.width,
-                next,
-                instruction,
-            ),
+            } => Self::vector_move(staged, memory, vector, scalar, to_vector, ir.width, next, instruction),
             operation @ (ScalarInstruction::VectorUnpack { .. }
             | ScalarInstruction::CarrylessMultiply { .. }
             | ScalarInstruction::VectorBitwise { .. }
@@ -59,7 +49,7 @@ impl ScalarInterpreter {
             | ScalarInstruction::VectorInsertWord { .. }
             | ScalarInstruction::Aes { .. }
             | ScalarInstruction::Sha { .. }) => {
-                crate::x86::vector::Executor::stage(staged, cpu, memory, operation, next, instruction)
+                crate::x86::vector::Executor::stage(staged, memory, operation, next, instruction)
             }
             ScalarInstruction::VectorStore { source, destination } => {
                 let value = cpu.vectors[usize::from(source)] as u64;
@@ -99,7 +89,7 @@ impl ScalarInterpreter {
                 operand,
                 store,
                 aligned,
-            } => VectorMemory::staged_transfer(staged, cpu, memory, vector, operand, store, aligned, next, instruction),
+            } => VectorMemory::staged_transfer(staged, memory, vector, operand, store, aligned, next, instruction),
             ScalarInstruction::VexVectorTransport {
                 vector,
                 operand,
@@ -149,7 +139,7 @@ impl ScalarInterpreter {
                     } else {
                         staged.vector_upper[usize::from(vector)] = 0;
                     }
-                    VectorMemory::staged_transfer(staged, cpu, memory, vector, operand, store, false, next, instruction)
+                    VectorMemory::staged_transfer(staged, memory, vector, operand, store, false, next, instruction)
                 }
             }
             ScalarInstruction::VexVectorTest {
