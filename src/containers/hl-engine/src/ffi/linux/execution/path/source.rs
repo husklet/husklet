@@ -116,6 +116,7 @@ impl OrdinaryContext {
         let shm_path = shared.path().to_owned();
         let shm_budget = shared.budget();
         super::tmpfs::PosixShm::create_tmp(&root_pin)?;
+        super::tmpfs::PosixShm::create_devpts(&root_pin)?;
         let tmp_path = root.join("tmp");
         let tmp_budget = super::tmpfs::Budget::ordinary();
         let paths = Arc::new(MountPaths::default());

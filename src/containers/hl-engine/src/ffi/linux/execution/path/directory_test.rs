@@ -851,6 +851,35 @@ fn credential_projection() {
 }
 
 #[test]
+fn devpts_synthesizes_over_a_layered_rootfs() {
+    let base = std::env::temp_dir().join(format!(
+        "hl-devpts-overlay-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let upper = base.join("upper");
+    let lower = base.join("lower");
+    std::fs::create_dir_all(&upper).unwrap();
+    std::fs::create_dir_all(&lower).unwrap();
+    let terminals = std::sync::Arc::new(hl_runtime::TerminalCatalog::default());
+    let allocated = terminals.allocate().unwrap();
+
+    let mut directory = State::new(upper.clone())
+        .with_overlay(vec![upper.clone(), lower.clone()])
+        .with_terminals(std::sync::Arc::clone(&terminals));
+    let snapshot = directory.read(16).unwrap();
+    let names: Vec<_> = snapshot.entries.iter().map(|entry| entry.name.as_slice()).collect();
+    assert_eq!(
+        names,
+        [b".".as_slice(), b"..".as_slice(), b"0".as_slice(), b"ptmx".as_slice()],
+        "a layered /dev/pts must still list the live slave and ptmx"
+    );
+
+    terminals.retire(allocated.id()).unwrap();
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn devpts_snapshot_lifetime() {
     let path = std::env::temp_dir().join(format!(
         "hl-devpts-{}-{}",

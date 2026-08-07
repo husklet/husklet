@@ -81,14 +81,29 @@ impl State {
 
     fn load(&self) -> Result<Vec<OfdDirectoryEntry>, ObjectError> {
         if let Some(paths) = &self.overlay {
-            return self.load_overlay(paths);
+            let mut entries = self.load_overlay(paths)?;
+            let Some(terminals) = &self.terminals else {
+                return Ok(entries);
+            };
+            // A layered rootfs still owns /dev/pts, so the live slave and ptmx
+            // nodes must be synthesized here exactly as on the plain path.
+            entries.retain(|entry| entry.name != b"." && entry.name != b"..");
+            return self.publish(entries, Some(terminals));
         }
-        let mut entries = std::fs::read_dir(&self.path)
+        let entries = std::fs::read_dir(&self.path)
             .map_err(Self::object)?
             .take(ENTRY_LIMIT - 1)
             .map(Self::entry)
             .collect::<Result<Vec<_>, _>>()?;
-        if let Some(terminals) = &self.terminals {
+        self.publish(entries, self.terminals.as_ref())
+    }
+
+    fn publish(
+        &self,
+        mut entries: Vec<OfdDirectoryEntry>,
+        terminals: Option<&Arc<hl_runtime::TerminalCatalog>>,
+    ) -> Result<Vec<OfdDirectoryEntry>, ObjectError> {
+        if let Some(terminals) = terminals {
             entries.retain(Self::retain_native);
             entries.push(Self::terminal(b"ptmx".to_vec(), 5, 2));
             entries.extend(Self::terminal_entries(terminals));
