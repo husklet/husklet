@@ -8,6 +8,10 @@ use std::sync::Arc;
 use super::{ArenaMemory, GuestExecutor, threads, waiter};
 const SLICE_BUDGET: u64 = 4096;
 const NATIVE_SOLO_BUDGET: u64 = 65_536;
+/// Ceiling on the instructions one native activation may be granted in total.
+/// A peer waiting for a scheduler turn counts as parked, so a compute-bound
+/// guest thread would otherwise keep extending its own grant forever.
+const NATIVE_ACTIVATION_BUDGET: u64 = 1 << 20;
 const INLINE_SERVICE_LIMIT: u64 = 64;
 const QUANTUM_TURNS: u64 = 4096;
 /// Turns of the retry cycle without a dispatch before the scheduler reports a livelock.
@@ -878,6 +882,14 @@ impl GuestExecutor {
         TurnResult { run, action }
     }
 
+    /// Whether an activation that has already been granted `admitted`
+    /// instructions may be extended again rather than returning to the
+    /// scheduler. `admitted` grows by one grant per extension, so this bounds
+    /// the chain even when no instruction retires.
+    const fn may_extend_activation(admitted: u64) -> bool {
+        admitted < NATIVE_ACTIVATION_BUDGET
+    }
+
     const fn native_budget(only_runnable: bool) -> u64 {
         if only_runnable {
             NATIVE_SOLO_BUDGET
@@ -1356,8 +1368,9 @@ impl GuestExecutor {
         let mapping = projection.request_continuation();
         // A still-current grant extends the run in place at the same instruction
         // granularity the budget would have yielded at.
-        let mut poll = |_: u64, _: u64| {
-            checkpoint.is_current()
+        let mut poll = |_: u64, admitted: u64| {
+            Self::may_extend_activation(admitted)
+                && checkpoint.is_current()
                 && mapping.is_current()
                 && continuation.is_some_and(threads::SchedulerContinuation::is_current)
         };
@@ -1581,8 +1594,9 @@ impl GuestExecutor {
         let mut stack_projection = Some(stack_projection);
         let checkpoint = stack_projection.as_ref()?.checkpoint_continuation();
         let mapping = stack_projection.as_ref()?.request_continuation();
-        let mut poll = |_: u64, _: u64| {
-            checkpoint.is_current()
+        let mut poll = |_: u64, admitted: u64| {
+            Self::may_extend_activation(admitted)
+                && checkpoint.is_current()
                 && mapping.is_current()
                 && continuation.is_some_and(threads::SchedulerContinuation::is_current)
         };
@@ -1878,6 +1892,21 @@ mod tests {
     fn native_budget_preserves_shared_fairness() {
         assert_eq!(GuestExecutor::native_budget(false), SLICE_BUDGET);
         assert_eq!(GuestExecutor::native_budget(true), NATIVE_SOLO_BUDGET);
+    }
+
+    #[test]
+    fn a_compute_bound_activation_stops_extending_and_returns_to_the_scheduler() {
+        // The C run loop admits one solo grant per accepted extension, so the
+        // chain a spinning guest thread can build must terminate.
+        let mut admitted = NATIVE_SOLO_BUDGET;
+        let mut extensions = 0u32;
+        while GuestExecutor::may_extend_activation(admitted) {
+            admitted += NATIVE_SOLO_BUDGET;
+            extensions += 1;
+            assert!(extensions < 1_000_000, "activation extended without bound");
+        }
+        assert!(extensions > 0, "a solo grant must still be extendable");
+        assert!(admitted <= NATIVE_ACTIVATION_BUDGET + NATIVE_SOLO_BUDGET);
     }
 
     #[test]
