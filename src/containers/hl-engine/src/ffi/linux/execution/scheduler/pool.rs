@@ -108,6 +108,9 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) diagnostics: bool,
     pub(super) executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
     pub(super) suppressed: BTreeSet<NativeSite>,
+    /// Entries whose only failure so far was a memory access under direct authority, which
+    /// runs without the operand resolver and so cannot recover an access outside its region.
+    pub(super) direct_declined: BTreeSet<NativeSite>,
     pub(super) fallbacks: BTreeSet<NativeSite>,
     pub(super) observations: BTreeMap<NativeSite, u8>,
     /// Diagnostics-only: how often each guest PC forced a fallback, and how
@@ -140,6 +143,7 @@ impl NativePool {
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
             executors: BTreeMap::new(),
             suppressed: BTreeSet::new(),
+            direct_declined: BTreeSet::new(),
             fallbacks: BTreeSet::new(),
             observations: BTreeMap::new(),
             fallback_weight: BTreeMap::new(),
@@ -181,13 +185,26 @@ impl NativePool {
     }
 
     /// Suppression is reserved for entries whose run retired too little to be worth
-    /// re-entering, so a run that did substantial native work keeps its entry.
-    pub(super) fn record_fallback(&mut self, entry: NativeSite, instruction: NativeSite, executed: u64, budget: u64) {
+    /// re-entering, so a run that did substantial native work keeps its entry. A first
+    /// memory fallback under direct authority buys one retry without it instead, because
+    /// that run mode has no operand resolver and so cannot be the entry's verdict.
+    pub(super) fn record_fallback(
+        &mut self,
+        entry: NativeSite,
+        instruction: NativeSite,
+        executed: u64,
+        budget: u64,
+        direct_guard: bool,
+    ) {
         if self.diagnostics {
             *self.fallback_weight.entry(instruction.4).or_default() += 1;
         }
-        if Self::fallback_suppresses(executed, budget) && self.suppressed.len() < NATIVE_SITE_LIMIT {
-            self.suppressed.insert(entry);
+        if Self::fallback_suppresses(executed, budget) {
+            if direct_guard && !self.direct_declined.contains(&entry) && self.direct_declined.len() < NATIVE_SITE_LIMIT {
+                self.direct_declined.insert(entry);
+            } else if self.suppressed.len() < NATIVE_SITE_LIMIT {
+                self.suppressed.insert(entry);
+            }
         }
         if self.fallbacks.len() < NATIVE_SITE_LIMIT {
             self.fallbacks.insert(instruction);
@@ -227,6 +244,7 @@ impl NativePool {
         self.instruction_epochs.clear();
         self.observations.clear();
         self.suppressed.clear();
+        self.direct_declined.clear();
         self.fallbacks.clear();
     }
 
@@ -235,6 +253,7 @@ impl NativePool {
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _, _), _| *owner != process);
         self.suppressed.retain(|(owner, _, _, _, _)| *owner != process);
+        self.direct_declined.retain(|(owner, _, _, _, _)| *owner != process);
         self.fallbacks.retain(|(owner, _, _, _, _)| *owner != process);
         Some(())
     }
@@ -243,6 +262,7 @@ impl NativePool {
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _, _), _| *owner != process);
         self.suppressed.retain(|(owner, _, _, _, _)| *owner != process);
+        self.direct_declined.retain(|(owner, _, _, _, _)| *owner != process);
         self.fallbacks.retain(|(owner, _, _, _, _)| *owner != process);
         self.source_incarnations.remove(&process);
         self.instruction_epochs.remove(&process);
@@ -262,6 +282,7 @@ impl NativePool {
             || !self.sources.is_empty()
             || !self.observations.is_empty()
             || !self.suppressed.is_empty()
+            || !self.direct_declined.is_empty()
             || !self.fallbacks.is_empty()
             || !self.source_incarnations.is_empty()
             || !self.instruction_epochs.is_empty()
@@ -281,6 +302,9 @@ impl NativePool {
         }
         if !self.suppressed.is_empty() {
             self.suppressed.retain(|(process, _, _, _, _)| live.contains(process));
+        }
+        if !self.direct_declined.is_empty() {
+            self.direct_declined.retain(|(process, _, _, _, _)| live.contains(process));
         }
         if !self.fallbacks.is_empty() {
             self.fallbacks.retain(|(process, _, _, _, _)| live.contains(process));

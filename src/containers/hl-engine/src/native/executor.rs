@@ -416,6 +416,9 @@ pub(crate) struct RunStatistics {
     pub(crate) builds: u64,
     pub(crate) hits: u64,
     pub(crate) fallback: bool,
+    /// A guard fault under direct authority, which carries no operand resolver: a limit
+    /// of the run mode rather than a verdict on the entry.
+    pub(crate) direct_guard: bool,
     pub(crate) sources: Vec<(u64, u64, ExecutableToken)>,
     pub(crate) sources_complete: bool,
 }
@@ -2252,6 +2255,7 @@ impl Executor {
         interrupt: &InterruptToken,
         budget: u64,
         resolve: &mut dyn FnMut(u64, &mut [u8]) -> Option<(usize, ExecutableToken)>,
+        allow_direct: bool,
         mut poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(RunOutcome, RunStatistics), ()> {
         if sources.is_empty() || sources.len() > 8 || sources.iter().any(|span| span.bytes.is_empty()) {
@@ -2345,7 +2349,7 @@ impl Executor {
         let direct_protection = self
             .direct_scalar_trace(state.pc, sources)
             .or_else(|| direct_literal.then_some(Protection::READ))
-            .filter(|required| lease.allows(*required));
+            .filter(|required| allow_direct && lease.allows(*required));
         let active_range = if direct_protection.is_some() {
             primary_range
         } else {
@@ -2472,6 +2476,12 @@ impl Executor {
                     .zip(before)
                     .map_or(0, |(after, before)| after.cache_hits.saturating_sub(before.cache_hits)),
                 fallback: exit == Exit::Fallback,
+                direct_guard: direct_protection.is_some()
+                    && exit == Exit::Fallback
+                    && sources
+                        .iter()
+                        .find_map(|source| source.instruction_at(instruction))
+                        .is_some_and(|word| word.scalar_access().is_some()),
                 sources: provider.observed,
                 sources_complete: provider.complete,
             },
@@ -2934,6 +2944,7 @@ impl Executor {
                     .zip(before)
                     .map_or(0, |(after, before)| after.cache_hits.saturating_sub(before.cache_hits)),
                 fallback: exit == Exit::Fallback,
+                direct_guard: false,
                 sources: provider.observed,
                 sources_complete: provider.complete,
             },
