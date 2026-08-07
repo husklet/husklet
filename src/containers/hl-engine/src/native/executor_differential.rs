@@ -3529,3 +3529,101 @@ fn x86_insert_word_matches_interpreter_at_each_boundary() {
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
+
+/// Operand and null patterns for the `pcmpistri` sweep. The alphabet is deliberately
+/// tiny so equality is common, and null placement is enumerated rather than sampled so
+/// the implicit-length edges (no null, null first, null last) are always covered.
+#[cfg(target_arch = "aarch64")]
+fn string_compare_operands(seed: u64) -> Vec<([u8; 16], [u8; 16])> {
+    let mut state = seed;
+    let mut next = move || {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut word = state;
+        word = (word ^ (word >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        word = (word ^ (word >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        word ^ (word >> 31)
+    };
+    let symbol = |word: u64| b"AB\x01\x7f\x80\xff"[(word % 6) as usize];
+    let mut cases = Vec::new();
+    // Every combination of first-null position for the two operands, including "no null"
+    // at 16, over a six-symbol alphabet that guarantees frequent equal-any hits.
+    for first_null in 0..=16_usize {
+        for second_null in 0..=16_usize {
+            let mut first = [0_u8; 16];
+            let mut second = [0_u8; 16];
+            for lane in 0..16 {
+                first[lane] = if lane == first_null { 0 } else { symbol(next()) };
+                second[lane] = if lane == second_null { 0 } else { symbol(next()) };
+            }
+            // Lanes past the terminator are garbage in real strings, so make them so:
+            // a lowering that reads them must diverge here rather than inside libc.
+            for lane in first_null + 1..16 {
+                first[lane] = (next() % 255) as u8 + 1;
+            }
+            for lane in second_null + 1..16 {
+                second[lane] = (next() % 255) as u8 + 1;
+            }
+            cases.push((first, second));
+        }
+    }
+    // Unstructured pairs over the full byte range, which reach null-free and all-null
+    // operands and any equality pattern the enumeration above misses.
+    for _ in 0..192 {
+        let mut first = [0_u8; 16];
+        let mut second = [0_u8; 16];
+        for lane in 0..16 {
+            first[lane] = (next() >> 13) as u8;
+            second[lane] = (next() >> 13) as u8;
+        }
+        cases.push((first, second));
+    }
+    cases
+}
+
+#[cfg(target_arch = "aarch64")]
+fn assert_string_compare_immediate(immediate: u8) {
+    for (first, second) in string_compare_operands(0x5eed_0001) {
+        let mut initial = X86CpuState {
+            scalar: ScalarState {
+                rip: 0x402720,
+                ..Default::default()
+            },
+            ..X86CpuState::default()
+        };
+        initial.registers[6] = 0x7000;
+        // RCX starts dirty so a lowering that fails to write the index is caught.
+        initial.registers[1] = 0xdead_beef_dead_beef;
+        initial.vectors[0] = u128::from_le_bytes(first);
+        initial.vectors[1] = u128::from_le_bytes(second);
+        let program: Vec<Vec<u8>> = vec![
+            vec![0x66, 0x0f, 0x3a, 0x63, 0xc1, immediate], // pcmpistri $imm,%xmm1,%xmm0
+            vec![0x66, 0x0f, 0x3a, 0x63, 0x06, immediate], // pcmpistri $imm,(%rsi),%xmm0
+        ];
+        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &second);
+    }
+}
+
+/// Randomised differential sweep over `pcmpistri`'s operand and null patterns, for the
+/// equal-each forms the frontend already admits. This pins the aggregation, the implicit
+/// lengths, both polarity bits, the index direction and all six defined flags against the
+/// interpreter before any further aggregation is lowered under it.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_string_compare_equal_each_matches_interpreter_over_operand_and_null_patterns() {
+    for immediate in [0x08, 0x0a, 0x18, 0x1a, 0x28, 0x38, 0x3a, 0x48, 0x58, 0x78] {
+        assert_string_compare_immediate(immediate);
+    }
+}
+
+/// The same sweep over the equal-any aggregation, whose `$0x12` form is `__strspn_sse42`'s.
+/// Equal-any has its own null validity: an operand two lane at or past the terminator is
+/// invalid and contributes zero, and operand one's lanes past its terminator must not
+/// match at all, so the garbage the sweep writes there is what proves the masking.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_string_compare_equal_any_matches_interpreter_over_operand_and_null_patterns() {
+    for immediate in [0x00, 0x02, 0x10, 0x12, 0x20, 0x30, 0x32, 0x40, 0x50, 0x52, 0x70] {
+        assert_string_compare_immediate(immediate);
+    }
+}

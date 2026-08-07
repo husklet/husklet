@@ -180,16 +180,25 @@ impl NativePool {
         self.executors.get(&process)
     }
 
-    pub(super) fn record_fallback(&mut self, entry: NativeSite, instruction: NativeSite) {
+    /// Suppression is reserved for entries whose run retired too little to be worth
+    /// re-entering, so a run that did substantial native work keeps its entry.
+    pub(super) fn record_fallback(&mut self, entry: NativeSite, instruction: NativeSite, executed: u64, budget: u64) {
         if self.diagnostics {
             *self.fallback_weight.entry(instruction.4).or_default() += 1;
         }
-        if self.suppressed.len() < NATIVE_SITE_LIMIT {
+        if Self::fallback_suppresses(executed, budget) && self.suppressed.len() < NATIVE_SITE_LIMIT {
             self.suppressed.insert(entry);
         }
         if self.fallbacks.len() < NATIVE_SITE_LIMIT {
             self.fallbacks.insert(instruction);
         }
+    }
+
+    /// Declining an entry hands the turn a whole `SLICE_BUDGET` interpreter slice, while a
+    /// fallback yields only what the run retired plus one interpreted instruction, so a
+    /// retry only pays for itself once it retires a substantial part of its budget.
+    pub(super) const fn fallback_suppresses(executed: u64, budget: u64) -> bool {
+        executed * 2 < budget
     }
 
     /// The observation table is a warm-up heuristic keyed by mapping generation,

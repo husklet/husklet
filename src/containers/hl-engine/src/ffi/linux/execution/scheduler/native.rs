@@ -189,7 +189,7 @@ impl GuestExecutor {
                 crate::native::NativeExit::Yield => StepOutcome::Yield,
                 crate::native::NativeExit::Fallback | crate::native::NativeExit::Fault => {
                     fallback = true;
-                    fallback_pc = Some(result.instruction);
+                    fallback_pc = Some((result.instruction, result.executed));
                     StepOutcome::Continue
                 }
                 crate::native::NativeExit::Epoch | crate::native::NativeExit::Interrupt => {
@@ -218,7 +218,7 @@ impl GuestExecutor {
         }
         if fallback {
             pool.counters.fallbacks += 1;
-            if let Some(pc) = fallback_pc {
+            if let Some((pc, executed)) = fallback_pc {
                 let instruction = (
                     run.process,
                     lease.generation(),
@@ -226,7 +226,7 @@ impl GuestExecutor {
                     token.version,
                     pc,
                 );
-                pool.record_fallback(fallback_key, instruction);
+                pool.record_fallback(fallback_key, instruction, executed, native_budget);
             }
             Some(run.machine.run_step(1, memory))
         } else {
@@ -408,12 +408,12 @@ impl GuestExecutor {
                     }
                 }
                 crate::native::NativeExit::Yield if Self::x86_yield_needs_interpreter(result.exit, result.executed) => {
-                    fallback = Some(result.instruction);
+                    fallback = Some((result.instruction, result.executed));
                     StepOutcome::Continue
                 }
                 crate::native::NativeExit::Yield => StepOutcome::Yield,
                 crate::native::NativeExit::Fallback | crate::native::NativeExit::Fault => {
-                    fallback = Some(result.instruction);
+                    fallback = Some((result.instruction, result.executed));
                     StepOutcome::Continue
                 }
                 crate::native::NativeExit::Epoch => {
@@ -451,7 +451,7 @@ impl GuestExecutor {
             boundaries.push(record);
         }
         drop(stack_projection);
-        if let Some(fallback_pc) = fallback {
+        if let Some((fallback_pc, executed)) = fallback {
             pool.counters.fallbacks += 1;
             pool.record_fallback(
                 key,
@@ -462,6 +462,8 @@ impl GuestExecutor {
                     token.version,
                     fallback_pc,
                 ),
+                executed,
+                native_budget,
             );
             Some(run.machine.run_step(1, memory))
         } else {

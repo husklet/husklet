@@ -501,9 +501,19 @@ static unsigned pcmp_equal_each(const uint8_t left[16], const uint8_t right[16],
     unsigned result = 0;
     unsigned index;
     for (index = 0; index < 16u; ++index) {
-        int equal = index < left_length && index < right_length
+        int equal;
+        if ((immediate & 0x08u) == 0u) {
+            /* Equal-any: a valid right element that occurs anywhere in the left set. */
+            unsigned scan;
+            equal = 0;
+            if (index < right_length)
+                for (scan = 0; scan < left_length; ++scan)
+                    if (left[scan] == right[index]) { equal = 1; break; }
+        } else {
+            equal = index < left_length && index < right_length
                         ? left[index] == right[index]
                         : index >= left_length && index >= right_length;
+        }
         if (equal) result |= 1u << index;
     }
     if ((immediate & 0x10u) != 0u)
@@ -590,6 +600,8 @@ static int pcmpistri_equal_each(void) {
     static const uint8_t controls[] = {
         0x08, 0x0a, 0x18, 0x1a, 0x28, 0x2a, 0x38, 0x3a,
         0x48, 0x4a, 0x58, 0x5a, 0x68, 0x6a, 0x78, 0x7a,
+        0x00, 0x02, 0x10, 0x12, 0x20, 0x22, 0x30, 0x32,
+        0x40, 0x42, 0x50, 0x52, 0x60, 0x62, 0x70, 0x72,
     };
     const uint64_t changed = HL_X86_RFLAGS_CF | HL_X86_RFLAGS_PF | HL_X86_RFLAGS_AF |
                              HL_X86_RFLAGS_ZF | HL_X86_RFLAGS_SF | HL_X86_RFLAGS_OF;
@@ -609,7 +621,8 @@ static int pcmpistri_equal_each(void) {
         CHECK(result.instruction_count == 1 && provenance[0].guest_size == sizeof guest);
         if (provenance[0].word_end - provenance[0].word_start > maximum_words)
             maximum_words = provenance[0].word_end - provenance[0].word_start;
-        CHECK(provenance[0].word_end - provenance[0].word_start <= 96u);
+        CHECK(provenance[0].word_end - provenance[0].word_start <=
+              ((controls[control] & 0x08u) != 0u ? 96u : 160u));
 #if defined(__aarch64__)
         {
             long page = sysconf(_SC_PAGESIZE);
@@ -797,7 +810,10 @@ static int pcmpistri_equal_each(void) {
 #endif
     }
     {
-        static const uint8_t wrong_control[] = {0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x00};
+        /* Word elements and the ranges/equal-ordered aggregations stay unsupported. */
+        static const uint8_t word_elements[] = {0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x09};
+        static const uint8_t wrong_control[] = {0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x0c};
+        static const uint8_t ranges_control[] = {0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x04};
         static const uint8_t wrong_prefix[] = {0x0f, 0x3a, 0x63, 0xc1, 0x08};
         static const uint8_t f2_prefix[] = {0xf2, 0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x08};
         static const uint8_t f3_prefix[] = {0xf3, 0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x08};
@@ -808,6 +824,10 @@ static int pcmpistri_equal_each(void) {
         hl_x86_a64_provenance provenance[8] = {0};
         hl_x86_a64_result result;
         hl_x86_a64_request request = request_for(wrong_control, sizeof wrong_control, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+        request = request_for(word_elements, sizeof word_elements, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+        request = request_for(ranges_control, sizeof ranges_control, host, provenance);
         CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
         request = request_for(wrong_prefix, sizeof wrong_prefix, host, provenance);
         CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
@@ -823,7 +843,7 @@ static int pcmpistri_equal_each(void) {
         request = request_for(truncated, sizeof truncated, host, provenance);
         CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_TRUNCATED);
     }
-    CHECK(maximum_words <= 96u);
+    CHECK(maximum_words <= 160u);
     return 0;
 }
 

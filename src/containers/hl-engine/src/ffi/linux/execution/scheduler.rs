@@ -640,9 +640,35 @@ mod tests {
         let entry = (process, 2, 3, 4, 0x400990);
         let instruction = (process, 2, 3, 4, 0x40b0c0);
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
-        pool.record_fallback(entry, instruction);
+        pool.record_fallback(entry, instruction, 0, SLICE_BUDGET);
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
+    }
+
+    /// A run that retired at least half its budget is worth re-entering, because declining
+    /// the entry would have bought only a `SLICE_BUDGET` interpreter slice instead.
+    #[test]
+    fn a_fallback_that_retired_most_of_its_budget_keeps_the_entry_but_records_the_site() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let entry = (process, 2, 3, 4, 0x1055286);
+        let instruction = (process, 2, 3, 4, 0x40b0c0);
+        let mut pool = NativePool::new(GuestIsa::X86_64, &plan(crate::options::Options::default()), None);
+        pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2, NATIVE_SOLO_BUDGET);
+        assert!(pool.suppressed.is_empty());
+        assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
+        // One instruction short of half the budget is not worth the entry.
+        pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2 - 1, NATIVE_SOLO_BUDGET);
+        assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+    }
+
+    /// The threshold is a share of the budget, so a short-budget run cannot dodge
+    /// suppression by retiring a handful of instructions.
+    #[test]
+    fn a_fallback_that_retired_a_handful_of_instructions_still_suppresses_the_entry() {
+        assert!(NativePool::fallback_suppresses(0, SLICE_BUDGET));
+        assert!(NativePool::fallback_suppresses(37, SLICE_BUDGET));
+        assert!(NativePool::fallback_suppresses(37, NATIVE_SOLO_BUDGET));
+        assert!(!NativePool::fallback_suppresses(SLICE_BUDGET, SLICE_BUDGET));
     }
 
     #[test]
