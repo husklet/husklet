@@ -33,7 +33,7 @@ pub(super) async fn run(scenarios: Vec<Scenario>, options: &Options, report: &Pa
     let stamp = fingerprint(&work, options.warm_provider).await?;
     let keys = work.iter().flat_map(|item| item.keys.iter().cloned()).collect();
     let report = report.to_path_buf();
-    let resume = options.resume;
+    let resume = options.selection.resume;
     let opened = tokio::task::spawn_blocking(move || {
         ledger::Ledger::open(&report, &stamp, &keys, resume).map_err(|error| error.to_string())
     })
@@ -41,9 +41,11 @@ pub(super) async fn run(scenarios: Vec<Scenario>, options: &Options, report: &Pa
     let ledger = Arc::new(opened.ledger);
     let prior = opened.prior;
     let completed_keys = Arc::new(prior.keys().cloned().collect::<BTreeSet<_>>());
-    let semaphore = Arc::new(Semaphore::new(options.jobs));
+    let semaphore = Arc::new(Semaphore::new(options.selection.jobs));
     let resources = Arc::new(ResourcePool::new());
-    let providers = options.warm_provider.then(|| Arc::new(ProviderPool::new(options.jobs)));
+    let providers = options
+        .warm_provider
+        .then(|| Arc::new(ProviderPool::new(options.selection.jobs)));
     let mut running = JoinSet::new();
     for item in work
         .into_iter()
@@ -291,9 +293,11 @@ impl Completion {
     fn row(&self) -> ledger::Row {
         let (status, diagnostic) = self.result.evidence();
         ledger::Row {
-            key: self.key.clone(),
-            status,
-            elapsed_ms: self.elapsed_ms,
+            attempt: crate::journal::Attempt {
+                key: self.key.clone(),
+                status,
+                elapsed_ms: self.elapsed_ms,
+            },
             timing: self.timing.clone(),
             diagnostic,
         }
@@ -305,7 +309,7 @@ fn plan(scenarios: Vec<Scenario>, options: &Options) -> Result<Vec<Work>, Error>
     let mut keys = BTreeSet::new();
     for scenario in scenarios {
         let scenario = Arc::new(scenario);
-        for target in options.targets() {
+        for target in options.selection.targets() {
             for (case_index, case) in scenario.cases.iter().enumerate() {
                 if case.supports(target) && selected_class(options.class, case.class) {
                     let mut samples = Vec::with_capacity(usize::from(case.repetitions));
@@ -434,11 +438,11 @@ fn summarize(prior: &BTreeMap<WorkKey, ledger::Row>, completed: Vec<Completion>)
     for row in prior.values() {
         println!(
             "RESUME {} {} {} sample={} elapsed_ms={} setup_us={} execution_us={} payload_us={} teardown_us={}",
-            row.status,
-            row.key.id,
-            row.key.target.name(),
-            row.key.sample,
-            row.elapsed_ms,
+            row.attempt.status,
+            row.attempt.key.id,
+            row.attempt.key.target.name(),
+            row.attempt.key.sample,
+            row.attempt.elapsed_ms,
             row.timing.setup_us,
             row.timing.execution_us,
             row.timing
@@ -446,7 +450,7 @@ fn summarize(prior: &BTreeMap<WorkKey, ledger::Row>, completed: Vec<Completion>)
                 .map_or_else(|| "unavailable".to_owned(), |value| value.to_string()),
             row.timing.teardown_us
         );
-        count(row.status, &row.key, &row.diagnostic, &mut summary);
+        count(row.attempt.status, &row.attempt.key, &row.diagnostic, &mut summary);
     }
     for item in completed {
         let (status, diagnostic) = item.result.evidence();

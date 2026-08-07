@@ -242,7 +242,7 @@ async fn execute_with_image(
     deadline: tokio::time::Instant,
 ) -> std::result::Result<Measurement, Error> {
     let service_started = Instant::now();
-    let state = isolated_state()?;
+    let state = tempfile::tempdir()?;
     let containers = tokio::time::timeout_at(
         deadline,
         hl_container::Containers::builder(Config::new(state.path())).build(),
@@ -278,10 +278,6 @@ async fn execute_with_image(
 
 fn elapsed_us(started: Instant) -> u128 {
     started.elapsed().as_micros()
-}
-
-fn isolated_state() -> std::result::Result<tempfile::TempDir, Error> {
-    Ok(tempfile::tempdir()?)
 }
 
 fn stage(artifact: &std::path::Path, image: &std::path::Path, program: &str) -> std::result::Result<(), Error> {
@@ -632,10 +628,7 @@ fn parse_phases(stdout: &[u8]) -> std::result::Result<Vec<(String, u128, u64)>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Benchmark, Capture, DIAGNOSTIC_OUTPUT, capture_size, isolated_state, output_excerpt, parse_phases,
-        stdout_contains,
-    };
+    use super::{Benchmark, Capture, DIAGNOSTIC_OUTPUT, capture_size, output_excerpt, parse_phases, stdout_contains};
     use crate::suite::BoundedCapture as _;
     use hl_container::{Entry, Stream};
 
@@ -728,13 +721,6 @@ mod tests {
         assert_eq!(capture_size(captured, &entry(1)).unwrap(), Capture::LIMIT);
         assert!(capture_size(Capture::LIMIT, &entry(1)).is_err());
         assert!(capture_size(usize::MAX, &entry(1)).is_err());
-    }
-
-    #[test]
-    fn every_case_receives_independent_state() {
-        let first = isolated_state().unwrap();
-        let second = isolated_state().unwrap();
-        assert_ne!(first.path(), second.path());
     }
 
     #[test]

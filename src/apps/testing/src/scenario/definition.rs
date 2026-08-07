@@ -142,15 +142,16 @@ struct Fixture {
     destination: String,
 }
 
+/// Validation only bounds these fields, so the parsed and validated forms are one type.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Readiness {
-    startup: String,
-    probe: String,
-    attempts: u32,
-    delay_ms: u64,
+pub struct Readiness {
+    pub startup: String,
+    pub probe: String,
+    pub attempts: u32,
+    pub delay_ms: u64,
     #[serde(default)]
-    logs: Vec<String>,
+    pub logs: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -222,7 +223,7 @@ pub struct ScenarioCase {
     pub working_directory: String,
     pub actions: Vec<ScenarioAction>,
     pub fixtures: Vec<ScenarioFixture>,
-    pub readiness: Option<ScenarioReadiness>,
+    pub readiness: Option<Readiness>,
     pub timeout: u64,
     pub warmups: u16,
     pub repetitions: u16,
@@ -250,14 +251,6 @@ pub enum ScenarioApiAction {
 pub struct ScenarioFixture {
     pub source: PathBuf,
     pub destination: String,
-}
-
-pub struct ScenarioReadiness {
-    pub startup: String,
-    pub probe: String,
-    pub attempts: u32,
-    pub delay_ms: u64,
-    pub logs: Vec<String>,
 }
 
 impl ScenarioCase {
@@ -533,7 +526,7 @@ fn validate_environment(id: &str, environment: &BTreeMap<String, String>) -> Res
     }
 }
 
-fn validate_readiness(value: Readiness) -> Result<ScenarioReadiness, Error> {
+fn validate_readiness(value: Readiness) -> Result<Readiness, Error> {
     if !bounded_text(&value.startup)
         || !bounded_text(&value.probe)
         || !(1..=1000).contains(&value.attempts)
@@ -549,13 +542,7 @@ fn validate_readiness(value: Readiness) -> Result<ScenarioReadiness, Error> {
     {
         return Err("readiness log paths must be absolute guest paths".into());
     }
-    Ok(ScenarioReadiness {
-        startup: value.startup,
-        probe: value.probe,
-        attempts: value.attempts,
-        delay_ms: value.delay_ms,
-        logs: value.logs,
-    })
+    Ok(value)
 }
 
 fn bounded_text(value: &str) -> bool {

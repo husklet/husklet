@@ -15,7 +15,7 @@ pub(crate) use report::{CachePreflightOptions, ProvenanceOptions};
 use std::path::{Path, PathBuf};
 
 pub async fn run(options: Options) -> Result<(), Error> {
-    let scenarios = scenarios(&options)?;
+    let scenarios = options.select_cases(load_scenarios(options.scenario.as_deref())?)?;
     if options.list {
         let work = scheduler::inventory(scenarios, &options)?;
         for key in &work {
@@ -38,11 +38,6 @@ pub async fn run(options: Options) -> Result<(), Error> {
     } else {
         Err(summary.failed.join("\n").into())
     }
-}
-
-fn scenarios(options: &Options) -> Result<Vec<Scenario>, Error> {
-    let scenarios = load_scenarios(options.scenario.as_deref())?;
-    Ok(options.select_cases(scenarios)?)
 }
 
 fn load_scenarios(selected: Option<&str>) -> Result<Vec<Scenario>, Error> {

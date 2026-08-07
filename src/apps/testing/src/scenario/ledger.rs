@@ -1,6 +1,6 @@
 use super::{scheduler::WorkKey, terminal::Metric};
 use crate::{
-    journal::{self, Require as _, Schema},
+    journal::{self, Attempt, Require as _, Schema},
     suite::{Error, Target},
 };
 use std::collections::BTreeSet;
@@ -9,9 +9,7 @@ pub(super) type Ledger = journal::Ledger<Scenario>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Row {
-    pub key: WorkKey,
-    pub status: &'static str,
-    pub elapsed_ms: u64,
+    pub attempt: Attempt<WorkKey>,
     pub timing: super::execution::PhaseTiming,
     pub diagnostic: String,
 }
@@ -84,19 +82,19 @@ impl Schema for Scenario {
     const FIELDS: usize = 11;
 
     fn key(row: &Row) -> &WorkKey {
-        &row.key
+        &row.attempt.key
     }
 
     fn format(row: &Row) -> Result<String, Error> {
-        (!row.key.id.contains(['\t', '\n']) && !row.diagnostic.contains(['\t', '\n']))
+        (!row.attempt.key.id.contains(['\t', '\n']) && !row.diagnostic.contains(['\t', '\n']))
             .require("scenario result contains an unsafe delimiter")?;
         let text = format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            row.key.id,
-            row.key.target.name(),
-            row.key.sample,
-            row.status,
-            row.elapsed_ms,
+            row.attempt.key.id,
+            row.attempt.key.target.name(),
+            row.attempt.key.sample,
+            row.attempt.status,
+            row.attempt.elapsed_ms,
             row.timing.setup_us,
             row.timing.execution_us,
             row.timing
@@ -126,9 +124,11 @@ impl Schema for Scenario {
             _ => return Err("invalid scenario resume status".into()),
         };
         Ok(Some(Row {
-            key,
-            status,
-            elapsed_ms: fields[4].parse()?,
+            attempt: Attempt {
+                key,
+                status,
+                elapsed_ms: fields[4].parse()?,
+            },
             timing: super::execution::PhaseTiming {
                 setup_us: fields[5].parse()?,
                 execution_us: fields[6].parse()?,
@@ -142,7 +142,7 @@ impl Schema for Scenario {
 }
 #[cfg(test)]
 mod tests {
-    use super::{Ledger, Row, WorkKey};
+    use super::{Attempt, Ledger, Row, WorkKey};
     use crate::scenario::execution::PhaseTiming;
     use crate::suite::Target;
     use std::collections::BTreeSet;
@@ -170,9 +170,11 @@ mod tests {
             opened
                 .ledger
                 .record(Row {
-                    key: key(id),
-                    status: "pass",
-                    elapsed_ms: 1,
+                    attempt: Attempt {
+                        key: key(id),
+                        status: "pass",
+                        elapsed_ms: 1,
+                    },
                     timing: PhaseTiming {
                         setup_us: 2,
                         execution_us: 3,
@@ -206,9 +208,11 @@ mod tests {
             opened
                 .ledger
                 .record(Row {
-                    key: sample_key("scenario/a", sample),
-                    status: if sample == 2 { "skip" } else { "pass" },
-                    elapsed_ms: u64::from(sample),
+                    attempt: Attempt {
+                        key: sample_key("scenario/a", sample),
+                        status: if sample == 2 { "skip" } else { "pass" },
+                        elapsed_ms: u64::from(sample),
+                    },
                     timing: PhaseTiming::default(),
                     diagnostic: String::new(),
                 })
@@ -217,9 +221,9 @@ mod tests {
         drop(opened);
         let resumed = Ledger::open(&report, "stamp", &keys, true).unwrap();
         assert_eq!(resumed.prior.len(), 2);
-        assert_eq!(resumed.prior[&sample_key("scenario/a", 1)].elapsed_ms, 1);
-        assert_eq!(resumed.prior[&sample_key("scenario/a", 2)].elapsed_ms, 2);
-        assert_eq!(resumed.prior[&sample_key("scenario/a", 2)].status, "skip");
+        assert_eq!(resumed.prior[&sample_key("scenario/a", 1)].attempt.elapsed_ms, 1);
+        assert_eq!(resumed.prior[&sample_key("scenario/a", 2)].attempt.elapsed_ms, 2);
+        assert_eq!(resumed.prior[&sample_key("scenario/a", 2)].attempt.status, "skip");
     }
 
     #[test]
@@ -231,16 +235,18 @@ mod tests {
         opened
             .ledger
             .record(Row {
-                key: key("scenario/a"),
-                status: "xfail",
-                elapsed_ms: 3,
+                attempt: Attempt {
+                    key: key("scenario/a"),
+                    status: "xfail",
+                    elapsed_ms: 3,
+                },
                 timing: PhaseTiming::default(),
                 diagnostic: "known gap".to_owned(),
             })
             .unwrap();
         drop(opened);
         let resumed = Ledger::open(&report, "stamp", &keys, true).unwrap();
-        assert_eq!(resumed.prior[&key("scenario/a")].status, "xfail");
+        assert_eq!(resumed.prior[&key("scenario/a")].attempt.status, "xfail");
         drop(resumed);
         assert!(Ledger::open(&report, "changed", &keys, true).is_err());
     }

@@ -1,6 +1,6 @@
 use super::WorkKey;
 use crate::{
-    journal::{self, Require as _, Schema},
+    journal::{self, Attempt, Require as _, Schema},
     suite::{Error, Target},
 };
 use std::collections::BTreeSet;
@@ -11,9 +11,7 @@ const OUTPUT_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub(super) struct Row {
-    pub key: WorkKey,
-    pub status: &'static str,
-    pub elapsed_ms: u64,
+    pub attempt: Attempt<WorkKey>,
     pub output: String,
 }
 
@@ -64,20 +62,20 @@ impl Schema for Bench {
     const FIELDS: usize = 6;
 
     fn key(row: &Row) -> &WorkKey {
-        &row.key
+        &row.attempt.key
     }
 
     fn format(row: &Row) -> Result<String, Error> {
-        (!row.key.id.contains(['\t', '\n']) && !row.key.provenance.contains(['\t', '\n']))
+        (!row.attempt.key.id.contains(['\t', '\n']) && !row.attempt.key.provenance.contains(['\t', '\n']))
             .require("benchmark result contains an unsafe delimiter")?;
         (row.output.len() <= OUTPUT_LIMIT).require("benchmark result output exceeds its byte bound")?;
         let text = format!(
             "{}\t{}\t{}\t{}\t{}\t{}\n",
-            row.key.id,
-            row.key.target.name(),
-            row.key.provenance,
-            row.status,
-            row.elapsed_ms,
+            row.attempt.key.id,
+            row.attempt.key.target.name(),
+            row.attempt.key.provenance,
+            row.attempt.status,
+            row.attempt.elapsed_ms,
             Self::encode(row.output.as_bytes())
         );
         (text.len() <= Self::ROW_LIMIT).require("benchmark result row exceeds its byte bound")?;
@@ -105,16 +103,18 @@ impl Schema for Bench {
             return Ok(None);
         }
         Ok(Some(Row {
-            key,
-            status,
-            elapsed_ms,
+            attempt: Attempt {
+                key,
+                status,
+                elapsed_ms,
+            },
             output,
         }))
     }
 }
 #[cfg(test)]
 mod tests {
-    use super::{Ledger, OUTPUT_LIMIT, Row, WorkKey};
+    use super::{Attempt, Ledger, OUTPUT_LIMIT, Row, WorkKey};
     use crate::suite::Target;
     use std::{collections::BTreeSet, io::Write};
 
@@ -135,9 +135,11 @@ mod tests {
         opened
             .ledger
             .record(Row {
-                key: key("bench/b"),
-                status: "pass",
-                elapsed_ms: 2,
+                attempt: Attempt {
+                    key: key("bench/b"),
+                    status: "pass",
+                    elapsed_ms: 2,
+                },
                 output: "PASS bench/b\nPHASE bench/b".to_owned(),
             })
             .unwrap();
@@ -147,9 +149,11 @@ mod tests {
         resumed
             .ledger
             .record(Row {
-                key: key("bench/a"),
-                status: "fail",
-                elapsed_ms: 1,
+                attempt: Attempt {
+                    key: key("bench/a"),
+                    status: "fail",
+                    elapsed_ms: 1,
+                },
                 output: "FAIL bench/a".to_owned(),
             })
             .unwrap();
@@ -183,9 +187,11 @@ mod tests {
         opened
             .ledger
             .record(Row {
-                key: key("bench/boundary"),
-                status: "pass",
-                elapsed_ms: 1,
+                attempt: Attempt {
+                    key: key("bench/boundary"),
+                    status: "pass",
+                    elapsed_ms: 1,
+                },
                 output: "x".repeat(OUTPUT_LIMIT),
             })
             .unwrap();
@@ -203,9 +209,11 @@ mod tests {
         opened
             .ledger
             .record(Row {
-                key: original,
-                status: "pass",
-                elapsed_ms: 1,
+                attempt: Attempt {
+                    key: original,
+                    status: "pass",
+                    elapsed_ms: 1,
+                },
                 output: "PASS bench/a".into(),
             })
             .unwrap();

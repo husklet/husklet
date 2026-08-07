@@ -1,7 +1,8 @@
 use std::future::Future;
 use tokio::task::{JoinError, JoinSet};
 
-pub(super) struct Pool<T, R> {
+/// A bounded work frontier: at most `jobs` tasks run at once, and the rest wait in `pending`.
+pub(crate) struct Pool<T, R> {
     pending: std::vec::IntoIter<T>,
     running: JoinSet<R>,
     jobs: usize,

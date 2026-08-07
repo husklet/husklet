@@ -8,8 +8,7 @@ use crate::{
 };
 use clap::Args;
 use definition::Benchmark;
-use std::{collections::BTreeSet, future::Future, path::PathBuf, sync::Arc};
-use tokio::task::JoinSet;
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 const EVIDENCE_LIMIT: usize = 64 * 1024;
 const DIAGNOSTIC_LIMIT: usize = 16 * 1024;
@@ -17,13 +16,16 @@ const LEDGER_IDENTITY: &str = "husklet-benchmark-ledger-v2";
 
 pub async fn run(options: Options) -> Result<(), Error> {
     let planned = plan(options.benchmarks()?, &options);
-    let mut preparations = WorkPool::new(planned, options.jobs);
+    let mut preparations = crate::pool::Pool::new(planned, options.jobs);
     let mut work = Vec::new();
     while let Some(prepared) = preparations.next(prepare_work).await? {
         work.push(prepared?);
     }
-    work.sort_by(|left, right| left.key.cmp(&right.key));
-    let keys = work.iter().map(|item| item.key.clone()).collect::<BTreeSet<_>>();
+    work.sort_by(|left, right| left.planned.key.cmp(&right.planned.key));
+    let keys = work
+        .iter()
+        .map(|item| item.planned.key.clone())
+        .collect::<BTreeSet<_>>();
     let report = runtime::workspace()?.join(&options.results);
     let resume = options.resume;
     let opened = tokio::task::spawn_blocking(move || {
@@ -31,15 +33,15 @@ pub async fn run(options: Options) -> Result<(), Error> {
     })
     .await??;
     let ledger = Arc::new(opened.ledger);
-    work.retain(|item| !opened.prior.contains_key(&item.key));
-    let mut pool = WorkPool::new(work, options.jobs);
+    work.retain(|item| !opened.prior.contains_key(&item.planned.key));
+    let mut pool = crate::pool::Pool::new(work, options.jobs);
     let mut rows = opened.prior;
     while let Some(completed) = pool.next(execute_work).await? {
         let row = completed.row();
         let recording = Arc::clone(&ledger);
         let saved = row.clone();
         tokio::task::spawn_blocking(move || recording.record(saved).map_err(|error| error.to_string())).await??;
-        rows.insert(row.key.clone(), row);
+        rows.insert(row.attempt.key.clone(), row);
     }
     tokio::task::spawn_blocking(move || ledger.finish().map_err(|error| error.to_string())).await??;
     Report::finish(&rows)
@@ -47,39 +49,12 @@ pub async fn run(options: Options) -> Result<(), Error> {
 
 async fn execute_work(work: Work) -> Completion {
     let started = std::time::Instant::now();
-    let result = execution::run(work.benchmark, work.case_index, work.target, work.prepared).await;
+    let planned = work.planned;
+    let result = execution::run(planned.benchmark, planned.case_index, planned.key.target, work.prepared).await;
     Completion {
-        key: work.key,
+        key: planned.key,
         elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         result,
-    }
-}
-
-struct WorkPool<T, R> {
-    pending: std::vec::IntoIter<T>,
-    running: JoinSet<R>,
-    jobs: usize,
-}
-
-impl<T: Send + 'static, R: Send + 'static> WorkPool<T, R> {
-    fn new(work: Vec<T>, jobs: usize) -> Self {
-        Self {
-            pending: work.into_iter(),
-            running: JoinSet::new(),
-            jobs,
-        }
-    }
-
-    async fn next<F, Fut>(&mut self, launch: F) -> Result<Option<R>, tokio::task::JoinError>
-    where
-        F: Clone + Fn(T) -> Fut,
-        Fut: Future<Output = R> + Send + 'static,
-    {
-        while self.running.len() < self.jobs {
-            let Some(work) = self.pending.next() else { break };
-            self.running.spawn(launch.clone()(work));
-        }
-        self.running.join_next().await.transpose()
     }
 }
 
@@ -91,34 +66,24 @@ struct WorkKey {
 }
 
 struct PlannedWork {
-    id: String,
     key: WorkKey,
     benchmark: Arc<Benchmark>,
     case_index: usize,
-    target: Target,
 }
 
 struct Work {
-    key: WorkKey,
-    benchmark: Arc<Benchmark>,
-    case_index: usize,
-    target: Target,
+    planned: PlannedWork,
     prepared: execution::Preparation,
 }
 
-async fn prepare_work(work: PlannedWork) -> Result<Work, String> {
-    let prepared = execution::prepare(&work.benchmark, work.case_index, work.target)
+/// Preparation is what discovers the provenance, so the key is only complete once it has run.
+async fn prepare_work(mut work: PlannedWork) -> Result<Work, String> {
+    let prepared = execution::prepare(&work.benchmark, work.case_index, work.key.target)
         .await
         .map_err(|error| error.to_string())?;
+    work.key.provenance = prepared.identity.clone();
     Ok(Work {
-        key: WorkKey {
-            id: work.id,
-            target: work.target,
-            provenance: prepared.identity.clone(),
-        },
-        benchmark: work.benchmark,
-        case_index: work.case_index,
-        target: work.target,
+        planned: work,
         prepared,
     })
 }
@@ -133,9 +98,11 @@ impl Completion {
     fn row(self) -> ledger::Row {
         let (status, output) = format_result(self.result);
         ledger::Row {
-            key: self.key,
-            status,
-            elapsed_ms: self.elapsed_ms,
+            attempt: crate::journal::Attempt {
+                key: self.key,
+                status,
+                elapsed_ms: self.elapsed_ms,
+            },
             output,
         }
     }
@@ -175,7 +142,7 @@ impl Report {
         let mut failures = Vec::new();
         for row in rows.values() {
             println!("{}", row.output);
-            if row.status == "pass" {
+            if row.attempt.status == "pass" {
                 passed += 1;
             } else {
                 failures.push(row.output.clone());
@@ -298,17 +265,14 @@ fn plan(benchmarks: Vec<Benchmark>, options: &Options) -> Vec<PlannedWork> {
         let benchmark = Arc::new(benchmark);
         for target in options.targets() {
             for (case_index, case) in benchmark.cases.iter().enumerate() {
-                let id = format!("bench/{}/{}", benchmark.name, case.id);
                 work.push(PlannedWork {
-                    id: id.clone(),
                     key: WorkKey {
-                        id,
+                        id: format!("bench/{}/{}", benchmark.name, case.id),
                         target,
                         provenance: String::new(),
                     },
                     benchmark: Arc::clone(&benchmark),
                     case_index,
-                    target,
                 });
             }
         }
@@ -371,7 +335,7 @@ impl Options {
 
 #[cfg(test)]
 mod tests {
-    use super::{DIAGNOSTIC_LIMIT, Options, Statistics, WorkPool, excerpt, format_passed};
+    use super::{DIAGNOSTIC_LIMIT, Options, Statistics, excerpt, format_passed};
     use clap::Parser;
     use std::sync::{
         Arc,
@@ -459,7 +423,7 @@ mod tests {
             }
         };
         let started = Instant::now();
-        let mut pool = WorkPool::new((0..6).collect(), 2);
+        let mut pool = crate::pool::Pool::new((0..6).collect(), 2);
         let mut completed = Vec::new();
         while let Some(value) = pool.next(launch.clone()).await.unwrap() {
             completed.push(value);
@@ -491,7 +455,7 @@ mod tests {
                 }
             }
         };
-        let mut pool = WorkPool::new(vec![0, 1], 1);
+        let mut pool = crate::pool::Pool::new(vec![0, 1], 1);
         while pool.next(launch.clone()).await.unwrap().is_some() {}
         assert_eq!(
             *events.lock().unwrap(),
