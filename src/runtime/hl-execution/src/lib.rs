@@ -74,7 +74,7 @@ pub use x86::{
     Encoding, ExecutionExit, ExtendedClass, ExtendedReal, FetchError, Flag, FlagState, FlagUpdate, FloatArithmetic,
     FloatWidth, GuestFeaturePolicy, HostCapabilities, InstructionFetch, IntegerWidth, LegacyPrefixes, MmxCount,
     MmxOperation, Multiplication, RepeatCondition, Rex, ScalarInstruction, ScalarInterpreter, ScalarIr, ScalarIrError,
-    ScalarOperand, ScalarRegister, ScalarState, ScalarWidth, Segment, ShiftCount, ShiftOperation, Staged,
+    ScalarOperand, ScalarRegister, ScalarState, ScalarWidth, Segment, ShiftCount, ShiftOperation, SparseWrites, Staged,
     StringInstruction, StringOperation, UnaryOperation, VectorArithmetic, VectorComparison, VectorDecode, VectorLane,
     VectorMemory, VectorOperation, VectorPackKind, VectorShiftKind, VectorShuffleMode, VectorSource, VectorTransfer,
     X86Decoder, X86ScalarDecoder, X87StackOperation, XgetbvError,

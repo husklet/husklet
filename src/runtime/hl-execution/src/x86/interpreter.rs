@@ -247,7 +247,8 @@ impl ScalarInterpreter {
             Staged::Batch(reservation, values, address, length) => memory
                 .commit_write_batch(reservation, &values[..usize::from(length / 8)])
                 .map_err(|()| fault(address, length)),
-            Staged::Sparse(reservations, values, count, address, length) => {
+            Staged::Sparse(sparse, count, address, length) => {
+                let crate::x86::SparseWrites { reservations, values } = *sparse;
                 for (reservation, value) in reservations.into_iter().flatten().zip(values).take(usize::from(count)) {
                     memory
                         .commit_write(reservation, value)
