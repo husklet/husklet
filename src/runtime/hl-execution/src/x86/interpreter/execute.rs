@@ -197,8 +197,7 @@ impl ScalarInterpreter {
                         }
                     }
                     Ok(Staged::Sparse(
-                        reservations,
-                        values,
+                        Box::new(crate::x86::SparseWrites { reservations, values }),
                         count as u8,
                         base,
                         if wide { 32 } else { 16 },
@@ -270,7 +269,12 @@ impl ScalarInterpreter {
                     values[count] = (data >> (u32::from(start) * 8)) as u64;
                     count += 1;
                 }
-                Ok(Staged::Sparse(reservations, values, count as u8, base, bytes))
+                Ok(Staged::Sparse(
+                    Box::new(crate::x86::SparseWrites { reservations, values }),
+                    count as u8,
+                    base,
+                    bytes,
+                ))
             }
             ScalarInstruction::VexAes {
                 operation,
