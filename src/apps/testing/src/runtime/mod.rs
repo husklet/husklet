@@ -20,7 +20,7 @@ use std::sync::Arc;
 pub(crate) use execution::WorkerOptions;
 
 pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error> {
-    image::preflight(name, &target.platform())
+    image::ImageCache::for_platform(&target.platform())?.preflight(name)
 }
 
 pub async fn run(options: Options) -> Result<(), Error> {
