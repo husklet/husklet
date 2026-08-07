@@ -551,6 +551,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
     hl_a64_budget_guard budget_guard;
     uint32_t *refund_patches[HL_A64_TRACE_MAX_CONDITIONALS] = {0};
     uint32_t refund_prefixes[HL_A64_TRACE_MAX_CONDITIONALS] = {0};
+    uint32_t refund_relocations[HL_A64_TRACE_MAX_CONDITIONALS] = {0};
     uint32_t stitched = 0;
     uint32_t charged_prefix = 0;
     int exclusive = 0;
@@ -668,6 +669,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) return 0;
             density_record(&density, HL_A64_DENSITY_CONTROL,
                            (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
+            refund_relocations[stitched] = output->relocation_count - 1u;
             refund_prefixes[stitched++] = (uint32_t)(index + 1u);
             continue;
         }
@@ -795,6 +797,12 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
     for (uint32_t index = 0; index < stitched; index++) {
         uint32_t refund = (uint32_t)output->instruction_count - refund_prefixes[index];
         *refund_patches[index] |= refund << 10;
+        /* The refund lives inside the reserved span, so republish the cold image
+         * once its immediate is known. */
+        hl_native_relocation *relocation = &output->relocations[refund_relocations[index]];
+        memcpy(relocation->span.cold, (const uint8_t *)buffer + relocation->code_offset,
+               sizeof(relocation->span.cold));
+        relocation->expected = relocation->span.cold[0];
     }
     if (output->provenance_count + guard_count > HL_NATIVE_PROVENANCE_MAX) {
         memset(buffer, 0, capacity);

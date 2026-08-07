@@ -98,11 +98,15 @@ int hl_a64_conditional_stitch(hl_a64_assembler *assembler, uint32_t word, uint64
     inverted = kind == PREDICATE_CONDITION ? word ^ 1u : word ^ (1u << 24);
     branch = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
+    /* The refund heads the reserved span so admission can fold it into its own
+     * subtract, leaving one read-modify-write on `budget` per taken edge. */
+    uint32_t *taken_reservation = (uint32_t *)assembler->cursor;
     hl_a64_ldr(assembler, 16, CPU, (int)offsetof(hl_native_aarch64_cpu, budget));
     if (refund_patch != NULL) *refund_patch = (uint32_t *)assembler->cursor;
     hl_a64_addi(assembler, 16, 16, 0);
     hl_a64_str(assembler, 16, CPU, (int)offsetof(hl_native_aarch64_cpu, budget));
-    uint32_t *taken_reservation = hl_a64_stub_edge_reserve(assembler);
+    for (uint32_t index = 3; index < HL_A64_EDGE_SPAN_WORDS; index++)
+        hl_a64_emit32(assembler, UINT32_C(0xd503201f));
     if (taken_patch != NULL) *taken_patch = taken_reservation;
     if (taken_target != NULL) *taken_target = pc + (uint64_t)displacement;
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_BRANCH, pc + (uint64_t)displacement);
