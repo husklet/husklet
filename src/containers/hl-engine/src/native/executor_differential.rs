@@ -283,6 +283,115 @@ fn aarch64_compare_against_zero_matches_interpreter_at_each_boundary() {
     }
 }
 
+/// The counter gate. Every `ok=` checksum is pure computation and never observes
+/// the counter, so a checksum-identical native/interpreter run proves nothing
+/// about the timebase; this compares the guest-visible counter values instead.
+/// The reads deliberately straddle the boundary, which is the shape that turned
+/// into nonsense phase timings when a raw host `mrs` was last emitted.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn aarch64_counter_reads_observe_one_timebase_across_the_native_boundary() {
+    const SENTINEL: u64 = 0xfeed_face_dead_beef;
+    #[derive(Debug)]
+    struct MonotonicNanoseconds(std::time::Instant);
+    impl hl_execution::ArchitecturalCounter for MonotonicNanoseconds {
+        fn read(&self) -> u64 {
+            u64::try_from(self.0.elapsed().as_nanos()).unwrap_or(u64::MAX)
+        }
+    }
+
+    let words: [u32; 4] = [
+        0xd53b_e000, // mrs x0, cntfrq_el0
+        0xd53b_e041, // mrs x1, cntvct_el0
+        0xd53b_e042, // mrs x2, cntvct_el0
+        0xd400_0001, // svc #0
+    ];
+    let mut bytes = Vec::new();
+    for word in words {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    let mut initial = Aarch64CpuState {
+        pc: 0x4000,
+        ..Aarch64CpuState::default()
+    };
+    for register in 0..3 {
+        initial.registers[register] = SENTINEL;
+    }
+
+    let counter = std::sync::Arc::new(MonotonicNanoseconds(std::time::Instant::now()));
+    let port: std::sync::Arc<dyn hl_execution::ArchitecturalCounter> = counter.clone();
+    let mut memory = ReplayMemory {
+        sources: vec![ReplaySource {
+            first: 0x4000,
+            bytes: bytes.clone(),
+        }],
+        data: Vec::new(),
+        generation: 1,
+    };
+    let machine = ExecutionMachine::new_with_counter(
+        ExecutionSnapshot {
+            version: EXECUTION_SNAPSHOT_VERSION,
+            cpu: ExecutionCpuSnapshot::Aarch64(initial.clone()),
+            cache_epoch: 1,
+            fault: None,
+        },
+        port,
+    )
+    .expect("interpreter");
+    assert_eq!(machine.run_slice(1, 2, &mut memory), StepOutcome::Yield);
+    machine.freeze().expect("interpreter freeze");
+    let ExecutionCpuSnapshot::Aarch64(mut interpreted) = machine.snapshot().expect("snapshot").cpu else {
+        unreachable!()
+    };
+    assert_eq!(
+        interpreted.registers[0],
+        hl_execution::GUEST_COUNTER_FREQUENCY_HZ,
+        "interpreted cntfrq_el0 left the declared guest timebase"
+    );
+    assert_ne!(
+        interpreted.registers[1], SENTINEL,
+        "interpreted cntvct_el0 was not read"
+    );
+
+    let spans = [SourceSpan {
+        guest_first: 0x4000,
+        bytes: bytes.as_ptr(),
+        size: bytes.len(),
+        mapping_incarnation: 1,
+        instruction_epoch: 1,
+    }];
+    let source = Source {
+        spans: spans.as_ptr(),
+        span_count: spans.len(),
+        mapping_incarnation: 1,
+        instruction_epoch: 1,
+    };
+    let executor = Executor::create().expect("native executor");
+    executor.reset(1).expect("native reset");
+    executor
+        .run_aarch64(&mut interpreted, &source, None, 1, 1, None, None)
+        .expect("native run");
+    let elapsed = hl_execution::ArchitecturalCounter::read(counter.as_ref());
+
+    // Native execution may decline the read, but if it answers it must answer on
+    // the same timeline and the same base the interpreter just used.
+    if interpreted.registers[0] != SENTINEL {
+        assert_eq!(
+            interpreted.registers[0],
+            hl_execution::GUEST_COUNTER_FREQUENCY_HZ,
+            "native cntfrq_el0 diverges from the guest timebase contract"
+        );
+    }
+    if interpreted.registers[2] != SENTINEL {
+        assert!(
+            (interpreted.registers[1]..=elapsed).contains(&interpreted.registers[2]),
+            "native cntvct_el0 {} is off the interpreter timeline {}..={elapsed}",
+            interpreted.registers[2],
+            interpreted.registers[1]
+        );
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TraceCheckpoint {
     instruction_count: u64,
