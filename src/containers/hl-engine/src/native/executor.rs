@@ -363,6 +363,16 @@ impl InstructionWord {
         self.0 & 0x0a00_0000 == 0x0800_0000 && self.0 & 0x0400_0000 != 0
     }
 
+    /// The instructions that end a block: branches, returns, and exception entry.
+    fn transfers_control(self) -> bool {
+        let word = self.0;
+        word & 0x7c00_0000 == 0x1400_0000
+            || word & 0xfe00_0000 == 0x5400_0000
+            || word & 0x7c00_0000 == 0x3400_0000
+            || word & 0xfe00_0000 == 0xd600_0000
+            || word & 0xff00_0000 == 0xd400_0000
+    }
+
     fn scalar_access(self) -> Option<Protection> {
         let word = self.0;
         if word & 0x0400_0000 != 0 || (word >> 30) & 3 == 3 && (word >> 22) & 3 == 2 {
@@ -1867,25 +1877,29 @@ impl BoundaryCaptureState {
 impl Executor {
     fn direct_scalar_trace(&self, pc: u64, sources: &[BorrowedSource<'_>]) -> Option<Protection> {
         let mut protection = None;
+        // The window is the entry block: an access past its terminator belongs to
+        // some other block and must not decide this one's authority.
         for index in 0..64 {
             let Some(instruction) = pc.checked_add(index * 4) else {
-                continue;
+                break;
             };
             let Some(word) = sources.iter().find_map(|source| source.instruction_at(instruction)) else {
-                continue;
+                break;
             };
             // Direct authority runs without the operand resolver, so a vector
             // access it cannot certify would fall back and suppress the entry.
             if word.vector_access() {
                 return None;
             }
-            let Some(access) = word.scalar_access() else {
-                continue;
-            };
-            if access == Protection::WRITE {
-                return Some(access);
+            if let Some(access) = word.scalar_access() {
+                if access == Protection::WRITE {
+                    return Some(access);
+                }
+                protection = Some(access);
             }
-            protection = Some(access);
+            if word.transfers_control() {
+                break;
+            }
         }
         protection
     }
@@ -3020,6 +3034,60 @@ mod test {
         ] {
             assert!(!InstructionWord(word).vector_access(), "{word:#x}");
         }
+    }
+
+    #[test]
+    fn control_transfer_forms() {
+        for word in [
+            0x1400_0004, // b .+16
+            0x9400_0004, // bl .+16
+            0x5400_0060, // b.eq .+12
+            0xb400_0060, // cbz x0, .+12
+            0x3700_0060, // tbnz w0, #0, .+12
+            0xd65f_03c0, // ret
+            0xd63f_0020, // blr x1
+            0xd400_0001, // svc #0
+        ] {
+            assert!(InstructionWord(word).transfers_control(), "{word:#x}");
+        }
+        for word in [
+            0xf940_0020, // ldr x0, [x1]
+            0x9100_4021, // add x1, x1, #16
+            0xfa42_0004, // ccmp x0, x2, #4, eq
+            0x6e27_1e10, // eor v16.16b
+            0xd503_201f, // nop
+        ] {
+            assert!(!InstructionWord(word).transfers_control(), "{word:#x}");
+        }
+    }
+
+    #[test]
+    fn direct_scalar_trace_stops_at_the_block_terminator() {
+        let executor = Executor::create().expect("executor");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0xf940_03e0_u32.to_le_bytes()); // ldr x0, [sp]
+        bytes.extend_from_slice(&0xd65f_03c0_u32.to_le_bytes()); // ret
+        while bytes.len() < 40 {
+            bytes.extend_from_slice(&0xd503_201f_u32.to_le_bytes()); // nop
+        }
+        // Past the terminator but inside the 64-instruction window; a write here
+        // used to claim the entry block for the direct authority.
+        bytes.extend_from_slice(&0xf900_07e0_u32.to_le_bytes()); // str x0, [sp, #8]
+        bytes.extend_from_slice(&0x3dc0_0027_u32.to_le_bytes()); // ldr q7, [x1]
+        let sources = [BorrowedSource {
+            guest_first: 0x1000,
+            bytes: &bytes,
+        }];
+        assert_eq!(
+            executor.direct_scalar_trace(0x1000, &sources),
+            Some(Protection::READ)
+        );
+        // Reached inside the block, the same two words still decide it.
+        assert_eq!(
+            executor.direct_scalar_trace(0x1000 + 8, &sources),
+            Some(Protection::WRITE)
+        );
+        assert_eq!(executor.direct_scalar_trace(0x1000 + 44, &sources), None);
     }
 
     #[derive(Default)]
