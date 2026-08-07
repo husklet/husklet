@@ -1022,6 +1022,44 @@ fn stop_install_before_control_event_releases_exact_gate() {
     assert_eq!(threads.next().unwrap().generation, run.generation);
 }
 
+/// Releasing a stop gate must leave a syscall-owned peer parked: its waiter
+/// still owes a completion, and clearing the park strands the run in `Waiter`.
+#[test]
+fn stop_gate_release_keeps_syscall_owned_peer_resumable() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let second = tasks
+        .commit_clone_thread(tasks.begin_clone_thread(first).unwrap())
+        .unwrap();
+    let threads = ThreadSet::new(2).unwrap();
+    let shared = space();
+    publish(&threads, process, first, 0x1000, Arc::clone(&shared));
+    publish(&threads, process, second, 0x2000, shared);
+    let waiting = threads.claim(second, threads.find(second).unwrap().generation).unwrap();
+    threads.park_syscall(&waiting).unwrap();
+    let owner = threads.claim(first, threads.find(first).unwrap().generation).unwrap();
+
+    assert!(threads.install_stop_gate(&owner, 1).unwrap());
+    threads.process_control(control_event(process, 2, hl_task::ProcessControlAction::Continue));
+
+    // The waiter lane now reports the completed syscall for `second`.
+    assert_eq!(threads.resume_run(&waiting), Ok(()));
+    threads.release(&waiting).unwrap();
+    let mut resumed = Vec::new();
+    while let Some(run) = threads.next() {
+        resumed.push(run.thread);
+        if resumed.len() > 2 {
+            break;
+        }
+    }
+    assert!(resumed.contains(&second), "syscall-owned peer was never rescheduled");
+}
+
 #[test]
 fn stop_gate_consumes_running_owner_after_peer_quiescence() {
     let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();

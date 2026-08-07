@@ -847,12 +847,11 @@ impl ThreadSet {
                     .get(&thread)
                     .is_some_and(|run| run.process == process && run.generation == generation)
                 {
-                    // A waiter still owns a syscall-parked run. SIGKILL only
-                    // wakes it here; completion returns the exact generation
-                    // before its signal boundary terminates the group.
-                    if action != hl_task::ProcessControlAction::Kill || !state.syscall_parked.contains(&thread) {
+                    // A waiter lane still owes a completion for a syscall-parked
+                    // run, and `resume_run` is the only transition that may
+                    // unpark it; clearing the park here strands it in `Waiter`.
+                    if !state.syscall_parked.contains(&thread) {
                         state.parked.remove(&thread);
-                        state.syscall_parked.remove(&thread);
                     }
                 }
             }
