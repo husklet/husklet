@@ -125,7 +125,9 @@ impl<H: SocketHostIo> ListenerQueue<H> {
             state.canceled = true;
             state.queue.drain(..).map(|accepted| accepted.token).collect::<Vec<_>>()
         };
-        tokens.into_iter().for_each(|token| self.host.close(token));
+        for token in tokens {
+            self.host.close(token);
+        }
         self.wake.notify_all();
     }
 

@@ -47,7 +47,7 @@ impl NetworkCatalog {
                     endpoints
                         .iter()
                         .find(|snapshot| usize::from(snapshot.id.slot) - 1 == index)
-                        .map(|snapshot| Self::unix_view(snapshot)),
+                        .map(Self::unix_view),
                 ),
                 CatalogSocket::Unix { snapshot, .. } => unix.push(Self::unix_view(snapshot)),
                 CatalogSocket::Host { snapshot, .. } if snapshot.family == crate::AddressFamily::Unix => {

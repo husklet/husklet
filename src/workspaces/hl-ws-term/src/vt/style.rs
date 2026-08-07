@@ -146,7 +146,7 @@ impl Vt {
                 // OSC 7 reports the shell's cwd as a `file://host/path` URI.
                 "7" => {
                     self.cwd = crate::session::WorkingDirectory::from_osc7(rest)
-                        .map(|path| path.into_string())
+                        .map(crate::session::WorkingDirectory::into_string)
                         .or(self.cwd.take());
                 }
                 _ => {}

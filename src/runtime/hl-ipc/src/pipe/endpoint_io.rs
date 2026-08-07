@@ -1,11 +1,23 @@
 //! The endpoint read and write path, including the waits it blocks on.
 use crate::pipe::{EndpointDirection, PIPE_BUF, PipeCancellationWake, PipeEndpoint, PipeState};
-use hl_descriptor::{ObjectError, OperationCancellation};
+use hl_descriptor::{CancellationSubscription, ObjectError, OperationCancellation};
 use std::io::{IoSlice, IoSliceMut};
 use std::sync::Arc;
 use std::sync::MutexGuard;
 use std::sync::atomic::Ordering;
 impl PipeEndpoint {
+    /// Routes cancellation wakes at this pipe so a blocked wait is interrupted.
+    fn subscribe_wake(
+        &self,
+        cancellation: Option<&dyn OperationCancellation>,
+    ) -> Option<Box<dyn CancellationSubscription>> {
+        cancellation.map(|cancellation| {
+            cancellation.subscribe(Arc::new(PipeCancellationWake {
+                pipe: Arc::downgrade(&self.pipe),
+            }))
+        })
+    }
+
     pub(super) fn read_bytes(
         &self,
         output: &mut [u8],
@@ -55,11 +67,7 @@ impl PipeEndpoint {
         if input.is_empty() {
             return Ok(0);
         }
-        let _subscription = cancellation.map(|cancellation| {
-            cancellation.subscribe(Arc::new(PipeCancellationWake {
-                pipe: Arc::downgrade(&self.pipe),
-            }))
-        });
+        let _subscription = self.subscribe_wake(cancellation);
         if input.len() <= PIPE_BUF {
             return self.write_atomic(input, cancellation);
         }
@@ -129,11 +137,7 @@ impl PipeEndpoint {
             }
             if !subscribed {
                 drop(state);
-                _subscription = cancellation.map(|cancellation| {
-                    cancellation.subscribe(Arc::new(PipeCancellationWake {
-                        pipe: Arc::downgrade(&self.pipe),
-                    }))
-                });
+                _subscription = self.subscribe_wake(cancellation);
                 subscribed = true;
                 state = self
                     .pipe
@@ -236,11 +240,7 @@ impl PipeEndpoint {
             }
             if !subscribed {
                 drop(state);
-                _subscription = cancellation.map(|cancellation| {
-                    cancellation.subscribe(Arc::new(PipeCancellationWake {
-                        pipe: Arc::downgrade(&self.pipe),
-                    }))
-                });
+                _subscription = self.subscribe_wake(cancellation);
                 subscribed = true;
                 state = self
                     .pipe
