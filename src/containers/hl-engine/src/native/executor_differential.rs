@@ -2498,3 +2498,29 @@ fn compare_operand() -> Vec<u8> {
     operand.extend_from_slice(&state.vector_upper[2].to_le_bytes());
     operand
 }
+
+/// Byte stores from the high-byte registers `%ah`/`%ch`/`%dh`/`%bh`, which glibc's
+/// `strncpy` uses to write the terminating NUL.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_high_byte_store_matches_interpreter_at_each_boundary() {
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[0] = 0x1122_3344_5566_7788;
+    initial.registers[1] = 0x99aa_bbcc_ddee_ff01;
+    initial.registers[2] = 0x0000_0000_0000_0000;
+    initial.registers[3] = 0xfedc_ba98_7654_3210;
+    initial.registers[6] = 0x7000;
+    let operand: Vec<u8> = (0..64_u32).map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8).collect();
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x88, 0x26],       // mov %ah,(%rsi)
+        vec![0x88, 0x6e, 0x01], // mov %ch,0x1(%rsi)
+        vec![0x88, 0x76, 0x02], // mov %dh,0x2(%rsi)
+        vec![0x88, 0x7e, 0x03], // mov %bh,0x3(%rsi)
+        vec![0x88, 0x76, 0x10], // mov %dh,0x10(%rsi)
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}

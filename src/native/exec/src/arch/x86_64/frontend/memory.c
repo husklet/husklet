@@ -438,9 +438,11 @@ void hl_x86_emit_store(uint32_t *words, uint32_t *cursor, const instruction *ite
     emit_write_cache(words, cursor, item->width);
     if (item->has_immediate != 0u)
         emit_constant(words, cursor, 20u, item->operand_immediate);
+    /* x18 carries the end-of-access address through the bounds checks below, so the
+     * high-byte source must land in x20 instead. */
     if (item->source_high == 8u) {
-        words[(*cursor)++] = UINT32_C(0x53083c00) | source << 5 | 18u;
-        source = 18u;
+        words[(*cursor)++] = UINT32_C(0x53083c00) | source << 5 | 20u; /* ubfx w20,wS,#8,#8 */
+        source = 20u;
     }
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
     words[(*cursor)++] = UINT32_C(0xeb11021f);
