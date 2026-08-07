@@ -144,6 +144,9 @@ typedef struct instruction {
     uint8_t conditional;
     uint8_t load_width;
     uint8_t memory_operand;
+    /* Set on a LOCKed ALU RMW retagged onto the atomic pre-image path, which keeps its
+     * own alu_kind and has no XADD pre-image writeback. */
+    uint8_t atomic_alu;
     uint8_t memory_write;
     uint8_t memory_destination;
     uint8_t address_32;

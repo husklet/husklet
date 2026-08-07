@@ -97,11 +97,11 @@ it now declares `timeout: 180` rather than being recorded as a failure.
 
 The 2026-08-03 ARM64 blocker is also gone.  A full ARM64 pass over the same
 cases completed with case-level results and no `stack smashing detected` abort.
-ARM64 additionally passes `memfd-exec-alias`, which AMD64 still fails.
 
 Twelve were recorded broken here, and none of them failed for the recorded
-2026-08-03 reason.  Eleven were harness contract gaps rather than engine defects
-and are active and passing on both guest ISAs as of 2026-08-07:
+2026-08-03 reason.  Eleven were harness contract gaps rather than engine
+defects; the twelfth, `memfd-exec-alias`, was a genuine engine defect and has
+since been fixed.  All twelve are active and passing on both guest ISAs:
 
 - Seven were unpassable under the runner's stdout/stderr contract, which
   rejected any non-empty stderr.  `allocator-reclamation`,
@@ -125,13 +125,41 @@ and are active and passing on both guest ISAs as of 2026-08-07:
   reported `EFAULT`.  The engine orders `ERANGE` before the buffer probe
   correctly; the case now pins a long working directory through `guest.cwd`
   rather than editing the golden.
-- `memfd-exec-alias` is the one genuine engine defect left, and it is AMD64 only.
-  Writes through the RW alias of a shared memfd become visible in the RX alias
-  (`scalar-visible=1`, `vector-visible=1`, `avx256-visible=1`) but do not retire
+- `memfd-exec-alias` was the one genuine engine defect, and it was AMD64 only.
+  Writes through the RW alias of a shared memfd became visible in the RX alias
+  (`scalar-visible=1`, `vector-visible=1`, `avx256-visible=1`) but did not retire
   the translated code for that alias, so `scalar-exec=0`, `cross-page=0`, and
-  `rep-exec=0` keep returning the previous immediate.  Only the wider 32-byte
-  store, which reaches a further guest page, forces retirement, leaving
-  `avx256-exec=1`.  ARM64 passes the same fixture at head.
+  `rep-exec=0` kept returning the previous immediate; only the wider 32-byte
+  store, which reaches a further guest page, forced retirement, leaving
+  `avx256-exec=1`.  Fixed in `6cf2ad32e`, which retires translations for stores
+  through a writable executable alias.  The case is typed active and passes on
+  both guest ISAs.
+
+## Re-verification against head, 2026-08-07
+
+The section above was re-checked against the corpus at head rather than carried
+forward.  `tests/runtime/memory/test.yaml` declares 114 cases: 95 active, 14
+`unsupported`, and 5 `broken`.
+
+All 25 cases typed broken on 2026-08-03 are now `status: active`, each carrying
+the mechanism the section above credits: `anon-tracker-concurrent` declares
+`timeout: 180`; `allocator-reclamation`, `anonymous-mapping-reclamation`,
+`fd-reclamation`, `file-mapping-reclamation`, `fork-reclamation`,
+`thread-reclamation`, and `zz-iso-flag` declare `expect.stderr`;
+`fixed-file-protection`, `fixed-noreplace`, and `truncate-peer` declare
+`guest.files`; `guard-page-efault` declares `guest.cwd`.  No memory case is
+typed broken for an engine defect any more.
+
+The five that remain `broken` are unrelated to that cohort and still hold.
+`mlockall-scope`, `vector-limits`, and `vector-order` are QEMU-oracle
+divergences whose evidence is `QEMU_EVIDENCE.md`, not engine failures.
+`nx-exec` and `edge-faults` are the NX and edge-fault fidelity gaps this
+document already records above as deliberately retained rather than hidden.
+The 14 `unsupported` cases are the macOS host-VM exclusions, also as recorded.
+
+`dbt-longjmp-reenter` is active and correct but load-sensitive: it passes
+uncontended in about 28 seconds against the 30-second default bound and can
+exceed it on a loaded box.  That is a measurement condition, not a regression.
 
 ## Native engine verification, 2026-08-03 (superseded)
 
