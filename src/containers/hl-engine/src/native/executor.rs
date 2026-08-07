@@ -365,16 +365,6 @@ impl InstructionWord {
         self.0 & 0x0a00_0000 == 0x0800_0000 && self.0 & 0x0400_0000 != 0
     }
 
-    /// The instructions that end a block: branches, returns, and exception entry.
-    fn transfers_control(self) -> bool {
-        let word = self.0;
-        word & 0x7c00_0000 == 0x1400_0000
-            || word & 0xfe00_0000 == 0x5400_0000
-            || word & 0x7c00_0000 == 0x3400_0000
-            || word & 0xfe00_0000 == 0xd600_0000
-            || word & 0xff00_0000 == 0xd400_0000
-    }
-
     fn scalar_access(self) -> Option<Protection> {
         let word = self.0;
         if word & 0x0400_0000 != 0 || (word >> 30) & 3 == 3 && (word >> 22) & 3 == 2 {
@@ -1881,29 +1871,27 @@ impl BoundaryCaptureState {
 impl Executor {
     fn direct_scalar_trace(&self, pc: u64, sources: &[BorrowedSource<'_>]) -> Option<Protection> {
         let mut protection = None;
-        // The window is the entry block: an access past its terminator belongs to
-        // some other block and must not decide this one's authority.
+        // A run chains single-instruction blocks across branches, so the window is
+        // not bounded by the entry block's terminator and may not stop at one.
         for index in 0..64 {
             let Some(instruction) = pc.checked_add(index * 4) else {
-                break;
+                continue;
             };
             let Some(word) = sources.iter().find_map(|source| source.instruction_at(instruction)) else {
-                break;
+                continue;
             };
             // Direct authority runs without the operand resolver, so a vector
             // access it cannot certify would fall back and suppress the entry.
             if word.vector_access() {
                 return None;
             }
-            if let Some(access) = word.scalar_access() {
-                if access == Protection::WRITE {
-                    return Some(access);
-                }
-                protection = Some(access);
+            let Some(access) = word.scalar_access() else {
+                continue;
+            };
+            if access == Protection::WRITE {
+                return Some(access);
             }
-            if word.transfers_control() {
-                break;
-            }
+            protection = Some(access);
         }
         protection
     }
@@ -3043,57 +3031,57 @@ mod test {
     }
 
     #[test]
-    fn control_transfer_forms() {
-        for word in [
-            0x1400_0004, // b .+16
-            0x9400_0004, // bl .+16
-            0x5400_0060, // b.eq .+12
-            0xb400_0060, // cbz x0, .+12
-            0x3700_0060, // tbnz w0, #0, .+12
-            0xd65f_03c0, // ret
-            0xd63f_0020, // blr x1
-            0xd400_0001, // svc #0
-        ] {
-            assert!(InstructionWord(word).transfers_control(), "{word:#x}");
-        }
-        for word in [
-            0xf940_0020, // ldr x0, [x1]
-            0x9100_4021, // add x1, x1, #16
-            0xfa42_0004, // ccmp x0, x2, #4, eq
-            0x6e27_1e10, // eor v16.16b
-            0xd503_201f, // nop
-        ] {
-            assert!(!InstructionWord(word).transfers_control(), "{word:#x}");
-        }
-    }
-
-    #[test]
-    fn direct_scalar_trace_stops_at_the_block_terminator() {
+    fn direct_scalar_trace_sees_a_write_past_a_branch_or_a_gap() {
         let executor = Executor::create().expect("executor");
+        // The lock fast path: the store the run reaches after the branch is the
+        // access that decides the authority.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0xb940_0001_u32.to_le_bytes()); // ldr w1, [x0]
+        bytes.extend_from_slice(&0x3500_0041_u32.to_le_bytes()); // cbnz w1, .+8
+        bytes.extend_from_slice(&0xb900_0002_u32.to_le_bytes()); // str w2, [x0]
+        assert_eq!(
+            executor.direct_scalar_trace(
+                0x1000,
+                &[BorrowedSource {
+                    guest_first: 0x1000,
+                    bytes: &bytes,
+                }]
+            ),
+            Some(Protection::WRITE)
+        );
+        // A hole in the source spans hides no access behind it either.
+        assert_eq!(
+            executor.direct_scalar_trace(
+                0x1000,
+                &[
+                    BorrowedSource {
+                        guest_first: 0x1000,
+                        bytes: &0xb940_0001_u32.to_le_bytes(),
+                    },
+                    BorrowedSource {
+                        guest_first: 0x1008,
+                        bytes: &0xb900_0002_u32.to_le_bytes(),
+                    },
+                ]
+            ),
+            Some(Protection::WRITE)
+        );
+        // A vector access the run reaches after the branch still declines, since
+        // direct authority has no operand it can certify for it.
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&0xf940_03e0_u32.to_le_bytes()); // ldr x0, [sp]
         bytes.extend_from_slice(&0xd65f_03c0_u32.to_le_bytes()); // ret
-        while bytes.len() < 40 {
-            bytes.extend_from_slice(&0xd503_201f_u32.to_le_bytes()); // nop
-        }
-        // Past the terminator but inside the 64-instruction window; a write here
-        // used to claim the entry block for the direct authority.
-        bytes.extend_from_slice(&0xf900_07e0_u32.to_le_bytes()); // str x0, [sp, #8]
         bytes.extend_from_slice(&0x3dc0_0027_u32.to_le_bytes()); // ldr q7, [x1]
-        let sources = [BorrowedSource {
-            guest_first: 0x1000,
-            bytes: &bytes,
-        }];
         assert_eq!(
-            executor.direct_scalar_trace(0x1000, &sources),
-            Some(Protection::READ)
+            executor.direct_scalar_trace(
+                0x1000,
+                &[BorrowedSource {
+                    guest_first: 0x1000,
+                    bytes: &bytes,
+                }]
+            ),
+            None
         );
-        // Reached inside the block, the same two words still decide it.
-        assert_eq!(
-            executor.direct_scalar_trace(0x1000 + 8, &sources),
-            Some(Protection::WRITE)
-        );
-        assert_eq!(executor.direct_scalar_trace(0x1000 + 44, &sources), None);
     }
 
     #[derive(Default)]
