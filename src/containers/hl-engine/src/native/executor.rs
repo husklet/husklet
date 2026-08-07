@@ -959,9 +959,17 @@ unsafe extern "C" fn resolve_operand<H: MemoryAccessHost>(
     /// `project_bounded` clamps to the resolved region, so an unbounded span
     /// projects the whole containing mapping in one view.
     const OPERAND_SPAN: u64 = u64::MAX;
+    // The four run views are keyed by permission as well as range, so a read-only view of a
+    // writable region costs a second slot and thrashes the cache; widen reads to read/write.
+    let widened = required.union(Protection::READ).union(Protection::WRITE);
     let projection = provider
         .lease
-        .project_bounded(hl_isa::GuestAddress::new(address), size, required, OPERAND_SPAN);
+        .project_bounded(hl_isa::GuestAddress::new(address), size, widened, OPERAND_SPAN)
+        .or_else(|_| {
+            provider
+                .lease
+                .project_bounded(hl_isa::GuestAddress::new(address), size, required, OPERAND_SPAN)
+        });
     match projection {
         Ok(view) => {
             provider.observed.observe(address, required);

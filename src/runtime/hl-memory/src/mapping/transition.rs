@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use hl_isa::AddressRange;
+
 use super::host::Coordinator;
 use super::port::Host;
 
@@ -46,6 +48,23 @@ impl<H: Host> Coordinator<H> {
     /// advances the executable era so range evidence witnesses reuse.
     pub(crate) fn publish_transition(&self, transition: &mut Transition, generation: u64) {
         self.host.executable.rotate();
+        transition.published(generation);
+    }
+
+    /// A transition confined to known ranges can only change which bytes those
+    /// ranges denote, so it supersedes them instead of the whole executable era.
+    pub(crate) fn publish_transition_ranges(
+        &self,
+        transition: &mut Transition,
+        generation: u64,
+        ranges: impl IntoIterator<Item = AddressRange>,
+    ) {
+        let ranges: Vec<_> = ranges.into_iter().collect();
+        if ranges.is_empty() {
+            self.host.executable.rotate();
+        } else {
+            self.host.executable.publish(ranges);
+        }
         transition.published(generation);
     }
 

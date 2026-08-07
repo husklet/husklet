@@ -21,6 +21,14 @@ pub(crate) enum PlannedOperation {
     Protect(AddressRange, Protection),
 }
 
+/// The guest range a planned operation changes the meaning of.
+pub(crate) fn planned_range(operation: &PlannedOperation) -> Option<AddressRange> {
+    match operation {
+        PlannedOperation::Map(address, request) => AddressRange::nonempty(*address, request.length).ok(),
+        PlannedOperation::Unmap(range) | PlannedOperation::Protect(range, _) => Some(*range),
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Batch {
     pub(crate) operations: Vec<Operation>,
