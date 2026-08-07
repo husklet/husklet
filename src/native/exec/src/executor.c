@@ -1186,8 +1186,28 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             .direct_token = (uint64_t)(uintptr_t)direct_token,
             .direct_generation = authority_generation,
         };
+        /* Reuse is decided by translation identity alone. The entry window is a
+         * property of this entry -- the caller's batch slicing and the remaining
+         * budget both narrow it -- not of the translation, so a trace that
+         * decoded more words than this window exposes is still the correct
+         * translation of the same bytes. What certifies those bytes is
+         * (mapping_incarnation, instruction_epoch) in the key plus the entry's
+         * recorded [source_first, source_last) hull, which spans every decoded
+         * pc including a stitched successor and so receives the range
+         * invalidation that any committed write or mapping transition drives.
+         * Comparing decoded_count here instead invalidated the wider block and
+         * republished a narrower one, so no cross-span trace ever survived its
+         * first re-entry.
+         *
+         * The remaining reason to refuse a hit is the other limit `count` folded
+         * in: a trace longer than the budget left in this slice. Its emitted
+         * guard would yield at the entry pc without retiring anything, and a
+         * slice owes its grant exact progress, so refuse it here and rebuild to
+         * fit. That rebuild does fit, because `limit` caps the requested word
+         * count by the same budget. Testing the guard's own condition keeps the
+         * refusal to the entries that would actually stall. */
         if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-            code.decoded_count > count) {
+            code.instruction_count > budget) {
             status = hl_native_execution_leave(&execution);
             if (status != HL_NATIVE_OK) return status;
             const hl_a64_source *build_source = active_source;
@@ -1250,8 +1270,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             /* Publication and reset both require exclusive mutation admission.
              * Resolve only after re-admission, so no pointer selected before
              * that boundary can survive an epoch change or fork repair. */
-            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-                code.decoded_count > count)
+            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT)
                 return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
         }
         if (cpu->indirect_site != 0) {
@@ -1261,8 +1280,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             if (status != HL_NATIVE_OK) return status;
             status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
-            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-                code.decoded_count > count)
+            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT)
                 return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
         }
         uint64_t executed_before = cpu->executed;

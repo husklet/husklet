@@ -90,6 +90,9 @@ typedef struct borrowed_resolver {
     uint8_t callee[REGION];
     uint64_t mapping;
     uint64_t epoch;
+    /* Set once a translation has consumed the callee region, so a later entry
+     * can prove reuse never needs to resolve it again. */
+    int refuse_callee;
 } borrowed_resolver;
 
 static int resolve_borrowed(void *opaque, uint64_t pc, uint64_t mapping, uint64_t epoch,
@@ -102,6 +105,7 @@ static int resolve_borrowed(void *opaque, uint64_t pc, uint64_t mapping, uint64_
         first = CALLER;
         region = state->caller;
     } else if (pc >= CALLEE && pc < CALLEE + REGION) {
+        if (state->refuse_callee) return 0;
         first = CALLEE;
         region = state->callee;
     } else {
@@ -177,8 +181,99 @@ static int stitch_keeps_entered_bytes(void) {
     return 0;
 }
 
+/* A trace that stitched a successor span decoded more words than its entry
+ * window exposes. The entry window is not what makes the translation valid --
+ * (mapping_incarnation, instruction_epoch) certify the bytes and the entry's
+ * recorded [source_first, source_last) hull, which spans every decoded pc,
+ * receives the range invalidation -- so re-entry must reuse it rather than
+ * rebuild. Before the fix the executor rejected the hit on decoded_count alone
+ * and republished on every single entry. */
+static int cross_span_trace_reenters_without_rebuild(void) {
+    executable_memory host = {0};
+    hl_native_executor *executor = create(&host);
+    CHECK(executor != NULL);
+    const hl_native_change replace = {.abi = HL_NATIVE_ABI, .size = sizeof(replace),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 11};
+    CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+
+    static _Alignas(16) uint8_t stack[4096];
+    uint64_t stack_first = (uint64_t)(uintptr_t)stack;
+    uint64_t stack_last = (uint64_t)(uintptr_t)(stack + sizeof(stack));
+    const hl_a64_view view = {stack_first, stack_last, stack_first, 11,
+        HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE, HL_NATIVE_WRITE_EXACT, 0};
+    const hl_a64_projection projection = {&view, 1, 11, 0};
+
+    static borrowed_resolver state;
+    memset(&state, 0, sizeof(state));
+    state.mapping = 11;
+    state.epoch = 5;
+    for (unsigned offset = 0; offset < REGION; offset += 4) {
+        store(state.caller, offset, UINT32_C(0xd503201f));
+        store(state.callee, offset, UINT32_C(0xd503201f));
+    }
+    /* movz x1,#0x777 ; svc #0 -- the successor body, four words from the end of
+     * the callee region so the stitched span contributes more than one word. */
+    store(state.callee, 0xf0, UINT32_C(0xd280eee1));
+    store(state.callee, 0xf4, UINT32_C(0xd4000001));
+
+    /* The caller-owned batch is the primary source, which is the only shape that
+     * stitches (37b6c4b54): nop then an unconditional B into the callee region.
+     * The window exposes two words; the trace decodes four. */
+    const uint32_t batch_words[] = {UINT32_C(0xd503201f), UINT32_C(0x17fff83b)};
+    const hl_native_source_span batch_span = {0x3000, (const uint8_t *)batch_words,
+        sizeof(batch_words), 11, 5};
+    const hl_native_source batch = {&batch_span, 1, 11, 5};
+
+    hl_native_aarch64_cpu cpu_state = {0};
+    hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
+        .architecture = HL_NATIVE_AARCH64, .state.aarch64 = &cpu_state};
+    hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
+        .architecture = HL_NATIVE_AARCH64, .mapping_epoch = 11, .projection = &projection,
+        .budget = 8, .source = &batch, .source_context = &state,
+        .source_resolve = resolve_borrowed};
+    hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
+    hl_native_cache_stats before = {0}, after = {0};
+
+    cpu_state.program = 0x3000;
+    cpu_state.stack = stack_last;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL);
+    CHECK(cpu_state.program == CALLEE + 0xf4);
+    CHECK(cpu_state.registers[1] == 0x777);
+    hl_native_cache_diagnose(executor->cache, &before);
+    /* The trace really did cross the span boundary; otherwise the reuse claim
+     * below would be about an ordinary single-window trace. */
+    CHECK(before.publications != 0);
+
+    /* Re-enter at the same pc with the same batch, the same epoch and a budget
+     * that still fits, but with the successor no longer resolvable. Reuse must
+     * not depend on being able to re-resolve a span the translation already
+     * consumed -- that is the resolver call the cache exists to avoid, and
+     * re-entering the shared borrowed buffer to make it is what published an
+     * unrelated function's bytes in 37b6c4b54. Before the fix the hit was
+     * rejected because decoded_count exceeded the entry window, the successor
+     * could no longer be stitched, and a narrower trace was published over the
+     * good one -- on every entry. */
+    state.refuse_callee = 1;
+    cpu_state.program = 0x3000;
+    cpu_state.stack = stack_last;
+    cpu_state.registers[1] = 0;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL);
+    CHECK(cpu_state.program == CALLEE + 0xf4);
+    CHECK(cpu_state.registers[1] == 0x777);
+    hl_native_cache_diagnose(executor->cache, &after);
+    CHECK(after.publications == before.publications);
+
+    hl_native_destroy(executor);
+    return 0;
+}
+
 #else
 static int stitch_keeps_entered_bytes(void) { return 0; }
+static int cross_span_trace_reenters_without_rebuild(void) { return 0; }
 #endif
 
-int main(void) { return stitch_keeps_entered_bytes(); }
+int main(void) {
+    return stitch_keeps_entered_bytes() || cross_span_trace_reenters_without_rebuild();
+}
