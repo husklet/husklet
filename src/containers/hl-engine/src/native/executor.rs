@@ -3,7 +3,9 @@
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use hl_execution::{Aarch64CpuState, CpuState as X86CpuState, FlagState, Nzcv, ScalarState};
+use hl_execution::{Aarch64CpuState, CpuState as X86CpuState, FlagState, Nzcv};
+#[cfg(test)]
+use hl_execution::ScalarState;
 use hl_isa::{AddressRange, GuestAddress};
 use hl_memory::{DirectAuthorityLease, ExecutableToken, MemoryAccessHost, MemoryError, ProjectionLease, Protection};
 
