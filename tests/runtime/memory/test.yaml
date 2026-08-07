@@ -367,9 +367,7 @@ cases:
     expect: { exit: 0, stdout: golden/memfd_aliasoverflow.out }
   - id: runtime/memory/memfd-exec-alias
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 only: a write through the RW alias of a shared memfd is visible in the RX alias but does not retire the translated code, so scalar-exec, cross-page, and rep-exec observe the stale immediate; ARM64 passes at head"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/memfd_execalias.c, output: memfd-exec-alias, flags: ["-static","-O2","-std=gnu11"] }
     artifact: { destination: /opt/husklet/memory/memfd-exec-alias }
