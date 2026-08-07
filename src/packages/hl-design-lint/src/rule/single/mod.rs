@@ -27,6 +27,7 @@ impl Rule for Use {
             let mut visitor = Definitions {
                 source,
                 test_scope: false,
+                nesting: Vec::new(),
                 values: Vec::new(),
             };
             visitor.visit_file(&source.syntax);
@@ -54,8 +55,18 @@ impl Rule for Use {
                     .into_iter()
                     .flatten()
                     .filter(|reference| {
-                        reference.context.as_ref().map(|context| context.name.as_str())
-                            != Some(definition.name.as_str())
+                        // Only the function's own body is a self-reference: a same-named method
+                        // calling it, or a same-named function in another file, is a real caller.
+                        let recursive = reference.context.as_ref().is_some_and(|context| {
+                            !context.associated
+                                && context.name == definition.name
+                                && reference.location.path == definition.location.path
+                        });
+                        !recursive
+                            && reference
+                                .module
+                                .as_ref()
+                                .is_none_or(|module| *module == definition.module)
                     })
                     .collect::<Vec<_>>();
                 // A sole attribute-borne use cannot take the remedy this rule asks for: no body
@@ -70,6 +81,7 @@ impl Rule for Use {
 struct Definition {
     name: String,
     location: crate::Location,
+    module: String,
 }
 impl Definition {
     fn finding(self, rule: &'static str, usage: &crate::rule::references::Reference) -> Finding {
@@ -91,6 +103,7 @@ impl Definition {
 struct Definitions<'a> {
     source: &'a Source,
     test_scope: bool,
+    nesting: Vec<String>,
     values: Vec<Definition>,
 }
 impl<'ast> Visit<'ast> for Definitions<'_> {
@@ -104,6 +117,7 @@ impl<'ast> Visit<'ast> for Definitions<'_> {
             self.values.push(Definition {
                 name: function.sig.ident.to_string(),
                 location: self.source.location(span),
+                module: crate::rule::references::module(&self.source.path, &self.nesting),
             });
         }
         syn::visit::visit_item_fn(self, function);
@@ -112,7 +126,9 @@ impl<'ast> Visit<'ast> for Definitions<'_> {
     fn visit_item_mod(&mut self, module: &'ast ItemMod) {
         let previous = self.test_scope;
         self.test_scope |= requires_test(&module.attrs);
+        self.nesting.push(module.ident.to_string());
         syn::visit::visit_item_mod(self, module);
+        self.nesting.pop();
         self.test_scope = previous;
     }
 }
