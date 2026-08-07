@@ -233,7 +233,7 @@ impl Benchmark {
             .join("target/testing/bench")
             .join(&self.name)
             .join(target.name());
-        fs::create_dir_all(&root)?;
+        tokio::fs::create_dir_all(&root).await?;
         let staging = tempfile::Builder::new().prefix("build-").tempdir_in(&root)?;
         let output = staging.path().join(case.id.replace('/', "-"));
         let compiler = build.compiler.for_target(target);
@@ -249,15 +249,15 @@ impl Benchmark {
         if !status.success() {
             return Err(format!("{compiler} failed building {}/{} with {status}", self.name, case.id).into());
         }
-        let identity = Sha256::digest(fs::read(&output)?);
+        let identity = Sha256::digest(tokio::fs::read(&output).await?);
         let identity = identity.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
         let cache = crate::runtime::workspace()?
             .join("target/testing/bench/cache/artifacts/sha256")
             .join(identity);
         if !cache.is_file() {
-            fs::create_dir_all(cache.parent().ok_or("artifact cache has no parent")?)?;
+            tokio::fs::create_dir_all(cache.parent().ok_or("artifact cache has no parent")?).await?;
             let temporary = tempfile::NamedTempFile::new_in(cache.parent().ok_or("artifact cache has no parent")?)?;
-            fs::copy(&output, temporary.path())?;
+            tokio::fs::copy(&output, temporary.path()).await?;
             match temporary.persist_noclobber(&cache) {
                 Ok(_) => {}
                 Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}

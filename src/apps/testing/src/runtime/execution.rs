@@ -67,9 +67,11 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
     let containers = hl_container::Containers::builder(config).build().await?;
     let destination = fixture.path().join(case.destination.trim_start_matches('/'));
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|error| context("create staging directory", parent, &error))?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| context("create staging directory", parent, &error))?;
     }
-    fs::copy(artifact.path(), &destination).map_err(|error| {
+    tokio::fs::copy(artifact.path(), &destination).await.map_err(|error| {
         format!(
             "stage {} into {}: {error}",
             artifact.path().display(),
@@ -217,8 +219,9 @@ impl<'a> CaseExecution<'a> {
         let status = self.wait(name, timeout).await?;
         let logs = self.containers.logs(name).await?;
         logs.bounded()?;
-        let expected =
-            fs::read(&self.case.golden).map_err(|error| context("read golden", &self.case.golden, &error))?;
+        let expected = tokio::fs::read(&self.case.golden)
+            .await
+            .map_err(|error| context("read golden", &self.case.golden, &error))?;
         if status != ExitStatus::Code(self.case.exit) {
             return Err(format!("exit {status:?}, expected {}", self.case.exit).into());
         }

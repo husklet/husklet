@@ -109,19 +109,17 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     let started = Instant::now();
     let runner = std::env::current_exe()?;
     let runner_identity = crate::record::FramedIdentity::of_file(&runner)?;
-    let definition = fs::read(benchmark.directory.join("test.yaml"))?;
-    let source = artifact.as_ref().map_or_else(
-        || {
-            Ok(benchmark
-                .rootfs_executable
-                .as_deref()
-                .unwrap_or_default()
-                .as_bytes()
-                .to_vec())
-        },
-        |_| fs::read(benchmark.source_path()),
-    )?;
-    let golden = fs::read(&case.stdout_contains)?;
+    let definition = tokio::fs::read(benchmark.directory.join("test.yaml")).await?;
+    let source = match artifact.as_ref() {
+        Some(_) => tokio::fs::read(benchmark.source_path()).await?,
+        None => benchmark
+            .rootfs_executable
+            .as_deref()
+            .unwrap_or_default()
+            .as_bytes()
+            .to_vec(),
+    };
+    let golden = tokio::fs::read(&case.stdout_contains).await?;
     let execution = format!("{:?}", benchmark.execution);
     let identity = crate::record::FramedIdentity::over(&[
         b"husklet-benchmark-provenance-v1".as_slice(),
@@ -310,7 +308,7 @@ async fn run_case(
     program: &str,
     deadline: tokio::time::Instant,
 ) -> std::result::Result<Measurement, Error> {
-    let expected_stdout = fs::read(&case.stdout_contains)?;
+    let expected_stdout = tokio::fs::read(&case.stdout_contains).await?;
     let total = 1_u32
         .checked_add(case.warmups)
         .and_then(|value| value.checked_add(case.samples))
