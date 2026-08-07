@@ -137,7 +137,7 @@ fn exit_finish() {
 #[test]
 fn assembly_memory_exit() {
     let fixture = Fixture::new();
-    let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+    let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
     let (process, thread) = assembly
         .tasks()
         .create_init(ProcessCredentials::new(0, 0, &[], 4).unwrap(), ProcessLimits::empty())

@@ -277,7 +277,7 @@ impl Networks {
                 .endpoints
                 .get_mut(container)
                 .expect("candidate cloned a present endpoint");
-            endpoint.name = new.to_owned();
+            new.clone_into(&mut endpoint.name);
             if let Err(error) = self.storage.replace(&candidate).await {
                 self.restore_committed(committed).await?;
                 return Err(error);

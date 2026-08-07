@@ -2500,7 +2500,7 @@ impl Executor {
     ) -> Result<(Exit, u64, u64, u64, u64, u64, NativeWrites), ()> {
         let (quantum_context, quantum_poll, quantum_grant) = match poll.as_mut() {
             Some(callback) => (
-                (callback as *mut &mut dyn FnMut(u64, u64) -> bool).cast(),
+                std::ptr::from_mut::<&mut dyn FnMut(u64, u64) -> bool>(callback).cast(),
                 Some(poll_quantum as unsafe extern "C" fn(*mut c_void, u64, u64) -> u32),
                 budget,
             ),
@@ -2746,7 +2746,6 @@ impl Executor {
             Some(((&raw mut operand).cast(), resolve_operand::<H>)),
             poll,
         )?;
-        drop(operand);
         if !observed.entries.is_empty() {
             let mut retained = self
                 .view_hints
@@ -3605,7 +3604,6 @@ mod test {
                 direction: true,
                 alignment_check: true,
                 id_flag: true,
-                ..Default::default()
             },
             vectors: std::array::from_fn(|index| (index as u128) << 80 | index as u128),
             vector_upper: std::array::from_fn(|index| (index as u128) << 96 | !(index as u128)),

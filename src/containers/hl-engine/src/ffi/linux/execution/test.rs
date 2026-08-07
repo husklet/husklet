@@ -481,7 +481,7 @@ fn ppoll_routes_isas() {
         pollfd[..4].copy_from_slice(&9_i32.to_le_bytes());
         pollfd[4..6].copy_from_slice(&1_i16.to_le_bytes());
         arena.write(0, &pollfd).unwrap();
-        let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+        let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
         let router = GuestExecutor::router(
             Arc::clone(&arena),
             mappings,
@@ -580,7 +580,7 @@ fn pidfd_fstat() {
     use hl_linux::{Errno, LinuxResult};
 
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
-        let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+        let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
         let (arena, mappings) = mapped_arena();
         let router = GuestExecutor::router(
             Arc::clone(&arena),
@@ -647,7 +647,7 @@ fn pidfd_fstat() {
 fn production_thread_registration() {
     use hl_linux::{Errno, LinuxResult};
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
-        let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+        let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
         let (arena, mappings) = mapped_arena();
         let router = GuestExecutor::router(
             Arc::clone(&arena),
@@ -755,7 +755,7 @@ fn production_memory_family() {
             MappingHostAdapter::new(Arc::clone(&arena)),
             hl_memory::AddressSpaceId { slot: 1, generation: 1 },
         ));
-        let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+        let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
         let router = GuestExecutor::router(
             Arc::clone(&arena),
             mappings,
@@ -842,7 +842,7 @@ fn shared_thread_routes() {
             })
             .unwrap();
         arena.write(64, b"threads\0").unwrap();
-        let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+        let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
         install_test_ipc(&assembly);
         let first_cancel = Arc::new(super::readiness::Cancellation::new().unwrap());
         let route = super::routing::create(
@@ -958,7 +958,7 @@ fn production_memfd_family() {
         arena.write(512, &[b'n'; 250]).unwrap();
         let assembly = RuntimeAssembly::new(hl_runtime::RuntimeAssemblyConfig {
             descriptor_limit: 5,
-            ..Default::default()
+            ..hl_runtime::HostCapacityPlan::default()
         })
         .unwrap();
         let router = GuestExecutor::router(
@@ -1036,7 +1036,7 @@ fn production_memfd_family() {
 #[test]
 fn descriptor_routes_isas() {
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
-        let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+        let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
         let (arena, mappings) = mapped_arena();
         let router = GuestExecutor::router(
             arena,
@@ -1073,7 +1073,7 @@ fn event_routes_isas() {
     use hl_linux::{Errno, LinuxResult};
 
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
-        let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+        let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
         let (arena, mappings) = mapped_arena();
         let router = GuestExecutor::router(
             Arc::clone(&arena),
@@ -1147,7 +1147,7 @@ fn pipe_routes_isas() {
     use hl_linux::{Errno, LinuxResult};
 
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
-        let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+        let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
         let (arena, mappings) = mapped_arena();
         let router = GuestExecutor::router(
             Arc::clone(&arena),
@@ -1213,7 +1213,7 @@ fn pipe_routes_isas() {
 
 #[test]
 fn x86_dup2_routes() {
-    let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+    let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
     let (arena, mappings) = mapped_arena();
     let router = GuestExecutor::router(
         arena,
@@ -1239,7 +1239,7 @@ fn x86_dup2_routes() {
 
 #[test]
 fn exit_group_cleanup() {
-    let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+    let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
     let (arena, mappings) = mapped_arena();
     let router = GuestExecutor::router(
         Arc::clone(&arena),
@@ -1438,7 +1438,7 @@ fn create_with_existing_anonymous_memory_does_not_reenter_system_lock() {
 #[test]
 fn stop_before_start() {
     let executor = GuestExecutor::default();
-    let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+    let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
     executor.stop(&assembly, StopRequest::Force).unwrap();
     let exit = executor.wait(&assembly).unwrap();
     assert_eq!(exit.kind, ExitKind::Signal);
@@ -1480,7 +1480,7 @@ fn unsupported_inventory_exact() {
         shared,
         hl_memory::AddressSpaceId { slot: 1, generation: 1 },
     ));
-    let assembly = RuntimeAssembly::new(Default::default()).unwrap();
+    let assembly = RuntimeAssembly::new(hl_runtime::HostCapacityPlan::default()).unwrap();
     let router = GuestExecutor::router(
         arena,
         mappings,

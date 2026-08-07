@@ -315,12 +315,12 @@ impl Filesystem {
         };
         match (existing.is_dir(), kind.is_dir()) {
             (true, false) => Err(Error::InvalidSpec(format!(
-                "cannot overwrite directory {:?} with a non-directory",
-                output.file_name().unwrap_or(output.as_os_str())
+                "cannot overwrite directory {} with a non-directory",
+                output.file_name().unwrap_or(output.as_os_str()).display()
             ))),
             (false, true) => Err(Error::InvalidSpec(format!(
-                "cannot overwrite non-directory {:?} with a directory",
-                output.file_name().unwrap_or(output.as_os_str())
+                "cannot overwrite non-directory {} with a directory",
+                output.file_name().unwrap_or(output.as_os_str()).display()
             ))),
             _ => Ok(()),
         }

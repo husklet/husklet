@@ -27,7 +27,7 @@ impl Native {
                 break;
             };
             // SAFETY: storage is immutable and descriptor is an independently owned duplicate.
-            let result = unsafe { libc::connect(descriptor, &storage as *const _ as *const _, length) };
+            let result = unsafe { libc::connect(descriptor, (&raw const storage).cast(), length) };
             let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
             if result == 0 {
                 let dead_on_arrival = retry_switch && Self::switch_dead_on_arrival(descriptor);
@@ -73,7 +73,7 @@ impl Native {
         self.shared
             .sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get_mut(&token)?
             .loopback_switch
             .take()
@@ -95,7 +95,11 @@ impl Native {
             let _ = self.restore_inet_socket(token, libc::SOCK_STREAM);
             return None;
         }
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sockets.get_mut(&token)?.guest_peer = Some(peer);
         Some(outcome)
     }
@@ -107,7 +111,7 @@ impl Native {
             revents: 0,
         };
         // SAFETY: poll references one initialized pollfd and retains no pointer after the bounded wait.
-        let result = unsafe { libc::poll(&mut poll, 1, SWITCH_CONNECT_PROBE_MILLIS) };
+        let result = unsafe { libc::poll(&raw mut poll, 1, SWITCH_CONNECT_PROBE_MILLIS) };
         if result <= 0 {
             return false;
         }
@@ -116,7 +120,7 @@ impl Native {
         let received = unsafe {
             libc::recv(
                 descriptor,
-                (&mut byte as *mut u8).cast(),
+                (&raw mut byte).cast(),
                 1,
                 libc::MSG_PEEK | libc::MSG_DONTWAIT,
             )

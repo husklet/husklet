@@ -16,7 +16,6 @@ impl HostResourceContext {
         })
     }
 
-    #[must_use]
     pub fn reserve(self: &Arc<Self>) -> HostResourceReservation {
         HostResourceReservation {
             context: Arc::clone(self),

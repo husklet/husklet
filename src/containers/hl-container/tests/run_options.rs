@@ -1,3 +1,6 @@
+// Contract tests drive a whole container lifecycle in one future; its size is the test, not a defect.
+#![allow(clippy::large_futures)]
+
 //! Container run-option contracts against a pinned Alpine root filesystem.
 //!
 //! These cases preserve the process-facing semantics formerly exercised by the

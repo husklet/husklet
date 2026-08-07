@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::fmt::Write as _;
 
 fn main() {
     let environment =
@@ -104,8 +105,10 @@ impl ExitReport {
         };
         let opcode = fault.opcode[..usize::from(fault.opcode_len)]
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+            .fold(String::new(), |mut text, byte| {
+                let _ = write!(text, "{byte:02x}");
+                text
+            });
         let address = fault
             .address
             .map_or_else(|| "-".to_string(), |value| format!("{value:#x}"));

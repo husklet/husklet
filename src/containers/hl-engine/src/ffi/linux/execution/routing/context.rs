@@ -229,7 +229,7 @@ impl ProcessContext {
             epoll: Arc::clone(&self.epoll),
             epoll_table: source_files,
             table_admission: Arc::clone(&self.table_admission),
-            _table_permit: self._table_permit.clone(),
+            table_permit: self.table_permit.clone(),
             thread_files: Mutex::new(std::collections::BTreeMap::new()),
             network: Arc::clone(&self.network),
             network_enabled: self.network_enabled,

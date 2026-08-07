@@ -547,7 +547,7 @@ impl OpenFileDescription for NativeFile {
         &self,
         offset: Option<u64>,
         maximum: usize,
-        _nonblocking: bool,
+        nonblocking: bool,
         cancellation: Option<&dyn hl_descriptor::OperationCancellation>,
     ) -> Result<Option<Box<dyn PreparedSpliceRead>>, ObjectError> {
         self.io()?;
@@ -571,7 +571,7 @@ impl OpenFileDescription for NativeFile {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         while implicit && *reserved {
-            if _nonblocking {
+            if nonblocking {
                 return Err(ObjectError::WouldBlock);
             }
             if cancellation.is_some_and(hl_descriptor::OperationCancellation::interrupted) {

@@ -419,7 +419,7 @@ pub(in crate::ffi::linux::execution) fn create(
         epoll,
         epoll_table,
         table_admission: TableAdmission::with_root(),
-        _table_permit: None,
+        table_permit: None,
         thread_files: Mutex::new(BTreeMap::new()),
         network,
         network_enabled,

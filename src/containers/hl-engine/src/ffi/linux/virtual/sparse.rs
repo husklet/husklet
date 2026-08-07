@@ -1,3 +1,7 @@
+// `_backing` names a retain guard: two of the three views only hold it, the third reads its
+// length, so the underscore records intent rather than disuse.
+#![allow(clippy::used_underscore_binding, clippy::used_underscore_items)]
+
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::os::fd::AsRawFd;
@@ -78,7 +82,7 @@ struct View {
     guest: u64,
     length: u64,
     offset: u64,
-    backing: Arc<Backing>,
+    _backing: Arc<Backing>,
 }
 
 impl View {
@@ -163,14 +167,14 @@ impl SparseMappings {
         );
         Self::remove(&mut views, guest, length)?;
         if let Some((file, offset)) = file {
-            let (backing, displacement) = Backing::file(file, length, offset)?;
+            let (_backing, displacement) = Backing::file(file, length, offset)?;
             views.insert(
                 guest,
                 View {
                     guest,
                     length,
                     offset: displacement,
-                    backing,
+                    _backing,
                 },
             );
         }
@@ -226,9 +230,9 @@ impl SparseMappings {
             .offset
             .checked_add(source.start().get() - source_view.guest)
             .ok_or(MemoryError::InvalidRange)?;
-        let available = (source_view.backing.length as u64).saturating_sub(source_offset);
-        let (backing, offset) = if length <= available {
-            (source_view.backing, source_offset)
+        let available = (source_view._backing.length as u64).saturating_sub(source_offset);
+        let (_backing, offset) = if length <= available {
+            (source_view._backing, source_offset)
         } else if let Some((file, file_offset)) = file {
             Backing::file(file, length, file_offset)?
         } else {
@@ -240,7 +244,7 @@ impl SparseMappings {
                 guest: destination,
                 length,
                 offset,
-                backing,
+                _backing,
             },
         );
         Ok(Prepared { views })
@@ -262,7 +266,7 @@ impl SparseMappings {
             .offset
             .checked_add(source_guest - source.guest)
             .ok_or(MemoryError::InvalidRange)?;
-        self.replace(guest, length, source.backing, offset)
+        self.replace(guest, length, source._backing, offset)
     }
 
     pub(super) fn pin(&self, range: AddressRange) -> Result<Option<BackingLease>, MemoryError> {
@@ -270,12 +274,12 @@ impl SparseMappings {
             return Ok(None);
         };
         let displacement = range.start().get() - view.guest;
-        let address = (view.backing.address as u64)
+        let address = (view._backing.address as u64)
             .checked_add(view.offset)
             .and_then(|value| value.checked_add(displacement))
             .ok_or(MemoryError::InvalidRange)?;
         Ok(Some(BackingLease {
-            _backing: view.backing,
+            _backing: view._backing,
             address,
         }))
     }
@@ -294,7 +298,7 @@ impl SparseMappings {
     }
 
     #[cfg(test)]
-    fn replace(&self, guest: u64, length: u64, backing: Arc<Backing>, offset: u64) -> Result<(), MemoryError> {
+    fn replace(&self, guest: u64, length: u64, _backing: Arc<Backing>, offset: u64) -> Result<(), MemoryError> {
         let mut views = self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::remove(&mut views, guest, length)?;
         views.insert(
@@ -303,7 +307,7 @@ impl SparseMappings {
                 guest,
                 length,
                 offset,
-                backing,
+                _backing,
             },
         );
         Ok(())
@@ -337,7 +341,7 @@ impl SparseMappings {
                         guest: end,
                         length: old_end - end,
                         offset: view.offset.checked_add(end - start).ok_or(MemoryError::InvalidRange)?,
-                        backing: view.backing,
+                        _backing: view._backing,
                     },
                 );
             }

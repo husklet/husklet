@@ -66,7 +66,7 @@ pub struct Memory {
 #[derive(Debug, Default)]
 struct Fault {
     call: usize,
-    failures: BTreeMap<usize, ()>,
+    failures: std::collections::BTreeSet<usize>,
 }
 
 impl Memory {
@@ -376,14 +376,14 @@ impl Memory {
     pub(super) fn inject_failures(&self, failures: &[usize]) {
         let mut fault = self.fault.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         fault.call = 0;
-        fault.failures = failures.iter().map(|call| (*call, ())).collect();
+        fault.failures = failures.iter().copied().collect();
     }
 
     #[cfg(test)]
     fn host_step(&self) -> Result<(), MemoryError> {
         let mut fault = self.fault.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         fault.call += 1;
-        if fault.failures.contains_key(&fault.call) {
+        if fault.failures.contains(&fault.call) {
             return Err(MemoryError::Host);
         }
         Ok(())

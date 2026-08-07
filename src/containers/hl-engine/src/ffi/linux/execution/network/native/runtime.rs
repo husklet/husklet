@@ -79,22 +79,21 @@ impl RuntimeNetworkHost for Native {
             .shared
             .sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get_mut(&token)
         {
             entry.original_family = Some(family);
             entry.original_protocol = Some(protocol);
         }
-        if protocol == libc::IPPROTO_ICMP {
-            if let Some(entry) = self
+        if protocol == libc::IPPROTO_ICMP
+            && let Some(entry) = self
                 .shared
                 .sockets
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get_mut(&token)
-            {
-                entry.icmp = true;
-            }
+        {
+            entry.icmp = true;
         }
         Ok(CreatedSocket {
             token,
@@ -107,7 +106,11 @@ impl RuntimeNetworkHost for Native {
         let descriptor = self.descriptor(token)?;
         let projected = match &address {
             SocketAddress::Inet4 { address: host, port } if *host == [0; 4] || *host == [127, 0, 0, 1] => {
-                let bindings = self.shared.bindings.lock().unwrap_or_else(|error| error.into_inner());
+                let bindings = self
+                    .shared
+                    .bindings
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if *port != 0 && bindings.iter().any(|(guest, _)| guest == &address) {
                     return Err(RuntimeNetworkError::AddressInUse);
                 }
@@ -120,7 +123,7 @@ impl RuntimeNetworkHost for Native {
         };
         let (storage, length) = Self::socket_address(&projected)?;
         // SAFETY: storage contains a sockaddr matching length and descriptor remains table-owned.
-        if unsafe { libc::bind(descriptor, &storage as *const _ as *const _, length) } != 0 {
+        if unsafe { libc::bind(descriptor, (&raw const storage).cast(), length) } != 0 {
             return Err(Self::runtime_error());
         }
         let actual = self.address_of(token, false)?;
@@ -142,14 +145,14 @@ impl RuntimeNetworkHost for Native {
                 self.shared
                     .bindings
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push((address.clone(), actual));
             }
             if let Some(entry) = self
                 .shared
                 .sockets
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get_mut(&token)
             {
                 entry.guest_local = Some(guest.clone());
@@ -192,20 +195,19 @@ impl RuntimeNetworkHost for Native {
         let mut descriptor = None;
         for offset in 0..attempts {
             let candidate = first.wrapping_add(offset as u16).max(1024);
-            let bound = match descriptor {
-                Some(bound) => bound,
-                None => {
-                    let value = self.switch_socket(token, kind)?;
-                    descriptor = Some(value);
-                    value
-                }
+            let bound = if let Some(bound) = descriptor {
+                bound
+            } else {
+                let value = self.switch_socket(token, kind)?;
+                descriptor = Some(value);
+                value
             };
             let mut publication = hl_fs::Publication::default();
             let staged = (|| {
                 let (anchor, path) = Self::switch_reservation(&interface, candidate, ipv6_only)?;
                 let (storage, length) = Self::socket_address(&SocketAddress::Unix(path.clone()))?;
                 // SAFETY: storage contains a bounded sockaddr_un and descriptor remains table-owned.
-                if unsafe { libc::bind(bound, &storage as *const _ as *const _, length) } != 0 {
+                if unsafe { libc::bind(bound, (&raw const storage).cast(), length) } != 0 {
                     return Err(Self::runtime_error());
                 }
                 // The peer protocol reads this name back with getsockname, so the bind must address it
@@ -245,7 +247,11 @@ impl RuntimeNetworkHost for Native {
                 address: interface.ipv4,
                 port: candidate,
             };
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
             entry.guest_local = Some(local.clone());
             entry.switch_interface = Some(interface.clone());
@@ -255,7 +261,7 @@ impl RuntimeNetworkHost for Native {
                 .shared
                 .switch_paths
                 .lock()
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for owned_path in ownership.names() {
                 registry.insert(owned_path.clone(), weak.clone());
             }
@@ -270,7 +276,11 @@ impl RuntimeNetworkHost for Native {
 
     fn prepare_connect(&self, token: u64, address: SocketAddress) -> Result<(), RuntimeNetworkError> {
         let address = self.binding(&address).unwrap_or(address);
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?.pending = Some(address);
         Ok(())
     }
@@ -300,7 +310,7 @@ impl RuntimeNetworkHost for Native {
                 .shared
                 .sockets
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(&token)
                 .is_none_or(|entry| entry.guest_local.is_none());
             if needs_source {
@@ -316,7 +326,11 @@ impl RuntimeNetworkHost for Native {
                     },
                 )?;
             }
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
             entry.pending = Some(peer.clone());
             entry.guest_peer = Some(peer);
@@ -327,7 +341,11 @@ impl RuntimeNetworkHost for Native {
             return Err(RuntimeNetworkError::OperationNotSupported);
         }
         self.switch_socket(token, libc::SOCK_STREAM)?;
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         entry.pending = Some(SocketAddress::Unix(path));
         entry.guest_peer = Some(peer);
@@ -350,7 +368,7 @@ impl RuntimeNetworkHost for Native {
             .shared
             .sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&token)
             .filter(|entry| entry.switched)
             .and_then(|entry| entry.guest_local.clone());
@@ -358,7 +376,7 @@ impl RuntimeNetworkHost for Native {
         let mut peer = unsafe { zeroed::<libc::sockaddr_storage>() };
         let mut length = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
         // SAFETY: peer storage is writable and returned descriptor is newly owned.
-        let accepted = unsafe { libc::accept(descriptor, &mut peer as *mut _ as *mut _, &mut length) };
+        let accepted = unsafe { libc::accept(descriptor, (&raw mut peer).cast(), &raw mut length) };
         self.arm_read(token);
         if accepted < 0 {
             return Err(Self::runtime_error());
@@ -378,7 +396,11 @@ impl RuntimeNetworkHost for Native {
         let accepted_token = self.insert(accepted)?;
         let projected_peer = projected.is_some();
         if let Some(address) = projected {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entry = sockets.get_mut(&accepted_token).ok_or(RuntimeNetworkError::Invalid)?;
             entry.guest_local = Some(address.clone());
             // The retained switch deliberately reports the listening virtual
@@ -417,17 +439,25 @@ impl RuntimeNetworkHost for Native {
 
     fn send_to(&self, token: u64, input: &[u8], address: SocketAddress, _: bool) -> Result<usize, RuntimeNetworkError> {
         {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.icmp) {
                 super::icmp::enqueue(&mut entry.icmp_packets, &mut entry.icmp_bytes, input, address)
-                    .map_err(|_| RuntimeNetworkError::WouldBlock)?;
+                    .map_err(|()| RuntimeNetworkError::WouldBlock)?;
                 drop(sockets);
                 self.notify(token);
                 return Ok(input.len());
             }
         }
         if super::resolver::Resolver::accepts(&address) {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
             entry.resolver = true;
             if let Some(response) = super::resolver::Resolver::answer(input) {
@@ -454,7 +484,7 @@ impl RuntimeNetworkHost for Native {
                 input.as_ptr().cast(),
                 input.len(),
                 0,
-                &storage as *const _ as *const _,
+                (&raw const storage).cast(),
                 length,
             )
         };
@@ -491,7 +521,7 @@ impl RuntimeNetworkHost for Native {
             .shared
             .sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&token)
             .is_none_or(|entry| entry.guest_local.is_none());
         if needs_source {
@@ -517,7 +547,7 @@ impl RuntimeNetworkHost for Native {
                 input.as_ptr().cast(),
                 input.len(),
                 0,
-                &storage as *const _ as *const _,
+                (&raw const storage).cast(),
                 length,
             )
         };
@@ -541,7 +571,11 @@ impl RuntimeNetworkHost for Native {
         peek: bool,
     ) -> Result<ReceivedDatagram, RuntimeNetworkError> {
         {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.icmp) {
                 let packet = if peek {
                     entry.icmp_packets.front().cloned()
@@ -600,8 +634,8 @@ impl RuntimeNetworkHost for Native {
                 output.as_mut_ptr().cast(),
                 output.len(),
                 flags,
-                &mut source as *mut _ as *mut _,
-                &mut length,
+                (&raw mut source).cast(),
+                &raw mut length,
             )
         };
         self.arm_read(token);
@@ -726,7 +760,11 @@ impl Native {
         let peer = SocketAddress::Inet4 { address, port };
         if self.socket_type(token)? == libc::SOCK_STREAM {
             let path = Self::switch_loopback_path(interface, port)?;
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
             entry.loopback_switch = Some((path, peer.clone()));
         }

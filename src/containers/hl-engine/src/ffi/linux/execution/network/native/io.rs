@@ -16,7 +16,11 @@ impl SocketHostIo for Native {
 
     fn read(&self, token: u64, output: &mut [u8], _: bool) -> Result<usize, SocketHostError> {
         {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.resolver) {
                 let Some(packet) = entry.resolver_packets.pop_front() else {
                     return Err(SocketHostError::WouldBlock);
@@ -40,7 +44,11 @@ impl SocketHostIo for Native {
 
     fn peek(&self, token: u64, output: &mut [u8]) -> Result<usize, SocketHostError> {
         {
-            let sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = sockets.get(&token).filter(|entry| entry.resolver) {
                 let Some(packet) = entry.resolver_packets.front() else {
                     return Err(SocketHostError::WouldBlock);
@@ -70,11 +78,15 @@ impl SocketHostIo for Native {
 
     fn write(&self, token: u64, input: &[u8], _: bool) -> Result<usize, SocketHostError> {
         {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.icmp) {
                 let peer = entry.icmp_peer.clone().ok_or(SocketHostError::DestinationRequired)?;
                 super::icmp::enqueue(&mut entry.icmp_packets, &mut entry.icmp_bytes, input, peer)
-                    .map_err(|_| SocketHostError::WouldBlock)?;
+                    .map_err(|()| SocketHostError::WouldBlock)?;
                 drop(sockets);
                 self.notify(token);
                 return Ok(input.len());
@@ -108,7 +120,7 @@ impl SocketHostIo for Native {
                         input.as_ptr().cast(),
                         input.len(),
                         0,
-                        &storage as *const _ as *const _,
+                        (&raw const storage).cast(),
                         length,
                     )
                 };
@@ -131,7 +143,11 @@ impl SocketHostIo for Native {
         }
         let error = Self::host_error();
         if error == SocketHostError::WouldBlock {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let changed = sockets.get_mut(&token).is_some_and(super::Entry::arm_write);
             drop(sockets);
             if changed {
@@ -143,7 +159,11 @@ impl SocketHostIo for Native {
 
     fn readiness(&self, token: u64) -> SocketHostReadiness {
         {
-            let sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = sockets.get(&token).filter(|entry| entry.resolver) {
                 return SocketHostReadiness {
                     readable: !entry.resolver_packets.is_empty(),
@@ -172,7 +192,7 @@ impl SocketHostIo for Native {
             revents: 0,
         };
         // SAFETY: poll references one initialized pollfd and timeout zero never blocks.
-        let result = unsafe { libc::poll(&mut poll, 1, 0) };
+        let result = unsafe { libc::poll(&raw mut poll, 1, 0) };
         SocketHostReadiness {
             readable: result > 0 && poll.revents & libc::POLLIN != 0,
             priority: result > 0 && poll.revents & libc::POLLPRI != 0,
@@ -184,7 +204,11 @@ impl SocketHostIo for Native {
     }
 
     fn start_connect(&self, token: u64, nonblocking: bool) -> SocketConnectStatus {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(entry) = sockets.get_mut(&token) else {
             return SocketConnectStatus::Failed(SocketConnectError::Canceled);
         };
@@ -227,7 +251,11 @@ impl SocketHostIo for Native {
             (SocketConnectStatus::Pending, loopback) => loopback,
             _ => None,
         };
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(entry) = sockets.get_mut(&token) {
             entry.loopback_switch = deferred;
             entry.connecting = status == SocketConnectStatus::Pending;
@@ -242,11 +270,19 @@ impl SocketHostIo for Native {
 
     fn poll_connect(&self, token: u64) -> SocketConnectStatus {
         let failure = {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             sockets.get_mut(&token).and_then(|entry| entry.connect_failure.take())
         };
         if let Some(error) = failure {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = sockets.get_mut(&token) {
                 entry.connecting = false;
             }
@@ -269,8 +305,8 @@ impl SocketHostIo for Native {
                 descriptor,
                 libc::SOL_SOCKET,
                 libc::SO_ERROR,
-                (&mut error as *mut i32).cast(),
-                &mut length,
+                (&raw mut error).cast(),
+                &raw mut length,
             )
         };
         let mut status = if result == 0 {
@@ -285,7 +321,11 @@ impl SocketHostIo for Native {
             status = retried;
         }
         if status != SocketConnectStatus::Pending {
-            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = sockets.get_mut(&token) {
                 entry.connecting = false;
             }
@@ -306,8 +346,8 @@ impl SocketHostIo for Native {
                 descriptor,
                 libc::SOL_SOCKET,
                 libc::SO_ACCEPTCONN,
-                (&mut accepting as *mut i32).cast(),
-                &mut length,
+                (&raw mut accepting).cast(),
+                &raw mut length,
             ) == 0
                 && accepting != 0
         };
@@ -327,7 +367,7 @@ impl SocketHostIo for Native {
         self.shared
             .observers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(token, observer);
         self.wake();
     }
@@ -336,7 +376,7 @@ impl SocketHostIo for Native {
         self.shared
             .observers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&token);
     }
 
@@ -346,14 +386,14 @@ impl SocketHostIo for Native {
             .shared
             .sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&token);
         if let Some(entry) = entry {
             if let Some(guest) = &entry.guest_local {
                 self.shared
                     .bindings
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .retain(|(address, _)| address != guest);
             }
             if let Some(path) = &entry.switch_path
@@ -363,7 +403,7 @@ impl SocketHostIo for Native {
                     .shared
                     .switch_paths
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner());
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 for owned_path in path.names() {
                     registry.remove(owned_path);
                 }

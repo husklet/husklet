@@ -57,7 +57,7 @@ fn x86_memory_movq_unpack_matches_interpreter() {
     assert_eq!(native.vectors[0], expected);
 }
 
-/// The AArch64 AES round chain the crypto phase runs, with its vector load and
+/// The `AArch64` AES round chain the crypto phase runs, with its vector load and
 /// its post-index vector store. Rounds are chained and one round key is zero so
 /// a wrong key/ShiftRows order or a dropped AESMC cannot cancel out, and the
 /// store's writeback is checked because it feeds the next iteration's address.
@@ -167,7 +167,7 @@ fn aarch64_aes_rounds_and_vector_memory_match_interpreter_at_each_boundary() {
     }
 }
 
-/// The AArch64 compare-against-zero family __strlen_asimd runs, in its memory
+/// The `AArch64` compare-against-zero family __`strlen_asimd` runs, in its memory
 /// form: a pre-index vector load feeds every element width and all five
 /// polarities, and the results are folded and stored. The operand straddles zero
 /// so a wrong polarity or element width cannot produce the same mask, and the
@@ -1253,9 +1253,9 @@ fn x86_sse_integer_to_scalar_float_matches_interpreter_at_each_boundary() {
     }
 }
 
-/// `aesenc`/`aesenclast`. x86 applies ShiftRows, SubBytes, MixColumns and then the
+/// `aesenc`/`aesenclast`. x86 applies `ShiftRows`, `SubBytes`, `MixColumns` and then the
 /// round key, while ARM's AESE folds the key in first, so the remap is easy to get
-/// subtly wrong. Chained rounds are used so a wrong order or a missing MixColumns
+/// subtly wrong. Chained rounds are used so a wrong order or a missing `MixColumns`
 /// cannot cancel out, and a zero round key is included because that is the case a
 /// key-first mistake would otherwise agree on.
 #[cfg(target_arch = "aarch64")]
@@ -2384,7 +2384,7 @@ fn x86_locked_immediate_arithmetic_matches_interpreter_at_each_boundary() {
             vec![0xf0, 0x48, 0x83, extension, 0x01],
             vec![0xf0, 0x48, 0x83, extension, 0xff],
         ];
-        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
         assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
     }
 }
@@ -2413,7 +2413,7 @@ fn x86_locked_register_arithmetic_matches_interpreter_at_each_boundary() {
             vec![0xf0, 0x48, base + 1, 0x1e], // lock op %rbx,(%rsi)
             vec![0xf0, 0x4c, base + 1, 0x36], // lock op %r14,(%rsi)
         ];
-        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
         assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
     }
 }
@@ -2436,7 +2436,7 @@ fn x86_dense_locked_block_splits_and_matches_interpreter() {
     let operand: [u8; 8] = [0x00, 0xff, 0x80, 0x7f, 0x01, 0x00, 0x00, 0x80];
     // 48 x `lock add %rbx,(%rsi)`, comfortably past the 36-instruction wall under a live chain.
     let program: Vec<Vec<u8>> = (0..48).map(|_| vec![0xf0, 0x48, 0x01, 0x1e]).collect();
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -2463,7 +2463,7 @@ fn x86_locked_immediate_arithmetic_all_kinds_in_one_block() {
         program.push(vec![0xf0, 0x83, extension, 0x01]);
         program.push(vec![0xf0, 0x48, 0x83, extension, 0xff]);
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -2516,10 +2516,10 @@ fn x86_locked_register_arithmetic_flag_edges_match_interpreter() {
         (0x31, &logical),
     ] {
         let mut program: Vec<Vec<u8>> = Vec::new();
-        for &(memory, value) in pairs.iter() {
+        for &(memory, value) in pairs {
             case(&mut program, operation, memory, value);
         }
-        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
         assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
     }
 }
@@ -2540,7 +2540,7 @@ fn x86_locked_register_arithmetic_rip_relative_matches_interpreter() {
         offset += piece.len() as u64;
         program.push(piece);
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let mut initial = X86CpuState {
         scalar: ScalarState {
             rip: code_first,
@@ -2569,7 +2569,7 @@ fn x86_shift_immediate_count_matches_interpreter_at_each_boundary() {
             program.push(vec![0x48, 0xc1, modrm, count]);
         }
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let initial = X86CpuState {
         scalar: ScalarState {
             rip: 0x402720,
@@ -2600,7 +2600,7 @@ fn x86_shift_variable_count_matches_interpreter_at_each_boundary() {
             program.push(vec![0x48, 0xd3, modrm]);
         }
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let initial = X86CpuState {
         scalar: ScalarState {
             rip: 0x402720,
@@ -2653,7 +2653,7 @@ fn assert_rotate_sweep(modrms: &[u8]) {
             }
         }
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let initial = X86CpuState {
         scalar: ScalarState {
             rip: 0x402720,
@@ -2690,7 +2690,7 @@ fn x86_rotate_variable_count_matches_interpreter_at_each_boundary() {
             }
         }
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let initial = X86CpuState {
         scalar: ScalarState {
             rip: 0x402720,
@@ -2729,7 +2729,7 @@ fn x86_double_shift_count_matches_interpreter_at_each_boundary() {
             }
         }
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let initial = X86CpuState {
         scalar: ScalarState {
             rip: 0x402720,
@@ -2774,7 +2774,7 @@ fn x86_alu_immediate_extension_matches_interpreter_at_each_boundary() {
             }
         }
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let initial = X86CpuState {
         scalar: ScalarState {
             rip: 0x402720,
@@ -2815,7 +2815,7 @@ fn x86_rotate_memory_count_matches_interpreter_at_each_boundary() {
                     _ => vec![0x48, 0xc1, modrm, count],
                 })
                 .collect();
-            let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+            let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
             assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
         }
     }
@@ -2853,7 +2853,7 @@ fn x86_address_folding_matches_interpreter_at_each_boundary() {
         vec![0x66, 0x89, 0x43, 0x14],                   // mov %ax,0x14(%rbx)
         vec![0x48, 0x8b, 0x03],                         // mov (%rbx),%rax
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let mut initial = X86CpuState {
         scalar: ScalarState {
             rip: 0x402720,
@@ -2895,7 +2895,7 @@ fn x86_bit_register_index_matches_interpreter_at_each_boundary() {
                 vec![0x0f, opcode, 0x06],
                 vec![0x66, 0x0f, opcode, 0x06],
             ];
-            let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+            let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
             assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
         }
     }
@@ -2913,7 +2913,7 @@ fn x86_vex_packed_compare_matches_interpreter_at_each_boundary() {
             program.push(vec![0xc5, prefix, opcode, 0xc2]); // vpcmpXX %xmm2,%xmm1,%xmm0
         }
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &compare_state(), 0x7000, &compare_operand());
 }
 
@@ -2928,7 +2928,7 @@ fn x86_vex_packed_compare_memory_matches_interpreter_at_each_boundary() {
             program.push(vec![0xc5, prefix, opcode, 0x06]); // vpcmpXX (%rsi),%xmm1,%xmm0
         }
     }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &compare_state(), 0x7000, &compare_operand());
 }
 
@@ -2986,7 +2986,7 @@ fn x86_vex_memory_operand_kinds_match_interpreter_at_each_boundary() {
         vec![0xc4, 0xe3, 0x75, 0x02, 0x06, 0x5a], // vpblendd $0x5a,(%rsi),%ymm1,%ymm0
         vec![0xc4, 0xe3, 0x75, 0x0d, 0x06, 0x0a], // vblendpd $0xa,(%rsi),%ymm1,%ymm0
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &compare_state(), 0x7000, &compare_operand());
 }
 
@@ -3022,7 +3022,7 @@ fn x86_vex_register_operand_kinds_match_interpreter_at_each_boundary() {
         vec![0xc4, 0xe3, 0x75, 0x02, 0xc2, 0x5a], // vpblendd $0x5a,%ymm2,%ymm1,%ymm0
         vec![0xc4, 0xe3, 0x75, 0x0d, 0xc2, 0x0a], // vblendpd $0xa,%ymm2,%ymm1,%ymm0
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &compare_state(), 0x7000, &compare_operand());
 }
 
@@ -3077,7 +3077,7 @@ fn x86_high_byte_store_matches_interpreter_at_each_boundary() {
         vec![0x88, 0x7e, 0x03], // mov %bh,0x3(%rsi)
         vec![0x88, 0x76, 0x10], // mov %dh,0x10(%rsi)
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3138,7 +3138,7 @@ fn x86_alu_memory_forms_match_interpreter_at_each_boundary() {
             vec![base, 0xd8],                                      // op %bl,%al
             vec![0x48, base | 1, 0xd8],                            // op %rbx,%rax
         ];
-        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
         assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
     }
 }
@@ -3167,7 +3167,7 @@ fn x86_exchange_forms_match_interpreter_at_each_boundary() {
         vec![0x48, 0x0f, 0xb1, 0x1e], // cmpxchg %rbx,(%rsi)
         vec![0x66, 0x0f, 0xb1, 0x1e], // cmpxchg %bx,(%rsi)
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3188,7 +3188,7 @@ fn x86_high_byte_exchange_matches_interpreter_at_each_boundary() {
         vec![0x0f, 0xb0, 0x26], // cmpxchg %ah,(%rsi)
         vec![0x0f, 0xb0, 0x36], // cmpxchg %dh,(%rsi)
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3211,7 +3211,7 @@ fn x86_string_forms_match_interpreter_at_each_boundary() {
         vec![0xad],       // lodsl
         vec![0x48, 0xad], // lodsq
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3233,7 +3233,7 @@ fn x86_stack_forms_match_interpreter_at_each_boundary() {
         vec![0x41, 0x50],                   // push %r8
         vec![0x41, 0x58],                   // pop %r8
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3254,7 +3254,7 @@ fn x86_conditional_forms_match_interpreter_at_each_boundary() {
             vec![0x48, 0x0f, 0x40 | condition, 0x06], // cmovcc (%rsi),%rax
             vec![0x66, 0x0f, 0x40 | condition, 0x06], // cmovcc (%rsi),%ax
         ];
-        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
         assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
     }
 }
@@ -3273,7 +3273,7 @@ fn x86_bitscan_forms_match_interpreter_at_each_boundary() {
         vec![0xf3, 0x48, 0x0f, 0xbc, 0xc3], // tzcnt %rbx,%rax
         vec![0xf3, 0x48, 0x0f, 0xbd, 0x06], // lzcnt (%rsi),%rax
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3295,7 +3295,7 @@ fn x86_multiply_divide_forms_match_interpreter_at_each_boundary() {
         vec![0xf7, 0x26],       // mull (%rsi)
         vec![0x48, 0xf7, 0x26], // mulq (%rsi)
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3321,7 +3321,7 @@ fn x86_sse_memory_forms_match_interpreter_at_each_boundary() {
         vec![0x66, 0x0f, 0xd7, 0xc1], // pmovmskb %xmm1,%eax
         vec![0xf3, 0x0f, 0x7f, 0x0e], // movdqu %xmm1,(%rsi)
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3348,7 +3348,7 @@ fn x86_load_string_merges_into_the_accumulator_at_each_boundary() {
         vec![0x48, 0xad], // lodsq
         vec![0xac],       // lodsb
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3386,7 +3386,7 @@ fn x86_scalar_staging_preserves_vector_state_at_each_boundary() {
         vec![0x48, 0x0f, 0xb6, 0xc3], // movzbq %bl,%rax
         vec![0x48, 0x31, 0xdb],       // xor  %rbx,%rbx
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let operand: Vec<u8> = (0..256_u32)
         .map(|index| (index.wrapping_mul(11) ^ 0x3c) as u8)
         .collect();
@@ -3421,7 +3421,7 @@ fn x86_accumulator_exchange_matches_interpreter_at_each_boundary() {
         vec![0x97],             // xchg %eax,%edi
         vec![0x48, 0x97],       // xchg %rax,%rdi
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let operand: Vec<u8> = (0..64_u32).map(|index| (index ^ 0x2d) as u8).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
@@ -3454,7 +3454,7 @@ fn x86_shuffle_byte_matches_interpreter_at_each_boundary() {
         vec![0x66, 0x0f, 0x38, 0x00, 0x16], // pshufb (%rsi),%xmm2
         vec![0x66, 0x0f, 0x38, 0x00, 0xc0], // pshufb %xmm0,%xmm0
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3495,7 +3495,7 @@ fn x86_packed_shift_immediate_matches_interpreter_at_each_boundary() {
         vec![0x66, 0x41, 0x0f, 0x71, 0xd2, 0x08], // psrlw $8,%xmm10
         vec![0x66, 0x41, 0x0f, 0x72, 0xf2, 0x01], // pslld $1,%xmm10
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     let operand: Vec<u8> = (0..64_u32).map(|index| (index ^ 0x71) as u8).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
@@ -3526,7 +3526,7 @@ fn x86_insert_word_matches_interpreter_at_each_boundary() {
         vec![0x66, 0x0f, 0xc4, 0x06, 0x03],       // pinsrw $3,(%rsi),%xmm0
         vec![0x66, 0x0f, 0xc4, 0x6e, 0x08, 0x05], // pinsrw $5,8(%rsi),%xmm5
     ];
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -3557,11 +3557,11 @@ fn string_compare_operands(seed: u64) -> Vec<([u8; 16], [u8; 16])> {
             }
             // Lanes past the terminator are garbage in real strings, so make them so:
             // a lowering that reads them must diverge here rather than inside libc.
-            for lane in first_null + 1..16 {
-                first[lane] = (next() % 255) as u8 + 1;
+            for lane in first.iter_mut().skip(first_null + 1) {
+                *lane = (next() % 255) as u8 + 1;
             }
-            for lane in second_null + 1..16 {
-                second[lane] = (next() % 255) as u8 + 1;
+            for lane in second.iter_mut().skip(second_null + 1) {
+                *lane = (next() % 255) as u8 + 1;
             }
             cases.push((first, second));
         }
@@ -3599,7 +3599,7 @@ fn assert_string_compare_immediate(immediate: u8) {
             vec![0x66, 0x0f, 0x3a, 0x63, 0xc1, immediate], // pcmpistri $imm,%xmm1,%xmm0
             vec![0x66, 0x0f, 0x3a, 0x63, 0x06, immediate], // pcmpistri $imm,(%rsi),%xmm0
         ];
-        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
         assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &second);
     }
 }
