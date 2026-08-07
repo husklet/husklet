@@ -6,7 +6,7 @@ use crate::{
     Result,
     model::{Finding, Related, Severity},
     rule::{Rule, references::References},
-    source::{Source, Workspace, requires_test},
+    source::{Source, Workspace, platform_gated, requires_test},
 };
 
 /// Reports private free functions referenced from exactly one production site.
@@ -121,6 +121,9 @@ fn candidate(function: &ItemFn, source: &str) -> bool {
             .attrs
             .iter()
             .any(|a| a.path().is_ident("test") || a.path().is_ident("bench"))
+        // The remedy this rule asks for is unavailable to a platform-gated function: an item-level
+        // `#[cfg]` cannot be inlined into its caller without repeating the gate at the use site.
+        && !platform_gated(&function.attrs)
         && !visual(function, source)
 }
 fn visual(function: &ItemFn, source: &str) -> bool {

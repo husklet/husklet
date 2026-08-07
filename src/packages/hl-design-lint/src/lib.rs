@@ -280,6 +280,8 @@ extern "C" fn ffi(value: usize) { let _ = value; }
 #[hl_design::adapter] async fn handler(State(state): State<AppState>) { let _ = state; }
 async fn unreviewed_handler(State(state): State<AppState>) { let _ = state; }
 fn detached(state: AppState) { let _ = state; }
+#[cfg(unix)] fn gated(value: usize) { let _ = value; }
+#[cfg(windows)] fn gated(value: usize) { let _ = value; }
 #[cfg(test)] fn test_only(value: usize) { let _ = value; }
 #[hl_design::classify(pkg)] fn package(value: usize) { let _ = value; }
 #[hl_design::classify(domain = "gpu")] fn domain(value: usize) { let _ = value; }
@@ -297,6 +299,7 @@ fn detached(state: AppState) { let _ = state; }
                 "two",
                 "unreviewed_handler",
                 "detached",
+                "gated",
                 "package",
                 "domain",
                 "malformed"
@@ -308,6 +311,16 @@ fn detached(state: AppState) { let _ = state; }
                 .find(|value| value.subject == "one")
                 .unwrap()
                 .is_violation()
+        );
+        let gated = values.iter().find(|value| value.subject == "gated").unwrap();
+        assert!(
+            gated
+                .review
+                .as_ref()
+                .unwrap()
+                .metadata
+                .iter()
+                .any(|(key, value)| key == "Usage resolution" && value == "unique name in scanned tree")
         );
         let package = values.iter().find(|value| value.subject == "package").unwrap();
         assert!(!package.is_violation());
@@ -356,8 +369,10 @@ fn reads() {
     fn single_supported_boundaries() {
         let values = findings(
             r#"
-fn main() { once(); visual(); public(); ffi(); twice(); twice(); }
+fn main() { once(); visual(); public(); ffi(); twice(); twice(); gated(); }
 fn once() {}
+#[cfg(unix)] fn gated() {}
+#[cfg(windows)] fn gated() {}
 pub fn public() {}
 extern "C" fn ffi() {}
 // hl-lint: visual-section

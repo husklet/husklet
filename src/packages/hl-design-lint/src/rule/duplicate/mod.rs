@@ -7,7 +7,7 @@ use crate::{
     Result,
     model::{Finding, Related, Review, Severity},
     rule::Rule,
-    source::{Source, Workspace, requires_test},
+    source::{Source, Workspace, platform_gated, requires_test},
 };
 
 /// Reports related structs that repeat at least three identically typed fields.
@@ -73,7 +73,8 @@ impl Visit<'_> for Structs<'_> {
     }
 
     fn visit_item_struct(&mut self, item: &ItemStruct) {
-        if self.test_scope || requires_test(&item.attrs) {
+        // A platform-gated struct pairs with its own siblings, which are alternative compilations.
+        if self.test_scope || requires_test(&item.attrs) || platform_gated(&item.attrs) {
             return;
         }
         let Fields::Named(fields) = &item.fields else {

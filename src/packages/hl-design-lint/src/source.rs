@@ -249,6 +249,33 @@ fn meta_requires_test(meta: &Meta) -> bool {
     }
 }
 
+/// Reports whether an item is gated to a platform, so same-named siblings are alternative
+/// compilations of one logical definition rather than competing definitions of the same name.
+pub fn platform_gated(attributes: &[Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("cfg")
+            && attribute
+                .parse_args::<Meta>()
+                .is_ok_and(|meta| meta_gates_platform(&meta))
+    })
+}
+
+fn meta_gates_platform(meta: &Meta) -> bool {
+    match meta {
+        Meta::Path(path) => ["unix", "windows", "wasm"].iter().any(|name| path.is_ident(name)),
+        Meta::NameValue(value) => value.path.get_ident().is_some_and(|key| {
+            matches!(
+                key.to_string().as_str(),
+                "target_os" | "target_arch" | "target_family" | "target_env" | "target_vendor" | "target_pointer_width"
+            )
+        }),
+        Meta::List(list) if ["not", "all", "any"].iter().any(|name| list.path.is_ident(name)) => {
+            parse_cfg_items(list).is_some_and(|items| items.iter().any(meta_gates_platform))
+        }
+        Meta::List(_) => false,
+    }
+}
+
 fn parse_cfg_items(list: &syn::MetaList) -> Option<Punctuated<Meta, Token![,]>> {
     list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
         .ok()

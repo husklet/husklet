@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use syn::{Expr, ExprCall, ExprMacro, FnArg, ItemFn, ItemMod, PathArguments, Type, spanned::Spanned, visit::Visit};
 
@@ -6,7 +6,7 @@ use crate::{
     Result,
     model::{Finding, Related, Review, ReviewState, Severity},
     rule::{Rule, references::References},
-    source::{Workspace, requires_test},
+    source::{Workspace, platform_gated, requires_test},
 };
 
 /// Requires one- and two-argument free functions to be refactored or classified.
@@ -25,6 +25,7 @@ impl Rule for FreeFunction {
         let mut candidates = Vec::new();
         let mut definitions = HashMap::<String, usize>::new();
         let mut references = HashMap::<String, Vec<crate::rule::references::Reference>>::new();
+        let mut gated = HashSet::new();
         for source in workspace.production() {
             let mut functions = Functions {
                 test_scope: false,
@@ -32,6 +33,11 @@ impl Rule for FreeFunction {
             };
             functions.visit_file(&source.syntax);
             for value in functions.values {
+                // Only one `#[cfg(target_os = ...)]` sibling exists in any build, so the set is one
+                // logical function: counting each would forge an ambiguous name and drop its usages.
+                if value.platform && !gated.insert((source.path.clone(), value.name.clone())) {
+                    continue;
+                }
                 *definitions.entry(value.name.clone()).or_default() += 1;
                 candidates.push((source, value));
             }
@@ -62,6 +68,7 @@ struct Candidate {
     span: proc_macro2::Span,
     dependencies: Vec<String>,
     classification: Option<Classification>,
+    platform: bool,
 }
 
 impl Candidate {
@@ -146,6 +153,7 @@ impl<'ast> Visit<'ast> for Functions {
                 span,
                 dependencies: dependencies.names.into_iter().collect(),
                 classification: classification(function),
+                platform: platform_gated(&function.attrs),
             });
         }
         syn::visit::visit_item_fn(self, function);
