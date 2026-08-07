@@ -2869,6 +2869,105 @@ fn x86_address_folding_matches_interpreter_at_each_boundary() {
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
+/// Every boundary of the add/sub-immediate displacement staircase: the twelve-bit limit,
+/// the shifted-by-twelve form, the two-word combination and the magnitudes just past each,
+/// in both signs, so a displacement folded into the base move keeps its value and sign.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_address_displacement_staircase_matches_interpreter_at_each_boundary() {
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x48, 0x8b, 0x83, 0xff, 0x0f, 0x00, 0x00], // mov 0xfff(%rbx),%rax
+        vec![0x48, 0x8b, 0x81, 0x01, 0xf0, 0xff, 0xff], // mov -0xfff(%rcx),%rax
+        vec![0x48, 0x8b, 0x82, 0x00, 0x10, 0x00, 0x00], // mov 0x1000(%rdx),%rax
+        vec![0x48, 0x8b, 0x86, 0x00, 0xf0, 0xff, 0xff], // mov -0x1000(%rsi),%rax
+        vec![0x48, 0x8b, 0x87, 0x01, 0x10, 0x00, 0x00], // mov 0x1001(%rdi),%rax
+        vec![0x48, 0x8b, 0x85, 0xff, 0xef, 0xff, 0xff], // mov -0x1001(%rbp),%rax
+        vec![0x49, 0x8b, 0x80, 0xff, 0xff, 0xff, 0x00], // mov 0xffffff(%r8),%rax
+        vec![0x49, 0x8b, 0x81, 0x01, 0x00, 0x00, 0xff], // mov -0xffffff(%r9),%rax
+        vec![0x49, 0x8b, 0x82, 0x00, 0x00, 0x00, 0x01], // mov 0x1000000(%r10),%rax
+        vec![0x49, 0x8b, 0x83, 0x00, 0x00, 0x00, 0xff], // mov -0x1000000(%r11),%rax
+        vec![0x4a, 0x8b, 0x84, 0xe2, 0x00, 0x10, 0x00, 0x00], // mov 0x1000(%rdx,%r12,8),%rax
+        vec![0x48, 0x89, 0x86, 0x00, 0xf0, 0xff, 0xff], // mov %rax,-0x1000(%rsi)
+        vec![0x49, 0x89, 0x82, 0x00, 0x00, 0x00, 0x01], // mov %rax,0x1000000(%r10)
+        vec![0x48, 0x8b, 0x82, 0x00, 0x10, 0x00, 0x00], // mov 0x1000(%rdx),%rax
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[3] = 0x0100_7001;
+    initial.registers[1] = 0x0100_8fff;
+    initial.registers[2] = 0x0100_7000;
+    initial.registers[6] = 0x0100_9000;
+    initial.registers[7] = 0x0100_6fff;
+    initial.registers[5] = 0x0100_9001;
+    initial.registers[8] = 0x8001;
+    initial.registers[9] = 0x0200_7fff;
+    initial.registers[10] = 0x8000;
+    initial.registers[11] = 0x0200_8000;
+    initial.registers[12] = 1;
+    let operand: Vec<u8> = (0..64_u32)
+        .map(|index| (index.wrapping_mul(89) ^ 0x3c) as u8)
+        .collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x0100_8000, &operand);
+}
+
+/// The base-less encodings, where the displacement folds into the materialised constant,
+/// and the 32-bit address forms, where the folded add must still wrap and zero-extend.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_address_baseless_and_32_bit_folding_matches_interpreter_at_each_boundary() {
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x48, 0x8b, 0x05, 0xd9, 0x48, 0xc0, 0xff], // mov -0x3fb727(%rip),%rax
+        vec![0x48, 0x89, 0x05, 0xda, 0x48, 0xc0, 0xff], // mov %rax,-0x3fb726(%rip)
+        vec![0x67, 0x8b, 0x83, 0xf8, 0x7f, 0x00, 0x00], // mov 0x7ff8(%ebx),%eax
+        vec![0x67, 0x8b, 0x41, 0xf8],                   // mov -0x8(%ecx),%eax
+        vec![0x48, 0x8b, 0x04, 0x25, 0x10, 0x70, 0x00, 0x00], // mov 0x7010,%rax
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[3] = 0xdead_beef_ffff_f008;
+    initial.registers[1] = 0x1234_5678_0000_7008;
+    let operand: Vec<u8> = (0..64_u32)
+        .map(|index| (index.wrapping_mul(53) ^ 0x27) as u8)
+        .collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// A 32-bit absolute address with no base and no index, where the only thing that keeps the
+/// sign-extended displacement inside four gigabytes is the mask on the folded constant.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_address_32_bit_absolute_folding_matches_interpreter_at_each_boundary() {
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x67, 0x8b, 0x04, 0x25, 0x00, 0xf0, 0xff, 0xff], // mov -0x1000,%eax
+        vec![0x67, 0x89, 0x04, 0x25, 0x08, 0xf0, 0xff, 0xff], // mov %eax,-0xff8
+        vec![0x67, 0x8b, 0x04, 0x25, 0x10, 0xf0, 0xff, 0xff], // mov -0xff0,%eax
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(std::vec::Vec::as_slice).collect();
+    let initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    let operand: Vec<u8> = (0..64_u32)
+        .map(|index| (index.wrapping_mul(71) ^ 0x6b) as u8)
+        .collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0xffff_f000, &operand);
+}
+
 /// `bt`/`bts`/`btr`/`btc` with a register bit index against memory, where the index is not
 /// masked at all but sign-extended and divided by eight to pick the containing byte.
 #[cfg(target_arch = "aarch64")]

@@ -71,12 +71,52 @@ static uint32_t move_register(unsigned destination, unsigned source, int wide) {
     return (wide ? UINT32_C(0xaa0003e0) : UINT32_C(0x2a0003e0)) | source << 16 | destination;
 }
 
+/* ARM add/sub-immediate reaches any twelve-bit magnitude, optionally shifted by
+ * twelve, so a displacement folds into one or two words that also absorb the
+ * base move, instead of materialising a constant and adding it. */
+static uint32_t fold_displacement(uint64_t immediate, uint32_t *low, uint32_t *high, int *negative) {
+    int64_t value = (int64_t)immediate;
+    uint64_t magnitude;
+
+    *negative = value < 0;
+    magnitude = *negative ? ~immediate + 1u : immediate;
+    if (magnitude > UINT64_C(0xffffff)) return 0;
+    *low = (uint32_t)(magnitude & UINT64_C(0xfff));
+    *high = (uint32_t)(magnitude >> 12);
+    return (*low != 0u ? 1u : 0u) + (*high != 0u ? 1u : 0u);
+}
+
+static uint32_t add_immediate(unsigned destination, unsigned source, uint32_t value,
+                              int shift, int negative, int wide) {
+    return (negative ? (wide ? UINT32_C(0xd1000000) : UINT32_C(0x51000000))
+                     : (wide ? UINT32_C(0x91000000) : UINT32_C(0x11000000))) |
+           (shift != 0 ? UINT32_C(0x400000) : 0u) | value << 10 | source << 5 | destination;
+}
+
+/* A displacement with no base register folds into the materialised constant. */
+static uint64_t address_constant(const instruction *item) {
+    uint64_t value = (item->rip_relative ? item->pc + item->length : 0u) + item->immediate;
+
+    return item->address_32 != 0u ? (value & UINT32_C(0xffffffff)) : value;
+}
+
 uint32_t hl_x86_address_words(const instruction *item) {
-    uint64_t base = item->rip_relative ? item->pc + item->length : 0u;
-    uint32_t words = item->address_base == UINT8_MAX ? constant_words(base) : 1u;
+    uint32_t low;
+    uint32_t high;
+    int negative;
+    uint32_t folded = item->address_base != UINT8_MAX && item->immediate != 0u
+                          ? fold_displacement(item->immediate, &low, &high, &negative)
+                          : 0u;
+    uint32_t words;
+
+    if (item->address_base == UINT8_MAX)
+        words = constant_words(address_constant(item));
+    else if (folded != 0u)
+        words = folded;
+    else
+        words = 1u + (item->immediate != 0u ? constant_words(item->immediate) + 1u : 0u);
 
     if (item->address_index != UINT8_MAX) ++words;
-    if (item->immediate != 0u) words += constant_words(item->immediate) + 1u;
     if (item->bit_memory_offset != 0u)
         words += item->bit_immediate != 0u ? constant_words(item->operand_immediate >> 3) + 1u :
                  3u; /* extend/move, asr, add - three words at every operand width */
@@ -84,21 +124,36 @@ uint32_t hl_x86_address_words(const instruction *item) {
 }
 
 void hl_x86_emit_address(uint32_t *words, uint32_t *cursor, const instruction *item) {
-    uint64_t base = item->rip_relative ? item->pc + item->length : 0u;
+    int wide = item->address_32 == 0u;
+    uint32_t low;
+    uint32_t high;
+    int negative;
+    uint32_t folded = item->address_base != UINT8_MAX && item->immediate != 0u
+                          ? fold_displacement(item->immediate, &low, &high, &negative)
+                          : 0u;
 
-    if (item->address_base == UINT8_MAX)
-        emit_constant(words, cursor, 16, base);
-    else
-        words[(*cursor)++] = move_register(16, item->address_base, item->address_32 == 0u);
+    if (item->address_base == UINT8_MAX) {
+        emit_constant(words, cursor, 16, address_constant(item));
+    } else if (folded != 0u) {
+        unsigned source = item->address_base;
+
+        if (high != 0u) {
+            words[(*cursor)++] = add_immediate(16, source, high, 1, negative, wide);
+            source = 16u;
+        }
+        if (low != 0u) words[(*cursor)++] = add_immediate(16, source, low, 0, negative, wide);
+    } else {
+        words[(*cursor)++] = move_register(16, item->address_base, wide);
+        if (item->immediate != 0u) {
+            emit_constant(words, cursor, 17, item->immediate);
+            words[(*cursor)++] = (wide ? UINT32_C(0x8b000000) : UINT32_C(0x0b000000)) |
+                                 17u << 16 | 16u << 5 | 16u;
+        }
+    }
     if (item->address_index != UINT8_MAX)
         words[(*cursor)++] = (item->address_32 != 0u ? UINT32_C(0x0b000000) : UINT32_C(0x8b000000)) |
                              (uint32_t)item->address_index << 16 |
                              (uint32_t)item->address_scale << 10 | 16u << 5 | 16u;
-    if (item->immediate != 0u) {
-        emit_constant(words, cursor, 17, item->immediate);
-        words[(*cursor)++] = (item->address_32 != 0u ? UINT32_C(0x0b000000) : UINT32_C(0x8b000000)) |
-                             17u << 16 | 16u << 5 | 16u;
-    }
     if (item->segment != 0u) {
         words[(*cursor)++] = load_word(17, item->segment == 1u ?
                                       offsetof(hl_native_x86_64_cpu, fs) :
