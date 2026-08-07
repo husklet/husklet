@@ -16,7 +16,7 @@ may be appended only after comparing every emitter, trampoline, signal capture,
 checkpoint codec, and fork path in the retained engine. Reordering an existing
 field is an ABI break.
 
-`certificate_valid`, `certificate_delta`, `active_authority`, `active_view_*`, and the `loop_*`
+`active_authority`, `active_view_*`, and the `loop_*`
 fields are AArch64 native-execution scratch. The authority values are published from the independently
 authenticated run request only while the execution gate is held. They are reset
 at every native run and whenever architectural state is captured into the native

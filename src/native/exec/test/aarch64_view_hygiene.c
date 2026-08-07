@@ -170,9 +170,46 @@ static int cache_scan_keeps_its_bound(void) {
     return 0;
 }
 
+/* One non-conforming view must not cost the conforming ones their publication:
+ * an abandoned publish leaves read_token zero and every guard on the slow path. */
+static int publish_skips_only_the_nonconforming(void) {
+    hl_a64_run_views cache = {0};
+    hl_native_aarch64_cpu cpu = {0};
+    cache.count = 3;
+    cache.entries[0] = (hl_a64_view){0x1000, 0x2000, 0x1000, 9,
+        HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE, HL_NATIVE_WRITE_EXACT, 0};
+    /* Rejected: a write policy the generated write scan cannot honour. */
+    cache.entries[1] = (hl_a64_view){0x2000, 0x3000, 0x2000, 9,
+        HL_A64_PERMISSION_READ, HL_NATIVE_WRITE_EXACT + 1u, 1};
+    cache.entries[2] = (hl_a64_view){0x3000, 0x4000, 0x3000, 9,
+        HL_A64_PERMISSION_READ, HL_NATIVE_WRITE_EXACT, 2};
+
+    hl_a64_run_view_publish(&cache, &cpu, 9);
+    CHECK(cpu.read_token == 9 && cpu.read_incarnation == 9);
+    CHECK(cpu.read_count == 2);
+    /* The survivors compact, so no live slot holds a rejected view's payload. */
+    CHECK(cpu.read_views[0][0] == 0x1000 && cpu.read_views[0][1] == 0x2000);
+    CHECK(cpu.read_views[1][0] == 0x3000 && cpu.read_views[1][1] == 0x4000);
+    CHECK(cpu.read_view_publication[1][1] == 2);
+    CHECK(cpu.read_views[2][0] == 0 && cpu.read_views[2][1] == 0);
+
+    /* Every view rejected still retires the window rather than publishing a
+     * token over empty slots. */
+    hl_native_aarch64_cpu empty = {0};
+    cache.count = 1;
+    cache.entries[0] = cache.entries[1];
+    hl_a64_run_view_publish(&cache, &empty, 9);
+    CHECK(empty.read_token == 0 && empty.read_count == 0);
+    return 0;
+}
+
 #else
 static int publish_retires_unused_slots(void) { return 0; }
 static int cache_scan_keeps_its_bound(void) { return 0; }
+static int publish_skips_only_the_nonconforming(void) { return 0; }
 #endif
 
-int main(void) { return publish_retires_unused_slots() || cache_scan_keeps_its_bound(); }
+int main(void) {
+    return publish_retires_unused_slots() || cache_scan_keeps_its_bound() ||
+           publish_skips_only_the_nonconforming();
+}

@@ -90,4 +90,20 @@ int hl_native_direct_request_snapshot(const hl_native_executor *, const hl_nativ
                                       hl_native_direct_authority *);
 uint64_t hl_native_certificate_cache_identity_issue(hl_native_executor *);
 
+#if defined(__aarch64__)
+#ifndef HL_A64_RUN_VIEW_CACHE
+#define HL_A64_RUN_VIEW_CACHE 1
+#endif
+#define HL_A64_RUN_VIEW_COUNT 4u
+
+typedef struct hl_a64_run_views {
+    hl_native_projection_view entries[HL_A64_RUN_VIEW_COUNT];
+    size_t count;
+} hl_a64_run_views;
+
+/* Publishes the conforming prefix-compacted subset; a rejected view is skipped
+ * rather than abandoning the slots behind it. */
+void hl_a64_run_view_publish(const hl_a64_run_views *, hl_native_aarch64_cpu *, uint64_t);
+#endif
+
 #endif

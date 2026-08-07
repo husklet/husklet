@@ -644,10 +644,10 @@ aarch64_soft_prepare_bounce,aarch64_soft_bounce_commit}`, `dispatch.h`'s
 task-owned soft-TLB/bounce fields, and `cache.c::{stw_before_translated,
 stw_after_translated,stw_mapping_begin,stw_mapping_end,
 map_invalidate_source_ranges}`. Rust/C owners followed were
-`guard.c::{write_cache,hl_a64_guard_begin_mode,hl_a64_guard_written}`,
+`guard.c::{write_cache,hl_a64_guard_begin,hl_a64_guard_written}`,
 `projection.c::{mergeable,flush_dirty,hl_a64_projection_resolve}`,
 `trace.c::{hl_a64_trace_loop_preflight,hl_a64_trace_certificate_check}`, and
-`executor.c::{run_aarch64,active_view_publish,run_view_publish}`.
+`executor.c::{run_aarch64,active_view_publish,hl_a64_run_view_publish}`.
 
 The retained CPU owns one tuple for its task lifetime. Registration and
 mapping mutation use registry/JIT locks to park peers and clear tuples before
@@ -673,14 +673,14 @@ executable/exclusive invalidation, and reservation commit; drop rolls back.
 | Repeated owner accumulation | coarse current tuple | bounded owner-qualified merge | implemented |
 | Capacity/executable write | coarse invalidation | pre-mutation epoch/overflow; exact epoch exit | implemented |
 | Cross-span discontinuity | signal-masked bounce | dispatcher fallback | divergent but safe |
-| Authenticated certificate | registry-cleared tuple | dormant `certificate_valid/delta` | missing by design |
+| Authenticated certificate | registry-cleared tuple | `read_token`/`read_incarnation`/`read_views` window | implemented |
 | Fork/teardown retirement | registry clear/removal | lease plus instance execution gate | implemented for live path |
 
-Mechanically, no code assigns a nonzero `certificate_valid` or
-`certificate_delta`; both are cleared at run entry. Setting those dormant
-words would not authenticate bounds, permissions, mapping incarnation,
-authority identity, or lease generation and could enable cross-page or stale
-host access. A coherent certificate therefore belongs to the separate
+Mechanically, nothing ever assigned a nonzero `certificate_valid` or
+`certificate_delta`, and a two-word `{valid, delta}` payload could not have
+authenticated bounds, permissions, mapping incarnation, authority identity, or
+lease generation. Both words have been removed; the release-published
+`read_token`/`read_incarnation`/`read_views` window is the live authenticator. A coherent certificate therefore belongs to the separate
 ingress/lifecycle work and requires mutation, fork, direct-chain, permission,
 fault, and teardown tests. It is not a safe dirty-journal-only edit.
 

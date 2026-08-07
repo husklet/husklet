@@ -113,9 +113,8 @@ int hl_a64_single_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc, 
         writeback = sign_extend((word >> 12) & 0x1ffu, 9);
 
     effective_address(assembler, word, &memory);
-    hl_a64_guard_begin_mode(assembler, memory.bytes,
-                            memory.read ? HL_A64_PERMISSION_READ : HL_A64_PERMISSION_WRITE,
-                            HL_A64_GUARD_LEGACY, guard);
+    hl_a64_guard_begin(assembler, memory.bytes,
+                       memory.read ? HL_A64_PERMISSION_READ : HL_A64_PERMISSION_WRITE, guard);
     target = target_stolen ? 17u : memory.target;
     if (memory.kind == HL_A64_MEMORY_LITERAL)
         native = literal_native(word, target);

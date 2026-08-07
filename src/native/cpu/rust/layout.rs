@@ -39,8 +39,6 @@ pub struct Aarch64Cpu {
     pub executable_written: u64,
     pub fpcr: u64,
     pub fpsr: u64,
-    pub certificate_valid: u64,
-    pub certificate_delta: u64,
     pub active_authority: u64,
     pub loop_valid: u64,
     pub loop_view_count: u64,
@@ -194,57 +192,55 @@ const _: () = {
     assert!(std::mem::offset_of!(Aarch64Cpu, executable_written) == 1848);
     assert!(std::mem::offset_of!(Aarch64Cpu, fpcr) == 1856);
     assert!(std::mem::offset_of!(Aarch64Cpu, fpsr) == 1864);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_valid) == 1872);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_delta) == 1880);
-    assert!(std::mem::offset_of!(Aarch64Cpu, active_authority) == 1888);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_valid) == 1896);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_view_count) == 1904);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_views) == 1912);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_mapping_incarnation) == 2008);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_authority) == 2016);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_trip) == 2024);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_decrement) == 2032);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_instruction_count) == 2040);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_iterations) == 2048);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_budget_iterations) == 2056);
-    assert!(std::mem::offset_of!(Aarch64Cpu, loop_executable) == 2064);
-    assert!(std::mem::offset_of!(Aarch64Cpu, active_view_incarnation) == 2072);
-    assert!(std::mem::offset_of!(Aarch64Cpu, active_view_authority) == 2080);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_guard_fast) == 2088);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_guard_full) == 2096);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_guard_fallback) == 2104);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_reserved) == 2112);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_overflow) == 2120);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_committed) == 2128);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_merged) == 2136);
-    assert!(std::mem::offset_of!(Aarch64Cpu, read_view_publication) == 2144);
-    assert!(std::mem::offset_of!(Aarch64Cpu, memory_write_policy) == 2208);
-    assert!(std::mem::offset_of!(Aarch64Cpu, memory_write_index) == 2216);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_guest_first) == 2224);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_guest_last) == 2232);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_host_first) == 2240);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_data_permissions) == 2248);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_mapped_executable) == 2256);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_mapping_incarnation) == 2264);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_mapping_generation) == 2272);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_instruction_generation) == 2280);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_authority_identity) == 2288);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_authority_generation) == 2296);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_run_generation) == 2304);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_view_index) == 2312);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_write_policy) == 2320);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_cache_identity) == 2328);
-    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_token) == 2336);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_ibtc_authenticated_entries) == 2344);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_ibtc_shared_hits) == 2352);
-    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_ibtc_auth_rejections) == 2360);
-    assert!(std::mem::offset_of!(Aarch64Cpu, code_arena_lower) == 2368);
-    assert!(std::mem::offset_of!(Aarch64Cpu, code_arena_upper) == 2376);
-    assert!(std::mem::offset_of!(Aarch64Cpu, entry_certificate_identity) == 2384);
-    assert!(std::mem::offset_of!(Aarch64Cpu, fault_completed) == 2392);
-    assert!(std::mem::offset_of!(Aarch64Cpu, ibtc_base) == 2400);
-    assert!(std::mem::offset_of!(Aarch64Cpu, execution_identity) == 2408);
-    assert!(std::mem::size_of::<Aarch64Cpu>() == 2416);
+    assert!(std::mem::offset_of!(Aarch64Cpu, active_authority) == 1872);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_valid) == 1880);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_view_count) == 1888);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_views) == 1896);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_mapping_incarnation) == 1992);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_authority) == 2000);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_trip) == 2008);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_decrement) == 2016);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_instruction_count) == 2024);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_iterations) == 2032);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_budget_iterations) == 2040);
+    assert!(std::mem::offset_of!(Aarch64Cpu, loop_executable) == 2048);
+    assert!(std::mem::offset_of!(Aarch64Cpu, active_view_incarnation) == 2056);
+    assert!(std::mem::offset_of!(Aarch64Cpu, active_view_authority) == 2064);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_guard_fast) == 2072);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_guard_full) == 2080);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_guard_fallback) == 2088);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_reserved) == 2096);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_overflow) == 2104);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_committed) == 2112);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_merged) == 2120);
+    assert!(std::mem::offset_of!(Aarch64Cpu, read_view_publication) == 2128);
+    assert!(std::mem::offset_of!(Aarch64Cpu, memory_write_policy) == 2192);
+    assert!(std::mem::offset_of!(Aarch64Cpu, memory_write_index) == 2200);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_guest_first) == 2208);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_guest_last) == 2216);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_host_first) == 2224);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_data_permissions) == 2232);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_mapped_executable) == 2240);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_mapping_incarnation) == 2248);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_mapping_generation) == 2256);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_instruction_generation) == 2264);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_authority_identity) == 2272);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_authority_generation) == 2280);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_run_generation) == 2288);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_view_index) == 2296);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_write_policy) == 2304);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_cache_identity) == 2312);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_token) == 2320);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_ibtc_authenticated_entries) == 2328);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_ibtc_shared_hits) == 2336);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_ibtc_auth_rejections) == 2344);
+    assert!(std::mem::offset_of!(Aarch64Cpu, code_arena_lower) == 2352);
+    assert!(std::mem::offset_of!(Aarch64Cpu, code_arena_upper) == 2360);
+    assert!(std::mem::offset_of!(Aarch64Cpu, entry_certificate_identity) == 2368);
+    assert!(std::mem::offset_of!(Aarch64Cpu, fault_completed) == 2376);
+    assert!(std::mem::offset_of!(Aarch64Cpu, ibtc_base) == 2384);
+    assert!(std::mem::offset_of!(Aarch64Cpu, execution_identity) == 2392);
+    assert!(std::mem::size_of::<Aarch64Cpu>() == 2400);
 
     assert!(std::mem::align_of::<Aarch64Cpu>() == 8);
 

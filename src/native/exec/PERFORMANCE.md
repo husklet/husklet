@@ -767,14 +767,14 @@ bypass plus one cached interval/protection/delta tuple and has no equivalent
 per-store projection journal. These counts explain why the 17,149,757 dynamic
 vector-pair guards dominate the measured memory phase.
 
-The existing dormant Rust certificate seam is not sufficient for a generic
-last-view certificate. `certificate_valid` and `certificate_delta` carry no
+The dormant certificate seam was never sufficient for a generic last-view
+certificate: `certificate_valid` and `certificate_delta` carried no
 guest-page/envelope identity, mapping incarnation, permission authority, or
-fork generation. `run_aarch64` clears both fields at entry, production pair
-emitters request `HL_A64_GUARD_LEGACY`, and no chain-entry authenticator
-publishes the exact active owner. Treating the validity bit as persistent
-would therefore allow an address from another page or a retired mapping to
-reuse a host delta. No emitter change was made.
+fork generation, and treating the validity bit as persistent would have let an
+address from another page or a retired mapping reuse a host delta. Nothing
+assigned them and both words have since been removed. The generation-qualified
+`read_token`/`read_incarnation`/`read_views` window, consumed by the
+LDAR-acquire scan in `read_cache`/`write_cache`, carries that identity instead.
 
 | Required capability | Current evidence | Decision |
 |---|---|---|

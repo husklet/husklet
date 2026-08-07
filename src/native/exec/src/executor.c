@@ -914,15 +914,9 @@ hl_native_status hl_native_executor_rollover(hl_native_executor *executor, uint6
 #ifndef HL_A64_RUN_VIEW_CACHE
 #define HL_A64_RUN_VIEW_CACHE 1
 #endif
-#define HL_A64_RUN_VIEW_COUNT 4u
 /* A retry that completes no instruction refunds its whole charge, so an operand
  * the guard never accepts would otherwise spin without consuming budget. */
 #define HL_A64_OPERAND_RETRY_LIMIT 8u
-
-typedef struct hl_a64_run_views {
-    hl_a64_view entries[HL_A64_RUN_VIEW_COUNT];
-    size_t count;
-} hl_a64_run_views;
 
 static int run_view_contains(const hl_a64_view *view, uint64_t address,
                              uint64_t size, uint32_t required) {
@@ -970,9 +964,10 @@ static void run_view_install(hl_a64_run_views *cache, const hl_a64_view *view) {
     cache->entries[0] = *view;
 }
 
-static void run_view_publish(const hl_a64_run_views *cache, hl_native_aarch64_cpu *cpu,
+void hl_a64_run_view_publish(const hl_a64_run_views *cache, hl_native_aarch64_cpu *cpu,
                              uint64_t mapping_incarnation) {
     size_t count = cache != NULL ? cache->count : 0;
+    size_t published = 0;
     __atomic_store_n(&cpu->read_token, 0, __ATOMIC_RELEASE);
     cpu->read_count = 0;
     /* Retire both halves of every slot, so no republication can leave a dead
@@ -986,15 +981,17 @@ static void run_view_publish(const hl_a64_run_views *cache, hl_native_aarch64_cp
             view->mapping_incarnation != mapping_incarnation || view->permissions == 0 ||
             (view->permissions & ~7u) != 0 ||
             view->host_first > UINT64_MAX - (view->guest_last - view->guest_first))
-            return;
-        cpu->read_views[index][0] = view->guest_first;
-        cpu->read_views[index][1] = view->guest_last;
-        cpu->read_views[index][2] = view->host_first - view->guest_first;
-        cpu->read_views[index][3] = view->permissions;
-        cpu->read_view_publication[index][0] = view->write_policy;
-        cpu->read_view_publication[index][1] = view->write_index;
+            continue;
+        cpu->read_views[published][0] = view->guest_first;
+        cpu->read_views[published][1] = view->guest_last;
+        cpu->read_views[published][2] = view->host_first - view->guest_first;
+        cpu->read_views[published][3] = view->permissions;
+        cpu->read_view_publication[published][0] = view->write_policy;
+        cpu->read_view_publication[published][1] = view->write_index;
+        published++;
     }
-    cpu->read_count = count;
+    if (published == 0) return;
+    cpu->read_count = published;
     cpu->read_incarnation = mapping_incarnation;
     __atomic_store_n(&cpu->read_token, mapping_incarnation, __ATOMIC_RELEASE);
 }
@@ -1062,8 +1059,6 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     memset(cpu->read_view_publication, 0, sizeof(cpu->read_view_publication));
     cpu->memory_write_policy = 0;
     cpu->memory_write_index = 0;
-    cpu->certificate_valid = 0;
-    cpu->certificate_delta = 0;
     cpu->active_authority = 0;
     active_view_clear(cpu);
     cpu->loop_valid = 0;
@@ -1127,7 +1122,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                  index > 0 && operand_views.count < HL_A64_RUN_VIEW_COUNT; index--)
                 run_view_install(&operand_views, &projection->views[index - 1]);
     }
-    run_view_publish(&operand_views, cpu, request->mapping_epoch);
+    hl_a64_run_view_publish(&operand_views, cpu, request->mapping_epoch);
     cpu->budget = budget;
     cpu->executed = 0;
     for (;;) {
@@ -1405,7 +1400,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                  * view and installed it as the active owner. Publish that same
                  * bounded ordering before retry so generated guards can select
                  * subsequent cached owners without another dispatcher exit. */
-                run_view_publish(&operand_views, cpu, source->mapping_incarnation);
+                hl_a64_run_view_publish(&operand_views, cpu, source->mapping_incarnation);
                 continue;
             }
             status = hl_native_execution_leave(&execution);
@@ -1422,7 +1417,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                                                cpu->fault_size, (uint32_t)cpu->fault_access))
                     return HL_NATIVE_ARGUMENT;
                 if (HL_A64_RUN_VIEW_CACHE) run_view_install(&operand_views, &view);
-                run_view_publish(&operand_views, cpu, source->mapping_incarnation);
+                hl_a64_run_view_publish(&operand_views, cpu, source->mapping_incarnation);
                 continue;
             }
             status = a64_execution_enter(executor, &execution, cpu);

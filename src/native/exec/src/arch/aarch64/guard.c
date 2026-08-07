@@ -30,8 +30,6 @@
 #define OFFSET_DIRTY_LAST ((int)offsetof(hl_native_aarch64_cpu, dirty_last))
 #define OFFSET_DIRTY_COUNT ((int)offsetof(hl_native_aarch64_cpu, dirty_count))
 #define OFFSET_DIRTY_RECORDS ((int)offsetof(hl_native_aarch64_cpu, dirty_records))
-#define OFFSET_CERTIFICATE_VALID ((int)offsetof(hl_native_aarch64_cpu, certificate_valid))
-#define OFFSET_CERTIFICATE_DELTA ((int)offsetof(hl_native_aarch64_cpu, certificate_delta))
 
 /* Diagnostic translations keep their counters in the execution-local CPU
  * record. x17 is stolen state and every call site has already preserved NZCV. */
@@ -414,13 +412,6 @@ static void link(hl_a64_assembler *assembler, uint32_t *instruction, const uint8
     *instruction = 0x94000000u | ((uint32_t)words & 0x03ffffffu);
 }
 
-static void cbnz(hl_a64_assembler *assembler, uint32_t *instruction,
-                 const uint8_t *target, unsigned reg) {
-    int64_t words;
-    if (!patch_offset(assembler, instruction, target, 19u, &words)) return;
-    *instruction = UINT32_C(0xb5000000) | (((uint32_t)words & UINT32_C(0x7ffff)) << 5) | reg;
-}
-
 /* The view payload is immutable for a whole entry, so the scan is a count-driven
  * loop over x30 rather than four unrolled copies of the same twelve words. */
 static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **hit) {
@@ -595,6 +586,8 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     hl_a64_str(assembler, 17, CPU, OFFSET_WRITE_POLICY);
     hl_a64_ldr(assembler, 17, 18, (int)sizeof(uint64_t));
     hl_a64_str(assembler, 17, CPU, OFFSET_WRITE_INDEX);
+    /* A write that the latched window missed but this cache resolved. */
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_fast));
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, UINT32_C(0xd51b4211)); /* msr nzcv,x17 */
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
@@ -616,8 +609,8 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     branch(assembler, again, loop);
 }
 
-static void legacy_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t required,
-                         hl_a64_guard *guard) {
+void hl_a64_guard_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t required,
+                        hl_a64_guard *guard) {
     uint32_t *cache_hit = NULL;
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u);
@@ -649,43 +642,6 @@ static void legacy_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t r
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_full));
     guard->required = required;
     guard->bytes = bytes;
-}
-
-void hl_a64_guard_begin_mode(hl_a64_assembler *assembler, uint64_t bytes, uint32_t required,
-                             hl_a64_guard_mode mode, hl_a64_guard *guard) {
-    if (mode != HL_A64_GUARD_AUTHENTICATED_MEMBER) {
-        legacy_begin(assembler, bytes, required, guard);
-        return;
-    }
-    /* A zero certificate falls through to the complete legacy guard.  A valid
-     * certificate may skip only repeated range/permission/delta selection;
-     * trace entry has already authenticated and published the exact active
-     * view fields required by write reservation and dirty publication. */
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_CERTIFICATE_VALID);
-    uint32_t *valid = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    legacy_begin(assembler, bytes, required, guard);
-    uint32_t *done = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    uint8_t *valid_target = assembler->cursor;
-    if (!hl_a64_assembler_ok(assembler)) return;
-    cbnz(assembler, valid, valid_target, 17u);
-    hl_a64_str(assembler, 9, CPU, 9 * 8);
-    hl_a64_emit32(assembler, UINT32_C(0xd53b4209));
-    hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_CERTIFICATE_DELTA);
-    hl_a64_emit32(assembler, UINT32_C(0x8b110210));
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
-    hl_a64_emit32(assembler, UINT32_C(0xd51b4211));
-    hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_fast));
-    if (!hl_a64_assembler_ok(assembler)) return;
-    branch(assembler, done, assembler->cursor);
-}
-
-void hl_a64_guard_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t required,
-                        hl_a64_guard *guard) {
-    hl_a64_guard_begin_mode(assembler, bytes, required, HL_A64_GUARD_LEGACY, guard);
 }
 
 void hl_a64_guard_direct_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t required,

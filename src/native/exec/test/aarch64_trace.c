@@ -512,38 +512,6 @@ static int loop_preflight(void) {
     return 0;
 }
 
-static int guard_modes(void) {
-    uint8_t legacy_bytes[4096] = {0}, explicit_bytes[4096] = {0}, authenticated_bytes[4096] = {0};
-    hl_a64_assembler legacy, explicit_legacy, authenticated;
-    hl_a64_guard legacy_guard = {.pc = 0x4400}, explicit_guard = {.pc = 0x4400};
-    hl_a64_guard authenticated_guard = {.pc = 0x4400};
-    CHECK(hl_a64_assembler_begin(&legacy, legacy_bytes, legacy_bytes, sizeof(legacy_bytes)));
-    CHECK(hl_a64_assembler_begin(&explicit_legacy, explicit_bytes, explicit_bytes, sizeof(explicit_bytes)));
-    CHECK(hl_a64_assembler_begin(&authenticated, authenticated_bytes, authenticated_bytes,
-                                 sizeof(authenticated_bytes)));
-    hl_a64_guard_begin(&legacy, 8, HL_A64_PERMISSION_WRITE, &legacy_guard);
-    hl_a64_guard_begin_mode(&explicit_legacy, 8, HL_A64_PERMISSION_WRITE,
-                            HL_A64_GUARD_LEGACY, &explicit_guard);
-    hl_a64_guard_begin_mode(&authenticated, 8, HL_A64_PERMISSION_WRITE,
-                            HL_A64_GUARD_AUTHENTICATED_MEMBER, &authenticated_guard);
-    size_t legacy_size = hl_a64_assembler_size(&legacy);
-    size_t authenticated_size = hl_a64_assembler_size(&authenticated);
-    CHECK(legacy_size == hl_a64_assembler_size(&explicit_legacy));
-    CHECK(memcmp(legacy_bytes, explicit_bytes, legacy_size) == 0);
-    /* Invalid certificate (zero) falls through the first two words into the
-     * byte-identical legacy guard.  The remaining nine words are one branch
-     * around the dormant valid path and its eight-word delta application. */
-    CHECK((authenticated_size - legacy_size) / sizeof(uint32_t) == 11);
-    CHECK((((uint32_t *)authenticated_bytes)[1] & UINT32_C(0xff00001f)) ==
-          UINT32_C(0xb5000011));
-    CHECK(memcmp(authenticated_bytes + 2 * sizeof(uint32_t), legacy_bytes, legacy_size) == 0);
-    CHECK(authenticated_guard.below == (uint32_t *)(authenticated_bytes +
-          2 * sizeof(uint32_t) + ((uint8_t *)legacy_guard.below - legacy_bytes)));
-    CHECK(authenticated_guard.resume == authenticated_bytes +
-          2 * sizeof(uint32_t) + (legacy_guard.resume - legacy_bytes));
-    return 0;
-}
-
 static int diagnostics_off_byte_identity_and_density(void) {
     const uint32_t words[] = {
         UINT32_C(0xad428420), /* ldp q0,q1,[x1,#80] */
@@ -626,7 +594,6 @@ int main(void) {
     if (range_planning() != 0) return 1;
     if (loop_planning() != 0) return 1;
     if (certificate_authentication() != 0) return 1;
-    if (guard_modes() != 0) return 1;
     if (diagnostics_off_byte_identity_and_density() != 0) return 1;
     if (source_window_fallthrough_shape() != 0) return 1;
 #if !defined(__aarch64__)
@@ -1149,8 +1116,6 @@ int main(void) {
     }
     run_state.program = 0x4000;
     run_state.flags = UINT64_C(0x40000000);
-    run_state.certificate_valid = UINT64_MAX;
-    run_state.certificate_delta = UINT64_MAX;
     run_state.active_view_incarnation = UINT64_MAX;
     run_state.active_view_authority = UINT64_MAX;
     run_state.loop_valid = UINT64_MAX;
@@ -1170,7 +1135,6 @@ int main(void) {
     CHECK(run_state.active_view_incarnation == 0 && run_state.active_view_authority == 0);
     run_request.fault_publish = observe_active_view;
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
-    CHECK(run_state.certificate_valid == 0 && run_state.certificate_delta == 0);
     CHECK(view_observer.publications != 0 && view_observer.incarnation == 7 &&
           view_observer.authority == 7);
     CHECK(run_state.active_view_incarnation == 0 && run_state.active_view_authority == 0);

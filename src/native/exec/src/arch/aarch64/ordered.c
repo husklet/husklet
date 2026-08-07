@@ -43,9 +43,8 @@ int hl_a64_ordered_body(hl_a64_assembler *assembler, uint32_t word,
     target_stolen = target != 31 && stolen(target);
     native_target = target_stolen ? 17u : target;
     address(assembler, base);
-    hl_a64_guard_begin_mode(assembler, bytes,
-                            load ? HL_A64_PERMISSION_READ : HL_A64_PERMISSION_WRITE,
-                            HL_A64_GUARD_LEGACY, guard);
+    hl_a64_guard_begin(assembler, bytes,
+                       load ? HL_A64_PERMISSION_READ : HL_A64_PERMISSION_WRITE, guard);
     if (!load) hl_a64_guard_write_begin(assembler, bytes, pc, guard);
     if (!load && target_stolen)
         hl_a64_ldr(assembler, 17, CPU, (int)target * 8);
