@@ -53,11 +53,15 @@ void hl_a64_stub_prologue(hl_a64_assembler *assembler) {
         hl_a64_ldp_q(assembler, vector, vector + 1, 0, OFFSET_VECTOR + vector * 16);
     for (int reg = 1; reg <= 30; reg++)
         if (!stolen(reg)) hl_a64_ldr(assembler, reg, 0, reg * 8);
+    /* Guest x30 is stolen and lives in the CPU record, so physical x30 carries
+     * the remaining budget for the whole native run. */
+    hl_a64_ldr(assembler, 30, 0, OFFSET_BUDGET);
     hl_a64_emit32(assembler, 0xAA0003FCu); /* mov x28,x0 */
     hl_a64_ldr(assembler, 0, 0, 0);
 }
 
 static void spill(hl_a64_assembler *assembler) {
+    hl_a64_str(assembler, 30, CPU, OFFSET_BUDGET);
     for (int vector = 0; vector < 32; vector += 2)
         hl_a64_stp_q(assembler, vector, vector + 1, CPU, OFFSET_VECTOR + vector * 16);
     for (int reg = 0; reg <= 30; reg++)
@@ -148,15 +152,14 @@ void hl_a64_stub_budget_begin(hl_a64_assembler *assembler, uint64_t pc, hl_a64_b
     guard->token_interrupt_branch = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, UINT32_C(0xb5000010)); /* cbnz x16,interrupt */
     patch_condition(guard->token_skip_branch, assembler->cursor);
-    hl_a64_ldr(assembler, 16, CPU, OFFSET_BUDGET);
     guard->subtract = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, UINT32_C(0xd1000211)); /* sub x17,x16,#count */
+    hl_a64_emit32(assembler, UINT32_C(0xd10003d1)); /* sub x17,x30,#count */
     /* Borrow test, so entry admission leaves guest NZCV alone. The reject arm
      * is an unconditional branch because a block body can outrange tbnz. */
     hl_a64_emit32(assembler, UINT32_C(0xb6f80000) | (UINT32_C(2) << 5) | 17u); /* tbz x17,#63,+2 */
     guard->budget_branch = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, UINT32_C(0x14000000)); /* b budget */
-    hl_a64_str(assembler, 17, CPU, OFFSET_BUDGET);
+    hl_a64_movr(assembler, 30, 17);
 }
 
 void hl_a64_stub_budget_finish(hl_a64_assembler *assembler, hl_a64_budget_guard *guard, uint32_t count) {

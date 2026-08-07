@@ -16,6 +16,7 @@ void enter_register_16(void);
 __asm__(".type enter_register_16,%function\n"
         "enter_register_16:\n"
         "mov x28,x0\n"
+        "ldr x30,[x0,#1104]\n"
         "ldr x16,[x0,#128]\n"
         "br x16\n");
 #endif

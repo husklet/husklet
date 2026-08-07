@@ -38,12 +38,13 @@ int hl_a64_fault_reconstruct(hl_native_aarch64_cpu *cpu, const hl_a64_host_conte
 
     /* Faultable opcodes are emitted only after the guard has restored every
      * non-stolen register. x16 is the projected EA, x17/x18 are staging, x28
-     * is the CPU owner and x30 is the native return link. Their guest values
+     * is the CPU owner and x30 carries the remaining budget. Their guest values
      * remain authoritative in the CPU record. A faulting load and every
      * manually de-indexed writeback leave architectural destinations/base
      * unchanged, so copying the remaining live host state yields pre-op state. */
     for (unsigned reg = 0; reg <= 30; ++reg)
         if (!stolen(reg)) cpu->registers[reg] = host->registers[reg];
+    cpu->budget = host->registers[30];
     cpu->stack = host->stack;
     cpu->program = record->guest;
     cpu->flags = host->pstate & UINT64_C(0xf0000000);
