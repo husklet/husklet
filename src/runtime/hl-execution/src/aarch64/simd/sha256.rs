@@ -1,3 +1,6 @@
+// The SHA specifications name these working variables a..h and w; keep them.
+#![allow(clippy::many_single_char_names, clippy::format_collect)]
+
 use crate::{Aarch64CpuState, Aarch64Instruction, Sha256Operation};
 
 pub(crate) struct Sha256Unit;

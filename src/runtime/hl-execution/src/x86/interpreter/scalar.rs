@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use super::ScalarInterpreter;
 use crate::{
     AccessKind, AluOperation, Arithmetic, CpuState, Division, ExecutionExit, Flag, FlagUpdate, GuestOperandMemory,

@@ -1,3 +1,6 @@
+// Variants are named for the ISA's instruction groups.
+#![allow(clippy::enum_variant_names)]
+
 use super::address::{LoadExtension, MemoryAddress, SimdCopy, SimdLogic, SimdPermute, SimdShift, SimdUnary};
 use crate::{
     Aarch64BranchCondition as BranchCondition, Aarch64Shift, BitfieldOperation, CompareOperand, DivideOperation,

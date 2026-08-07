@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use crate::x86::real::Conversion;
 use crate::{CpuState, ExecutionExit, ExtendedClass, ExtendedReal, FloatWidth};
 
@@ -143,7 +145,9 @@ impl ExtendedMemory {
                                 let truncated = left % right;
                                 let result = if ieee {
                                     let half = right_magnitude * 0.5;
-                                    if truncated.abs() > half || truncated.abs() == half && quotient & 1 != 0 {
+                                    #[allow(clippy::float_cmp)]
+                                    let tie = truncated.abs() == half;
+                                    if truncated.abs() > half || tie && quotient & 1 != 0 {
                                         quotient += 1;
                                         truncated - right_magnitude.copysign(left)
                                     } else {

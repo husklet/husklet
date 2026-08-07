@@ -1,3 +1,6 @@
+// Exponent and significand masks are written as the manuals write them.
+#![allow(clippy::verbose_bit_mask)]
+
 use crate::{
     AccessKind, CpuState, DecodedInstruction, ExecutionExit, FloatArithmetic, FloatWidth, GuestOperandMemory,
     ScalarInstruction, ScalarIrError, VectorSource,

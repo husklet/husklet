@@ -87,6 +87,7 @@ missing_panics_doc = "allow"
 # Opcode, address and mask constants read better as the manuals write them.
 inconsistent_digit_grouping = "allow"
 unreadable_literal = "allow"
+unusual_byte_groupings = "allow"
 
 # Instruction and syscall handlers carry the arity and flag set the ISA defines.
 fn_params_excessive_bools = "allow"

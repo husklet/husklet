@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use crate::x86::real::Conversion;
 use crate::{
     AccessKind, CpuState, EffectiveAddress, ExecutionExit, ExtendedClass, ExtendedReal, FloatWidth, GuestOperandMemory,
@@ -113,7 +115,6 @@ impl ExtendedMemory {
 
     // FPREM's round-to-even tie-break is specified as an exact comparison against half the divisor.
     #[allow(clippy::float_cmp)]
-
     pub(crate) fn environment<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,

@@ -135,7 +135,7 @@ fn rational_reference() {
 fn half_flags() {
     let environment = Environment::default();
     for bits in 0_u16..=u16::MAX {
-        if bits >> 10 & 31 != 31 || bits & 0x03ff == 0 {
+        if bits >> 10 & 31 != 31 || bits.trailing_zeros() >= 10 {
             continue;
         }
         let result = environment.add(half(bits), half(0x3c00));

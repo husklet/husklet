@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default, clippy::comparison_chain)]
+
 use crate::x86::{VexImmediateShift, VexOperation};
 use crate::*;
 

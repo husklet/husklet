@@ -162,7 +162,7 @@ fn exec_c_programs_pass() {
             Outcome::Passed => passed += 1,
             Outcome::Skipped(reason) => eprintln!("skip {name}: {reason}"),
             Outcome::Failed(report) if known.is_some() => {
-                eprintln!("known failure {name} ({}): {report}", known.expect("known entry").1)
+                eprintln!("known failure {name} ({}): {report}", known.expect("known entry").1);
             }
             Outcome::Failed(report) | Outcome::Broken(report) => failures.push(format!("{name}: {report}")),
         }

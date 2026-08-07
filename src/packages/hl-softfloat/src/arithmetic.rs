@@ -427,6 +427,7 @@ impl Environment {
         }
     }
 
+    #[allow(clippy::unused_self)]
     pub(crate) fn pack_exact(self, format: Format, value: Operand) -> Value {
         Value::from_bits(
             format,
@@ -434,10 +435,12 @@ impl Environment {
         )
     }
 
+    #[allow(clippy::unused_self)]
     pub(crate) fn zero(self, format: Format, sign: bool) -> Value {
         Value::from_bits(format, u64::from(sign) << (format.width() - 1))
     }
 
+    #[allow(clippy::unused_self)]
     pub(crate) fn infinity(self, format: Format, sign: bool) -> Value {
         Value::from_bits(
             format,
@@ -445,6 +448,7 @@ impl Environment {
         )
     }
 
+    #[allow(clippy::unused_self)]
     fn default_nan(self, format: Format) -> Value {
         Value::from_bits(
             format,

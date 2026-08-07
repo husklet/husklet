@@ -1,3 +1,6 @@
+// Exponent and significand masks are written as the manuals write them.
+#![allow(clippy::verbose_bit_mask)]
+
 use super::interpreter::Aarch64FpExecutor;
 use crate::{
     Aarch64CpuState, FPSR_INPUT_DENORMAL, FPSR_INVALID, FpArithmetic, FpArithmeticPort, FpFormat, FpRequest, Nzcv,

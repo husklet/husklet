@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use crate::x86::real::Conversion;
 use crate::{
     AccessKind, CpuState, EffectiveAddress, ExecutionExit, ExtendedClass, ExtendedReal, FloatWidth, GuestOperandMemory,

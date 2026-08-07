@@ -28,6 +28,8 @@ pub struct Decoder;
 pub type Aarch64Decoder = Decoder;
 
 impl Aarch64Decoder {
+    // Field masks are written as the manual writes them.
+    #[allow(clippy::verbose_bit_mask)]
     pub fn decode(word: u32) -> Result<Aarch64Ir, Aarch64DecodeError> {
         let wide = word >> 31 != 0;
         if word >> 25 & 0xf == 0 {

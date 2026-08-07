@@ -1,3 +1,6 @@
+// Reserved-encoding predicates mirror the manual's condition tables.
+#![allow(clippy::nonminimal_bool)]
+
 use crate::{Aarch64CpuState, Aarch64DecodeError, Aarch64Instruction, FpComparison, FpFormat};
 
 pub(crate) struct Comparison;

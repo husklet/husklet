@@ -145,6 +145,8 @@ impl Aarch64MemoryInterpreter {
         let mut writes = [(0, 0); 4];
         let mut values = [0; 4];
         let chunks = if bytes == 16 { 4 } else { 2 };
+        // `register` indexes three parallel arrays, not just one.
+        #[allow(clippy::needless_range_loop)]
         for register in 0..2 {
             let base = resolved.address.wrapping_add(u64::from(bytes) * register as u64);
             let index = register * if bytes == 16 { 2 } else { 1 };

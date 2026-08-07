@@ -1,3 +1,6 @@
+// The SHA specifications name these working variables a..h and w; keep them.
+#![allow(clippy::many_single_char_names, clippy::format_collect)]
+
 use crate::x86::X86ShaOperation;
 use crate::{DecodedInstruction, ScalarInstruction, ScalarIrError, VectorSource};
 

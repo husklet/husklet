@@ -1,3 +1,5 @@
+#![allow(clippy::comparison_chain)]
+
 use crate::{
     AccessKind, CpuState, ExecutionExit, GuestOperandMemory, ScalarOperand, ScalarRegister, ScalarWidth, Staged,
     VectorArithmetic, VectorComparison, VectorOperation, VectorShiftKind, VectorShuffleMode, VectorSource,

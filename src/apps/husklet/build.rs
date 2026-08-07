@@ -1,4 +1,5 @@
 use sha2::Digest as _;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 struct RuntimeIdentityInputs(Vec<PathBuf>);
@@ -75,10 +76,9 @@ fn main() {
         );
         digest.update(bytes);
     }
-    let identity = digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let identity = digest.finalize().iter().fold(String::new(), |mut text, byte| {
+        let _ = write!(text, "{byte:02x}");
+        text
+    });
     println!("cargo:rustc-env=HUSKLET_RUNTIME_BUILD_ID={identity}");
 }

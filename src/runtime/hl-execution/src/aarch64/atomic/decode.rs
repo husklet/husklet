@@ -101,6 +101,8 @@ impl Decoder {
         }
     }
 
+    // Result keeps this uniform with the other decode arms.
+    #[allow(clippy::unnecessary_wraps)]
     fn compare_exchange(word: u32, width: MemoryWidth, pair: bool) -> Result<Aarch64Instruction, Aarch64DecodeError> {
         Ok(Aarch64Instruction::AtomicCompareExchange {
             base: (word >> 5 & 31) as u8,

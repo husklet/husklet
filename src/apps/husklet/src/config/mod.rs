@@ -190,7 +190,7 @@ impl CudaDevice {
         if name.is_empty() {
             return None;
         }
-        d.name = name.to_owned();
+        name.clone_into(&mut d.name);
         if let Some(cc) = parts.get(1) {
             let cc = cc.trim();
             if !Self::valid_capability(cc) {
