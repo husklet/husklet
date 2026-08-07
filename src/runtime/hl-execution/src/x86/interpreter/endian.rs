@@ -11,7 +11,7 @@ impl ScalarInterpreter {
     }
 
     pub(super) fn endian<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         register: ScalarRegister,
@@ -36,7 +36,7 @@ impl ScalarInterpreter {
         } else {
             let value = Self::read(cpu, memory, operand, width, next, instruction)?;
             staged.write_register(register, width, Self::swap(value, width));
-            Ok(Staged::Cpu(staged))
+            Ok(Staged::Cpu)
         }
     }
 

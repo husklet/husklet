@@ -93,7 +93,7 @@ impl Lane {
         value.clamp(minimum, maximum) as u128 & Self::mask(bits)
     }
     pub fn insert_word<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         destination: u8,
@@ -128,7 +128,7 @@ impl Lane {
         let mask = u128::from(u16::MAX) << shift;
         let vector = &mut staged.vectors[usize::from(destination)];
         *vector = (*vector & !mask) | (u128::from(value & 0xffff) << shift);
-        Ok(Staged::Cpu(staged))
+        Ok(Staged::Cpu)
     }
 
     #[must_use]
@@ -502,11 +502,9 @@ impl Lane {
         result
     }
 
-    #[must_use]
-    pub fn write_mask(mut cpu: CpuState, destination: ScalarRegister, source: u8, lane: u8) -> CpuState {
+    pub fn write_mask(cpu: &mut CpuState, destination: ScalarRegister, source: u8, lane: u8) {
         let value = Self::sign_mask(cpu.vectors[usize::from(source)], lane);
         cpu.write_register(destination, ScalarWidth::Dword, u64::from(value));
-        cpu
     }
 
     pub fn read<M: GuestOperandMemory>(

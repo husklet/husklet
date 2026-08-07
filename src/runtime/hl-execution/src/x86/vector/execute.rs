@@ -4,7 +4,7 @@ pub struct Executor;
 
 impl Executor {
     pub fn stage<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         operation: ScalarInstruction,
@@ -214,7 +214,7 @@ impl Executor {
                 source,
                 lane,
             } => {
-                staged = VectorLane::write_mask(staged, destination, source, lane);
+                VectorLane::write_mask(staged, destination, source, lane);
             }
             ScalarInstruction::VectorInsertWord {
                 destination,
@@ -225,6 +225,6 @@ impl Executor {
             }
             _ => unreachable!(),
         }
-        Ok(Staged::Cpu(staged))
+        Ok(Staged::Cpu)
     }
 }

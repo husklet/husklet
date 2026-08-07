@@ -137,7 +137,7 @@ impl CompareExchange {
     }
 
     pub(crate) fn add<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         destination: ScalarOperand,
@@ -170,7 +170,7 @@ impl CompareExchange {
         match (destination, address) {
             (ScalarOperand::Register(register), None) => {
                 staged.write_register(register, width, operation.result);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             (ScalarOperand::Memory(_), Some(address)) => {
                 Self::validate(address, Self::byte_count(width), instruction, AccessKind::Write)?;
@@ -183,7 +183,6 @@ impl CompareExchange {
                     ))
                 })?;
                 Ok(Staged::Write(
-                    staged,
                     reservation,
                     operation.result,
                     address,
@@ -236,17 +235,16 @@ impl CompareExchange {
     }
 
     pub(crate) fn register(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         destination: ScalarRegister,
         source: ScalarRegister,
         width: ScalarWidth,
-    ) -> CpuState {
+    ) {
         let left = cpu.read_register(destination, width);
         let right = cpu.read_register(source, width);
         staged.write_register(destination, width, right);
         staged.write_register(source, width, left);
-        staged
     }
 
     pub(crate) fn exchange<M: GuestOperandMemory + ExclusiveMemory>(

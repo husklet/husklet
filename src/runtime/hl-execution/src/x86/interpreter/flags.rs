@@ -5,7 +5,7 @@ use crate::{
 
 impl ScalarInterpreter {
     pub(super) fn push_flags<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         width: ScalarWidth,
@@ -31,7 +31,7 @@ impl ScalarInterpreter {
     }
 
     pub(super) fn pop_flags<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         width: ScalarWidth,
@@ -40,12 +40,12 @@ impl ScalarInterpreter {
         let bytes = Self::bytes(width);
         let value = Self::memory_read(memory, cpu.registers[4], bytes, instruction)?;
         staged.registers[4] = staged.registers[4].wrapping_add(u64::from(bytes));
-        Self::restore_flags(&mut staged, value, width);
-        Ok(Staged::Cpu(staged))
+        Self::restore_flags(staged, value, width);
+        Ok(Staged::Cpu)
     }
 
     pub(super) fn iret<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         instruction: u64,
@@ -64,8 +64,8 @@ impl ScalarInterpreter {
         Self::canonical(frame[0], 1, instruction, crate::AccessKind::Execute)?;
         staged.rip = frame[0];
         staged.registers[4] = frame[3];
-        Self::restore_flags(&mut staged, frame[2], ScalarWidth::Qword);
-        Ok(Staged::Cpu(staged))
+        Self::restore_flags(staged, frame[2], ScalarWidth::Qword);
+        Ok(Staged::Cpu)
     }
 
     fn restore_flags(cpu: &mut CpuState, value: u64, width: ScalarWidth) {
@@ -77,7 +77,7 @@ impl ScalarInterpreter {
         }
     }
 
-    pub(super) fn control(mut staged: CpuState, cpu: &CpuState, operation: ControlFlag) -> CpuState {
+    pub(super) fn control(staged: &mut CpuState, cpu: &CpuState, operation: ControlFlag) {
         match operation {
             ControlFlag::ComplementCarry => {
                 staged.flags = staged.flags.with(Flag::Carry, !cpu.flags.contains(Flag::Carry));
@@ -87,6 +87,5 @@ impl ScalarInterpreter {
             ControlFlag::ClearDirection => staged.direction = false,
             ControlFlag::SetDirection => staged.direction = true,
         }
-        staged
     }
 }

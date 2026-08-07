@@ -136,12 +136,12 @@ impl CpuState {
     }
 
     pub(crate) fn apply_bit_scan(
-        mut self,
+        &mut self,
         operation: BitScanOperation,
         destination: ScalarRegister,
         width: ScalarWidth,
         source: u64,
-    ) -> Self {
+    ) {
         let integer_width = match width {
             ScalarWidth::Word => crate::IntegerWidth::Word,
             ScalarWidth::Dword => crate::IntegerWidth::Dword,
@@ -164,7 +164,6 @@ impl CpuState {
         if let Some(result) = scan.result {
             self.write_register(destination, width, result);
         }
-        self
     }
 
     pub(crate) fn write_product(&mut self, width: ScalarWidth, product: Multiplication) {

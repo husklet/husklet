@@ -139,12 +139,14 @@ impl ScalarInterpreter {
                 next,
             );
         }
-        match Self::stage(cpu, memory, ir, instruction, next) {
-            Ok(Staged::Cpu(staged)) => {
+        let mut staged = cpu.clone();
+        staged.rip = next;
+        match Self::stage(cpu, &mut staged, memory, ir, instruction, next) {
+            Ok(Staged::Cpu) => {
                 *cpu = staged;
                 ExecutionExit::Continue
             }
-            Ok(Staged::Write(staged, reservation, value, address, length)) => {
+            Ok(Staged::Write(reservation, value, address, length)) => {
                 if memory.commit_write(reservation, value).is_err() {
                     return ExecutionExit::OperandFault(crate::FaultAccess::operand(
                         instruction,
@@ -156,7 +158,7 @@ impl ScalarInterpreter {
                 *cpu = staged;
                 ExecutionExit::Continue
             }
-            Ok(Staged::Batch(staged, reservation, values, address, length)) => {
+            Ok(Staged::Batch(reservation, values, address, length)) => {
                 if memory
                     .commit_write_batch(reservation, &values[..usize::from(length / 8)])
                     .is_err()
@@ -171,7 +173,7 @@ impl ScalarInterpreter {
                 *cpu = staged;
                 ExecutionExit::Continue
             }
-            Ok(Staged::Sparse(staged, reservations, values, count, address, length)) => {
+            Ok(Staged::Sparse(reservations, values, count, address, length)) => {
                 for (reservation, value) in reservations.into_iter().flatten().zip(values).take(usize::from(count)) {
                     if memory.commit_write(reservation, value).is_err() {
                         return ExecutionExit::OperandFault(crate::FaultAccess::operand(

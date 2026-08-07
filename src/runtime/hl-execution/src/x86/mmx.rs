@@ -370,7 +370,7 @@ impl Mmx {
     }
 
     pub(crate) fn stage<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         operation: ScalarInstruction,
@@ -477,7 +477,7 @@ impl Mmx {
             ScalarInstruction::MmxEmpty => staged.empty_mmx(),
             _ => unreachable!(),
         }
-        Ok(Staged::Cpu(staged))
+        Ok(Staged::Cpu)
     }
 
     fn read<M: GuestOperandMemory>(
@@ -501,7 +501,7 @@ impl Mmx {
     }
 
     fn store<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         register: u8,
@@ -513,7 +513,7 @@ impl Mmx {
         match operand {
             VectorSource::Register(destination) => {
                 staged.write_mmx(destination, value);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             VectorSource::Memory(address) => ScalarInterpreter::write(
                 staged,

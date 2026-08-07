@@ -6,7 +6,7 @@ use crate::{
 
 impl ScalarInterpreter {
     pub(super) fn vector_move<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         vector: u8,
@@ -19,7 +19,7 @@ impl ScalarInterpreter {
         if to_vector {
             let value = Self::read(cpu, memory, scalar, width, next, instruction)?;
             staged.vectors[usize::from(vector)] = u128::from(value);
-            Ok(Staged::Cpu(staged))
+            Ok(Staged::Cpu)
         } else {
             let value = staged.vectors[usize::from(vector)] as u64;
             Self::write(staged, memory, scalar, width, value, next, instruction)
@@ -53,7 +53,7 @@ impl ScalarInterpreter {
         ExecutionExit::Continue
     }
     pub(super) fn call<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         memory: &M,
         width: ScalarWidth,
         next: u64,
@@ -93,7 +93,7 @@ impl ScalarInterpreter {
         }
     }
     pub(crate) fn write<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         memory: &M,
         operand: ScalarOperand,
         width: ScalarWidth,
@@ -104,7 +104,7 @@ impl ScalarInterpreter {
         match operand {
             ScalarOperand::Register(register) => {
                 staged.write_register(register, width, value);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarOperand::Memory(address) => {
                 let address = address.resolve(&staged.registers, next, staged.fs_base, staged.gs_base);
@@ -118,7 +118,7 @@ impl ScalarInterpreter {
                         u64::from(bytes),
                     ))
                 })?;
-                Ok(Staged::Write(staged, reservation, value, address, bytes))
+                Ok(Staged::Write(reservation, value, address, bytes))
             }
             ScalarOperand::Immediate(_) => Err(ExecutionExit::UndefinedInstruction { instruction }),
         }

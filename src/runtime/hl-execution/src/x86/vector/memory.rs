@@ -1,15 +1,15 @@
 use crate::{AccessKind, CpuState, ExecutionExit, GuestOperandMemory, Staged, VectorLane, VectorSource};
 
 pub enum Transfer<B> {
-    Cpu(CpuState),
-    Batch(CpuState, B, [u64; 4], u64),
+    Cpu,
+    Batch(B, [u64; 4], u64),
 }
 
 pub struct Memory;
 
 impl Memory {
     pub fn duplicate<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         destination: u8,
@@ -38,11 +38,11 @@ impl Memory {
             let second = if high { value >> 96 } else { value >> 64 } & u128::from(u32::MAX);
             first | (first << 32) | (second << 64) | (second << 96)
         };
-        Ok(Staged::Cpu(staged))
+        Ok(Staged::Cpu)
     }
 
     pub fn staged_transfer<M: GuestOperandMemory>(
-        staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         vector: u8,
@@ -53,15 +53,13 @@ impl Memory {
         instruction: u64,
     ) -> Result<Staged<M::Reservation, M::BatchReservation>, ExecutionExit> {
         match Self::transfer(staged, cpu, memory, vector, operand, store, aligned, next, instruction)? {
-            Transfer::Cpu(cpu) => Ok(Staged::Cpu(cpu)),
-            Transfer::Batch(cpu, reservation, values, address) => {
-                Ok(Staged::Batch(cpu, reservation, values, address, 16))
-            }
+            Transfer::Cpu => Ok(Staged::Cpu),
+            Transfer::Batch(reservation, values, address) => Ok(Staged::Batch(reservation, values, address, 16)),
         }
     }
 
     pub fn half<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         vector: u8,
@@ -79,7 +77,7 @@ impl Memory {
             } else {
                 (prior & (u128::from(u64::MAX) << 64)) | u128::from((source >> 64) as u64)
             };
-            return Ok(Staged::Cpu(staged));
+            return Ok(Staged::Cpu);
         }
         let VectorSource::Memory(address) = source else {
             unreachable!()
@@ -93,7 +91,7 @@ impl Memory {
             })?;
             let vector = cpu.vectors[usize::from(vector)];
             let value = if high { (vector >> 64) as u64 } else { vector as u64 };
-            return Ok(Staged::Write(staged, reservation, value, address, 8));
+            return Ok(Staged::Write(reservation, value, address, 8));
         }
         let value = memory
             .read(address, 8)
@@ -104,11 +102,11 @@ impl Memory {
         } else {
             (prior & (u128::from(u64::MAX) << 64)) | u128::from(value)
         };
-        Ok(Staged::Cpu(staged))
+        Ok(Staged::Cpu)
     }
 
     pub fn transfer<M: GuestOperandMemory>(
-        mut staged: CpuState,
+        staged: &mut CpuState,
         cpu: &CpuState,
         memory: &M,
         vector: u8,
@@ -121,7 +119,7 @@ impl Memory {
         if let VectorSource::Register(index) = operand {
             let value = cpu.vectors[usize::from(if store { vector } else { index })];
             staged.vectors[usize::from(if store { index } else { vector })] = value;
-            return Ok(Transfer::Cpu(staged));
+            return Ok(Transfer::Cpu);
         }
         let VectorSource::Memory(address) = operand else {
             unreachable!()
@@ -138,7 +136,7 @@ impl Memory {
         }
         if !store {
             staged.vectors[usize::from(vector)] = VectorLane::read(cpu, memory, operand, next, instruction)?;
-            return Ok(Transfer::Cpu(staged));
+            return Ok(Transfer::Cpu);
         }
         let value = cpu.vectors[usize::from(vector)];
         let writes = [(address, 8), (address + 8, 8)];
@@ -146,7 +144,6 @@ impl Memory {
             ExecutionExit::OperandFault(crate::FaultAccess::operand(instruction, fault, AccessKind::Write, 16))
         })?;
         Ok(Transfer::Batch(
-            staged,
             reservation,
             [value as u64, (value >> 64) as u64, 0, 0],
             address,

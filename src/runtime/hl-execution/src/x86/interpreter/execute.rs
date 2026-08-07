@@ -8,13 +8,12 @@ use crate::{
 impl ScalarInterpreter {
     pub(super) fn stage<M: GuestOperandMemory>(
         cpu: &CpuState,
+        staged: &mut CpuState,
         memory: &M,
         ir: ScalarIr,
         instruction: u64,
         next: u64,
     ) -> Result<Staged<M::Reservation, M::BatchReservation>, ExecutionExit> {
-        let mut staged = cpu.clone();
-        staged.rip = next;
         match ir.instruction {
             ScalarInstruction::VectorLaneInsert { .. }
             | ScalarInstruction::VectorLaneExtract { .. }
@@ -56,31 +55,29 @@ impl ScalarInterpreter {
                     }
                 }
                 staged.write_register(destination, ScalarWidth::Dword, u64::from(crc));
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::ByteSwap { register } => {
                 let value = cpu.read_register(register, ir.width);
                 staged.write_register(register, ir.width, Self::byte_swap(value, ir.width));
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::Exchange {
                 destination: ScalarOperand::Register(destination),
                 source,
-            } => Ok(Staged::Cpu(crate::x86::compare_exchange::CompareExchange::register(
-                staged,
-                cpu,
-                destination,
-                source,
-                ir.width,
-            ))),
+            } => {
+                crate::x86::compare_exchange::CompareExchange::register(staged, cpu, destination, source, ir.width);
+                Ok(Staged::Cpu)
+            }
             ScalarInstruction::AccumulatorExchange { source } => {
-                Ok(Staged::Cpu(crate::x86::compare_exchange::CompareExchange::register(
+                crate::x86::compare_exchange::CompareExchange::register(
                     staged,
                     cpu,
                     ScalarRegister::General(0),
                     source,
                     ir.width,
-                )))
+                );
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::Exchange {
                 destination: ScalarOperand::Memory(_),
@@ -169,7 +166,7 @@ impl ScalarInterpreter {
                 match destination {
                     VectorSource::Register(index) => {
                         staged.vectors[usize::from(index)] = u128::from(value);
-                        Ok(Staged::Cpu(staged))
+                        Ok(Staged::Cpu)
                     }
                     VectorSource::Memory(address) => Self::write(
                         staged,
@@ -195,7 +192,7 @@ impl ScalarInterpreter {
                     )?,
                 };
                 staged.vectors[usize::from(destination)] = u128::from(value);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VectorTransport {
                 vector,
@@ -214,11 +211,11 @@ impl ScalarInterpreter {
                         let value = Self::vex_read(cpu, memory, operand, true, next, instruction)?;
                         staged.vectors[usize::from(vector)] = value[0];
                         staged.vector_upper[usize::from(vector)] = value[1];
-                        Ok(Staged::Cpu(staged))
+                        Ok(Staged::Cpu)
                     } else if let VectorSource::Register(destination) = operand {
                         staged.vectors[usize::from(destination)] = cpu.vectors[usize::from(vector)];
                         staged.vector_upper[usize::from(destination)] = cpu.vector_upper[usize::from(vector)];
-                        Ok(Staged::Cpu(staged))
+                        Ok(Staged::Cpu)
                     } else {
                         let VectorSource::Memory(address) = operand else {
                             unreachable!()
@@ -236,7 +233,6 @@ impl ScalarInterpreter {
                         let low = cpu.vectors[usize::from(vector)];
                         let high = cpu.vector_upper[usize::from(vector)];
                         Ok(Staged::Batch(
-                            staged,
                             reservation,
                             [low as u64, (low >> 64) as u64, high as u64, (high >> 64) as u64],
                             address,
@@ -271,7 +267,7 @@ impl ScalarInterpreter {
                 staged.flags = crate::FlagState::default()
                     .with(Flag::Zero, zero)
                     .with(Flag::Carry, carry);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexMaskedMemory {
                 vector,
@@ -307,7 +303,6 @@ impl ScalarInterpreter {
                         }
                     }
                     Ok(Staged::Sparse(
-                        staged,
                         reservations,
                         values,
                         count as u8,
@@ -334,7 +329,7 @@ impl ScalarInterpreter {
                     }
                     staged.vectors[usize::from(vector)] = output[0];
                     staged.vector_upper[usize::from(vector)] = if wide { output[1] } else { 0 };
-                    Ok(Staged::Cpu(staged))
+                    Ok(Staged::Cpu)
                 }
             }
             ScalarInstruction::VectorMaskedStore {
@@ -381,7 +376,7 @@ impl ScalarInterpreter {
                     values[count] = (data >> (u32::from(start) * 8)) as u64;
                     count += 1;
                 }
-                Ok(Staged::Sparse(staged, reservations, values, count as u8, base, bytes))
+                Ok(Staged::Sparse(reservations, values, count as u8, base, bytes))
             }
             ScalarInstruction::VexAes {
                 operation,
@@ -393,7 +388,7 @@ impl ScalarInterpreter {
                 let first = cpu.vectors[usize::from(first)];
                 staged.vectors[usize::from(destination)] = crate::x86::vector::Aes::execute(first, second, operation);
                 staged.vector_upper[usize::from(destination)] = 0;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexScalarMerge {
                 destination,
@@ -409,7 +404,7 @@ impl ScalarInterpreter {
                 staged.vectors[usize::from(destination)] =
                     (cpu.vectors[usize::from(first)] & !mask) | (cpu.vectors[usize::from(second)] & mask);
                 staged.vector_upper[usize::from(destination)] = 0;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexScalarLoad {
                 destination,
@@ -425,7 +420,7 @@ impl ScalarInterpreter {
                             u128::from(u32::MAX)
                         };
                 staged.vector_upper[usize::from(destination)] = 0;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexScalarMultiply {
                 destination,
@@ -439,7 +434,7 @@ impl ScalarInterpreter {
                     (cpu.vectors[usize::from(first)] & !u128::from(u32::MAX)) | u128::from(result);
                 staged.vector_upper[usize::from(destination)] = 0;
                 staged.mxcsr |= exceptions;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexFma {
                 operation,
@@ -500,7 +495,7 @@ impl ScalarInterpreter {
                 staged.vectors[usize::from(destination)] = output[0];
                 staged.vector_upper[usize::from(destination)] = if wide && !scalar { output[1] } else { 0 };
                 staged.mxcsr |= exceptions;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexHalfWiden {
                 destination,
@@ -517,7 +512,7 @@ impl ScalarInterpreter {
                 }
                 staged.vectors[usize::from(destination)] = output[0];
                 staged.vector_upper[usize::from(destination)] = if wide { output[1] } else { 0 };
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexPackedDoubleConvert {
                 destination,
@@ -558,7 +553,7 @@ impl ScalarInterpreter {
                 staged.vectors[usize::from(destination)] = output[0];
                 staged.vector_upper[usize::from(destination)] = if from_integer && wide { output[1] } else { 0 };
                 staged.mxcsr |= exceptions;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexHalfNarrow {
                 source,
@@ -580,7 +575,7 @@ impl ScalarInterpreter {
                 if let VectorSource::Register(destination) = destination {
                     staged.vectors[usize::from(destination)] = output;
                     staged.vector_upper[usize::from(destination)] = 0;
-                    Ok(Staged::Cpu(staged))
+                    Ok(Staged::Cpu)
                 } else {
                     let VectorSource::Memory(address) = destination else {
                         unreachable!()
@@ -604,7 +599,6 @@ impl ScalarInterpreter {
                                 ))
                             })?;
                     Ok(Staged::Batch(
-                        staged,
                         reservation,
                         [output as u64, (output >> 64) as u64, 0, 0],
                         address,
@@ -621,7 +615,7 @@ impl ScalarInterpreter {
                 let value = Self::read(cpu, memory, source, width, next, instruction)?;
                 staged.vectors[usize::from(destination)] = u128::from(value);
                 staged.vector_upper[usize::from(destination)] = 0;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexQword { vector, operand, store } => {
                 if store {
@@ -630,7 +624,7 @@ impl ScalarInterpreter {
                         VectorSource::Register(destination) => {
                             staged.vectors[usize::from(destination)] = u128::from(value);
                             staged.vector_upper[usize::from(destination)] = 0;
-                            Ok(Staged::Cpu(staged))
+                            Ok(Staged::Cpu)
                         }
                         VectorSource::Memory(address) => {
                             let address = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
@@ -642,14 +636,14 @@ impl ScalarInterpreter {
                                     8,
                                 ))
                             })?;
-                            Ok(Staged::Write(staged, reservation, value, address, 8))
+                            Ok(Staged::Write(reservation, value, address, 8))
                         }
                     }
                 } else {
                     let value = Self::vex_read_bytes(cpu, memory, operand, 8, next, instruction)?[0] as u64;
                     staged.vectors[usize::from(vector)] = u128::from(value);
                     staged.vector_upper[usize::from(vector)] = 0;
-                    Ok(Staged::Cpu(staged))
+                    Ok(Staged::Cpu)
                 }
             }
             ScalarInstruction::VexHalfMove {
@@ -674,7 +668,7 @@ impl ScalarInterpreter {
                     (first & (u128::from(u64::MAX) << 64)) | u128::from(selected)
                 };
                 staged.vector_upper[usize::from(destination)] = 0;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexHalfStore { source, address, high } => {
                 let address = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
@@ -683,7 +677,7 @@ impl ScalarInterpreter {
                 let reservation = memory.reserve_write(address, 8).map_err(|()| {
                     ExecutionExit::OperandFault(crate::FaultAccess::operand(instruction, address, AccessKind::Write, 8))
                 })?;
-                Ok(Staged::Write(staged, reservation, value, address, 8))
+                Ok(Staged::Write(reservation, value, address, 8))
             }
             ScalarInstruction::VexMask {
                 destination,
@@ -697,7 +691,7 @@ impl ScalarInterpreter {
                         u64::from(VectorLane::sign_mask(cpu.vector_upper[usize::from(source)], lane)) << (16 / lane);
                 }
                 staged.write_register(destination, ScalarWidth::Dword, mask);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexDwordToSingle {
                 destination,
@@ -736,7 +730,7 @@ impl ScalarInterpreter {
                 staged.vectors[usize::from(destination)] = output[0];
                 staged.vector_upper[usize::from(destination)] = if wide { output[1] } else { 0 };
                 staged.mxcsr |= exceptions;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexFloatWidth {
                 destination,
@@ -818,7 +812,7 @@ impl ScalarInterpreter {
                         0
                     };
                 staged.mxcsr |= exceptions;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexCompare {
                 destination,
@@ -834,7 +828,7 @@ impl ScalarInterpreter {
                 let result = Self::vex_compare(left, right, format, scalar, wide, predicate);
                 staged.vectors[usize::from(destination)] = result[0];
                 staged.vector_upper[usize::from(destination)] = if wide && !scalar { result[1] } else { 0 };
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexRound {
                 destination,
@@ -915,7 +909,7 @@ impl ScalarInterpreter {
                 }
                 staged.vectors[usize::from(destination)] = output[0];
                 staged.vector_upper[usize::from(destination)] = if wide && !scalar { output[1] } else { 0 };
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexBlend {
                 destination,
@@ -931,7 +925,7 @@ impl ScalarInterpreter {
                 let result = Self::vex_blend(left, right, masks, lane, wide);
                 staged.vectors[usize::from(destination)] = result[0];
                 staged.vector_upper[usize::from(destination)] = if wide { result[1] } else { 0 };
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexBinary {
                 operation,
@@ -975,12 +969,12 @@ impl ScalarInterpreter {
                     staged.vectors[usize::from(destination)] = output[0];
                     staged.vector_upper[usize::from(destination)] = if wide { output[1] } else { 0 };
                     staged.mxcsr |= exceptions;
-                    return Ok(Staged::Cpu(staged));
+                    return Ok(Staged::Cpu);
                 }
                 let result = Self::vex_binary(operation, left, right, wide, immediate);
                 staged.vectors[usize::from(destination)] = result[0];
                 staged.vector_upper[usize::from(destination)] = if wide { result[1] } else { 0 };
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexImmediateShift {
                 operation,
@@ -994,7 +988,7 @@ impl ScalarInterpreter {
                 let result = Self::vex_immediate_shift(input, operation, lane, wide, count);
                 staged.vectors[usize::from(destination)] = result[0];
                 staged.vector_upper[usize::from(destination)] = if wide { result[1] } else { 0 };
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexScalarCountShift {
                 operation,
@@ -1009,7 +1003,7 @@ impl ScalarInterpreter {
                 let result = Self::vex_scalar_count_shift(input, operation, lane, wide, count);
                 staged.vectors[usize::from(destination)] = result[0];
                 staged.vector_upper[usize::from(destination)] = if wide { result[1] } else { 0 };
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexExtract128 {
                 source,
@@ -1025,7 +1019,7 @@ impl ScalarInterpreter {
                     VectorSource::Register(destination) => {
                         staged.vectors[usize::from(destination)] = value;
                         staged.vector_upper[usize::from(destination)] = 0;
-                        Ok(Staged::Cpu(staged))
+                        Ok(Staged::Cpu)
                     }
                     VectorSource::Memory(address) => {
                         let address = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
@@ -1039,7 +1033,6 @@ impl ScalarInterpreter {
                             ))
                         })?;
                         Ok(Staged::Batch(
-                            staged,
                             reservation,
                             [value as u64, (value >> 64) as u64, 0, 0],
                             address,
@@ -1058,7 +1051,7 @@ impl ScalarInterpreter {
                     if wide { ScalarWidth::Qword } else { ScalarWidth::Dword },
                     cpu.vectors[usize::from(source)] as u64,
                 );
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::RotateRightNoFlags {
                 destination,
@@ -1072,7 +1065,7 @@ impl ScalarInterpreter {
                     _ => unreachable!(),
                 };
                 staged.write_register(destination, ir.width, result);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::IsolateBit {
                 operation,
@@ -1102,7 +1095,7 @@ impl ScalarInterpreter {
                         result >> (if ir.width == ScalarWidth::Qword { 63 } else { 31 }) != 0,
                     )
                     .with(Flag::Overflow, false);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::AndNotGeneral {
                 destination,
@@ -1127,7 +1120,7 @@ impl ScalarInterpreter {
                         result >> (if ir.width == ScalarWidth::Qword { 63 } else { 31 }) != 0,
                     )
                     .with(Flag::Overflow, false);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::ZeroHighBits {
                 destination,
@@ -1158,7 +1151,7 @@ impl ScalarInterpreter {
                     .with(Flag::Zero, result == 0)
                     .with(Flag::Sign, result >> (bits - 1) != 0)
                     .with(Flag::Overflow, false);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VariableShift {
                 operation,
@@ -1183,7 +1176,7 @@ impl ScalarInterpreter {
                     _ => unreachable!(),
                 };
                 staged.write_register(destination, ir.width, result);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::MultiplyExtended { high, low, source } => {
                 let right = Self::read(cpu, memory, source, ir.width, next, instruction)?;
@@ -1197,7 +1190,7 @@ impl ScalarInterpreter {
                 };
                 staged.write_register(low, ir.width, low_value);
                 staged.write_register(high, ir.width, high_value);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::TransferBits {
                 destination,
@@ -1232,16 +1225,16 @@ impl ScalarInterpreter {
                     }
                 }
                 staged.write_register(destination, ir.width, result);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexZeroUpper => {
                 staged.vector_upper.fill(0);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VexZeroAll => {
                 staged.vectors.fill(0);
                 staged.vector_upper.fill(0);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::VectorHalf {
                 vector,
@@ -1275,14 +1268,14 @@ impl ScalarInterpreter {
                     ScalarWidth::Qword => unreachable!(),
                 };
                 staged.write_register(ScalarRegister::General(0), ir.width, extended);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::AccumulatorHighExtend => {
                 let value = cpu.read_register(ScalarRegister::General(0), ir.width);
                 let sign = Self::mask(ir.width) ^ (Self::mask(ir.width) >> 1);
                 let high = if value & sign == 0 { 0 } else { Self::mask(ir.width) };
                 staged.write_register(ScalarRegister::General(2), ir.width, high);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::MoveSignExtend {
                 destination,
@@ -1294,7 +1287,7 @@ impl ScalarInterpreter {
                     return Ok(Staged::Exit(ExecutionExit::UndefinedInstruction { instruction }));
                 };
                 staged.write_register(destination, ir.width, extended);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::MoveZeroExtend {
                 destination,
@@ -1303,18 +1296,17 @@ impl ScalarInterpreter {
             } => {
                 let value = Self::read(cpu, memory, source, source_width, next, instruction)?;
                 staged.write_register(destination, ir.width, value);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::BitScan {
                 operation,
                 destination,
                 source,
-            } => Ok(Staged::Cpu(staged.apply_bit_scan(
-                operation,
-                destination,
-                ir.width,
-                Self::read(cpu, memory, source, ir.width, next, instruction)?,
-            ))),
+            } => {
+                let value = Self::read(cpu, memory, source, ir.width, next, instruction)?;
+                staged.apply_bit_scan(operation, destination, ir.width, value);
+                Ok(Staged::Cpu)
+            }
             ScalarInstruction::PopulationCount { destination, source } => {
                 let value = Self::read(cpu, memory, source, ir.width, next, instruction)?;
                 let mask = match ir.width {
@@ -1325,7 +1317,7 @@ impl ScalarInterpreter {
                 };
                 staged.write_register(destination, ir.width, (value & mask).count_ones().into());
                 staged.flags = crate::FlagState::default().with(crate::Flag::Zero, value & mask == 0);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::Xlat { address_32, segment } => {
                 let mut address = cpu.registers[3].wrapping_add(cpu.registers[0] & 0xff);
@@ -1343,7 +1335,7 @@ impl ScalarInterpreter {
                     ScalarWidth::Byte,
                     value,
                 );
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::BitOperation { .. }
             | ScalarInstruction::VectorPack { .. }
@@ -1389,7 +1381,7 @@ impl ScalarInterpreter {
                 address.segment = None;
                 let value = address.resolve(&cpu.registers, next, 0, 0);
                 staged.write_register(destination, ir.width, value);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::Push { source } => {
                 let value = Self::read(cpu, memory, source, ir.width, next, instruction)?;
@@ -1423,9 +1415,12 @@ impl ScalarInterpreter {
                 next,
                 instruction,
             ),
-            ScalarInstruction::WriteSelector => Ok(Staged::Cpu(staged)),
+            ScalarInstruction::WriteSelector => Ok(Staged::Cpu),
             ScalarInstruction::Iret => Self::iret(staged, cpu, memory, instruction),
-            ScalarInstruction::FlagControl(operation) => Ok(Staged::Cpu(Self::control(staged, cpu, operation))),
+            ScalarInstruction::FlagControl(operation) => {
+                Self::control(staged, cpu, operation);
+                Ok(Staged::Cpu)
+            }
             ScalarInstruction::Alu {
                 operation,
                 destination,
@@ -1439,7 +1434,7 @@ impl ScalarInterpreter {
                 );
                 staged.flags = staged.flags.apply(arithmetic.flags);
                 if matches!(operation, AluOperation::Compare | AluOperation::Test) {
-                    Ok(Staged::Cpu(staged))
+                    Ok(Staged::Cpu)
                 } else {
                     Self::write(
                         staged,
@@ -1515,7 +1510,7 @@ impl ScalarInterpreter {
                 let product = Multiplication::widening(Self::integer_width(ir.width), cpu.registers[0], source, signed);
                 staged.write_product(ir.width, product);
                 staged.flags = staged.flags.apply(product.flags);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::TruncatedMultiply {
                 destination,
@@ -1535,7 +1530,7 @@ impl ScalarInterpreter {
                     product.low,
                     overflow,
                 ));
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::Divide { signed, divisor } => {
                 let divisor = Self::read(cpu, memory, divisor, ir.width, next, instruction)?;
@@ -1557,7 +1552,7 @@ impl ScalarInterpreter {
                 match division {
                     Ok(result) => {
                         staged.write_division(ir.width, result);
-                        Ok(Staged::Cpu(staged))
+                        Ok(Staged::Cpu)
                     }
                     Err(error) => Ok(Staged::Exit(ExecutionExit::DivideError { instruction, error })),
                 }
@@ -1565,14 +1560,14 @@ impl ScalarInterpreter {
             ScalarInstruction::Jump { target } => {
                 Self::canonical(target, 1, instruction, AccessKind::Execute)?;
                 staged.rip = target;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::JumpConditional { condition, target } => {
                 if cpu.condition(condition) {
                     Self::canonical(target, 1, instruction, AccessKind::Execute)?;
                     staged.rip = target;
                 }
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::CountBranch {
                 target,
@@ -1598,7 +1593,7 @@ impl ScalarInterpreter {
                     Self::canonical(target, 1, instruction, AccessKind::Execute)?;
                     staged.rip = target;
                 }
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::ConditionalMove {
                 condition,
@@ -1612,7 +1607,7 @@ impl ScalarInterpreter {
                     cpu.read_register(destination, ir.width)
                 };
                 staged.write_register(destination, ir.width, value);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::SetConditional { condition, destination } => {
                 let value = u64::from(cpu.condition(condition));
@@ -1627,7 +1622,7 @@ impl ScalarInterpreter {
                     .with(Flag::Auxiliary, ah & 0x10 != 0)
                     .with(Flag::Parity, ah & 0x04 != 0)
                     .with(Flag::Carry, ah & 0x01 != 0);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::AhFromFlags => {
                 let mut ah = 0x02_u64;
@@ -1641,13 +1636,13 @@ impl ScalarInterpreter {
                     ah |= u64::from(cpu.flags.contains(flag)) << bit;
                 }
                 staged.registers[0] = (staged.registers[0] & !0xff00) | (ah << 8);
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::JumpIndirect { target } => {
                 let target = Self::read(cpu, memory, target, ir.width, next, instruction)?;
                 Self::canonical(target, 1, instruction, AccessKind::Execute)?;
                 staged.rip = target;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::Call { target } => Self::call(staged, memory, ir.width, next, target, instruction),
             ScalarInstruction::CallIndirect { target } => {
@@ -1660,16 +1655,16 @@ impl ScalarInterpreter {
                 Self::canonical(target, 1, instruction, AccessKind::Execute)?;
                 staged.registers[4] = staged.registers[4].wrapping_add(u64::from(bytes) + u64::from(pop_bytes));
                 staged.rip = target;
-                Ok(Staged::Cpu(staged))
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::Leave { .. } => unreachable!(),
             ScalarInstruction::String(_) => unreachable!(),
-            ScalarInstruction::Nop => Ok(Staged::Cpu(staged)),
+            ScalarInstruction::Nop => Ok(Staged::Cpu),
             ScalarInstruction::Undefined => Ok(Staged::Exit(ExecutionExit::UndefinedInstruction { instruction })),
             ScalarInstruction::Breakpoint => Ok(Staged::Exit(ExecutionExit::Breakpoint { instruction, next })),
             ScalarInstruction::Cpuid => {
-                crate::GuestFeaturePolicy::interpreter().apply(&mut staged);
-                Ok(Staged::Cpu(staged))
+                crate::GuestFeaturePolicy::interpreter().apply(staged);
+                Ok(Staged::Cpu)
             }
             ScalarInstruction::TimestampCounter { auxiliary } => Ok(Staged::Exit(ExecutionExit::TimestampCounter {
                 instruction,
