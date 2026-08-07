@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 
 use hl_isa::GuestAddress;
 use hl_linux::{Errno, FutexOperation, FutexPlan, FutexWaitVector, LinuxResult};
@@ -10,8 +9,12 @@ use hl_sync::{
 };
 use hl_time::Clock;
 
+#[path = "futex/keys.rs"]
+mod keys;
 #[path = "futex/result.rs"]
 mod result;
+
+use keys::{Binding, KeyState};
 
 use crate::RuntimeFutexPort;
 pub trait FutexInterruptionSource: Send + Sync {
@@ -21,39 +24,6 @@ pub trait FutexInterruptionSource: Send + Sync {
         None
     }
 }
-struct Binding<H: MemoryAccessHost> {
-    memory: Weak<MappingCoordinator<H>>,
-    address: GuestAddress,
-    private: bool,
-    identity: FutexIdentity,
-}
-impl<H: MemoryAccessHost> Binding<H> {
-    fn matches(&self, memory: &Arc<MappingCoordinator<H>>, address: GuestAddress) -> bool {
-        if self.address != address {
-            return false;
-        }
-        let Some(candidate) = self.memory.upgrade() else {
-            return false;
-        };
-        Arc::ptr_eq(&candidate, memory)
-    }
-}
-struct KeyState<H: MemoryAccessHost> {
-    next_shared: u64,
-    shared: BTreeMap<FutexIdentity, u64>,
-    bindings: BTreeMap<FutexKey, Vec<Binding<H>>>,
-}
-
-impl<H: MemoryAccessHost> Default for KeyState<H> {
-    fn default() -> Self {
-        Self {
-            next_shared: 0,
-            shared: BTreeMap::new(),
-            bindings: BTreeMap::new(),
-        }
-    }
-}
-
 struct FutexAccessMemory<H: MemoryAccessHost> {
     keys: Mutex<KeyState<H>>,
 }
