@@ -182,6 +182,10 @@ pub enum VexOperation {
     },
     ShiftRightBytes,
     ShuffleDword,
+    /// `vpshufhw`/`vpshuflw`: shuffles one half of every 128-bit lane, copying the other.
+    ShuffleWord {
+        high: bool,
+    },
     ShuffleSingle,
     ShuffleDouble,
 }

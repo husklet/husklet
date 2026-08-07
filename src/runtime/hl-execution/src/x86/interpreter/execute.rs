@@ -1913,6 +1913,19 @@ impl ScalarInterpreter {
             }
             return output;
         }
+        if let VexOperation::ShuffleWord { high } = operation {
+            let mut output = [0_u128; 2];
+            let base = if high { 4 } else { 0 };
+            for half in 0..if wide { 2 } else { 1 } {
+                output[half] = right[half] & if high { u128::from(u64::MAX) } else { u128::from(u64::MAX) << 64 };
+                for lane in 0..4 {
+                    let selected = usize::from((immediate >> (lane * 2)) & 3) + base;
+                    let word = (right[half] >> (selected * 16)) & u128::from(u16::MAX);
+                    output[half] |= word << ((base + lane) * 16);
+                }
+            }
+            return output;
+        }
         if operation == VexOperation::ShuffleDouble {
             let mut output = [0_u128; 2];
             for half in 0..if wide { 2 } else { 1 } {
@@ -2669,6 +2682,7 @@ impl ScalarInterpreter {
                 | VexOperation::Insert128 => unreachable!(),
                 VexOperation::WidenSignedDword | VexOperation::ShiftRightBytes => unreachable!(),
                 VexOperation::ShuffleDword | VexOperation::ShuffleSingle => unreachable!(),
+                VexOperation::ShuffleWord { .. } => unreachable!(),
                 VexOperation::ShuffleDouble => unreachable!(),
             };
         }

@@ -16139,3 +16139,127 @@ fn vex_non_temporal_store_family() {
         assert!(X86ScalarDecoder::decode(&[0xc5, 0xf9, opcode, 0xc3], 0x7400).is_err());
     }
 }
+
+/// `vpshufhw`/`vpshuflw` against the legacy `pshufhw`/`pshuflw` they inherit, per
+/// 128-bit lane, plus the untouched half and the 256-bit form.
+#[test]
+fn vex_word_shuffle_family() {
+    let low = 0x000f_100e_200d_300c_400b_500a_6009_7008_u128;
+    let high = 0x8817_9916_aa15_bb14_cc13_dd12_ee11_ff10_u128;
+    let mut memory = ModelMemory {
+        base: 0,
+        bytes: vec![],
+        fail_read: false,
+        fail_write: false,
+        commits: 0,
+    };
+    for (legacy, prefix, wide) in [
+        (0xf3_u8, 0xfa_u8, false),
+        (0xf3, 0xfe, true),
+        (0xf2, 0xfb, false),
+        (0xf2, 0xff, true),
+    ] {
+        for immediate in [0x00_u8, 0x1b, 0xe4, 0xff, 0x93] {
+            let mut legacy_cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            legacy_cpu.vectors[1] = low;
+            let decoded = X86ScalarDecoder::decode(&[legacy, 0x0f, 0x70, 0xc1, immediate], legacy_cpu.rip).unwrap();
+            assert_eq!(
+                ScalarInterpreter::execute(&mut legacy_cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+
+            let mut cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            cpu.vectors[1] = low;
+            cpu.vector_upper[1] = high;
+            cpu.vector_upper[0] = u128::MAX;
+            let decoded = X86ScalarDecoder::decode(&[0xc5, prefix, 0x70, 0xc1, immediate], cpu.rip).unwrap();
+            assert_eq!(
+                ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+            assert_eq!(cpu.vectors[0], legacy_cpu.vectors[0], "low {prefix:#x} {immediate:#x}");
+
+            let mut upper_cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            upper_cpu.vectors[1] = high;
+            let decoded = X86ScalarDecoder::decode(&[legacy, 0x0f, 0x70, 0xc1, immediate], upper_cpu.rip).unwrap();
+            assert_eq!(
+                ScalarInterpreter::execute(&mut upper_cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+            assert_eq!(
+                cpu.vector_upper[0],
+                if wide { upper_cpu.vectors[0] } else { 0 },
+                "upper {prefix:#x} {immediate:#x}"
+            );
+        }
+    }
+}
+
+/// `vucomiss`/`vucomisd`/`vcomiss`/`vcomisd` must set exactly the flags and the
+/// exceptions their legacy encodings do.
+#[test]
+fn vex_scalar_ordered_compare_family() {
+    let mut memory = ModelMemory {
+        base: 0,
+        bytes: vec![],
+        fail_read: false,
+        fail_write: false,
+        commits: 0,
+    };
+    let singles = [1.0_f32, 2.0, -0.0, 0.0, f32::NAN, f32::INFINITY];
+    for opcode in [0x2e_u8, 0x2f] {
+        for (legacy, prefix, double) in [(None, 0xf8_u8, false), (Some(0x66_u8), 0xf9, true)] {
+            for left in singles {
+                for right in singles {
+                    let (a, b) = if double {
+                        (
+                            u128::from(f64::from(left).to_bits()),
+                            u128::from(f64::from(right).to_bits()),
+                        )
+                    } else {
+                        (u128::from(left.to_bits()), u128::from(right.to_bits()))
+                    };
+                    let mut legacy_bytes = Vec::new();
+                    legacy_bytes.extend(legacy);
+                    legacy_bytes.extend_from_slice(&[0x0f, opcode, 0xc1]);
+                    let mut legacy_cpu = CpuState {
+                        rip: 0x7000,
+                        mxcsr: 0x1f80,
+                        ..Default::default()
+                    };
+                    legacy_cpu.vectors[0] = a;
+                    legacy_cpu.vectors[1] = b;
+                    let decoded = X86ScalarDecoder::decode(&legacy_bytes, legacy_cpu.rip).unwrap();
+                    assert_eq!(
+                        ScalarInterpreter::execute(&mut legacy_cpu, &mut memory, decoded),
+                        ExecutionExit::Continue
+                    );
+
+                    let mut cpu = CpuState {
+                        rip: 0x7000,
+                        mxcsr: 0x1f80,
+                        ..Default::default()
+                    };
+                    cpu.vectors[0] = a;
+                    cpu.vectors[1] = b;
+                    let decoded = X86ScalarDecoder::decode(&[0xc5, prefix, opcode, 0xc1], cpu.rip).unwrap();
+                    assert_eq!(
+                        ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+                        ExecutionExit::Continue
+                    );
+                    assert_eq!(cpu.flags, legacy_cpu.flags, "{opcode:#x} {left} {right} flags");
+                    assert_eq!(cpu.mxcsr, legacy_cpu.mxcsr, "{opcode:#x} {left} {right} mxcsr");
+                }
+            }
+        }
+    }
+}
