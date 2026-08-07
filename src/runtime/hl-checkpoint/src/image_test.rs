@@ -169,7 +169,7 @@ fn section_count_size() {
     let mut oversized = CheckpointWriter::new(limits);
     assert!(matches!(
         oversized.push(Section::new(Fixture::kind(1), 1, vec![0; 5])),
-        Err(ImageError::SectionTooLarge)
+        Err(ImageError::SectionTooLarge { length: 5, maximum: 4 })
     ));
 
     let mut unordered = CheckpointWriter::new(ImageLimits::default());
@@ -180,7 +180,7 @@ fn section_count_size() {
     ));
 
     let mut sink = MemorySink::new();
-    assert!(matches!(writer.publish(&mut sink), Err(ImageError::ImageTooLarge)));
+    assert!(matches!(writer.publish(&mut sink), Err(ImageError::ImageTooLarge { .. })));
     assert!(sink.committed().is_none());
 }
 
@@ -191,7 +191,7 @@ fn reader_rejects_images() {
     let mut source = MemorySource::new(bytes);
     assert!(matches!(
         CheckpointReader::new(limits).read(&mut source),
-        Err(ImageError::ImageTooLarge)
+        Err(ImageError::ImageTooLarge { .. })
     ));
 }
 

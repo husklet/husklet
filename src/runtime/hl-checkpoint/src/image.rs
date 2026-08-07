@@ -139,23 +139,31 @@ impl PreparedImage {
     }
 }
 
+/// Names the checksummed span so a mismatch identifies what was corrupted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChecksumRegion {
+    Footer,
+    Manifest,
+    Section(SectionKind),
+}
+
 #[derive(Debug)]
 pub enum ImageError {
     Port(PortError),
     InvalidSectionKind,
     DuplicateOrUnorderedSection,
     SectionLimit,
-    SectionTooLarge,
-    ImageTooLarge,
+    SectionTooLarge { length: usize, maximum: usize },
+    ImageTooLarge { size: usize, maximum: usize },
     ArithmeticOverflow,
-    Truncated,
+    Truncated { offset: usize, needed: usize, available: usize },
     TrailingBytes,
     Magic,
     Version(u32),
     Reserved(u32),
     ManifestLength,
-    Offset,
-    Checksum,
+    Offset { expected: usize, actual: usize },
+    Checksum(ChecksumRegion),
     ZeroProgress,
 }
 
@@ -193,7 +201,10 @@ impl CheckpointWriter {
             return Err(ImageError::SectionLimit);
         }
         if section.bytes.len() > self.limits.section_bytes {
-            return Err(ImageError::SectionTooLarge);
+            return Err(ImageError::SectionTooLarge {
+                length: section.bytes.len(),
+                maximum: self.limits.section_bytes,
+            });
         }
         if self
             .sections
@@ -254,7 +265,10 @@ impl CheckpointWriter {
             .and_then(|size| size.checked_add(FOOTER_SIZE))
             .ok_or(ImageError::ArithmeticOverflow)?;
         if total > self.limits.image_bytes {
-            return Err(ImageError::ImageTooLarge);
+            return Err(ImageError::ImageTooLarge {
+                size: total,
+                maximum: self.limits.image_bytes,
+            });
         }
         let mut manifest = Vec::with_capacity(manifest_size);
         let mut payload_offset = 0_usize;
@@ -298,7 +312,10 @@ impl CheckpointReader {
     pub fn read<S: CheckpointSource>(&self, source: &mut S) -> Result<CheckpointImage, ImageError> {
         let size = source.image_size()?;
         if size > self.limits.image_bytes {
-            return Err(ImageError::ImageTooLarge);
+            return Err(ImageError::ImageTooLarge {
+                size,
+                maximum: self.limits.image_bytes,
+            });
         }
         let mut image = vec![0_u8; size];
         Self::read_image(source, &mut image)?;
@@ -309,7 +326,13 @@ impl CheckpointReader {
         let mut offset = 0;
         while offset < image.len() {
             match source.read(&mut image[offset..]) {
-                Ok(0) => return Err(ImageError::Truncated),
+                Ok(0) => {
+                    return Err(ImageError::Truncated {
+                        offset,
+                        needed: image.len(),
+                        available: offset,
+                    });
+                }
                 Ok(count) if count <= image.len() - offset => offset += count,
                 Ok(_) => return Err(ImageError::ZeroProgress),
                 Err(PortError::Interrupted) => {}
@@ -326,13 +349,17 @@ impl CheckpointReader {
 
     fn decode(&self, image: &[u8]) -> Result<CheckpointImage, ImageError> {
         if image.len() < HEADER_SIZE + FOOTER_SIZE {
-            return Err(ImageError::Truncated);
+            return Err(ImageError::Truncated {
+                offset: 0,
+                needed: HEADER_SIZE + FOOTER_SIZE,
+                available: image.len(),
+            });
         }
         let footer = image.len() - FOOTER_SIZE;
         if Bytes::read_u64(image, footer)? != FOOTER_MAGIC
             || Bytes::read_u64(image, footer + 8)? != Hash::bytes(&image[..footer])
         {
-            return Err(ImageError::Checksum);
+            return Err(ImageError::Checksum(ChecksumRegion::Footer));
         }
         if Bytes::read_u64(image, 0)? != IMAGE_MAGIC {
             return Err(ImageError::Magic);
@@ -359,9 +386,13 @@ impl CheckpointReader {
         if payload_end != footer {
             return Err(ImageError::ManifestLength);
         }
-        let manifest = image.get(HEADER_SIZE..manifest_end).ok_or(ImageError::Truncated)?;
+        let manifest = image.get(HEADER_SIZE..manifest_end).ok_or(ImageError::Truncated {
+            offset: HEADER_SIZE,
+            needed: manifest_size,
+            available: image.len().saturating_sub(HEADER_SIZE),
+        })?;
         if Bytes::read_u64(image, 32)? != Hash::bytes(manifest) {
-            return Err(ImageError::Checksum);
+            return Err(ImageError::Checksum(ChecksumRegion::Manifest));
         }
         self.decode_sections(
             manifest,
@@ -385,21 +416,34 @@ impl CheckpointReader {
             let offset = Bytes::usize(entry, 8)?;
             let length = Bytes::usize(entry, 16)?;
             if offset != expected_offset {
-                return Err(ImageError::Offset);
+                return Err(ImageError::Offset {
+                    expected: expected_offset,
+                    actual: offset,
+                });
             }
             if length > self.limits.section_bytes {
-                return Err(ImageError::SectionTooLarge);
+                return Err(ImageError::SectionTooLarge {
+                    length,
+                    maximum: self.limits.section_bytes,
+                });
             }
             let end = offset.checked_add(length).ok_or(ImageError::ArithmeticOverflow)?;
-            let bytes = payload.get(offset..end).ok_or(ImageError::Truncated)?;
+            let bytes = payload.get(offset..end).ok_or(ImageError::Truncated {
+                offset,
+                needed: length,
+                available: payload.len().saturating_sub(offset),
+            })?;
             if Bytes::read_u64(entry, 24)? != Hash::bytes(bytes) {
-                return Err(ImageError::Checksum);
+                return Err(ImageError::Checksum(ChecksumRegion::Section(kind)));
             }
             sections.push(Section::new(kind, version, bytes.to_vec()));
             expected_offset = end;
         }
         if expected_offset != payload.len() {
-            return Err(ImageError::Offset);
+            return Err(ImageError::Offset {
+                expected: payload.len(),
+                actual: expected_offset,
+            });
         }
         Ok(CheckpointImage { sections, digest })
     }
@@ -417,12 +461,20 @@ impl Bytes {
     }
 
     fn read_u32(input: &[u8], offset: usize) -> Result<u32, ImageError> {
-        let bytes = input.get(offset..offset + 4).ok_or(ImageError::Truncated)?;
+        let bytes = input.get(offset..offset + 4).ok_or(ImageError::Truncated {
+            offset,
+            needed: 4,
+            available: input.len().saturating_sub(offset),
+        })?;
         Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
     }
 
     fn read_u64(input: &[u8], offset: usize) -> Result<u64, ImageError> {
-        let bytes = input.get(offset..offset + 8).ok_or(ImageError::Truncated)?;
+        let bytes = input.get(offset..offset + 8).ok_or(ImageError::Truncated {
+            offset,
+            needed: 8,
+            available: input.len().saturating_sub(offset),
+        })?;
         Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
     }
 

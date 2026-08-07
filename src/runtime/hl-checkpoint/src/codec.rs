@@ -31,34 +31,40 @@ impl Limits {
 /// Encoding failure.
 #[derive(Debug)]
 pub enum EncodeError {
-    Io(io::Error),
-    LengthOverflow,
+    Io { offset: u64, error: io::Error },
+    LengthOverflow { offset: u64, length: usize },
 }
 
 impl fmt::Display for EncodeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(error) => write!(formatter, "encoding failed: {error}"),
-            Self::LengthOverflow => formatter.write_str("value length exceeds u32"),
+            Self::Io { offset, error } => write!(formatter, "encoding failed at offset {offset}: {error}"),
+            Self::LengthOverflow { offset, length } => {
+                write!(formatter, "value length {length} at offset {offset} exceeds u32")
+            }
         }
     }
 }
 
 impl std::error::Error for EncodeError {}
 
-impl From<io::Error> for EncodeError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
-}
-
 /// Rejection of malformed, truncated, or oversized input.
 #[derive(Debug)]
 pub enum DecodeError {
-    Io(io::Error),
-    Truncated,
-    InvalidUtf8,
+    Io {
+        offset: usize,
+        error: io::Error,
+    },
+    Truncated {
+        offset: usize,
+        requested: usize,
+    },
+    InvalidUtf8 {
+        offset: usize,
+        length: usize,
+    },
     LimitExceeded {
+        offset: usize,
         kind: LimitKind,
         requested: usize,
         maximum: usize,
@@ -68,14 +74,22 @@ pub enum DecodeError {
 impl fmt::Display for DecodeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(error) => write!(formatter, "decoding failed: {error}"),
-            Self::Truncated => formatter.write_str("encoded value is truncated"),
-            Self::InvalidUtf8 => formatter.write_str("encoded string is not UTF-8"),
+            Self::Io { offset, error } => write!(formatter, "decoding failed at offset {offset}: {error}"),
+            Self::Truncated { offset, requested } => {
+                write!(formatter, "encoded value of {requested} bytes at offset {offset} is truncated")
+            }
+            Self::InvalidUtf8 { offset, length } => {
+                write!(formatter, "encoded string of {length} bytes at offset {offset} is not UTF-8")
+            }
             Self::LimitExceeded {
+                offset,
                 kind,
                 requested,
                 maximum,
-            } => write!(formatter, "{kind:?} length {requested} exceeds maximum {maximum}"),
+            } => write!(
+                formatter,
+                "{kind:?} length {requested} at offset {offset} exceeds maximum {maximum}"
+            ),
         }
     }
 }
@@ -135,7 +149,10 @@ impl<W: Write> Encoder<W> {
     }
 
     pub fn write_bytes(&mut self, value: &[u8]) -> Result<(), EncodeError> {
-        let length = u32::try_from(value.len()).map_err(|_| EncodeError::LengthOverflow)?;
+        let length = u32::try_from(value.len()).map_err(|_| EncodeError::LengthOverflow {
+            offset: self.written,
+            length: value.len(),
+        })?;
         self.write_u32(length)?;
         self.write_all(value)
     }
@@ -145,11 +162,17 @@ impl<W: Write> Encoder<W> {
     }
 
     fn write_all(&mut self, value: &[u8]) -> Result<(), EncodeError> {
-        self.output.write_all(value)?;
+        let offset = self.written;
+        self.output
+            .write_all(value)
+            .map_err(|error| EncodeError::Io { offset, error })?;
         self.written = self
             .written
             .checked_add(u64::try_from(value.len()).unwrap_or(u64::MAX))
-            .ok_or(EncodeError::LengthOverflow)?;
+            .ok_or(EncodeError::LengthOverflow {
+                offset,
+                length: value.len(),
+            })?;
         Ok(())
     }
 }
@@ -220,9 +243,10 @@ impl<R: Read> Decoder<R> {
 
     pub fn read_string(&mut self) -> Result<String, DecodeError> {
         let length = self.read_length(LimitKind::String, self.limits.string)?;
+        let offset = self.consumed();
         let mut value = vec![0_u8; length];
         self.read_exact(&mut value)?;
-        String::from_utf8(value).map_err(|_| DecodeError::InvalidUtf8)
+        String::from_utf8(value).map_err(|_| DecodeError::InvalidUtf8 { offset, length })
     }
 
     pub fn read_count(&mut self) -> Result<usize, DecodeError> {
@@ -230,13 +254,16 @@ impl<R: Read> Decoder<R> {
     }
 
     fn read_length(&mut self, kind: LimitKind, maximum: usize) -> Result<usize, DecodeError> {
+        let offset = self.consumed();
         let requested = usize::try_from(self.read_u32()?).map_err(|_| DecodeError::LimitExceeded {
+            offset,
             kind,
             requested: usize::MAX,
             maximum,
         })?;
         if requested > maximum {
             return Err(DecodeError::LimitExceeded {
+                offset,
                 kind,
                 requested,
                 maximum,
@@ -246,11 +273,13 @@ impl<R: Read> Decoder<R> {
     }
 
     fn read_exact(&mut self, output: &mut [u8]) -> Result<(), DecodeError> {
+        let offset = self.input.consumed();
+        let requested = output.len();
         self.input.read_exact(output).map_err(|error| {
             if matches!(error.kind(), io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData) {
-                DecodeError::Truncated
+                DecodeError::Truncated { offset, requested }
             } else {
-                DecodeError::Io(error)
+                DecodeError::Io { offset, error }
             }
         })
     }
@@ -304,6 +333,7 @@ mod tests {
         assert!(matches!(
             decoder.read_bytes(),
             Err(DecodeError::LimitExceeded {
+                offset: 0,
                 kind: LimitKind::Bytes,
                 requested: 33,
                 maximum: 32,
@@ -315,9 +345,21 @@ mod tests {
     #[test]
     fn text_errors() {
         let mut truncated = Decoder::new(Cursor::new([4, 0, 0, 0, 1, 2]), limits());
-        assert!(matches!(truncated.read_bytes(), Err(DecodeError::Truncated)));
+        assert!(matches!(
+            truncated.read_bytes(),
+            Err(DecodeError::Truncated {
+                offset: 4,
+                requested: 4
+            })
+        ));
 
         let mut invalid = Decoder::new(Cursor::new([2, 0, 0, 0, 0xff, 0xff]), limits());
-        assert!(matches!(invalid.read_string(), Err(DecodeError::InvalidUtf8)));
+        assert!(matches!(
+            invalid.read_string(),
+            Err(DecodeError::InvalidUtf8 {
+                offset: 4,
+                length: 2
+            })
+        ));
     }
 }
