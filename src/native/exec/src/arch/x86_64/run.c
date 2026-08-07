@@ -99,6 +99,24 @@ static int view_resolve(x86_run_views *cache, hl_native_x86_64_cpu *cpu,
     return 0;
 }
 
+/* Two views of one range differing only in permissions are one region to every
+ * lookup: the wider entry answers everything the narrower one answers from the
+ * same host bytes, so keeping both only burns a slot and a probe. */
+static int view_subsumes(const hl_native_projection_view *wide,
+                         const hl_native_projection_view *narrow) {
+    return wide->guest_first == narrow->guest_first && wide->guest_last == narrow->guest_last &&
+           wide->host_first == narrow->host_first &&
+           wide->mapping_incarnation == narrow->mapping_incarnation &&
+           (wide->permissions & narrow->permissions) == narrow->permissions;
+}
+
+static void view_discard(x86_run_views *cache, size_t index) {
+    if (index + 1 < cache->count)
+        memmove(&cache->entries[index], &cache->entries[index + 1],
+                (cache->count - index - 1) * sizeof(cache->entries[0]));
+    cache->count--;
+}
+
 static void view_install(x86_run_views *cache, const hl_native_projection_view *view) {
     if (cache == NULL || view == NULL) return;
     for (size_t index = 0; index < cache->count; ++index) {
@@ -106,6 +124,10 @@ static void view_install(x86_run_views *cache, const hl_native_projection_view *
             view_promote(cache, index);
             return;
         }
+    }
+    for (size_t index = cache->count; index > 0; --index) {
+        if (view_subsumes(&cache->entries[index - 1], view)) return;
+        if (view_subsumes(view, &cache->entries[index - 1])) view_discard(cache, index - 1);
     }
     if (cache->count < X86_RUN_VIEW_COUNT) cache->count++;
     if (cache->count > 1)
