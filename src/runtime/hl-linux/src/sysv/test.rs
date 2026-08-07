@@ -59,6 +59,7 @@ impl Memory {
         self.bytes.lock().unwrap()[offset..offset + length].to_vec()
     }
 
+    #[allow(clippy::unused_self)]
     fn golden_permissions(&self, length: usize) -> Vec<u8> {
         let mut bytes = vec![0; length];
         put_u32(&mut bytes, 0, (-2_i32) as u32);

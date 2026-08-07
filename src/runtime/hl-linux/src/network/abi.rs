@@ -144,6 +144,8 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         }
     }
 
+    // Result keeps this uniform with the other address decoders.
+    #[allow(clippy::unnecessary_wraps)]
     fn decode_unix(bytes: &[u8]) -> Result<GuestNetworkAddress, Error> {
         let path = &bytes[2..];
         if path.is_empty() {
@@ -379,6 +381,8 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         }
     }
 
+    // Consumes the requested form while validating it.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn decode_socket_option(
         &self,
         source: u64,

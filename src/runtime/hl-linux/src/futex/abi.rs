@@ -249,7 +249,7 @@ impl<M: GuestMemory> TimeFutexAbi<'_, M> {
     }
 
     const fn aligned(address: u64) -> Result<(), FutexMarshalError> {
-        if address & 3 == 0 {
+        if address.trailing_zeros() >= 2 {
             Ok(())
         } else {
             Err(FutexMarshalError::Invalid)

@@ -157,6 +157,8 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         self.mmap_plan(address, length, protection, flags, descriptor, page_offset, true)
     }
 
+    // Receiver kept so the plan builders read uniformly on the ABI.
+    #[allow(clippy::unused_self)]
     fn mmap_plan(
         &self,
         address: u64,
@@ -352,7 +354,7 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
     }
 
     pub fn mlockall(flags: u32) -> Result<LockAllPlan, AbiError> {
-        if flags & !7 != 0 || flags & 3 == 0 || flags & 4 != 0 && flags & 2 == 0 {
+        if flags & !7 != 0 || flags.trailing_zeros() >= 2 || flags & 4 != 0 && flags & 2 == 0 {
             return Err(AbiError::Invalid);
         }
         Ok(LockAllPlan {

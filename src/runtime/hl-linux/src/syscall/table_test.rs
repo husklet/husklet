@@ -410,7 +410,6 @@ fn dispatcher_routes_family() {
         blocked,
         SeccompDispatch::Result(LinuxResult::Error(crate::Errno::EACCES)),
     );
-    drop(ports);
     assert_eq!(
         network.calls.get(&SyscallFamily::Network),
         Some(&("sendmsg", [1, 2, 3, 4, 5, 6])),

@@ -208,7 +208,7 @@ fn resolve(program: &std::ffi::OsStr) -> std::io::Result<PathBuf> {
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::NotFound,
-        format!("host executable {program:?} was not found in PATH"),
+        format!("host executable {} was not found in PATH", program.display()),
     ))
 }
 

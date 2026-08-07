@@ -125,8 +125,10 @@ impl VectorTransfer {
             let length = usize::try_from(vector.length).map_err(|_| MarshalError::Invalid)?;
             let mut bytes = vec![0; length];
             let progress = marshaller.copy_from(vector.base, &mut bytes);
-            if progress.fault.is_some() && (require_all || progress.copied == 0 && copied == 0) {
-                return Err(MarshalError::Fault(progress.fault.expect("checked fault")));
+            if let Some(fault) = progress.fault
+                && (require_all || progress.copied == 0 && copied == 0)
+            {
+                return Err(MarshalError::Fault(fault));
             }
             bytes.truncate(progress.copied);
             copied += progress.copied;

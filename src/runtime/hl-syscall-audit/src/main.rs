@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -62,6 +63,7 @@ impl Audit {
         self.root.join("src/runtime/hl-syscall-audit").join(name)
     }
 
+    #[allow(clippy::unused_self)]
     fn check(&self, path: &Path, expected: &str) {
         let actual = fs::read_to_string(path).unwrap_or_default();
         assert_eq!(actual, expected, "{} is stale; run hl-syscall-audit", path.display());
@@ -105,6 +107,7 @@ impl Audit {
         Ok(entries)
     }
 
+    #[allow(clippy::unused_self)]
     fn rust_routes(&self, source: &str) -> Routes {
         let mut routes = Routes::default();
         for line in source.lines().filter_map(Self::canonical_route) {
@@ -193,6 +196,7 @@ impl Audit {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn supported_names<'a>(&self, source: &'a str) -> BTreeSet<&'a str> {
         let block = source
             .split("pub(super) const SUPPORTED")
@@ -225,12 +229,13 @@ impl Audit {
         });
         let mut output = String::from("# arm64\tx86_64\tname\n");
         for entry in entries {
-            output.push_str(&format!(
-                "{}\t{}\t{}\n",
+            let _ = writeln!(
+                output,
+                "{}\t{}\t{}",
                 entry.arm.expect("oracle arm number"),
                 entry.x86.expect("oracle x86 number"),
                 entry.name
-            ));
+            );
         }
         fs::write(self.numbers_path(), output).expect("write number table");
     }
@@ -302,19 +307,22 @@ impl Audit {
         Ok(output)
     }
 
+    #[allow(clippy::unused_self)]
     fn render_manifest(&self, entries: &[Entry]) -> String {
         let mut output = "arm64\tx86_64\tname\tstatus\tarm64_status\tx86_64_status\n".to_owned();
         for entry in entries {
             let arm = entry.arm.map_or_else(|| "-".to_owned(), |value| value.to_string());
             let x86 = entry.x86.map_or_else(|| "-".to_owned(), |value| value.to_string());
-            output.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\n",
+            let _ = writeln!(
+                output,
+                "{}\t{}\t{}\t{}\t{}\t{}",
                 arm, x86, entry.name, entry.category, entry.arm_category, entry.x86_category
-            ));
+            );
         }
         output
     }
 
+    #[allow(clippy::unused_self)]
     fn render_report(&self, entries: &[Entry]) -> String {
         let count = |category| entries.iter().filter(|entry| entry.category == category).count();
         let names = |category| {
