@@ -183,6 +183,11 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         }
         if (vex == 0u && semantic_prefix == 0xf0u && opcode != 0xf6u && opcode != 0xf7u &&
             opcode != 0x86u && opcode != 0x87u &&
+            !((opcode == 0x80u || opcode == 0x81u || opcode == 0x83u) &&
+              (request->flags & HL_X86_A64_LSE) != 0u && cursor < request->guest_size &&
+              (request->guest_bytes[cursor] >> 6) != 3u &&
+              (((request->guest_bytes[cursor] >> 3) & 7u) == 0u ||
+               ((request->guest_bytes[cursor] >> 3) & 7u) == 5u)) &&
             !(opcode == 0x0fu && cursor < request->guest_size &&
               (request->guest_bytes[cursor] == 0xb0u || request->guest_bytes[cursor] == 0xb1u ||
                request->guest_bytes[cursor] == 0xc0u || request->guest_bytes[cursor] == 0xc1u))) {
@@ -1470,6 +1475,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         } else if (hl_x86_immediate_opcode(opcode)) {
             if (!hl_x86_decode_immediate(request, block, item, opcode, rex, operand_16,
                                          address_32, start, &cursor)) break;
+            /* LOCK ADD/SUB imm,m reuses the atomic pre-image RMW rather than load-modify-store. */
+            if (semantic_prefix == 0xf0u) item->operation = OP_XADD;
         } else if (opcode == 0x8du) {
             if (!hl_x86_decode_address(request, block, item, rex, operand_16, address_32, start, &cursor)) break;
         } else if (opcode == 0x89u || opcode == 0x8bu || opcode == 0xc7u) {
@@ -1940,7 +1947,7 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
             dirty |= UINT32_C(1) << item->destination;
         } else if (item->operation == OP_XADD) {
             hl_x86_emit_xadd(request->host_words, &words, item);
-            dirty |= UINT32_C(1) << item->source;
+            if (item->has_immediate == 0u) dirty |= UINT32_C(1) << item->source;
             if (item->memory_operand == 0u) dirty |= UINT32_C(1) << item->destination;
         } else if (item->operation == OP_CMPXCHG) {
             hl_x86_emit_cmpxchg(request->host_words, &words, item);

@@ -2249,6 +2249,34 @@ fn x86_bit_test_immediate_matches_interpreter_at_each_boundary() {
     assert_x86_boundaries(0x402720, &bytes, &instruction_ends, &initial, 0x7000, &operand);
 }
 
+/// `lock add`/`lock sub` of an immediate to memory, at every width and both signs.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_locked_immediate_arithmetic_matches_interpreter_at_each_boundary() {
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for extension in [0x06_u8, 0x2e] {
+        program.push(vec![0xf0, 0x80, extension, 0x7f]);
+        program.push(vec![0xf0, 0x66, 0x81, extension, 0x34, 0x12]);
+        program.push(vec![0xf0, 0x81, extension, 0x78, 0x56, 0x34, 0x12]);
+        program.push(vec![0xf0, 0x48, 0x81, extension, 0x78, 0x56, 0x34, 0x12]);
+        program.push(vec![0xf0, 0x83, extension, 0x01]);
+        program.push(vec![0xf0, 0x83, extension, 0xff]);
+        program.push(vec![0xf0, 0x48, 0x83, extension, 0x01]);
+        program.push(vec![0xf0, 0x48, 0x83, extension, 0xff]);
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    let operand: [u8; 8] = [0x00, 0xff, 0x80, 0x7f, 0x01, 0x00, 0x00, 0x80];
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
 /// Immediate shift counts across the 0x1f/0x3f masking boundary at both widths.
 #[cfg(target_arch = "aarch64")]
 #[test]

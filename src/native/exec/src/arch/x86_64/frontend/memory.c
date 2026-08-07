@@ -669,7 +669,10 @@ void hl_x86_emit_xadd(uint32_t *words, uint32_t *cursor, const instruction *item
         unsigned source = item->source;
         hl_x86_emit_address(words, cursor, item); --*cursor;
         emit_write_cache(words, cursor, item->width);
-        if (item->source_high) {
+        if (item->has_immediate) {
+            emit_constant(words, cursor, 21u, item->operand_immediate);
+            source = 21u;
+        } else if (item->source_high) {
             words[(*cursor)++] = UINT32_C(0x53083c00) | source << 5 | 21u;
             source = 21u;
         } else
@@ -695,19 +698,30 @@ void hl_x86_emit_xadd(uint32_t *words, uint32_t *cursor, const instruction *item
             uint32_t size = item->width == 8u ? UINT32_C(0xc0000000) :
                             item->width == 4u ? UINT32_C(0x80000000) :
                             item->width == 2u ? UINT32_C(0x40000000) : 0u;
+            /* SUB adds the two's complement while flags stay the exact x86 subtraction. */
+            if (item->alu_kind == 5u) {
+                words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xcb0003e0) : UINT32_C(0x4b0003e0)) |
+                                     source << 16 | 22u;
+                source = 22u;
+            }
             words[(*cursor)++] = UINT32_C(0x38e00000) | size | source << 16 | 17u << 5 | 19u;
         }
         add.destination = 19u; add.source = 21u; add.destination_high = 0u; add.source_high = 0u;
-        add.memory_operand = 0u; add.memory_write = 0u; add.alu_kind = 0u; add.flags_only = 1u;
+        add.memory_operand = 0u; add.memory_write = 0u; add.flags_only = 1u;
+        add.has_immediate = 0u;
+        if (!item->has_immediate) add.alu_kind = 0u;
         hl_x86_emit_alu(words, cursor, &add);
-        if (item->width == 1u)
-            words[(*cursor)++] = (item->source_high ? UINT32_C(0xb3781c00) : UINT32_C(0xb3401c00)) |
-                                 19u << 5 | item->source;
-        else if (item->width == 2u)
-            words[(*cursor)++] = UINT32_C(0xb3403c00) | 19u << 5 | item->source;
-        else
-            words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xaa0003e0) : UINT32_C(0x2a0003e0)) |
-                                 19u << 16 | item->source;
+        /* The locked immediate form has no pre-image destination register. */
+        if (!item->has_immediate) {
+            if (item->width == 1u)
+                words[(*cursor)++] = (item->source_high ? UINT32_C(0xb3781c00) : UINT32_C(0xb3401c00)) |
+                                     19u << 5 | item->source;
+            else if (item->width == 2u)
+                words[(*cursor)++] = UINT32_C(0xb3403c00) | 19u << 5 | item->source;
+            else
+                words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xaa0003e0) : UINT32_C(0x2a0003e0)) |
+                                     19u << 16 | item->source;
+        }
         words[(*cursor)++] = UINT32_C(0xd2800031);
         words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, memory_written));
         words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_delta));
