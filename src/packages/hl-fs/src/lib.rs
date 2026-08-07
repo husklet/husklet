@@ -489,6 +489,7 @@ mod tests {
         assert_eq!(std::fs::metadata(target).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
+    #[cfg(feature = "async")]
     #[tokio::test]
     async fn copies_sizes_clears_and_removes_directory_trees() {
         let temporary = tempfile::tempdir().unwrap();
