@@ -1,4 +1,5 @@
 use super::WorkKey;
+use super::diagnostic::BoundedDiagnostic as _;
 use crate::{
     journal::{self, Require as _, Schema},
     suite::{Error, Target},
@@ -53,7 +54,7 @@ impl Schema for Runtime {
         let diagnostic = row.diagnostic.replace(['\t', '\n'], " ");
         let room = Self::ROW_LIMIT.saturating_sub(prefix.len() + 1);
         (room > 64).require("runtime result key exceeds its byte bound")?;
-        Ok(format!("{prefix}{}\n", super::diagnostic::bound(diagnostic, room)))
+        Ok(format!("{prefix}{}\n", diagnostic.bounded_to(room)))
     }
 
     fn parse(fields: &[&str], keys: &BTreeSet<WorkKey>) -> Result<Option<Row>, Error> {

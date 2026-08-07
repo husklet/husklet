@@ -20,27 +20,62 @@ pub(super) fn compare(label: &str, got: &[u8], expected: &[u8]) -> String {
         got.len(),
         expected.len(),
         at(got, expected, offset),
-        window(got, start),
-        window(expected, start)
+        got.escaped_from(start),
+        expected.escaped_from(start)
     )
 }
 
-/// Escapes and bounds an arbitrary byte stream for inclusion in a one-line diagnostic.
-pub(super) fn preview(bytes: &[u8]) -> String {
-    window(bytes, 0)
+/// Escaped, length-bounded renderings of a byte stream for a one-line diagnostic.
+pub(super) trait Excerpt {
+    /// The whole stream, escaped and bounded.
+    fn preview(&self) -> String;
+    /// The stream from `start`, escaped and bounded, marking any tail it dropped.
+    fn escaped_from(&self, start: usize) -> String;
+}
+
+impl Excerpt for [u8] {
+    fn preview(&self) -> String {
+        self.escaped_from(0)
+    }
+
+    fn escaped_from(&self, start: usize) -> String {
+        let tail = self.get(start..).unwrap_or_default();
+        let mut text = String::with_capacity(EXCERPT);
+        let mut consumed = 0;
+        for byte in tail {
+            let escaped = byte.escape_ascii().to_string();
+            if text.len() + escaped.len() > EXCERPT {
+                break;
+            }
+            text.push_str(&escaped);
+            consumed += 1;
+        }
+        let remaining = tail.len() - consumed;
+        if remaining == 0 {
+            format!("\"{text}\"")
+        } else {
+            format!("\"{text}\"[+{remaining} bytes]")
+        }
+    }
 }
 
 /// Bounds an assembled diagnostic, marking any bytes it dropped.
-pub(super) fn bound(text: String, limit: usize) -> String {
-    if text.len() <= limit {
-        return text;
+pub(super) trait BoundedDiagnostic {
+    fn bounded_to(self, limit: usize) -> String;
+}
+
+impl BoundedDiagnostic for String {
+    fn bounded_to(self, limit: usize) -> String {
+        if self.len() <= limit {
+            return self;
+        }
+        let mut end = limit.saturating_sub(32);
+        while end > 0 && !self.is_char_boundary(end) {
+            end -= 1;
+        }
+        let dropped = self.len() - end;
+        format!("{}[+{dropped} bytes truncated]", &self[..end])
     }
-    let mut end = limit.saturating_sub(32);
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let dropped = text.len() - end;
-    format!("{}[+{dropped} bytes truncated]", &text[..end])
 }
 
 fn at(got: &[u8], expected: &[u8], offset: usize) -> String {
@@ -55,29 +90,9 @@ fn at(got: &[u8], expected: &[u8], offset: usize) -> String {
     }
 }
 
-fn window(bytes: &[u8], start: usize) -> String {
-    let tail = bytes.get(start..).unwrap_or_default();
-    let mut text = String::with_capacity(EXCERPT);
-    let mut consumed = 0;
-    for byte in tail {
-        let escaped = byte.escape_ascii().to_string();
-        if text.len() + escaped.len() > EXCERPT {
-            break;
-        }
-        text.push_str(&escaped);
-        consumed += 1;
-    }
-    let remaining = tail.len() - consumed;
-    if remaining == 0 {
-        format!("\"{text}\"")
-    } else {
-        format!("\"{text}\"[+{remaining} bytes]")
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{DIAGNOSTIC_LIMIT, bound, compare, preview};
+    use super::{BoundedDiagnostic as _, DIAGNOSTIC_LIMIT, Excerpt as _, compare};
 
     #[test]
     fn first_difference_is_located_and_both_sides_are_shown() {
@@ -94,13 +109,13 @@ mod tests {
         assert!(text.len() < DIAGNOSTIC_LIMIT, "{}", text.len());
         assert!(!text.contains(['\t', '\n']));
         assert!(text.contains("bytes]"), "{text}");
-        assert!(preview(&got).contains("\\n"));
+        assert!(got.preview().contains("\\n"));
     }
 
     #[test]
     fn a_short_diagnostic_survives_bounding_unchanged() {
-        assert_eq!(bound("short".to_owned(), 64), "short");
-        let bounded = bound("x".repeat(200), 100);
+        assert_eq!("short".to_owned().bounded_to(64), "short");
+        let bounded = "x".repeat(200).bounded_to(100);
         assert!(bounded.len() <= 100 && bounded.contains("truncated"), "{bounded}");
     }
 

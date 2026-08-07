@@ -14,6 +14,7 @@ pub(crate) mod scheduler;
 use crate::suite::{Error, Target};
 use clap::Args;
 use definition::{App, EngineHost};
+use diagnostic::BoundedDiagnostic as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -220,7 +221,7 @@ fn outcome(result: &Result<Vec<execution::CaseResult>, String>) -> (&'static str
         ),
         Err(error) => (ledger::FAIL, error.clone()),
     };
-    (status, diagnostic::bound(diagnostic, diagnostic::DIAGNOSTIC_LIMIT))
+    (status, diagnostic.bounded_to(diagnostic::DIAGNOSTIC_LIMIT))
 }
 
 fn summarize(

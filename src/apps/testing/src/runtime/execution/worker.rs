@@ -1,5 +1,5 @@
 use super::CaseResult;
-use crate::runtime::diagnostic::preview;
+use crate::runtime::diagnostic::Excerpt as _;
 use crate::runtime::{self, workspace};
 use crate::suite::{Error, Target};
 use clap::Args;
@@ -203,31 +203,31 @@ fn supervise(
         ProcessOutcome::Signaled(signal) => {
             return Err(format!(
                 "runtime worker terminated by signal {signal}; stderr={}; stdout={}",
-                preview(&stderr),
-                preview(&stdout)
+                stderr.preview(),
+                stdout.preview()
             ));
         }
         ProcessOutcome::TimedOut => {
             return Err(format!(
                 "runtime worker timed out after {} milliseconds; stderr={}; stdout={}",
                 timeout.as_millis(),
-                preview(&stderr),
-                preview(&stdout)
+                stderr.preview(),
+                stdout.preview()
             ));
         }
         ProcessOutcome::Cancelled => {
             return Err(format!(
                 "runtime worker was interrupted; stderr={}; stdout={}",
-                preview(&stderr),
-                preview(&stdout)
+                stderr.preview(),
+                stdout.preview()
             ));
         }
         ProcessOutcome::OutputLimit => {
             return Err(format!(
                 "runtime worker output exceeded its bound ({CAPTURE_LIMIT} stdout, \
                  {DIAGNOSTIC_CAPTURE_LIMIT} stderr); stderr={}; stdout={}",
-                preview(&stderr),
-                preview(&stdout)
+                stderr.preview(),
+                stdout.preview()
             ));
         }
     }
@@ -277,8 +277,8 @@ fn write_result(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 fn termination(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
     format!(
         "runtime worker exited with {code:?}; stderr={}; stdout={}",
-        preview(stderr),
-        preview(stdout)
+        stderr.preview(),
+        stdout.preview()
     )
 }
 

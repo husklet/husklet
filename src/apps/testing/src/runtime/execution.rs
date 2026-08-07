@@ -1,5 +1,6 @@
 mod worker;
 
+use super::diagnostic::Excerpt as _;
 use super::{Error, definition::App, image::TestImage};
 use crate::suite::{BoundedCapture as _, Target};
 use hl_container::{Config, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
@@ -229,7 +230,7 @@ impl<'a> CaseExecution<'a> {
             return Err(super::diagnostic::compare("stdout", &logs.stdout, &expected).into());
         }
         if !logs.stderr.is_empty() {
-            return Err(format!("unexpected stderr: {}", super::diagnostic::preview(&logs.stderr)).into());
+            return Err(format!("unexpected stderr: {}", logs.stderr.preview()).into());
         }
         Ok(())
     }
