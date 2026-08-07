@@ -1,6 +1,6 @@
 use super::*;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn health_monitor_persists_success_and_inherits_process_context() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_millis(80);
@@ -57,7 +57,7 @@ async fn health_monitor_persists_success_and_inherits_process_context() {
     containers.wait("healthy").await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn start_interval_drives_grace_probes_and_stop_cancels_an_inflight_probe() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_millis(50);
@@ -80,7 +80,7 @@ async fn start_interval_drives_grace_probes_and_stop_cancels_an_inflight_probe()
 
     tokio::time::timeout(Duration::from_millis(100), async {
         while runtime.programs.lock().unwrap().len() < 2 {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
@@ -117,7 +117,7 @@ async fn start_interval_drives_grace_probes_and_stop_cancels_an_inflight_probe()
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn shell_health_check_uses_container_shell_context() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_millis(40);
@@ -148,7 +148,7 @@ async fn shell_health_check_uses_container_shell_context() {
     containers.wait("shell-health").await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn health_grace_threshold_timeout_and_pause_are_generation_safe() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_millis(140);
@@ -220,7 +220,7 @@ async fn health_grace_threshold_timeout_and_pause_are_generation_safe() {
     containers.wait("unhealthy").await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn late_probe_from_previous_generation_cannot_mutate_restart() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(1));
     runtime.delay = Duration::from_millis(15);
