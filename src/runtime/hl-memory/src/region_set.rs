@@ -27,7 +27,7 @@ impl RegionSet {
         Ok(start)
     }
 
-    pub(crate) fn apply_placement(&mut self, placement: Placement, range: AddressRange) -> Result<(), MemoryError> {
+    fn apply_placement(&mut self, placement: Placement, range: AddressRange) -> Result<(), MemoryError> {
         if matches!(placement, Placement::Fixed(_)) {
             return self.unmap(range);
         }
@@ -46,7 +46,7 @@ impl RegionSet {
         Ok(())
     }
 
-    pub(crate) fn retain_unmapped(
+    fn retain_unmapped(
         &self,
         region: Region,
         removed: AddressRange,
@@ -60,14 +60,14 @@ impl RegionSet {
         self.retain_right(region, removed, output)
     }
 
-    pub(crate) fn retain_left(&self, region: Region, removed: AddressRange, output: &mut Vec<Region>) -> Result<(), MemoryError> {
+    fn retain_left(&self, region: Region, removed: AddressRange, output: &mut Vec<Region>) -> Result<(), MemoryError> {
         if region.range().start() < removed.start() {
             output.push(region.slice(region.range().start(), region.range().end().min(removed.start()))?);
         }
         Ok(())
     }
 
-    pub(crate) fn retain_right(&self, region: Region, removed: AddressRange, output: &mut Vec<Region>) -> Result<(), MemoryError> {
+    fn retain_right(&self, region: Region, removed: AddressRange, output: &mut Vec<Region>) -> Result<(), MemoryError> {
         if region.range().end() > removed.end() {
             output.push(region.slice(region.range().start().max(removed.end()), region.range().end())?);
         }
@@ -130,7 +130,7 @@ impl RegionSet {
         self.finish()
     }
 
-    pub(crate) fn covers(&self, range: AddressRange) -> bool {
+    fn covers(&self, range: AddressRange) -> bool {
         let mut cursor = range.start();
         for region in &self.regions {
             if region.range().end() <= cursor {
@@ -147,7 +147,7 @@ impl RegionSet {
         false
     }
 
-    pub(crate) fn protect_region(
+    fn protect_region(
         &self,
         region: Region,
         changed: AddressRange,
@@ -177,7 +177,7 @@ impl RegionSet {
         self.validate()
     }
 
-    pub(crate) fn canonicalize(&mut self) -> Result<(), MemoryError> {
+    fn canonicalize(&mut self) -> Result<(), MemoryError> {
         self.regions.sort_unstable_by_key(|region| region.range().start());
         let mut merged: Vec<Region> = Vec::with_capacity(self.regions.len());
         for region in self.regions.iter().copied() {
@@ -187,7 +187,7 @@ impl RegionSet {
         Ok(())
     }
 
-    pub(crate) fn append_canonical(output: &mut Vec<Region>, region: Region) -> Result<(), MemoryError> {
+    fn append_canonical(output: &mut Vec<Region>, region: Region) -> Result<(), MemoryError> {
         let Some(previous) = output.last_mut() else {
             output.push(region);
             return Ok(());
@@ -209,7 +209,7 @@ impl RegionSet {
         Ok(())
     }
 
-    pub(crate) fn validate_pair(left: Region, right: Region) -> Result<(), MemoryError> {
+    fn validate_pair(left: Region, right: Region) -> Result<(), MemoryError> {
         if left.range().end() > right.range().start() || left.can_merge(right)? {
             return Err(MemoryError::InvariantViolation);
         }
@@ -233,7 +233,7 @@ impl RegionSet {
         })
     }
 
-    pub(crate) fn region_at(&self, address: GuestAddress) -> Option<Region> {
+    fn region_at(&self, address: GuestAddress) -> Option<Region> {
         let index = self
             .regions
             .binary_search_by(|region| {
