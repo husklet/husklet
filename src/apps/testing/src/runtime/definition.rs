@@ -11,6 +11,7 @@ pub(crate) use environment::EnvironmentEntry;
 pub(crate) use host::EngineHost;
 use host::HostExclusion;
 use input::ManifestPath;
+pub(crate) use manifest::GuestFile;
 use manifest::{CompatClass, Document, Oracle, Status};
 use std::{
     collections::BTreeSet,
@@ -31,6 +32,9 @@ pub struct RuntimeCase {
     pub timeout: u64,
     pub exit: i32,
     pub golden: PathBuf,
+    pub(crate) stderr: Vec<String>,
+    pub(crate) guest_files: Vec<GuestFile>,
+    pub(crate) working_directory: Option<String>,
     pub destination: String,
     pub(in crate::runtime) source: ManifestPath,
     pub(crate) output: String,
@@ -134,6 +138,10 @@ impl App {
                     return Err(format!("{} has duplicate case output or destination", definition.display()).into());
                 }
                 let golden = validate_golden(directory, &case.expect.stdout)?;
+                let stderr =
+                    manifest::stderr_patterns(case.expect.stderr).map_err(|error| format!("{}: {error}", case.id))?;
+                let (guest_files, working_directory) =
+                    case.guest.validate().map_err(|error| format!("{}: {error}", case.id))?;
                 let (environment, engine_options) =
                     EngineOptions::split(&case.environment).map_err(|error| format!("{}: {error}", case.id))?;
                 Ok(RuntimeCase {
@@ -144,6 +152,9 @@ impl App {
                     timeout: case.timeout,
                     exit: case.expect.exit,
                     golden,
+                    stderr,
+                    guest_files,
+                    working_directory,
                     destination,
                     source,
                     output,
@@ -363,6 +374,31 @@ mod tests {
         assert_eq!(app.cases.len(), 2);
         assert_eq!(app.cases[0].destination, "/opt/one");
         assert_eq!(app.cases[0].output, "one");
+    }
+
+    #[test]
+    fn declared_guest_state_and_stderr_patterns_are_validated() {
+        let row = |extra: &str| {
+            format!(
+                "  - id: runtime/one\n    build: {{ source: one.c, output: one, flags: [] }}\n    artifact: {{ destination: /opt/one }}\n    status: active\n    compat: {{ class: compatibility }}\n    run: []\n{extra}    expect: {{ exit: 0, stdout: golden/one.out, stderr: [\"probe *\"] }}\n"
+            )
+        };
+
+        let app = category(&row(
+            "    guest: { files: [{ path: /data, size: 12288, fill: 42 }], cwd: /opt/deep }\n",
+        ))
+        .unwrap();
+        assert_eq!(app.cases[0].stderr, ["probe *"]);
+        assert_eq!(app.cases[0].guest_files[0].contents().len(), 12288);
+        assert_eq!(app.cases[0].working_directory.as_deref(), Some("/opt/deep"));
+
+        for invalid in [
+            "    guest: { files: [{ path: data, size: 8, fill: 0 }] }\n",
+            "    guest: { files: [{ path: /data, size: 0, fill: 0 }] }\n",
+            "    guest: { cwd: relative }\n",
+        ] {
+            assert!(category(&row(invalid)).is_err(), "{invalid}");
+        }
     }
 
     /// Two workers building one case must each get a private, complete artifact.
