@@ -64,15 +64,23 @@ static hl_x86_a64_status status_at_capacity(const uint8_t *guest, size_t size, u
     return hl_x86_a64_emit(&request, &result);
 }
 
-/* The budgeting pass must never promise fewer words than the emit pass writes. */
+/* The budgeting pass must never promise fewer words than the emit pass writes: one word short, the
+ * frontend has to refuse or split to a strictly shorter block, never emit the whole one. */
 static int budget_covers_emitted(const uint8_t *guest, size_t size) {
     uint32_t host[4096] = {0};
     hl_x86_a64_provenance provenance[64] = {0};
     hl_x86_a64_request request = request_for(guest, size, host, provenance);
     hl_x86_a64_result result;
+    uint32_t tight_host[4096] = {0};
+    hl_x86_a64_provenance tight_provenance[64] = {0};
+    hl_x86_a64_request tight = request_for(guest, size, tight_host, tight_provenance);
+    hl_x86_a64_result tight_result;
 
     if (hl_x86_a64_emit(&request, &result) != HL_X86_A64_OK) return 0;
-    return status_at_capacity(guest, size, result.word_count - 1u) == HL_X86_A64_CAPACITY;
+    tight.host_capacity = result.word_count - 1u;
+    if (hl_x86_a64_emit(&tight, &tight_result) != HL_X86_A64_OK) return 1;
+    return tight_result.instruction_count < result.instruction_count &&
+           tight_result.word_count < result.word_count;
 }
 
 /* Stronger: the two passes agree to the word, so the elided form wastes no reserved space. */
@@ -298,11 +306,16 @@ static int checkpointed_budget_is_exact(const uint8_t *guest, size_t size) {
     hl_x86_a64_result result;
     uint32_t exact = block_words(guest, size, HL_X86_A64_CHECKPOINTS);
 
+    uint32_t full;
+
     request.flags |= HL_X86_A64_CHECKPOINTS;
-    request.host_capacity = exact - 1u;
-    if (hl_x86_a64_emit(&request, &result) != HL_X86_A64_CAPACITY) return 0;
     request.host_capacity = exact;
-    return hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK;
+    if (hl_x86_a64_emit(&request, &result) != HL_X86_A64_OK) return 0;
+    full = result.instruction_count;
+    /* One word short the block cannot be emitted whole: it is refused, or split strictly shorter. */
+    request.host_capacity = exact - 1u;
+    if (hl_x86_a64_emit(&request, &result) != HL_X86_A64_OK) return 1;
+    return result.instruction_count < full && result.word_count < exact;
 }
 
 static uint32_t checkpoint_cost(const uint8_t *guest, size_t size) {

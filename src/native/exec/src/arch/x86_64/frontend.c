@@ -1767,6 +1767,164 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         block->status = HL_X86_A64_OK;
 }
 
+/* Host words the block needs, and via `fit` the widest instruction prefix that would still fit. */
+static uint32_t block_words(const hl_x86_a64_request *request, const decode *block, int checkpoints,
+                            int live_chain, uint32_t *fit) {
+    uint32_t dirty = 0;
+    uint32_t words = 0;
+    uint32_t index;
+    int vector_marked = 0;
+
+    *fit = 0;
+    for (index = 0; index < block->count; ++index) {
+        if (!vector_marked && (request->flags & HL_X86_A64_DIAGNOSTICS) != 0u &&
+            vector_register_write(&block->instructions[index])) {
+            words += 2u;
+            vector_marked = 1;
+        }
+        if (checkpoints && may_fallback(&block->instructions[index])) {
+            words += (live_chain ? 1u : bit_count(dirty) + 3u);
+            dirty = 0;
+        }
+        if (block->instructions[index].operation == OP_MOV_IMMEDIATE) {
+            words += constant_words(block->instructions[index].immediate) +
+                     (block->instructions[index].width == 2u ? 1u : 0u);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_MOV_REGISTER) {
+            ++words;
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_BSWAP) {
+            ++words;
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_BITSCAN) {
+            words += hl_x86_bitscan_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_BIT) {
+            words += hl_x86_bit_words(&block->instructions[index]);
+            if (block->instructions[index].memory_operand == 0u &&
+                block->instructions[index].condition != 0u)
+                dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_STRING) {
+            words += hl_x86_string_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << 7;
+            if (block->instructions[index].condition == 0u) dirty |= UINT32_C(1) << 6;
+            if (block->instructions[index].condition == 2u) dirty |= UINT32_C(1);
+            if (block->instructions[index].conditional != 0u) dirty |= UINT32_C(1) << 1;
+        } else if (block->instructions[index].operation == OP_EXTEND) {
+            words += 1u + (block->instructions[index].source_high == 8u ? 1u : 0u) +
+                     (block->instructions[index].width == 2u ? 1u : 0u);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_BYTE) {
+            words += 1u + (block->instructions[index].source_high == 8u ? 1u : 0u) +
+                     (block->instructions[index].has_immediate != 0u ? 1u : 0u);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_ALU) {
+            words += hl_x86_alu_words(&block->instructions[index]);
+            if (!block->instructions[index].flags_only &&
+                (block->instructions[index].memory_operand == 0u || block->instructions[index].memory_write == 0u))
+                dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_IMUL) {
+            words += hl_x86_imul_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_MUL) {
+            words += hl_x86_mul_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << 0;
+            if (block->instructions[index].width != 1u) dirty |= UINT32_C(1) << 2;
+        } else if (block->instructions[index].operation == OP_DIV) {
+            words += hl_x86_div_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << 0;
+            if (block->instructions[index].width != 1u) dirty |= UINT32_C(1) << 2;
+        } else if (block->instructions[index].operation == OP_SHIFT) {
+            words += hl_x86_shift_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_DOUBLE_SHIFT) {
+            words += hl_x86_double_shift_words(&block->instructions[index]);
+            if (block->instructions[index].memory_operand == 0u)
+                dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_ROTATE) {
+            words += hl_x86_rotate_words(&block->instructions[index]);
+            if (block->instructions[index].memory_operand == 0u)
+                dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_ADDRESS) {
+            words += hl_x86_address_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_LOAD) {
+            words += hl_x86_load_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_CMOV) {
+            words += hl_x86_cmov_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_SET) {
+            words += hl_x86_set_words(&block->instructions[index]);
+            if (block->instructions[index].memory_operand == 0u)
+                dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_STORE) {
+            words += hl_x86_store_words(&block->instructions[index]);
+        } else if (block->instructions[index].operation == OP_XCHG) {
+            words += hl_x86_xchg_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_EXCHANGE) {
+            words += 3u;
+            dirty |= UINT32_C(1) << block->instructions[index].destination;
+            dirty |= UINT32_C(1) << block->instructions[index].source;
+        } else if (block->instructions[index].operation == OP_XADD) {
+            words += hl_x86_xadd_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << block->instructions[index].source;
+            if (block->instructions[index].memory_operand == 0u)
+                dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_CMPXCHG) {
+            words += hl_x86_cmpxchg_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << 0;
+        } else if (block->instructions[index].operation == OP_VECTOR) {
+            words += hl_x86_vector_words(&block->instructions[index]);
+            if (block->instructions[index].vector_kind == VECTOR_STRING_EQUAL_EACH)
+                dirty |= UINT32_C(1) << 1;
+            else if (block->instructions[index].vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED)
+                dirty |= UINT32_C(1) << block->instructions[index].destination;
+            else if (block->instructions[index].memory_operand == 0u &&
+                (block->instructions[index].vector_kind == VECTOR_TO_INTEGER ||
+                 block->instructions[index].vector_kind == VECTOR_BYTE_MASK))
+                dirty |= UINT32_C(1) << block->instructions[index].destination;
+        } else if (block->instructions[index].operation == OP_ACCUMULATOR) {
+            words += hl_x86_accumulator_words(&block->instructions[index]);
+            dirty |= UINT32_C(1) << 0;
+            if (block->instructions[index].source_high != 0u) dirty |= UINT32_C(1) << 2;
+        } else if (block->instructions[index].operation == OP_CALL ||
+                   block->instructions[index].operation == OP_JUMP ||
+                   block->instructions[index].operation == OP_RETURN ||
+                   block->instructions[index].operation == OP_LEAVE ||
+                   block->instructions[index].operation == OP_PUSH ||
+                   block->instructions[index].operation == OP_POP) {
+            words += hl_x86_control_words(&block->instructions[index]);
+            if (block->instructions[index].operation == OP_LEAVE)
+                dirty |= UINT32_C(1) << 4 | UINT32_C(1) << 5;
+            if (block->instructions[index].operation == OP_PUSH)
+                dirty |= UINT32_C(1) << 4;
+            if (block->instructions[index].operation == OP_POP)
+                dirty |= UINT32_C(1) << 4 | UINT32_C(1) << block->instructions[index].destination;
+        }
+        /* Widest prefix whose own fallthrough exit still fits, used to split rather than abandon. */
+        if (index + 1u < block->count) {
+            uint32_t tail = (live_chain ? 0u : bit_count(dirty)) +
+                            (checkpoints ? (live_chain ? 1u : 3u) : 0u) +
+                            constant_words(block->instructions[index + 1u].pc) + 1u;
+            if (words + tail <= request->host_capacity) *fit = index + 1u;
+        }
+    }
+    words += (live_chain ? 0u : bit_count(dirty)) + (checkpoints ? (live_chain ? 1u : 3u) : 0u);
+    if (block->exit == HL_X86_A64_CONDITIONAL_BRANCH &&
+        (request->flags & HL_X86_A64_CONDITIONAL_SELF_LOOP) != 0u && block->target == request->guest_pc)
+        words += (live_chain ? 64u : 26u) + constant_words(block->next_pc);
+    else if (block->exit == HL_X86_A64_CONDITIONAL_BRANCH)
+        words += (block->instructions[block->count - 1u].condition == 0xau ||
+                  block->instructions[block->count - 1u].condition == 0xbu ? 5u : 35u) +
+                 constant_words(block->target) + constant_words(block->next_pc);
+    else
+        words += constant_words(block->exit == HL_X86_A64_DIRECT_BRANCH ? block->target : block->next_pc) + 1u;
+
+    return words;
+}
+
 hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_result *result) {
     decode block;
     uint32_t dirty = 0;
@@ -1782,146 +1940,19 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
                    HL_X86_A64_UNKNOWN_FLAG : HL_X86_A64_ARGUMENT;
     decode_block(request, &block);
     if (block.count > request->provenance_capacity) return HL_X86_A64_CAPACITY;
-    mark_dead_flags(&block);
-    for (index = 0; index < block.count; ++index) {
-        if (!vector_marked && (request->flags & HL_X86_A64_DIAGNOSTICS) != 0u &&
-            vector_register_write(&block.instructions[index])) {
-            words += 2u;
-            vector_marked = 1;
-        }
-        if (checkpoints && may_fallback(&block.instructions[index])) {
-            words += (live_chain ? 1u : bit_count(dirty) + 3u);
-            dirty = 0;
-        }
-        if (block.instructions[index].operation == OP_MOV_IMMEDIATE) {
-            words += constant_words(block.instructions[index].immediate) +
-                     (block.instructions[index].width == 2u ? 1u : 0u);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_MOV_REGISTER) {
-            ++words;
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_BSWAP) {
-            ++words;
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_BITSCAN) {
-            words += hl_x86_bitscan_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_BIT) {
-            words += hl_x86_bit_words(&block.instructions[index]);
-            if (block.instructions[index].memory_operand == 0u &&
-                block.instructions[index].condition != 0u)
-                dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_STRING) {
-            words += hl_x86_string_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << 7;
-            if (block.instructions[index].condition == 0u) dirty |= UINT32_C(1) << 6;
-            if (block.instructions[index].condition == 2u) dirty |= UINT32_C(1);
-            if (block.instructions[index].conditional != 0u) dirty |= UINT32_C(1) << 1;
-        } else if (block.instructions[index].operation == OP_EXTEND) {
-            words += 1u + (block.instructions[index].source_high == 8u ? 1u : 0u) +
-                     (block.instructions[index].width == 2u ? 1u : 0u);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_BYTE) {
-            words += 1u + (block.instructions[index].source_high == 8u ? 1u : 0u) +
-                     (block.instructions[index].has_immediate != 0u ? 1u : 0u);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_ALU) {
-            words += hl_x86_alu_words(&block.instructions[index]);
-            if (!block.instructions[index].flags_only &&
-                (block.instructions[index].memory_operand == 0u || block.instructions[index].memory_write == 0u))
-                dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_IMUL) {
-            words += hl_x86_imul_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_MUL) {
-            words += hl_x86_mul_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << 0;
-            if (block.instructions[index].width != 1u) dirty |= UINT32_C(1) << 2;
-        } else if (block.instructions[index].operation == OP_DIV) {
-            words += hl_x86_div_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << 0;
-            if (block.instructions[index].width != 1u) dirty |= UINT32_C(1) << 2;
-        } else if (block.instructions[index].operation == OP_SHIFT) {
-            words += hl_x86_shift_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_DOUBLE_SHIFT) {
-            words += hl_x86_double_shift_words(&block.instructions[index]);
-            if (block.instructions[index].memory_operand == 0u)
-                dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_ROTATE) {
-            words += hl_x86_rotate_words(&block.instructions[index]);
-            if (block.instructions[index].memory_operand == 0u)
-                dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_ADDRESS) {
-            words += hl_x86_address_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_LOAD) {
-            words += hl_x86_load_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_CMOV) {
-            words += hl_x86_cmov_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_SET) {
-            words += hl_x86_set_words(&block.instructions[index]);
-            if (block.instructions[index].memory_operand == 0u)
-                dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_STORE) {
-            words += hl_x86_store_words(&block.instructions[index]);
-        } else if (block.instructions[index].operation == OP_XCHG) {
-            words += hl_x86_xchg_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_EXCHANGE) {
-            words += 3u;
-            dirty |= UINT32_C(1) << block.instructions[index].destination;
-            dirty |= UINT32_C(1) << block.instructions[index].source;
-        } else if (block.instructions[index].operation == OP_XADD) {
-            words += hl_x86_xadd_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << block.instructions[index].source;
-            if (block.instructions[index].memory_operand == 0u)
-                dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_CMPXCHG) {
-            words += hl_x86_cmpxchg_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << 0;
-        } else if (block.instructions[index].operation == OP_VECTOR) {
-            words += hl_x86_vector_words(&block.instructions[index]);
-            if (block.instructions[index].vector_kind == VECTOR_STRING_EQUAL_EACH)
-                dirty |= UINT32_C(1) << 1;
-            else if (block.instructions[index].vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED)
-                dirty |= UINT32_C(1) << block.instructions[index].destination;
-            else if (block.instructions[index].memory_operand == 0u &&
-                (block.instructions[index].vector_kind == VECTOR_TO_INTEGER ||
-                 block.instructions[index].vector_kind == VECTOR_BYTE_MASK))
-                dirty |= UINT32_C(1) << block.instructions[index].destination;
-        } else if (block.instructions[index].operation == OP_ACCUMULATOR) {
-            words += hl_x86_accumulator_words(&block.instructions[index]);
-            dirty |= UINT32_C(1) << 0;
-            if (block.instructions[index].source_high != 0u) dirty |= UINT32_C(1) << 2;
-        } else if (block.instructions[index].operation == OP_CALL ||
-                   block.instructions[index].operation == OP_JUMP ||
-                   block.instructions[index].operation == OP_RETURN ||
-                   block.instructions[index].operation == OP_LEAVE ||
-                   block.instructions[index].operation == OP_PUSH ||
-                   block.instructions[index].operation == OP_POP) {
-            words += hl_x86_control_words(&block.instructions[index]);
-            if (block.instructions[index].operation == OP_LEAVE)
-                dirty |= UINT32_C(1) << 4 | UINT32_C(1) << 5;
-            if (block.instructions[index].operation == OP_PUSH)
-                dirty |= UINT32_C(1) << 4;
-            if (block.instructions[index].operation == OP_POP)
-                dirty |= UINT32_C(1) << 4 | UINT32_C(1) << block.instructions[index].destination;
-        }
+    for (;;) {
+        uint32_t fit = 0;
+        mark_dead_flags(&block);
+        words = block_words(request, &block, checkpoints, live_chain, &fit);
+        if (words <= request->host_capacity) break;
+        if (fit == 0) return HL_X86_A64_CAPACITY;
+        /* Split at an instruction boundary rather than abandoning the block; the dropped tail is
+         * re-entered at its own guest pc, exactly as a max_instructions truncation is. */
+        block.count = fit;
+        block.exit = HL_X86_A64_FALLTHROUGH;
+        block.next_pc = block.instructions[fit].pc;
+        block.target = 0;
     }
-    words += (live_chain ? 0u : bit_count(dirty)) + (checkpoints ? (live_chain ? 1u : 3u) : 0u);
-    if (block.exit == HL_X86_A64_CONDITIONAL_BRANCH &&
-        (request->flags & HL_X86_A64_CONDITIONAL_SELF_LOOP) != 0u && block.target == request->guest_pc)
-        words += (live_chain ? 64u : 26u) + constant_words(block.next_pc);
-    else if (block.exit == HL_X86_A64_CONDITIONAL_BRANCH)
-        words += (block.instructions[block.count - 1u].condition == 0xau ||
-                  block.instructions[block.count - 1u].condition == 0xbu ? 5u : 35u) +
-                 constant_words(block.target) + constant_words(block.next_pc);
-    else
-        words += constant_words(block.exit == HL_X86_A64_DIRECT_BRANCH ? block.target : block.next_pc) + 1u;
-    if (words > request->host_capacity) return HL_X86_A64_CAPACITY;
 
     words = 0;
     dirty = 0;
