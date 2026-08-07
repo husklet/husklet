@@ -70,6 +70,7 @@ impl GuestExecutor {
         if pool.observe(fallback_key) < 2 {
             return None;
         }
+        let allow_direct = !pool.direct_declined.contains(&fallback_key);
         let mut bytes = [0_u8; 256];
         let bytes = &mut bytes[..usize::try_from(length).ok()?];
         mappings
@@ -168,6 +169,7 @@ impl GuestExecutor {
                     &run.interrupt,
                     native_budget,
                     &mut resolve,
+                    allow_direct,
                     continuation.map(|_| &mut poll as &mut dyn FnMut(u64, u64) -> bool),
                 )
             else {
@@ -215,6 +217,7 @@ impl GuestExecutor {
                 }
             }
         });
+        let direct_guard = statistics.as_ref().is_some_and(|stats| stats.direct_guard);
         if let Some(stats) = statistics {
             pool.counters.runs += 1;
             pool.counters.builds += stats.builds;
@@ -231,7 +234,7 @@ impl GuestExecutor {
                     token.version,
                     pc,
                 );
-                pool.record_fallback(fallback_key, instruction, executed, native_budget);
+                pool.record_fallback(fallback_key, instruction, executed, native_budget, direct_guard);
             }
             Some(run.machine.run_step(1, memory))
         } else {
@@ -469,6 +472,7 @@ impl GuestExecutor {
                 ),
                 executed,
                 native_budget,
+                false,
             );
             Some(run.machine.run_step(1, memory))
         } else {

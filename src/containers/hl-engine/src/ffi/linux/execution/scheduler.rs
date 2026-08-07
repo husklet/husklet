@@ -642,7 +642,7 @@ mod tests {
         let entry = (process, 2, 3, 4, 0x400990);
         let instruction = (process, 2, 3, 4, 0x40b0c0);
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
-        pool.record_fallback(entry, instruction, 0, SLICE_BUDGET);
+        pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, false);
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
     }
@@ -655,12 +655,33 @@ mod tests {
         let entry = (process, 2, 3, 4, 0x1055286);
         let instruction = (process, 2, 3, 4, 0x40b0c0);
         let mut pool = NativePool::new(GuestIsa::X86_64, &plan(crate::options::Options::default()), None);
-        pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2, NATIVE_SOLO_BUDGET);
+        pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2, NATIVE_SOLO_BUDGET, false);
         assert!(pool.suppressed.is_empty());
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
         // One instruction short of half the budget is not worth the entry.
-        pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2 - 1, NATIVE_SOLO_BUDGET);
+        pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2 - 1, NATIVE_SOLO_BUDGET, false);
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+    }
+
+    /// Direct authority runs without the operand resolver, so a memory fallback under it is
+    /// a limit of the run mode. The entry buys exactly one retry without it and then latches,
+    /// bounding the extra interpreter slices at one per entry key for the life of the process.
+    #[test]
+    fn a_direct_authority_memory_fallback_buys_one_retry_before_it_suppresses() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let entry = (process, 2, 3, 4, 0x1008a80);
+        let instruction = (process, 2, 3, 4, 0x1008abc);
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, true);
+        assert!(pool.suppressed.is_empty());
+        assert_eq!(pool.direct_declined, BTreeSet::from([entry]));
+        pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, true);
+        assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+        // A run that retired most of its budget still keeps its entry either way.
+        let kept = (process, 2, 3, 4, 0x1008b00);
+        pool.record_fallback(kept, instruction, SLICE_BUDGET, SLICE_BUDGET, true);
+        assert!(!pool.suppressed.contains(&kept));
+        assert!(!pool.direct_declined.contains(&kept));
     }
 
     /// The threshold is a share of the budget, so a short-budget run cannot dodge
@@ -702,6 +723,7 @@ mod tests {
             pool.sources.insert((process, 1, 0x1000, 0x1100), token);
             pool.observations.insert((process, 1, 1, 1, 0x1000), 1);
             pool.suppressed.insert((process, 1, 1, 1, 0x1000));
+            pool.direct_declined.insert((process, 1, 1, 1, 0x1000));
             pool.fallbacks.insert((process, 1, 1, 1, 0x1004));
             pool.source_incarnations.insert(process, 1);
             pool.instruction_epochs.insert(process, 1);
@@ -722,6 +744,7 @@ mod tests {
         assert!(pool.sources.is_empty());
         assert!(pool.observations.is_empty());
         assert!(pool.suppressed.is_empty());
+        assert!(pool.direct_declined.is_empty());
         assert!(pool.fallbacks.is_empty());
         assert!(pool.source_incarnations.is_empty());
         assert!(pool.instruction_epochs.is_empty());
