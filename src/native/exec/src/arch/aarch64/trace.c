@@ -719,6 +719,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
                 return 0;
             }
             output->source_last = instruction + 4;
+            hl_native_state_untranslatable(planned_words[index], 0);
             /* The unsupported instruction remains in the source interval for
              * invalidation/provenance, but it is not completed guest work. */
             charged_prefix = (uint32_t)index;
@@ -890,7 +891,12 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
     size_t admitted = count;
     while (!trace_build(source, pc, admitted, buffer, capacity, &trace, executor->ibtc, authority,
                         expected_authority, NULL, executor->diagnostics)) {
-        if (admitted == 1) return HL_STATE("trace head untranslatable");
+        if (admitted == 1) {
+            hl_a64_fetch_result head;
+            if (hl_a64_source_fetch(source, pc, 1, &head))
+                hl_native_state_untranslatable(head.words[0], 1);
+            return HL_STATE("trace head untranslatable");
+        }
         admitted--;
     }
     key.source_first = trace.source_first;
