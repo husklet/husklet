@@ -2075,6 +2075,86 @@ fn x86_shift_variable_count_matches_interpreter_at_each_boundary() {
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
 }
 
+/// `rol`/`ror` immediate counts at every width, across the 0x1f/0x3f mask and the
+/// width-modulo boundary that only the 8- and 16-bit forms have.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_rotate_immediate_count_matches_interpreter_at_each_boundary() {
+    assert_rotate_sweep(&[0xc0, 0xc8]);
+}
+
+/// `rcl`/`rcr`, whose count reduces modulo width+1 rather than width because the
+/// carry flag joins the rotated value.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_rotate_through_carry_count_matches_interpreter_at_each_boundary() {
+    assert_rotate_sweep(&[0xd0, 0xd8]);
+}
+
+#[cfg(target_arch = "aarch64")]
+fn assert_rotate_sweep(modrms: &[u8]) {
+    let seed = 0x8877_6655_4433_2211_u64;
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for count in [0x00_u8, 0x01, 0x07, 0x08, 0x09, 0x0f, 0x10, 0x11, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff] {
+        for &modrm in modrms {
+            /* `cmp $1,%ecx` on a zero borrows and so sets CF, `cmp $0,%ecx` clears it. */
+            for carry in [0x00_u8, 0x01] {
+                for width in 0..4 {
+                    program.push(vec![0xb9, 0, 0, 0, 0]);
+                    program.push(vec![0x83, 0xf9, carry]);
+                    let mut load = vec![0x48, 0xb8];
+                    load.extend_from_slice(&seed.to_le_bytes());
+                    program.push(load);
+                    program.push(match width {
+                        0 => vec![0xc0, modrm, count],
+                        1 => vec![0x66, 0xc1, modrm, count],
+                        2 => vec![0xc1, modrm, count],
+                        _ => vec![0x48, 0xc1, modrm, count],
+                    });
+                }
+            }
+        }
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
+}
+
+/// The same rotates driven by `%cl`, where the zero-count skip is taken at run time.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_rotate_variable_count_matches_interpreter_at_each_boundary() {
+    let seed = 0x8877_6655_4433_2211_u64;
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for count in [0x00_u32, 0x01, 0x07, 0x08, 0x09, 0x0f, 0x10, 0x11, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff] {
+        for modrm in [0xc0_u8, 0xc8, 0xd0, 0xd8] {
+            for width in 0..4 {
+                let mut set_count = vec![0xb9];
+                set_count.extend_from_slice(&count.to_le_bytes());
+                program.push(set_count);
+                let mut load = vec![0x48, 0xb8];
+                load.extend_from_slice(&seed.to_le_bytes());
+                program.push(load);
+                program.push(match width {
+                    0 => vec![0xd2, modrm],
+                    1 => vec![0x66, 0xd3, modrm],
+                    2 => vec![0xd3, modrm],
+                    _ => vec![0x48, 0xd3, modrm],
+                });
+            }
+        }
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
+}
+
 /// ALU immediates at each width, covering the imm8-sign-extended-to-operand-size form
 /// (0x83), the zero-extended byte form (0x80) and the imm32 form that sign-extends to 64.
 #[cfg(target_arch = "aarch64")]
@@ -2115,6 +2195,37 @@ fn x86_alu_immediate_extension_matches_interpreter_at_each_boundary() {
         ..X86CpuState::default()
     };
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
+}
+
+/// The memory forms of the same rotate counts, where the value is reloaded and stored back
+/// rather than kept in a register. Only `rol`/`ror` are lowered; `rcl`/`rcr` on memory fall
+/// back to the interpreter above 16 bits.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_rotate_memory_count_matches_interpreter_at_each_boundary() {
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    let operand: [u8; 8] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+    /* One block per count: the memory rotate loop is large enough that a longer block
+       exceeds the compiler's budget and falls back wholesale. */
+    for count in [0x00_u8, 0x01, 0x07, 0x08, 0x09, 0x0f, 0x10, 0x11, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff] {
+        for kind in 0..2_u8 {
+            let modrm = 0x06 | kind << 3;
+            let program: Vec<Vec<u8>> = (0..4)
+                .map(|width| match width {
+                    0 => vec![0xc0, modrm, count],
+                    1 => vec![0x66, 0xc1, modrm, count],
+                    2 => vec![0xc1, modrm, count],
+                    _ => vec![0x48, 0xc1, modrm, count],
+                })
+                .collect();
+            let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+            assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+        }
+    }
 }
 
 /// Displacement and scaled-index folding: every displacement width and sign, every scale,

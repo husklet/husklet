@@ -4721,7 +4721,9 @@ static int rotate_differential(void) {
                 if ((count & (bits[width] == 64u ? 63u : 31u)) == 0u ||
                     ((kind == 2u || kind == 3u) && bits[width] < 32u &&
                      (count & 31u) % (bits[width] + 1u) == 0u))
-                    expected_register = initial;
+                    /* The destination is still written, so the 32-bit form clears the upper
+                       half while the narrower forms preserve it. */
+                    expected_register = bits[width] == 32u ? (uint32_t)initial : initial;
                 else expected_register = bits[width] == 8u ? (initial & ~UINT64_C(0xff)) | expected_value :
                                     bits[width] == 16u ? (initial & ~UINT64_C(0xffff)) | expected_value :
                                     bits[width] == 32u ? (uint32_t)expected_value : expected_value;

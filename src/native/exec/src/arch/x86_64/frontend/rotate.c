@@ -60,6 +60,7 @@ void hl_x86_emit_rotate(uint32_t *words, uint32_t *cursor, const instruction *it
     uint32_t *loop;
     uint32_t *again;
     uint32_t *other_count;
+    uint32_t *writeback;
 
     if (rotates_directly(item)) {
         int wide = item->width == 8u;
@@ -152,6 +153,7 @@ void hl_x86_emit_rotate(uint32_t *words, uint32_t *cursor, const instruction *it
     words[(*cursor)++] = UINT32_C(0xaa160294); /* orr x20, x20, x22 */
     branch(other_count, &words[*cursor], 1u);
     words[(*cursor)++] = store_word(20u, offsetof(hl_native_x86_64_cpu, flags));
+    writeback = &words[*cursor];
     if (item->memory_operand != 0u) {
         instruction store = *item;
         words[(*cursor)++] = move(25u, 18u, 1);
@@ -169,7 +171,10 @@ void hl_x86_emit_rotate(uint32_t *words, uint32_t *cursor, const instruction *it
     } else {
         words[(*cursor)++] = move(item->destination, 18u, item->width == 8u);
     }
-    compare_zero(zero, &words[*cursor], 17u, 0);
+    /* A zero count leaves flags alone but still writes the destination, and a 32-bit
+       write clears the upper half, so only that form runs the writeback. */
+    compare_zero(zero, item->memory_operand == 0u && item->width == 4u ? writeback : &words[*cursor],
+                 17u, 0);
 }
 
 uint32_t hl_x86_rotate_words(const instruction *item) {
