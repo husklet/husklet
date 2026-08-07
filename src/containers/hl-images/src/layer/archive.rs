@@ -66,17 +66,7 @@ impl HardLinks {
             return Ok(());
         }
         for _ in 0..self.0.len() {
-            let mut remaining = Vec::new();
-            let mut progress = false;
-            for link in self.0 {
-                match fs::hard_link(&link.target, &link.destination) {
-                    Ok(()) => progress = true,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        remaining.push(link);
-                    }
-                    Err(error) => return Err(link.path.io("create deferred hard link", error)),
-                }
-            }
+            let (remaining, progress) = Self::attempt(self.0)?;
             self.0 = remaining;
             if self.0.is_empty() {
                 return Ok(());
@@ -89,6 +79,20 @@ impl HardLinks {
         Err(link
             .path
             .error("hardlink target was not present after applying the complete layer"))
+    }
+
+    /// Links every pending entry once, reporting those still missing a target and whether any linked.
+    fn attempt(links: Vec<HardLink>) -> Result<(Vec<HardLink>, bool)> {
+        let mut remaining = Vec::new();
+        let mut progress = false;
+        for link in links {
+            match fs::hard_link(&link.target, &link.destination) {
+                Ok(()) => progress = true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => remaining.push(link),
+                Err(error) => return Err(link.path.io("create deferred hard link", error)),
+            }
+        }
+        Ok((remaining, progress))
     }
 }
 
@@ -356,6 +360,30 @@ impl Path {
         Ok(physical_target.relative_to(physical_link.parent().unwrap_or(FsPath::new(""))))
     }
 
+    fn apply_opaque(
+        &self,
+        root: &FsPath,
+        ownerships: Option<&mut Ownerships>,
+        names: Option<&mut Names>,
+    ) -> Result<()> {
+        let parent = self
+            .as_path()
+            .parent()
+            .ok_or_else(|| self.error("opaque whiteout has no parent"))?;
+        if let Some(ownerships) = ownerships {
+            ownerships.discard_tree(parent, false)?;
+        }
+        let physical = names.map_or_else(|| Ok(parent.to_owned()), |names| names.resolve(root, parent))?;
+        let directory = Self::new(&physical)?.destination(root);
+        if !directory.exists() {
+            return Ok(());
+        }
+        for child in fs::read_dir(directory)? {
+            self.remove(&child?.path())?;
+        }
+        Ok(())
+    }
+
     fn apply_whiteout(
         &self,
         root: &FsPath,
@@ -365,26 +393,7 @@ impl Path {
         let path = self;
         let name = path.name();
         if name == ".wh..wh..opq" {
-            if let Some(ownerships) = ownerships {
-                let parent = path
-                    .as_path()
-                    .parent()
-                    .ok_or_else(|| path.error("opaque whiteout has no parent"))?;
-                ownerships.discard_tree(parent, false)?;
-            }
-            let parent = path
-                .as_path()
-                .parent()
-                .ok_or_else(|| path.error("opaque whiteout has no parent"))?;
-            let physical = names
-                .as_deref_mut()
-                .map_or_else(|| Ok(parent.to_owned()), |names| names.resolve(root, parent))?;
-            let directory = Path::new(&physical)?.destination(root);
-            if directory.exists() {
-                for child in fs::read_dir(directory)? {
-                    path.remove(&child?.path())?;
-                }
-            }
+            self.apply_opaque(root, ownerships, names.as_deref_mut())?;
             return Ok(true);
         }
         let Some(target) = name.strip_prefix(".wh.") else {

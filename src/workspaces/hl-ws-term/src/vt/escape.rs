@@ -225,35 +225,24 @@ impl Vt {
                 }
             }
             b'h' | b'l' if self.private == b'?' => {
-                let set = final_byte == b'h';
-                match self.params.first().copied().unwrap_or(0) {
-                    25 => self.grid.cursor_visible = set, // DECTCEM show/hide cursor
-                    7 => self.autowrap = set,             // DECAWM autowrap
-                    1049 => {
-                        if set {
-                            self.enter_alt(true);
-                        } else {
-                            self.leave_alt(true);
-                        }
-                    }
-                    47 | 1047 => {
-                        if set {
-                            self.enter_alt(false);
-                        } else {
-                            self.leave_alt(false);
-                        }
-                    }
-                    1048 => {
-                        if set {
-                            self.save_cursor();
-                        } else {
-                            self.restore_cursor();
-                        }
-                    }
-                    _ => {} // mouse/bracketed-paste/cursor-key modes are input-side: ignore on output
-                }
+                self.private_mode(self.params.first().copied().unwrap_or(0), final_byte == b'h');
             }
             _ => {} // unhandled CSI: ignore
+        }
+    }
+
+    /// DEC private mode set (`CSI ? Pn h`) / reset (`CSI ? Pn l`).
+    fn private_mode(&mut self, mode: u32, set: bool) {
+        match mode {
+            25 => self.grid.cursor_visible = set, // DECTCEM show/hide cursor
+            7 => self.autowrap = set,             // DECAWM autowrap
+            1049 if set => self.enter_alt(true),
+            1049 => self.leave_alt(true),
+            47 | 1047 if set => self.enter_alt(false),
+            47 | 1047 => self.leave_alt(false),
+            1048 if set => self.save_cursor(),
+            1048 => self.restore_cursor(),
+            _ => {} // mouse/bracketed-paste/cursor-key modes are input-side: ignore on output
         }
     }
 }

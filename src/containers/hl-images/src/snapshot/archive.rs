@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File},
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use super::{Names, Ownerships, names::Name};
@@ -71,6 +71,16 @@ fn append_children<W: Write>(
 }
 
 impl Entry<'_> {
+    fn link_target(&self, names: &Names, guest: &Path, target: &Path) -> PathBuf {
+        if target.is_absolute() {
+            return target.to_owned();
+        }
+        let joined = self.relative.parent().unwrap_or(Path::new("")).join(target);
+        let physical = Name::normalize(&joined);
+        let guest_target = names.guest(&physical);
+        Name::relative(guest.parent().unwrap_or(Path::new("")), guest_target)
+    }
+
     fn append<W: Write>(&self, archive: &mut tar::Builder<W>) -> Result<()> {
         let source = self.root.join(self.relative);
         let guest = self.names.map_or(self.relative, |names| names.guest(self.relative));
@@ -95,15 +105,9 @@ impl Entry<'_> {
             header.set_entry_type(tar::EntryType::Symlink);
             header.set_size(0);
             let target = fs::read_link(&source)?;
-            let target = self.names.map_or(target.clone(), |names| {
-                if target.is_absolute() {
-                    return target.clone();
-                }
-                let joined = self.relative.parent().unwrap_or(Path::new("")).join(&target);
-                let physical = Name::normalize(&joined);
-                let guest_target = names.guest(&physical);
-                Name::relative(guest.parent().unwrap_or(Path::new("")), guest_target)
-            });
+            let target = self
+                .names
+                .map_or(target.clone(), |names| self.link_target(names, guest, &target));
             header.set_link_name(target)?;
             header.set_cksum();
             archive.append_data(&mut header, guest, &[][..])?;

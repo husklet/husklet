@@ -248,9 +248,7 @@ impl<H: MappingHost + 'static> CheckpointParticipant for MemoryCheckpointPartici
             };
             replacement.freeze_checkpoint();
             if self.memory.stage(replacement.clone()).is_err() {
-                if let Some(resources) = &mut resources {
-                    resources.rollback();
-                }
+                resources.iter_mut().for_each(|resources| resources.rollback());
                 host.rollback();
                 replacement.thaw_checkpoint();
                 return Err(());
@@ -258,18 +256,14 @@ impl<H: MappingHost + 'static> CheckpointParticipant for MemoryCheckpointPartici
             let reservation = self.next.fetch_add(1, Ordering::Relaxed);
             if reservation == 0 {
                 self.memory.clear_stage(&replacement);
-                if let Some(resources) = &mut resources {
-                    resources.rollback();
-                }
+                resources.iter_mut().for_each(|resources| resources.rollback());
                 host.rollback();
                 replacement.thaw_checkpoint();
                 return Err(());
             }
             let Ok(mut states) = self.staged.lock() else {
                 self.memory.clear_stage(&replacement);
-                if let Some(resources) = &mut resources {
-                    resources.rollback();
-                }
+                resources.iter_mut().for_each(|resources| resources.rollback());
                 host.rollback();
                 replacement.thaw_checkpoint();
                 return Err(());

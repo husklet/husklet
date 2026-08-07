@@ -73,14 +73,7 @@ impl Archive {
             }
             let destination = staging.path().join(format!("member-{count}"));
             let mut file = File::create(&destination)?;
-            let mut buffer = vec![0_u8; 64 * 1024];
-            loop {
-                let read = entry.read(&mut buffer).map_err(Self::error)?;
-                if read == 0 {
-                    break;
-                }
-                file.write_all(&buffer[..read])?;
-            }
+            Self::drain(&mut entry, &mut file)?;
             file.sync_all()?;
             members.insert(name, (destination, size));
         }
@@ -177,6 +170,17 @@ impl Archive {
         std::fs::read(path).map_err(Into::into)
     }
 
+    fn drain(entry: &mut impl Read, file: &mut File) -> Result<()> {
+        let mut buffer = vec![0_u8; 64 * 1024];
+        loop {
+            let read = entry.read(&mut buffer).map_err(Self::error)?;
+            if read == 0 {
+                return Ok(());
+            }
+            file.write_all(&buffer[..read])?;
+        }
+    }
+
     fn layer_media(path: &Path) -> Result<&'static str> {
         let mut file = File::open(path)?;
         let mut magic = [0_u8; 4];
@@ -243,18 +247,23 @@ impl Images {
         let descriptor: Descriptor =
             serde_json::from_value(serde_json::json!({"mediaType":media,"digest":digest.to_string(),"size":size}))?;
         if !self.content().contains(&digest)? {
-            let mut ingest = self.content().ingest(format!("archive-{digest}"))?;
-            let mut file = File::open(path)?;
-            loop {
-                let count = file.read(&mut buffer)?;
-                if count == 0 {
-                    break;
-                }
-                ingest.write(&buffer[..count])?;
-            }
-            ingest.commit(&descriptor)?;
+            self.ingest_file(&digest, path, &descriptor, &mut buffer)?;
         }
         Ok(descriptor)
+    }
+
+    fn ingest_file(&self, digest: &Digest, path: &Path, descriptor: &Descriptor, buffer: &mut [u8]) -> Result<()> {
+        let mut ingest = self.content().ingest(format!("archive-{digest}"))?;
+        let mut file = File::open(path)?;
+        loop {
+            let count = file.read(buffer)?;
+            if count == 0 {
+                break;
+            }
+            ingest.write(&buffer[..count])?;
+        }
+        ingest.commit(descriptor)?;
+        Ok(())
     }
 }
 struct DockerWriter<'a, W: Write> {

@@ -138,19 +138,18 @@ impl Vt {
 
     pub(super) fn finish_osc(&mut self) {
         // OSC 0;title (icon+title) or 2;title (title) set the window title.
-        if let Ok(s) = std::str::from_utf8(&self.osc) {
-            if let Some((num, rest)) = s.split_once(';') {
-                match num {
-                    // OSC 0 (icon+title) / 2 (title) set the window title.
-                    "0" | "2" => self.title = rest.to_string(),
-                    // OSC 7 reports the shell's cwd as a `file://host/path` URI.
-                    "7" => {
-                        if let Some(path) = crate::session::WorkingDirectory::from_osc7(rest) {
-                            self.cwd = Some(path.into_string());
-                        }
-                    }
-                    _ => {}
+        let split = std::str::from_utf8(&self.osc).ok().and_then(|s| s.split_once(';'));
+        if let Some((num, rest)) = split {
+            match num {
+                // OSC 0 (icon+title) / 2 (title) set the window title.
+                "0" | "2" => self.title = rest.to_string(),
+                // OSC 7 reports the shell's cwd as a `file://host/path` URI.
+                "7" => {
+                    self.cwd = crate::session::WorkingDirectory::from_osc7(rest)
+                        .map(crate::session::WorkingDirectory::into_string)
+                        .or(self.cwd.take());
                 }
+                _ => {}
             }
         }
         self.osc.clear();

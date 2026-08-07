@@ -289,15 +289,14 @@ impl crate::api::DockerMount {
             labels = options.labels.clone().unwrap_or_default();
             populate = !options.no_copy;
             subpath = options.subpath.as_deref();
-            if let Some(driver) = &options.driver_config {
-                if !driver.name.is_empty() && driver.name != "local" {
-                    return Err(ApiError::new(
-                        StatusCode::NOT_IMPLEMENTED,
-                        format!("volume driver {:?} is not implemented", driver.name),
-                    ));
-                }
-                driver_options = Some(driver.options.clone());
+            let config = options.driver_config.as_ref();
+            if let Some(driver) = config.filter(|driver| !driver.name.is_empty() && driver.name != "local") {
+                return Err(ApiError::new(
+                    StatusCode::NOT_IMPLEMENTED,
+                    format!("volume driver {:?} is not implemented", driver.name),
+                ));
             }
+            driver_options = config.map(|driver| driver.options.clone());
         }
         if let Some(options) = driver_options.filter(|options| !options.is_empty()) {
             if self.source.is_empty() {

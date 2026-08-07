@@ -97,16 +97,17 @@ pub(in super::super) async fn extract(
     let mut received = 0_u64;
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
-        if let Ok(data) = frame.into_data() {
-            received = received.saturating_add(data.len() as u64);
-            if received > ARCHIVE_LIMIT {
-                return Err(ApiError::new(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "container archive exceeds upload limit",
-                ));
-            }
-            file.write_all(&data).await.map_err(ApiError::io)?;
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        received = received.saturating_add(data.len() as u64);
+        if received > ARCHIVE_LIMIT {
+            return Err(ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "container archive exceeds upload limit",
+            ));
         }
+        file.write_all(&data).await.map_err(ApiError::io)?;
     }
     file.flush().await.map_err(ApiError::io)?;
     file.seek(SeekFrom::Start(0)).await.map_err(ApiError::io)?;

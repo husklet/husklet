@@ -129,12 +129,8 @@ impl Builder {
     async fn resolve_bases(&self, recipe: &Recipe, policy: BaseImages) -> Result<(), BuildError> {
         let images = self.containers.images()?;
         for stage in &recipe.stages {
-            if let Base::Image(reference) = &stage.base
-                && policy.requires_pull(images.resolve(reference)?.is_some())
-            {
-                images
-                    .pull(self.source.as_ref(), reference.clone(), &self.platform)
-                    .await?;
+            if let Base::Image(reference) = &stage.base {
+                self.pull_if_required(&images, reference, policy).await?;
             }
             for reference in stage.steps.iter().filter_map(|step| match step {
                 Step::Copy {
@@ -143,12 +139,22 @@ impl Builder {
                 } => Some(reference),
                 _ => None,
             }) {
-                if policy.requires_pull(images.resolve(reference)?.is_some()) {
-                    images
-                        .pull(self.source.as_ref(), reference.clone(), &self.platform)
-                        .await?;
-                }
+                self.pull_if_required(&images, reference, policy).await?;
             }
+        }
+        Ok(())
+    }
+
+    async fn pull_if_required(
+        &self,
+        images: &hl_images::Images,
+        reference: &hl_images::Reference,
+        policy: BaseImages,
+    ) -> Result<(), BuildError> {
+        if policy.requires_pull(images.resolve(reference)?.is_some()) {
+            images
+                .pull(self.source.as_ref(), reference.clone(), &self.platform)
+                .await?;
         }
         Ok(())
     }

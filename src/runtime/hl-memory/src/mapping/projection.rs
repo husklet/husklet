@@ -441,20 +441,21 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
             }
         }
         for index in 0..self.additional.len() {
-            if let Some(reservation) = self.additional[index].write_reservation.take() {
-                let view = self.additional[index].view;
-                if let Err(error) = self.publish_view(view, reservation) {
-                    self.coordinator.host.host.rollback_write(reservation);
-                    self.coordinator.host.executable.publish(executable);
-                    return Err(error);
-                }
-                if let Some(resolution) = self.coordinator.ledger.resolve(view.range.start(), Protection::WRITE) {
-                    executable.extend(self.coordinator.executable_write_ranges(
-                        view.range.start(),
-                        resolution,
-                        view.range.length(),
-                    ));
-                }
+            let Some(reservation) = self.additional[index].write_reservation.take() else {
+                continue;
+            };
+            let view = self.additional[index].view;
+            if let Err(error) = self.publish_view(view, reservation) {
+                self.coordinator.host.host.rollback_write(reservation);
+                self.coordinator.host.executable.publish(executable);
+                return Err(error);
+            }
+            if let Some(resolution) = self.coordinator.ledger.resolve(view.range.start(), Protection::WRITE) {
+                executable.extend(self.coordinator.executable_write_ranges(
+                    view.range.start(),
+                    resolution,
+                    view.range.length(),
+                ));
             }
         }
         self.coordinator.host.epoch.fetch_add(1, Ordering::AcqRel);
@@ -503,14 +504,16 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         }
         for index in 0..self.additional.len() {
             let view = self.additional[index].view;
-            if let Some(reservation) = self.additional[index].write_reservation.take() {
-                if let Err(error) = self.publish_ranges(view, reservation, &journals[index + 1], &mut executable) {
-                    self.coordinator.host.host.rollback_write(reservation);
-                    self.coordinator.host.executable.publish(executable.iter().copied());
-                    return Err(error);
+            let Some(reservation) = self.additional[index].write_reservation.take() else {
+                if !journals[index + 1].is_empty() {
+                    return Err(MemoryError::InvariantViolation);
                 }
-            } else if !journals[index + 1].is_empty() {
-                return Err(MemoryError::InvariantViolation);
+                continue;
+            };
+            if let Err(error) = self.publish_ranges(view, reservation, &journals[index + 1], &mut executable) {
+                self.coordinator.host.host.rollback_write(reservation);
+                self.coordinator.host.executable.publish(executable.iter().copied());
+                return Err(error);
             }
         }
         if dirty.is_empty() {

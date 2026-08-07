@@ -32,6 +32,69 @@ impl OverviewData {
             processes_error: None,
         }
     }
+
+    fn daemon_socket(workspace: &str) -> Result<std::path::PathBuf, String> {
+        match Hl::command(&["daemon", workspace]).output() {
+            Ok(output) if output.status.success() => Ok(std::path::PathBuf::from(
+                String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            )),
+            Ok(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn merge_resources(&mut self, socket: &Result<std::path::PathBuf, String>) {
+        let socket = match socket {
+            Ok(socket) if !socket.as_os_str().is_empty() => socket,
+            Ok(_) => {
+                self.resources_error = Some("workspace daemon returned no socket".into());
+                return;
+            }
+            Err(error) => {
+                self.resources_error = Some(if error.is_empty() {
+                    "workspace daemon unavailable".into()
+                } else {
+                    error.clone()
+                });
+                return;
+            }
+        };
+        match WorkspaceResources::new(socket).read() {
+            Ok(resources) => {
+                self.containers = resources.containers;
+                self.images = resources.images;
+                self.volumes = resources.volumes;
+                self.networks = resources.networks;
+            }
+            Err(error) => {
+                self.resources_error = Some(format!("workspace resource query failed: {error}"));
+            }
+        }
+    }
+
+    fn merge_processes(&mut self, workspace: &str, shell: &str) {
+        match WorkspaceProcesses::new(workspace, shell).read() {
+            Ok(processes) => self.processes = processes,
+            Err(error) => {
+                self.processes_error = Some(format!("workspace process query failed: {error}"));
+            }
+        }
+    }
+
+    fn poll_forever(workspace: &str, shell: &str, data: &std::sync::Mutex<Self>, stop: &std::sync::atomic::AtomicBool) {
+        let socket = Self::daemon_socket(workspace);
+        loop {
+            if stop.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+
+            let mut snapshot = Self::poll();
+            snapshot.merge_resources(&socket);
+            snapshot.merge_processes(workspace, shell);
+            *data.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    }
 }
 
 /// Ensures the workspace daemon, then polls it over its Unix socket every two seconds.
@@ -41,56 +104,7 @@ pub(super) fn spawn_overview_poller(
     data: std::sync::Arc<std::sync::Mutex<OverviewData>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
-    std::thread::spawn(move || {
-        let socket = match Hl::command(&["daemon", &workspace]).output() {
-            Ok(output) if output.status.success() => Ok(std::path::PathBuf::from(
-                String::from_utf8_lossy(&output.stdout).trim().to_string(),
-            )),
-            Ok(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
-            Err(error) => Err(error.to_string()),
-        };
-
-        loop {
-            if stop.load(std::sync::atomic::Ordering::Acquire) {
-                return;
-            }
-
-            let mut snapshot = OverviewData::poll();
-            match &socket {
-                Ok(socket) if !socket.as_os_str().is_empty() => match WorkspaceResources::new(socket).read() {
-                    Ok(resources) => {
-                        snapshot.containers = resources.containers;
-                        snapshot.images = resources.images;
-                        snapshot.volumes = resources.volumes;
-                        snapshot.networks = resources.networks;
-                    }
-                    Err(error) => {
-                        snapshot.resources_error = Some(format!("workspace resource query failed: {error}"));
-                    }
-                },
-                Ok(_) => {
-                    snapshot.resources_error = Some("workspace daemon returned no socket".into());
-                }
-                Err(error) => {
-                    snapshot.resources_error = Some(if error.is_empty() {
-                        "workspace daemon unavailable".into()
-                    } else {
-                        error.clone()
-                    });
-                }
-            }
-
-            match WorkspaceProcesses::new(&workspace, &shell).read() {
-                Ok(processes) => snapshot.processes = processes,
-                Err(error) => {
-                    snapshot.processes_error = Some(format!("workspace process query failed: {error}"));
-                }
-            }
-
-            *data.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
-            std::thread::sleep(std::time::Duration::from_secs(2));
-        }
-    });
+    std::thread::spawn(move || OverviewData::poll_forever(&workspace, &shell, &data, &stop));
 }
 
 #[cfg(test)]

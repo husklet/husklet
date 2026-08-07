@@ -254,10 +254,10 @@ impl Pair {
             let result = Self::read_locked(&mut state, endpoint, output);
             match result {
                 Err(ReadError::WouldBlock) if nonblocking => return result,
+                Err(ReadError::WouldBlock) if cancellation.is_some_and(OperationCancellation::interrupted) => {
+                    return Err(ReadError::Interrupted);
+                }
                 Err(ReadError::WouldBlock) => {
-                    if cancellation.is_some_and(OperationCancellation::interrupted) {
-                        return Err(ReadError::Interrupted);
-                    }
                     state = self
                         .changed
                         .wait(state)

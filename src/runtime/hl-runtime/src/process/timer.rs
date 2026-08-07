@@ -146,14 +146,15 @@ impl TimerRegistry {
             let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::replace(&mut *slots, [None; TIMER_LIMIT])
         };
-        if let Some(delivery) = &self.delivery {
-            for (id, timer) in old.into_iter().enumerate() {
-                let Some(timer) = timer else { continue };
-                if let Some(token) = timer.token {
-                    delivery.alarms.cancel_callback(token);
-                }
-                self.remove_pending(id, timer, delivery);
+        let Some(delivery) = &self.delivery else {
+            return;
+        };
+        for (id, timer) in old.into_iter().enumerate() {
+            let Some(timer) = timer else { continue };
+            if let Some(token) = timer.token {
+                delivery.alarms.cancel_callback(token);
             }
+            self.remove_pending(id, timer, delivery);
         }
     }
 
@@ -288,15 +289,16 @@ impl TimerRegistry {
             }
             next
         };
-        if let Some(next) = next {
-            if registry.arm(id, generation, next).is_err() {
-                let mut slots = registry.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if let Some(timer) = slots.get_mut(id).and_then(Option::as_mut) {
-                    if timer.generation == generation && timer.deadline == Some(next) {
-                        timer.deadline = None;
-                        timer.interval = 0;
-                    }
-                }
+        if let Some(next) = next
+            && registry.arm(id, generation, next).is_err()
+        {
+            let mut slots = registry.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(timer) = slots.get_mut(id).and_then(Option::as_mut)
+                && timer.generation == generation
+                && timer.deadline == Some(next)
+            {
+                timer.deadline = None;
+                timer.interval = 0;
             }
         }
     }

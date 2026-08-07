@@ -163,6 +163,37 @@ impl NativeFile {
             .ok_or(super::RuntimePathError::Invalid)
     }
 
+    #[cfg(target_os = "linux")]
+    fn write_zeros(file: &std::fs::File, start: u64, end: u64) -> Result<(), ObjectError> {
+        let zeros = [0_u8; 65_536];
+        let mut position = start;
+        while position < end {
+            let count =
+                usize::try_from((end - position).min(zeros.len() as u64)).map_err(|_| ObjectError::ResourceLimit)?;
+            let written = file.write_at(&zeros[..count], position).map_err(Self::object)?;
+            if written == 0 {
+                return Err(ObjectError::Io);
+            }
+            position += written as u64;
+        }
+        Ok(())
+    }
+
+    /// Waits one backoff step for a contended advisory lock.
+    fn flock_wait(
+        nonblocking: bool,
+        cancellation: &dyn hl_descriptor::OperationCancellation,
+    ) -> Result<(), ObjectError> {
+        if nonblocking {
+            return Err(ObjectError::WouldBlock);
+        }
+        if cancellation.interrupted() {
+            return Err(ObjectError::Interrupted);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        Ok(())
+    }
+
     pub(super) fn retain_link(&self, target: Option<Vec<u8>>) {
         *self
             .link_target
@@ -302,10 +333,11 @@ impl OpenFileDescription for NativeFile {
             let mut buffer = vec![0_u8; maximum.min(8192)];
             let mut done = 0;
             while done < maximum {
-                if cancellation.is_some_and(hl_descriptor::OperationCancellation::interrupted) {
-                    if done == 0 {
-                        return Err(ObjectError::Interrupted);
-                    }
+                let interrupted = cancellation.is_some_and(hl_descriptor::OperationCancellation::interrupted);
+                if interrupted && done == 0 {
+                    return Err(ObjectError::Interrupted);
+                }
+                if interrupted {
                     break;
                 }
                 let chunk = (maximum - done).min(buffer.len());
@@ -694,17 +726,7 @@ impl OpenFileDescription for NativeFile {
                 } else {
                     end
                 };
-                let zeros = [0_u8; 65_536];
-                let mut position = request.offset;
-                while position < zero_end {
-                    let count = usize::try_from((zero_end - position).min(zeros.len() as u64))
-                        .map_err(|_| ObjectError::ResourceLimit)?;
-                    let written = file.write_at(&zeros[..count], position).map_err(Self::object)?;
-                    if written == 0 {
-                        return Err(ObjectError::Io);
-                    }
-                    position += written as u64;
-                }
+                Self::write_zeros(file, request.offset, zero_end)?;
                 self.watches.publish(&self.path, hl_event::InotifyMask::MODIFY);
                 return Ok(());
             }
@@ -740,13 +762,7 @@ impl OpenFileDescription for NativeFile {
             }
             match std::io::Error::last_os_error().raw_os_error() {
                 Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK => {
-                    if nonblocking {
-                        return Err(ObjectError::WouldBlock);
-                    }
-                    if cancellation.interrupted() {
-                        return Err(ObjectError::Interrupted);
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    Self::flock_wait(nonblocking, cancellation)?;
                 }
                 Some(libc::EINTR) => return Err(ObjectError::Interrupted),
                 Some(libc::EBADF) => return Err(ObjectError::BadDescriptor),

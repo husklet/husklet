@@ -541,35 +541,7 @@ impl VfsHost for Host {
             if let Some(candidates) = self.cached_directory(&guest, epoch) {
                 return Ok((guest, candidates, NodeKind::Directory));
             }
-            let mut candidates = Vec::new();
-            let mut visible = None;
-            for parent in &entry.candidates {
-                if visible.is_none() && Self::marker(parent.descriptor.as_raw_fd(), component)? {
-                    break;
-                }
-                if let Some((child, kind)) = Self::child(parent.descriptor.as_raw_fd(), &name)? {
-                    let directory = kind == NodeKind::Directory;
-                    if visible.is_none() {
-                        visible = Some(kind);
-                    }
-                    if visible == Some(kind) && directory {
-                        let opaque = Self::opaque(child.as_raw_fd())?;
-                        candidates.push(LayerPin {
-                            descriptor: Arc::new(child),
-                            layer: parent.layer,
-                        });
-                        if opaque {
-                            break;
-                        }
-                    } else if candidates.is_empty() {
-                        candidates.push(LayerPin {
-                            descriptor: Arc::new(child),
-                            layer: parent.layer,
-                        });
-                        break;
-                    }
-                }
-            }
+            let (candidates, visible) = Self::layer_candidates(&entry.candidates, component, &name)?;
             let kind = visible.ok_or(ResolveHostError::NotFound)?;
             if kind == NodeKind::Directory {
                 self.cache_directory(&guest, &candidates, epoch);
@@ -641,6 +613,40 @@ impl VfsHost for Host {
 }
 
 impl Host {
+    /// Collects the layer pins that make up one child in upper-to-lower order.
+    fn layer_candidates(
+        parents: &[LayerPin],
+        component: &GuestName,
+        name: &CString,
+    ) -> Result<(Vec<LayerPin>, Option<NodeKind>), ResolveHostError> {
+        let mut candidates = Vec::new();
+        let mut visible = None;
+        for parent in parents {
+            if visible.is_none() && Self::marker(parent.descriptor.as_raw_fd(), component)? {
+                break;
+            }
+            let Some((child, kind)) = Self::child(parent.descriptor.as_raw_fd(), name)? else {
+                continue;
+            };
+            if visible.is_none() {
+                visible = Some(kind);
+            }
+            let mergeable = visible == Some(kind) && kind == NodeKind::Directory;
+            if !mergeable && !candidates.is_empty() {
+                continue;
+            }
+            let opaque = mergeable && Self::opaque(child.as_raw_fd())?;
+            candidates.push(LayerPin {
+                descriptor: Arc::new(child),
+                layer: parent.layer,
+            });
+            if opaque || !mergeable {
+                break;
+            }
+        }
+        Ok((candidates, visible))
+    }
+
     fn is_layered(handle: NodeHandle) -> bool {
         handle.raw() & LAYERED_HANDLE_BIT != 0
     }

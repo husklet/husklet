@@ -345,27 +345,36 @@ pub(super) async fn stats(
         let containers = containers.clone();
         let reference = reference.clone();
         let sampler = sampler.clone();
-        async move {
-            if index > 0 {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-            let container = containers.inspect(&reference).await.ok()?;
-            let active = container.state.is_active();
-            if stop_when_inactive && !active {
-                return None;
-            }
-            let value = if active {
-                ProcessMetrics::sample(&container, sampler.as_ref(), previous.as_ref())
-            } else {
-                ProcessMetrics::empty_sample(&container)
-            };
-            let next = (index + 1, Some(value.clone()));
-            let mut bytes = serde_json::to_vec(&value).ok()?;
-            bytes.push(b'\n');
-            Some((Ok::<_, std::io::Error>(bytes), next))
-        }
+        stats_frame(containers, reference, sampler, stop_when_inactive, index, previous)
     });
     Ok(stats_stream_response(Body::from_stream(body)))
+}
+
+async fn stats_frame(
+    containers: hl_container::Containers,
+    reference: String,
+    sampler: std::sync::Arc<dyn crate::ProcessSampler>,
+    stop_when_inactive: bool,
+    index: u64,
+    previous: Option<Stats>,
+) -> Option<(Result<Vec<u8>, std::io::Error>, (u64, Option<Stats>))> {
+    if index > 0 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let container = containers.inspect(&reference).await.ok()?;
+    let active = container.state.is_active();
+    if stop_when_inactive && !active {
+        return None;
+    }
+    let value = if active {
+        ProcessMetrics::sample(&container, sampler.as_ref(), previous.as_ref())
+    } else {
+        ProcessMetrics::empty_sample(&container)
+    };
+    let next = (index + 1, Some(value.clone()));
+    let mut bytes = serde_json::to_vec(&value).ok()?;
+    bytes.push(b'\n');
+    Some((Ok(bytes), next))
 }
 
 fn stats_stream_response(body: Body) -> Response {

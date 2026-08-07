@@ -65,13 +65,14 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         for index in 0..=NAME_MAXIMUM {
             let location = address.checked_add(index as u64).ok_or(Error::Fault)?;
             let byte = self.read::<1>(location)?[0];
-            if byte == 0 {
-                if name.is_empty() || name.contains(&b'/') {
-                    return Err(Error::Invalid);
-                }
-                return Ok(name);
+            if byte != 0 {
+                name.push(byte);
+                continue;
             }
-            name.push(byte);
+            if name.is_empty() || name.contains(&b'/') {
+                return Err(Error::Invalid);
+            }
+            return Ok(name);
         }
         Err(Error::NameTooLong)
     }

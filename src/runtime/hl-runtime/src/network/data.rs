@@ -512,16 +512,11 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let mut count = 0;
         loop {
             let observed = queue.observation();
-            match socket.read_with(&mut output[count..], true) {
+            let progress = match socket.read_with(&mut output[count..], true) {
                 Ok(0) => return Ok(count),
-                Ok(read) => {
-                    count += read;
-                    if !waitall || count == output.len() {
-                        return Ok(count);
-                    }
-                }
+                Ok(read) => Some(read),
                 Err(hl_descriptor::ObjectError::WouldBlock) => match wait.wait(&queue, observed, Some(deadline)) {
-                    Ok(hl_sync::WaitOutcome::Notified) => {}
+                    Ok(hl_sync::WaitOutcome::Notified) => None,
                     Ok(hl_sync::WaitOutcome::Interrupted) => return Err(Errno::EINTR),
                     Ok(hl_sync::WaitOutcome::TimedOut) if count == 0 => return Err(Errno::EAGAIN),
                     Ok(hl_sync::WaitOutcome::TimedOut) => return Ok(count),
@@ -529,6 +524,13 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 },
                 Err(error) if count == 0 => return Err(FileErrno::object(error)),
                 Err(_) => return Ok(count),
+            };
+            let Some(read) = progress else {
+                continue;
+            };
+            count += read;
+            if !waitall || count == output.len() {
+                return Ok(count);
             }
         }
     }

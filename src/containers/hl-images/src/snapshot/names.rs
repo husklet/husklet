@@ -11,6 +11,13 @@ use crate::{Digest, Error, Result};
 #[serde(transparent)]
 struct Entries(BTreeMap<String, String>);
 
+/// How an existing host directory already spells the requested guest name.
+enum Sibling {
+    Exact(PathBuf),
+    Collision,
+    None,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Name(String);
 
@@ -215,39 +222,48 @@ impl Names {
                 Error::InvalidMetadata(format!("snapshot name is not UTF-8: {}", guest.as_path().display()))
             })?;
         let directory = root.join(&physical_parent);
-        if directory.is_dir() {
-            let mut collides = false;
-            for entry in fs::read_dir(&directory)? {
-                let entry = entry?;
-                let physical = physical_parent.join(entry.file_name());
-                let visible = self.guest(&physical);
-                let Some(visible_name) = visible.file_name().and_then(|value| value.to_str()) else {
-                    continue;
-                };
-                if visible_name == name {
-                    return Ok(physical);
-                }
-                if visible_name.eq_ignore_ascii_case(name) {
-                    collides = true;
-                }
+        if !directory.is_dir() {
+            return Ok(physical_parent.join(name));
+        }
+        match self.sibling(&directory, &physical_parent, name)? {
+            Sibling::Exact(physical) => Ok(physical),
+            Sibling::Collision => self.encode_sibling(root, &physical_parent, guest),
+            Sibling::None => Ok(physical_parent.join(name)),
+        }
+    }
+
+    /// Classifies the existing host siblings against the requested guest name.
+    fn sibling(&self, directory: &Path, physical_parent: &Path, name: &str) -> Result<Sibling> {
+        let mut collides = false;
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let physical = physical_parent.join(entry.file_name());
+            let visible = self.guest(&physical);
+            let Some(visible_name) = visible.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if visible_name == name {
+                return Ok(Sibling::Exact(physical));
             }
-            if collides {
-                for salt in 0..u32::MAX {
-                    let encoded = guest.encoded(salt);
-                    let candidate = Name::from_path(
-                        &physical_parent.join(encoded.as_path().file_name().expect("encoded name has a leaf")),
-                    )?;
-                    if !root.join(candidate.as_path()).exists() || self.guest(candidate.as_path()) == guest.as_path() {
-                        let path = candidate.as_path().to_owned();
-                        self.entries.0.insert(candidate.into_string(), guest.into_string());
-                        self.save()?;
-                        return Ok(path);
-                    }
-                }
-                return Err(Error::InvalidMetadata("snapshot name encoding space exhausted".into()));
+            collides |= visible_name.eq_ignore_ascii_case(name);
+        }
+        Ok(if collides { Sibling::Collision } else { Sibling::None })
+    }
+
+    fn encode_sibling(&mut self, root: &Path, physical_parent: &Path, guest: Name) -> Result<PathBuf> {
+        for salt in 0..u32::MAX {
+            let encoded = guest.encoded(salt);
+            let candidate = Name::from_path(
+                &physical_parent.join(encoded.as_path().file_name().expect("encoded name has a leaf")),
+            )?;
+            if !root.join(candidate.as_path()).exists() || self.guest(candidate.as_path()) == guest.as_path() {
+                let path = candidate.as_path().to_owned();
+                self.entries.0.insert(candidate.into_string(), guest.into_string());
+                self.save()?;
+                return Ok(path);
             }
         }
-        Ok(physical_parent.join(name))
+        Err(Error::InvalidMetadata("snapshot name encoding space exhausted".into()))
     }
 
     pub(super) fn relocate(&mut self, path: PathBuf) {

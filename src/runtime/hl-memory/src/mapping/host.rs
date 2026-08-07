@@ -126,11 +126,12 @@ impl<H: Host> Coordinator<H> {
             };
             let overlap_first = first.max(alias_first);
             let overlap_last = last.min(alias_last);
-            if overlap_first < overlap_last {
-                let address = region.range().start().get() + (overlap_first - alias_first);
-                if let Ok(range) = AddressRange::nonempty(GuestAddress::new(address), overlap_last - overlap_first) {
-                    ranges.push(range);
-                }
+            if overlap_first >= overlap_last {
+                continue;
+            }
+            let address = region.range().start().get() + (overlap_first - alias_first);
+            if let Ok(range) = AddressRange::nonempty(GuestAddress::new(address), overlap_last - overlap_first) {
+                ranges.push(range);
             }
         }
         ranges

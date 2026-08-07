@@ -113,22 +113,7 @@ impl Path {
                 Ok(meta) if !meta.is_dir() => {
                     return Err(self.error("entry parent is not a directory"));
                 }
-                Ok(metadata) => {
-                    let original = metadata.permissions();
-                    if original.readonly() {
-                        let mut writable = original.clone();
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt as _;
-                            writable.set_mode(original.mode() | 0o200);
-                        }
-                        #[cfg(not(unix))]
-                        writable.set_readonly(false);
-                        fs::set_permissions(&current, writable)
-                            .map_err(|source| self.io("make parent directory writable", source))?;
-                        changed.push((current.clone(), original));
-                    }
-                }
+                Ok(metadata) => changed.extend(self.make_writable(&current, &metadata.permissions())?),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     fs::create_dir(&current).map_err(|source| self.io("create parent directory", source))?;
                 }
@@ -136,6 +121,27 @@ impl Path {
             }
         }
         Ok(Parents(changed))
+    }
+
+    /// Grants owner write on a read-only parent, reporting the permissions to restore afterwards.
+    fn make_writable(
+        &self,
+        current: &FsPath,
+        original: &fs::Permissions,
+    ) -> Result<Option<(PathBuf, fs::Permissions)>> {
+        if !original.readonly() {
+            return Ok(None);
+        }
+        let mut writable = original.clone();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            writable.set_mode(original.mode() | 0o200);
+        }
+        #[cfg(not(unix))]
+        writable.set_readonly(false);
+        fs::set_permissions(current, writable).map_err(|source| self.io("make parent directory writable", source))?;
+        Ok(Some((current.to_owned(), original.clone())))
     }
 
     /// Resolve and prepare the entry's parent below `root`.

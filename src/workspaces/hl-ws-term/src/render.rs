@@ -179,10 +179,7 @@ impl Image {
     fn draw_glyph(&mut self, renderer: &CpuRenderer, img_w: u32, ox: u32, oy: u32, ch: char, color: (u8, u8, u8)) {
         let bitmap = font::EMBEDDED.lookup(ch);
         for (gy, rowbits) in bitmap.iter().enumerate() {
-            for gx in 0..GLYPH_W {
-                if rowbits & (0x80 >> gx) == 0 {
-                    continue;
-                }
+            for gx in (0..GLYPH_W).filter(|gx| rowbits & (0x80 >> gx) != 0) {
                 let x = ox + gx as u32 * renderer.scale;
                 let y = oy + gy as u32 * renderer.scale;
                 self.fill_cell(img_w, x, y, renderer.scale, renderer.scale, color);

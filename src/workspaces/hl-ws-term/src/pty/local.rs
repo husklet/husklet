@@ -144,14 +144,15 @@ impl PtyBackend for LocalPty {
         while !bytes.is_empty() {
             // SAFETY: the source pointer and length come from the same live borrowed slice.
             let n = unsafe { libc::write(self.master, bytes.as_ptr().cast::<libc::c_void>(), bytes.len()) };
-            if n < 0 {
-                let e = io::Error::last_os_error();
-                if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(libc::EINTR) {
-                    continue; // transient: retry
-                }
-                return Err(e);
+            if n >= 0 {
+                bytes = &bytes[n as usize..];
+                continue;
             }
-            bytes = &bytes[n as usize..];
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(libc::EINTR) {
+                continue; // transient: retry
+            }
+            return Err(e);
         }
         Ok(())
     }

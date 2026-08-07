@@ -321,6 +321,18 @@ impl AddressSpaceView {
         output
     }
 
+    fn numa_file_field(path: &[u8]) -> Vec<u8> {
+        let mut field = b" file=".to_vec();
+        field.extend(path.iter().flat_map(|byte| {
+            if *byte == b' ' {
+                br"\040".as_slice()
+            } else {
+                std::slice::from_ref(byte)
+            }
+        }));
+        field
+    }
+
     #[must_use]
     pub fn numa(&self) -> Vec<u8> {
         let mut output = Vec::new();
@@ -330,26 +342,18 @@ impl AddressSpaceView {
                 Some(MemoryRegionLabel::Heap) => output.extend_from_slice(b" heap"),
                 Some(MemoryRegionLabel::Stack) => output.extend_from_slice(b" stack"),
                 _ if region.inode != 0 => {
-                    if let Some(path) = &region.path {
-                        output.extend_from_slice(b" file=");
-                        for byte in path {
-                            if *byte == b' ' {
-                                output.extend_from_slice(br"\040");
-                            } else {
-                                output.push(*byte);
-                            }
-                        }
-                    }
+                    output.extend(region.path.iter().flat_map(|path| Self::numa_file_field(path)));
                 }
                 _ => {}
             }
             let pages = region.end.saturating_sub(region.start) / self.page_bytes;
             if region.protection != 0 && pages != 0 {
-                if region.inode == 0 {
-                    output.extend_from_slice(format!(" anon={pages} dirty={pages}").as_bytes());
+                let residency = if region.inode == 0 {
+                    format!(" anon={pages} dirty={pages}")
                 } else {
-                    output.extend_from_slice(format!(" mapped={pages}").as_bytes());
-                }
+                    format!(" mapped={pages}")
+                };
+                output.extend_from_slice(residency.as_bytes());
                 output.extend_from_slice(format!(" active=0 N0={pages} kernelpagesize_kB=4").as_bytes());
             }
             output.push(b'\n');

@@ -22,6 +22,15 @@ impl Tree<'_> {
         self.sync_with(&mut |_, opened| opened.sync_all())
     }
 
+    fn sync_children(&self, sync: &mut impl FnMut(&Path, &fs::File) -> std::io::Result<()>) -> Result<fs::File> {
+        let directory = fs::File::open(self.0)?;
+        for entry in fs::read_dir(self.0)? {
+            let path = entry?.path();
+            Tree::from(path.as_path()).sync_with(sync)?;
+        }
+        Ok(directory)
+    }
+
     fn sync_with(&self, sync: &mut impl FnMut(&Path, &fs::File) -> std::io::Result<()>) -> Result<()> {
         let metadata = fs::symlink_metadata(self.0)?;
         if metadata.file_type().is_symlink() {
@@ -55,14 +64,7 @@ impl Tree<'_> {
             #[cfg(not(unix))]
             accessible.set_readonly(false);
             fs::set_permissions(self.0, accessible)?;
-            let traversed = (|| -> Result<fs::File> {
-                let directory = fs::File::open(self.0)?;
-                for entry in fs::read_dir(self.0)? {
-                    let path = entry?.path();
-                    Tree::from(path.as_path()).sync_with(sync)?;
-                }
-                Ok(directory)
-            })();
+            let traversed = self.sync_children(sync);
             let restored = fs::set_permissions(self.0, original);
             let directory = traversed?;
             restored?;

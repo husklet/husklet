@@ -257,29 +257,29 @@ impl List {
             })
             .cloned()
             .collect::<Vec<_>>();
-        if unsupported.is_empty() {
-            for name in ["expose", "publish"] {
-                for value in list.filters.get(name).into_iter().flatten() {
-                    Self::exposed_port(value)?;
-                }
-            }
-            for value in list.filters.get("health").into_iter().flatten() {
-                if !matches!(value.as_str(), "starting" | "healthy" | "unhealthy" | "none") {
-                    return Err(format!("invalid health filter {value:?}"));
-                }
-            }
-            let mut task = None;
-            for value in list.filters.get("is-task").into_iter().flatten() {
-                let value = Self::task_filter(value)?;
-                if task.is_some_and(|current| current != value) {
-                    return Err("conflicting is-task boolean values".into());
-                }
-                task = Some(value);
-            }
-            Ok(list)
-        } else {
-            Err(format!("unsupported container filters: {}", unsupported.join(", ")))
+        if !unsupported.is_empty() {
+            return Err(format!("unsupported container filters: {}", unsupported.join(", ")));
         }
+        for value in ["expose", "publish"]
+            .into_iter()
+            .flat_map(|name| list.filters.get(name).into_iter().flatten())
+        {
+            Self::exposed_port(value)?;
+        }
+        for value in list.filters.get("health").into_iter().flatten() {
+            if !matches!(value.as_str(), "starting" | "healthy" | "unhealthy" | "none") {
+                return Err(format!("invalid health filter {value:?}"));
+            }
+        }
+        let mut task = None;
+        for value in list.filters.get("is-task").into_iter().flatten() {
+            let value = Self::task_filter(value)?;
+            if task.is_some_and(|current| current != value) {
+                return Err("conflicting is-task boolean values".into());
+            }
+            task = Some(value);
+        }
+        Ok(list)
     }
 
     pub(crate) fn prepare(self, containers: &[hl_container::Container]) -> PreparedList {

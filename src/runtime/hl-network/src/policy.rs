@@ -71,46 +71,51 @@ impl NetworkPolicy {
                 interfaces: Vec::new(),
             });
         }
-        let mut parsed = Vec::new();
-        if !records.is_empty() {
-            for record in records.split(|byte| *byte == b'\n').filter(|record| !record.is_empty()) {
-                if parsed.len() == INTERFACE_MAXIMUM {
-                    break;
-                }
-                let equal = record
-                    .iter()
-                    .position(|byte| *byte == b'=')
-                    .ok_or(NetworkPolicyError::InvalidInterface)?;
-                let identity = &record[..equal];
-                let address = &record[equal + 1..];
-                if identity.is_empty() || identity.len() > 40 {
-                    return Err(NetworkPolicyError::InvalidInterface);
-                }
-                let slash = address
-                    .iter()
-                    .position(|byte| *byte == b'/')
-                    .ok_or(NetworkPolicyError::InvalidInterface)?;
-                let ip = Self::ipv4(&address[..slash])?;
-                let prefix = Self::decimal(&address[slash + 1..])?;
-                if prefix > 32 {
-                    return Err(NetworkPolicyError::InvalidInterface);
-                }
-                parsed.push(Self::interface(parsed.len(), identity, ip, prefix as u8));
-            }
+        let parsed = if !records.is_empty() {
+            Self::parse_interfaces(records)?
         } else if !bridge.is_empty() && !ipv4.is_empty() {
-            parsed.push(Self::interface(
+            vec![Self::interface(
                 0,
                 &bridge[..bridge.len().min(40)],
                 Self::ipv4(ipv4)?,
                 16,
-            ));
+            )]
         } else {
-            parsed.push(Self::interface(0, b"", [172, 17, 0, 2], 16));
-        }
+            vec![Self::interface(0, b"", [172, 17, 0, 2], 16)]
+        };
         Ok(Self {
             isolated,
             interfaces: parsed,
         })
+    }
+
+    fn parse_interfaces(records: &[u8]) -> Result<Vec<InterfaceConfiguration>, NetworkPolicyError> {
+        let mut parsed = Vec::new();
+        for record in records.split(|byte| *byte == b'\n').filter(|record| !record.is_empty()) {
+            if parsed.len() == INTERFACE_MAXIMUM {
+                break;
+            }
+            let equal = record
+                .iter()
+                .position(|byte| *byte == b'=')
+                .ok_or(NetworkPolicyError::InvalidInterface)?;
+            let identity = &record[..equal];
+            let address = &record[equal + 1..];
+            if identity.is_empty() || identity.len() > 40 {
+                return Err(NetworkPolicyError::InvalidInterface);
+            }
+            let slash = address
+                .iter()
+                .position(|byte| *byte == b'/')
+                .ok_or(NetworkPolicyError::InvalidInterface)?;
+            let ip = Self::ipv4(&address[..slash])?;
+            let prefix = Self::decimal(&address[slash + 1..])?;
+            if prefix > 32 {
+                return Err(NetworkPolicyError::InvalidInterface);
+            }
+            parsed.push(Self::interface(parsed.len(), identity, ip, prefix as u8));
+        }
+        Ok(parsed)
     }
 
     /// Selects whether an internet destination is routable by this guest

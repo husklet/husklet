@@ -20,46 +20,54 @@ enum Operation {
 impl Operation {
     fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Self>, String> {
         let mut arguments = arguments.into_iter();
-        match arguments.next().as_deref() {
-            None => Ok(None),
-            Some("--worker") => {
-                let operation = arguments.next().unwrap_or_default();
-                let name = arguments.next().filter(|value| !value.is_empty());
-                match operation.as_str() {
-                    "launch" => {
-                        let name = name.ok_or_else(|| "workspace name is missing".to_owned())?;
-                        let slot = arguments.next().filter(|value| !value.is_empty());
-                        let diagnostics = arguments.next().filter(|value| !value.is_empty()).map(PathBuf::from);
-                        let cwd = arguments.next().filter(|value| !value.is_empty());
-                        if arguments.next().is_some() {
-                            return Err("workspace launch received unexpected arguments".into());
-                        }
-                        Ok(Some(Self::Launch {
-                            name,
-                            slot,
-                            cwd,
-                            diagnostics,
-                        }))
-                    }
-                    "daemon" => {
-                        let name = name.ok_or_else(|| "workspace name is missing".to_owned())?;
-                        if arguments.next().is_some() {
-                            return Err("workspace daemon received unexpected arguments".into());
-                        }
-                        Ok(Some(Self::Daemon { name }))
-                    }
-                    "domain" => {
-                        let name = name.ok_or_else(|| "workspace name is missing".to_owned())?;
-                        if arguments.next().is_some() {
-                            return Err("workspace domain received unexpected arguments".into());
-                        }
-                        Ok(Some(Self::Domain { name }))
-                    }
-                    _ => Err(format!("invalid Husklet worker operation {operation:?}")),
-                }
-            }
-            Some(_) => Ok(None),
+        let leading = arguments.next();
+        match leading.as_deref() {
+            Some("--worker") => Self::parse_worker(arguments),
+            _ => Ok(None),
         }
+    }
+
+    fn parse_worker(mut arguments: impl Iterator<Item = String>) -> Result<Option<Self>, String> {
+        let operation = arguments.next().unwrap_or_default();
+        let name = arguments.next().filter(|value| !value.is_empty());
+        match operation.as_str() {
+            "launch" => Self::parse_launch(name, arguments),
+            "daemon" => Ok(Some(Self::Daemon {
+                name: Self::only_name(name, arguments, "daemon")?,
+            })),
+            "domain" => Ok(Some(Self::Domain {
+                name: Self::only_name(name, arguments, "domain")?,
+            })),
+            _ => Err(format!("invalid Husklet worker operation {operation:?}")),
+        }
+    }
+
+    fn parse_launch(name: Option<String>, mut arguments: impl Iterator<Item = String>) -> Result<Option<Self>, String> {
+        let name = name.ok_or_else(|| "workspace name is missing".to_owned())?;
+        let slot = arguments.next().filter(|value| !value.is_empty());
+        let diagnostics = arguments.next().filter(|value| !value.is_empty()).map(PathBuf::from);
+        let cwd = arguments.next().filter(|value| !value.is_empty());
+        if arguments.next().is_some() {
+            return Err("workspace launch received unexpected arguments".into());
+        }
+        Ok(Some(Self::Launch {
+            name,
+            slot,
+            cwd,
+            diagnostics,
+        }))
+    }
+
+    fn only_name(
+        name: Option<String>,
+        mut arguments: impl Iterator<Item = String>,
+        operation: &str,
+    ) -> Result<String, String> {
+        let name = name.ok_or_else(|| "workspace name is missing".to_owned())?;
+        if arguments.next().is_some() {
+            return Err(format!("workspace {operation} received unexpected arguments"));
+        }
+        Ok(name)
     }
 }
 

@@ -254,19 +254,19 @@ impl OrdinaryContext {
                 if aliases.len() + exact.len() == NAME_ALIAS_MAXIMUM {
                     return Err(RuntimePathError::TooLarge);
                 }
-                if field.starts_with('/') {
-                    let path = GuestPath::new(field).map_err(|_| RuntimePathError::Invalid)?;
-                    if exact.contains(&path) {
+                if !field.starts_with('/') {
+                    let alias = GuestName::new(field.as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
+                    if aliases.contains(&alias) {
                         return Err(RuntimePathError::Invalid);
                     }
-                    exact.push(path);
+                    aliases.push(alias);
                     continue;
                 }
-                let alias = GuestName::new(field.as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
-                if aliases.contains(&alias) {
+                let path = GuestPath::new(field).map_err(|_| RuntimePathError::Invalid)?;
+                if exact.contains(&path) {
                     return Err(RuntimePathError::Invalid);
                 }
-                aliases.push(alias);
+                exact.push(path);
             }
             if aliases.is_empty() && exact.is_empty() {
                 return Err(RuntimePathError::Invalid);
@@ -320,25 +320,33 @@ impl OrdinaryContext {
             .iter()
             .filter(|rule| rule.aliases.iter().any(|alias| alias.as_bytes() == leaf))
         {
-            for alias in &rule.aliases {
-                let sibling = if parent == "/" {
-                    format!("/{}", String::from_utf8_lossy(alias.as_bytes()))
-                } else {
-                    format!("{parent}/{}", String::from_utf8_lossy(alias.as_bytes()))
-                };
-                let sibling = GuestPathBytes::new(sibling.as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
-                if self.raw_non_directory(&sibling)? {
-                    return Ok(Some(NameBinding {
-                        guest,
-                        host: rule.host.clone(),
-                        parent: Arc::clone(&rule.parent),
-                        leaf: rule.leaf.clone(),
-                        read_only: rule.read_only,
-                    }));
-                }
+            if self.alias_sibling_present(rule, parent)? {
+                return Ok(Some(NameBinding {
+                    guest,
+                    host: rule.host.clone(),
+                    parent: Arc::clone(&rule.parent),
+                    leaf: rule.leaf.clone(),
+                    read_only: rule.read_only,
+                }));
             }
         }
         Ok(None)
+    }
+
+    /// Reports whether any alias of the rule names a non-directory sibling.
+    fn alias_sibling_present(&self, rule: &NameBind, parent: &str) -> Result<bool, RuntimePathError> {
+        for alias in &rule.aliases {
+            let sibling = if parent == "/" {
+                format!("/{}", String::from_utf8_lossy(alias.as_bytes()))
+            } else {
+                format!("{parent}/{}", String::from_utf8_lossy(alias.as_bytes()))
+            };
+            let sibling = GuestPathBytes::new(sibling.as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
+            if self.raw_non_directory(&sibling)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn raw_non_directory(&self, guest: &GuestPathBytes) -> Result<bool, RuntimePathError> {

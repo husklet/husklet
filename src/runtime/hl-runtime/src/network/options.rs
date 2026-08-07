@@ -16,6 +16,27 @@ const TCP_INFO: i32 = 11;
 const SOL_IPV6: i32 = 41;
 
 impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
+    fn attach_filter(&self, descriptor: i32, level: i32, option: i32, pointer: u64, length: u32) -> LinuxResult {
+        let socket = match self.lookup(descriptor) {
+            Ok(value) => value,
+            Err(error) => return LinuxResult::Error(error),
+        };
+        let value = match self.socket_filter(pointer, length) {
+            Ok(value) => GuestSocketOption::Filter(value),
+            Err(error) => return LinuxResult::Error(error),
+        };
+        if let RuntimeSocketKind::Host { token, .. } = &socket.kind {
+            let Some(host) = &self.host else {
+                return LinuxResult::Error(Errno::ENOSYS);
+            };
+            if let Err(error) = host.set_option(*token, level, option, value.clone()) {
+                return LinuxResult::Error(SocketErrno::runtime(error));
+            }
+        }
+        socket.set_option(level, option, value);
+        LinuxResult::Value(0)
+    }
+
     pub(crate) fn setsockopt(
         &self,
         descriptor: i32,
@@ -25,24 +46,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         length: u32,
     ) -> LinuxResult {
         if level == SOL_SOCKET && option == SO_ATTACH_FILTER {
-            let socket = match self.lookup(descriptor) {
-                Ok(value) => value,
-                Err(error) => return LinuxResult::Error(error),
-            };
-            let value = match self.socket_filter(pointer, length) {
-                Ok(value) => GuestSocketOption::Filter(value),
-                Err(error) => return LinuxResult::Error(error),
-            };
-            if let RuntimeSocketKind::Host { token, .. } = &socket.kind {
-                let Some(host) = &self.host else {
-                    return LinuxResult::Error(Errno::ENOSYS);
-                };
-                if let Err(error) = host.set_option(*token, level, option, value.clone()) {
-                    return LinuxResult::Error(SocketErrno::runtime(error));
-                }
-            }
-            socket.set_option(level, option, value);
-            return LinuxResult::Value(0);
+            return self.attach_filter(descriptor, level, option, pointer, length);
         }
         let form = match Self::option_form(level, option, false) {
             Ok(value) => value,

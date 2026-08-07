@@ -193,14 +193,15 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 }
                 PreparedChildWait::NoChange => {
                     let zero = [0_u8; 128];
-                    if GuestMarshaller::new(&self.memory, self.architecture)
+                    let faulted = GuestMarshaller::new(&self.memory, self.architecture)
                         .copy_to(plan.information, &zero)
                         .fault
-                        .is_some()
-                    {
-                        return LinuxResult::Error(Errno::EFAULT);
-                    }
-                    return LinuxResult::Value(0);
+                        .is_some();
+                    return if faulted {
+                        LinuxResult::Error(Errno::EFAULT)
+                    } else {
+                        LinuxResult::Value(0)
+                    };
                 }
                 PreparedChildWait::WouldBlock => {}
             }

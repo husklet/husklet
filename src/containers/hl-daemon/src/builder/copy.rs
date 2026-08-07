@@ -228,15 +228,7 @@ impl Copy<'_> {
                 .transpose()?
                 .flatten();
             if let (true, Some(archive)) = (self.unpack, archive) {
-                let output = self.destination.join(&target);
-                std::fs::create_dir_all(&output)?;
-                let mut imported = Ownerships::memory();
-                archive.unpack(&source_path, &output, &mut imported)?;
-                ownerships.merge(&target, &imported)?;
-                self.apply_metadata(&output)?;
-                if let Some(owner) = self.owner {
-                    ownerships.set_recursive(self.destination, &target, owner)?;
-                }
+                self.unpack_into(archive, &source_path, &target, ownerships)?;
                 copied = copied.saturating_add(1);
                 continue;
             }
@@ -272,6 +264,25 @@ impl Copy<'_> {
         }
         if copied == 0 {
             return Err(BuildError::Copy("all COPY/ADD sources were excluded".into()));
+        }
+        Ok(())
+    }
+
+    fn unpack_into(
+        &self,
+        archive: Archive,
+        source_path: &Path,
+        target: &Path,
+        ownerships: &mut Ownerships,
+    ) -> Result<(), BuildError> {
+        let output = self.destination.join(target);
+        std::fs::create_dir_all(&output)?;
+        let mut imported = Ownerships::memory();
+        archive.unpack(source_path, &output, &mut imported)?;
+        ownerships.merge(target, &imported)?;
+        self.apply_metadata(&output)?;
+        if let Some(owner) = self.owner {
+            ownerships.set_recursive(self.destination, target, owner)?;
         }
         Ok(())
     }

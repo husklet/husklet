@@ -246,10 +246,12 @@ impl BuildOutput {
 pub(super) async fn prune(State(state): State<DockerState>) -> ApiResult<Json<crate::api::BuildPrune>> {
     let images = state.containers.images().map_err(ApiError::container)?;
     let report = tokio::task::spawn_blocking(move || {
-        for image in images.list()? {
-            if image.name.repository().starts_with("hl-build-cache/") {
-                images.remove(&image.name)?;
-            }
+        let cached = images
+            .list()?
+            .into_iter()
+            .filter(|image| image.name.repository().starts_with("hl-build-cache/"));
+        for image in cached {
+            images.remove(&image.name)?;
         }
         let gc = images.gc()?;
         Ok::<_, hl_images::Error>(crate::api::BuildPrune {

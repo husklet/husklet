@@ -19,15 +19,26 @@ impl RemoveWorkspace {
         let parent = parent.cloned();
         let confirmation_parent = parent.clone();
         crate::gtk_adapter::Dialog::present(confirmation_parent.as_ref(), model, move |event| {
-            if event == remove {
-                if let Err(error) = on_remove() {
-                    let dismiss = EventId::new("dismiss");
-                    let failure = Dialog::new("Could not remove workspace")
-                        .detail(error.to_string())
-                        .action(Action::new(dismiss, "OK").suggested());
-                    crate::gtk_adapter::Dialog::present(parent.as_ref(), failure, |_| {});
-                }
-            }
+            Self::confirmed(&event, &remove, &on_remove, parent.as_ref());
         });
+    }
+
+    fn confirmed(
+        event: &EventId,
+        remove: &EventId,
+        on_remove: &impl Fn() -> std::io::Result<()>,
+        parent: Option<&gtk::Window>,
+    ) {
+        if event != remove {
+            return;
+        }
+        let Err(error) = on_remove() else {
+            return;
+        };
+        let dismiss = EventId::new("dismiss");
+        let failure = Dialog::new("Could not remove workspace")
+            .detail(error.to_string())
+            .action(Action::new(dismiss, "OK").suggested());
+        crate::gtk_adapter::Dialog::present(parent, failure, |_| {});
     }
 }

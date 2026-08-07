@@ -79,13 +79,15 @@ impl<'a> Context<'a> {
                 && evaluated
                     .iter()
                     .any(|(child, ignored)| !ignored && child != path && child.starts_with(path));
-            if *ignored && !keeps_child && path.symlink_metadata().is_ok() {
-                if path.is_dir() {
-                    std::fs::remove_dir_all(path)?;
-                } else {
-                    std::fs::remove_file(path)?;
-                }
+            if !*ignored || keeps_child || path.symlink_metadata().is_err() {
+                continue;
             }
+            let removed = if path.is_dir() {
+                std::fs::remove_dir_all(path)
+            } else {
+                std::fs::remove_file(path)
+            };
+            removed?;
         }
         for protected in [self.root.join(dockerfile), path] {
             if protected.symlink_metadata().is_ok() {
@@ -131,9 +133,7 @@ impl<'a> Context<'a> {
             for entry in std::fs::read_dir(directory)? {
                 let entry = entry?;
                 let path = entry.path();
-                if entry.file_type()?.is_dir() {
-                    directories.push(path.clone());
-                }
+                directories.extend(entry.file_type()?.is_dir().then(|| path.clone()));
                 paths.push(path);
             }
         }

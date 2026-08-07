@@ -219,23 +219,7 @@ impl NetworkCatalog {
             _ => None,
         };
         if let Some(removed) = removed {
-            for slot in &mut *slots {
-                let Some(CatalogSocket::Unix {
-                    snapshot,
-                    pending,
-                    datagram,
-                }) = slot.socket.as_deref()
-                else {
-                    continue;
-                };
-                if pending.iter().any(|id| removed.contains(id)) {
-                    slot.socket = Some(Arc::new(CatalogSocket::Unix {
-                        snapshot: snapshot.clone(),
-                        pending: pending.iter().copied().filter(|id| !removed.contains(id)).collect(),
-                        datagram: datagram.clone(),
-                    }));
-                }
-            }
+            Self::drop_pending(&mut slots, removed);
         }
         self.advance_generation();
         self.ports
@@ -244,6 +228,26 @@ impl NetworkCatalog {
             .retain(|port| port.checkpoint().owner != id);
         Ok(())
     }
+    fn drop_pending(slots: &mut [Slot], removed: [SocketId; 2]) {
+        for slot in slots {
+            let Some(CatalogSocket::Unix {
+                snapshot,
+                pending,
+                datagram,
+            }) = slot.socket.as_deref()
+            else {
+                continue;
+            };
+            if pending.iter().any(|id| removed.contains(id)) {
+                slot.socket = Some(Arc::new(CatalogSocket::Unix {
+                    snapshot: snapshot.clone(),
+                    pending: pending.iter().copied().filter(|id| !removed.contains(id)).collect(),
+                    datagram: datagram.clone(),
+                }));
+            }
+        }
+    }
+
     pub(crate) fn advance_generation(&self) {
         let _ = self
             .generation

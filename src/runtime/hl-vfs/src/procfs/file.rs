@@ -148,7 +148,9 @@ impl OpenFileDescription for OomFile {
             .try_fold(0usize, |length, part| length.checked_add(part.len()))
             .ok_or(ObjectError::InvalidArgument)?;
         let mut bytes = Vec::with_capacity(length);
-        input.iter().for_each(|part| bytes.extend_from_slice(part));
+        for part in input {
+            bytes.extend_from_slice(part);
+        }
         self.write_context(&bytes, context)
     }
 

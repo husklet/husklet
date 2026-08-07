@@ -30,6 +30,14 @@ enum BatchReceiveEntry {
 }
 
 impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
+    fn credential_controls(credentials: hl_network::SenderCredentials) -> Vec<hl_network::ControlMessage> {
+        vec![hl_network::ControlMessage::Credentials {
+            process: credentials.process,
+            user: credentials.user,
+            group: credentials.group,
+        }]
+    }
+
     pub(crate) fn sendmmsg(&self, descriptor: i32, messages: u64, count: u32, flags: u32) -> LinuxResult {
         if count > MESSAGE_VECTOR_MAXIMUM {
             return LinuxResult::Error(Errno::EINVAL);
@@ -502,13 +510,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                     match &socket.kind {
                         RuntimeSocketKind::Unix { pair, endpoint } => pair
                             .peer_credentials(*endpoint)
-                            .map(|credentials| {
-                                vec![hl_network::ControlMessage::Credentials {
-                                    process: credentials.process,
-                                    user: credentials.user,
-                                    group: credentials.group,
-                                }]
-                            })
+                            .map(Self::credential_controls)
                             .unwrap_or_default(),
                         _ => Vec::new(),
                     }

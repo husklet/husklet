@@ -311,6 +311,23 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         };
         self.execute_vector(&lease, &marshaller, plan, reading, None, None)
     }
+    fn raise_sigpipe(&self) {
+        if let Some(signal) = &self.pipe_signal {
+            let _ = signal.queue_sigpipe();
+        }
+    }
+
+    fn truncate_vectors(plan: &mut IovecPlan, allowed: u64) {
+        if allowed >= plan.total_length {
+            return;
+        }
+        let mut remaining = allowed;
+        for vector in &mut plan.vectors {
+            vector.length = vector.length.min(remaining);
+            remaining -= vector.length;
+        }
+        plan.total_length = allowed;
+    }
     pub(super) fn execute_vector(
         &self,
         lease: &hl_descriptor::OperationLease,
@@ -337,14 +354,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 Ok(value) => value as u64,
                 Err(error) => return error,
             };
-            if allowed < plan.total_length {
-                let mut remaining = allowed;
-                for vector in &mut plan.vectors {
-                    vector.length = vector.length.min(remaining);
-                    remaining -= vector.length;
-                }
-                plan.total_length = allowed;
-            }
+            Self::truncate_vectors(&mut plan, allowed);
         }
         let cancellation = self.pipe_cancellation.as_ref().map(|port| port.observation());
         let context = hl_descriptor::OperationContext {
@@ -374,9 +384,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 Err(VectorError::Errno(Errno::EFAULT)) if reading => return Self::failed_read_probe(lease),
                 Err(VectorError::Errno(errno)) => return LinuxResult::Error(errno),
                 Err(VectorError::Object(ObjectError::BrokenPipe)) => {
-                    if let Some(signal) = &self.pipe_signal {
-                        let _ = signal.queue_sigpipe();
-                    }
+                    self.raise_sigpipe();
                     return LinuxResult::Error(Errno::EPIPE);
                 }
                 Err(VectorError::Object(error)) => return LinuxResult::Error(FileErrno::object(error)),

@@ -283,19 +283,15 @@ impl NetworkCheckpointImage {
                 return Err(NetworkCheckpointError::InvalidImage);
             }
             for id in pending {
-                let Some(accepted) = ids.get(id) else {
-                    return Err(NetworkCheckpointError::InvalidImage);
-                };
-                if !claimed.insert(*id)
-                    || !self.sockets.iter().any(|socket| {
-                        matches!(socket, NetworkSocketState::UnixPair { endpoints, .. } if endpoints[1].id == *id)
-                    })
-                    || accepted.family != AddressFamily::Unix
-                    || accepted.state != crate::SocketState::Connected
-                    || accepted.local != listener.local
-                {
-                    return Err(NetworkCheckpointError::InvalidImage);
-                }
+                let accepted = ids.get(id).ok_or(NetworkCheckpointError::InvalidImage)?;
+                let accepts = claimed.insert(*id)
+                    && self.sockets.iter().any(
+                        |socket| matches!(socket, NetworkSocketState::UnixPair { endpoints, .. } if endpoints[1].id == *id),
+                    )
+                    && accepted.family == AddressFamily::Unix
+                    && accepted.state == crate::SocketState::Connected
+                    && accepted.local == listener.local;
+                accepts.then_some(()).ok_or(NetworkCheckpointError::InvalidImage)?;
             }
         }
         Ok(())

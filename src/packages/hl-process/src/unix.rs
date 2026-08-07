@@ -374,43 +374,45 @@ struct Drain {
 }
 
 impl Drain {
-    fn spawn(mut source: File, limit: u64) -> std::io::Result<Self> {
+    fn spawn(source: File, limit: u64) -> std::io::Result<Self> {
         nonblocking(&source)?;
         let count = Arc::new(AtomicU64::new(0));
         let observed = Arc::clone(&count);
         let stopping = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&stopping);
-        let thread = thread::spawn(move || {
-            let capacity = usize::try_from(limit.min(1024 * 1024)).unwrap_or(1024 * 1024);
-            let mut retained = Vec::with_capacity(capacity);
-            let mut buffer = [0_u8; 16 * 1024];
-            loop {
-                let size = match source.read(&mut buffer) {
-                    Ok(size) => size,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        if stop.load(Ordering::Acquire) {
-                            break;
-                        }
-                        thread::sleep(POLL);
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
-                if size == 0 {
-                    break;
-                }
-                observed.fetch_add(size as u64, Ordering::Release);
-                let available = usize::try_from(limit.saturating_sub(retained.len() as u64)).unwrap_or(usize::MAX);
-                retained.extend_from_slice(&buffer[..size.min(available)]);
-            }
-            Ok(retained)
-        });
+        let thread = thread::spawn(move || Self::drain(source, limit, &observed, &stop));
         Ok(Self {
             count,
             limit,
             stopping,
             thread,
         })
+    }
+
+    fn drain(mut source: File, limit: u64, observed: &AtomicU64, stop: &AtomicBool) -> std::io::Result<Vec<u8>> {
+        let capacity = usize::try_from(limit.min(1024 * 1024)).unwrap_or(1024 * 1024);
+        let mut retained = Vec::with_capacity(capacity);
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let size = match source.read(&mut buffer) {
+                Ok(size) => size,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && stop.load(Ordering::Acquire) => {
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(POLL);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if size == 0 {
+                break;
+            }
+            observed.fetch_add(size as u64, Ordering::Release);
+            let available = usize::try_from(limit.saturating_sub(retained.len() as u64)).unwrap_or(usize::MAX);
+            retained.extend_from_slice(&buffer[..size.min(available)]);
+        }
+        Ok(retained)
     }
 
     fn exceeded(&self) -> bool {
