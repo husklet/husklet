@@ -39,6 +39,12 @@ cargo run -p testing -- runtime core --engine-profile debug
 Every result row records the profile, and the runner's SHA-256 joins the resume
 stamp, so a rebuilt engine can never resume rows measured by another one.
 
+A case's `environment:` is split by name. An `HL_*` name is an engine option and
+is applied to the container spec, never exported to the guest; everything else
+is guest environment. An unrecognised `HL_*` name fails the manifest at load,
+and a recognised one the runner cannot yet express (`HL_NETNS`, `HL_NETBR`,
+`HL_IP`, `HL_ULIMITS`) fails its case by name rather than being dropped.
+
 Check committed golden bytes against the folder's reference emulator, or
 replace them explicitly:
 
