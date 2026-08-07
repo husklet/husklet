@@ -276,11 +276,11 @@ fn naming_connectives() {
     fs::create_dir_all(root.join("src/launcher")).unwrap();
     fs::write(
         root.join("src/launcher/plan.rs"),
-        r#"
+        r"
 fn list_with_shared_size() {}
 fn wait_until_freeze_waits() {}
 fn reject_duplicate_fixture_destinations() {}
-"#,
+",
     )
     .unwrap();
     let workspace = Workspace::load([root.clone()]).unwrap();
@@ -297,11 +297,11 @@ fn naming_test_attribute() {
     fs::create_dir_all(root.join("src/launcher")).unwrap();
     fs::write(
         root.join("src/launcher/plan.rs"),
-        r#"
+        r"
 #[test]
 fn launcher_rejects_a_deliberately_long_assertion_name() {}
 fn launcher_rejects_a_deliberately_long_production_name() {}
-"#,
+",
     )
     .unwrap();
     let workspace = Workspace::load([root.clone()]).unwrap();

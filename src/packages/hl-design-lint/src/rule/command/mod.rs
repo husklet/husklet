@@ -92,6 +92,8 @@ impl<'a> Commands<'a> {
         (path == ["std", "process", "Command"] || path == ["tokio", "process", "Command"]).then(|| path.join("::"))
     }
 
+    // The finding owns the subject it reports.
+    #[allow(clippy::needless_pass_by_value)]
     fn report_boundary(&mut self, call: &ExprCall, command: String) {
         if self.boundary() {
             return;

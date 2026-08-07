@@ -306,6 +306,8 @@ fn common_fields(wire: &Definition, domain: &Definition) -> Vec<(String, String)
         .collect()
 }
 
+// The finding owns the field pairs it reports.
+#[allow(clippy::needless_pass_by_value)]
 fn finding(
     rule: &'static str,
     wire: &Definition,

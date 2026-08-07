@@ -93,6 +93,7 @@ impl Registry {
     }
 
     /// Appends a rule in execution order.
+    #[must_use]
     pub fn register(mut self, rule: impl Rule + 'static) -> Self {
         self.rules.push(Box::new(rule));
         self

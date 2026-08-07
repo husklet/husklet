@@ -7,6 +7,7 @@
 //! Dependency-free + fully headless-testable: the tree serializes to a compact prefix-notation text
 //! format (no serde/toml), and the history round-trip (dump VTE text → replay bytes) is pure.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::{collections::HashSet, io};
 
@@ -86,7 +87,7 @@ impl PaneNode {
             Self::Split { dir, ratio, a, b } => {
                 out.push_str(dir.token());
                 out.push(' ');
-                out.push_str(&format!("{:.4}", ratio.clamp(0.05, 0.95)));
+                let _ = write!(out, "{:.4}", ratio.clamp(0.05, 0.95));
                 out.push(' ');
                 a.write(out);
                 out.push(' ');
@@ -213,7 +214,12 @@ impl Session {
         let mut components = Path::new(file).components();
         let valid_component =
             matches!(components.next(), Some(std::path::Component::Normal(_))) && components.next().is_none();
-        if !valid_component || !file.starts_with("hist-") || !file.ends_with(".txt") {
+        if !valid_component
+            || !file.starts_with("hist-")
+            || !std::path::Path::new(file)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"))
+        {
             return Err(Layout::invalid("invalid pane history filename"));
         }
         Ok(Self::dir(storage_dir).join(file))

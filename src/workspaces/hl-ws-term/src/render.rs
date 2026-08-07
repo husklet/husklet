@@ -44,6 +44,8 @@ impl Image {
         (self.rgba[i], self.rgba[i + 1], self.rgba[i + 2], self.rgba[i + 3])
     }
 
+    // `kind` is the four-byte PNG chunk tag; naming it as an array keeps call sites literal.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     fn write_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
         out.extend_from_slice(&(data.len() as u32).to_be_bytes());
         let start = out.len();
@@ -187,6 +189,8 @@ impl Image {
         }
     }
 
+    // r/g/b/x/y are the conventional names for these quantities.
+    #[allow(clippy::many_single_char_names)]
     fn put(&mut self, img_w: u32, x: u32, y: u32, (r, g, b): (u8, u8, u8)) {
         let i = ((y * img_w + x) * 4) as usize;
         self.rgba[i..i + 4].copy_from_slice(&[r, g, b, 0xff]);
@@ -216,6 +220,7 @@ impl CpuRenderer {
     }
 
     /// Resolve an xterm 256-color palette index.
+    #[allow(clippy::unused_self)]
     fn ansi(&self, index: u8) -> (u8, u8, u8) {
         const BASE: [(u8, u8, u8); 16] = [
             (0x00, 0x00, 0x00),

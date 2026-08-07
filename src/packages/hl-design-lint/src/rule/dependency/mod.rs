@@ -323,146 +323,116 @@ fn allowed_edge(source: &str, target: &str) -> bool {
     matches!(
         (source, target),
         // Container services and Docker-compatible APIs.
-        ("hl-client", "hl-container")
-            | ("hl-client", "hl-daemon")
-            | ("hl-client", "hl-images")
-            | ("hl-client", "hl-log")
-            | ("hl-container", "hl-engine")
-            | ("hl-engine", "hl-native")
-            | ("hl-container", "hl-fs")
-            | ("hl-container", "hl-images")
-            | ("hl-container", "hl-log")
-            | ("hl-daemon", "hl-client")
-            | ("hl-daemon", "hl-container")
-            | ("hl-daemon", "hl-design")
-            | ("hl-daemon", "hl-images")
-            | ("hl-daemon", "hl-log")
-            | ("hl-images", "hl-fs")
-            | ("hl-images", "hl-log")
-            // Workspace and terminal capabilities.
-            | ("hl-ws-term", "hl-fs")
-            | ("hl-ws-term", "hl-ws")
-            // Product composition root.
-            | ("husklet", "hl-client")
-            | ("husklet", "hl-container")
-            | ("husklet", "hl-daemon")
-            | ("husklet", "hl-design")
-            | ("husklet", "hl-fs")
-            | ("husklet", "hl-gui")
-            | ("husklet", "hl-images")
-            | ("husklet", "hl-log")
-            | ("husklet", "hl-ws")
-            | ("husklet", "hl-ws-term")
-            | ("dockerd", "hl-container")
-            | ("dockerd", "hl-daemon")
-            | ("dockerd", "hl-images")
-            | ("dockerd", "hl-log")
-            | ("engine", "hl-engine")
-            | ("engine", "hl-log")
-            | ("testing", "hl-checkpoint")
-            | ("testing", "hl-container")
-            | ("testing", "hl-descriptor")
-            | ("testing", "hl-design")
-            | ("testing", "hl-engine")
-            | ("testing", "hl-images")
-            | ("testing", "hl-log")
-            | ("testing", "hl-network")
-            | ("testing", "hl-process")
-            | ("testing", "hl-provider")
-            | ("testing", "hl-runtime")
-        // Runtime foundations and domains.
-            | ("hl-vfs", "hl-descriptor")
-            | ("hl-vfs", "hl-fs")
-            | ("hl-terminal", "hl-descriptor")
-            | ("hl-event", "hl-descriptor")
-            | ("hl-event", "hl-time")
-            | ("hl-memory", "hl-isa")
-            | ("hl-sync", "hl-memory")
-            | ("hl-sync", "hl-time")
-            | ("hl-network", "hl-descriptor")
-            | ("hl-network", "hl-sync")
-            | ("hl-ipc", "hl-descriptor")
-            | ("hl-ipc", "hl-memory")
-            | ("hl-ipc", "hl-sync")
-            | ("hl-ipc", "hl-time")
-            | ("hl-task", "hl-descriptor")
-            | ("hl-task", "hl-memory")
-            | ("hl-task", "hl-sync")
-            | ("hl-task", "hl-time")
-            | ("hl-loader", "hl-isa")
-            | ("hl-loader", "hl-vfs")
-            | ("hl-loader", "hl-memory")
-            | ("hl-execution", "hl-isa")
-            | ("hl-execution", "hl-memory")
+        (
+            "hl-client" | "hl-daemon" | "husklet" | "dockerd" | "testing",
+            "hl-container"
+        ) | ("hl-client" | "husklet" | "dockerd", "hl-daemon")
+            | (
+                "hl-client" | "hl-container" | "hl-daemon" | "husklet" | "dockerd" | "testing",
+                "hl-images"
+            )
+            | (
+                "hl-client"
+                    | "hl-container"
+                    | "hl-daemon"
+                    | "hl-images"
+                    | "husklet"
+                    | "dockerd"
+                    | "engine"
+                    | "testing"
+                    | "hl-runtime"
+                    | "hl-engine",
+                "hl-log"
+            )
+            | ("hl-container" | "engine" | "testing", "hl-engine")
+            | (
+                "hl-engine",
+                "hl-native"
+                    | "hl-runtime"
+                    | "hl-checkpoint"
+                    | "hl-descriptor"
+                    | "hl-event"
+                    | "hl-network"
+                    | "hl-linux"
+                    | "hl-execution"
+                    | "hl-fs"
+                    | "hl-isa"
+                    | "hl-loader"
+                    | "hl-memory"
+                    | "hl-sync"
+                    | "hl-task"
+                    | "hl-time"
+                    | "hl-provider"
+                    | "hl-ipc"
+            )
+            | (
+                "hl-container" | "hl-images" | "hl-ws-term" | "husklet" | "hl-vfs",
+                "hl-fs"
+            )
+            | ("hl-daemon" | "husklet", "hl-client")
+            | ("hl-daemon" | "husklet" | "testing", "hl-design")
+            | ("hl-ws-term" | "husklet", "hl-ws")
+            | ("husklet", "hl-gui" | "hl-ws-term")
+            | ("testing" | "hl-runtime", "hl-checkpoint")
+            | (
+                "testing"
+                    | "hl-vfs"
+                    | "hl-terminal"
+                    | "hl-event"
+                    | "hl-network"
+                    | "hl-ipc"
+                    | "hl-task"
+                    | "hl-provider"
+                    | "hl-linux"
+                    | "hl-checkpoint"
+                    | "hl-runtime"
+                    | "hl-fake-host",
+                "hl-descriptor"
+            )
+            | (
+                "testing" | "hl-linux" | "hl-checkpoint" | "hl-runtime" | "hl-fake-host",
+                "hl-network"
+            )
+            | ("testing", "hl-process" | "hl-provider" | "hl-runtime")
+            | (
+                "hl-event" | "hl-sync" | "hl-ipc" | "hl-task" | "hl-linux" | "hl-runtime" | "hl-fake-host",
+                "hl-time"
+            )
+            | (
+                "hl-memory" | "hl-loader" | "hl-execution" | "hl-linux" | "hl-runtime" | "hl-fake-host",
+                "hl-isa"
+            )
+            | (
+                "hl-sync"
+                    | "hl-ipc"
+                    | "hl-task"
+                    | "hl-loader"
+                    | "hl-execution"
+                    | "hl-linux"
+                    | "hl-checkpoint"
+                    | "hl-runtime"
+                    | "hl-fake-host",
+                "hl-memory"
+            )
+            | (
+                "hl-network" | "hl-ipc" | "hl-task" | "hl-linux" | "hl-checkpoint" | "hl-runtime",
+                "hl-sync"
+            )
+            | (
+                "hl-loader" | "hl-linux" | "hl-checkpoint" | "hl-runtime" | "hl-fake-host",
+                "hl-vfs"
+            )
             | ("hl-execution", "hl-softfloat")
-            | ("hl-provider", "hl-descriptor")
-            // Linux personality.
-            | ("hl-linux", "hl-isa")
-            | ("hl-linux", "hl-time")
-            | ("hl-linux", "hl-descriptor")
-            | ("hl-linux", "hl-vfs")
-            | ("hl-linux", "hl-event")
-            | ("hl-linux", "hl-memory")
-            | ("hl-linux", "hl-sync")
-            | ("hl-linux", "hl-network")
-            | ("hl-linux", "hl-ipc")
-            | ("hl-linux", "hl-task")
-            // Aggregate checkpoint coordination.
-            | ("hl-checkpoint", "hl-descriptor")
-            | ("hl-checkpoint", "hl-vfs")
-            | ("hl-checkpoint", "hl-event")
-            | ("hl-checkpoint", "hl-memory")
-            | ("hl-checkpoint", "hl-sync")
-            | ("hl-checkpoint", "hl-network")
-            | ("hl-checkpoint", "hl-ipc")
-            | ("hl-checkpoint", "hl-task")
-            | ("hl-checkpoint", "hl-provider")
-            | ("hl-checkpoint", "hl-execution")
-            // Runtime and product composition.
-            | ("hl-runtime", "hl-aio")
-            | ("hl-runtime", "hl-linux")
-            | ("hl-runtime", "hl-loader")
-            | ("hl-runtime", "hl-checkpoint")
-            | ("hl-runtime", "hl-provider")
-            | ("hl-runtime", "hl-execution")
-            | ("hl-runtime", "hl-descriptor")
-            | ("hl-runtime", "hl-event")
-            | ("hl-runtime", "hl-isa")
-            | ("hl-runtime", "hl-time")
-            | ("hl-runtime", "hl-sync")
-            | ("hl-runtime", "hl-task")
-            | ("hl-runtime", "hl-memory")
-            | ("hl-runtime", "hl-network")
-            | ("hl-runtime", "hl-ipc")
-            | ("hl-runtime", "hl-vfs")
-            | ("hl-runtime", "hl-terminal")
-            | ("hl-runtime", "hl-log")
-            | ("hl-fake-host", "hl-descriptor")
-            | ("hl-fake-host", "hl-execution")
-            | ("hl-fake-host", "hl-isa")
+            | (
+                "hl-linux" | "hl-checkpoint" | "hl-runtime",
+                "hl-event" | "hl-ipc" | "hl-task"
+            )
+            | (
+                "hl-checkpoint" | "hl-runtime" | "hl-fake-host",
+                "hl-provider" | "hl-execution"
+            )
+            | ("hl-runtime", "hl-aio" | "hl-linux" | "hl-loader" | "hl-terminal")
             | ("hl-fake-host", "hl-linux")
-            | ("hl-fake-host", "hl-memory")
-            | ("hl-fake-host", "hl-network")
-            | ("hl-fake-host", "hl-provider")
-            | ("hl-fake-host", "hl-time")
-            | ("hl-fake-host", "hl-vfs")
-            | ("hl-engine", "hl-runtime")
-            | ("hl-engine", "hl-checkpoint")
-            | ("hl-engine", "hl-descriptor")
-            | ("hl-engine", "hl-event")
-            | ("hl-engine", "hl-network")
-            | ("hl-engine", "hl-linux")
-            | ("hl-engine", "hl-execution")
-            | ("hl-engine", "hl-fs")
-            | ("hl-engine", "hl-isa")
-            | ("hl-engine", "hl-loader")
-            | ("hl-engine", "hl-memory")
-            | ("hl-engine", "hl-sync")
-            | ("hl-engine", "hl-task")
-            | ("hl-engine", "hl-time")
-            | ("hl-engine", "hl-log")
-            | ("hl-engine", "hl-provider")
-            | ("hl-engine", "hl-ipc")
     )
 }
 
@@ -493,6 +463,8 @@ fn dependencies(document: &toml::Value, manifest: &Path, workspace: &WorkspaceDe
     output
 }
 
+// The recursion hands each nested table its own owned target name.
+#[allow(clippy::needless_pass_by_value)]
 fn tables(
     table: &toml::map::Map<String, toml::Value>,
     target: Option<String>,

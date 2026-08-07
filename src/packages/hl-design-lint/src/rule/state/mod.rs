@@ -327,6 +327,8 @@ impl<'ast> Visit<'ast> for Strings<'_> {
     }
 }
 
+// The finding owns the subject it reports.
+#[allow(clippy::needless_pass_by_value)]
 fn finding(rule: &'static str, concept: Concept, evidence: Evidence) -> Option<Finding> {
     if evidence.preserves_unknown {
         return None;

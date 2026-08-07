@@ -62,7 +62,6 @@ impl LocalPty {
         // the whole allocate-and-read-name critical section with a process-wide lock, copying the name
         // into owned storage before releasing it. (`ptsname_r` would avoid this but isn't portable to
         // macOS.) The lock is released before `fork` so the child never inherits a held lock.
-        static PTY_ALLOC: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let (master, slave_path) = {
             let _guard = PTY_ALLOC.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // SAFETY: the block only names the master descriptor it just opened, and the `ptsname` buffer is copied while the allocation lock is still held.
@@ -228,6 +227,7 @@ impl Drop for LocalPty {
         }
     }
 }
+static PTY_ALLOC: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -269,7 +269,7 @@ mod tests {
                 exited = true;
                 continue; // loop once more to drain the fully-buffered final output
             }
-            assert!(Instant::now() <= deadline, "pty test timed out")
+            assert!(Instant::now() <= deadline, "pty test timed out");
         }
         vt
     }

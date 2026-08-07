@@ -102,6 +102,8 @@ struct Visitor<'a> {
 }
 
 impl Visitor<'_> {
+    // The finding owns the subject it reports.
+    #[allow(clippy::needless_pass_by_value)]
     fn inspect(&mut self, subject: String, span: proc_macro2::Span, types: impl IntoIterator<Item = Type>) {
         let mut leaks = BTreeSet::new();
         for ty in types {
@@ -344,6 +346,8 @@ fn collect_toolkit_uses(tree: &UseTree, prefix: Option<String>, aliases: &Aliase
     }
 }
 
+// The finding owns the subject it reports.
+#[allow(clippy::needless_pass_by_value)]
 fn record_toolkit_use(prefix: Option<String>, leaf: String, aliases: &Aliases, leaks: &mut BTreeSet<String>) {
     let path = prefix.map_or_else(|| leaf.clone(), |prefix| format!("{prefix}::{leaf}"));
     let root = path.split("::").next().unwrap_or_default();

@@ -91,6 +91,8 @@ struct Implementation {
 }
 
 impl Definition {
+    // The finding owns the subject it reports.
+    #[allow(clippy::needless_pass_by_value)]
     fn finding(self, rule: &'static str, implementations: Vec<Implementation>) -> Option<Finding> {
         if self.methods.len() < MINIMUM_METHODS {
             return None;

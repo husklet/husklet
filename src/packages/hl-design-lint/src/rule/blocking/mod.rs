@@ -82,6 +82,8 @@ impl<'a> Blocking<'a> {
         parts
     }
 
+    // The finding owns the subject it reports.
+    #[allow(clippy::needless_pass_by_value)]
     fn report(&mut self, span: proc_macro2::Span, kind: &str, subject: String, help: &str) {
         let location = self.source.location(span);
         let mut finding = Finding::error("async-blocking-operation", subject.clone(), location.clone());

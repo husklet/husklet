@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(markdown.paths, [PathBuf::from("src"), PathBuf::from("tests")]);
 
         let mut cases = Arguments::try_parse_from(["hl-design-lint", "--cases", "lint", "src"]).unwrap();
-        assert!(matches!(cases.output(), Output::Cases(path) if path == PathBuf::from("lint")));
+        assert!(matches!(cases.output(), Output::Cases(path) if path == std::path::Path::new("lint")));
         assert_eq!(cases.paths, [PathBuf::from("src")]);
     }
 

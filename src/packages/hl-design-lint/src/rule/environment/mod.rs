@@ -77,6 +77,8 @@ impl<'a> Accesses<'a> {
         path
     }
 
+    // The finding owns the subject it reports.
+    #[allow(clippy::needless_pass_by_value)]
     fn report_access(&mut self, span: Span, operation: String) {
         if self.boundary() {
             return;

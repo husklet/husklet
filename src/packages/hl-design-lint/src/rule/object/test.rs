@@ -1,3 +1,6 @@
+// The fixtures build source text by concatenation; that reads better than a fold here.
+#![allow(clippy::format_collect, clippy::format_push_string)]
+
 use std::{
     fs,
     path::PathBuf,

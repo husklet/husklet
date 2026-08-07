@@ -43,6 +43,8 @@ struct Functions<'a> {
 }
 
 impl Functions<'_> {
+    // The finding owns the subject it reports.
+    #[allow(clippy::needless_pass_by_value)]
     fn inspect(&mut self, name: String, span: Span, block: &syn::Block) {
         let mut depth = Depth::default();
         depth.visit_block(block);

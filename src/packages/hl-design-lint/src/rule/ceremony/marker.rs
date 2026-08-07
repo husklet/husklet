@@ -54,6 +54,8 @@ struct Trait {
 }
 
 impl Trait {
+    // The finding owns the subject it reports.
+    #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
     fn finding(self, implementations: Vec<Implementation>) -> Option<Finding> {
         let proof = if implementations.is_empty() {
             "the private empty trait has no implementations or uses"

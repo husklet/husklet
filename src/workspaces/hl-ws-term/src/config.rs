@@ -5,6 +5,7 @@
 //! Unknown keys are ignored (forward-compatible); malformed values fall back to the default. The GUI
 //! (`hl-term`) loads this at startup, applies it to every VTE terminal, and live-reloads on file change.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Terminal cursor shape.
@@ -234,10 +235,10 @@ impl TermConfig {
         s.push_str("cursor_blink = true\n\n");
         s.push_str("# colors (#rrggbb)\n");
         let d = TermConfig::default();
-        s.push_str(&format!("foreground = {}\n", d.foreground));
-        s.push_str(&format!("background = {}\n", d.background));
+        let _ = writeln!(s, "foreground = {}", d.foreground);
+        let _ = writeln!(s, "background = {}", d.background);
         for (i, c) in d.palette.iter().enumerate() {
-            s.push_str(&format!("color{i} = {c}\n"));
+            let _ = writeln!(s, "color{i} = {c}");
         }
         s
     }

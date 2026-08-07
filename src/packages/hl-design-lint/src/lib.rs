@@ -1,6 +1,9 @@
 //! Extensible repository design linting with registered rules and interchangeable reporters.
 
 #![warn(missing_docs)]
+// Rule findings assign their help text once, on a cold path; `clone_into` would obscure
+// the literal each rule is documenting.
+#![allow(clippy::assigning_clones)]
 
 mod error;
 mod model;
