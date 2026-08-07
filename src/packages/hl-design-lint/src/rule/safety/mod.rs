@@ -1,6 +1,7 @@
 use proc_macro2::{Span, TokenTree};
 use syn::{
-    Attribute, ExprUnsafe, ImplItemFn, ItemFn, ItemImpl, ItemMod, ItemTrait, TraitItemFn, spanned::Spanned, visit::Visit,
+    Attribute, Expr, ExprUnsafe, ImplItemFn, ItemFn, ItemImpl, ItemMod, ItemTrait, Macro, Token, TraitItemFn,
+    punctuated::Punctuated, spanned::Spanned, visit::Visit,
 };
 
 use crate::{
@@ -31,6 +32,7 @@ impl Rule for Boundary {
                 application: application(source),
                 ffi_depth: 0,
                 allow_depth: 0,
+                macro_depth: 0,
                 findings: Vec::new(),
             };
             visitor.visit_file(&source.syntax);
@@ -46,6 +48,7 @@ struct Syntax<'a> {
     application: bool,
     ffi_depth: usize,
     allow_depth: usize,
+    macro_depth: usize,
     findings: Vec<Finding>,
 }
 
@@ -72,8 +75,10 @@ impl Syntax<'_> {
         self.findings.push(finding);
     }
 
+    /// A macro argument shares its caller's line, so the rationale window cannot be read there; the
+    /// boundary rule still applies.
     fn report_missing_rationale(&mut self, expression: &ExprUnsafe) {
-        if !self.allowed() || rationale(self.source, expression.span()) {
+        if !self.allowed() || self.macro_depth != 0 || rationale(self.source, expression.span()) {
             return;
         }
         let mut finding = Finding::error(
@@ -97,6 +102,17 @@ impl<'ast> Visit<'ast> for Syntax<'_> {
         syn::visit::visit_item_mod(self, module);
         self.allow_depth -= allow;
         self.ffi_depth -= usize::from(ffi);
+    }
+
+    /// `syn` does not walk macro token streams, so `assert_eq!(unsafe { .. }, 0)` would otherwise
+    /// escape every check that bare `unsafe` beside it receives.
+    fn visit_macro(&mut self, invocation: &'ast Macro) {
+        let arguments = invocation.parse_body_with(Punctuated::<Expr, Token![,]>::parse_terminated);
+        self.macro_depth += 1;
+        for argument in arguments.iter().flatten() {
+            self.visit_expr(argument);
+        }
+        self.macro_depth -= 1;
     }
 
     fn visit_expr_unsafe(&mut self, expression: &'ast ExprUnsafe) {
@@ -204,10 +220,24 @@ fn application(source: &Source) -> bool {
         .any(|components| components[0] == "src" && matches!(components[1], "app" | "apps"))
 }
 
+/// Start of the comment block that runs unbroken up to `line`, so the window below is measured from
+/// that block's last line rather than its first and a long rationale is not truncated away.
+fn attached(lines: &[&str], line: usize) -> usize {
+    let mut first = line;
+    while first != 0 {
+        let previous = lines[first - 1].trim_start();
+        if !previous.starts_with("//") && !previous.starts_with('*') && !previous.starts_with("/*") {
+            break;
+        }
+        first -= 1;
+    }
+    first
+}
+
 fn rationale(source: &Source, span: Span) -> bool {
     let lines = source.text.lines().collect::<Vec<_>>();
     let line = span.start().line.saturating_sub(1);
-    let first = line.saturating_sub(3);
+    let first = line.saturating_sub(3).min(attached(&lines, line));
     let last = (line + 1).min(lines.len().saturating_sub(1));
     lines[first..=last].iter().any(|line| {
         ["// SAFETY:", "/* SAFETY:", "* SAFETY:"]

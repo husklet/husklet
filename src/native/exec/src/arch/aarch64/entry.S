@@ -21,7 +21,8 @@ hl_native_aarch64_enter:
     mrs x9,fpcr
     mrs x10,fpsr
     stp x9,x10,[sp]
-    mov x9,sp
+    /* host_stack is the caller's sp; the fpcr/fpsr pair sits just below it. */
+    add x9,sp,#16
     str x9,[x0,#280]
     br x1
 .size hl_native_aarch64_enter,.-hl_native_aarch64_enter
@@ -42,8 +43,8 @@ hl_native_aarch64_return:
     ldp q12,q13,[x0,#960]
     ldp q14,q15,[x0,#992]
     ldr x9,[x0,#280]
-    ldp x10,x11,[x9]
-    add sp,x9,#16
+    ldp x10,x11,[x9,#-16]
+    mov sp,x9
     msr fpcr,x10
     msr fpsr,x11
     ret

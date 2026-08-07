@@ -175,7 +175,8 @@ static uint32_t resolve_operand(void *opaque, uint64_t address, uint64_t size, u
         return HL_NATIVE_OPERAND_FAULT;
     *output = (hl_native_projection_view){.guest_first = address, .guest_last = address + size,
         .host_first = (uint64_t)(uintptr_t)&provider->value, .mapping_incarnation = mapping,
-        .permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE};
+        .permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
+        .write_policy = HL_NATIVE_WRITE_EXACT};
     return HL_NATIVE_OPERAND_RESOLVED;
 }
 

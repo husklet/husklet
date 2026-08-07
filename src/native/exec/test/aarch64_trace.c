@@ -113,7 +113,8 @@ static hl_native_memory executable_services(executable_memory *memory) {
 
 static void execute(hl_native_aarch64_cpu *cpu, void *address) {
     void (*entry)(void);
-    cpu->budget = UINT64_MAX;
+    /* The stub admits a batch by a sign-bit borrow test, so budget must stay under INT64_MAX. */
+    cpu->budget = (uint64_t)INT64_MAX;
     cpu->executed = 0;
     memcpy(&entry, &address, sizeof(entry));
     hl_native_aarch64_enter(cpu, entry);
@@ -1351,9 +1352,9 @@ int main(void) {
     /* A resolver target may have an independently versioned executable span.
      * Its guarded exit must recover the exact chained block rather than the
      * overlapping entry source's token or guest-PC range. */
-    const uint32_t versioned_branch = 0x94000440u; /* bl 0x9400 from 0x8300 */
+    const uint32_t versioned_branch = 0x94000440u; /* bl 0x9800 from 0x8700 */
     const hl_native_source_span versioned_entry_span = {
-        0x8300, (const uint8_t *)&versioned_branch, sizeof(versioned_branch), 7, 8};
+        0x8700, (const uint8_t *)&versioned_branch, sizeof(versioned_branch), 7, 8};
     const hl_native_source versioned_entry = {&versioned_entry_span, 1, 7, 8};
     operand_provider versioned_memory = {
         .value = UINT64_C(0x123456789abcdef0), .guest = 0x3000,
@@ -1397,7 +1398,7 @@ int main(void) {
     }
     provider.word = LDR_X(1, 0);
     provider.next = 0xd4000001u;
-    provider.guest = 0x9400;
+    provider.guest = 0x9800;
     provider.size = 2 * sizeof(provider.word);
     provider.stale = 1;
     provider.calls = 0;
@@ -1409,10 +1410,10 @@ int main(void) {
     run_request.size = sizeof(run_request);
     run_request.budget = 3;
     memset(&run_state, 0, sizeof(run_state));
-    run_state.program = 0x8300;
+    run_state.program = 0x8700;
     run_state.registers[0] = versioned_memory.guest;
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
-    CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_output.instruction == 0x9404);
+    CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_output.instruction == 0x9804);
     CHECK(run_state.registers[1] == versioned_memory.value && provider.calls == 1 && versioned_memory.calls == 1);
     provider.word = 0xd4000001u;
     provider.next = 0;

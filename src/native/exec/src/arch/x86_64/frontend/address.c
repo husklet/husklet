@@ -79,7 +79,7 @@ uint32_t hl_x86_address_words(const instruction *item) {
     if (item->immediate != 0u) words += constant_words(item->immediate) + 1u;
     if (item->bit_memory_offset != 0u)
         words += item->bit_immediate != 0u ? constant_words(item->operand_immediate >> 3) + 1u :
-                 (item->bit_operand_width == 8u ? 2u : 3u);
+                 3u; /* extend/move, asr, add - three words at every operand width */
     return words + 1u + (item->segment != 0u ? 2u : 0u);
 }
 

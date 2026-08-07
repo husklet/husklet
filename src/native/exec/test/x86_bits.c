@@ -1,4 +1,6 @@
 #include "../src/arch/x86_64/frontend.h"
+#include "../src/arch/x86_64/frontend/private.h"
+#include "../src/arch/x86_64/decode.h"
 #include "../src/arch/x86_64/entry.h"
 #include "../include/cpu.h"
 
@@ -47,6 +49,28 @@ static int decode_matrix(void) {
     { const uint8_t bad[] = {0x0f, 0xba, 0xc0, 1}; CHECK(emit(bad, sizeof bad, host, &result) == HL_X86_A64_UNSUPPORTED); }
     { const uint8_t lock[] = {0xf0, 0x0f, 0xab, 0x08}; CHECK(emit(lock, sizeof lock, host, &result) == HL_X86_A64_UNSUPPORTED); }
     { const uint8_t short_form[] = {0x0f, 0xba, 0xe0}; CHECK(emit(short_form, sizeof short_form, host, &result) == HL_X86_A64_TRUNCATED); }
+    return 0;
+}
+
+/* hl_x86_address_words must agree with hl_x86_emit_address on every bit_memory_offset shape,
+ * so routing a new opcode through that branch cannot silently under-reserve host words. */
+static int address_sizing(void) {
+    static const uint8_t widths[] = {1u, 2u, 4u, 8u};
+    uint32_t host[64];
+    for (size_t w = 0; w < sizeof widths; ++w) for (unsigned immediate = 0; immediate < 2u; ++immediate) {
+        instruction item = {0};
+        uint32_t cursor = 0;
+        item.operation = OP_ADDRESS;
+        item.address_base = 3u;
+        item.address_index = UINT8_MAX;
+        item.bit_memory_offset = 1u;
+        item.bit_operand_width = widths[w];
+        item.bit_immediate = (uint8_t)immediate;
+        item.bit_index = 5u;
+        item.operand_immediate = 0x1234u;
+        hl_x86_emit_address(host, &cursor, &item);
+        CHECK(hl_x86_address_words(&item) == cursor);
+    }
     return 0;
 }
 
@@ -101,4 +125,8 @@ static int runtime_matrix(void) {
     return 0;
 }
 
-int main(void) { int status=decode_matrix(); return status != 0 ? status : runtime_matrix(); }
+int main(void) {
+    int status = decode_matrix();
+    if (status == 0) status = address_sizing();
+    return status != 0 ? status : runtime_matrix();
+}

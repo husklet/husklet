@@ -17,16 +17,12 @@ const SKIPPED: &[(&str, &str)] =
 /// Programs that fail at HEAD for reasons that predate this harness. Removing an entry is the fix;
 /// a listed program that starts passing fails the run so the list cannot rot. The allowlist excuses
 /// a program that runs and fails, never one that fails to build.
-const KNOWN_FAILING: &[(&str, &str)] = &[
-    ("a64_cycles", "cycle accounting predates this harness"),
-    ("aarch64_trace", "trace path predates this harness"),
-    (
-        "run",
-        "run.c:71 hl_native_test_spill: hl_native_aarch64_enter records host_stack as a value other \
-         than the caller's sp, so the spill contract check returns 1",
-    ),
-    ("translation", "translation.c:77 epoch run predates this harness"),
-];
+const KNOWN_FAILING: &[(&str, &str)] = &[(
+    "translation",
+    "translation.c:77 leaves mapping_epoch at 0, which run_aarch64 rejects at executor.c:1114 \
+     (expected_authority == 0), and calls hl_native_run inside a held execution scope, which blocks \
+     the epoch gate; the gate and the stale preamble arrived together in 8512e5e1c",
+)];
 
 /// Assembly helpers that some programs need. They precede the archive on the link line so archive
 /// members they reference are still pulled in.

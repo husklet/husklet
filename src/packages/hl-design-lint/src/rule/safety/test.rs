@@ -185,6 +185,41 @@ fn rejects_similar_names() {
     );
 }
 
+/// The window runs from the attached comment block's last line, so a long rationale still counts
+/// while a detached one cannot reach past the three-line gap.
+#[test]
+fn accepts_long_attached_rationale() {
+    let values = findings(
+        "native-kernel",
+        "runtime",
+        "src/native/execution.rs",
+        "fn call() {\n    // SAFETY: the mapping is live.\n    // Line two.\n    // Line three.\n    // Line four.\n    unsafe {}\n}",
+    );
+    assert!(values.is_empty(), "{values:?}");
+    let detached = findings(
+        "native-kernel",
+        "runtime",
+        "src/native/execution.rs",
+        "fn call() {\n    // SAFETY: the mapping is live.\n\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    unsafe {}\n}",
+    );
+    assert_eq!(detached.len(), 1);
+}
+
+#[test]
+fn descends_into_macro_arguments() {
+    let values = ordinary("fn call() {\n    assert_eq!(unsafe { 1 }, 1);\n}");
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].subject, "unsafe block");
+    // A macro argument shares its caller's line, so only the boundary rule can be applied there.
+    let allowed = findings(
+        "native-kernel",
+        "runtime",
+        "src/native/execution.rs",
+        "fn call() {\n    assert_eq!(unsafe { 1 }, 1);\n}",
+    );
+    assert!(allowed.is_empty(), "{allowed:?}");
+}
+
 #[test]
 fn marker_needs_reason() {
     let values = findings(

@@ -260,7 +260,9 @@ static int execution(void) {
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 6);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
-    CHECK(after.boundary_branch == before.boundary_branch + 2);
+    /* Direct-successor folding compiles the self-edge block into one cache entry, so the re-run
+     * costs a single dispatcher round trip. */
+    CHECK(after.boundary_branch == before.boundary_branch + 1);
 
     CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
     return 0;
@@ -399,11 +401,11 @@ static int branch_diagnostics(void) {
     state.budget = 2;
     state.registers[16] = (uint64_t)(uintptr_t)hot_admission;
     state.interrupt = 1;
-    state.indirect_site = 0;
+    state.execution_identity = 0;
     hl_native_aarch64_enter(&state, enter_register_16);
     CHECK(state.reason == HL_NATIVE_EXIT_BRANCH && state.program == 0x6004 &&
-          state.indirect_site > (uint64_t)(uintptr_t)hot_code.entry &&
-          state.indirect_site - 1 < (uint64_t)(uintptr_t)hot_code.entry + hot_code.code_size);
+          state.execution_identity > (uint64_t)(uintptr_t)hot_code.entry &&
+          state.execution_identity - 1 < (uint64_t)(uintptr_t)hot_code.entry + hot_code.code_size);
     state = saved_state;
 
     hl_native_interrupt_token *interrupt_token = NULL;
@@ -413,11 +415,11 @@ static int branch_diagnostics(void) {
     state.budget = 2;
     state.registers[16] = (uint64_t)(uintptr_t)hot_admission;
     state.interrupt_token = (uint64_t)(uintptr_t)interrupt_token;
-    state.indirect_site = 0;
+    state.execution_identity = 0;
     hl_native_aarch64_enter(&state, enter_register_16);
     CHECK(state.reason == HL_NATIVE_EXIT_BRANCH && state.program == 0x6004 &&
-          state.indirect_site > (uint64_t)(uintptr_t)hot_code.entry &&
-          state.indirect_site - 1 < (uint64_t)(uintptr_t)hot_code.entry + hot_code.code_size);
+          state.execution_identity > (uint64_t)(uintptr_t)hot_code.entry &&
+          state.execution_identity - 1 < (uint64_t)(uintptr_t)hot_code.entry + hot_code.code_size);
     state = saved_state;
     hl_native_interrupt_destroy(interrupt_token);
 
