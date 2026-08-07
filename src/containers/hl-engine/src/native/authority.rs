@@ -14,7 +14,7 @@ mod provider;
 #[cfg(unix)]
 mod tree;
 #[cfg(unix)]
-use crate::engine::EngineError;
+use crate::engine::{EngineError, Step as _};
 #[cfg(unix)]
 use crate::session::{FrameKind, Limits, Secret, Session, connect};
 #[cfg(unix)]
@@ -52,21 +52,11 @@ enum Supervised<S: ProcessSyscalls> {
     Exited(ChildExit),
 }
 
-/// `AuthorityFailed` carries no operand, so a `socketpair` denied by confinement and a
-/// dead child are indistinguishable to the caller; name the step before collapsing it.
-fn authority_failed(operation: &str, source: &dyn core::fmt::Debug) -> EngineError {
-    hl_log::hl_error!(
-        hl_log::tag::EXEC,
-        "authority step failed operation={operation} error={source:?}"
-    );
-    EngineError::AuthorityFailed
-}
-
 #[cfg(unix)]
 impl<S: ProcessSyscalls> Supervised<S> {
     fn healthy(&mut self) -> Result<bool, EngineError> {
         let Self::Running(handle) = self else { return Ok(false) };
-        let Some(exit) = handle.wait().map_err(|error| authority_failed("child wait", &error))? else {
+        let Some(exit) = handle.wait().step("child_wait")? else {
             return Ok(true);
         };
         *self = Self::Exited(exit);
@@ -110,11 +100,11 @@ pub enum ProjectionError {
 impl AuthorityWorker {
     pub fn inherit(descriptor: i32, health: i32) -> Result<Self, EngineError> {
         let mut stream =
-            crate::ffi::linux::InheritedStream::adopt(descriptor).map_err(|()| authority_failed("session descriptor adopt", &"denied"))?;
-        let secret = Secret::receive(&mut stream).map_err(|error| authority_failed("secret receive", &error))?;
+            crate::ffi::linux::InheritedStream::adopt(descriptor).step("session_adopt")?;
+        let secret = Secret::receive(&mut stream).step("secret_recv")?;
         let session =
-            connect(&mut stream, secret, Limits::new(4096, 8).unwrap()).map_err(|error| authority_failed("session connect", &error))?;
-        let health = crate::ffi::linux::InheritedStream::adopt(health).map_err(|()| authority_failed("health descriptor adopt", &"denied"))?;
+            connect(&mut stream, secret, Limits::new(4096, 8).unwrap()).step("session_connect")?;
+        let health = crate::ffi::linux::InheritedStream::adopt(health).step("health_adopt")?;
         Ok(Self {
             stream,
             session,
@@ -129,13 +119,13 @@ impl AuthorityWorker {
     pub fn enter<R>(&mut self, entry: impl FnOnce() -> R) -> Result<R, EngineError> {
         self.session
             .send(&mut self.stream, FrameKind::Ready, &[])
-            .map_err(|error| authority_failed("ready frame send", &error))?;
+            .step("ready_send")?;
         let reply = self
             .session
             .receive(&mut self.stream)
-            .map_err(|error| authority_failed("ready frame receive", &error))?;
+            .step("ready_recv")?;
         if reply.kind != FrameKind::Ready || !reply.payload.is_empty() {
-            return Err(authority_failed("ready frame reply", &"refused"));
+            return Err(EngineError::denied("ready_reply"));
         }
         Ok(entry())
     }
@@ -143,14 +133,14 @@ impl AuthorityWorker {
     pub fn ping(&mut self, payload: &[u8]) -> Result<Vec<u8>, EngineError> {
         self.session
             .send(&mut self.stream, FrameKind::Ping, payload)
-            .map_err(|error| authority_failed("ping frame send", &error))?;
+            .step("ping_send")?;
         let reply = self
             .session
             .receive(&mut self.stream)
-            .map_err(|error| authority_failed("ping frame receive", &error))?;
+            .step("ping_recv")?;
         (reply.kind == FrameKind::Ping)
             .then_some(reply.payload)
-            .ok_or_else(|| authority_failed("ping frame reply", &"absent"))
+            .step("ping_reply")
     }
 
     pub(super) fn provider(&mut self, payload: &[u8]) -> Result<Vec<u8>, ProjectionError> {
@@ -191,32 +181,32 @@ impl AuthorityWorker {
     pub fn close(&mut self) -> Result<(), EngineError> {
         self.session
             .send(&mut self.stream, FrameKind::Close, &[])
-            .map_err(|error| authority_failed("close frame send", &error))
+            .step("close_send")
     }
 
     pub fn health(&self) -> Result<AuthorityHealth, EngineError> {
         self.health
             .try_clone()
             .map(AuthorityHealth)
-            .map_err(|error| authority_failed("health descriptor clone", &error))
+            .step("health_clone")
     }
 }
 
 #[cfg(unix)]
 impl AuthorityHealth {
     pub fn monitor(&self, done: &AtomicBool, failure: impl FnOnce()) -> Result<(), EngineError> {
-        crate::ffi::linux::InheritedStream::wait_closed(&self.0).map_err(|()| authority_failed("health wait closed", &"denied"))?;
+        crate::ffi::linux::InheritedStream::wait_closed(&self.0).step("health_wait")?;
         if done.load(Ordering::Acquire) {
             return Ok(());
         }
         failure();
-        Err(authority_failed("health closed early", &"refused"))
+        Err(EngineError::denied("health_closed"))
     }
 
     pub fn stop(&self) -> Result<(), EngineError> {
         self.0
             .shutdown(std::net::Shutdown::Both)
-            .map_err(|error| authority_failed("health shutdown", &error))
+            .step("health_shutdown")
     }
 }
 
@@ -225,7 +215,7 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
     pub fn new(program: &Path, processes: Arc<S>) -> Result<Self, EngineError> {
         use std::os::unix::ffi::OsStrExt;
         Ok(Self {
-            program: CString::new(program.as_os_str().as_bytes()).map_err(|error| authority_failed("program path encode", &error))?,
+            program: CString::new(program.as_os_str().as_bytes()).step("program_encode")?,
             arguments: Vec::new(),
             projected: None,
             projected_root: None,
@@ -242,17 +232,17 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
     pub fn projected(program: &Path, file: &Path, processes: Arc<S>) -> Result<Self, EngineError> {
         let mut authority = Self::new(program, processes)?;
         if file.as_os_str().len() > 4096 {
-            return Err(authority_failed("projected program missing", &"refused"));
+            return Err(EngineError::denied("projected_program"));
         }
-        authority.projected = Some(std::fs::File::open(file).map_err(|error| authority_failed("projected file open", &error))?);
+        authority.projected = Some(std::fs::File::open(file).step("projected_open")?);
         Ok(authority)
     }
 
     pub fn projected_root(program: &Path, root: &Path, image: &Path, processes: Arc<S>) -> Result<Self, EngineError> {
         let mut authority = Self::projected(program, image, processes)?;
-        let root = std::fs::File::open(root).map_err(|error| authority_failed("projected root open", &error))?;
-        if !root.metadata().map_err(|error| authority_failed("projected root metadata", &error))?.is_dir() {
-            return Err(authority_failed("projected root not a directory", &"refused"));
+        let root = std::fs::File::open(root).step("root_open")?;
+        if !root.metadata().step("root_metadata")?.is_dir() {
+            return Err(EngineError::denied("root_not_directory"));
         }
         authority.projected_root = Some(root);
         Ok(authority)
@@ -305,19 +295,19 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
         }
         arguments.extend(self.arguments.iter().cloned());
         let mut file_actions = vec![
-            FileAction::Inherit(HostDescriptor::new(session_fd).map_err(|error| authority_failed("session descriptor inherit", &error))?),
-            FileAction::Inherit(HostDescriptor::new(bootstrap_fd).map_err(|error| authority_failed("bootstrap descriptor inherit", &error))?),
-            FileAction::Inherit(HostDescriptor::new(health_fd).map_err(|error| authority_failed("health descriptor inherit", &error))?),
-            FileAction::Inherit(HostDescriptor::new(transfer_fd).map_err(|error| authority_failed("transfer descriptor inherit", &error))?),
+            FileAction::Inherit(HostDescriptor::new(session_fd).step("session_inherit")?),
+            FileAction::Inherit(HostDescriptor::new(bootstrap_fd).step("bootstrap_inherit")?),
+            FileAction::Inherit(HostDescriptor::new(health_fd).step("health_inherit")?),
+            FileAction::Inherit(HostDescriptor::new(transfer_fd).step("transfer_inherit")?),
         ];
         if let Some(descriptor) = projected {
             file_actions.push(FileAction::Inherit(
-                HostDescriptor::new(descriptor).map_err(|error| authority_failed("projected file descriptor inherit", &error))?,
+                HostDescriptor::new(descriptor).step("projected_inherit")?,
             ));
         }
         if let Some(descriptor) = projected_root {
             file_actions.push(FileAction::Inherit(
-                HostDescriptor::new(descriptor).map_err(|error| authority_failed("projected root descriptor inherit", &error))?,
+                HostDescriptor::new(descriptor).step("root_inherit")?,
             ));
         }
         let request = SpawnRequest {
@@ -327,12 +317,12 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
             process_group: ProcessGroup::New,
             file_actions,
         };
-        ProcessHandle::spawn(Arc::clone(&self.processes), &request).map_err(|error| authority_failed("authority spawn", &error))
+        ProcessHandle::spawn(Arc::clone(&self.processes), &request).step("spawn")
     }
 
     pub fn healthy(&self, token: u64) -> Result<bool, EngineError> {
         let mut state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
-        let process = state.active.get_mut(&token).ok_or_else(|| authority_failed("active token lookup", &"absent"))?;
+        let process = state.active.get_mut(&token).step("active_lookup")?;
         process.healthy()
     }
 
@@ -341,18 +331,18 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
         let pending = state
             .pending
             .get(&channel.descriptor().raw())
-            .ok_or_else(|| authority_failed("pending channel lookup", &"absent"))?;
+            .step("pending_lookup")?;
         let stream = &pending.0;
-        let health = pending.1.try_clone().map_err(|error| authority_failed("health stream clone", &error))?;
-        let transfer = pending.2.try_clone().map_err(|error| authority_failed("transfer socket clone", &error))?;
-        let mut stream = stream.try_clone().map_err(|error| authority_failed("session stream clone", &error))?;
-        let secret = Secret::receive(&mut stream).map_err(|error| authority_failed("worker secret receive", &error))?;
+        let health = pending.1.try_clone().step("health_stream_clone")?;
+        let transfer = pending.2.try_clone().step("transfer_clone")?;
+        let mut stream = stream.try_clone().step("session_clone")?;
+        let secret = Secret::receive(&mut stream).step("worker_secret_recv")?;
         let session = connect(
             &mut stream,
             secret,
             Limits::new(channel.frame_limit(), channel.inflight_limit()).unwrap(),
         )
-        .map_err(|error| authority_failed("worker session connect", &error))?;
+        .step("worker_connect")?;
         Ok(AuthorityWorker {
             stream,
             session,
@@ -371,10 +361,10 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
             .map_err(|_| EngineError::Synchronization)?
             .active
             .remove(&token)
-            .ok_or_else(|| authority_failed("reap token lookup", &"absent"))?;
+            .step("reap_lookup")?;
         match process {
             Supervised::Exited(exit) => Ok(exit),
-            Supervised::Running(handle) => handle.wait_blocking().map_err(|error| authority_failed("reap wait", &error)),
+            Supervised::Running(handle) => handle.wait_blocking().step("reap_wait"),
         }
     }
 
@@ -385,14 +375,14 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
             .map_err(|_| EngineError::Synchronization)?
             .active
             .remove(&token)
-            .ok_or_else(|| authority_failed("terminate token lookup", &"absent"))?;
+            .step("terminate_lookup")?;
         match process {
             Supervised::Exited(exit) => Ok(exit),
             Supervised::Running(handle) => {
                 handle
                     .signal(ProcessSignal::Kill)
-                    .map_err(|error| authority_failed("terminate signal", &error))?;
-                handle.wait_blocking().map_err(|error| authority_failed("terminate wait", &error))
+                    .step("terminate_signal")?;
+                handle.wait_blocking().step("terminate_wait")
             }
         }
     }
@@ -413,7 +403,7 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
                 handle
                     .wait_blocking()
                     .map(Some)
-                    .map_err(|error| authority_failed("cleanup wait", &error))
+                    .step("cleanup_wait")
             }
         }
     }
@@ -424,21 +414,21 @@ impl<S: ProcessSyscalls + 'static> AuthorityAccess for ProcessAuthority<S> {
     fn open(&self, _: [u64; 2]) -> Result<AuthorityChannel, EngineError> {
         let mut state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
         if state.pending.len() + state.active.len() >= 64 {
-            return Err(authority_failed("authority program missing", &"refused"));
+            return Err(EngineError::denied("program_missing"));
         }
         let token = state.next;
-        state.next = state.next.checked_add(1).ok_or_else(|| authority_failed("token counter overflow", &"absent"))?;
-        let (worker, mut authority) = UnixStream::pair().map_err(|error| authority_failed("session socketpair", &error))?;
-        let (mut bootstrap_parent, bootstrap_child) = UnixStream::pair().map_err(|error| authority_failed("bootstrap socketpair", &error))?;
-        let (health_worker, health_authority) = UnixStream::pair().map_err(|error| authority_failed("health socketpair", &error))?;
-        let (transfer_worker, transfer_authority) = UnixDatagram::pair().map_err(|error| authority_failed("transfer socketpair", &error))?;
-        let (worker_secret, authority_secret) = Secret::pair().map_err(|error| authority_failed("secret pipe", &error))?;
+        state.next = state.next.checked_add(1).step("token_overflow")?;
+        let (worker, mut authority) = UnixStream::pair().step("session_pair")?;
+        let (mut bootstrap_parent, bootstrap_child) = UnixStream::pair().step("bootstrap_pair")?;
+        let (health_worker, health_authority) = UnixStream::pair().step("health_pair")?;
+        let (transfer_worker, transfer_authority) = UnixDatagram::pair().step("transfer_pair")?;
+        let (worker_secret, authority_secret) = Secret::pair().step("secret_pipe")?;
         worker_secret
             .send(&mut authority)
-            .map_err(|error| authority_failed("worker secret send", &error))?;
+            .step("worker_secret_send")?;
         authority_secret
             .send(&mut bootstrap_parent)
-            .map_err(|error| authority_failed("authority secret send", &error))?;
+            .step("authority_secret_send")?;
         let process = self.spawn(&authority, &bootstrap_child, &health_authority, &transfer_authority)?;
         let descriptor = worker.as_raw_fd();
         let health_descriptor = health_worker.as_raw_fd();
@@ -447,9 +437,9 @@ impl<S: ProcessSyscalls + 'static> AuthorityAccess for ProcessAuthority<S> {
             .pending
             .insert(descriptor, (worker, health_worker, transfer_worker, process));
         AuthorityChannel::new(
-            HostDescriptor::new(descriptor).map_err(|error| authority_failed("session channel descriptor", &error))?,
-            HostDescriptor::new(health_descriptor).map_err(|error| authority_failed("health channel descriptor", &error))?,
-            HostDescriptor::new(transfer_descriptor).map_err(|error| authority_failed("transfer channel descriptor", &error))?,
+            HostDescriptor::new(descriptor).step("session_channel")?,
+            HostDescriptor::new(health_descriptor).step("health_channel")?,
+            HostDescriptor::new(transfer_descriptor).step("transfer_channel")?,
             [token, 1],
             4096,
             8,
@@ -461,7 +451,7 @@ impl<S: ProcessSyscalls + 'static> AuthorityAccess for ProcessAuthority<S> {
         let (_, _, _, process) = state
             .pending
             .remove(&channel.descriptor().raw())
-            .ok_or_else(|| authority_failed("commit pending lookup", &"absent"))?;
+            .step("commit_lookup")?;
         state.active.insert(channel.session()[0], Supervised::Running(process));
         Ok(())
     }
