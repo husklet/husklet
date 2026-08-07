@@ -50,6 +50,18 @@ pub struct App {
     pub cases: Vec<RuntimeCase>,
 }
 
+/// A freshly compiled guest; its directory is removed when the build is dropped.
+pub struct GuestBuild {
+    _directory: tempfile::TempDir,
+    path: PathBuf,
+}
+
+impl GuestBuild {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 impl RuntimeCase {
     pub(crate) fn inactive(&self, host: EngineHost) -> Option<(&'static str, &str, &str)> {
         self.status.inactive(host)
@@ -154,14 +166,18 @@ impl App {
         })
     }
 
-    pub fn build(&self, case: &RuntimeCase, target: Target) -> Result<PathBuf, Error> {
-        let output = workspace()?
+    /// Each build owns a private directory, so concurrent runners of one case never share an artifact.
+    pub fn build(&self, case: &RuntimeCase, target: Target) -> Result<GuestBuild, Error> {
+        let root = workspace()?
             .join("target/testing/runtime")
             .join(&self.name)
-            .join(target.name())
-            .join(&case.output);
-        let parent = output.parent().ok_or("runtime output has no parent")?;
-        fs::create_dir_all(parent).map_err(|error| format!("create build directory {}: {error}", parent.display()))?;
+            .join(target.name());
+        fs::create_dir_all(&root).map_err(|error| format!("create build directory {}: {error}", root.display()))?;
+        let directory = tempfile::Builder::new()
+            .prefix("build-")
+            .tempdir_in(&root)
+            .map_err(|error| format!("create build directory in {}: {error}", root.display()))?;
+        let output = directory.path().join(&case.output);
         let compiler = self.compiler.for_target(target);
         let source = self.directory.join(case.source.native());
         let status = StdCommand::new(compiler)
@@ -174,7 +190,10 @@ impl App {
         if !status.success() {
             return Err(format!("{compiler} failed with {status}").into());
         }
-        Ok(output)
+        Ok(GuestBuild {
+            _directory: directory,
+            path: output,
+        })
     }
 
     pub fn oracle(&self, target: Target, update: bool, selected: Option<&str>) -> Result<(), Error> {
@@ -205,7 +224,7 @@ impl App {
                 .collect::<std::io::Result<Vec<_>>>()?;
             let mut command = hl_process::Command::new(self.command(commands, target));
             command.exact_environment(environment)?;
-            command.arg(&artifact).args(&case.arguments);
+            command.arg(artifact.path()).args(&case.arguments);
             let outcome = hl_process::run(
                 &command,
                 &capture,
@@ -338,6 +357,54 @@ mod tests {
         assert_eq!(app.cases.len(), 2);
         assert_eq!(app.cases[0].destination, "/opt/one");
         assert_eq!(app.cases[0].output, "one");
+    }
+
+    /// Two workers building one case must each get a private, complete artifact.
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_builds_of_one_case_do_not_share_an_artifact() {
+        let directory = tempfile::tempdir().unwrap();
+        let compiler = directory.path().join("slow-cc");
+        fs::write(
+            &compiler,
+            "#!/bin/sh\nout=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = -o ]; then out=$2; shift; fi\n  shift\ndone\n: > \"$out\"\nsleep 1\nprintf 'GUEST-%s\\n' \"$$\" >> \"$out\"\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&compiler, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let rows = "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/one.out }\n";
+        fs::write(directory.path().join("one.c"), "one").unwrap();
+        fs::write(directory.path().join("two.c"), "two").unwrap();
+        fs::create_dir_all(directory.path().join("golden")).unwrap();
+        fs::write(directory.path().join("golden/one.out"), []).unwrap();
+        let definition = directory.path().join("test.yaml");
+        let compiler = compiler.display().to_string();
+        fs::write(
+            &definition,
+            format!(
+                "targets: [arm64, amd64]\nimage: alpine\nexecution: {{}}\nbuild:\n  compiler: {{ arm64: {compiler}, amd64: {compiler} }}\n  flags: []\ncases:\n{rows}"
+            ),
+        )
+        .unwrap();
+        let app = App::load(directory.path(), &definition).unwrap();
+
+        let build = || app.build(&app.cases[0], crate::suite::Target::Arm64).unwrap();
+        let (first, second) = std::thread::scope(|scope| {
+            let peer = scope.spawn(build);
+            (build(), peer.join().unwrap())
+        });
+
+        assert_ne!(first.path(), second.path());
+        for artifact in [&first, &second] {
+            let text = fs::read_to_string(artifact.path()).unwrap();
+            assert_eq!(text.lines().count(), 1, "clobbered artifact: {text:?}");
+            assert!(text.starts_with("GUEST-"), "{text:?}");
+        }
+        drop((first, second));
+        let _ = fs::remove_dir_all(super::workspace().unwrap().join("target/testing/runtime").join(&app.name));
     }
 
     #[test]

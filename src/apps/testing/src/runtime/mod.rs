@@ -6,6 +6,7 @@ mod execution;
 mod fingerprint;
 pub(crate) mod image;
 mod ledger;
+mod load;
 mod pool;
 pub(crate) mod scheduler;
 
@@ -92,6 +93,7 @@ fn unattempted(ledger: &ledger::Ledger, aborted: Option<&Error>) -> Result<Vec<l
             key: key.clone(),
             status: ledger::NOT_RUN,
             elapsed_ms: 0,
+            host_load: load::unmeasured(),
             diagnostic: reason.clone(),
         })
         .collect())
@@ -139,6 +141,7 @@ async fn execute(work: Work) -> Completed {
     Completed {
         key: work.key,
         elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        host_load: load::sample(),
         result,
     }
 }
@@ -173,6 +176,7 @@ struct Work {
 struct Completed {
     key: WorkKey,
     elapsed_ms: u64,
+    host_load: String,
     result: Result<Vec<execution::CaseResult>, String>,
 }
 
@@ -183,6 +187,7 @@ impl Completed {
             key: self.key.clone(),
             status,
             elapsed_ms: self.elapsed_ms,
+            host_load: self.host_load.clone(),
             diagnostic,
         }
     }
@@ -212,11 +217,12 @@ fn summarize(
     let mut failed = Vec::new();
     for row in prior.values() {
         println!(
-            "RESUME {} {} {} elapsed_ms={}",
+            "RESUME {} {} {} elapsed_ms={} host_load={}",
             row.status,
             row.key.id,
             row.key.target.name(),
-            row.elapsed_ms
+            row.elapsed_ms,
+            row.host_load
         );
         if row.status == "pass" {
             passed += 1;
@@ -232,9 +238,21 @@ fn summarize(
 
 fn summarize_completed(completed: Completed, passed: &mut usize, failed: &mut Vec<String>) {
     match completed.result {
-        Ok(results) => summarize_results(&completed.key, completed.elapsed_ms, results, passed, failed),
+        Ok(results) => summarize_results(
+            &completed.key,
+            completed.elapsed_ms,
+            &completed.host_load,
+            results,
+            passed,
+            failed,
+        ),
         Err(error) => {
-            let failure = format!("{} {}: {error}", completed.key.id, completed.key.target.name());
+            let failure = format!(
+                "{} {} host_load={}: {error}",
+                completed.key.id,
+                completed.key.target.name(),
+                completed.host_load
+            );
             println!("FAIL {failure}");
             failed.push(failure);
         }
@@ -244,6 +262,7 @@ fn summarize_completed(completed: Completed, passed: &mut usize, failed: &mut Ve
 fn summarize_results(
     key: &WorkKey,
     elapsed_ms: u64,
+    host_load: &str,
     results: Vec<execution::CaseResult>,
     passed: &mut usize,
     failed: &mut Vec<String>,
@@ -252,7 +271,7 @@ fn summarize_results(
         match result {
             execution::CaseResult::Passed(id, attempt) => {
                 println!(
-                    "PASS {} {} elapsed_ms={elapsed_ms}",
+                    "PASS {} {} elapsed_ms={elapsed_ms} host_load={host_load}",
                     display_attempt(&id, attempt),
                     key.target.name()
                 );
@@ -260,8 +279,8 @@ fn summarize_results(
             }
             execution::CaseResult::Failed(id, attempt, error) => {
                 let display = display_attempt(&id, attempt);
-                println!("FAIL {display} {}: {error}", key.target.name());
-                failed.push(format!("{display} {}: {error}", key.target.name()));
+                println!("FAIL {display} {} host_load={host_load}: {error}", key.target.name());
+                failed.push(format!("{display} {} host_load={host_load}: {error}", key.target.name()));
             }
         }
     }
@@ -308,6 +327,7 @@ fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Planned
                         },
                         status: ledger::NOT_RUN,
                         elapsed_ms: 0,
+                        host_load: load::unmeasured(),
                         diagnostic: format!("{kind}: {reason} [{evidence}]"),
                     });
                     continue;
@@ -493,6 +513,7 @@ mod tests {
                 key: key("runtime/a"),
                 status: ledger::PASS,
                 elapsed_ms: 1,
+                host_load: "0.10/8".to_owned(),
                 diagnostic: String::new(),
             })
             .unwrap();

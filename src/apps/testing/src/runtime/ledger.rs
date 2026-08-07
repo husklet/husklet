@@ -17,6 +17,8 @@ pub(super) struct Row {
     pub key: WorkKey,
     pub status: &'static str,
     pub elapsed_ms: u64,
+    /// Host load when the row was recorded, so a contended run is distinguishable from a real timeout.
+    pub host_load: String,
     pub diagnostic: String,
 }
 
@@ -28,9 +30,9 @@ impl Schema for Runtime {
     type Row = Row;
 
     const KIND: &'static str = "runtime";
-    const HEADER: &'static str = "id\ttarget\tstatus\telapsed_ms\tdiagnostic\n";
+    const HEADER: &'static str = "id\ttarget\tstatus\telapsed_ms\thost_load\tdiagnostic\n";
     const ROW_LIMIT: usize = 16 * 1024;
-    const FIELDS: usize = 5;
+    const FIELDS: usize = 6;
 
     fn key(row: &Row) -> &WorkKey {
         &row.key
@@ -39,8 +41,9 @@ impl Schema for Runtime {
     /// Never fails on diagnostic shape: a truncated row is worth more than an aborted sweep.
     fn format(row: &Row) -> Result<String, Error> {
         (!row.key.id.contains(['\t', '\n'])).require("runtime result contains an unsafe delimiter")?;
+        let load = super::load::sanitize(&row.host_load);
         let prefix = format!(
-            "{}\t{}\t{}\t{}\t",
+            "{}\t{}\t{}\t{}\t{load}\t",
             row.key.id,
             row.key.target.name(),
             row.status,
@@ -68,7 +71,8 @@ impl Schema for Runtime {
             key,
             status,
             elapsed_ms: fields[3].parse()?,
-            diagnostic: fields[4].to_owned(),
+            host_load: fields[4].to_owned(),
+            diagnostic: fields[5].to_owned(),
         }))
     }
 }
@@ -99,6 +103,7 @@ mod tests {
                 key: key("runtime/b"),
                 status: "pass",
                 elapsed_ms: 2,
+                host_load: "0.20/8".to_owned(),
                 diagnostic: String::new(),
             })
             .unwrap();
@@ -111,6 +116,7 @@ mod tests {
                 key: key("runtime/a"),
                 status: "pass",
                 elapsed_ms: 1,
+                host_load: "0.10/8".to_owned(),
                 diagnostic: String::new(),
             })
             .unwrap();
@@ -127,11 +133,12 @@ mod tests {
             key: key("runtime/loud"),
             status: super::FAIL,
             elapsed_ms: 1,
+            host_load: "9.00/8".to_owned(),
             diagnostic: "x\ty\n".repeat(1 << 16),
         };
         let text = super::Runtime::format(&row).unwrap();
         assert!(text.len() <= super::Runtime::ROW_LIMIT, "{}", text.len());
-        assert_eq!(text.matches('\t').count(), 4);
+        assert_eq!(text.matches('\t').count(), 5);
         assert!(text.ends_with("truncated]\n"), "{text}");
     }
 
@@ -147,6 +154,7 @@ mod tests {
                 key: key("runtime/a"),
                 status: super::NOT_RUN,
                 elapsed_ms: 0,
+                host_load: super::super::load::unmeasured(),
                 diagnostic: "BROKEN: retained".to_owned(),
             })
             .unwrap();

@@ -216,12 +216,14 @@ impl Benchmark {
 
     pub async fn build(&self, case: &BenchmarkCase, target: Target) -> Result<PathBuf, Error> {
         let build = self.build.as_ref().ok_or("rootfs workload has no build artifact")?;
-        let output = crate::runtime::workspace()?
+        // Compile into a private directory so concurrent builders of one case cannot clobber each other.
+        let root = crate::runtime::workspace()?
             .join("target/testing/bench")
             .join(&self.name)
-            .join(target.name())
-            .join(&case.id);
-        fs::create_dir_all(output.parent().ok_or("benchmark output has no parent")?)?;
+            .join(target.name());
+        fs::create_dir_all(&root)?;
+        let staging = tempfile::Builder::new().prefix("build-").tempdir_in(&root)?;
+        let output = staging.path().join(case.id.replace('/', "-"));
         let compiler = build.compiler.for_target(target);
         let status = tokio::process::Command::new(compiler)
             .args(&build.flags)

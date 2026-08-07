@@ -65,10 +65,10 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| context("create staging directory", parent, &error))?;
     }
-    fs::copy(&artifact, &destination).map_err(|error| {
+    fs::copy(artifact.path(), &destination).map_err(|error| {
         format!(
             "stage {} into {}: {error}",
-            artifact.display(),
+            artifact.path().display(),
             destination.display()
         )
     })?;

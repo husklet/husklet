@@ -379,6 +379,12 @@ unreadable diagnostic never removes a row from the corpus. Byte differences are
 reported as the first differing offset with escaped context from both sides,
 never as a raw byte-array dump.
 
+Every guest is compiled into a private directory that is removed with the build,
+so two runners of one case never share an artifact and no run can observe a
+peer's half-written image. Each row also records `host_load` as the one-minute
+load average over the logical CPU count at completion, so a deadline exceeded
+under host contention is distinguishable from a genuine timeout.
+
 YAML declares the smallest valid failure boundary:
 
 ```yaml

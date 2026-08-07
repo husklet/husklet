@@ -51,13 +51,11 @@ impl TestImage {
 
     fn from_image(images: Images, image: &Image, platform: &Platform) -> Result<Self, Error> {
         let digest = image.target.digest().to_string();
-        let unpacked = images
-            .unpack(image, platform)
-            .map_err(|error| format!("unpack {digest}: {error}"))?;
+        // One critical section: a peer must never repair the chain between our unpack and our fork.
+        let (unpacked, reference) = images
+            .materialize(image, platform)
+            .map_err(|error| format!("materialize {digest}: {error}"))?;
         let runtime = unpacked.runtime().clone();
-        let reference = images
-            .rootfs(&unpacked)
-            .map_err(|error| format!("fork rootfs from {digest}: {error}"))?;
         let view = images
             .roots()
             .open(&reference)
