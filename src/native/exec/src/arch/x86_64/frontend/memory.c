@@ -952,7 +952,8 @@ static uint32_t vector_operation_words(const instruction *item) {
     case VECTOR_TRUNC_FLOAT_TO_SIGNED_DWORD:
         return 11u + constant_words(UINT64_C(0x4f000000)) +
                constant_words(UINT64_C(0x80000000));
-    case VECTOR_STRING_EQUAL_EACH: return 96u;
+    case VECTOR_STRING_EQUAL_EACH:
+        return (item->vector_immediate & 0x08u) == 0u ? 160u : 96u;
     case VECTOR_SHUFFLE_BYTE: return 3u;
     case VECTOR_SHIFT_IMMEDIATE: return 1u;
     case VECTOR_INSERT_WORD: return 1u;
@@ -1039,11 +1040,13 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         uint64_t clear = UINT64_C(1) | UINT64_C(1) << 2 | UINT64_C(1) << 4 |
                          UINT64_C(1) << 6 | UINT64_C(1) << 7 | UINT64_C(1) << 11;
         uint32_t immediate = item->vector_immediate;
+        uint32_t equal_any = (immediate & 0x08u) == 0u;
 
-        /* IntRes1 for implicit-length byte equal-each.  Scratch vectors are
+        /* IntRes1 for the implicit-length byte aggregations.  Scratch vectors are
          * outside the guest XMM bank; operand two has already passed the
          * complete generic memory guard when it names v16. */
-        words[(*cursor)++] = UINT32_C(0x6e208c00) | source << 16 | destination << 5 | 18u;
+        if (equal_any == 0u)
+            words[(*cursor)++] = UINT32_C(0x6e208c00) | source << 16 | destination << 5 | 18u;
         words[(*cursor)++] = UINT32_C(0x4e209800) | destination << 5 | 19u;
         words[(*cursor)++] = UINT32_C(0x4e209800) | source << 5 | 21u;
 #define EMIT_MASK(vector, target) do { \
@@ -1055,10 +1058,9 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
             words[(*cursor)++] = UINT32_C(0x0e003c00) | 17u << 16 | 17u << 5 | (target); \
             words[(*cursor)++] = UINT32_C(0x2a000000) | (target) << 16 | 8u << 10 | 16u << 5 | (target); \
         } while (0)
-        EMIT_MASK(18u, 19u);
+        if (equal_any == 0u) EMIT_MASK(18u, 19u);
         EMIT_MASK(19u, 21u);
         EMIT_MASK(21u, 24u);
-#undef EMIT_MASK
         emit_constant(words, cursor, 16u, UINT64_C(0x10000));
         words[(*cursor)++] = UINT32_C(0x2a000000) | 16u << 16 | 21u << 5 | 17u;
         words[(*cursor)++] = UINT32_C(0x5ac00000) | 17u << 5 | 17u;
@@ -1072,10 +1074,35 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         /* w18, never w26: x26 carries the live instruction budget. */
         words[(*cursor)++] = UINT32_C(0x1ac02000) | 23u << 16 | 16u << 5 | 18u;
         words[(*cursor)++] = UINT32_C(0x51000400) | 18u << 5 | 18u;
-        words[(*cursor)++] = UINT32_C(0x0a000000) | 25u << 16 | 19u << 5 | 17u;
-        words[(*cursor)++] = UINT32_C(0x0a000000) | 18u << 16 | 17u << 5 | 17u;
-        words[(*cursor)++] = UINT32_C(0x2a000000) | 18u << 16 | 25u << 5 | 16u;
-        words[(*cursor)++] = UINT32_C(0x2a200000) | 16u << 16 | 17u << 5 | 17u;
+        if (equal_any != 0u) {
+            uint32_t lane_index;
+
+            /* Clear operand one past its terminator, then aggregate a byte-broadcast
+             * compare of it over operand two.  The lanes just cleared can only match
+             * operand two at or past its own terminator, which the valid-position
+             * mask then drops, so the trailing garbage never reaches IntRes1. */
+            emit_constant(words, cursor, 16u, UINT64_C(0x0706050403020100));
+            words[(*cursor)++] = UINT32_C(0x4e081c00) | 16u << 5 | 22u;
+            emit_constant(words, cursor, 16u, UINT64_C(0x0f0e0d0c0b0a0908));
+            words[(*cursor)++] = UINT32_C(0x4e181c00) | 16u << 5 | 22u;
+            words[(*cursor)++] = UINT32_C(0x4e010c00) | 22u << 5 | 23u;
+            words[(*cursor)++] = UINT32_C(0x6e203400) | 22u << 16 | 23u << 5 | 23u;
+            words[(*cursor)++] = UINT32_C(0x4e201c00) | 23u << 16 | destination << 5 | 24u;
+            words[(*cursor)++] = UINT32_C(0x6e201c00) | 25u << 16 | 25u << 5 | 25u;
+            for (lane_index = 0; lane_index < 16u; ++lane_index) {
+                words[(*cursor)++] = UINT32_C(0x4e000400) | ((lane_index << 1) | 1u) << 16 | 24u << 5 | 26u;
+                words[(*cursor)++] = UINT32_C(0x6e208c00) | 26u << 16 | source << 5 | 26u;
+                words[(*cursor)++] = UINT32_C(0x4ea01c00) | 26u << 16 | 25u << 5 | 25u;
+            }
+            EMIT_MASK(25u, 17u);
+            words[(*cursor)++] = UINT32_C(0x0a000000) | 18u << 16 | 17u << 5 | 17u;
+        } else {
+            words[(*cursor)++] = UINT32_C(0x0a000000) | 25u << 16 | 19u << 5 | 17u;
+            words[(*cursor)++] = UINT32_C(0x0a000000) | 18u << 16 | 17u << 5 | 17u;
+            words[(*cursor)++] = UINT32_C(0x2a000000) | 18u << 16 | 25u << 5 | 16u;
+            words[(*cursor)++] = UINT32_C(0x2a200000) | 16u << 16 | 17u << 5 | 17u;
+        }
+#undef EMIT_MASK
         words[(*cursor)++] = UINT32_C(0x53003c00) | 17u << 5 | 17u;
         if ((immediate & 0x10u) != 0u) {
             if ((immediate & 0x20u) != 0u) {

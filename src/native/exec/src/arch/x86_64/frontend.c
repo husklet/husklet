@@ -600,7 +600,9 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 break;
             }
             item->vector_immediate = request->guest_bytes[cursor++];
-            if ((item->vector_immediate & 0x0du) != 0x08u) {
+            /* Byte elements, and either the equal-each or the equal-any aggregation;
+             * signedness is immaterial because both only test equality. */
+            if ((item->vector_immediate & 0x05u) != 0x00u) {
                 cursor = start;
                 block->status = HL_X86_A64_UNSUPPORTED;
                 block->exit = HL_X86_A64_INTERPRETER;
