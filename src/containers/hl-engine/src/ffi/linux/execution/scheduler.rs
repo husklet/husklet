@@ -150,6 +150,8 @@ enum SourceChange {
 
 pub(super) struct NativePool {
     enabled: bool,
+    /// Gates the opt-in profiling tables and the boundary ring, whose recording costs
+    /// memory on the native path; failures are reported through `hl_log` regardless.
     diagnostics: bool,
     executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
     suppressed: BTreeSet<NativeSite>,
@@ -607,7 +609,7 @@ impl GuestExecutor {
             fn drop(&mut self) {
                 let lost = self.0.lost_completions();
                 if lost != 0 {
-                    eprintln!("hl-sched: lost_completions={lost}");
+                    hl_log::hl_error!(hl_log::tag::TASK, "scheduler exited with stranded threads lost={lost}");
                 }
             }
         }
@@ -846,10 +848,16 @@ impl GuestExecutor {
             address,
             ..
         } = &action
-            && let Some(boundaries) = &native.boundaries {
-                eprintln!("hl-native-terminal-sigsegv: code={code} address={address:#x}");
+        {
+            hl_log::hl_error!(
+                hl_log::tag::EXEC,
+                "native execution took a terminal fault signal=11 code={code} address={address:#x} process={:?}",
+                run.process,
+            );
+            if let Some(boundaries) = &native.boundaries {
                 boundaries.report(Some(run.process));
             }
+        }
         TurnResult { run, action }
     }
 
@@ -1325,7 +1333,6 @@ impl GuestExecutor {
                 Some(mappings.executable_token(range, lease.generation()))
             },
         )?;
-        let diagnostics = pool.diagnostics;
         let executor = pool.executor(run.process)?;
         let source = [crate::native::NativeSource { guest_first: pc, bytes }];
         let checkpoint = projection.checkpoint_continuation();
@@ -1401,12 +1408,14 @@ impl GuestExecutor {
                         .expect("native boundary exit")
                 }
                 crate::native::NativeExit::Fatal => {
-                    if diagnostics {
-                        eprintln!(
-                            "hl-native-fatal: isa=aarch64 pc={pc:#x} instruction={:#x} code={} remaining={} executed={}",
-                            result.instruction, result.code, result.remaining, result.executed,
-                        );
-                    }
+                    hl_log::hl_error!(
+                        hl_log::tag::EXEC,
+                        "native execution died isa=aarch64 pc={pc:#x} instruction={:#x} code={} remaining={} executed={}",
+                        result.instruction,
+                        result.code,
+                        result.remaining,
+                        result.executed,
+                    );
                     StepOutcome::Fault(hl_execution::ExecutionFault::Frozen)
                 }
             }
@@ -1623,12 +1632,14 @@ impl GuestExecutor {
                     StepOutcome::Yield
                 }
                 crate::native::NativeExit::Fatal => {
-                    if diagnostics {
-                        eprintln!(
-                            "hl-native-fatal: isa=x86_64 pc={pc:#x} rip={:#x} code={} remaining={} executed={}",
-                            cpu.rip, result.code, result.remaining, result.executed
-                        );
-                    }
+                    hl_log::hl_error!(
+                        hl_log::tag::EXEC,
+                        "native execution died isa=x86_64 pc={pc:#x} rip={:#x} code={} remaining={} executed={}",
+                        cpu.rip,
+                        result.code,
+                        result.remaining,
+                        result.executed,
+                    );
                     StepOutcome::Fault(hl_execution::ExecutionFault::Frozen)
                 }
             }
