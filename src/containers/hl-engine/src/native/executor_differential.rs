@@ -1886,6 +1886,117 @@ fn capture_decoder_rejects_resource_counts_before_allocation() {
     assert_eq!(BoundaryCapture::decode(&aggregate), Err("capture aggregate limit"));
 }
 
+/// Replays a byte sequence native-vs-interpreter once per instruction boundary, so the
+/// first divergence names the exact instruction that produced it rather than the block.
+#[cfg(target_arch = "aarch64")]
+fn assert_x86_boundaries(
+    code_first: u64,
+    bytes: &[u8],
+    ends: &[usize],
+    initial: &X86CpuState,
+    operand_first: u64,
+    operand: &[u8],
+) {
+    for (index, &end) in ends.iter().enumerate() {
+        let mut prefix = bytes[..end].to_vec();
+        prefix.extend_from_slice(&[0x0f, 0x05]);
+        let source = [super::BorrowedSource {
+            guest_first: code_first,
+            bytes: &prefix,
+        }];
+        let mut native = initial.clone();
+        let mut storage = operand.to_vec();
+        let view = ProjectionView {
+            guest_first: operand_first,
+            guest_last: operand_first + operand.len() as u64,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 1,
+            permissions: 3,
+            write_policy: super::WRITE_EXACT,
+            write_index: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 1,
+            active: 0,
+        };
+        let executor = Executor::create().expect("native executor");
+        let mut resolve = |_: u64, _: &mut [u8]| None;
+        let outcome = executor
+            .run_x86(
+                &mut native,
+                &source,
+                1,
+                index as u64 + 1,
+                ends.len() as u64 + 2,
+                false,
+                Some(&projection),
+                &mut resolve,
+            )
+            .unwrap()
+            .0;
+        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+
+        let mut memory = ReplayMemory {
+            sources: vec![ReplaySource {
+                first: code_first,
+                bytes: prefix.clone(),
+            }],
+            data: vec![ReplayView {
+                first: operand_first,
+                data: operand.to_vec(),
+            }],
+            generation: 1,
+        };
+        let machine = ExecutionMachine::new(ExecutionSnapshot {
+            version: EXECUTION_SNAPSHOT_VERSION,
+            cpu: ExecutionCpuSnapshot::X86_64(initial.clone()),
+            cache_epoch: 1,
+            fault: None,
+        })
+        .unwrap();
+        let step = machine.run_slice(1, index as u64 + 3, &mut memory);
+        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        machine.freeze().unwrap();
+        let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
+            unreachable!()
+        };
+        assert_eq!(
+            native,
+            interpreted,
+            "first state divergence after instruction {} ending at {:#x}",
+            index + 1,
+            code_first + end as u64
+        );
+        assert_eq!(
+            storage.as_slice(),
+            memory.data[0].data.as_slice(),
+            "first byte divergence after instruction {} ending at {:#x}",
+            index + 1,
+            code_first + end as u64
+        );
+    }
+}
+
+/// Same replay, but taking one slice per instruction so the boundaries follow the encoding.
+#[cfg(target_arch = "aarch64")]
+fn assert_x86_sequence(
+    code_first: u64,
+    instructions: &[&[u8]],
+    initial: &X86CpuState,
+    operand_first: u64,
+    operand: &[u8],
+) {
+    let mut bytes = Vec::new();
+    let mut ends = Vec::new();
+    for piece in instructions {
+        bytes.extend_from_slice(piece);
+        ends.push(bytes.len());
+    }
+    assert_x86_boundaries(code_first, &bytes, &ends, initial, operand_first, operand);
+}
+
 /// `bt`/`bts`/`btr`/`btc` with an immediate bit index: the register form must keep the
 /// full width-masked index, while only the memory form addresses the containing byte.
 #[cfg(target_arch = "aarch64")]
@@ -1909,84 +2020,143 @@ fn x86_bit_test_immediate_matches_interpreter_at_each_boundary() {
     };
     initial.registers[6] = 0x7000;
     initial.registers[7] = 0x0019_9999_9999_999a;
-    for (index, &end) in instruction_ends.iter().enumerate() {
-        let mut prefix = bytes[..end].to_vec();
-        prefix.extend_from_slice(&[0x0f, 0x05]);
-        let source = [super::BorrowedSource {
-            guest_first: 0x402720,
-            bytes: &prefix,
-        }];
-        let mut native = initial.clone();
-        let mut storage = operand;
-        let view = ProjectionView {
-            guest_first: 0x7000,
-            guest_last: 0x7008,
-            host_first: storage.as_mut_ptr() as usize as u64,
-            mapping_incarnation: 1,
-            permissions: 3,
-            write_policy: super::WRITE_EXACT,
-            write_index: 0,
-        };
-        let projection = Projection {
-            views: &raw const view,
-            count: 1,
-            mapping_incarnation: 1,
-            active: 0,
-        };
-        let executor = Executor::create().expect("native executor");
-        let mut resolve = |_: u64, _: &mut [u8]| None;
-        let outcome = executor
-            .run_x86(
-                &mut native,
-                &source,
-                1,
-                index as u64 + 1,
-                64,
-                false,
-                Some(&projection),
-                &mut resolve,
-            )
-            .unwrap()
-            .0;
-        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
-
-        let mut memory = ReplayMemory {
-            sources: vec![ReplaySource {
-                first: 0x402720,
-                bytes: prefix.clone(),
-            }],
-            data: vec![ReplayView {
-                first: 0x7000,
-                data: operand.to_vec(),
-            }],
-            generation: 1,
-        };
-        let machine = ExecutionMachine::new(ExecutionSnapshot {
-            version: EXECUTION_SNAPSHOT_VERSION,
-            cpu: ExecutionCpuSnapshot::X86_64(initial.clone()),
-            cache_epoch: 1,
-            fault: None,
-        })
-        .unwrap();
-        let step = machine.run_slice(1, index as u64 + 3, &mut memory);
-        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
-        machine.freeze().unwrap();
-        let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
-            unreachable!()
-        };
-        assert_eq!(
-            native,
-            interpreted,
-            "first state divergence after instruction {} ending at {:#x}",
-            index + 1,
-            0x402720 + end
-        );
-        assert_eq!(
-            storage.as_slice(),
-            memory.data[0].data.as_slice(),
-            "first byte divergence after instruction {} ending at {:#x}",
-            index + 1,
-            0x402720 + end
-        );
-    }
+    assert_x86_boundaries(0x402720, &bytes, &instruction_ends, &initial, 0x7000, &operand);
 }
+
+/// Immediate shift counts across the 0x1f/0x3f masking boundary at both widths.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_shift_immediate_count_matches_interpreter_at_each_boundary() {
+    let seed = 0x8877_6655_4433_2211_u64;
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for count in [0x00_u8, 0x01, 0x02, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff] {
+        for modrm in [0xe7_u8, 0xef, 0xff] {
+            let mut load = vec![0x48, 0xbf];
+            load.extend_from_slice(&seed.to_le_bytes());
+            program.push(load.clone());
+            program.push(vec![0xc1, modrm, count]);
+            program.push(load);
+            program.push(vec![0x48, 0xc1, modrm, count]);
+        }
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
+}
+
+/// `%cl` shift counts across the same boundary, where the mask is applied at run time.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_shift_variable_count_matches_interpreter_at_each_boundary() {
+    let seed = 0x8877_6655_4433_2211_u64;
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for count in [0x00_u32, 0x01, 0x02, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff] {
+        for modrm in [0xe7_u8, 0xef, 0xff] {
+            let mut set_count = vec![0xb9];
+            set_count.extend_from_slice(&count.to_le_bytes());
+            program.push(set_count.clone());
+            let mut load = vec![0x48, 0xbf];
+            load.extend_from_slice(&seed.to_le_bytes());
+            program.push(load.clone());
+            program.push(vec![0xd3, modrm]);
+            program.push(set_count);
+            program.push(load);
+            program.push(vec![0x48, 0xd3, modrm]);
+        }
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
+}
+
+/// ALU immediates at each width, covering the imm8-sign-extended-to-operand-size form
+/// (0x83), the zero-extended byte form (0x80) and the imm32 form that sign-extends to 64.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_alu_immediate_extension_matches_interpreter_at_each_boundary() {
+    let seed = 0x8877_6655_4433_2211_u64;
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for kind in 0..8_u8 {
+        let modrm = 0xc0 | kind << 3;
+        for byte in [0x00_u8, 0x01, 0x7f, 0x80, 0xff] {
+            for width in 0..4 {
+                let mut load = vec![0x48, 0xb8];
+                load.extend_from_slice(&seed.to_le_bytes());
+                program.push(load);
+                program.push(match width {
+                    0 => vec![0x80, modrm, byte],
+                    1 => vec![0x66, 0x83, modrm, byte],
+                    2 => vec![0x83, modrm, byte],
+                    _ => vec![0x48, 0x83, modrm, byte],
+                });
+            }
+        }
+        for word in [0x0000_0000_u32, 0x0000_0001, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff] {
+            for wide in [false, true] {
+                let mut load = vec![0x48, 0xb8];
+                load.extend_from_slice(&seed.to_le_bytes());
+                program.push(load);
+                let mut operation = if wide { vec![0x48, 0x81] } else { vec![0x81] };
+                operation.push(modrm);
+                operation.extend_from_slice(&word.to_le_bytes());
+                program.push(operation);
+            }
+        }
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
+}
+
+/// Displacement and scaled-index folding: every displacement width and sign, every scale,
+/// the no-index and no-base encodings, in both the load and the store direction, so an
+/// offset folded into the address cannot also be applied by the consumer.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_address_folding_matches_interpreter_at_each_boundary() {
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x48, 0x8b, 0x03],                          // mov (%rbx),%rax
+        vec![0x48, 0x8b, 0x43, 0x08],                    // mov 0x8(%rbx),%rax
+        vec![0x48, 0x8b, 0x43, 0xf8],                    // mov -0x8(%rbx),%rax
+        vec![0x48, 0x8b, 0x83, 0x10, 0, 0, 0],           // mov 0x10(%rbx),%rax
+        vec![0x48, 0x8b, 0x83, 0xc0, 0xff, 0xff, 0xff],  // mov -0x40(%rbx),%rax
+        vec![0x48, 0x8b, 0x04, 0x23],                    // mov (%rbx),%rax via SIB, no index
+        vec![0x48, 0x8b, 0x04, 0x0b],                    // mov (%rbx,%rcx,1),%rax
+        vec![0x48, 0x8b, 0x04, 0x4b],                    // mov (%rbx,%rcx,2),%rax
+        vec![0x48, 0x8b, 0x04, 0x8b],                    // mov (%rbx,%rcx,4),%rax
+        vec![0x48, 0x8b, 0x04, 0xcb],                    // mov (%rbx,%rcx,8),%rax
+        vec![0x48, 0x8b, 0x44, 0x8b, 0x08],              // mov 0x8(%rbx,%rcx,4),%rax
+        vec![0x48, 0x8b, 0x44, 0xcb, 0xf8],              // mov -0x8(%rbx,%rcx,8),%rax
+        vec![0x48, 0x8b, 0x84, 0x0b, 0x10, 0, 0, 0],     // mov 0x10(%rbx,%rcx,1),%rax
+        vec![0x48, 0x8b, 0x04, 0x25, 0x00, 0x70, 0, 0],  // mov 0x7000,%rax
+        vec![0x8b, 0x43, 0x08],                          // mov 0x8(%rbx),%eax
+        vec![0x8a, 0x43, 0xf8],                          // mov -0x8(%rbx),%al
+        vec![0x66, 0x8b, 0x43, 0x04],                    // mov 0x4(%rbx),%ax
+        vec![0x48, 0x89, 0x43, 0x08],                    // mov %rax,0x8(%rbx)
+        vec![0x48, 0x89, 0x43, 0xf8],                    // mov %rax,-0x8(%rbx)
+        vec![0x48, 0x89, 0x44, 0x8b, 0x08],              // mov %rax,0x8(%rbx,%rcx,4)
+        vec![0x89, 0x43, 0x10],                          // mov %eax,0x10(%rbx)
+        vec![0x88, 0x43, 0x11],                          // mov %al,0x11(%rbx)
+        vec![0x66, 0x89, 0x43, 0x14],                    // mov %ax,0x14(%rbx)
+        vec![0x48, 0x8b, 0x03],                          // mov (%rbx),%rax
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[3] = 0x7040;
+    initial.registers[1] = 4;
+    let operand: Vec<u8> = (0..256_u32).map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
