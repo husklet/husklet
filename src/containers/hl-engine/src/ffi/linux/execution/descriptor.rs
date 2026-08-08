@@ -285,6 +285,30 @@ impl OpenFileDescription for StandardIo {
             .write(input)
             .map_err(|error| Self::io_errno(&error))
     }
+
+    /// Writes every segment in one operation, as Linux does for a standard stream.
+    ///
+    /// The inherited default writes only the first non-empty segment, which turns
+    /// each `writev` into a short write that the guest retries, splitting one
+    /// process write across several output records.
+    fn write_vector_context(
+        &self,
+        input: &[std::io::IoSlice<'_>],
+        _: hl_descriptor::OperationContext<'_>,
+    ) -> Result<usize, ObjectError> {
+        let length = input
+            .iter()
+            .try_fold(0_usize, |total, part| total.checked_add(part.len()))
+            .ok_or(ObjectError::ResourceLimit)?;
+        if length == 0 {
+            return Ok(0);
+        }
+        let mut buffer = Vec::with_capacity(length);
+        for part in input {
+            buffer.extend_from_slice(part);
+        }
+        self.write(&buffer)
+    }
 }
 
 #[cfg(test)]

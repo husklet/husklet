@@ -107,9 +107,13 @@ impl Connection {
         loop {
             let entry = tokio::select! {
                 result = &mut end, if watch_input => match result {
+                    // Closing stdin is a half-close, not a disconnect: the process keeps
+                    // producing output that this session still owes the client. Stop
+                    // watching input and keep draining; a client that really went away
+                    // surfaces as a write failure below.
                     Ok(InputEnd::Closed) => {
-                        disconnected = true;
-                        break;
+                        watch_input = false;
+                        continue;
                     }
                     Ok(InputEnd::Detached) => break,
                     Err(_) => {
