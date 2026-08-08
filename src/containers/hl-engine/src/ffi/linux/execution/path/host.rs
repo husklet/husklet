@@ -248,18 +248,21 @@ impl RuntimePathHost for NativePath {
                 Arc::clone(&self.ownership),
                 None,
             );
-            return Ok(Box::new(open::PendingOpen::at_guest(
-                file,
-                binding.host,
-                binding.guest,
-                plan.intent,
-                plan.mode,
-                Arc::clone(&self.paths),
-                Arc::clone(&self.terminals),
-                parent,
-                binding.leaf,
-                Arc::clone(&self.transfers),
-            )));
+            return Ok(Box::new(
+                open::PendingOpen::at_guest(
+                    file,
+                    binding.host,
+                    binding.guest,
+                    plan.intent,
+                    plan.mode,
+                    Arc::clone(&self.paths),
+                    Arc::clone(&self.terminals),
+                    parent,
+                    binding.leaf,
+                    Arc::clone(&self.transfers),
+                )
+                .with_advisory_locks(self.locks.clone()),
+            ));
         }
         let resolver = Resolver::new(ordinary.host(), ordinary.mounts());
         let base_path = GuestPathBytes::new(base.path().as_str().as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
@@ -344,7 +347,8 @@ impl RuntimePathHost for NativePath {
                     name,
                     Arc::clone(&self.transfers),
                 )
-                .with_creator(creator),
+                .with_creator(creator)
+                .with_advisory_locks(self.locks.clone()),
             ))
         } else {
             Ok(Box::new(
@@ -360,7 +364,8 @@ impl RuntimePathHost for NativePath {
                     name,
                     Arc::clone(&self.transfers),
                 )
-                .with_creator(creator),
+                .with_creator(creator)
+                .with_advisory_locks(self.locks.clone()),
             ))
         }
     }

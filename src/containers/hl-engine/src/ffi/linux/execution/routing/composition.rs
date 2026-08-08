@@ -336,6 +336,7 @@ pub(in crate::ffi::linux::execution) fn create(
         network.files(),
         Arc::clone(&entropy),
         assembly.system(),
+        assembly.locks(),
         architecture,
     )?;
     if path_host

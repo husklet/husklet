@@ -50,8 +50,14 @@ impl<'lease> CopyUp<'lease> {
         })
     }
 
-    pub(super) fn commit(mut self) -> io::Result<()> {
+    /// Publishes the staged copy and reports the upper identity it landed on.
+    pub(super) fn commit(mut self) -> io::Result<(u64, u64)> {
         self.staged.sync_all()?;
+        let published = {
+            use std::os::unix::fs::MetadataExt;
+            let status = self.staged.metadata()?;
+            (status.dev(), status.ino())
+        };
         rename(self.parent, &self.staged_name, &self.final_name)?;
         if let Err(error) = clear_whiteout(self.parent, &self.final_name) {
             // Keep a failed publication hidden. Restoring the private staged
@@ -62,7 +68,8 @@ impl<'lease> CopyUp<'lease> {
         }
         self.published = true;
         self.lease.publish();
-        sync_directory(self.parent)
+        sync_directory(self.parent)?;
+        Ok(published)
     }
 }
 
@@ -76,23 +83,41 @@ impl Drop for CopyUp<'_> {
 
 /// Makes a lower-backed regular file writable in the upper before host open.
 /// A create for a name absent from every layer only materializes its parent.
-pub(super) fn prepare_write(lease: &mut ParentLease, name: &CStr) -> io::Result<bool> {
+///
+/// A copy-up reports the lower and upper host identities it joined, which the
+/// caller hands to the advisory-lock table; nowhere later are both still known.
+pub(super) fn prepare_write(lease: &mut ParentLease, name: &CStr) -> io::Result<Option<CopiedUp>> {
     validate_name(name)?;
     ensure_upper(lease)?;
     let upper = lease
         .mutation()
         .map_err(|_| io::Error::from_raw_os_error(libc::ENOENT))?;
     if entry_exists(upper, name)? {
-        return Ok(false);
+        return Ok(None);
     }
     for lower in lease.lower_parents() {
         let Some(source) = open_regular(lower, name)? else {
             continue;
         };
-        CopyUp::stage(lease, name, &source)?.commit()?;
-        return Ok(true);
+        let origin = {
+            use std::os::unix::fs::MetadataExt;
+            let status = source.metadata()?;
+            (status.dev(), status.ino())
+        };
+        let published = CopyUp::stage(lease, name, &source)?.commit()?;
+        return Ok(Some(CopiedUp {
+            lower: origin,
+            upper: published,
+        }));
     }
-    Ok(false)
+    Ok(None)
+}
+
+/// The two host identities one copy-up gave a single guest file.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CopiedUp {
+    pub(super) lower: (u64, u64),
+    pub(super) upper: (u64, u64),
 }
 
 /// Materializes the upper parent of a lease whose walk selected a lower
@@ -694,7 +719,7 @@ mod tests {
         .with_upper_root(File::open(root.0.join("upper")).unwrap().into())
         .with_epoch(Arc::clone(&epoch));
 
-        assert!(!prepare_write(&mut lease, c"new").unwrap());
+        assert!(prepare_write(&mut lease, c"new").unwrap().is_none());
 
         assert!(root.0.join("upper/a/b").is_dir());
         assert_eq!(epoch.load(Ordering::Acquire), 6);

@@ -51,6 +51,13 @@ cases:
     artifact: { destination: /opt/husklet/overlay/lower-merge }
     run: [merge]
     expect: { exit: 0, stdout: golden/lower-merge.out }
+  - id: runtime/overlay/lower-lock-copy-up
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/lower.c, output: lower-lock-copy-up, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/lower-lock-copy-up }
+    run: [lock-copy-up]
+    expect: { exit: 0, stdout: golden/lower-lock-copy-up.out }
   - id: runtime/overlay/lower-whiteout-dir
     status: active
     compat: { class: compatibility }
