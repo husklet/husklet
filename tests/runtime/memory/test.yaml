@@ -669,6 +669,22 @@ cases:
     # once, so the patched leaf is never translated and they still pass with SMC detection removed.
     # Observed deterministically at builds=50 arm64 / 362 amd64; the once-per-body shape this case
     # exists to avoid degenerates to 18 arm64, so 30 separates them and catches a case going cold.
+    # arm64 reaches runs=11 against amd64's runs=241, and ~231 refusals per inner-loop PC. That is
+    # not an RWX rule: the entries are suppressed by `fallback_suppresses(executed, budget)`, which
+    # compares against `native_budget`. This guest is single-runnable, so that is NATIVE_SOLO_BUDGET,
+    # sixteen times the SLICE_BUDGET a decline would actually buy, and runs retiring 35757, 32202,
+    # 28097, 24010, 19914, 11152, 7626 and 3530 instructions before the unavoidable guard-write
+    # fallback at the patch store are all scored failures. Each suppression moves the entry one
+    # instruction deeper into the loop, leaving fewer instructions before the same fault, so the
+    # next entry retires less and latches too until all seven PCs are held for the remaining rounds.
+    # Relaxing the bar to `budget.min(SLICE_BUDGET)` takes arm64 to runs=240, builds=1436, native
+    # instructions 162302 -> 7699844, and 269ms -> 177ms. It was NOT landed: it also makes arm64
+    # PASS the frozen-`ExecutableVersions::token` mutation this case exists to fail. arm64's arm of
+    # that oracle is an artifact of the suppression -- it discriminates only because native runs are
+    # long and rare enough to span a patch. Once entries are admitted every round, native always
+    # exits at the patch store and never holds a translation across a patch, so the token is never
+    # consulted and the mutation is invisible. Restore an arm64 probe that patches without leaving
+    # native (a second thread patching while the first spins) BEFORE relaxing the suppression bar.
     expect: { exit: 0, stdout: golden/dbt_smchotpatch.out, diagnostics: [{ counter: builds, greater-than: 30 }] }
   - id: runtime/memory/dbt-smc-bounce
     targets: [arm64, amd64]
