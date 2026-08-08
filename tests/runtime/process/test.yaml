@@ -65,18 +65,16 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/prctl_lifecycle.txt }
   - id: runtime/process/seccomp-filter
-    status: !broken
-      reason: "QEMU host seccomp behavior diverges from the engine filter lifecycle contract"
-      evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/seccomp_filter.c, output: seccomp-filter, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/seccomp-filter }
+    # The golden starts from PR_GET_SECCOMP == DISABLED, which is `seccomp=unconfined`, not the container default.
+    environment: { HL_SECCOMP_BASELINE: "disabled" }
     run: []
     expect: { exit: 0, stdout: golden/seccomp_filter.txt }
   - id: runtime/process/seccomp-matrix
-    status: !broken
-      reason: "QEMU host seccomp behavior diverges from the engine action matrix contract"
-      evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/seccomp_matrix.c, output: seccomp-matrix, flags: [-static, -O2, -std=gnu11, -pthread] }
     artifact: { destination: /opt/husklet/seccomp-matrix }
@@ -536,7 +534,7 @@ cases:
   - id: runtime/process/clone-settid
     targets: [arm64, amd64]
     status: !broken
-      reason: "raw clone(CLONE_VM|CLONE_PARENT_SETTID|CLONE_CHILD_SETTID|CLONE_CHILD_CLEARTID|SIGCHLD) is REJECTED outright by the engine on both targets (prints 'clone fail'), so PARENT_SETTID/CHILD_SETTID and the CHILD_CLEARTID futex wake are untested. Native does all three. Earlier note claimed a clear-tid futex hang; the current failure is the clone itself"
+      reason: "raw clone(CLONE_VM|CLONE_PARENT_SETTID|CLONE_CHILD_SETTID|CLONE_CHILD_CLEARTID|SIGCHLD) returns EINVAL, so the guest prints 'clone fail' and exits 1. The gate is Runtime::valid in src/containers/hl-engine/src/ffi/linux/execution/fork.rs: the process-fork path accepts only CHILD_SETTID|CHILD_CLEARTID|PIDFD, plus VM|VFORK when BOTH are set. This case sets CLONE_VM without CLONE_VFORK (a distinct waitable process sharing the address space with a concurrently running parent, which the engine only aliases for the parked-parent vfork case) and CLONE_PARENT_SETTID (never accepted by the fork path, though process/fork.rs::probe_parent_outputs already faults-checks its pointer). CHILD_SETTID/CHILD_CLEARTID themselves are implemented and exercised. The refusal is loud (EINVAL), not silent. Contrast clone-vm-vfork and clone-stack, which are active and pass."
       evidence: "tests/runtime/process/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/clone_settid.c, output: clone-settid, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
@@ -546,9 +544,7 @@ cases:
     expect: { exit: 0, stdout: golden/clone_settid.txt }
   - id: runtime/process/clone-vm-vfork
     targets: [arm64, amd64]
-    status: !broken
-      reason: "CLONE_VM|CLONE_VFORK shares the address space so child writes are visible to the parent (engine breaks the shared-VM/vfork contract)"
-      evidence: "tests/runtime/process/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/clone_vfork.c, output: clone-vm-vfork, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
     artifact: { destination: /opt/husklet/clone-vm-vfork }

@@ -142,6 +142,11 @@ impl Spec {
             }
             crate::Sandbox::SentryOnly => Self::set(options, "HL_UNTRUSTED", b"1")?,
         }
+        // The engine defaults to the container baseline, so only the unconfined choice is sent.
+        match launch.isolation.seccomp_baseline {
+            crate::SeccompBaseline::Container => {}
+            crate::SeccompBaseline::Disabled => Self::set(options, "HL_SECCOMP_BASELINE", b"disabled")?,
+        }
         Ok(())
     }
 

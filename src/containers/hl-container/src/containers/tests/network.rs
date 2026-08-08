@@ -420,6 +420,7 @@ async fn stopped_member_can_join_a_network_with_active_peers() {
             sandbox: crate::Sandbox::Disabled,
             read_only_root: false,
             network_isolated: false,
+            seccomp_baseline: crate::SeccompBaseline::Container,
         })
     };
     containers.create(networked("server")).await.unwrap();

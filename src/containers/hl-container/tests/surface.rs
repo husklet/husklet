@@ -8,6 +8,7 @@ fn general_linux_workloads_default_to_sentry_routing() {
             sandbox: Sandbox::SentryOnly,
             read_only_root: false,
             network_isolated: false,
+            seccomp_baseline: hl_container::SeccompBaseline::Container,
         }
     );
 }

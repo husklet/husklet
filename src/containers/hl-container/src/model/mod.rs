@@ -19,7 +19,7 @@ pub use container::{Checkpoint, Container, ContainerId, ContainerState, ExitStat
 pub use exec::{Exec, ExecId, ExecSpec, ExecState, Streams};
 pub(crate) use health::OUTPUT_LIMIT;
 pub use health::{Check, Health, HealthStatus, Healthcheck, Probe};
-pub use isolation::{Isolation, NetworkMode, Resources, Sandbox};
+pub use isolation::{Isolation, NetworkMode, Resources, Sandbox, SeccompBaseline};
 pub use lifecycle::{RemovalPolicy, Signal, WaitCondition};
 pub use log::{Entry, Logs, Stream};
 pub(crate) use log::{JournalId, LogChunk};
