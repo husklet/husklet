@@ -165,12 +165,9 @@ pub(in crate::ffi::linux::execution) fn create(
     let seccomp = assembly.seccomp();
     // Docker seeds the supplementary set with the primary group, so `id` reports a `groups=` field.
     let mut launch_credentials = ProcessCredentials::new(uid, gid, &[gid], 32).expect("valid launch credentials");
-    launch_credentials.capabilities = hl_task::CapabilitySets {
-        effective: hl_task::CapabilitySets::CONTAINER,
-        permitted: hl_task::CapabilitySets::CONTAINER,
-        inheritable: 0,
-        ambient: 0,
-    };
+    // Docker grants the container set to a root container and nothing to a `--user` one, since runc
+    // changes user before raising capabilities. The bounding set is the container set either way.
+    launch_credentials.capabilities = hl_task::CapabilitySets::initial(uid);
     launch_credentials.capability_bounding = hl_task::CapabilitySets::CONTAINER;
     let (launch_limits, limit_overrides) = policy.limits()?;
     let source = match tasks.snapshot().init {
