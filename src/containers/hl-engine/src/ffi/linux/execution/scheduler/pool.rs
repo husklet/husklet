@@ -136,6 +136,8 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) boundaries: Option<NativeBoundaries>,
     pub(super) counters: NativeCounters,
     pub(super) host_faults: Option<Arc<dyn crate::native::HostFaultOwner>>,
+    /// Live process set the last retain sweep ran against, so an unchanged set skips it.
+    swept: Option<BTreeSet<hl_task::ProcessId>>,
 }
 
 impl NativePool {
@@ -169,6 +171,7 @@ impl NativePool {
             boundaries: (plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1")).then(NativeBoundaries::new),
             counters: NativeCounters::default(),
             host_faults,
+            swept: None,
         }
     }
 
@@ -355,6 +358,13 @@ impl NativePool {
     }
 
     pub(super) fn retain_processes(&mut self, live: &BTreeSet<hl_task::ProcessId>) {
+        // The sweep only drops entries keyed by a process outside `live`, and every
+        // insertion between turns is keyed by a process the same set already holds,
+        // so repeating it for an unchanged live set can never drop anything.
+        if self.swept.as_ref().is_some_and(|swept| swept == live) {
+            return;
+        }
+        self.swept = Some(live.clone());
         if !self.executors.is_empty() {
             self.executors.retain(|process, _| live.contains(process));
         }

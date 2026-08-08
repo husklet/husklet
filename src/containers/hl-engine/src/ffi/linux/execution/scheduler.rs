@@ -758,6 +758,34 @@ mod tests {
         assert!(pool.boundary_sensitive.is_empty());
     }
 
+    /// The unchanged-live-set memo must not suppress the sweep once the set really changes.
+    #[test]
+    fn retain_processes_memo_still_drops_a_newly_dead_process() {
+        let dying = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let live = hl_task::ProcessId::from_wire(2, 1).unwrap();
+        let token = hl_memory::ExecutableToken {
+            incarnation: 1,
+            version: 1,
+        };
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        for process in [dying, live] {
+            pool.sources.insert((process, 1, 0x1000, 0x1100), token);
+            pool.observations.insert((process, 1, 1, 1, 0x1000), 1);
+            pool.boundary_sensitive.insert(process);
+        }
+
+        let both = BTreeSet::from([dying, live]);
+        pool.retain_processes(&both);
+        pool.retain_processes(&both);
+        assert_eq!(pool.sources.len(), 2);
+        assert_eq!(pool.observations.len(), 2);
+
+        pool.retain_processes(&BTreeSet::from([live]));
+        assert!(pool.sources.keys().all(|(process, _, _, _)| *process == live));
+        assert!(pool.observations.keys().all(|(process, _, _, _, _)| *process == live));
+        assert_eq!(pool.boundary_sensitive, BTreeSet::from([live]));
+    }
+
     /// Sustained run-mode alternation must trip a hold, while a steady mode never does.
     #[test]
     fn direct_run_mode_holds_only_on_sustained_alternation() {
