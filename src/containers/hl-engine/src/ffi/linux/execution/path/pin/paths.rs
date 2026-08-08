@@ -76,16 +76,19 @@ impl Host {
             .guest()
             .map(|guest| Self::child_index_key(guest, name.to_bytes()));
         for (position, candidate) in candidates.into_iter().enumerate() {
+            // An index answers absence and whiteouts outright; a hit still takes the
+            // one fstatat below, since the entry carries no host `stat`.
+            let mut indexed = false;
             if let (Some(key), Some(index)) = (key.as_deref(), parent.candidate_index(position)) {
                 if index.is_whiteout(key) {
                     return Err(RuntimePathError::NotFound);
                 }
                 match index.get(key) {
-                    Some(_) => return Ok(candidate),
+                    Some(_) => indexed = true,
                     None => continue,
                 }
             }
-            if Self::whiteout_at(candidate.as_raw_fd(), name)? {
+            if !indexed && Self::whiteout_at(candidate.as_raw_fd(), name)? {
                 return Err(RuntimePathError::NotFound);
             }
             let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
