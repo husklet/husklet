@@ -132,13 +132,11 @@ impl TaskRegistry {
         if pending.front(info.signal) != Some(info) || pending.pop(info.signal) != Some(info) {
             return Err(TaskError::InvalidLifecycle);
         }
-        let process_pending = Self::process(&state, prepared.process)?.signals.pending.snapshot();
-        let thread_pending = Self::thread(&state, prepared.thread)?.signals.pending.snapshot();
-        let entry_pending = process_pending
-            .into_iter()
-            .chain(thread_pending)
-            .filter(|pending| pending.signal != info.signal)
-            .fold(0_u64, |bits, pending| bits | (1_u64 << (pending.signal.get() - 1)));
+        // The occupied mask already carries one bit per non-empty queue, which is
+        // what folding the snapshots produced.
+        let process_pending = Self::process(&state, prepared.process)?.signals.pending.mask();
+        let thread_pending = Self::thread(&state, prepared.thread)?.signals.pending.mask();
+        let entry_pending = (process_pending.bits() | thread_pending.bits()) & !(1_u64 << (info.signal.get() - 1));
         let signals = &mut Self::thread_mut(&mut state, prepared.thread)?.signals;
         // The retained engine's fixed 32-entry bookkeeping stack does not
         // reject a deeper guest handler: it publishes the frame but stops
