@@ -1,6 +1,198 @@
 # Engine performance checkpoint
 
+## 2026-08-07: BENCH-MAP-2 re-take after the four counter-verified fixes
+
+Head `a1cf286dd` on `refactor/merge-rust-engine`, release build, Linux ARM64
+host, 18 logical CPUs, harness-pinned CPU 17, `CARGO_TARGET_DIR` under
+`/var/tmp`. Every row used the benchmark gate at
+`--repeats 9 --divisor 1 --max-spread 0.05` against the retained C build
+`/Users/x/dd/engine/build/unit-audit` (`c_build_id sha256:9c2701b3…`, unchanged
+from the previous map). Rust engine `sha256:fc14eb0762df…`, revision
+`a1cf286dd028` (clean, not `-dirty`). The guest is byte-identical to the
+previous map's: `git log 3c805f9e5..a1cf286dd -- tests/bench/combined/main.c` is
+empty, so every counter change below is engine behaviour, not a changed guest.
+
+**Completion was verified per arm, not by exit code.** All ten rows recorded
+9 files / 9 sample rows for each of `native`, `c-engine`, and `rust-engine`, and
+the per-arm `ok=` checksum in `cycle-NNN-<env>-arm64.csv` is identical across all
+three arms on every row except `syscall`, whose checksum embeds the guest TID and
+is intentionally not compared. No row in this table came from an aborted
+baseline. (One earlier `malloc` attempt was discarded precisely because it was
+killed mid-run at 25 of 27 cycle files; it is not in this table.)
+
+**Measurement caveat — read before using the absolute numbers.** The brief for
+this lane was written against a quiet box (load ~1.1) and that window closed
+before the sweep could use it. Load was 1.18 at 19:56; by 20:00 sibling lanes had
+spun up a `testing runtime --jobs 4` soak suite, two release `rustc` builds, and
+a *second* lane running its own `hl-engine --phase malloc` benchmark. All of
+those competitors run unpinned (`sched_getaffinity` = 0-17), so they float onto
+CPU 17 and contend directly with the pinned providers. Per-row `host_load` ranged
+9.36 to 20.30 out of 18. The gate refused a spread verdict on **every** row. Per
+the lane rule, `--max-spread` was **not** relaxed to force verdicts, and repeats
+were not raised, because raising repeats does not fix contention.
+
+The contention inflates absolute times but largely cancels in the ratios, since
+all three arms are measured under the same load. `compute` remains the control
+and was measured twice here: `rust_x_c 3.161` at `host_load 25.04` and
+`rust_x_c 3.585` at `host_load 9.54`, against a quiet reference of 3.16. **Treat
+`rust_x_c` and the ordering as sound; treat the absolute microseconds as
+inflated, and treat any single row's absolutes as +/- ~15% run to run.**
+
+Ranked by absolute time lost against C (`rust_us - c_us`), which is the ordering
+the optimisation lanes should prioritise by — not by ratio.
+
+| rank | workload | native_us | c_us | rust_us | rust_x_c | rust_x_native | spread | verdict | host_load | lost vs C (us) |
+|---:|---|---:|---:|---:|---:|---:|---:|---|---:|---:|
+| 1 | malloc | 343,755 | 491,078 | 263,421,862 | 536.416 | 766.307 | 0.302 | no verdict (spread) | 11.17 | 262,930,784 |
+| 2 | signal | 691,388 | 631,445 | 82,612,899 | 130.832 | 119.488 | 0.195 | no verdict (spread) | 20.30 | 81,981,454 |
+| 3 | tlb | 302,069 | 406,413 | 13,645,712 | 33.576 | 45.174 | 0.393 | no verdict (spread) | 12.72 | 13,239,299 |
+| 4 | calls | 121,406 | 175,845 | 9,920,061 | 56.414 | 81.710 | 0.207 | no verdict (spread) | 15.36 | 9,744,216 |
+| 5 | file | 256,196 | 367,993 | 6,768,818 | 18.394 | 26.420 | 0.641 | no verdict (spread) | 19.93 | 6,400,825 |
+| 6 | pipe | 402,298 | 1,744,668 | 5,388,562 | 3.089 | 13.394 | 0.150 | no verdict (spread) | 11.25 | 3,643,894 |
+| 7 | syscall | 948,509 | 484,383 | 2,634,412 | 5.439 | 2.777 | 0.236 | no verdict (spread) | 17.61 | 2,150,029 |
+| 8 | memory | 140,979 | 129,519 | 1,749,706 | 13.509 | 12.411 | 0.274 | no verdict (spread) | 12.91 | 1,620,187 |
+| 9 | branch | 395,535 | 421,865 | 935,754 | 2.218 | 2.366 | 0.087 | no verdict (spread) | 9.36 | 513,889 |
+| 10 | compute | 60,101 | 60,026 | 215,219 | 3.585 | 3.581 | 0.123 | no verdict (spread) | 9.54 | 155,193 |
+
+**The ordering survived the re-take.** Total time lost across the ten rows is
+about 382 seconds; `malloc` and `signal` together are 345 of it, or 90%.
+`compute` is still rank 10 and still the cheapest workload on the board — it
+loses 0.16 s against C while `malloc` loses 263 s, a factor of about 1,690. The
+only rank change against the previous map is `calls` and `file` swapping ranks 4
+and 5. Ranking by ratio would still mis-order the middle: `pipe` at 3.1x loses
+more than `memory` at 13.5x, and `calls` at 56.4x loses less than a third of what
+`tlb` at 33.6x does.
+
+### Before/after for the four fixed workloads
+
+This is the gap the lane existed to close: all four fixes were counter-verified
+but none was wall-clock verified. Three of the four do not survive wall-clock
+measurement, and one does not survive its own counter claim.
+
+| workload | claim | stale map | this map | verdict |
+|---|---|---|---|---|
+| malloc | fallbacks 757→6, native instructions 24,075→428,094 | `rust_x_c` 532.624 | `rust_x_c` 536.416 | **wall time unmoved** (+0.7%, inside noise) |
+| signal | builds 4,400,030→42, fills 1,099,990→10 | builds 4,400,042, fills 1,100,007, `rust_x_c` 96.483 | builds **6,600,042**, fills **2,199,965**, `rust_x_c` 130.832 | **claim refuted, and worse** |
+| tlb | completed 418→987, first guarded native execution | completed 180, `rust_x_c` 33.214 | completed 1,432, `rust_x_c` 33.576 | counters improved, **wall time unmoved** |
+| compute | 4.02x→3.16x, gate verdict, spread 0.034 | `rust_x_c` 4.020 | `rust_x_c` 3.161 / 3.585 | **ratio confirmed**, but no gate verdict reproduced |
+
+**`malloc`: the wall time did not move — confirm, not refute.** The finding
+lane's "14.66 → 14.73 s, don't book the 157 s" is correct in direction and this
+map confirms it at gate scale. `rust_x_c` moved 532.624 → 536.416, which is
+smaller than the run-to-run variation of the control. The absolute `rust_us` rose
+157.9 s → 263.4 s, but that is a load artefact (`host_load` 4.06 then versus
+11.17 now) and must not be read as a regression. The counters do show the fix
+landing: `completed` went 18,663 → 506,533, a 27x increase in guest instructions
+retired natively, and `a64_guard_fast` is now 17,147 where the stale map had a
+100% fallback rate. **Native instructions went up 27x and wall time did not
+move**, which says the remaining `malloc` cost is not in the instructions that
+were newly admitted. Note also that the claimed "fallbacks 757 → 6" conflates two
+counters: the top-line `fallbacks` is still 824 against `runs=824`, a 100%
+fallback rate exactly as before; it is the detail `a64_guard_fallback` that is 8.
+The 263 s prize is still on the board and still unclaimed.
+
+**`signal`: the counter claim does not hold at this head.** The fix
+(`a37295b48 perf(a64): stop the per-entry direct-authority narrowing that reset
+the cache`) is in the range, but at `a1cf286dd` the gate workload records
+`runs=3,300,007 builds=6,600,042 fills=2,199,965` — still exactly two builds per
+run, the same rebuild storm the stale map described, and roughly 1.5-2x *more* of
+it in absolute terms. `rust_x_c` moved the wrong way, 96.483 → 130.832. Since the
+guest is byte-identical, this is engine behaviour. The most likely reading is
+that the later direct-authority work on this branch (`454780124`, `51dfd1ecc`,
+`a1cf286dd`) re-broke what `a37295b48` fixed; that bisect was not run here and is
+the obvious next step. Until it is, **the signal fix should not be booked.**
+
+**`tlb`: counters improved, ratio did not.** `completed` went 180 → 1,432 and the
+run now records real guarded native execution (`a64_guard_fast=7`,
+`a64_guard_full=249`) where the stale map had none. But `rust_x_c` went
+33.214 → 33.576, i.e. unmoved. `runs=28` against `fallbacks=28` is still a 100%
+fallback rate, and `a64_fallback_form_memory=24` still classifies every one of
+them as the aarch64 memory-guard form. Warming is no longer structurally
+impossible, but it is not yet worth any measurable time.
+
+**`compute`: the only fix that shows up in the ratio.** 4.020 → 3.161/3.585. It
+is also, still, rank 10 of 10 and the smallest prize on the board. The claimed
+`spread 0.034` and gate verdict did not reproduce under this load; the two
+observations here spread 0.123 and 0.181.
+
+### Native counters per workload (arm64, this head)
+
+Counters are load-independent, so unlike the timings they are exact.
+
+| workload | runs | builds | hits | fallbacks | sites | completed | fills | a64_guard_fast | a64_guard_full | a64_fallback_form_memory |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| malloc | 824 | 9,757 | 21,042 | 824 | 257 | 506,533 | 1,039 | 17,147 | 131,131 | 8 |
+| signal | 3,300,007 | 6,600,042 | 15,400,096 | 3 | 3 | 19,800,288 | 2,199,965 | 1,100,005 | 2,200,075 | 5 |
+| tlb | 28 | 41 | 82 | 28 | 13 | 1,432 | 0 | 7 | 249 | 24 |
+| calls | 9,290 | 250,071 | 3,806,626 | 3,004 | 5 | 2,913,647,524 | 71,889 | 2 | 477,712,536 | 3,004 |
+| file | 2 | 8 | 19 | 2 | 2 | 40 | 3 | 0 | 3 | 2 |
+| syscall | 500,001 | 8 | 500,019 | 2 | 2 | 9,500,022 | 4 | 0 | 4 | 2 |
+| memory | 1,123 | 1,527 | 23,938 | 0 | 0 | 1,175,797,129 | 292 | 47 | 585,526,360 | 16 |
+| pipe | 3 | 13 | 29 | 3 | 2 | 141 | 3 | 0 | 13 | 3 |
+| branch | 1,279 | 435 | 21,552 | 3 | 3 | 1,338,821,299 | 3 | 0 | 1 | 2 |
+| compute | 363 | 57 | 5,945 | 3 | 3 | 377,955,309 | 7 | 1 | 29 | 2 |
+
+Two attributions that are new since the previous map:
+
+**`malloc` now suppresses entries rather than only falling back.** The run emits
+24 distinct `hl-native-suppressed-entry` sites, the top five refusing
+15,447 / 15,117 / 12,869 / 12,842 / 12,553 times each. That is the same
+suppression signature the `tlb` lane identified and fixed, now visibly dominating
+`malloc`. With `builds=9,757` against `runs=824` — about twelve builds per run —
+the engine is still translating repeatedly and discarding the result. This, not
+the view-hint replay that was just fixed, is where the 263 seconds now sits.
+
+**`calls` regressed and is now rank 4.** `builds` went 159,314 → 250,071 and
+`rust_x_c` went 28.753 → 56.414 while `completed` stayed flat at 2.91 billion.
+`a64_guard_full=477,712,536` is unchanged, so this is build churn, not guard
+cost. Nothing in the four fixes targeted `calls`; it should be checked against
+the same direct-authority commits implicated in the `signal` regression.
+
+### Not measured, and why
+
+* **`mmap`, arm64** — still fails, still deterministically, and still not because
+  of load: at `host_load=9.58` the gate exits with `testing: native execution was
+  requested but native diagnostics are missing`. The previous map saw the
+  identical failure at `host_load=4.14`. Two observations 5.4 load apart give the
+  same message, so this is confirmed as an ARM64 native-diagnostics harness bug
+  and not a contention artefact. It remains the one gate workload with no row.
+* **`malloc`, amd64** — not re-attempted. The previous map's finding (the gate's
+  600-second internal deadline fires before the phase completes under the x86
+  interpreter at `--divisor 1`) was not re-tested here; arm64 `malloc` alone took
+  48 minutes of the sweep under load, and an amd64 attempt would have cost a
+  600-second timeout to re-learn a known result. **Restated, not resolved.**
+* **All amd64 timings** — not attempted, same reasoning as the previous map, and
+  additionally `native_baseline` is absent on amd64 because the host is aarch64.
+  Only `rust_x_c` would be meaningful there, and any "native" number for amd64
+  comes from binfmt and must not be quoted as a baseline.
+* **`compute_cold`, `intdiv`, `float_simd`, `crypto`, `atomics`, `string`** —
+  **still holds, verified directly at this head.** `--workload intdiv` reports
+  `[possible values: compute, branch, calls, memory, tlb, malloc, syscall, mmap,
+  file, pipe, signal, full]`. The 17-phase guest defines the other six but they
+  are reachable only through the guest's own `--phase` flag, so they carry no C
+  baseline or verdict.
+* **`sqlite`** — still guarded by `#ifdef HL_BENCH_SQLITE` and not compiled in.
+* **`full`** — supported by the gate but not run; at `--divisor 1` `malloc` and
+  `signal` alone are about 346 seconds of rust time per repeat, so nine repeats
+  cannot finish inside the gate's 600-second deadline.
+
+### Rerun note
+
+The ordering, the counter table, and the four before/after verdicts do not depend
+on a quiet box and should be treated as this map's durable output. The absolute
+microsecond columns still want a quiet re-take. Two operational hazards cost this
+lane real time and are worth recording: the agent scratchpad directory is
+**shared between lanes** and a sibling overwrote this lane's driver script
+mid-sweep, and a foreground harness timeout reaped an in-flight gate run at 25 of
+27 cycle files. Drive long sweeps from a lane-private directory with `setsid`,
+and verify per-arm `ok=` counts before trusting any row.
+
 ## 2026-08-07: BENCH-MAP full-workload sweep against the retained C engine
+
+> **Superseded for absolutes and for the four fixed rows by the BENCH-MAP-2
+> section above.** Its ordering and its counter attributions still stand; its
+> `malloc`, `signal`, `tlb`, and `compute` rows predate the fixes that target
+> them.
 
 Head `3c805f9e5` on `refactor/merge-rust-engine`, release build, Linux ARM64
 host, 18 logical CPUs, harness-pinned CPU 17. Every row used the benchmark gate
