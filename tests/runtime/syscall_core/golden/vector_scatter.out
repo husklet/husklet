@@ -1,0 +1,1 @@
+vector-scatter event=1 socket=1 procfs=1 device=1 comm=1

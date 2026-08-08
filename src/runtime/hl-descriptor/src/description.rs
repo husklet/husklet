@@ -9,6 +9,30 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::io::{IoSlice, IoSliceMut};
 use std::sync::Arc;
+
+/// The segment list a vectored operation is given.
+struct Segments;
+
+impl Segments {
+    /// Concatenates the segments of a vectored write so a description without its own
+    /// vectored path still delivers the whole request instead of one short segment.
+    /// Returns `None` when every segment is empty.
+    fn gather(input: &[IoSlice<'_>]) -> Result<Option<Vec<u8>>, ObjectError> {
+        let length = input
+            .iter()
+            .try_fold(0_usize, |total, part| total.checked_add(part.len()))
+            .ok_or(ObjectError::ResourceLimit)?;
+        if length == 0 {
+            return Ok(None);
+        }
+        let mut buffer = Vec::with_capacity(length);
+        for part in input {
+            buffer.extend_from_slice(part);
+        }
+        Ok(Some(buffer))
+    }
+}
+
 /// An object whose lifetime follows Linux open-file-description semantics.
 ///
 /// File, socket, pipe, and event domains implement this marker for their
@@ -163,10 +187,10 @@ pub trait OpenFileDescription: Debug + Send + Sync + 'static {
     /// # Errors
     /// Returns an error if the object does not support the operation or the operation fails.
     fn write_vector_context(&self, input: &[IoSlice<'_>], context: OperationContext<'_>) -> Result<usize, ObjectError> {
-        let Some(input) = input.iter().find(|input| !input.is_empty()) else {
+        let Some(buffer) = Segments::gather(input)? else {
             return Ok(0);
         };
-        self.write_context(input, context)
+        self.write_context(&buffer, context)
     }
     ///
     /// # Errors
@@ -178,10 +202,10 @@ pub trait OpenFileDescription: Debug + Send + Sync + 'static {
     /// # Errors
     /// Returns an error if the object does not support the operation or the operation fails.
     fn write_vector_at(&self, offset: u64, input: &[IoSlice<'_>]) -> Result<usize, ObjectError> {
-        let Some(input) = input.iter().find(|input| !input.is_empty()) else {
+        let Some(buffer) = Segments::gather(input)? else {
             return Ok(0);
         };
-        self.write_at(offset, input)
+        self.write_at(offset, &buffer)
     }
     ///
     /// # Errors
