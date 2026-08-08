@@ -54,13 +54,7 @@ impl GuestExecutor {
         }
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
-        let fallback_key = (
-            run.process,
-            lease.generation(),
-            mappings.ledger().generation(),
-            token.version,
-            pc,
-        );
+        let fallback_key = (run.process, lease.generation(), token.version, pc);
         if pool.suppressed.contains(&fallback_key) {
             if pool.diagnostics {
                 *pool.suppressed_weight.entry(pc).or_default() += 1;
@@ -228,13 +222,7 @@ impl GuestExecutor {
         if fallback {
             pool.counters.fallbacks += 1;
             if let Some((pc, executed)) = fallback_pc {
-                let instruction = (
-                    run.process,
-                    lease.generation(),
-                    mappings.ledger().generation(),
-                    token.version,
-                    pc,
-                );
+                let instruction = (run.process, lease.generation(), token.version, pc);
                 pool.record_fallback(fallback_key, instruction, executed, native_budget, direct_guard);
             }
             Some(run.machine.run_step(1, memory))
@@ -273,13 +261,7 @@ impl GuestExecutor {
         }
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length as u64).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
-        let key = (
-            run.process,
-            lease.generation(),
-            mappings.ledger().generation(),
-            token.version,
-            pc,
-        );
+        let key = (run.process, lease.generation(), token.version, pc);
         if pool.suppressed.contains(&key) {
             if pool.diagnostics {
                 *pool.suppressed_weight.entry(pc).or_default() += 1;
@@ -464,13 +446,7 @@ impl GuestExecutor {
             pool.counters.fallbacks += 1;
             pool.record_fallback(
                 key,
-                (
-                    run.process,
-                    lease.generation(),
-                    mappings.ledger().generation(),
-                    token.version,
-                    fallback_pc,
-                ),
+                (run.process, lease.generation(), token.version, fallback_pc),
                 executed,
                 native_budget,
                 false,

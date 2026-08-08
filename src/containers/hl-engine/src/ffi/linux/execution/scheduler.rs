@@ -633,8 +633,8 @@ mod tests {
     #[test]
     fn fallback_epoch() {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
-        let site = (process, 2, 3, 4, 0x5000);
-        let changed = (process, 2, 3, 5, 0x5000);
+        let site = (process, 2, 4, 0x5000);
+        let changed = (process, 2, 5, 0x5000);
         let mut sites = BTreeSet::new();
         sites.insert(site);
         assert!(sites.contains(&site));
@@ -644,8 +644,8 @@ mod tests {
     #[test]
     fn fallback_site_is_distinct_from_suppressed_entry() {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
-        let entry = (process, 2, 3, 4, 0x400990);
-        let instruction = (process, 2, 3, 4, 0x40b0c0);
+        let entry = (process, 2, 4, 0x400990);
+        let instruction = (process, 2, 4, 0x40b0c0);
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
         pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, false);
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
@@ -657,8 +657,8 @@ mod tests {
     #[test]
     fn a_fallback_that_retired_most_of_its_budget_keeps_the_entry_but_records_the_site() {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
-        let entry = (process, 2, 3, 4, 0x1055286);
-        let instruction = (process, 2, 3, 4, 0x40b0c0);
+        let entry = (process, 2, 4, 0x1055286);
+        let instruction = (process, 2, 4, 0x40b0c0);
         let mut pool = NativePool::new(GuestIsa::X86_64, &plan(crate::options::Options::default()), None);
         pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2, NATIVE_SOLO_BUDGET, false);
         assert!(pool.suppressed.is_empty());
@@ -674,8 +674,8 @@ mod tests {
     #[test]
     fn a_direct_authority_memory_fallback_buys_one_retry_before_it_suppresses() {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
-        let entry = (process, 2, 3, 4, 0x1008a80);
-        let instruction = (process, 2, 3, 4, 0x1008abc);
+        let entry = (process, 2, 4, 0x1008a80);
+        let instruction = (process, 2, 4, 0x1008abc);
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
         pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, true);
         assert!(pool.suppressed.is_empty());
@@ -683,7 +683,7 @@ mod tests {
         pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, true);
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
         // A run that retired most of its budget still keeps its entry either way.
-        let kept = (process, 2, 3, 4, 0x1008b00);
+        let kept = (process, 2, 4, 0x1008b00);
         pool.record_fallback(kept, instruction, SLICE_BUDGET, SLICE_BUDGET, true);
         assert!(!pool.suppressed.contains(&kept));
         assert!(!pool.direct_declined.contains(&kept));
@@ -701,16 +701,28 @@ mod tests {
         assert!(!NativePool::fallback_suppresses(SLICE_BUDGET / 2, NATIVE_SOLO_BUDGET));
     }
 
+    /// Warm-up survives mapping churn elsewhere in the space but not a change to the
+    /// entry's own bytes: the site carries the range version, never the ledger generation.
+    #[test]
+    fn warm_up_survives_unrelated_mapping_churn_and_resets_on_a_range_change() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        let entry = (process, 1, 7, 0x400990);
+        assert_eq!(pool.observe(entry), 1);
+        assert_eq!(pool.observe(entry), 2);
+        assert_eq!(pool.observe((process, 1, 8, 0x400990)), 1);
+    }
+
     #[test]
     fn a_full_observation_table_reclaims_stale_generations_instead_of_disabling() {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
         let mut pool = NativePool::new(GuestIsa::X86_64, &plan(crate::options::Options::default()), None);
         pool.enabled = true;
         for index in 0..NATIVE_SITE_LIMIT {
-            pool.observations.insert((process, index as u64, 3, 4, 0x400000), 2);
+            pool.observations.insert((process, index as u64, 4, 0x400000), 2);
         }
         assert_eq!(pool.observations.len(), NATIVE_SITE_LIMIT);
-        let fresh = (process, u64::MAX, 3, 4, 0x403340);
+        let fresh = (process, u64::MAX, 4, 0x403340);
         assert_eq!(pool.observe(fresh), 1);
         assert_eq!(pool.observe(fresh), 2);
         assert!(pool.enabled);
@@ -728,10 +740,10 @@ mod tests {
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
         for process in [retired, retained] {
             pool.sources.insert((process, 1, 0x1000, 0x1100), token);
-            pool.observations.insert((process, 1, 1, 1, 0x1000), 1);
-            pool.suppressed.insert((process, 1, 1, 1, 0x1000));
-            pool.direct_declined.insert((process, 1, 1, 1, 0x1000));
-            pool.fallbacks.insert((process, 1, 1, 1, 0x1004));
+            pool.observations.insert((process, 1, 1, 0x1000), 1);
+            pool.suppressed.insert((process, 1, 1, 0x1000));
+            pool.direct_declined.insert((process, 1, 1, 0x1000));
+            pool.fallbacks.insert((process, 1, 1, 0x1004));
             pool.source_incarnations.insert(process, 1);
             pool.instruction_epochs.insert(process, 1);
             pool.direct_modes.insert(process, (true, 0));
@@ -741,11 +753,7 @@ mod tests {
 
         pool.purge_process_metadata(retired);
         assert!(pool.sources.keys().all(|(process, _, _, _)| *process == retained));
-        assert!(
-            pool.observations
-                .keys()
-                .all(|(process, _, _, _, _)| *process == retained)
-        );
+        assert!(pool.observations.keys().all(|(process, _, _, _)| *process == retained));
         assert!(!pool.source_incarnations.contains_key(&retired));
         assert!(pool.source_incarnations.contains_key(&retained));
 
@@ -774,7 +782,7 @@ mod tests {
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
         for process in [dying, live] {
             pool.sources.insert((process, 1, 0x1000, 0x1100), token);
-            pool.observations.insert((process, 1, 1, 1, 0x1000), 1);
+            pool.observations.insert((process, 1, 1, 0x1000), 1);
             pool.boundary_sensitive.insert(process);
         }
 
@@ -786,7 +794,7 @@ mod tests {
 
         pool.retain_processes(&BTreeSet::from([live]));
         assert!(pool.sources.keys().all(|(process, _, _, _)| *process == live));
-        assert!(pool.observations.keys().all(|(process, _, _, _, _)| *process == live));
+        assert!(pool.observations.keys().all(|(process, _, _, _)| *process == live));
         assert_eq!(pool.boundary_sensitive, BTreeSet::from([live]));
     }
 
