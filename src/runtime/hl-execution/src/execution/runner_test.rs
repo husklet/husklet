@@ -201,6 +201,71 @@ impl ExecutionInstructionMemory for Memory {
     }
 }
 
+/// A signal delivery swaps the register file and nothing else, so the blocks already
+/// translated for this image must survive it. `replace` is the image-changing swap and
+/// must still discard them, which is what makes this test non-vacuous: the two calls
+/// differ only in which method is used and they must differ in refetch count.
+#[test]
+fn a_context_swap_keeps_translations_that_an_image_swap_discards() {
+    fn rewound(machine: &ExecutionMachine) -> ExecutionSnapshot {
+        machine.freeze().unwrap();
+        let mut snapshot = machine.snapshot().unwrap();
+        let ExecutionCpuSnapshot::Aarch64(cpu) = &mut snapshot.cpu else {
+            panic!("AArch64")
+        };
+        cpu.pc = 0x1000;
+        cpu.registers[1] = 0;
+        snapshot
+    }
+
+    let mut memory = Memory::new(0x2000);
+    for (offset, word) in [0x9100_0400_u32, 0xf100_0421, 0x54ff_ffc1].into_iter().enumerate() {
+        memory.put(0x1000 + offset * 4, &word.to_le_bytes());
+    }
+    let cpu = Aarch64CpuState {
+        pc: 0x1000,
+        ..Aarch64CpuState::default()
+    };
+    let machine = Memory::machine(ExecutionCpuSnapshot::Aarch64(cpu));
+    assert_eq!(machine.run_slice(1, 30_000, &mut memory), StepOutcome::Yield);
+    let warm = memory.fetches.get();
+    assert_eq!(warm, 3);
+
+    let snapshot = rewound(&machine);
+    machine.replace_context(snapshot).unwrap();
+    machine.thaw().unwrap();
+    assert_eq!(machine.run_slice(1, 30_000, &mut memory), StepOutcome::Yield);
+    assert_eq!(
+        memory.fetches.get(),
+        warm,
+        "a context swap must not discard translations"
+    );
+
+    let snapshot = rewound(&machine);
+    machine.replace(snapshot).unwrap();
+    machine.thaw().unwrap();
+    assert_eq!(machine.run_slice(1, 30_000, &mut memory), StepOutcome::Yield);
+    assert!(
+        memory.fetches.get() > warm,
+        "an image swap must still discard translations"
+    );
+}
+
+/// A replacement carrying a different cache epoch is a new image, and keeping the
+/// translated blocks across it would run stale code, so the context swap refuses it.
+#[test]
+fn a_context_swap_refuses_a_new_cache_epoch() {
+    let cpu = Aarch64CpuState::default();
+    let machine = Memory::machine(ExecutionCpuSnapshot::Aarch64(cpu));
+    machine.freeze().unwrap();
+    let mut snapshot = machine.snapshot().unwrap();
+    snapshot.cache_epoch += 1;
+    assert!(machine.replace_context(snapshot.clone()).is_err());
+    snapshot.cache_epoch -= 1;
+    assert!(machine.replace_context(snapshot).is_ok());
+    machine.thaw().unwrap();
+}
+
 #[test]
 fn blocks_retain_decode() {
     let mut memory = Memory::new(0x2000);
