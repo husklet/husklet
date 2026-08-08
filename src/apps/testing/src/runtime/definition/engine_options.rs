@@ -2,11 +2,13 @@
 
 use super::super::Error;
 use super::environment::EnvironmentEntry;
-use hl_container::{EndpointSpec, Isolation, Mount, NetworkMode, NetworkSpec, Resources, Sandbox, Subnet};
+use hl_container::{
+    EndpointSpec, Isolation, Mount, NetworkMode, NetworkSpec, Resources, Sandbox, SeccompBaseline, Subnet,
+};
 use std::path::PathBuf;
 
 /// Names hl-container can honour, and the ones it cannot express yet.
-const SUPPORTED: [&str; 14] = [
+const SUPPORTED: [&str; 15] = [
     "HL_NETNS",
     "HL_NETBR",
     "HL_IP",
@@ -21,6 +23,7 @@ const SUPPORTED: [&str; 14] = [
     "HL_MEM_MAX",
     "HL_PIDS_MAX",
     "HL_PCACHE_DIR",
+    "HL_SECCOMP_BASELINE",
 ];
 /// Recognised engine options with no hl-container expression; a case asking for one cannot run.
 const UNWIRED: [&str; 1] = ["HL_ULIMITS"];
@@ -37,6 +40,7 @@ pub(crate) struct EngineOptions {
     memory_bytes: Option<u64>,
     process_count: Option<u32>,
     translation_cache: Option<PathBuf>,
+    seccomp_baseline: Option<SeccompBaseline>,
     bridge: Option<String>,
     address: Option<std::net::Ipv4Addr>,
     /// Recognised but unwired names, retained so the case fails by name rather than silently.
@@ -82,6 +86,13 @@ impl EngineOptions {
             "HL_MEM_MAX" => self.memory_bytes = Some(setting.number()?),
             "HL_PIDS_MAX" => self.process_count = Some(setting.number()?),
             "HL_PCACHE_DIR" => self.translation_cache = Some(PathBuf::from(value)),
+            "HL_SECCOMP_BASELINE" => {
+                self.seccomp_baseline = Some(match value {
+                    "container" => SeccompBaseline::Container,
+                    "disabled" => SeccompBaseline::Disabled,
+                    _ => return Err(format!("HL_SECCOMP_BASELINE is not container or disabled: {value:?}").into()),
+                });
+            }
             // Every non-host container already owns a network namespace, so the legacy name is satisfied on arrival.
             "HL_NETNS" if value.is_empty() => return Err("HL_NETNS is empty".into()),
             "HL_NETNS" => {}
@@ -148,6 +159,7 @@ impl EngineOptions {
             } else {
                 self.network_isolated.unwrap_or(base.network_isolated)
             },
+            seccomp_baseline: self.seccomp_baseline.unwrap_or(base.seccomp_baseline),
             ..base
         }
     }

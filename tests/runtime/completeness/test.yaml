@@ -1046,9 +1046,7 @@ cases:
     build: { source: syscall/seccomp_filter.c, inputs: [compat.h], output: seccomp-filter, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/seccomp-filter }
     run: []
-    status: !broken
-      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
-      evidence: tests/runtime/completeness/ORACLE.md
+    status: active
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/shared/seccomp_filter.out }

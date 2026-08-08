@@ -25,12 +25,24 @@ pub enum NetworkMode {
     Host,
 }
 
+/// Guest-visible seccomp state at launch.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeccompBaseline {
+    /// Report a filter already installed, as Docker's default profile does.
+    #[default]
+    Container,
+    /// Report no filter, matching `docker run --security-opt seccomp=unconfined`.
+    Disabled,
+}
+
 /// Isolation applied to a container launch.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Isolation {
     pub sandbox: Sandbox,
     pub read_only_root: bool,
     pub network_isolated: bool,
+    pub seccomp_baseline: SeccompBaseline,
 }
 
 impl Default for Isolation {
@@ -39,6 +51,7 @@ impl Default for Isolation {
             sandbox: Sandbox::SentryOnly,
             read_only_root: false,
             network_isolated: false,
+            seccomp_baseline: SeccompBaseline::Container,
         }
     }
 }

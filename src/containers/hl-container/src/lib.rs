@@ -32,8 +32,8 @@ pub use model::{
     Endpoint, EndpointSpec, Entry, Environment, EnvironmentRecord, Exec, ExecId, ExecSpec, ExecState, Execution,
     ExitStatus, FaultCause, Guest, Health, HealthStatus, Healthcheck, Isolation, Logs, Mount, MountSource, Network,
     NetworkDriver, NetworkId, NetworkMode, NetworkSpec, Port, Probe, Process, Protocol, Prune, Publication,
-    RemovalPolicy, Resolver, Resources, Restart, RestartPolicy, Rootfs, Sandbox, Signal, Size, Stream, Streams, Subnet,
-    Update, Volume, VolumeKind, VolumeSource, VolumeSpec, WaitCondition,
+    RemovalPolicy, Resolver, Resources, Restart, RestartPolicy, Rootfs, Sandbox, SeccompBaseline, Signal, Size, Stream,
+    Streams, Subnet, Update, Volume, VolumeKind, VolumeSource, VolumeSpec, WaitCondition,
 };
 pub(crate) use model::{JournalId, LogChunk};
 pub use networks::Networks;

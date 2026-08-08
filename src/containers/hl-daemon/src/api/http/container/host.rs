@@ -188,6 +188,8 @@ impl HostSettings {
             },
             read_only_root: value.readonly_rootfs,
             network_isolated,
+            // Docker's `--security-opt seccomp=` is not parsed yet, so every API launch keeps the container baseline.
+            seccomp_baseline: hl_container::SeccompBaseline::default(),
         }
     }
 

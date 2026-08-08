@@ -159,6 +159,7 @@ impl Fixture {
                 sandbox: Sandbox::Disabled,
                 read_only_root: false,
                 network_isolated: true,
+                seccomp_baseline: hl_container::SeccompBaseline::Container,
             })
     }
 
