@@ -1,5 +1,6 @@
 use super::{scheduler, workspace};
 use crate::suite::SafePath as _;
+pub(super) mod diagnostics;
 mod engine_options;
 mod environment;
 mod host;
@@ -33,6 +34,7 @@ pub struct RuntimeCase {
     pub exit: i32,
     pub golden: PathBuf,
     pub(crate) stderr: Vec<String>,
+    pub(crate) diagnostics: Vec<diagnostics::Assertion>,
     pub(crate) guest_files: Vec<GuestFile>,
     pub(crate) guest_libraries: Vec<GuestLibrary>,
     pub(crate) working_directory: Option<String>,
@@ -95,6 +97,7 @@ impl App {
             return Err(format!("{} has an invalid image or case list", definition.display()).into());
         }
         document.execution.container()?;
+        let emits_diagnostics = document.execution.emits_diagnostics();
         let mut ids = BTreeSet::new();
         let mut outputs = BTreeSet::new();
         let mut destinations = BTreeSet::new();
@@ -141,6 +144,8 @@ impl App {
                 let golden = validate_golden(directory, &case.expect.stdout)?;
                 let stderr =
                     manifest::stderr_patterns(case.expect.stderr).map_err(|error| format!("{}: {error}", case.id))?;
+                let diagnostics = diagnostics::validate(case.expect.diagnostics, emits_diagnostics)
+                    .map_err(|error| format!("{}: {error}", case.id))?;
                 let (guest_files, guest_libraries, working_directory) =
                     case.guest.validate().map_err(|error| format!("{}: {error}", case.id))?;
                 let (environment, engine_options) =
@@ -154,6 +159,7 @@ impl App {
                     exit: case.expect.exit,
                     golden,
                     stderr,
+                    diagnostics,
                     guest_files,
                     guest_libraries,
                     working_directory,
@@ -346,12 +352,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn diagnostic_assertions_reach_the_case_and_need_an_app_that_emits_them() {
+        let row = "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/one.out, diagnostics: [{ counter: runs, greater-than: 0 }] }\n";
+        let app = category_with("{ native: true, diagnostics: true }", row).unwrap();
+        assert_eq!(app.cases[0].diagnostics.len(), 1);
+        let Err(error) = category_with("{}", row) else {
+            panic!("a diagnostic assertion loaded without an app that emits diagnostics");
+        };
+        assert!(error.to_string().contains("expect.diagnostics"), "{error}");
+    }
+
+    #[test]
+    fn a_case_without_diagnostics_still_loads_with_an_empty_list() {
+        let app = category(
+            "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/one.out }\n",
+        )
+        .unwrap();
+        assert!(app.cases[0].diagnostics.is_empty());
+    }
+
     fn category(case_rows: &str) -> Result<App, super::Error> {
         let directory = tempfile::tempdir().unwrap();
         category_at(directory.path(), case_rows)
     }
 
+    fn category_with(execution: &str, case_rows: &str) -> Result<App, super::Error> {
+        let directory = tempfile::tempdir().unwrap();
+        write_category(directory.path(), execution, case_rows)
+    }
+
     fn category_at(directory: &Path, case_rows: &str) -> Result<App, super::Error> {
+        write_category(directory, "{}", case_rows)
+    }
+
+    fn write_category(directory: &Path, execution: &str, case_rows: &str) -> Result<App, super::Error> {
         fs::write(directory.join("one.c"), "one").unwrap();
         fs::write(directory.join("two.c"), "two").unwrap();
         fs::create_dir_all(directory.join("golden")).unwrap();
@@ -362,7 +397,7 @@ mod tests {
         fs::write(
             &definition,
             format!(
-                "targets: [arm64, amd64]\nimage: alpine\nexecution: {{}}\nbuild:\n  compiler: {{ arm64: arm-cc, amd64: amd-cc }}\n  flags: []\ncases:\n{case_rows}"
+                "targets: [arm64, amd64]\nimage: alpine\nexecution: {execution}\nbuild:\n  compiler: {{ arm64: arm-cc, amd64: amd-cc }}\n  flags: []\ncases:\n{case_rows}"
             ),
         )
         .unwrap();

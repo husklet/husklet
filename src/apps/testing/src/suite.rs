@@ -52,6 +52,11 @@ pub(crate) struct Execution {
 }
 
 impl Execution {
+    /// Whether the engine is asked for the counters a case can assert on.
+    pub(crate) const fn emits_diagnostics(self) -> bool {
+        self.native && self.diagnostics
+    }
+
     pub(crate) fn container(self) -> Result<hl_container::Execution, Error> {
         if self.diagnostics && !self.native {
             return Err("native diagnostics require native execution".into());

@@ -1,4 +1,5 @@
 use super::CaseResult;
+use crate::runtime::definition::diagnostics::{self, Assertion};
 use crate::runtime::diagnostic::Excerpt as _;
 use crate::runtime::{self, workspace};
 use crate::suite::{Error, Target};
@@ -14,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const CAPTURE_LIMIT: u64 = 1024 * 1024;
-/// Engine diagnostics are forwarded rather than compared, but every concurrent worker holds one in
+/// Engine diagnostics are forwarded and compared, but every concurrent worker holds one in
 /// memory, so the bound is only loose enough for the loudest observed case.
 const DIAGNOSTIC_CAPTURE_LIMIT: u64 = 8 * 1024 * 1024;
 const RESULT_LIMIT: u64 = 1024 * 1024;
@@ -57,13 +58,20 @@ pub(crate) async fn execute(options: Options) -> Result<(), Error> {
     result.map(|_| ()).map_err(Into::into)
 }
 
-pub(super) async fn run(app: &str, case: &str, target: Target, timeout: Duration) -> Result<Vec<CaseResult>, Error> {
+pub(super) async fn run(
+    app: &str,
+    case: &str,
+    target: Target,
+    timeout: Duration,
+    assertions: &[Assertion],
+) -> Result<Vec<CaseResult>, Error> {
     let interrupts = Interrupts::new()?;
     let cancellation = Arc::new(AtomicBool::new(false));
     let guard = Cancellation(Arc::clone(&cancellation));
     let app = app.to_owned();
     let case = case.to_owned();
-    let task = tokio::task::spawn_blocking(move || supervise(&app, &case, target, timeout, &cancellation));
+    let assertions = assertions.to_vec();
+    let task = tokio::task::spawn_blocking(move || supervise(&app, &case, target, timeout, &cancellation, &assertions));
     let result = interrupted(task, &guard.0, interrupts).await;
     drop(guard);
     result?.map_err(Into::into)
@@ -164,6 +172,7 @@ fn supervise(
     target: Target,
     timeout: Duration,
     cancelled: &AtomicBool,
+    assertions: &[Assertion],
 ) -> Result<Vec<CaseResult>, String> {
     let root = workspace().map_err(|error| error.to_string())?;
     let workers = root.join("target/testing/runtime/workers");
@@ -247,7 +256,25 @@ fn supervise(
     if decoded.token != token {
         return Err("runtime worker result correlation token mismatched".to_owned());
     }
-    decoded.result
+    Ok(judged(decoded.result?, case, assertions, &stderr))
+}
+
+/// Counters accumulate over the whole worker run, so an assertion judges the aggregate and every
+/// attempt of a soak case carries the same verdict.
+fn judged(results: Vec<CaseResult>, case: &str, assertions: &[Assertion], stderr: &[u8]) -> Vec<CaseResult> {
+    let Some(violation) = diagnostics::violation(assertions, stderr) else {
+        return results;
+    };
+    if results.is_empty() {
+        return vec![CaseResult::Failed(case.to_owned(), None, violation)];
+    }
+    results
+        .into_iter()
+        .map(|result| match result {
+            CaseResult::Passed(id, attempt) => CaseResult::Failed(id, attempt, violation.clone()),
+            failed @ CaseResult::Failed(_, _, _) => failed,
+        })
+        .collect()
 }
 
 fn token() -> Result<String, String> {

@@ -13,7 +13,7 @@ cases:
     build: { source: source/shared_writeback.c, output: shared-writeback, flags: ["-static","-O2","-std=gnu11"] }
     artifact: { destination: /opt/husklet/publication/shared-writeback }
     run: []
-    expect: { exit: 0, stdout: golden/shared_writeback.out }
+    expect: { exit: 0, stdout: golden/shared_writeback.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/publication/multi-view
     targets: [arm64, amd64]
     status: active
@@ -21,7 +21,7 @@ cases:
     build: { source: source/multi_view.c, output: multi-view, flags: ["-static","-O2","-std=gnu11"] }
     artifact: { destination: /opt/husklet/publication/multi-view }
     run: []
-    expect: { exit: 0, stdout: golden/multi_view.out }
+    expect: { exit: 0, stdout: golden/multi_view.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/publication/code-patch
     targets: [arm64, amd64]
     status: active
@@ -29,4 +29,4 @@ cases:
     build: { source: source/code_patch.c, output: code-patch, flags: ["-static","-O2","-std=gnu11"] }
     artifact: { destination: /opt/husklet/publication/code-patch }
     run: []
-    expect: { exit: 0, stdout: golden/code_patch.out }
+    expect: { exit: 0, stdout: golden/code_patch.out, diagnostics: [{ counter: runs, greater-than: 0 }] }

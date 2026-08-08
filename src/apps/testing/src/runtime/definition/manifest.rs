@@ -161,6 +161,9 @@ pub(super) struct Expectation {
     /// Declared stderr line patterns; an absent list keeps the default that stderr must be empty.
     #[serde(default)]
     pub(super) stderr: Vec<String>,
+    /// Engine counter assertions; an absent list asserts nothing, so every manifest still parses.
+    #[serde(default)]
+    pub(super) diagnostics: Vec<super::diagnostics::Assertion>,
 }
 
 /// Guest files are bounded so a manifest typo cannot ask the harness to write an unbounded fixture.
