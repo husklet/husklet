@@ -125,8 +125,44 @@ The restored inline syscall service is visible as `services` 17 → 3,300,020.
 first map). It is also the row where the retained C engine beats host-native
 execution (448,661us against 920,802us), so its `rust_x_native` of 2.79
 understates the real gap; use `rust_x_c`. Its diagnostics show a single
-suppressed-entry site refusing 10,500,001 times, which is the obvious thing for a
-follow-up lane to look at.
+suppressed-entry site refusing 10,500,001 times. **That refusal has since been
+measured and is correct**; the remaining gap is not a native-admission defect.
+
+The site is `0x4164e8`, the instruction after `svc #0x0` in libc's `syscall()`
+wrapper — the post-syscall resume point, the same shape as the `__syscall_cancel`
+entry that `33517a682` fixed on x86. Isolating the phase (`--phase syscall`)
+attributes it exactly: the harness calls `phase_syscall` with `iters/20 + 1 =
+500,001` per warm call, and `runs` is 500,001 with `syscall` boundary exits
+499,999. The entry runs natively for one whole warm call, then the return into
+`run_phase`'s accumulator (`ldr x1, [x20, #2088]` at `0x402378`) raises a guard-read
+fallback with `executed=17` against `budget=65536`, so `fallback_suppresses`
+latches it; `500,001 + 10,000,000 = 10,500,001` is then every subsequent arrival.
+
+Admitting it anyway is 2.9x slower. Letting an entry survive a fallback raised at
+a block it merely chained into lifts `runs` 500,001 → 11,000,003 and `completed`
+9,500,022 → 209,000,036 on the phase (and, on the full guest, `runs` 11.9M → 25.8M,
+`completed` 25.88B → 27.86B with `builds` up only 8% and `services` unchanged) —
+yet `rust_x_c` goes **5.213 → 15.224 with both arms earning gate verdicts** (spreads
+0.009 and 0.017, `--max-spread` never relaxed), reproduced across two further
+alternated rounds at 5.403 → 15.836 and 5.423 → 15.371. Each native run here retires only
+19 instructions (`completed/runs`) before the syscall boundary ends it, so 11M
+native entries each pay a full native-slice setup for 19 instructions of work,
+which the interpreter slice absorbs far more cheaply. `executed * 2 < budget`
+measured precisely the right thing. **This row is a counter-improvement that is a
+wall-clock regression: lead with counters, but confirm with the gate.**
+
+What is left is the per-syscall round trip, not admission: `services` is 10,830,786
+for 10.5M guest `gettid` calls, so the engine leaves native code once per syscall
+and pays roughly 231ns against the retained C engine's 43ns. That cost sits in the
+scheduler's inline-service path, which is SIGRETURN-COST's territory, not native
+suppression's.
+
+This is a second, independent confirmation of the bar `8db3d7595` set on
+`dbt-smc-hotpatch`: relaxing `fallback_suppresses` looks like a large counter win on
+both cases and is not one. The mechanisms differ — that case ratchets through
+successive entries, this one is a single cold fallback at `executed=17` that latches
+under either the current rule or the proposed `budget.min(SLICE_BUDGET)` — but the
+conclusion is the same, so the rule is left alone.
 
 ### Native counters per workload (arm64, this head)
 
