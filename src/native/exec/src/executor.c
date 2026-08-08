@@ -1175,8 +1175,14 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             budget = quantum_grant;
             cpu->budget = budget;
         }
-        size_t limit = budget < HL_A64_SOURCE_MAX_WORDS ? (size_t)budget : HL_A64_SOURCE_MAX_WORDS;
+        /* A trace is cached under its entry pc alone, so sizing it by the budget
+         * left in this slice publishes a budget-shaped translation the next wider
+         * entry has to destroy. Ask for the whole window once the run has retired
+         * something and a coordinator can be asked for more grant. */
+        int extendable = quantum_poll != NULL && cpu->executed != 0;
+        size_t limit = HL_A64_SOURCE_MAX_WORDS;
         if (limit > HL_A64_TRACE_MAX_WORDS) limit = HL_A64_TRACE_MAX_WORDS;
+        if (!extendable && budget < limit) limit = (size_t)budget;
         count = hl_a64_source_available(active_source, instruction, limit);
         if (count == 0 && translated && resolver != NULL) {
             memset(&resolved_span, 0, sizeof(resolved_span));
@@ -1218,15 +1224,23 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
          * republished a narrower one, so no cross-span trace ever survived its
          * first re-entry.
          *
-         * The remaining reason to refuse a hit is the other limit `count` folded
-         * in: a trace longer than the budget left in this slice. Its emitted
-         * guard would yield at the entry pc without retiring anything, and a
-         * slice owes its grant exact progress, so refuse it here and rebuild to
-         * fit. That rebuild does fit, because `limit` caps the requested word
-         * count by the same budget. Testing the guard's own condition keeps the
-         * refusal to the entries that would actually stall. */
-        if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-            code.instruction_count > budget) {
+         * A trace longer than the budget left in this slice would still stall on
+         * its own guard, so it is refused here; an extendable run buys grant for
+         * it below and only a run that cannot rebuilds to fit. */
+        hl_native_lookup found = hl_native_translation_lookup(executor, &key, &code);
+        /* Narrowing a correct trace costs the entry, every relocation into it and
+         * the whole IBTC, so buy grant instead and yield only when refused. */
+        if (found == HL_NATIVE_HIT && code.instruction_count > budget && extendable) {
+            if (!quantum_poll(quantum_context, cpu->executed, cumulative_budget))
+                return run_exit(&execution, output, HL_NATIVE_EXIT_YIELD, instruction);
+            if (cumulative_budget > UINT64_MAX - quantum_grant || cpu->executed > cumulative_budget)
+                return run_fatal(&execution, output, A64_FATAL_QUANTUM_GRANT);
+            cumulative_budget += quantum_grant;
+            budget += quantum_grant;
+            cpu->budget = budget;
+            continue;
+        }
+        if (found != HL_NATIVE_HIT || code.instruction_count > budget) {
             status = hl_native_execution_leave(&execution);
             if (status != HL_NATIVE_OK) return status;
             const hl_a64_source *build_source = active_source;
@@ -1291,6 +1305,16 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
              * that boundary can survive an epoch change or fork repair. */
             if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT)
                 return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
+            if (code.instruction_count > budget && extendable) {
+                if (!quantum_poll(quantum_context, cpu->executed, cumulative_budget))
+                    return run_exit(&execution, output, HL_NATIVE_EXIT_YIELD, instruction);
+                if (cumulative_budget > UINT64_MAX - quantum_grant || cpu->executed > cumulative_budget)
+                    return run_fatal(&execution, output, A64_FATAL_QUANTUM_GRANT);
+                cumulative_budget += quantum_grant;
+                budget += quantum_grant;
+                cpu->budget = budget;
+                continue;
+            }
         }
         if (cpu->indirect_site != 0) {
             status = hl_native_execution_leave(&execution);
