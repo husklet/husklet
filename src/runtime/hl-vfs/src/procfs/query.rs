@@ -121,6 +121,11 @@ impl Procfs {
                 self.source.cwd(process_identity()?)?;
                 NodeKind::Link
             }
+            model::Node::Exe => {
+                self.source.executable(process_identity()?)?;
+                NodeKind::Link
+            }
+            model::Node::MountsLink => NodeKind::Link,
             model::Node::UtsNamespace
             | model::Node::CgroupNamespace
             | model::Node::IpcNamespace
@@ -332,6 +337,11 @@ impl Procfs {
                 self.source.cwd(process_identity()?)?;
                 0
             }
+            model::Node::Exe => {
+                self.source.executable(process_identity()?)?;
+                0
+            }
+            model::Node::MountsLink => 0,
             model::Node::UtsNamespace
             | model::Node::CgroupNamespace
             | model::Node::IpcNamespace

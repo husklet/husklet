@@ -107,7 +107,42 @@ impl Procfs {
         self.read_link_for(path, current, current)
     }
 
+    /// Rewrites a `/proc/thread-self/<leaf>` spelling onto the calling thread's
+    /// own task directory, which the node parser already understands.
+    fn thread_self(path: &[u8], current: u32, thread: u32) -> Option<Vec<u8>> {
+        let rest = path
+            .strip_prefix(b"/")
+            .unwrap_or(path)
+            .strip_prefix(b"proc/thread-self/")?;
+        let mut rewritten = format!("/proc/{current}/task/{thread}/").into_bytes();
+        rewritten.extend_from_slice(rest);
+        Some(rewritten)
+    }
+
+    pub fn metadata_for(&self, path: &[u8], current: u32, thread: u32) -> Result<Option<OfdMetadata>, Error> {
+        match Self::thread_self(path, current, thread) {
+            Some(rewritten) => self.metadata(&rewritten, current),
+            None => self.metadata(path, current),
+        }
+    }
+
+    pub fn open_for(
+        &self,
+        path: &[u8],
+        current: u32,
+        thread: u32,
+        intent: crate::OpenIntent,
+    ) -> Result<Option<Arc<dyn hl_descriptor::OpenFileDescription>>, Error> {
+        match Self::thread_self(path, current, thread) {
+            Some(rewritten) => self.open(&rewritten, current, intent),
+            None => self.open(path, current, intent),
+        }
+    }
+
     pub fn read_link_for(&self, path: &[u8], current: u32, thread: u32) -> Result<Option<Vec<u8>>, Error> {
+        if let Some(rewritten) = Self::thread_self(path, current, thread) {
+            return self.read_link_for(&rewritten, current, thread);
+        }
         let path = path.strip_prefix(b"/").unwrap_or(path);
         if path == b"proc/self" {
             let identity = self.source.resolve_process(current)?;
@@ -126,6 +161,13 @@ impl Procfs {
         if let Some((process, thread, model::Node::Cwd)) = model::Node::parse(path, current) {
             let identity = self.resolve_path_process(process, thread)?;
             return self.source.cwd(identity).map(Some);
+        }
+        if let Some((_, _, model::Node::MountsLink)) = model::Node::parse(path, current) {
+            return Ok(Some(b"self/mounts".to_vec()));
+        }
+        if let Some((process, thread, model::Node::Exe)) = model::Node::parse(path, current) {
+            let identity = self.resolve_path_process(process, thread)?;
+            return self.source.executable(identity).map(Some);
         }
         if let Some((process, thread, model::Node::UtsNamespace)) = model::Node::parse(path, current) {
             let identity = self.resolve_path_process(process, thread)?;

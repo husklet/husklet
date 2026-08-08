@@ -304,8 +304,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/shared/selfcomm.out }
   - id: runtime/procfs/forkself
-    status: !unsupported
-      reason: "excluded-macos: child /proc/<pid>/stat comm surfacing is not emulated on the macOS engine. Linux engine still runs+passes this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "child /proc/<pid>/stat comm surfacing is not emulated on the macOS engine. Linux engine still runs+passes this."
       evidence: "tests/runtime/procfs/ORACLE.md"
     compat: { class: compatibility }
     build: { source: forkself.c, inputs: [pf.h], output: forkself, flags: [-static, -O2, -std=gnu11, -I.] }

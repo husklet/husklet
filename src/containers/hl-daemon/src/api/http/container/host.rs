@@ -176,6 +176,8 @@ impl HostSettings {
             memory_bytes,
             process_count,
             cpu_count,
+            // Docker's `HostConfig.Ulimits` is not parsed yet, so an API launch keeps the engine defaults.
+            limits: Vec::new(),
         })
     }
 

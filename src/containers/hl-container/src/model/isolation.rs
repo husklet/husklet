@@ -69,10 +69,56 @@ mod tests {
 }
 
 /// Resource ceilings. Zero means the engine's platform default.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Resources {
     pub memory_bytes: u64,
     pub process_count: u32,
     /// Number of guest-visible logical CPUs. Zero selects the engine default.
     pub cpu_count: u32,
+    /// Per-process rlimits, as `docker --ulimit` sets them. Empty keeps the engine defaults.
+    #[serde(default)]
+    pub limits: Vec<ResourceLimit>,
+}
+
+/// One `getrlimit` pair named by its Linux short name, such as `nofile` or `nproc`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResourceLimit {
+    pub name: String,
+    pub soft: u64,
+    pub hard: u64,
+}
+
+impl ResourceLimit {
+    /// Names the engine's `HL_ULIMITS` parser understands; anything else is rejected
+    /// at spec time rather than silently dropped on the engine side.
+    pub const NAMES: [&'static str; 16] = [
+        "cpu",
+        "fsize",
+        "data",
+        "stack",
+        "core",
+        "rss",
+        "nproc",
+        "nofile",
+        "memlock",
+        "as",
+        "locks",
+        "sigpending",
+        "msgqueue",
+        "nice",
+        "rtprio",
+        "rttime",
+    ];
+
+    #[must_use]
+    pub fn record(&self) -> String {
+        let text = |value: u64| {
+            if value == u64::MAX {
+                String::from("unlimited")
+            } else {
+                value.to_string()
+            }
+        };
+        format!("{}={}:{}", self.name, text(self.soft), text(self.hard))
+    }
 }

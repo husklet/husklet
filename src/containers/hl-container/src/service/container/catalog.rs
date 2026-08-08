@@ -121,7 +121,7 @@ impl Service {
     pub(crate) async fn update(&self, reference: &str, update: crate::Update) -> Result<Container> {
         let _guard = self.operations.lock().await;
         let mut container = self.resolve(reference).await?;
-        let previous = container.spec.resources;
+        let previous = container.spec.resources.clone();
         update.apply(&mut container.spec.resources, &mut container.spec.restart);
         container.spec.validate()?;
         let cancel_restart = match container.state {

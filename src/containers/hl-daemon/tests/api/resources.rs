@@ -18,6 +18,7 @@ async fn limits(containers: &Containers, rootfs: &Path) -> Result<(), Error> {
             memory_bytes: 32 * 1024 * 1024,
             process_count: 16,
             cpu_count: 2,
+            limits: Vec::new(),
         },
         timeout: Duration::from_secs(15),
     };
@@ -101,7 +102,7 @@ impl Case<'_> {
     fn spec(&self, rootfs: &Path) -> ContainerSpec {
         ContainerSpec::from_directory(rootfs, Process::new("/bin/sh").args(["-c", self.command]))
             .name(self.name)
-            .resources(self.resources)
+            .resources(self.resources.clone())
             .isolation(Isolation {
                 sandbox: Sandbox::Disabled,
                 ..Isolation::default()

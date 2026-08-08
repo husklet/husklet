@@ -228,9 +228,7 @@ cases:
     expect: { exit: 0, stdout: golden/fatal_group.txt }
   - id: runtime/process/proc-self-exe
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the previous reason was WRONG. Re-derived 2026-08-08 on both ISAs: fdlink closed=1 -- readlink of a dup()'d-then-close()d /proc/self/fd/N already ENOENTs, that defect is gone. The live residual is /proc/self/exe spelling coverage: got 'exe abs=1 canon=1 alias=0 tself=0 dirfd=0 cwdrel=0 selfpid=1 open=1 lstat=0 stat=0 access=0' and 'magic mounts=0'. Cause: hl-vfs procfs has no exe node at all (no b\"exe\" in procfs/model/node.rs), so exe exists only as the literal-string special cases NativePath::procfs_link path == \"/proc/self/exe\" and HostPaths::resolve's identical literal compare. Every other spelling -- /proc/<pid>/exe, /proc/thread-self/exe, readlinkat(dirfd of /proc/self, \"exe\"), the cwd-relative \"proc/self/exe\" -- misses the literal and falls through to procfs.read_link_for, which has no exe node and returns NotFound; and lstat/stat/access fail because procfs_node consults procfs.metadata first, which likewise has no exe node, so the literal special case is never reached. /proc/mounts is separately missing as a symlink to \"self/mounts\". Fix is an Exe node in hl-vfs procfs whose target the engine supplies, replacing both literal compares."
-      evidence: "tests/runtime/process/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/proc_exe.c, output: proc-self-exe, flags: ["-static-pie", "-O2", "-std=gnu11", "-pthread"] }
     artifact: { destination: /opt/husklet/proc-self-exe }

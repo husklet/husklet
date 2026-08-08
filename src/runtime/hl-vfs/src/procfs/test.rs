@@ -1165,13 +1165,16 @@ fn mounts_projection_uses_same_namespace() {
         "shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=65536k 0 0\n",
     )
     .as_bytes();
-    for path in [b"/proc/mounts".as_slice(), b"/proc/self/mounts", b"/proc/7/mounts"] {
+    for path in [b"/proc/self/mounts".as_slice(), b"/proc/7/mounts"] {
         let file = procfs.open(path, 7, OpenIntent::from_bits(0)).unwrap().unwrap();
         let mut bytes = [0; 2048];
         let count = file.read(&mut bytes).unwrap();
         assert_eq!(&bytes[..count], expected);
         assert_eq!(file.metadata().unwrap().size, count as u64);
     }
+    // Linux spells /proc/mounts as a relative symlink to the caller's own table.
+    assert_eq!(procfs.kind(b"/proc/mounts", 7), Ok(Some(super::NodeKind::Link)));
+    assert_eq!(procfs.read_link(b"/proc/mounts", 7), Ok(Some(b"self/mounts".to_vec())));
     assert_eq!(procfs.kind(b"/proc/8/mounts", 7), Err(Error::NotFound));
 }
 

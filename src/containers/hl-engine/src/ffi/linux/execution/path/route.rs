@@ -6,7 +6,7 @@ use hl_runtime::{
     RuntimeXattrMutation, XattrName,
 };
 
-use super::{NativePath, device, executable::ProcessExecutable, metadata, pin};
+use super::{NativePath, device, metadata, pin};
 
 #[derive(Debug)]
 struct ReadOnlyNode(Box<dyn ResolvedPathLease>);
@@ -69,17 +69,6 @@ impl NativePath {
             if let Some(node) = device::DeviceOpen::resolve(operand.path.as_bytes()) {
                 return Ok(node);
             }
-        }
-        if !base.confines_root() && operand.path.as_bytes() == b"/proc/self/exe" {
-            let target = self
-                .executable
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            if target.is_empty() {
-                return Err(RuntimePathError::NotFound);
-            }
-            return Ok(Box::new(ProcessExecutable(target)));
         }
         let ordinary = self.ordinary()?;
         if let Some(binding) = ordinary.name_binding(base.path(), operand.path.as_bytes())? {

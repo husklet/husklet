@@ -32,6 +32,10 @@ pub trait Source: Send + Sync {
     fn cwd(&self, _process: ProcessIdentity) -> Result<Vec<u8>, Error> {
         Err(Error::NotFound)
     }
+    /// Absolute guest path of the process image backing `/proc/<pid>/exe`.
+    fn executable(&self, _process: ProcessIdentity) -> Result<Vec<u8>, Error> {
+        Err(Error::NotFound)
+    }
     fn process(&self, process: ProcessIdentity) -> Result<ProcessView, Error>;
     fn cmdline(&self, _process: ProcessIdentity) -> Result<Vec<u8>, Error> {
         Err(Error::NotFound)

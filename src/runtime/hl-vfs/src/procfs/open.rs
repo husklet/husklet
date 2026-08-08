@@ -276,7 +276,11 @@ impl Procfs {
                 leaf,
                 self.source.mounts(identity.ok_or(Error::NotFound)?)?.stats(),
             ),
-            model::Node::Root | model::Node::Cwd | model::Node::UtsNamespace => Ok(None),
+            model::Node::Root
+            | model::Node::Cwd
+            | model::Node::Exe
+            | model::Node::MountsLink
+            | model::Node::UtsNamespace => Ok(None),
             model::Node::NetworkNamespace
             | model::Node::CgroupNamespace
             | model::Node::IpcNamespace
