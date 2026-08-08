@@ -294,6 +294,10 @@ impl NativePool {
     /// retry only pays for itself once it retires a substantial part of its budget. The
     /// slice is what a decline actually buys, so a larger native budget cannot raise the
     /// bar the retry has to clear.
+    ///
+    /// This weighs one retry against one slice, but the latch never clears, so on sqlite
+    /// 529 latches from 719 verdicts refuse 1,678,898 later probes and buy an interpreter
+    /// slice for every one of them.
     pub(super) const fn fallback_suppresses(executed: u64, budget: u64) -> bool {
         executed * 2
             < if budget < super::SLICE_BUDGET {
