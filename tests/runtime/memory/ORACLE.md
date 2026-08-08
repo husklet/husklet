@@ -60,8 +60,9 @@ and targeted instruction-cache retirement.  AMD64-specific coverage owns REP
 fault restart state, LOCK/REP SMC boundaries, and concurrent executable alias
 rewrites.  The retained macOS path deliberately weakens some protection and
 fault behavior because of host VM granularity; those cases remain explicitly
-`unsupported`.  The known NX and edge-fault fidelity gaps remain explicitly
-`broken` rather than disappearing from discovery.
+`unsupported`.  The edge-fault fidelity gap remains explicitly `broken` rather
+than disappearing from discovery; the NX gap was diagnosed and fixed on
+2026-08-08 (see the final section).
 
 Rust ownership maps guest-visible regions, protection, placement, shared
 objects, generations, reservations, atomic access, checkpoint values, and
@@ -155,6 +156,7 @@ The five that remain `broken` are unrelated to that cohort and still hold.
 divergences whose evidence is `QEMU_EVIDENCE.md`, not engine failures.
 `nx-exec` and `edge-faults` are the NX and edge-fault fidelity gaps this
 document already records above as deliberately retained rather than hidden.
+(`nx-exec` was superseded on 2026-08-08; see the section below.)
 The 14 `unsupported` cases are the macOS host-VM exclusions, also as recorded.
 
 `dbt-longjmp-reenter` is active and correct but load-sensitive: it passes
@@ -194,3 +196,45 @@ early execution with `*** stack smashing detected ***` after guest fault entry
 at address `0x8ffc` (process exit 134). No ARM64 case-level pass summary was
 produced, so this run was recorded as an engine activation/teardown blocker and
 was not used to promote any case to active. That blocker no longer reproduces.
+
+## `nx-exec`: the recorded reason was wrong, 2026-08-08
+
+`nx-exec` was typed `broken` with a reason claiming that "the engine strips
+`PROT_EXEC` and forces host `PROT_READ` (syscall/mem.c mmap+mprotect case 226)
+so guest exec permission is never represented", that a non-executable page
+"executes on both targets", and that the fix "needs a guest-exec registry
+checked at translate-block code fetch".  Every one of those claims was checked
+against head and is false; the two file references are to the retained C
+oracle, not to this engine.
+
+What is actually true.  Guest execute permission *is* represented: `mmap`/
+`mprotect` decode `PROT_EXEC` into `Protection::EXECUTE`
+(`hl-linux/src/memory/abi.rs`), the ELF loader gives text segments `EXECUTE`
+(`hl-engine/src/ffi/linux/loader.rs`), `RegionSet::resolve` refuses any access
+whose region lacks the requested bit (`hl-memory/src/region_set.rs`), and the
+native translator already declines to build a block whose PC lacks `EXECUTE`
+(`hl-engine/src/ffi/linux/execution/scheduler/native.rs`).  A guest `mmap` of
+`PROT_READ|PROT_WRITE|PROT_EXEC` succeeds and executes on both ISAs, and W|X is
+held simultaneously, which matches unhardened Linux.  The "registry checked at
+translate-block code fetch" the reason asks for already existed.
+
+The two real defects were narrower, and neither was a stripped `PROT_EXEC`:
+
+- The aarch64 interpreter fetched instructions through
+  `GuestOperandMemory::read`, which demands only `Protection::READ`, instead of
+  the `InstructionFetch`/`Protection::EXECUTE` path the x86 interpreter uses.
+  So NX was unenforced on aarch64 only, and only in the interpreter: the native
+  translator correctly declined such a PC, fell back to the interpreter, and the
+  interpreter then ran the bytes anyway.  amd64 already enforced NX.
+- `GuestExecutor::fault_signal` did not match `ExecutionFault::Fetch`, so a
+  correctly denied fetch fell to `_ => None` and killed the thread with a
+  `FaultReason::Fetch` exit instead of raising SIGSEGV.  No guest handler ran
+  and no `si_code` was ever computed, on either ISA.  This is why the case
+  timed out rather than printing `killed_segv=0`: the amd64 child died without
+  a wait status the fixture could classify.
+
+Both are fixed; `nx-exec` is `active` and passes on both ISAs in about 190 ms.
+It now pins `runs > 0` so it cannot silently stop reaching the native engine.
+Fetch denial now reaches `classify`, which reports `SEGV_ACCERR` when the
+address is mapped and `SEGV_MAPERR` when it is not, matching Linux for both the
+`PROT_READ` and `PROT_NONE` probes.

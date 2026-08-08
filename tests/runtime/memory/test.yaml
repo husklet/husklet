@@ -806,14 +806,12 @@ cases:
     expect: { exit: 0, stdout: golden/efault_uaccess.out }
   - id: runtime/memory/nx-exec
     targets: [arm64, amd64]
-    status: !broken
-      reason: "SECURITY: NX/W^X not enforced -- a page mapped without PROT_EXEC (guest PROT_READ) executes on both targets (prot_read killed_segv=0 vs native 1); the engine strips PROT_EXEC and forces host PROT_READ (syscall/mem.c mmap+mprotect case 226) so guest exec permission is never represented. x86_64 additionally does not kill on a PROT_NONE exec (prot_none killed_segv=0; aarch64 is correct). Fix needs a guest-exec registry checked at translate-block code fetch"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/nx_exec.c, output: nx-exec, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/nx-exec }
     run: []
-    expect: { exit: 0, stdout: golden/nx_exec.out }
+    expect: { exit: 0, stdout: golden/nx_exec.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/memory/edge-faults
     targets: [arm64, amd64]
     status: !broken
