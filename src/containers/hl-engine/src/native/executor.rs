@@ -1710,6 +1710,12 @@ pub(crate) struct Executor {
     diagnostics_enabled: bool,
     fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
     view_hints: std::sync::Mutex<ViewHints>,
+    /// Cross-run x86 hint admission, counted only under diagnostics.
+    x86_hints_in: std::sync::atomic::AtomicU64,
+    x86_hints_accepted: std::sync::atomic::AtomicU64,
+    x86_hints_overlap_rejected: std::sync::atomic::AtomicU64,
+    x86_hints_subsuming_rejected: std::sync::atomic::AtomicU64,
+    x86_hints_unprojectable: std::sync::atomic::AtomicU64,
     /// A lease failure is a fieldless `Err(())`; without this the scheduler cannot
     /// name which step refused.
     lease_failure: std::sync::atomic::AtomicU32,
@@ -2016,6 +2022,11 @@ impl Executor {
             diagnostics_enabled,
             fault_owner,
             view_hints: std::sync::Mutex::new(ViewHints::default()),
+            x86_hints_in: std::sync::atomic::AtomicU64::new(0),
+            x86_hints_accepted: std::sync::atomic::AtomicU64::new(0),
+            x86_hints_overlap_rejected: std::sync::atomic::AtomicU64::new(0),
+            x86_hints_subsuming_rejected: std::sync::atomic::AtomicU64::new(0),
+            x86_hints_unprojectable: std::sync::atomic::AtomicU64::new(0),
             lease_failure: std::sync::atomic::AtomicU32::new(0),
             #[cfg(test)]
             test_epoch: std::sync::Mutex::new(None),
@@ -2247,6 +2258,14 @@ impl Executor {
 
     fn statistics_snapshot(&self) -> Result<Option<Diagnostics>, ()> {
         self.diagnostics_enabled.then(|| self.diagnostics()).transpose()
+    }
+
+    /// Cross-run hint admission is only observable from Rust, so count it here rather
+    /// than in the engine's own diagnostics block.
+    fn count_x86_hint(&self, counter: &std::sync::atomic::AtomicU64) {
+        if self.diagnostics_enabled {
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     pub(crate) fn run_lease<H: MemoryAccessHost>(
@@ -2772,6 +2791,7 @@ impl Executor {
         let mut views = vec![primary];
         const OPERAND_SPAN: u64 = u64::MAX;
         for (address, required) in hints {
+            self.count_x86_hint(&self.x86_hints_in);
             // A hint records one address but projects its whole region, so replaying the
             // narrow observed access publishes a region-wide view that rejects the
             // opposite access. Widen as `resolve_operand` does, narrowing only when the
@@ -2781,6 +2801,7 @@ impl Executor {
                 .project_bounded(hl_isa::GuestAddress::new(address), 1, widened, OPERAND_SPAN)
                 .or_else(|_| lease.project_bounded(hl_isa::GuestAddress::new(address), 1, required, OPERAND_SPAN))
             else {
+                self.count_x86_hint(&self.x86_hints_unprojectable);
                 continue;
             };
             let candidate = ProjectionView {
@@ -2792,9 +2813,30 @@ impl Executor {
                 write_policy: WRITE_EXACT,
                 write_index: view.index,
             };
-            if !views.iter().any(|existing| {
+            let overlaps = |existing: &ProjectionView| {
                 existing.guest_first < candidate.guest_last && candidate.guest_first < existing.guest_last
-            }) {
+            };
+            if views.iter().any(overlaps) {
+                self.count_x86_hint(&self.x86_hints_overlap_rejected);
+                // Whether the aarch64 subsumption rule would have admitted this one: a
+                // candidate covering a lone view under the same host delta and permissions
+                // resolves every address that view resolved.
+                if views.iter().enumerate().any(|(index, existing)| {
+                    overlaps(existing)
+                        && candidate.guest_first <= existing.guest_first
+                        && existing.guest_last <= candidate.guest_last
+                        && candidate.permissions == existing.permissions
+                        && candidate.host_first.wrapping_sub(candidate.guest_first)
+                            == existing.host_first.wrapping_sub(existing.guest_first)
+                        && !views
+                            .iter()
+                            .enumerate()
+                            .any(|(other, view)| other != index && overlaps(view))
+                }) {
+                    self.count_x86_hint(&self.x86_hints_subsuming_rejected);
+                }
+            } else {
+                self.count_x86_hint(&self.x86_hints_accepted);
                 views.push(candidate);
             }
         }
@@ -3006,7 +3048,7 @@ impl Drop for Executor {
             && let Ok(value) = self.diagnostics()
         {
             eprintln!(
-                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_fallback_guard_read={} a64_fallback_guard_write={} a64_fallback_simd_fp={} a64_fallback_memory={} a64_fallback_control={} a64_fallback_other={} a64_fallback_entry_rejection={} a64_fallback_generated={} a64_fallback_call={} a64_fallback_return={} a64_fallback_indirect={} a64_fallback_system={} a64_fallback_form_memory={} a64_fallback_form_other={} ibtc_authenticated_entries={} ibtc_shared_hits={} ibtc_auth_rejections={} a64_slim_exits=0 a64_branch_exhaustion={} a64_branch_cold_relocation={} a64_branch_nonrelocatable={} a64_branch_unidentified={} a64_branch_sample_pc={:#x} a64_branch_sample_source_first={:#x} a64_branch_sample_source_last={:#x} a64_branch_sample_form={}",
+                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_fallback_guard_read={} a64_fallback_guard_write={} a64_fallback_simd_fp={} a64_fallback_memory={} a64_fallback_control={} a64_fallback_other={} a64_fallback_entry_rejection={} a64_fallback_generated={} a64_fallback_call={} a64_fallback_return={} a64_fallback_indirect={} a64_fallback_system={} a64_fallback_form_memory={} a64_fallback_form_other={} ibtc_authenticated_entries={} ibtc_shared_hits={} ibtc_auth_rejections={} a64_slim_exits=0 a64_branch_exhaustion={} a64_branch_cold_relocation={} a64_branch_nonrelocatable={} a64_branch_unidentified={} a64_branch_sample_pc={:#x} a64_branch_sample_source_first={:#x} a64_branch_sample_source_last={:#x} a64_branch_sample_form={} x86_hints_in={} x86_hints_accepted={} x86_hints_overlap_rejected={} x86_hints_subsuming_rejected={} x86_hints_unprojectable={}",
                 value.ibtc_fills,
                 value.ibtc_site_collisions,
                 value.ibtc_shared_collisions,
@@ -3061,6 +3103,13 @@ impl Drop for Executor {
                 value.a64_branch_sample_source_first,
                 value.a64_branch_sample_source_last,
                 value.a64_branch_sample_form,
+                self.x86_hints_in.load(std::sync::atomic::Ordering::Relaxed),
+                self.x86_hints_accepted.load(std::sync::atomic::Ordering::Relaxed),
+                self.x86_hints_overlap_rejected
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                self.x86_hints_subsuming_rejected
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                self.x86_hints_unprojectable.load(std::sync::atomic::Ordering::Relaxed),
             );
         }
         // SAFETY: construction transfers unique ownership of the live handle;
