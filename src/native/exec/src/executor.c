@@ -1359,12 +1359,16 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                     if (!executed_identity) {
                         atomic_fetch_add_explicit(&executor->a64_branch_unidentified, 1, memory_order_relaxed);
                         form = HL_NATIVE_A64_BRANCH_FORM_UNIDENTIFIED;
+                    } else if (cpu->program == executed_code.source_last) {
+                        /* Exhaustion describes this exit, while a relocation count is a
+                         * property the block carries whether or not the exit used one.
+                         * Testing relocation first reported nearly every exit as a cold
+                         * relocation and left this counter permanently zero. */
+                        atomic_fetch_add_explicit(&executor->a64_branch_exhaustion, 1, memory_order_relaxed);
+                        form = HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION;
                     } else if (executed_code.relocation_count != 0) {
                         atomic_fetch_add_explicit(&executor->a64_branch_cold_relocation, 1, memory_order_relaxed);
                         form = HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION;
-                    } else if (cpu->program == executed_code.source_last) {
-                        atomic_fetch_add_explicit(&executor->a64_branch_exhaustion, 1, memory_order_relaxed);
-                        form = HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION;
                     } else {
                         atomic_fetch_add_explicit(&executor->a64_branch_nonrelocatable, 1, memory_order_relaxed);
                         form = HL_NATIVE_A64_BRANCH_FORM_NONRELOCATABLE;
