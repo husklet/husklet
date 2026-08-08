@@ -131,6 +131,39 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         if reading { mode == 1 } else { mode == 0 }
     }
 
+    /// A description without a vectored read path would otherwise fill only the first
+    /// segment, so gather one read into a bounce buffer and scatter it across every
+    /// segment the way the kernel does.
+    fn scatter_read(
+        lease: &hl_descriptor::OperationLease,
+        output: &mut [std::io::IoSliceMut<'_>],
+        offset: Option<u64>,
+        context: hl_descriptor::OperationContext<'_>,
+    ) -> Result<usize, ObjectError> {
+        let capacity = output
+            .iter()
+            .try_fold(0_usize, |total, part| total.checked_add(part.len()))
+            .ok_or(ObjectError::ResourceLimit)?;
+        if capacity == 0 {
+            return Ok(0);
+        }
+        let mut buffer = vec![0_u8; capacity];
+        let count = match offset {
+            Some(position) => lease.read_at(position, &mut buffer)?,
+            None => lease.read_context(&mut buffer, context)?,
+        };
+        let mut copied = 0;
+        for part in output.iter_mut() {
+            let length = part.len().min(count.saturating_sub(copied));
+            part[..length].copy_from_slice(&buffer[copied..copied + length]);
+            copied += length;
+            if copied == count {
+                break;
+            }
+        }
+        Ok(count)
+    }
+
     fn read_vector(
         lease: &hl_descriptor::OperationLease,
         marshaller: &GuestMarshaller<'_, M>,
@@ -146,14 +179,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 None => lease.read_vector_context(&mut output, context),
             };
             match result {
-                Err(ObjectError::NotSupported) => {
-                    let first = output.iter_mut().find(|vector| !vector.is_empty());
-                    match (offset, first) {
-                        (_, None) => Ok(0),
-                        (Some(position), Some(vector)) => lease.read_at(position, vector),
-                        (None, Some(vector)) => lease.read_context(vector, context),
-                    }
-                }
+                Err(ObjectError::NotSupported) => Self::scatter_read(lease, &mut output, offset, context),
                 result => result,
             }
         };
