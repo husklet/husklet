@@ -90,7 +90,13 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     }
 
     pub(crate) fn poll_cpu_itimers(&self) {
-        let (Some(alarms), Ok(virtual_now), Ok(prof_now)) = (&self.alarms, self.cpu_now(1), self.cpu_now(2)) else {
+        // Reading the two CPU clocks costs a host syscall each, and this runs at
+        // every signal boundary; skip it entirely while no CPU itimer is armed.
+        let Some(alarms) = &self.alarms else { return };
+        if !alarms.cpu_timers_armed() {
+            return;
+        }
+        let (Ok(virtual_now), Ok(prof_now)) = (self.cpu_now(1), self.cpu_now(2)) else {
             return;
         };
         alarms.poll_cpu(self.process, virtual_now, prof_now);

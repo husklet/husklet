@@ -113,6 +113,10 @@ pub struct AlarmRegistry {
     scheduler: Arc<dyn AlarmScheduler>,
     timers: Mutex<BTreeMap<ProcessId, TimerState>>,
     cpu_timers: Mutex<BTreeMap<ProcessId, ProcessCpuTimers>>,
+    /// True while some process holds an armed `ITIMER_VIRTUAL`/`ITIMER_PROF` deadline.
+    /// Reading the CPU clocks costs two host syscalls, so the signal boundary
+    /// consults this first and skips the poll entirely when nothing is armed.
+    cpu_armed: AtomicBool,
     interruptions: Mutex<BTreeMap<hl_task::ThreadId, Weak<Interruption>>>,
 }
 
@@ -124,8 +128,23 @@ impl AlarmRegistry {
             scheduler,
             timers: Mutex::new(BTreeMap::new()),
             cpu_timers: Mutex::new(BTreeMap::new()),
+            cpu_armed: AtomicBool::new(false),
             interruptions: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    /// Cheap predicate guarding the per-boundary CPU itimer poll.
+    #[must_use]
+    pub fn cpu_timers_armed(&self) -> bool {
+        self.cpu_armed.load(Ordering::Acquire)
+    }
+
+    /// Recomputes the armed flag from the table the caller already holds locked.
+    fn refresh_cpu_armed(&self, timers: &BTreeMap<ProcessId, ProcessCpuTimers>) {
+        let armed = timers
+            .values()
+            .any(|entry| entry.virtual_timer.deadline.is_some() || entry.prof_timer.deadline.is_some());
+        self.cpu_armed.store(armed, Ordering::Release);
     }
 
     /// Registers the cancellation edge used by interruptible blocking syscalls.
@@ -177,11 +196,11 @@ impl AlarmRegistry {
         let previous = self.current_cpu(process, which, now);
         let value = timer.value.checked_nanoseconds().ok_or(())?;
         let interval = timer.interval.checked_nanoseconds().ok_or(())?;
-        let mut timers = self
+        let mut timers_guard = self
             .cpu_timers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let timers = timers.entry(process).or_default();
+        let timers = timers_guard.entry(process).or_default();
         let state = if which == 1 {
             &mut timers.virtual_timer
         } else {
@@ -190,6 +209,7 @@ impl AlarmRegistry {
         state.interval = interval;
         state.deadline = (value != 0).then(|| now.saturating_add(value));
         Self::publish_cpu(timers);
+        self.refresh_cpu_armed(&timers_guard);
         Ok(previous)
     }
 
@@ -219,11 +239,13 @@ impl AlarmRegistry {
     pub(crate) fn poll_cpu(&self, process: ProcessId, virtual_now: u64, prof_now: u64) {
         let mut signals = Vec::new();
         {
-            let mut timers = self
+            let mut timers_guard = self
                 .cpu_timers
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let Some(timers) = timers.get_mut(&process) else { return };
+            let Some(timers) = timers_guard.get_mut(&process) else {
+                return;
+            };
             for which in [1, 2] {
                 let now = if which == 1 { virtual_now } else { prof_now };
                 let state = if which == 1 {
@@ -244,6 +266,7 @@ impl AlarmRegistry {
                 signals.push(if which == 1 { 26 } else { 27 });
             }
             Self::publish_cpu(timers);
+            self.refresh_cpu_armed(&timers_guard);
         }
         for raw in signals {
             if let Ok(signal) = SignalNumber::new(raw) {
@@ -263,13 +286,14 @@ impl AlarmRegistry {
         if let Some(token) = state.and_then(|state| state.token) {
             self.scheduler.cancel(token);
         }
-        if let Some(timers) = self
+        let mut cpu_timers = self
             .cpu_timers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&process)
-            && let Some(publication) = timers.publication
-        {
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let removed = cpu_timers.remove(&process);
+        self.refresh_cpu_armed(&cpu_timers);
+        drop(cpu_timers);
+        if let Some(publication) = removed.and_then(|timers| timers.publication) {
             publication.publish(None, None);
         }
     }
@@ -540,5 +564,52 @@ mod tests {
         let publication = alarms.cpu_timer_publication(process);
 
         assert_eq!(publication.snapshot().virtual_deadline, Some(120_000_000));
+    }
+
+    /// The signal boundary skips two host clock syscalls whenever this flag is
+    /// clear, so a missed transition would silently stop CPU itimers firing.
+    #[test]
+    fn cpu_armed_flag_tracks_every_arm_and_disarm() {
+        let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+        let credentials = ProcessCredentials::new(0, 0, &[], 65_536).unwrap();
+        let (process, _) = tasks.create_init(credentials, ProcessLimits::default()).unwrap();
+        let alarms = AlarmRegistry::new(tasks, Arc::new(Scheduler));
+        let oneshot = IntervalTimer {
+            interval: hl_time::Timespec::default(),
+            value: hl_time::Timespec::new(0, 20_000_000).unwrap(),
+        };
+        let disarm = IntervalTimer {
+            interval: hl_time::Timespec::default(),
+            value: hl_time::Timespec::default(),
+        };
+        assert!(!alarms.cpu_timers_armed(), "no timer is armed before any setitimer");
+
+        // Arming ITIMER_VIRTUAL must open the poll.
+        alarms.replace_cpu(process, 1, 100_000_000, oneshot).unwrap();
+        assert!(alarms.cpu_timers_armed());
+
+        // A one-shot expiry disarms it again.
+        alarms.poll_cpu(process, 120_000_000, 0);
+        assert!(!alarms.cpu_timers_armed(), "an expired one-shot leaves nothing armed");
+
+        // An interval timer stays armed across its own expiry.
+        let periodic = IntervalTimer {
+            interval: hl_time::Timespec::new(0, 20_000_000).unwrap(),
+            value: hl_time::Timespec::new(0, 20_000_000).unwrap(),
+        };
+        alarms.replace_cpu(process, 2, 100_000_000, periodic).unwrap();
+        assert!(alarms.cpu_timers_armed());
+        alarms.poll_cpu(process, 0, 120_000_000);
+        assert!(alarms.cpu_timers_armed(), "a periodic timer rearms and stays armed");
+
+        // Explicitly clearing the timer closes the poll.
+        alarms.replace_cpu(process, 2, 200_000_000, disarm).unwrap();
+        assert!(!alarms.cpu_timers_armed());
+
+        // Process teardown must also clear it.
+        alarms.replace_cpu(process, 1, 200_000_000, oneshot).unwrap();
+        assert!(alarms.cpu_timers_armed());
+        alarms.remove(process);
+        assert!(!alarms.cpu_timers_armed(), "process exit leaves nothing armed");
     }
 }
