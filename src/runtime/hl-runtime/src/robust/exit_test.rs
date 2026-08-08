@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use hl_isa::AddressRange;
-use hl_memory::{Backing, MapRequest, MappingHost, MemoryAccessHost, MemoryError, Placement};
+use hl_memory::{Backing, MapRequest, MappingHost, MemoryAccessHost, MemoryError, Placement, WriteReservation};
 use hl_task::{ProcessCredentials, ProcessLimits, RegistryConfig};
 
 use super::*;
@@ -62,14 +62,15 @@ impl MemoryAccessHost for Host {
         Ok(())
     }
 
-    fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError> {
+    fn prepare_write(&self, range: AddressRange) -> Result<WriteReservation, MemoryError> {
         let mut state = self.state.lock().unwrap();
         let token = Self::reserve(&mut state);
         state.writes.insert(token, range);
-        Ok(token)
+        Ok(WriteReservation::new(token, range))
     }
 
-    fn commit_write(&self, token: u64, input: &[u8]) -> Result<(), MemoryError> {
+    fn commit_write(&self, token: WriteReservation, input: &[u8]) -> Result<(), MemoryError> {
+        let token = token.token;
         let mut state = self.state.lock().unwrap();
         let range = state.writes.remove(&token).ok_or(MemoryError::InvariantViolation)?;
         for (offset, byte) in input.iter().enumerate() {
@@ -78,7 +79,8 @@ impl MemoryAccessHost for Host {
         Ok(())
     }
 
-    fn rollback_write(&self, token: u64) {
+    fn rollback_write(&self, token: WriteReservation) {
+        let token = token.token;
         self.state.lock().unwrap().writes.remove(&token);
     }
 }

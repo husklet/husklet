@@ -1,7 +1,7 @@
 //! Guest read and staged-write access over a mapping coordinator.
 
 use super::{AccessState, Coordinator};
-use crate::mapping::port::MemoryAccessHost;
+use crate::mapping::port::{MemoryAccessHost, WriteReservation};
 use crate::{Backing, MemoryError, Protection, Region, SharedBackingPin};
 use hl_isa::{AddressRange, GuestAddress};
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 
 pub struct WriteTransaction<H: MemoryAccessHost> {
     pub(in crate::mapping) access: Arc<AccessState<H>>,
-    pub(in crate::mapping) reservation: u64,
+    pub(in crate::mapping) reservation: WriteReservation,
     pub(crate) generation: u64,
     pub(crate) observed_epoch: Option<u64>,
     pub(in crate::mapping) range: AddressRange,
@@ -65,6 +65,11 @@ impl<H: MemoryAccessHost> Coordinator<H> {
     }
     pub fn prepare_write(&self, address: GuestAddress, length: u64) -> Result<WriteTransaction<H>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
+        self.prepare_write_admitted(address, length)
+    }
+
+    /// Stages one write while the caller already holds a memory admission.
+    fn prepare_write_admitted(&self, address: GuestAddress, length: u64) -> Result<WriteTransaction<H>, MemoryError> {
         let range = AddressRange::nonempty(address, length).map_err(|_| MemoryError::AddressOverflow)?;
         let resolution = self
             .ledger
@@ -100,7 +105,8 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         if length == 0 {
             return Err(MemoryError::EmptyRange);
         }
-        let mut transactions = Vec::new();
+        // Almost every guest store resolves to a single contiguous span.
+        let mut transactions = Vec::with_capacity(1);
         let mut copied = 0_u64;
         while copied < length {
             let current = address.get().checked_add(copied).ok_or(MemoryError::AddressOverflow)?;
@@ -108,7 +114,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             if available == 0 {
                 return Err(MemoryError::NoAddressSpace);
             }
-            transactions.push(self.prepare_write(GuestAddress::new(current), available)?);
+            transactions.push(self.prepare_write_admitted(GuestAddress::new(current), available)?);
             copied = copied.checked_add(available).ok_or(MemoryError::AddressOverflow)?;
         }
         Ok(WriteSpanTransaction {

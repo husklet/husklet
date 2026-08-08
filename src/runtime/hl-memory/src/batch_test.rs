@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use hl_isa::{AddressRange, GuestAddress};
+use crate::WriteReservation;
 
 use crate::{
     AddressSpaceId, AtomicBatchHost, AtomicU32Write, Backing, MapRequest, MappingCoordinator, MappingHost,
@@ -65,14 +66,15 @@ impl MemoryAccessHost for BatchHost {
         Ok(())
     }
 
-    fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError> {
+    fn prepare_write(&self, range: AddressRange) -> Result<WriteReservation, MemoryError> {
         let mut state = self.state.lock().unwrap();
         let reservation = Self::reserve(&mut state);
         state.writes.insert(reservation, range);
-        Ok(reservation)
+        Ok(WriteReservation::new(reservation, range))
     }
 
-    fn commit_write(&self, reservation: u64, input: &[u8]) -> Result<(), MemoryError> {
+    fn commit_write(&self, reservation: WriteReservation, input: &[u8]) -> Result<(), MemoryError> {
+        let reservation = reservation.token;
         let mut state = self.state.lock().unwrap();
         let range = state
             .writes
@@ -87,7 +89,8 @@ impl MemoryAccessHost for BatchHost {
         Ok(())
     }
 
-    fn rollback_write(&self, reservation: u64) {
+    fn rollback_write(&self, reservation: WriteReservation) {
+        let reservation = reservation.token;
         self.state.lock().unwrap().writes.remove(&reservation);
     }
 }

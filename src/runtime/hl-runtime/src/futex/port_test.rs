@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use hl_isa::{AddressRange, GuestAddress};
+use hl_memory::WriteReservation;
 use hl_linux::{FutexOperation, FutexPlan, FutexWaitVector, LinuxResult};
 use hl_memory::{
     AddressSpaceId, Backing, FileIdentity, MapRequest, MappingCoordinator, MappingHost, MemoryAccessHost, MemoryError,
@@ -64,13 +65,14 @@ impl MemoryAccessHost for Host {
         Ok(())
     }
 
-    fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError> {
+    fn prepare_write(&self, range: AddressRange) -> Result<WriteReservation, MemoryError> {
         let reservation = self.next.fetch_add(1, Ordering::Relaxed);
         self.writes.lock().unwrap().insert(reservation, range);
-        Ok(reservation)
+        Ok(WriteReservation::new(reservation, range))
     }
 
-    fn commit_write(&self, reservation: u64, input: &[u8]) -> Result<(), MemoryError> {
+    fn commit_write(&self, reservation: WriteReservation, input: &[u8]) -> Result<(), MemoryError> {
+        let reservation = reservation.token;
         let range = self
             .writes
             .lock()
@@ -84,7 +86,8 @@ impl MemoryAccessHost for Host {
         Ok(())
     }
 
-    fn rollback_write(&self, reservation: u64) {
+    fn rollback_write(&self, reservation: WriteReservation) {
+        let reservation = reservation.token;
         self.writes.lock().unwrap().remove(&reservation);
     }
 }

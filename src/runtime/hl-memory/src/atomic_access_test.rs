@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use hl_isa::{AddressRange, GuestAddress};
+use crate::WriteReservation;
 
 use crate::{
     AtomicOperation, AtomicOrder, AtomicValue, Backing, FileIdentity, MapRequest, MappingCoordinator, MappingHost,
@@ -108,13 +109,14 @@ impl MemoryAccessHost for ArenaHost {
         Ok(())
     }
 
-    fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError> {
+    fn prepare_write(&self, range: AddressRange) -> Result<WriteReservation, MemoryError> {
         let token = self.reservation();
         self.writes.lock().unwrap().insert(token, range);
-        Ok(token)
+        Ok(WriteReservation::new(token, range))
     }
 
-    fn commit_write(&self, reservation: u64, input: &[u8]) -> Result<(), MemoryError> {
+    fn commit_write(&self, reservation: WriteReservation, input: &[u8]) -> Result<(), MemoryError> {
+        let reservation = reservation.token;
         let range = self
             .writes
             .lock()
@@ -133,7 +135,8 @@ impl MemoryAccessHost for ArenaHost {
         Ok(())
     }
 
-    fn rollback_write(&self, reservation: u64) {
+    fn rollback_write(&self, reservation: WriteReservation) {
+        let reservation = reservation.token;
         self.writes.lock().unwrap().remove(&reservation);
     }
 
