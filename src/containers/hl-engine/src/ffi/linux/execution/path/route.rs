@@ -89,11 +89,11 @@ impl NativePath {
                 std::sync::Arc::clone(&self.ownership),
             )))));
         }
-        let path = self.resolve_path(base, operand)?;
-        let guest = self.guest_path(&path)?;
-        Ok(Box::new(metadata::Node::new(
-            path,
-            guest,
+        let (parent, name) = self.resolve_anchor(base, operand)?;
+        Ok(Box::new(metadata::Node::anchored(
+            parent,
+            name,
+            self.source.native_arc()?,
             std::sync::Arc::clone(&self.ownership),
         )))
     }
@@ -107,6 +107,18 @@ impl NativePath {
         if let Some(binding) = ordinary.name_binding(base.path(), operand.path.as_bytes())? {
             return Ok(binding.host);
         }
+        let (parent, name) = self.resolve_anchor(base, operand)?;
+        pin::Host::path(&parent, &name)
+    }
+
+    /// Resolves to the pinned parent and leaf name the walk already produced,
+    /// leaving the host path unrendered.
+    fn resolve_anchor(
+        &self,
+        base: &DirectoryBaseLease,
+        operand: &PathOperand,
+    ) -> Result<(super::overlay_lease::ParentLease, std::ffi::CString), RuntimePathError> {
+        let ordinary = self.ordinary()?;
         let resolver = hl_runtime::Resolver::new(ordinary.host(), ordinary.mounts());
         let base_path =
             hl_runtime::GuestPathBytes::new(base.path().as_str().as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
@@ -129,7 +141,7 @@ impl NativePath {
             || std::ffi::CString::new(".").expect("dot has no NUL"),
             |name| std::ffi::CString::new(name.as_bytes()).expect("validated guest component has no NUL"),
         );
-        pin::Host::path(&parent, &name)
+        Ok((parent, name))
     }
 
     pub(super) fn guest_path(&self, path: &Path) -> Result<GuestPath, RuntimePathError> {

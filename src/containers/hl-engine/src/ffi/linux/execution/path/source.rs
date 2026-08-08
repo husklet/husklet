@@ -317,6 +317,13 @@ impl Source {
             .map(Self::Ordinary)
     }
 
+    pub(super) fn native_arc(&self) -> Result<Arc<OrdinaryContext>, RuntimePathError> {
+        match self {
+            Self::Ordinary(context) => Ok(Arc::clone(context)),
+            Self::Projected(_) => Err(RuntimePathError::Unsupported),
+        }
+    }
+
     pub(super) fn native(&self) -> Result<&OrdinaryContext, RuntimePathError> {
         match self {
             Self::Ordinary(context) => Ok(context),
