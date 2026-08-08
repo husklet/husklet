@@ -1,0 +1,19 @@
+image: node:20-alpine
+execution: { native: true, diagnostics: false }
+workload:
+  rootfs: { executable: /usr/local/bin/node }
+cases:
+  - id: startup
+    arguments: [-e, console.log("NODESTART")]
+    warmups: 1
+    samples: 3
+    timeout: 300
+    expect: { stdout_contains: golden/startup.txt }
+  - id: work
+    arguments:
+      - -e
+      - let s=0;for(let i=0;i<2000000;i++)s+=i%7;console.log("NODEWORK",s)
+    warmups: 1
+    samples: 3
+    timeout: 300
+    expect: { stdout_contains: golden/work.txt }
