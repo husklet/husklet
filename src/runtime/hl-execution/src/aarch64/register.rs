@@ -10,9 +10,9 @@ use crate::{
 pub(crate) struct RegisterExecutor;
 
 impl RegisterExecutor {
-    pub(crate) const fn supports(instruction: Aarch64Instruction) -> bool {
+    pub(crate) const fn supports(instruction: &Aarch64Instruction) -> bool {
         matches!(
-            instruction,
+            *instruction,
             Aarch64Instruction::AddSubtractImmediate { .. }
                 | Aarch64Instruction::AddSubtractShifted { .. }
                 | Aarch64Instruction::AddCarry { .. }
@@ -35,7 +35,7 @@ impl RegisterExecutor {
     pub(crate) fn execute(
         cpu: &mut Aarch64CpuState,
         coordinates: &dyn PcCoordinatePort,
-        ir: Aarch64Ir,
+        ir: &Aarch64Ir,
     ) -> Option<Aarch64ExecutionExit> {
         let instruction = cpu.pc;
         if instruction & 3 != 0 {
@@ -329,7 +329,7 @@ mod tests {
         let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
         for word in words {
             let ir = Aarch64Decoder::decode(word).unwrap();
-            assert!(RegisterExecutor::supports(ir.instruction));
+            assert!(RegisterExecutor::supports(&ir.instruction));
             for _ in 0..64 {
                 seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
                 let mut expected = Aarch64CpuState {
@@ -339,8 +339,8 @@ mod tests {
                     ..Aarch64CpuState::default()
                 };
                 let mut actual = expected.clone();
-                let expected_exit = Aarch64Interpreter::execute(&mut expected, &Coordinates, ir);
-                let actual_exit = RegisterExecutor::execute(&mut actual, &Coordinates, ir).unwrap();
+                let expected_exit = Aarch64Interpreter::execute(&mut expected, &Coordinates, &ir);
+                let actual_exit = RegisterExecutor::execute(&mut actual, &Coordinates, &ir).unwrap();
                 assert_eq!(actual_exit, expected_exit, "word={word:#010x}");
                 assert_eq!(actual, expected, "word={word:#010x}");
             }

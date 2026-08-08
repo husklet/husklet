@@ -14,7 +14,7 @@ impl Aarch64Interpreter {
         word: u32,
     ) -> Aarch64ExecutionExit {
         match Aarch64Decoder::decode(word) {
-            Ok(ir) => Self::execute_runtime_ir(cpu, memory, system, coordinates, ir),
+            Ok(ir) => Self::execute_runtime_ir(cpu, memory, system, coordinates, &ir),
             Err(Aarch64DecodeError::Reserved) => Aarch64ExecutionExit::UndefinedInstruction {
                 instruction: cpu.pc,
                 word,
@@ -31,15 +31,15 @@ impl Aarch64Interpreter {
         memory: &mut M,
         system: &mut S,
         coordinates: &dyn PcCoordinatePort,
-        ir: Aarch64Ir,
+        ir: &Aarch64Ir,
     ) -> Aarch64ExecutionExit {
-        if Aarch64MemoryInterpreter::is_memory(ir.instruction) {
+        if Aarch64MemoryInterpreter::is_memory(&ir.instruction) {
             Aarch64MemoryInterpreter::execute(cpu, memory, coordinates, ir)
-        } else if atomic::Executor::handles(ir.instruction) {
+        } else if atomic::Executor::handles(&ir.instruction) {
             atomic::Executor::execute(cpu, memory, ir)
-        } else if system::Executor::handles(ir.instruction) {
+        } else if system::Executor::handles(&ir.instruction) {
             system::Executor::execute(cpu, system, ir)
-        } else if Aarch64FpExecutor::is_fp(ir.instruction) {
+        } else if Aarch64FpExecutor::is_fp(&ir.instruction) {
             Aarch64FpExecutor::execute(cpu, &mut Aarch64SoftFloat, ir)
         } else {
             Self::execute(cpu, coordinates, ir)

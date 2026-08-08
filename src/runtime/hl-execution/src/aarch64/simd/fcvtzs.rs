@@ -226,7 +226,7 @@ mod test {
             Aarch64FpExecutor::execute(
                 &mut cpu,
                 &mut Aarch64SoftFloat,
-                crate::Aarch64Ir {
+                &crate::Aarch64Ir {
                     word: 0x4ea1_b821,
                     wide: true,
                     instruction: ir
@@ -247,7 +247,7 @@ mod test {
         Aarch64FpExecutor::execute(
             &mut cpu,
             &mut Aarch64SoftFloat,
-            crate::Aarch64Ir {
+            &crate::Aarch64Ir {
                 word: 0x4f7f_fc42,
                 wide: true,
                 instruction: ir,
@@ -307,7 +307,7 @@ mod test {
                 Aarch64FpExecutor::execute(
                     &mut cpu,
                     &mut Aarch64SoftFloat,
-                    crate::Aarch64Ir {
+                    &crate::Aarch64Ir {
                         word: 0,
                         wide: false,
                         instruction,
@@ -462,7 +462,7 @@ mod test {
                 Aarch64FpExecutor::execute(
                     &mut cpu,
                     &mut Aarch64SoftFloat,
-                    crate::Aarch64Ir {
+                    &crate::Aarch64Ir {
                         word: 0,
                         wide: true,
                         instruction,

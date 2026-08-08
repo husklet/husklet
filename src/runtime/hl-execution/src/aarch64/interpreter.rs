@@ -19,7 +19,7 @@ impl Aarch64Interpreter {
         word: u32,
     ) -> Aarch64ExecutionExit {
         match Aarch64Decoder::decode(word) {
-            Ok(ir) => Self::execute(cpu, coordinates, ir),
+            Ok(ir) => Self::execute(cpu, coordinates, &ir),
             Err(Aarch64DecodeError::Reserved) => Aarch64ExecutionExit::UndefinedInstruction {
                 instruction: cpu.pc,
                 word,
@@ -37,7 +37,7 @@ impl Aarch64Interpreter {
         word: u32,
     ) -> Aarch64ExecutionExit {
         match Aarch64Decoder::decode(word) {
-            Ok(ir) => Self::execute_with_memory(cpu, memory, coordinates, ir),
+            Ok(ir) => Self::execute_with_memory(cpu, memory, coordinates, &ir),
             Err(Aarch64DecodeError::Reserved) => Aarch64ExecutionExit::UndefinedInstruction {
                 instruction: cpu.pc,
                 word,
@@ -53,7 +53,7 @@ impl Aarch64Interpreter {
         cpu: &mut Aarch64CpuState,
         memory: &mut M,
         coordinates: &dyn PcCoordinatePort,
-        ir: Aarch64Ir,
+        ir: &Aarch64Ir,
     ) -> Aarch64ExecutionExit {
         if cpu.pc & 3 != 0 {
             return Aarch64ExecutionExit::AlignmentFault {
@@ -62,7 +62,7 @@ impl Aarch64Interpreter {
                 access: crate::AccessKind::Execute,
             };
         }
-        if Aarch64MemoryInterpreter::is_memory(ir.instruction) {
+        if Aarch64MemoryInterpreter::is_memory(&ir.instruction) {
             return Aarch64MemoryInterpreter::execute(cpu, memory, coordinates, ir);
         }
         Self::execute(cpu, coordinates, ir)
@@ -74,7 +74,7 @@ impl Aarch64Interpreter {
         word: u32,
     ) -> Aarch64ExecutionExit {
         match Aarch64Decoder::decode(word) {
-            Ok(ir) => Self::execute_with_concurrency(cpu, memory, system, ir),
+            Ok(ir) => Self::execute_with_concurrency(cpu, memory, system, &ir),
             Err(Aarch64DecodeError::Reserved) => Aarch64ExecutionExit::UndefinedInstruction {
                 instruction: cpu.pc,
                 word,
@@ -90,7 +90,7 @@ impl Aarch64Interpreter {
         cpu: &mut Aarch64CpuState,
         memory: &mut E,
         system: &mut S,
-        ir: Aarch64Ir,
+        ir: &Aarch64Ir,
     ) -> Aarch64ExecutionExit {
         if cpu.pc & 3 != 0 {
             return Aarch64ExecutionExit::AlignmentFault {
@@ -99,10 +99,10 @@ impl Aarch64Interpreter {
                 access: crate::AccessKind::Execute,
             };
         }
-        if atomic::Executor::handles(ir.instruction) {
+        if atomic::Executor::handles(&ir.instruction) {
             return atomic::Executor::execute(cpu, memory, ir);
         }
-        if system::Executor::handles(ir.instruction) {
+        if system::Executor::handles(&ir.instruction) {
             return system::Executor::execute(cpu, system, ir);
         }
         Self::execute(cpu, &IdentityCoordinates, ir)
@@ -111,12 +111,12 @@ impl Aarch64Interpreter {
     pub fn execute(
         cpu: &mut Aarch64CpuState,
         coordinates: &dyn PcCoordinatePort,
-        ir: Aarch64Ir,
+        ir: &Aarch64Ir,
     ) -> Aarch64ExecutionExit {
         if let Some(exit) = super::crc32::Crc::execute(cpu, ir) {
             return exit;
         }
-        if Aarch64SimdInterpreter::is_simd(ir.instruction) {
+        if Aarch64SimdInterpreter::is_simd(&ir.instruction) {
             return Aarch64SimdInterpreter::execute(cpu, ir);
         }
         let instruction = cpu.pc;

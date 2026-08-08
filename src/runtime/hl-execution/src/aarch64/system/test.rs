@@ -30,7 +30,7 @@ impl GuestSystemPort for System {
 
 fn execute(cpu: &mut Aarch64CpuState, system: &mut System, word: u32) -> Aarch64ExecutionExit {
     match Aarch64Decoder::decode(word) {
-        Ok(ir) => Executor::execute(cpu, system, ir),
+        Ok(ir) => Executor::execute(cpu, system, &ir),
         Err(Aarch64DecodeError::Reserved) => Aarch64ExecutionExit::UndefinedInstruction {
             instruction: cpu.pc,
             word,

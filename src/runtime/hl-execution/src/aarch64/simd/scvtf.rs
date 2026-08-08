@@ -89,7 +89,7 @@ mod test {
             Aarch64FpExecutor::execute(
                 &mut cpu,
                 &mut Aarch64SoftFloat,
-                Aarch64Ir {
+                &Aarch64Ir {
                     word: 0x4e21_d821,
                     wide: true,
                     instruction
@@ -111,7 +111,7 @@ mod test {
         Aarch64FpExecutor::execute(
             &mut cpu,
             &mut Aarch64SoftFloat,
-            Aarch64Ir {
+            &Aarch64Ir {
                 word: 0x7e61_d842,
                 wide: true,
                 instruction,

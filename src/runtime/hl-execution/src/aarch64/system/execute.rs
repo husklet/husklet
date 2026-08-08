@@ -3,9 +3,9 @@ use crate::{Aarch64CpuState, Aarch64ExecutionExit, Aarch64Instruction, Aarch64Ir
 pub(crate) struct Executor;
 
 impl Executor {
-    pub(crate) fn handles(instruction: Aarch64Instruction) -> bool {
+    pub(crate) fn handles(instruction: &Aarch64Instruction) -> bool {
         matches!(
-            instruction,
+            *instruction,
             Aarch64Instruction::Barrier { .. }
                 | Aarch64Instruction::SystemRead { .. }
                 | Aarch64Instruction::SystemWrite { .. }
@@ -16,7 +16,7 @@ impl Executor {
     pub(crate) fn execute<S: GuestSystemPort>(
         cpu: &mut Aarch64CpuState,
         system: &mut S,
-        ir: Aarch64Ir,
+        ir: &Aarch64Ir,
     ) -> Aarch64ExecutionExit {
         match ir.instruction {
             Aarch64Instruction::Barrier { kind, option } => {

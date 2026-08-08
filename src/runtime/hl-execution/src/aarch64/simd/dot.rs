@@ -156,7 +156,7 @@ mod test {
             let expected = reference_value(&cpu, signed, 0, 0, index, 0, wide);
             let ir = Aarch64Decoder::decode(word).unwrap();
             assert_eq!(
-                Aarch64Interpreter::execute(&mut cpu, &Coordinates, ir),
+                Aarch64Interpreter::execute(&mut cpu, &Coordinates, &ir),
                 Aarch64ExecutionExit::Continue
             );
             assert_eq!(cpu.vector(0), expected);
@@ -189,7 +189,7 @@ mod test {
                 | 1 << 5;
             let ir = Aarch64Decoder::decode(word).unwrap();
             assert_eq!(
-                Aarch64Interpreter::execute(&mut cpu, &Coordinates, ir),
+                Aarch64Interpreter::execute(&mut cpu, &Coordinates, &ir),
                 Aarch64ExecutionExit::Continue
             );
             assert_eq!(cpu.vector(0), expected);

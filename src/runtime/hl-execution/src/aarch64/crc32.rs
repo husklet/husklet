@@ -30,7 +30,7 @@ impl Crc {
         })
     }
 
-    pub(crate) fn execute(cpu: &mut Aarch64CpuState, ir: Aarch64Ir) -> Option<Aarch64ExecutionExit> {
+    pub(crate) fn execute(cpu: &mut Aarch64CpuState, ir: &Aarch64Ir) -> Option<Aarch64ExecutionExit> {
         let Aarch64Instruction::Crc32 {
             polynomial,
             bytes,
