@@ -1,7 +1,5 @@
 use super::TaskRegistry;
-#[cfg(test)]
-use crate::{CapabilitySets, IdMap, MapError};
-use crate::{NamespaceId, NamespaceKind, NamespaceSet, ProcessId, SetgroupsState, TaskError, UserNamespace};
+use crate::{NamespaceId, NamespaceKind, NamespaceSet, ProcessId, TaskError, UserNamespace};
 
 impl TaskRegistry {
     pub(super) fn initial_users() -> std::collections::BTreeMap<NamespaceId, UserNamespace> {
@@ -12,11 +10,6 @@ impl TaskRegistry {
                 id,
                 parent: None,
                 owner: 0,
-                user_map: None,
-                group_map: None,
-                setgroups: SetgroupsState::Allow,
-                user_authority: true,
-                group_authority: true,
             },
         )])
     }
@@ -147,51 +140,6 @@ impl TaskRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn unshare_user(&self, process: ProcessId) -> Result<NamespaceId, TaskError> {
-        let mut state = self.lock();
-        Self::ensure_process_unreserved(&state, process)?;
-        let current = Self::process(&state, process)?;
-        if current.threads.len() != 1 {
-            return Err(TaskError::InvalidLifecycle);
-        }
-        let parent = current.namespaces.user;
-        if state
-            .user_namespaces
-            .get(&parent)
-            .is_none_or(|namespace| namespace.parent.is_some())
-        {
-            return Err(TaskError::InvalidLifecycle);
-        }
-        let owner = current.credentials.effective_user;
-        let user_authority = current.credentials.has_capability(CapabilitySets::SET_USER);
-        let group_authority = current.credentials.has_capability(CapabilitySets::SET_GROUP);
-        let identifier = NamespaceId {
-            kind: NamespaceKind::User,
-            serial: state.next_namespace,
-        };
-        state.next_namespace = state.next_namespace.checked_add(1).ok_or(TaskError::InvalidCapacity)?;
-        state.user_namespaces.insert(
-            identifier,
-            UserNamespace {
-                id: identifier,
-                parent: Some(parent),
-                owner,
-                user_map: None,
-                group_map: None,
-                setgroups: SetgroupsState::Allow,
-                user_authority,
-                group_authority,
-            },
-        );
-        let target = Self::process_mut(&mut state, process)?;
-        target.namespaces.replace(identifier);
-        target.credentials.capabilities.effective = CapabilitySets::SUPPORTED;
-        target.credentials.capabilities.permitted = CapabilitySets::SUPPORTED;
-        target.credentials.capabilities.ambient = 0;
-        Ok(identifier)
-    }
-
-    #[cfg(test)]
     pub(crate) fn user_namespace(&self, process: ProcessId) -> Result<UserNamespace, TaskError> {
         let state = self.lock();
         let identifier = Self::process(&state, process)?.namespaces.user;
@@ -200,66 +148,6 @@ impl TaskRegistry {
             .get(&identifier)
             .cloned()
             .ok_or(TaskError::InvalidSnapshot)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn write_user_map(&self, actor: ProcessId, target: ProcessId, map: IdMap) -> Result<(), MapError> {
-        self.write_map(actor, target, map, true)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn write_group_map(&self, actor: ProcessId, target: ProcessId, map: IdMap) -> Result<(), MapError> {
-        self.write_map(actor, target, map, false)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn deny_setgroups(&self, actor: ProcessId, target: ProcessId) -> Result<(), MapError> {
-        if actor != target {
-            return Err(MapError::Permission);
-        }
-        let mut state = self.lock();
-        let identifier = Self::process(&state, target)
-            .map_err(|_| MapError::Invalid)?
-            .namespaces
-            .user;
-        let namespace = state.user_namespaces.get_mut(&identifier).ok_or(MapError::Invalid)?;
-        if namespace.group_map.is_some() || namespace.setgroups == SetgroupsState::Deny {
-            return Err(MapError::Permission);
-        }
-        namespace.setgroups = SetgroupsState::Deny;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn write_map(&self, actor: ProcessId, target: ProcessId, map: IdMap, user: bool) -> Result<(), MapError> {
-        if actor != target {
-            return Err(MapError::Permission);
-        }
-        let mut state = self.lock();
-        let process = Self::process(&state, target).map_err(|_| MapError::Invalid)?;
-        let identifier = process.namespaces.user;
-        let outside = if user {
-            process.credentials.effective_user
-        } else {
-            process.credentials.effective_group
-        };
-        let namespace = state.user_namespaces.get_mut(&identifier).ok_or(MapError::Invalid)?;
-        let (slot, authority) = if user {
-            (&mut namespace.user_map, namespace.user_authority)
-        } else {
-            if namespace.setgroups != SetgroupsState::Deny && !namespace.group_authority {
-                return Err(MapError::Permission);
-            }
-            (&mut namespace.group_map, namespace.group_authority)
-        };
-        if slot.is_some() {
-            return Err(MapError::Written);
-        }
-        if !authority && !map.single(outside) {
-            return Err(MapError::Permission);
-        }
-        *slot = Some(map);
-        Ok(())
     }
 
     pub fn join_namespace(&self, process: ProcessId, identifier: NamespaceId) -> Result<(), TaskError> {

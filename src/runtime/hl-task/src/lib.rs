@@ -37,10 +37,7 @@ pub use model::{
     CancellationEvent, CloneThreadPlan, CpuAccount, CpuUsage, Denial, ExitStatus, ForkProcessPlan, ProcessLifecycle,
     RegistryConfig, SignalPendingEvent, TaskError, ThreadLifecycle,
 };
-pub use namespace::{
-    IdMap, IdRange, MAX_ID_RANGES, MapError, NamespaceId, NamespaceKind, NamespaceSet, SetgroupsState,
-    UTS_NAME_MAXIMUM, UserNamespace, UtsIdentity,
-};
+pub use namespace::{NamespaceId, NamespaceKind, NamespaceSet, UTS_NAME_MAXIMUM, UserNamespace, UtsIdentity};
 pub use port::{
     CancellationSink, ForegroundGroupEvent, InterruptSink, PreparedTerminalTransition, ProcessControlAction,
     SignalActivityEvent, SignalActivityKind, SignalActivitySubscription, SignalActivityWake, SignalPendingSink,

@@ -180,7 +180,7 @@ fn portable_corruption_rejected() {
     let digest = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
     });
-    assert_eq!(digest, 0x72de_3ec1_91ba_e090);
+    assert_eq!(digest, 0xe038_d820_1de4_4884);
     assert_eq!(codec.encode(&image).unwrap(), bytes);
     assert_eq!(codec.decode(&bytes).unwrap(), image);
     assert_eq!(bytes.first(), Some(&b'{'));
@@ -197,7 +197,7 @@ fn portable_corruption_rejected() {
     assert!(codec.encode(&stale).is_err());
 
     let mut corrupt = bytes;
-    let marker = br#""wire":7"#;
+    let marker = br#""wire":8"#;
     let offset = corrupt
         .windows(marker.len())
         .position(|window| window == marker)
