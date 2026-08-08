@@ -465,6 +465,9 @@ impl<M: GuestMemory> EventSyscalls for RuntimeEventSyscalls<M> {
                 architecture: self.architecture,
             }
             .settime(arguments),
+            // Legacy x86-64 `signalfd`/`inotify_init` are the flagged forms with a zero flags argument.
+            "signalfd" => self.signalfd(arguments[0] as i32, arguments[1], arguments[2] as usize, 0),
+            "inotify_init" => self.inotify_init(0),
             "signalfd4" => self.signalfd(
                 arguments[0] as i32,
                 arguments[1],

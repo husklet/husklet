@@ -69,6 +69,9 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 arguments[4] as u32,
             ),
             "chown" => abi.chownat(-100, arguments[0], arguments[1] as u32, arguments[2] as u32, 0),
+            // Legacy x86-64 `lchown` is `chown` that does not follow the final symlink.
+            "lchown" => abi.chownat(-100, arguments[0], arguments[1] as u32, arguments[2] as u32, 0x100),
+            "mknod" => abi.mknodat(-100, arguments[0], arguments[1] as u32, arguments[2]),
             "utime" => abi.utime(arguments[0], arguments[1]),
             "utimes" => abi.utimes(-100, arguments[0], arguments[1]),
             "futimesat" => abi.futimesat(arguments[0] as i32, arguments[1], arguments[2]),

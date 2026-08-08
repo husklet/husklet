@@ -116,6 +116,8 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
     fn descriptor_io(&self, operation: SyscallOperation, arguments: [u64; 6]) -> LinuxResult {
         let descriptor = arguments[0] as i32;
         match operation.name {
+            // Legacy x86-64 `pipe` is `pipe2` with no flags.
+            "pipe" => self.pipe2(arguments[0], 0),
             "pipe2" => self.pipe2(arguments[0], arguments[1] as u32),
             "read" => self.read(descriptor, arguments[1], arguments[2]),
             "write" => self.write(descriptor, arguments[1], arguments[2]),
@@ -334,6 +336,10 @@ impl<M: GuestMemory> FilesystemSyscalls for RuntimeFilesystemSyscalls<M> {
     fn may_block(&self, operation: SyscallOperation, arguments: [u64; 6]) -> bool {
         match operation.name {
             "creat" => self.open_may_block([(-100_i64) as u64, arguments[0], 0x241, arguments[1], 0, 0], false),
+            "open" => self.open_may_block(
+                [(-100_i64) as u64, arguments[0], arguments[1], arguments[2], 0, 0],
+                false,
+            ),
             "openat" => self.open_may_block(arguments, false),
             "openat2" => self.open_may_block(arguments, true),
             _ => false,
@@ -347,6 +353,11 @@ impl<M: GuestMemory> FilesystemSyscalls for RuntimeFilesystemSyscalls<M> {
             "fchdir" => self.fchdir(arguments[0] as i32),
             "chroot" => self.chroot(arguments[0]),
             "creat" => self.openat([(-100_i64) as u64, arguments[0], 0x241, arguments[1], 0, 0], false),
+            // Legacy x86-64 `open` carries (path, flags, mode); it is `openat` against AT_FDCWD.
+            "open" => self.openat(
+                [(-100_i64) as u64, arguments[0], arguments[1], arguments[2], 0, 0],
+                false,
+            ),
             "openat" => self.openat(arguments, false),
             "openat2" => self.openat(arguments, true),
             "newfstatat" => self.path_stat(arguments, false),
@@ -388,11 +399,10 @@ impl<M: GuestMemory> FilesystemSyscalls for RuntimeFilesystemSyscalls<M> {
             "faccessat2" => self.path_access(arguments, true),
             "readlinkat" => self.path_readlink(arguments),
             "readlink" => self.legacy_readlink(arguments),
-            "chmod" | "mkdir" | "mkdirat" | "mknodat" | "unlink" | "unlinkat" | "rmdir" | "symlink" | "symlinkat"
-            | "link" | "linkat" | "rename" | "renameat" | "renameat2" | "fchmod" | "fchmodat" | "fchmodat2"
-            | "fchown" | "fchownat" | "chown" | "utime" | "utimes" | "futimesat" | "utimensat" => {
-                self.path_mutation(operation.name, arguments)
-            }
+            "chmod" | "mkdir" | "mkdirat" | "mknod" | "mknodat" | "unlink" | "unlinkat" | "rmdir" | "symlink"
+            | "symlinkat" | "link" | "linkat" | "rename" | "renameat" | "renameat2" | "fchmod" | "fchmodat"
+            | "fchmodat2" | "fchown" | "fchownat" | "chown" | "lchown" | "utime" | "utimes" | "futimesat"
+            | "utimensat" => self.path_mutation(operation.name, arguments),
             "setxattr" | "lsetxattr" | "fsetxattr" | "getxattr" | "lgetxattr" | "fgetxattr" | "listxattr"
             | "llistxattr" | "flistxattr" | "removexattr" | "lremovexattr" | "fremovexattr" => {
                 self.path_xattr(operation.name, arguments)
