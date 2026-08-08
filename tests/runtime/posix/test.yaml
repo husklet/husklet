@@ -592,9 +592,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/rusaget.out }
   - id: runtime/posix/pthread-cancel-async
-    status: !broken
-      reason: "PTHREAD_CANCEL_ASYNCHRONOUS: SIGCANCEL delivery FIXED (SI_TKILL siginfo now stamped, no longer a silent hang), but glibc async cancellation forced-unwinds through the signal frame and libgcc does not recognize the engine sentinel handler-return trampoline as an rt_sigreturn signal frame -> crash; needs a real recognizable signal-return trampoline (large per-arch signal-frame ABI change), deferred"
-      evidence: "tests/runtime/posix/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: pthcancelasync.c, output: pthread-cancel-async, flags: [-static, -O2, -std=gnu11, -pthread] }
     artifact: { destination: /opt/husklet/posix-pthread-cancel-async }
@@ -692,9 +690,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/tty_access.out }
   - id: runtime/posix/tty-bg-deviation
-    status: !broken
-      reason: "ONE residual deviation from native, both targets: a background tcsetattr should SIGTTOU-stop the process but the engine blocks SIGTTOU around tcsetattr/tcsetpgrp (fs.c tty_ctl_block, a deliberate shell-handoff workaround) so it silently succeeds -- tcset_sigttou=0 vs native 1. The former x86_64-only SIGTTIN-blocked read deviation is GONE (blk_eio=1 on both). Golden is native; activate per-fix"
-      evidence: "tests/runtime/posix/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: tty_deviation.c, output: tty-bg-deviation, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/posix-tty-bg-deviation }

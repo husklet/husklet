@@ -1,12 +1,6 @@
 // memory-compat isolation: precise fault boundaries around a live private-anon mapping. On Linux the page
 // immediately PAST a mapping's end, and the page immediately BELOW it, are unmapped holes -- reading either
-// faults SIGSEGV/SEGV_MAPERR (an off-by-one past a buffer must not silently read a neighbor). The engine
-// reserves a large zero-filled guard tail past every anon mmap and keeps an adjacency grow cushion, so a
-// read just past (or just below) a mapping is currently satisfied out of those private zero pages instead of
-// faulting. That over-read never crosses into another mapping's data (consecutive guest mmaps are separated
-// by the guard, verified: over-reading 128 KB reveals only zero), so it is a fault-fidelity divergence, not a
-// cross-mapping leak -- but Linux faults where the engine does not. The last in-mapping byte stays readable.
-// Arch-neutral output. Expected values are the Linux oracle (all faults=1); flip to `active` when enforced.
+// faults SIGSEGV/SEGV_MAPERR, and the last in-mapping byte stays readable. Arch-neutral output.
 #define _GNU_SOURCE
 #include <signal.h>
 #include <stdint.h>

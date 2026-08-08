@@ -256,7 +256,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/mq_edge.out }
   - id: runtime/ipc/mq-notify
-    status: !broken
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mq_notify SIGEV_SIGNAL si_code/SI_MESGQ delivery diverges on the macOS engine. Linux engine still runs+passes this."
       evidence: "tests/runtime/ipc/ORACLE.md"
     compat: { class: compatibility }
@@ -950,7 +951,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/scm_signalfd.out }
   - id: runtime/ipc/pipe-capacity
-    status: !broken
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: POSIX mqueue / SCM-timerfd / pipe-capacity semantics diverge or hang on the macOS engine; Linux engine still runs+enforces this."
       evidence: "tests/runtime/ipc/ORACLE.md"
     compat: { class: compatibility }
@@ -968,7 +970,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/mq_access.out }
   - id: runtime/ipc/mq-xproc
-    status: !broken
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: POSIX mqueue / SCM-timerfd / pipe-capacity semantics diverge or hang on the macOS engine; Linux engine still runs+enforces this."
       evidence: "tests/runtime/ipc/ORACLE.md"
     compat: { class: compatibility }
@@ -978,7 +981,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/mq_xproc.out }
   - id: runtime/ipc/mq-poll
-    status: !broken
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: POSIX mqueue / SCM-timerfd / pipe-capacity semantics diverge or hang on the macOS engine; Linux engine still runs+enforces this."
       evidence: "tests/runtime/ipc/ORACLE.md"
     compat: { class: compatibility }
@@ -1028,7 +1032,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/fork_epolltimerfd.out }
   - id: runtime/ipc/pipe-fill-exact
-    status: !broken
+    status: !host-excluded
+      hosts: [macos]
       reason: "F_SETPIPE_SZ page rounding, exact fill-to-capacity then EAGAIN, negative-size EINVAL, and PIPE_BUF atomic-write refusal near the limit. excluded-macos: macOS pipes have no F_SETPIPE_SZ and no Linux page-accounting, so capacity/rounding/negative-rejection/atomic-refusal are un-emulatable there; runs+passes on the Linux engine. native Linux oracle"
       evidence: "tests/runtime/ipc/ORACLE.md"
     compat: { class: compatibility }
@@ -1038,7 +1043,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/pipe_fill.out }
   - id: runtime/ipc/socketpair-peek
-    status: !broken
+    status: !host-excluded
+      hosts: [macos]
       reason: "AF_UNIX datagram MSG_PEEK/MSG_TRUNC, zero-length datagram delivery, and shutdown EOF. excluded-macos: Linux MSG_PEEK|MSG_TRUNC reports the full datagram length into a short buffer; the macOS AF_UNIX datagram stack reports only the copied length, which the backend cannot emulate. Runs+passes on the Linux engine. native Linux oracle"
       evidence: "tests/runtime/ipc/ORACLE.md"
     compat: { class: compatibility }
@@ -1048,7 +1054,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/socketpair_peek.out }
   - id: runtime/ipc/fork-fd-locks
-    status: !broken
+    status: !host-excluded
+      hosts: [macos]
       reason: "POSIX record locks are per-process while OFD locks (F_OFD_SETLK) follow the open file description across fork. excluded-macos: macOS has no OFD locks, so F_OFD_SETLK cannot be emulated there; runs+passes on the Linux engine. native Linux oracle"
       evidence: "tests/runtime/ipc/ORACLE.md"
     compat: { class: compatibility }
