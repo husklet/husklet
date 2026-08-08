@@ -158,6 +158,21 @@ impl Images {
         Ok((unpacked, reference))
     }
 
+    /// Unpack an image and fork an empty overlay upper over it as one operation.
+    ///
+    /// This is the `materialize` counterpart for callers that want the product's
+    /// lower/upper split rather than a full recursive copy of the chain.
+    ///
+    /// # Errors
+    /// Returns unpack failures, or snapshot and durable lease failures from the fork.
+    pub fn materialize_overlay(&self, image: &Image, platform: &Platform) -> Result<(UnpackedImage, RootReference)> {
+        self.mirror(image)?;
+        let _operation = crate::storage::ExclusiveLock::acquire(&self.operation_lock)?;
+        let unpacked = self.unpack_locked(image, platform)?;
+        let reference = self.roots().fork_overlay(unpacked.snapshot())?;
+        Ok((unpacked, reference))
+    }
+
     pub(super) fn unpack_locked(&self, image: &Image, platform: &Platform) -> Result<UnpackedImage> {
         let root_bytes = self.content.read_document(&image.target)?;
         let manifest = if image.target.is_index() {

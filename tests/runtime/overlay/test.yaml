@@ -7,11 +7,48 @@ build:
   flags: []
 cases:
   - id: runtime/overlay/coherence
-    status: !unsupported
-      reason: "The YAML runtime runner cannot yet construct separate overlay lower, upper, and work trees"
+    status: !broken
+      reason: "Overlay whiteout publication is unwired, so renaming a lower-origin name away fails (exit 15)"
       evidence: "tests/runtime/overlay/EVIDENCE.md"
     compat: { class: compatibility }
     build: { source: coherence.c, output: coherence, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/coherence }
     run: []
     expect: { exit: 0, stdout: golden/coherence.out }
+  - id: runtime/overlay/lower-read
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/lower.c, output: lower, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/lower-read }
+    run: [read]
+    expect: { exit: 0, stdout: golden/lower-read.out }
+  - id: runtime/overlay/lower-negative
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/lower.c, output: lower-negative, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/lower-negative }
+    run: [negative]
+    expect: { exit: 0, stdout: golden/lower-negative.out }
+  - id: runtime/overlay/lower-copy-up
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/lower.c, output: lower-copy-up, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/lower-copy-up }
+    run: [copy-up]
+    expect: { exit: 0, stdout: golden/lower-copy-up.out }
+  - id: runtime/overlay/lower-whiteout
+    status: !broken
+      reason: "unlink of a lower-only name returns EIO: overlay_publish::publish_whiteout is #[cfg(test)] and has no production caller"
+      evidence: "tests/runtime/overlay/EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/lower.c, output: lower-whiteout, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/lower-whiteout }
+    run: [whiteout]
+    expect: { exit: 0, stdout: golden/lower-whiteout.out }
+  - id: runtime/overlay/lower-merge
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/lower.c, output: lower-merge, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/lower-merge }
+    run: [merge]
+    expect: { exit: 0, stdout: golden/lower-merge.out }

@@ -1,6 +1,6 @@
 use super::{Error, workspace};
 use hl_images::{
-    Image, Images, Platform, Reference, RuntimeConfig,
+    Image, Images, Platform, Reference, RuntimeConfig, UnpackedImage,
     remote::{Auth, Registry},
     rootfs::{Reference as RootReference, View},
 };
@@ -13,11 +13,46 @@ use tokio::time::sleep;
 
 const MATERIALIZE_ATTEMPTS: u32 = 4;
 
+/// How a case's writable root is derived from the immutable image chain.
+///
+/// `Overlay` is what the product takes: an empty upper over the unpacked lower.
+/// `Copy` is the full recursive fork the product falls back to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Materialization {
+    Copy,
+    Overlay,
+}
+
+impl Materialization {
+    /// Honours `HL_HARNESS_ROOTFS=copy|overlay`, defaulting to the product's overlay.
+    #[must_use]
+    pub fn from_environment() -> Self {
+        match env::var("HL_HARNESS_ROOTFS").ok().as_deref() {
+            Some("copy") => Self::Copy,
+            _ => Self::Overlay,
+        }
+    }
+}
+
+/// The writable root a case runs against, in whichever shape it was materialized.
+enum Root {
+    Copy {
+        reference: RootReference,
+        view: View,
+    },
+    Overlay {
+        reference: RootReference,
+        lower: PathBuf,
+        upper: PathBuf,
+    },
+}
+
 pub struct TestImage {
     images: Images,
     identity: String,
-    reference: RootReference,
-    view: View,
+    /// Retained in overlay mode so the lower chain stays pinned across re-forks.
+    unpacked: Option<UnpackedImage>,
+    root: Root,
     runtime: RuntimeConfig,
 }
 
@@ -35,8 +70,16 @@ impl TestImage {
 
     /// Concurrent workers share one on-disk snapshot store, so a lost race there is transient.
     pub async fn materialize(name: &str, platform: &Platform) -> Result<Self, Error> {
+        Self::materialize_with(name, platform, Materialization::Copy).await
+    }
+
+    /// Materializes a writable root in the requested shape, retrying store races.
+    ///
+    /// # Errors
+    /// Returns image lookup, pull, unpack, snapshot, or lease failures.
+    pub async fn materialize_with(name: &str, platform: &Platform, mode: Materialization) -> Result<Self, Error> {
         for attempt in 1..=MATERIALIZE_ATTEMPTS {
-            let failure = match Self::attempt(name, platform).await {
+            let failure = match Self::attempt(name, platform, mode).await {
                 Ok(fixture) => return Ok(fixture),
                 Err(error) => error.to_string(),
             };
@@ -50,34 +93,101 @@ impl TestImage {
     }
 
     /// Opening the shared store races too, so resolution and unpacking retry together.
-    async fn attempt(name: &str, platform: &Platform) -> Result<Self, Error> {
+    async fn attempt(name: &str, platform: &Platform, mode: Materialization) -> Result<Self, Error> {
         let cache = ImageCache::for_platform(platform)?;
         let (images, image) = cache.resolve(name).await?;
-        Self::from_image(images, &image, platform)
+        Self::from_image(images, &image, platform, mode)
     }
 
-    fn from_image(images: Images, image: &Image, platform: &Platform) -> Result<Self, Error> {
+    fn from_image(images: Images, image: &Image, platform: &Platform, mode: Materialization) -> Result<Self, Error> {
         let digest = image.target.digest().to_string();
         // One critical section: a peer must never repair the chain between our unpack and our fork.
-        let (unpacked, reference) = images
-            .materialize(image, platform)
-            .map_err(|error| format!("materialize {digest}: {error}"))?;
+        let (unpacked, reference) = match mode {
+            Materialization::Copy => images.materialize(image, platform),
+            Materialization::Overlay => images.materialize_overlay(image, platform),
+        }
+        .map_err(|error| format!("materialize {digest}: {error}"))?;
         let runtime = unpacked.runtime().clone();
-        let view = images
-            .roots()
-            .open(&reference)
-            .map_err(|error| format!("open rootfs {}: {error}", reference.lease_id()))?;
+        let root = Self::open_root(&images, reference, mode)?;
         Ok(Self {
             images,
-            identity: image.target.digest().to_string(),
-            reference,
-            view,
+            identity: digest,
+            unpacked: matches!(mode, Materialization::Overlay).then_some(unpacked),
+            root,
             runtime,
         })
     }
 
+    fn open_root(images: &Images, reference: RootReference, mode: Materialization) -> Result<Root, Error> {
+        let lease = reference.lease_id().to_owned();
+        match mode {
+            Materialization::Copy => {
+                let view = images
+                    .roots()
+                    .open(&reference)
+                    .map_err(|error| format!("open rootfs {lease}: {error}"))?;
+                Ok(Root::Copy { reference, view })
+            }
+            Materialization::Overlay => {
+                let view = images
+                    .roots()
+                    .open_overlay(&reference)
+                    .map_err(|error| format!("open overlay rootfs {lease}: {error}"))?;
+                Ok(Root::Overlay {
+                    lower: view.lower().to_owned(),
+                    upper: view.upper().to_owned(),
+                    reference,
+                })
+            }
+        }
+    }
+
+    /// Replaces a consumed overlay root with a fresh empty upper over the same lower.
+    ///
+    /// Container removal releases an image-backed rootfs, so a repeated attempt
+    /// needs its own upper rather than inheriting the previous attempt's writes.
+    ///
+    /// # Errors
+    /// Returns snapshot or lease failures from the fork.
+    pub fn refork(&mut self) -> Result<(), Error> {
+        let Some(unpacked) = self.unpacked.clone() else {
+            return Ok(());
+        };
+        let reference = self
+            .images
+            .roots()
+            .fork_overlay(unpacked.snapshot())
+            .map_err(|error| format!("re-fork overlay for {}: {error}", self.identity))?;
+        self.root = Self::open_root(&self.images, reference, Materialization::Overlay)?;
+        Ok(())
+    }
+
+    /// Where the harness stages guest files: the upper in overlay mode, the tree itself in copy mode.
     pub fn path(&self) -> &Path {
-        self.view.path()
+        match &self.root {
+            Root::Copy { view, .. } => view.path(),
+            Root::Overlay { upper, .. } => upper,
+        }
+    }
+
+    /// The immutable lower tree, present only when this root is an overlay.
+    pub fn lower(&self) -> Option<&Path> {
+        match &self.root {
+            Root::Copy { .. } => None,
+            Root::Overlay { lower, .. } => Some(lower),
+        }
+    }
+
+    /// The durable rootfs reference, for a spec that must carry the lower/upper split.
+    pub const fn reference(&self) -> &RootReference {
+        match &self.root {
+            Root::Copy { reference, .. } | Root::Overlay { reference, .. } => reference,
+        }
+    }
+
+    /// The shared image store, so a container service resolves the same snapshots.
+    pub fn images(&self) -> Images {
+        self.images.clone()
     }
 
     /// Immutable manifest identity selected for this platform.
@@ -89,10 +199,41 @@ impl TestImage {
         &self.runtime
     }
 
+    /// An image-backed spec transfers ownership, so container removal may already
+    /// have released this lease; that is success, not a leak.
     pub fn release(self) -> Result<(), Error> {
-        self.images.roots().release(&self.reference)?;
-        Ok(())
+        match self.images.roots().release(self.reference()) {
+            Ok(()) | Err(hl_images::Error::NotOwned { .. }) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
+}
+
+/// Warns once when the image cache sits on a filesystem without reflink, where
+/// every copy-materialized root is a full byte copy rather than a share.
+fn report_reflink_support(root: &Path) {
+    static REPORTED: std::sync::Once = std::sync::Once::new();
+    REPORTED.call_once(|| {
+        if std::fs::create_dir_all(root).is_err() {
+            return;
+        }
+        let source = root.join(".reflink-probe-source");
+        let destination = root.join(".reflink-probe-clone");
+        let _ = std::fs::remove_file(&destination);
+        if std::fs::write(&source, b"reflink probe").is_err() {
+            return;
+        }
+        if reflink_copy::reflink(&source, &destination).is_err() {
+            eprintln!(
+                "image cache {} is on a filesystem without reflink support; every copy-materialized \
+                 rootfs is a full byte copy. Set HL_SCENARIO_IMAGE_CACHE to a reflink-capable \
+                 filesystem before taking materialization measurements.",
+                root.display()
+            );
+        }
+        let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_file(&destination);
+    });
 }
 
 /// The per-platform on-disk image store every harness shares.
@@ -106,8 +247,10 @@ impl ImageCache {
     /// Returns a failure when the workspace root cannot be located.
     pub fn for_platform(platform: &Platform) -> Result<Self, Error> {
         let configured = env::var_os("HL_SCENARIO_IMAGE_CACHE").map(PathBuf::from);
+        let root = Self::locate(configured, platform, &workspace()?);
+        report_reflink_support(&root);
         Ok(Self {
-            root: Self::locate(configured, platform, &workspace()?),
+            root,
             platform: platform.clone(),
         })
     }
