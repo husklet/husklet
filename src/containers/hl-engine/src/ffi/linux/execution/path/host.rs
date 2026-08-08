@@ -300,6 +300,8 @@ impl RuntimePathHost for NativePath {
             &guest,
             plan.intent,
         )?;
+        // Whatever this open creates belongs to the opening task, exactly as the mutation paths record.
+        let creator = mutation::Identity::project(self).map_or((0, 0), |identity| (identity.user, identity.group));
         let file = NativeFile::new(
             Arc::clone(&self.watches),
             path.clone(),
@@ -329,31 +331,37 @@ impl RuntimePathHost for NativePath {
             }
         }
         if path.starts_with(ordinary.root()) {
-            Ok(Box::new(open::PendingOpen::new(
-                file,
-                path,
-                plan.intent,
-                plan.mode,
-                ordinary.root().to_path_buf(),
-                Arc::clone(&self.paths),
-                Arc::clone(&self.terminals),
-                parent,
-                name,
-                Arc::clone(&self.transfers),
-            )))
+            Ok(Box::new(
+                open::PendingOpen::new(
+                    file,
+                    path,
+                    plan.intent,
+                    plan.mode,
+                    ordinary.root().to_path_buf(),
+                    Arc::clone(&self.paths),
+                    Arc::clone(&self.terminals),
+                    parent,
+                    name,
+                    Arc::clone(&self.transfers),
+                )
+                .with_creator(creator),
+            ))
         } else {
-            Ok(Box::new(open::PendingOpen::at_guest(
-                file,
-                path,
-                guest_path,
-                plan.intent,
-                plan.mode,
-                Arc::clone(&self.paths),
-                Arc::clone(&self.terminals),
-                parent,
-                name,
-                Arc::clone(&self.transfers),
-            )))
+            Ok(Box::new(
+                open::PendingOpen::at_guest(
+                    file,
+                    path,
+                    guest_path,
+                    plan.intent,
+                    plan.mode,
+                    Arc::clone(&self.paths),
+                    Arc::clone(&self.terminals),
+                    parent,
+                    name,
+                    Arc::clone(&self.transfers),
+                )
+                .with_creator(creator),
+            ))
         }
     }
 

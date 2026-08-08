@@ -28,9 +28,17 @@ pub(super) struct PendingOpen {
     parent: ParentLease,
     name: CString,
     transfers: Arc<FileTransferRegistry>,
+    /// Filesystem uid and gid of the opening task, which owns the file if this open creates it.
+    /// `None` leaves ownership unrecorded, as it was before creation carried a guest owner.
+    creator: Option<(u32, u32)>,
 }
 
 impl PendingOpen {
+    pub(super) fn with_creator(mut self, creator: (u32, u32)) -> Self {
+        self.creator = Some(creator);
+        self
+    }
+
     pub(super) fn new(
         file: Arc<NativeFile>,
         path: PathBuf,
@@ -56,6 +64,7 @@ impl PendingOpen {
             parent,
             name,
             transfers,
+            creator: None,
         }
     }
 
@@ -84,6 +93,7 @@ impl PendingOpen {
             parent,
             name,
             transfers,
+            creator: None,
         }
     }
 
@@ -197,6 +207,16 @@ impl PreparedPathOpen for PendingOpen {
             return Err(RuntimePathError::WouldBlock);
         }
         self.admit_quota(&opened, created, temporary)?;
+        if let (true, Some((user, group))) = (created, self.creator) {
+            let parent = self.parent.as_raw_fd();
+            if temporary {
+                self.file
+                    .ownership()
+                    .record_created_fd(parent, opened.as_raw_fd(), user, group);
+            } else {
+                self.file.ownership().record_created(parent, &self.name, user, group);
+            }
+        }
         self.file
             .path_only
             .store(bits & OpenIntent::PATH_ONLY != 0, Ordering::Release);

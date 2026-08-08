@@ -67,6 +67,14 @@ cases:
     environment: { HL_UID: "0", HL_GID: "0" }
     run: []
     expect: { exit: 0, stdout: golden/permissions.out }
+  - id: runtime/filesystem/created-ownership
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/created_ownership.c, output: created-ownership, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-created-ownership }
+    environment: { HL_UID: "0", HL_GID: "0" }
+    run: []
+    expect: { exit: 0, stdout: golden/created_ownership.out }
   - id: runtime/filesystem/fs-statfs-type
     status: !broken
       reason: "QEMU host filesystem type differs from the retained overlay-root golden on both ISAs"

@@ -161,3 +161,30 @@ fn ownership_hardlink() {
     drop(file);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// Eviction is what replaced the per-inode fd pin: the record must die with the inode so a recycled
+/// inode number cannot inherit a stale guest owner.
+#[test]
+fn ownership_forgets_a_freed_inode() {
+    let root = std::env::temp_dir().join(format!("hl-owner-evict-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("made"), b"data").unwrap();
+    let parent = std::fs::File::open(&root).unwrap();
+    let host = std::fs::symlink_metadata(root.join("made")).unwrap();
+    let (user, group) = (host.uid().wrapping_add(7_000), host.gid().wrapping_add(9_000));
+    // Without this the projection below would agree with the host by accident.
+    assert_ne!(user, host.uid());
+
+    let registry = Registry::default();
+    registry.record_created(parent.as_raw_fd(), c"made", user, group);
+    let mut projected = HostMetadata::path(&root.join("made")).unwrap();
+    registry.project(&mut projected);
+    assert_eq!((projected.user, projected.group), (user, group));
+
+    registry.forget(projected.identity.device, projected.identity.inode);
+    let mut reused = HostMetadata::path(&root.join("made")).unwrap();
+    registry.project(&mut reused);
+    assert_eq!((reused.user, reused.group), (host.uid(), host.gid()));
+
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -353,9 +353,9 @@ impl<'namespace, H: VfsMutationHost> VfsMutations<'namespace, H> {
     }
 
     /// Reference sticky policy; `VfsMutations` has no production caller, so this is the written
-    /// specification rather than an enforced check. Lifting it into `hl-engine` is blocked until a
-    /// guest-created file records its guest owner and `setuid` drops `CAP_FOWNER` — today both
-    /// operands read the engine's host uid and every guest process keeps `owner_override`.
+    /// specification rather than an enforced check. Guest-created files now record a guest owner and
+    /// `setuid` now drops `CAP_FOWNER`, so both operands are meaningful; lifting this into
+    /// `hl-engine` is blocked only on the pinned `owner_override`, which still short-circuits it.
     fn check_sticky(
         &self,
         parent: crate::NodeHandle,
