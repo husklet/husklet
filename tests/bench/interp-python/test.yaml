@@ -1,0 +1,29 @@
+image: python:3.12-alpine
+execution: { native: true, diagnostics: false }
+workload:
+  rootfs: { executable: /usr/local/bin/python3 }
+cases:
+  - id: startup
+    arguments: [-c, print("PYSTART")]
+    warmups: 1
+    samples: 3
+    timeout: 300
+    expect: { stdout_contains: golden/startup.txt }
+  - id: import
+    arguments: [-c, 'import json,os,re,sys;print("PYIMPORT")']
+    warmups: 1
+    samples: 3
+    timeout: 300
+    expect: { stdout_contains: golden/import.txt }
+  - id: work
+    arguments:
+      - -c
+      - 'd={}
+
+        for i in range(200000): d[i%1000]=d.get(i%1000,0)+i
+
+        print("PYWORK",sum(d.values()))'
+    warmups: 1
+    samples: 3
+    timeout: 300
+    expect: { stdout_contains: golden/work.txt }

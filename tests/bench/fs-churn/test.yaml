@@ -1,0 +1,27 @@
+image: alpine:3.20
+execution: { native: true, diagnostics: false }
+workload:
+  rootfs: { executable: /bin/busybox }
+cases:
+  # npm-install-shaped churn: many small files created, stat'ed, read and removed.
+  - id: unpack
+    arguments:
+      - sh
+      - -c
+      # `mkdir -p /tmp/c` is avoided: husklet returns EINVAL for mkdir("/"), which mkdir -p walks.
+      - 'i=0; while [ $i -lt 2000 ]; do echo payload$i > /tmp/f$i; i=$((i+1)); done;
+         cat /tmp/f* > /dev/null; rm -f /tmp/f*; echo CHURN_OK'
+    warmups: 1
+    samples: 3
+    timeout: 300
+    expect: { stdout_contains: golden/unpack.txt }
+  # Process setup: the fork/exec surface tests/bench/combined/main.c declares as a gap.
+  - id: spawn
+    arguments:
+      - sh
+      - -c
+      - 'i=0; while [ $i -lt 500 ]; do /bin/busybox true; i=$((i+1)); done; echo SPAWN_OK'
+    warmups: 1
+    samples: 3
+    timeout: 300
+    expect: { stdout_contains: golden/spawn.txt }
