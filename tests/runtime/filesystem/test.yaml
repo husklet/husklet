@@ -550,6 +550,13 @@ cases:
     artifact: { destination: /opt/husklet/filesystem-ofd-lock }
     run: []
     expect: { exit: 0, stdout: golden/ofd_lock.out }
+  - id: runtime/filesystem/lock-close-release
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/lock_close_release.c, output: lock-close-release, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-lock-close-release }
+    run: []
+    expect: { exit: 0, stdout: golden/lock_close_release.out }
   - id: runtime/filesystem/otmpfile-link
     status: active
     compat: { class: compatibility }

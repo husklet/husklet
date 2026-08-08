@@ -153,10 +153,14 @@ impl DescriptorPort {
         }
     }
 
-    fn close(&self, number: i32) -> hl_linux::LinuxResult {
-        let locked_file = self
-            .epoll_table
-            .descriptor_table()
+    /// Records what a pending close must release: the file's POSIX locks, plus the
+    /// description's OFD locks when this is the last descriptor naming it.
+    fn pending_lock_release(
+        &self,
+        number: i32,
+    ) -> (Option<hl_runtime::FileIdentity>, Option<hl_runtime::FlockOwnerToken>) {
+        let descriptors = self.epoll_table.descriptor_table();
+        let file = descriptors
             .pin(number)
             .ok()
             .and_then(|lease| lease.metadata().ok())
@@ -164,18 +168,43 @@ impl DescriptorPort {
                 device: metadata.device,
                 inode: metadata.inode,
             });
+        let open_file = descriptors
+            .active_snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.number == number)
+            .filter(|snapshot| snapshot.descriptor_references == 1)
+            .map(|snapshot| hl_runtime::FlockOwnerToken {
+                identity: snapshot.description_identity,
+                generation: snapshot.description_generation,
+            });
+        (file, open_file)
+    }
+
+    fn apply_lock_release(
+        &self,
+        file: Option<hl_runtime::FileIdentity>,
+        open_file: Option<hl_runtime::FlockOwnerToken>,
+    ) {
+        if let Some(file) = file {
+            let (identity, generation) = self.process.wire_parts();
+            let _ = self.locks.close_process_file(
+                file,
+                hl_runtime::ProcessLockOwner {
+                    identity: u64::from(identity),
+                    generation: u32::from(generation),
+                },
+            );
+        }
+        if let Some(open_file) = open_file {
+            self.locks.close_ofd(open_file);
+        }
+    }
+
+    fn close(&self, number: i32) -> hl_linux::LinuxResult {
+        let (locked_file, open_file) = self.pending_lock_release(number);
         match self.epoll.close(&self.epoll_table, number) {
             Ok(()) => {
-                if let Some(file) = locked_file {
-                    let (identity, generation) = self.process.wire_parts();
-                    let _ = self.locks.close_process_file(
-                        file,
-                        hl_runtime::ProcessLockOwner {
-                            identity: u64::from(identity),
-                            generation: u32::from(generation),
-                        },
-                    );
-                }
+                self.apply_lock_release(locked_file, open_file);
                 hl_linux::LinuxResult::Value(0)
             }
             Err(hl_runtime::ControlError::Descriptor(error)) => {
@@ -203,6 +232,22 @@ impl DescriptorPort {
             return hl_linux::LinuxResult::Error(hl_linux::Errno::EINVAL);
         }
         let last = last.min(u64::from(u32::MAX));
+        // CLOEXEC only re-flags and UNSHARE leaves this table's descriptors open, so neither drops locks.
+        let releasing = flags & (UNSHARE | CLOEXEC) == 0;
+        let pending = if releasing {
+            self.epoll_table
+                .descriptor_table()
+                .active_snapshots()
+                .into_iter()
+                .filter(|snapshot| {
+                    let number = u64::from(snapshot.number as u32);
+                    number >= first && number <= last
+                })
+                .map(|snapshot| self.pending_lock_release(snapshot.number))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let result = if flags & UNSHARE != 0 {
             self.unshare.publish(first as u32, last as u32, flags & CLOEXEC != 0)
         } else {
@@ -210,7 +255,12 @@ impl DescriptorPort {
                 .close_range(&self.epoll_table, first as u32, last as u32, flags & CLOEXEC != 0)
         };
         match result {
-            Ok(()) => hl_linux::LinuxResult::Value(0),
+            Ok(()) => {
+                for (file, open_file) in pending {
+                    self.apply_lock_release(file, open_file);
+                }
+                hl_linux::LinuxResult::Value(0)
+            }
             Err(hl_runtime::ControlError::Capacity) => hl_linux::LinuxResult::Error(hl_linux::Errno::ENOMEM),
             Err(hl_runtime::ControlError::Descriptor(error)) => {
                 hl_linux::LinuxResult::Error(descriptor::Set::errno(error))
