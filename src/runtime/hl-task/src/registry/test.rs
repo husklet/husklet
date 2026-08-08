@@ -734,7 +734,9 @@ fn clone_plan_is() {
     let (registry, _, source) = Fixture::registry(2, 3);
     let rolled_back = registry.begin_clone_thread(source).unwrap();
     let stale = rolled_back.thread();
-    assert_eq!(registry.snapshot().threads[1].lifecycle, ThreadLifecycle::Starting);
+    let snapshot = registry.snapshot();
+    let staged = snapshot.threads.iter().find(|entry| entry.id == stale).unwrap();
+    assert_eq!(staged.lifecycle, ThreadLifecycle::Starting);
     registry.rollback_clone_thread(rolled_back).unwrap();
     let committed = registry.begin_clone_thread(source).unwrap();
     let current = committed.thread();
@@ -760,13 +762,17 @@ fn fork_inherits_values() {
     let (registry, parent, source) = Fixture::registry(3, 4);
     let plan = registry.begin_fork_process(source).unwrap();
     let child = plan.process();
-    assert!(registry.snapshot().processes[0].children.is_empty());
+    let staged = registry.snapshot();
+    let staged_parent = staged.processes.iter().find(|entry| entry.id == parent).unwrap();
+    assert!(staged_parent.children.is_empty());
     registry.commit_fork_process(plan).unwrap();
     let snapshot = registry.snapshot();
-    assert_eq!(snapshot.processes[0].children, vec![child]);
-    assert_eq!(snapshot.processes[1].parent, Some(parent));
-    assert_eq!(snapshot.processes[0].credentials, snapshot.processes[1].credentials);
-    assert_eq!(snapshot.processes[0].limits, snapshot.processes[1].limits);
+    let parent_entry = snapshot.processes.iter().find(|entry| entry.id == parent).unwrap();
+    let child_entry = snapshot.processes.iter().find(|entry| entry.id == child).unwrap();
+    assert_eq!(parent_entry.children, vec![child]);
+    assert_eq!(child_entry.parent, Some(parent));
+    assert_eq!(parent_entry.credentials, child_entry.credentials);
+    assert_eq!(parent_entry.limits, child_entry.limits);
 }
 
 #[test]

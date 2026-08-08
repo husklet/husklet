@@ -99,13 +99,23 @@ fn malformed_parent_thread() {
     for corruption in 0..4 {
         let mut invalid = snapshot.clone();
         match corruption {
-            0 => {
-                let process = invalid.processes[0].id;
-                invalid.processes[0].children.push(process);
+            0 => invalid.processes.iter_mut().for_each(|process| {
+                let id = process.id;
+                process.children.push(id);
+            }),
+            1 => invalid.processes.iter_mut().for_each(|process| process.threads.clear()),
+            // Every group loses its members, so the case does not depend on which slot init holds.
+            2 => invalid
+                .process_groups
+                .iter_mut()
+                .for_each(|group| group.members.clear()),
+            // The generation must disagree with a slot that actually holds a process,
+            // which is no longer slot zero now that init reserves pid 1 for the entrypoint.
+            _ => {
+                let (slot, _) = invalid.processes[0].id.wire_parts();
+                let slot = slot as usize;
+                invalid.process_generations[slot] = invalid.process_generations[slot].saturating_add(1);
             }
-            1 => invalid.processes[0].threads.clear(),
-            2 => invalid.process_groups[0].members.clear(),
-            _ => invalid.process_generations[0] = invalid.process_generations[0].saturating_add(1),
         }
         assert_eq!(TaskRegistry::restore(&invalid).err(), Some(TaskError::InvalidSnapshot));
     }

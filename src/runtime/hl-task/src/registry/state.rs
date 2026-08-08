@@ -157,10 +157,20 @@ impl TaskRegistry {
     }
 
     pub(super) fn allocate_leader(state: &mut State) -> Result<(ProcessId, ThreadId), TaskError> {
+        Self::allocate_leader_from(state, 0)
+    }
+
+    /// Allocates a leader from `first_slot` upwards. The synthetic init reserves
+    /// slot zero for the guest entrypoint it forks, so the entrypoint reports pid 1.
+    pub(super) fn allocate_leader_from(
+        state: &mut State,
+        first_slot: usize,
+    ) -> Result<(ProcessId, ThreadId), TaskError> {
         let (slot, _) = state
             .processes
             .iter()
             .enumerate()
+            .filter(|(slot, _)| *slot >= first_slot)
             .filter(|(slot, entry)| {
                 entry.value.is_none()
                     && entry.generation != u16::MAX
