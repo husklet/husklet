@@ -206,6 +206,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         ids.into_iter().all(|id| id == u32::MAX || allowed.contains(&id))
     }
 
+    /// Only ids and set-id authority move here: `credentials.capabilities` survives a transition away
+    /// from root, so a dropped-privilege guest keeps `CAP_FOWNER`/`CAP_DAC_OVERRIDE` and every
+    /// owner-or-capability DAC check in the engine passes unconditionally.
     fn replace_ids(
         &self,
         mut credentials: ProcessCredentials,
