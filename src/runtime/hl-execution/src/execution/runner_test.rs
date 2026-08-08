@@ -10,6 +10,7 @@ struct Memory {
     generation: u64,
     fetches: std::cell::Cell<u64>,
     cacheable: bool,
+    invalidated: Vec<u64>,
 }
 
 impl Memory {
@@ -19,6 +20,7 @@ impl Memory {
             generation: 0,
             fetches: std::cell::Cell::new(0),
             cacheable: true,
+            invalidated: Vec::new(),
         }
     }
 
@@ -199,6 +201,10 @@ impl ExecutionInstructionMemory for Memory {
             writes: self.generation,
         })
     }
+
+    fn invalidate_instruction(&mut self, address: u64) {
+        self.invalidated.push(address);
+    }
 }
 
 /// A signal delivery swaps the register file and nothing else, so the blocks already
@@ -291,6 +297,51 @@ fn blocks_retain_decode() {
     assert_eq!(cpu.registers[0], 10_000);
     assert_eq!(cpu.registers[1], 0);
     assert_eq!(cpu.pc, 0x100c);
+}
+
+/// Three mechanisms independently keep `AArch64` self-modifying code correct, and in the guest
+/// corpus each one masks the others: the store path publishes the written executable range, a
+/// guest `ic ivau` publishes it again, and `ic ivau` also drops the affected line locally. These
+/// two tests pin the first and second so that removing either is visible on its own.
+#[test]
+fn a_published_write_epoch_discards_translations_without_cache_maintenance() {
+    let mut memory = Memory::new(0x2000);
+    // add x0,x0,#1; add x0,x0,#1; b .
+    for (offset, word) in [0x9100_0400_u32, 0x9100_0400, 0x17ff_fffe].into_iter().enumerate() {
+        memory.put(0x1000 + offset * 4, &word.to_le_bytes());
+    }
+    let cpu = Aarch64CpuState {
+        pc: 0x1000,
+        ..Aarch64CpuState::default()
+    };
+    let machine = Memory::machine(ExecutionCpuSnapshot::Aarch64(cpu));
+    assert_eq!(machine.run_slice(1, 3, &mut memory), StepOutcome::Yield);
+    // add x0,x0,#4, published only by the write epoch: the guest issues no `ic ivau`.
+    memory.put(0x1000, &0x9100_1000_u32.to_le_bytes());
+    assert_eq!(machine.run_slice(1, 3, &mut memory), StepOutcome::Yield);
+    machine.freeze().unwrap();
+    let ExecutionCpuSnapshot::Aarch64(cpu) = machine.snapshot().unwrap().cpu else {
+        panic!("AArch64")
+    };
+    assert_eq!(cpu.registers[0], 7, "the second pass must run the published bytes");
+}
+
+#[test]
+fn guest_instruction_cache_maintenance_reaches_the_memory_port() {
+    let mut memory = Memory::new(0x2000);
+    memory.put(0x1000, &0xd50b_7520_u32.to_le_bytes()); // ic ivau, x0
+    let mut cpu = Aarch64CpuState {
+        pc: 0x1000,
+        ..Aarch64CpuState::default()
+    };
+    cpu.registers[0] = 0x1400;
+    let machine = Memory::machine(ExecutionCpuSnapshot::Aarch64(cpu));
+    assert_eq!(machine.run_slice(1, 1, &mut memory), StepOutcome::Yield);
+    assert_eq!(
+        memory.invalidated,
+        vec![0x1400],
+        "maintenance must publish to peer executors, not only this cache"
+    );
 }
 
 #[test]
