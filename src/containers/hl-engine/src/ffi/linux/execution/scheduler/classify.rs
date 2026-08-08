@@ -54,8 +54,8 @@ impl GuestExecutor {
     /// new deliverability without passing a signal-delivery boundary.
     pub(super) fn changes_signal_delivery(isa: GuestIsa, number: u64) -> bool {
         match isa {
-            GuestIsa::Aarch64 => matches!(number, 132 | 134 | 135 | 138 | 139),
-            GuestIsa::X86_64 => matches!(number, 13 | 14 | 15 | 129 | 131),
+            GuestIsa::Aarch64 => matches!(number, 132 | 134 | 135 | 138),
+            GuestIsa::X86_64 => matches!(number, 13 | 14 | 129 | 131),
         }
     }
 

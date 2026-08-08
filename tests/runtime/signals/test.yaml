@@ -101,6 +101,13 @@ cases:
     artifact: { destination: /opt/husklet/signals-pending-set }
     run: []
     expect: { exit: 0, stdout: golden/sigpendingx.out }
+  - id: runtime/signals/sigreturn-unblock
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigreturn_unblock.c, output: sigreturn-unblock, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigreturn-unblock }
+    run: []
+    expect: { exit: 0, stdout: golden/sigreturn_unblock.out }
   - id: runtime/signals/compute-preemption
     status: active
     compat: { class: compatibility }
