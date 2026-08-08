@@ -1,9 +1,9 @@
 use crate::{Aarch64CpuState, Aarch64ExecutionExit, Aarch64Instruction, Aarch64Ir, SimdLogic};
 pub(crate) struct Aarch64SimdInterpreter;
 impl Aarch64SimdInterpreter {
-    pub(crate) fn is_simd(instruction: Aarch64Instruction) -> bool {
+    pub(crate) fn is_simd(instruction: &Aarch64Instruction) -> bool {
         matches!(
-            instruction,
+            *instruction,
             Aarch64Instruction::SimdAes { .. }
                 | Aarch64Instruction::SimdSha1 { .. }
                 | Aarch64Instruction::SimdSha256 { .. }
@@ -32,7 +32,7 @@ impl Aarch64SimdInterpreter {
                 | Aarch64Instruction::SimdScalarMove { .. }
         )
     }
-    pub(crate) fn execute(cpu: &mut Aarch64CpuState, ir: Aarch64Ir) -> Aarch64ExecutionExit {
+    pub(crate) fn execute(cpu: &mut Aarch64CpuState, ir: &Aarch64Ir) -> Aarch64ExecutionExit {
         let mut staged = cpu.clone();
         staged.pc = cpu.pc.wrapping_add(4);
         match ir.instruction {

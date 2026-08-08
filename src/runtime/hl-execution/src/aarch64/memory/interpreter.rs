@@ -8,9 +8,9 @@ pub(crate) struct Interpreter;
 pub(crate) type Aarch64MemoryInterpreter = Interpreter;
 
 impl Aarch64MemoryInterpreter {
-    pub(crate) fn is_memory(instruction: Aarch64Instruction) -> bool {
+    pub(crate) fn is_memory(instruction: &Aarch64Instruction) -> bool {
         matches!(
-            instruction,
+            *instruction,
             Aarch64Instruction::Load { .. }
                 | Aarch64Instruction::Store { .. }
                 | Aarch64Instruction::VectorLoad { .. }
@@ -31,7 +31,7 @@ impl Aarch64MemoryInterpreter {
         cpu: &mut Aarch64CpuState,
         memory: &mut M,
         coordinates: &dyn PcCoordinatePort,
-        ir: Aarch64Ir,
+        ir: &Aarch64Ir,
     ) -> Aarch64ExecutionExit {
         match ir.instruction {
             Aarch64Instruction::Load {

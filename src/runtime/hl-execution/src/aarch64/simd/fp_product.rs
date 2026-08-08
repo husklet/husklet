@@ -386,7 +386,7 @@ mod test {
             Aarch64FpExecutor::execute(
                 cpu,
                 &mut Aarch64SoftFloat,
-                Aarch64Ir {
+                &Aarch64Ir {
                     word,
                     wide: word >> 31 != 0,
                     instruction

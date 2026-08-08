@@ -140,7 +140,7 @@ mod test {
         };
         let ir = Aarch64Decoder::decode(base | 2 << 16 | 1 << 5).unwrap();
         assert_eq!(
-            Aarch64Interpreter::execute(&mut cpu, &Coordinates, ir),
+            Aarch64Interpreter::execute(&mut cpu, &Coordinates, &ir),
             Aarch64ExecutionExit::Continue
         );
         assert_eq!(cpu.vector(0), expected);
@@ -152,7 +152,7 @@ mod test {
         let expected = reference_value(&cpu, signedness, 0, 0, 0);
         let ir = Aarch64Decoder::decode(base).unwrap();
         assert_eq!(
-            Aarch64Interpreter::execute(&mut cpu, &Coordinates, ir),
+            Aarch64Interpreter::execute(&mut cpu, &Coordinates, &ir),
             Aarch64ExecutionExit::Continue
         );
         assert_eq!(cpu.vector(0), expected);

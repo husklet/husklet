@@ -6,9 +6,9 @@ use crate::{
 pub(crate) struct Executor;
 
 impl Executor {
-    pub(crate) fn handles(instruction: Aarch64Instruction) -> bool {
+    pub(crate) fn handles(instruction: &Aarch64Instruction) -> bool {
         matches!(
-            instruction,
+            *instruction,
             Aarch64Instruction::ExclusiveLoad { .. }
                 | Aarch64Instruction::OrderedAccess { .. }
                 | Aarch64Instruction::ExclusiveStore { .. }
@@ -21,7 +21,7 @@ impl Executor {
     pub(crate) fn execute<E: ExclusiveMemory>(
         cpu: &mut Aarch64CpuState,
         memory: &mut E,
-        ir: Aarch64Ir,
+        ir: &Aarch64Ir,
     ) -> Aarch64ExecutionExit {
         match ir.instruction {
             Aarch64Instruction::OrderedAccess {

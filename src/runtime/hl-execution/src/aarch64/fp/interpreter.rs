@@ -13,7 +13,7 @@ impl Aarch64FpExecutor {
         word: u32,
     ) -> Aarch64ExecutionExit {
         match Aarch64Decoder::decode(word) {
-            Ok(ir) if Self::is_fp(ir.instruction) => Self::execute(cpu, port, ir),
+            Ok(ir) if Self::is_fp(&ir.instruction) => Self::execute(cpu, port, &ir),
             Ok(_) | Err(Aarch64DecodeError::Unsupported) => Aarch64ExecutionExit::UnsupportedInstruction {
                 instruction: cpu.pc,
                 word,
@@ -24,9 +24,9 @@ impl Aarch64FpExecutor {
             },
         }
     }
-    pub(crate) fn is_fp(instruction: Aarch64Instruction) -> bool {
+    pub(crate) fn is_fp(instruction: &Aarch64Instruction) -> bool {
         matches!(
-            instruction,
+            *instruction,
             Aarch64Instruction::FpImmediate { .. }
                 | Aarch64Instruction::FpUnary { .. }
                 | Aarch64Instruction::FpBinary { .. }
@@ -59,7 +59,7 @@ impl Aarch64FpExecutor {
     pub(crate) fn execute<P: FpArithmeticPort>(
         cpu: &mut Aarch64CpuState,
         port: &mut P,
-        ir: Aarch64Ir,
+        ir: &Aarch64Ir,
     ) -> Aarch64ExecutionExit {
         cpu.pc = cpu.pc.wrapping_add(4);
         match ir.instruction {

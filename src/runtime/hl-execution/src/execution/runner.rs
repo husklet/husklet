@@ -703,8 +703,8 @@ impl ExecutionMachine {
             let instructions = &cache.get(address).expect("inserted block").instructions;
             let maximum = instructions.len().min(usize::try_from(remaining).unwrap_or(usize::MAX));
             let mut invalidated = None;
-            for &ir in &instructions[..maximum] {
-                let exit = if RegisterExecutor::supports(ir.instruction) {
+            for ir in &instructions[..maximum] {
+                let exit = if RegisterExecutor::supports(&ir.instruction) {
                     RegisterExecutor::execute(cpu, &IdentityCoordinates, ir).expect("supported register instruction")
                 } else {
                     let mut system = RunnerSystem::new(self.architectural_counter.as_ref());
