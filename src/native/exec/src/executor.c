@@ -1509,8 +1509,11 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             return hl_native_execution_exit(&execution, output, HL_NATIVE_EXIT_FAULT,
                                             (uint32_t)cpu->fault_access, cpu->program, cpu->program,
                                             cpu->fault_address, 1);
+        /* An epoch exit is a drain request at the store's own pc, not a refusal
+         * of the block; reporting it as a fallback suppresses the entry. */
         if (cpu->reason != HL_NATIVE_EXIT_SYSCALL && cpu->reason != HL_NATIVE_EXIT_FALLBACK &&
-            cpu->reason != HL_NATIVE_EXIT_INTERRUPT && cpu->reason != HL_NATIVE_EXIT_YIELD)
+            cpu->reason != HL_NATIVE_EXIT_INTERRUPT && cpu->reason != HL_NATIVE_EXIT_YIELD &&
+            cpu->reason != HL_NATIVE_EXIT_EPOCH)
             return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, instruction);
         if (executor->diagnostics && cpu->reason == HL_NATIVE_EXIT_FALLBACK && cpu->fault_access == 0) {
             hl_a64_fetch_result fallback_word;

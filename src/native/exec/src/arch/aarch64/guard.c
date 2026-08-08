@@ -32,6 +32,15 @@
 #define OFFSET_DIRTY_COUNT ((int)offsetof(hl_native_aarch64_cpu, dirty_count))
 #define OFFSET_DIRTY_RECORDS ((int)offsetof(hl_native_aarch64_cpu, dirty_records))
 #define OFFSET_BUDGET ((int)offsetof(hl_native_aarch64_cpu, budget))
+#define DIRTY_CAPACITY \
+    ((uint32_t)(sizeof(((hl_native_aarch64_cpu *)0)->dirty_records) / \
+                sizeof(((hl_native_aarch64_cpu *)0)->dirty_records[0])))
+/* hl_a64_addi masks its immediate to 12 bits, so every offset it takes as a
+ * base must stay addressable; growing dirty_records is what pushes them out. */
+_Static_assert(OFFSET_DIRTY_RECORDS < 4096 && OFFSET_READ_VIEWS < 4096 &&
+                   OFFSET_READ_VIEW_PUBLICATION < 4096,
+               "aarch64 CPU add-immediate base offset exceeds imm12");
+_Static_assert(DIRTY_CAPACITY < 4096, "aarch64 dirty capacity exceeds cmp imm12");
 
 /* x30 carries the remaining budget across the whole native run.  The view scans
  * and the archive subroutine borrow it, so they publish it first and recover it
@@ -155,7 +164,7 @@ static void archive_dirty_body(hl_a64_assembler *assembler, uint64_t pc) {
     hl_a64_emit32(assembler, 0);
     uint8_t *append = assembler->cursor;
     hl_a64_ldr(assembler, 16, CPU, OFFSET_DIRTY_COUNT);
-    hl_a64_emit32(assembler, UINT32_C(0xf100421f)); /* cmp count,#16 */
+    hl_a64_emit32(assembler, UINT32_C(0xf100021f) | (DIRTY_CAPACITY << 10)); /* cmp count,#capacity */
     overflow = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     hl_a64_addi(assembler, 18, CPU, OFFSET_DIRTY_RECORDS);

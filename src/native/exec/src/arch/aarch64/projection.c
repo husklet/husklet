@@ -1,6 +1,8 @@
 #include "projection.h"
 
-#define HL_A64_DIRTY_CAPACITY 16u
+#define HL_A64_DIRTY_CAPACITY \
+    ((uint64_t)(sizeof(((hl_native_aarch64_cpu *)0)->dirty_records) / \
+                sizeof(((hl_native_aarch64_cpu *)0)->dirty_records[0])))
 
 static int mergeable(const hl_native_aarch64_cpu *cpu) {
     if (cpu == NULL || cpu->dirty_first == UINT64_MAX || cpu->dirty_first >= cpu->dirty_last ||
