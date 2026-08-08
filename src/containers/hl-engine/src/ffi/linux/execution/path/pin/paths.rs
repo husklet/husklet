@@ -61,7 +61,21 @@ impl Host {
         let mut candidates = Vec::with_capacity(parent.lower_parents().len() + 1);
         candidates.push(parent.selected());
         candidates.extend(parent.lower_parents());
-        for candidate in candidates {
+        // This is the final-component scan, where the negative-probe storms
+        // land. An indexed lower answers both of its probes from memory.
+        let key = parent
+            .guest()
+            .map(|guest| Self::child_index_key(guest, name.to_bytes()));
+        for (position, candidate) in candidates.into_iter().enumerate() {
+            if let (Some(key), Some(index)) = (key.as_deref(), parent.candidate_index(position)) {
+                if index.is_whiteout(key) {
+                    return Err(RuntimePathError::NotFound);
+                }
+                match index.get(key) {
+                    Some(_) => return Ok(candidate),
+                    None => continue,
+                }
+            }
             if Self::whiteout_at(candidate.as_raw_fd(), name)? {
                 return Err(RuntimePathError::NotFound);
             }
@@ -84,6 +98,17 @@ impl Host {
             }
         }
         Err(RuntimePathError::NotFound)
+    }
+
+    /// The layer-relative index key for a child of a pinned guest directory.
+    fn child_index_key(parent: &hl_runtime::GuestPathBytes, name: &[u8]) -> Vec<u8> {
+        let parent = parent.as_bytes();
+        let mut key = parent.strip_prefix(b"/".as_slice()).unwrap_or(parent).to_vec();
+        if !key.is_empty() {
+            key.push(b'/');
+        }
+        key.extend_from_slice(name);
+        key
     }
 
     pub(super) fn whiteout_at(parent: RawFd, name: &CStr) -> Result<bool, RuntimePathError> {

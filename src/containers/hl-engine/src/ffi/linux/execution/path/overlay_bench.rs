@@ -116,6 +116,106 @@ fn report(name: &str, sample: Sample, baseline: Sample) {
     );
 }
 
+/// A realistic lower resembling an interpreter image's immutable content, and
+/// the lookup mix a process start issues against it: mostly lower-resident
+/// library paths plus a run of negative probes from loader search order.
+fn interpreter_fixture(lower: &Path) {
+    for directory in [
+        "usr/lib/python3.12/json",
+        "usr/lib/python3.12/encodings",
+        "usr/local/lib",
+        "lib",
+        "etc",
+    ] {
+        std::fs::create_dir_all(lower.join(directory)).unwrap();
+    }
+    for file in [
+        "lib/libc.musl-aarch64.so.1",
+        "usr/local/lib/libpython3.12.so.1.0",
+        "usr/lib/python3.12/os.py",
+        "usr/lib/python3.12/json/__init__.py",
+        "usr/lib/python3.12/encodings/utf_8.py",
+        "etc/ld.so.cache",
+    ] {
+        std::fs::write(lower.join(file), b"x").unwrap();
+    }
+}
+
+const LOOKUPS: [&[u8]; 12] = [
+    b"/lib/libc.musl-aarch64.so.1",
+    b"/usr/local/lib/libpython3.12.so.1.0",
+    b"/usr/lib/python3.12/os.py",
+    b"/usr/lib/python3.12/json/__init__.py",
+    b"/usr/lib/python3.12/encodings/utf_8.py",
+    b"/etc/ld.so.cache",
+    // Loader and module search misses: the negative-probe storm.
+    b"/lib/libpython3.12.so.1.0",
+    b"/usr/lib/libpython3.12.so.1.0",
+    b"/usr/lib/python3.12/json.so",
+    b"/usr/lib/python3.12/json/__init__.so",
+    b"/usr/lib/python3.12/encodings/utf_8.so",
+    b"/etc/ld.so.preload",
+];
+
+fn sweep(host: &Host, rounds: usize) {
+    let mounts = MountNamespace::new();
+    for _ in 0..rounds {
+        for path in LOOKUPS {
+            let path = GuestPathBytes::new(path).unwrap();
+            let resolver = Resolver::new(host.clone(), &mounts);
+            let root = GuestPathBytes::new(b"/").unwrap();
+            if let Ok(resolved) = resolver.resolve(ResolveRequest {
+                path: &path,
+                base: &root,
+                nofollow_final: true,
+                no_symlinks: false,
+                allow_missing_final: false,
+            }) && let Ok(lease) = resolved.duplicate_parent()
+            {
+                let name = resolved.final_name().map_or_else(
+                    || c".".to_owned(),
+                    |name| std::ffi::CString::new(name.as_bytes()).unwrap(),
+                );
+                black_box(Host::path(&lease, &name).is_ok());
+            }
+        }
+    }
+}
+
+/// Syscall evidence for the layer index, counted with `strace -c` on one
+/// process. Run each alone; the difference is the index's whole effect.
+///
+/// `strace -f -c -e trace=newfstatat,openat cargo test --release -p hl-engine \
+///   overlay_lookup_syscalls_live -- --ignored --nocapture`
+#[test]
+#[ignore = "syscall evidence, counted externally with strace"]
+fn overlay_lookup_syscalls_live() {
+    let fixture = Fixture::new();
+    let upper = fixture.directory("upper");
+    let lower = fixture.directory("lower");
+    interpreter_fixture(&lower);
+    sweep(&layered(&upper, &lower), 1_000);
+}
+
+#[test]
+#[ignore = "syscall evidence, counted externally with strace"]
+fn overlay_lookup_syscalls_indexed() {
+    let fixture = Fixture::new();
+    let upper = fixture.directory("upper");
+    let lower = fixture.directory("lower");
+    interpreter_fixture(&lower);
+    let index = Arc::new(hl_fs::LayerIndex::build(&lower).unwrap());
+    let host = Host::indexed(
+        vec![
+            Arc::new(File::open(&upper).unwrap()),
+            Arc::new(File::open(&lower).unwrap()),
+        ],
+        vec![None, Some(index)],
+        Arc::new(MountPaths::default()),
+    );
+    sweep(&host, 1_000);
+}
+
 /// Release-only microbenchmark. It is deliberately ignored by normal tests.
 ///
 /// Run after the overlay domain is released with:

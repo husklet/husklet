@@ -113,6 +113,12 @@ impl Publication {
         }
     }
 
+    /// Only immutable layer chains are name-indexed; writable uppers and
+    /// forked container snapshots publish generically.
+    pub(super) const fn is_layer_chain(&self) -> bool {
+        matches!(self, Self::LayerChain { .. })
+    }
+
     pub(super) fn layers(self) -> Option<Vec<LayerRecord>> {
         match self {
             Self::LayerChain { layers, .. } => Some(layers),

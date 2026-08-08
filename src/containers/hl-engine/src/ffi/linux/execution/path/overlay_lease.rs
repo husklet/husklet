@@ -26,6 +26,9 @@ pub(super) struct ParentLease {
     upper_root: Option<OwnedFd>,
     epoch: Option<Arc<AtomicU64>>,
     layer: SelectedLayer,
+    /// Verified name index per candidate, aligned with `selected` followed by
+    /// `lower_parents`. Only immutable lowers ever carry one.
+    candidate_indexes: Vec<Option<Arc<hl_fs::LayerIndex>>>,
 }
 
 impl ParentLease {
@@ -38,6 +41,7 @@ impl ParentLease {
             upper_root: None,
             epoch: None,
             layer: SelectedLayer::Upper,
+            candidate_indexes: Vec::new(),
         }
     }
 
@@ -50,6 +54,7 @@ impl ParentLease {
             upper_root: None,
             epoch: None,
             layer: SelectedLayer::Lower(layer),
+            candidate_indexes: Vec::new(),
         }
     }
 
@@ -80,6 +85,16 @@ impl ParentLease {
 
     pub(super) fn lower_parents(&self) -> &[OwnedFd] {
         &self.lower_parents
+    }
+
+    pub(super) fn with_candidate_indexes(mut self, indexes: Vec<Option<Arc<hl_fs::LayerIndex>>>) -> Self {
+        self.candidate_indexes = indexes;
+        self
+    }
+
+    /// The name index for the nth candidate of `visible_parent`'s ordered scan.
+    pub(super) fn candidate_index(&self, position: usize) -> Option<&hl_fs::LayerIndex> {
+        self.candidate_indexes.get(position)?.as_deref()
     }
 
     pub(super) fn with_upper_root(mut self, upper_root: OwnedFd) -> Self {
@@ -117,6 +132,7 @@ impl From<OwnedFd> for ParentLease {
             upper_root: None,
             epoch: None,
             layer: SelectedLayer::Upper,
+            candidate_indexes: Vec::new(),
         }
     }
 }

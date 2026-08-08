@@ -70,6 +70,25 @@ impl MountPaths {
     }
 }
 
+/// Loads the name index a committed image chain publishes beside its tree.
+///
+/// The sidecar lives at `<store>/index/committed/<chain-id>.idx` next to the
+/// `<store>/committed/<chain-id>` tree it enumerates, and is only consulted for
+/// a lower whose layout matches that shape. Any missing, oversized, or
+/// digest-mismatched sidecar yields `None` and the resolver probes live.
+fn layer_index(lower: &Path) -> Option<Arc<hl_fs::LayerIndex>> {
+    let name = lower.file_name()?;
+    let committed = lower.parent()?;
+    if committed.file_name()? != "committed" {
+        return None;
+    }
+    let sidecar = committed
+        .parent()?
+        .join("index/committed")
+        .join(format!("{}.idx", name.to_str()?));
+    hl_fs::LayerIndex::load(&sidecar).ok().map(Arc::new)
+}
+
 /// Native root, resolver, mount table, and reverse mount projection for one engine.
 pub(crate) struct OrdinaryContext {
     root: PathBuf,
@@ -109,7 +128,8 @@ impl OrdinaryContext {
                     return Err(RuntimePathError::NotDirectory);
                 }
                 let pin = File::open(&lower).map(Arc::new).map_err(HostError::map)?;
-                Ok((lower, pin))
+                let index = layer_index(&lower);
+                Ok((lower, pin, index))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let shared = super::tmpfs::PosixShm::create(&root, &root_pin)?;
@@ -134,13 +154,18 @@ impl OrdinaryContext {
             pin::Host::new(Arc::clone(&root_pin), Arc::clone(&paths))
         } else {
             let mut roots = Vec::with_capacity(lower_roots.len() + 1);
+            let mut indexes = Vec::with_capacity(lower_roots.len() + 1);
             roots.push(Arc::clone(&root_pin));
-            roots.extend(lower_roots.iter().map(|(_, pin)| Arc::clone(pin)));
-            pin::Host::layered(roots, Arc::clone(&paths))
+            indexes.push(None);
+            for (_, pin, index) in &lower_roots {
+                roots.push(Arc::clone(pin));
+                indexes.push(index.clone());
+            }
+            pin::Host::indexed(roots, indexes, Arc::clone(&paths))
         };
         let mut layer_roots = Vec::with_capacity(lower_roots.len() + 1);
         layer_roots.push(root.clone());
-        layer_roots.extend(lower_roots.into_iter().map(|(path, _)| path));
+        layer_roots.extend(lower_roots.into_iter().map(|(path, _, _)| path));
         Ok(Self {
             root,
             layer_roots,

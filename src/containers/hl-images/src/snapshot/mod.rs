@@ -16,6 +16,7 @@ pub use ownership::{Ownership, Ownerships};
 mod names;
 pub use names::Names;
 mod archive;
+pub(super) mod index;
 mod tree;
 use tree::Tree;
 mod record;
@@ -47,6 +48,7 @@ impl Snapshots {
             "names/active",
             "names/committed",
             "publication/committed",
+            "index/committed",
             "drafts",
             "draft-locks",
             "work",
@@ -213,12 +215,14 @@ impl Snapshots {
                 }
                 let _ = fs::remove_file(self.names_path("committed", id));
                 let _ = Native.remove(&self.publication_path(id));
+                index::discard(&self.root, id);
                 Ok(true)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let _ = fs::remove_file(self.ownership_path("committed", id));
                 let _ = fs::remove_file(self.names_path("committed", id));
                 let _ = Native.remove(&self.publication_path(id));
+                index::discard(&self.root, id);
                 Ok(false)
             }
             Err(error) => Err(error).at(path),
@@ -236,6 +240,12 @@ impl Snapshots {
             .join("names")
             .join(state)
             .join(format!("{}.json", id.as_str()))
+    }
+
+    /// Path of a committed chain's name-index sidecar, present only for layer chains.
+    #[must_use]
+    pub fn index_path(&self, id: &Id) -> PathBuf {
+        index::path(&self.root, id)
     }
 
     fn publication_path(&self, id: &Id) -> PathBuf {
@@ -373,6 +383,110 @@ mod publication_tests {
             || Id::new("chain-empty").unwrap(),
             |record| Id::new(format!("chain-{}", record.chain_id.encoded())).unwrap(),
         )
+    }
+
+    fn tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, body) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, *body).unwrap();
+        }
+        builder.into_inner().unwrap()
+    }
+
+    fn walk(root: &std::path::Path, prefix: &str, into: &mut Vec<String>) {
+        for entry in std::fs::read_dir(root).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().into_string().unwrap();
+            let path = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if entry.file_type().unwrap().is_dir() {
+                walk(&entry.path(), &path, into);
+            }
+            into.push(path);
+        }
+    }
+
+    /// The index is only sound because an unpacked chain is immutable and fully
+    /// materialized: layer application resolves every whiteout by deletion, so a
+    /// committed tree carries no markers and its index enumerates it exactly.
+    #[test]
+    fn a_committed_layer_chain_is_marker_free_and_exactly_enumerated_by_its_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(temp.path()).unwrap();
+        let layers = records(1);
+        let key = id(&layers);
+        let mut draft = snapshots.prepare(Id::new("draft-index").unwrap(), None).unwrap();
+        let path = draft.path().to_owned();
+        let (ownerships, names) = draft.metadata_mut();
+        crate::layer::Layer::new(std::io::Cursor::new(tar(&[
+            ("usr/lib/libc.so", b"lower"),
+            ("usr/lib/doomed", b"gone"),
+            ("etc/hosts", b"hosts"),
+        ])))
+        .apply_with_metadata(&path, ownerships, names)
+        .unwrap();
+        let (ownerships, names) = draft.metadata_mut();
+        crate::layer::Layer::new(std::io::Cursor::new(tar(&[("usr/lib/.wh.doomed", b"")])))
+            .apply_with_metadata(&path, ownerships, names)
+            .unwrap();
+        draft.commit_layer(key.clone(), layers).unwrap();
+
+        let tree = temp.path().join("committed").join(key.as_str());
+        let mut names = Vec::new();
+        walk(&tree, "", &mut names);
+        names.sort();
+        assert!(
+            !names.iter().any(|name| name.contains(".wh.")),
+            "a committed chain must carry no overlay markers: {names:?}"
+        );
+        assert!(!names.iter().any(|name| name.ends_with("doomed")), "{names:?}");
+
+        let index = hl_fs::LayerIndex::load(&snapshots.index_path(&key)).unwrap();
+        assert!(!index.has_markers());
+        assert_eq!(index.len(), names.len());
+        for name in &names {
+            assert!(index.get(name.as_bytes()).is_some(), "index is missing {name}");
+        }
+        assert!(index.get(b"usr/lib/doomed").is_none(), "whiteout victim leaked");
+        assert!(index.get(b"usr/lib/absent").is_none());
+    }
+
+    /// Writable uppers and forked container snapshots publish generically and
+    /// must never be indexed: enumerating a mutable tree cannot stay true.
+    #[test]
+    fn generic_publications_are_never_indexed() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(temp.path()).unwrap();
+        let upper = Id::new("upper-generic").unwrap();
+        snapshots
+            .prepare(upper.clone(), None)
+            .unwrap()
+            .commit(upper.clone())
+            .unwrap();
+        assert!(!snapshots.index_path(&upper).exists());
+    }
+
+    #[test]
+    fn removing_a_snapshot_reclaims_its_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(temp.path()).unwrap();
+        let layers = records(1);
+        let key = id(&layers);
+        snapshots
+            .prepare(Id::new("draft-index-gc").unwrap(), None)
+            .unwrap()
+            .commit_layer(key.clone(), layers)
+            .unwrap();
+        assert!(snapshots.index_path(&key).exists());
+        assert!(snapshots.remove(&key).unwrap());
+        assert!(!snapshots.index_path(&key).exists());
     }
 
     #[test]

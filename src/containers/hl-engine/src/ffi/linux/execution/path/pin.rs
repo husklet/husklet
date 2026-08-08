@@ -26,9 +26,17 @@ pub(super) use anonymous::{AnonymousName, AnonymousSlot};
 #[derive(Clone)]
 pub(super) struct Host {
     roots: Arc<Vec<Arc<File>>>,
+    /// Verified name index per root, parallel to `roots`. Index zero is the
+    /// writable upper and is never indexed; a `None` lower falls back to
+    /// live probing.
+    indexes: Arc<Vec<Option<Arc<hl_fs::LayerIndex>>>>,
     mounts: Arc<super::source::MountPaths>,
     pins: Arc<PinRegistry>,
     epoch: Arc<AtomicU64>,
+    /// Counts index consults so tests can prove the index was actually
+    /// exercised rather than passing while the resolver probed live.
+    #[cfg(test)]
+    consults: Arc<AtomicU64>,
 }
 
 struct PinRegistry {
@@ -71,9 +79,24 @@ impl Host {
     /// `inspect_child` can select that lower child without losing the upper
     /// directory's precedence.
     pub(super) fn layered(roots: Vec<Arc<File>>, mounts: Arc<super::source::MountPaths>) -> Self {
+        let indexes = vec![None; roots.len()];
+        Self::indexed(roots, indexes, mounts)
+    }
+
+    /// Builds a layered host that answers lower-layer name questions from a
+    /// verified per-chain index instead of probing the filesystem.
+    pub(super) fn indexed(
+        roots: Vec<Arc<File>>,
+        mut indexes: Vec<Option<Arc<hl_fs::LayerIndex>>>,
+        mounts: Arc<super::source::MountPaths>,
+    ) -> Self {
         debug_assert!(!roots.is_empty());
+        indexes.resize(roots.len(), None);
+        // The upper is writable, so no enumeration of it can stay true.
+        indexes[0] = None;
         Self {
             roots: Arc::new(roots),
+            indexes: Arc::new(indexes),
             mounts,
             pins: Arc::new(PinRegistry {
                 next: AtomicU64::new(1),
@@ -84,7 +107,14 @@ impl Host {
                 }),
             }),
             epoch: Arc::new(AtomicU64::new(1)),
+            #[cfg(test)]
+            consults: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn consults(&self) -> u64 {
+        self.consults.load(Ordering::Relaxed)
     }
 
     fn duplicate_descriptor(descriptor: RawFd) -> Result<OwnedFd, ResolveHostError> {
@@ -349,7 +379,7 @@ impl VfsHost for Host {
             if let Some(candidates) = self.cached_directory(&guest, epoch) {
                 return Ok((guest, candidates, NodeKind::Directory));
             }
-            let (candidates, visible) = Self::layer_candidates(&entry.candidates, component, &name)?;
+            let (candidates, visible) = self.layer_candidates(&entry.candidates, &guest, component, &name)?;
             let kind = visible.ok_or(ResolveHostError::NotFound)?;
             if kind == NodeKind::Directory {
                 self.cache_directory(&guest, &candidates, epoch);
@@ -393,6 +423,16 @@ impl VfsHost for Host {
                 .filter(|candidate| candidate.layer != 0)
                 .map(|candidate| Self::duplicate_descriptor(candidate.descriptor.as_raw_fd()))
                 .collect::<Result<Vec<_>, _>>()?;
+            // `visible_parent` scans the selected parent first, then the lower
+            // parents; the index list must follow exactly that order.
+            let mut candidate_indexes = vec![self.indexes[selected.layer].clone()];
+            candidate_indexes.extend(
+                entry
+                    .candidates
+                    .iter()
+                    .filter(|candidate| candidate.layer != 0)
+                    .map(|candidate| self.indexes[candidate.layer].clone()),
+            );
             let lease = if selected.layer == 0 {
                 ParentLease::upper(entry.guest.clone(), selected_descriptor)
             } else {
@@ -401,6 +441,7 @@ impl VfsHost for Host {
             let upper_root = Self::duplicate_descriptor(self.roots[0].as_raw_fd())?;
             Ok(lease
                 .with_lower_parents(lowers)
+                .with_candidate_indexes(candidate_indexes)
                 .with_upper_root(upper_root)
                 .with_epoch(Arc::clone(&self.epoch)))
         })?
@@ -421,17 +462,51 @@ impl VfsHost for Host {
 }
 
 impl Host {
+    /// The verified name index for a layer, if it has one. Layer zero is the
+    /// writable upper and never carries an index.
+    fn index(&self, layer: usize) -> Option<&hl_fs::LayerIndex> {
+        self.indexes.get(layer)?.as_deref()
+    }
+
+    /// The index key for a guest path: layer-relative, no leading separator.
+    fn index_key(guest: &GuestPathBytes) -> &[u8] {
+        let bytes = guest.as_bytes();
+        bytes.strip_prefix(b"/".as_slice()).unwrap_or(bytes)
+    }
+
     /// Collects the layer pins that make up one child in upper-to-lower order.
+    ///
+    /// A lower layer with a verified index answers "does this name exist here,
+    /// is it whited out, is this directory opaque" from a hash lookup. Absence
+    /// from a complete enumeration of an immutable tree is proof of absence, so
+    /// those answers cost no syscalls and cannot go stale. The upper is probed
+    /// live first in every case, so it always wins.
     fn layer_candidates(
+        &self,
         parents: &[LayerPin],
+        guest: &GuestPathBytes,
         component: &GuestName,
         name: &CString,
     ) -> Result<(Vec<LayerPin>, Option<NodeKind>), ResolveHostError> {
+        let key = Self::index_key(guest);
         let mut candidates = Vec::new();
         let mut visible = None;
         for parent in parents {
-            if visible.is_none() && Self::marker(parent.descriptor.as_raw_fd(), component)? {
+            let index = self.index(parent.layer);
+            #[cfg(test)]
+            if index.is_some() {
+                self.consults.fetch_add(1, Ordering::Relaxed);
+            }
+            let whiteout = match index {
+                Some(index) => index.is_whiteout(key),
+                None => visible.is_none() && Self::marker(parent.descriptor.as_raw_fd(), component)?,
+            };
+            if visible.is_none() && whiteout {
                 break;
+            }
+            // A name the index does not list cannot exist in this layer.
+            if index.is_some_and(|index| index.get(key).is_none()) {
+                continue;
             }
             let Some((child, kind)) = Self::child(parent.descriptor.as_raw_fd(), name)? else {
                 continue;
@@ -443,7 +518,11 @@ impl Host {
             if !mergeable && !candidates.is_empty() {
                 continue;
             }
-            let opaque = mergeable && Self::opaque(child.as_raw_fd())?;
+            let opaque = mergeable
+                && match index {
+                    Some(index) => index.is_opaque(key),
+                    None => Self::opaque(child.as_raw_fd())?,
+                };
             candidates.push(LayerPin {
                 descriptor: Arc::new(child),
                 layer: parent.layer,
@@ -505,6 +584,134 @@ mod overlay_tests {
             |name| std::ffi::CString::new(name.as_bytes()).unwrap(),
         );
         Host::path(&parent, &name).map_err(|_| hl_runtime::ResolveError::Host(hl_runtime::ResolveHostError::Io))
+    }
+
+    fn indexed_host(upper: &std::path::Path, lower: &std::path::Path) -> Host {
+        let index = std::sync::Arc::new(hl_fs::LayerIndex::build(lower).unwrap());
+        Host::indexed(
+            vec![
+                std::sync::Arc::new(std::fs::File::open(upper).unwrap()),
+                std::sync::Arc::new(std::fs::File::open(lower).unwrap()),
+            ],
+            vec![None, Some(index)],
+            std::sync::Arc::new(super::super::source::MountPaths::default()),
+        )
+    }
+
+    /// The index must produce exactly the verdicts live probing produces, and
+    /// must demonstrably be the thing producing them.
+    #[test]
+    fn indexed_lower_answers_hits_and_negatives_identically_to_live_probing() {
+        let upper = fixture("indexed-upper");
+        let lower = fixture("indexed-lower");
+        std::fs::create_dir(lower.join("usr")).unwrap();
+        std::fs::write(lower.join("usr/libc.so"), b"lower").unwrap();
+        std::fs::create_dir(upper.join("usr")).unwrap();
+        std::fs::write(upper.join("usr/private"), b"upper").unwrap();
+
+        let live = layered_host(&upper, &lower);
+        let indexed = indexed_host(&upper, &lower);
+        for path in [
+            b"/usr/libc.so".as_slice(),
+            b"/usr/private",
+            b"/usr",
+            b"/usr/absent.so",
+            b"/absent",
+            b"/absent/deeper",
+        ] {
+            assert_eq!(
+                resolve(&live, path).ok(),
+                resolve(&indexed, path).ok(),
+                "index disagreed with live probing for {}",
+                String::from_utf8_lossy(path)
+            );
+        }
+        assert!(indexed.consults() > 0, "the index was never consulted");
+        assert_eq!(live.consults(), 0);
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    /// The upper is writable and is never indexed, so a name created there
+    /// after the index was built must still shadow the lower.
+    #[test]
+    fn upper_wins_over_the_index_including_names_created_after_it_was_built() {
+        let upper = fixture("index-upper-wins");
+        let lower = fixture("index-upper-wins-lower");
+        std::fs::write(lower.join("shared"), b"lower").unwrap();
+        std::fs::write(lower.join("hidden"), b"lower").unwrap();
+        std::fs::create_dir(lower.join("deep")).unwrap();
+        std::fs::write(lower.join("deep/leaf"), b"lower").unwrap();
+        let host = indexed_host(&upper, &lower);
+
+        std::fs::write(upper.join("shared"), b"upper").unwrap();
+        std::fs::write(upper.join(".wh.hidden"), b"").unwrap();
+        std::fs::write(upper.join("fresh"), b"upper").unwrap();
+
+        assert_eq!(resolve(&host, b"/shared").unwrap(), upper.join("shared"));
+        assert_eq!(resolve(&host, b"/fresh").unwrap(), upper.join("fresh"));
+        assert!(resolve(&host, b"/hidden").is_err(), "upper whiteout was ignored");
+        // An upper hit terminates the union before any lower is examined, so a
+        // stale index cannot shadow a name the container just created.
+        assert_eq!(host.consults(), 0, "the index was consulted ahead of the upper");
+
+        // A lower-resident path reaches the union walk and must consult the index.
+        assert_eq!(resolve(&host, b"/deep/leaf").unwrap(), lower.join("deep/leaf"));
+        assert!(host.consults() > 0, "the index was never consulted");
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    /// The index is only sound while the lower tree is immutable. The store
+    /// upholds that by leases and by never mutating `committed/`, but nothing
+    /// seals the directory, so this pins the exact failure a violation causes.
+    #[test]
+    fn writing_into_an_indexed_lower_is_invisible_which_is_why_lowers_are_immutable() {
+        let upper = fixture("index-immutability-upper");
+        let lower = fixture("index-immutability-lower");
+        std::fs::write(lower.join("present"), b"lower").unwrap();
+        let host = indexed_host(&upper, &lower);
+        assert_eq!(resolve(&host, b"/present").unwrap(), lower.join("present"));
+
+        std::fs::write(lower.join("smuggled"), b"lower").unwrap();
+        assert!(
+            resolve(&host, b"/smuggled").is_err(),
+            "a name added to a committed lower after indexing must not be observable"
+        );
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    /// A lower that still carries its own markers is described by the index
+    /// rather than probed, and must reach the same verdicts.
+    #[test]
+    fn an_indexed_lower_reports_its_own_whiteout_and_opaque_markers() {
+        let upper = fixture("index-marker-upper");
+        let lower = fixture("index-marker-lower");
+        let deeper = fixture("index-marker-deeper");
+        std::fs::create_dir(lower.join("dir")).unwrap();
+        std::fs::write(lower.join("dir/.wh.gone"), b"").unwrap();
+        std::fs::write(lower.join("dir/.wh..wh..opq"), b"").unwrap();
+        std::fs::create_dir(deeper.join("dir")).unwrap();
+        std::fs::write(deeper.join("dir/gone"), b"deeper").unwrap();
+        std::fs::write(deeper.join("dir/cut"), b"deeper").unwrap();
+
+        let index = std::sync::Arc::new(hl_fs::LayerIndex::build(&lower).unwrap());
+        assert!(index.has_markers());
+        let host = Host::indexed(
+            vec![
+                std::sync::Arc::new(std::fs::File::open(&upper).unwrap()),
+                std::sync::Arc::new(std::fs::File::open(&lower).unwrap()),
+                std::sync::Arc::new(std::fs::File::open(&deeper).unwrap()),
+            ],
+            vec![None, Some(index), None],
+            std::sync::Arc::new(super::super::source::MountPaths::default()),
+        );
+        assert!(resolve(&host, b"/dir/gone").is_err(), "lower whiteout was ignored");
+        assert!(resolve(&host, b"/dir/cut").is_err(), "lower opaque marker was ignored");
+        for path in [upper, lower, deeper] {
+            std::fs::remove_dir_all(path).unwrap();
+        }
     }
 
     #[test]
