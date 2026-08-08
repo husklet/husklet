@@ -88,7 +88,7 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
 }
 
 /// Stages the case artifact into the writable root: the overlay upper, or the copied tree.
-async fn stage(root: &Path, case: &super::definition::RuntimeCase, artifact: &Path) -> Result<(), Error> {
+async fn stage(root: &Path, case: &super::definition::RuntimeCase, artifact: &Path, target: Target) -> Result<(), Error> {
     let destination = root.join(case.destination.trim_start_matches('/'));
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)
@@ -99,7 +99,7 @@ async fn stage(root: &Path, case: &super::definition::RuntimeCase, artifact: &Pa
         .await
         .map_err(|error| format!("stage {} into {}: {error}", artifact.display(), destination.display()))?;
     make_executable(&destination).map_err(|error| context("make executable", &destination, &error))?;
-    provision(root, case).await
+    provision(root, case, target).await
 }
 
 /// Proves the run really took the product's overlay path rather than a flat copy.
@@ -133,7 +133,24 @@ fn assert_overlay(fixture: &TestImage, case: &super::definition::RuntimeCase) ->
 }
 
 /// Stages the guest-side state a case declares, so a fixture never has to depend on the image alone.
-async fn provision(root: &std::path::Path, case: &super::definition::RuntimeCase) -> Result<(), Error> {
+async fn provision(root: &std::path::Path, case: &super::definition::RuntimeCase, target: Target) -> Result<(), Error> {
+    // A dynamically linked case needs its PT_INTERP loader and shared libraries, which the base
+    // image's libc does not supply; they come from the same cross toolchain that built the binary.
+    for library in &case.guest_libraries {
+        let (host, path) = (
+            library.host(target),
+            root.join(library.guest(target).trim_start_matches('/')),
+        );
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| context("create guest library directory", parent, &error))?;
+        }
+        tokio::fs::copy(host, &path)
+            .await
+            .map_err(|error| format!("stage guest library {host} into {}: {error}", path.display()))?;
+        make_executable(&path).map_err(|error| context("make guest library executable", &path, &error))?;
+    }
     for file in &case.guest_files {
         let path = root.join(file.path().trim_start_matches('/'));
         if let Some(parent) = path.parent() {
@@ -272,7 +289,7 @@ impl<'a> CaseExecution<'a> {
             if refork {
                 fixture.refork()?;
             }
-            stage(fixture.path(), self.case, artifact).await?;
+            stage(fixture.path(), self.case, artifact, self.target).await?;
             assert_overlay(fixture, self.case)
         }
         .await;

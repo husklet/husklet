@@ -11,8 +11,8 @@ pub(crate) use environment::EnvironmentEntry;
 pub(crate) use host::EngineHost;
 use host::HostExclusion;
 use input::ManifestPath;
-pub(crate) use manifest::GuestFile;
 use manifest::{CompatClass, Document, Oracle, Status};
+pub(crate) use manifest::{GuestFile, GuestLibrary};
 use std::{
     collections::BTreeSet,
     fs,
@@ -34,6 +34,7 @@ pub struct RuntimeCase {
     pub golden: PathBuf,
     pub(crate) stderr: Vec<String>,
     pub(crate) guest_files: Vec<GuestFile>,
+    pub(crate) guest_libraries: Vec<GuestLibrary>,
     pub(crate) working_directory: Option<String>,
     pub destination: String,
     pub(in crate::runtime) source: ManifestPath,
@@ -140,7 +141,7 @@ impl App {
                 let golden = validate_golden(directory, &case.expect.stdout)?;
                 let stderr =
                     manifest::stderr_patterns(case.expect.stderr).map_err(|error| format!("{}: {error}", case.id))?;
-                let (guest_files, working_directory) =
+                let (guest_files, guest_libraries, working_directory) =
                     case.guest.validate().map_err(|error| format!("{}: {error}", case.id))?;
                 let (environment, engine_options) =
                     EngineOptions::split(&case.environment).map_err(|error| format!("{}: {error}", case.id))?;
@@ -154,6 +155,7 @@ impl App {
                     golden,
                     stderr,
                     guest_files,
+                    guest_libraries,
                     working_directory,
                     destination,
                     source,
@@ -401,6 +403,35 @@ mod tests {
         ] {
             assert!(category(&row(invalid)).is_err(), "{invalid}");
         }
+    }
+
+    /// A dynamically linked case names its loader per target, because the guest path and the host
+    /// sysroot path both differ between ISAs.
+    #[test]
+    fn declared_guest_libraries_resolve_per_target() {
+        use crate::suite::Target;
+
+        let row = |extra: &str| {
+            format!(
+                "  - id: runtime/one\n    build: {{ source: one.c, output: one, flags: [] }}\n    artifact: {{ destination: /opt/one }}\n    status: active\n    compat: {{ class: compatibility }}\n    run: []\n{extra}    expect: {{ exit: 0, stdout: golden/one.out }}\n"
+            )
+        };
+        let library = |guest_amd64: &str| {
+            format!(
+                "    guest:\n      libraries:\n        - host: {{ arm64: /sysroot/a64/ld.so, amd64: /sysroot/x64/ld.so }}\n          guest: {{ arm64: /lib/ld-a64.so.1, amd64: {guest_amd64} }}\n"
+            )
+        };
+
+        let app = category(&row(&library("/lib64/ld-x64.so.2"))).unwrap();
+        let staged = &app.cases[0].guest_libraries[0];
+        assert_eq!(staged.host(Target::Arm64), "/sysroot/a64/ld.so");
+        assert_eq!(staged.host(Target::Amd64), "/sysroot/x64/ld.so");
+        assert_eq!(staged.guest(Target::Arm64), "/lib/ld-a64.so.1");
+        assert_eq!(staged.guest(Target::Amd64), "/lib64/ld-x64.so.2");
+
+        // A relative guest path would escape the fixture root, and one guest path may be staged once.
+        assert!(category(&row(&library("lib64/ld-x64.so.2"))).is_err());
+        assert!(category(&row(&library("/lib/ld-a64.so.1"))).is_err());
     }
 
     /// Two workers building one case must each get a private, complete artifact.

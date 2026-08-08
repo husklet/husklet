@@ -13,33 +13,40 @@ static double u2d(uint64_t u){ double d; memcpy(&d,&u,8); return d; }
 
 #if defined(__x86_64__)
 static const uint64_t GEN_SIGN = 1;   // x86 indefinite QNaN: sign set
+// aarch64 folds fma() to FMADD from baseline, but x86-64 baseline has no FMA, so libm dispatches
+// to glibc's C soft-fma, which stamps its own default QNaN and never runs a fused instruction.
+// Force the real VFMADD so both ISAs exercise the translator's FMA lowering.
+__attribute__((target("fma"), noinline)) static double fused(double a, double b, double c){
+  return __builtin_fma(a, b, c);
+}
 #else
 static const uint64_t GEN_SIGN = 0;   // aarch64 default NaN: sign clear
+static double fused(double a, double b, double c){ return __builtin_fma(a, b, c); }
 #endif
 
 int main(void){
   volatile double inf=INFINITY, ninf=-INFINITY, zero=0.0, one=1.0;
 
   // inf*0 generates a NaN in the multiply stage
-  volatile double g1 = fma(inf, zero, one);
+  volatile double g1 = fused(inf, zero, one);
   uint64_t u1 = d2u(g1);
   printf("mul-gen  isnan=%d sign-ok=%d payload=%013llx\n",
     (g1!=g1), (int)((u1>>63)==GEN_SIGN), (unsigned long long)(u1 & 0xfffffffffffffull));
 
   // inf + (-inf) generates a NaN in the fused add stage (1*inf then + -inf)
-  volatile double g2 = fma(one, inf, ninf);
+  volatile double g2 = fused(one, inf, ninf);
   uint64_t u2 = d2u(g2);
   printf("add-gen  isnan=%d sign-ok=%d payload=%013llx\n",
     (g2!=g2), (int)((u2>>63)==GEN_SIGN), (unsigned long long)(u2 & 0xfffffffffffffull));
 
   // a qNaN operand propagates verbatim (sign + payload) on both ISAs
   volatile double qn = u2d(0x7ff8000abcde0000ull);
-  volatile double p1 = fma(qn, one, one);
+  volatile double p1 = fused(qn, one, one);
   printf("prop-q   keeps-input=%d\n", d2u(p1)==0x7ff8000abcde0000ull);
 
   // a signed qNaN operand also propagates verbatim
   volatile double qn2 = u2d(0xfff8000000000042ull);
-  volatile double p2 = fma(one, one, qn2);
+  volatile double p2 = fused(one, one, qn2);
   printf("prop-sq  keeps-input=%d\n", d2u(p2)==0xfff8000000000042ull);
   return 0;
 }

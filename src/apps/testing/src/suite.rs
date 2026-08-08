@@ -64,7 +64,7 @@ impl Execution {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Commands {
     arm64: String,
