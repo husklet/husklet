@@ -23,14 +23,44 @@ pub(super) trait ImageMemory {
     fn address_space(&self) -> &space::AddressSpace;
 }
 
+/// Element widths of one staged guest write, held inline for the scalar, pair,
+/// and quad forms that dominate execution so no store allocates.
+enum Widths {
+    Inline { data: [u8; 4], count: u8 },
+    Spilled(Vec<u8>),
+}
+
+impl Widths {
+    fn new(widths: &[(u64, u8)]) -> Self {
+        let Ok(count) = u8::try_from(widths.len()) else {
+            return Self::Spilled(widths.iter().map(|(_, bytes)| *bytes).collect());
+        };
+        if widths.len() > 4 {
+            return Self::Spilled(widths.iter().map(|(_, bytes)| *bytes).collect());
+        }
+        let mut data = [0_u8; 4];
+        for (slot, (_, bytes)) in data.iter_mut().zip(widths) {
+            *slot = *bytes;
+        }
+        Self::Inline { data, count }
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Inline { data, count } => &data[..usize::from(*count)],
+            Self::Spilled(widths) => widths,
+        }
+    }
+}
+
 pub(super) struct ArenaWrite {
     lease: space::SpaceLease,
     transaction: hl_memory::WriteSpanTransaction<MappingHostAdapter>,
-    widths: Vec<u8>,
+    widths: Widths,
 }
 
 impl ArenaWrite {
-    fn prepare(memory: &impl ImageMemory, address: u64, length: u64) -> Result<Self, ()> {
+    fn prepare(memory: &impl ImageMemory, address: u64, length: u64, widths: Widths) -> Result<Self, ()> {
         let lease = ImageMemory::lease(memory);
         let transaction = lease
             .mappings()
@@ -39,7 +69,7 @@ impl ArenaWrite {
         Ok(Self {
             lease,
             transaction,
-            widths: Vec::new(),
+            widths,
         })
     }
 
@@ -72,13 +102,11 @@ macro_rules! impl_operand_memory {
             }
 
             fn reserve_write(&self, address: u64, bytes: u8) -> Result<Self::Reservation, ()> {
-                let mut reservation = ArenaWrite::prepare(self, address, u64::from(bytes))?;
-                reservation.widths.push(bytes);
-                Ok(reservation)
+                ArenaWrite::prepare(self, address, u64::from(bytes), Widths::new(&[(address, bytes)]))
             }
 
             fn commit_write(&mut self, reservation: Self::Reservation, value: u64) -> Result<(), ()> {
-                let bytes = reservation.widths[0];
+                let bytes = reservation.widths.as_slice()[0];
                 reservation.commit(&value.to_le_bytes()[..usize::from(bytes)])
             }
 
@@ -93,20 +121,38 @@ macro_rules! impl_operand_memory {
                     next = next.checked_add(u64::from(*bytes)).ok_or(*address)?;
                 }
                 let length = next.checked_sub(writes[0].0).ok_or(writes[0].0)?;
-                let mut reservation = ArenaWrite::prepare(self, writes[0].0, length).map_err(|_| writes[0].0)?;
-                reservation.widths = writes.iter().map(|(_, bytes)| *bytes).collect();
-                Ok(reservation)
+                ArenaWrite::prepare(self, writes[0].0, length, Widths::new(writes)).map_err(|_| writes[0].0)
             }
 
             fn commit_write_batch(&mut self, reservation: Self::BatchReservation, values: &[u64]) -> Result<(), ()> {
-                if reservation.widths.len() != values.len() {
+                let widths = reservation.widths.as_slice();
+                if widths.len() != values.len() {
                     return Err(());
                 }
-                let mut output = Vec::new();
-                for (bytes, value) in reservation.widths.iter().zip(values) {
-                    output.extend_from_slice(&value.to_le_bytes()[..usize::from(*bytes)]);
+                // Guest stores narrower than the staging buffer never allocate.
+                let mut staged = [0_u8; 64];
+                let mut copied = 0_usize;
+                let mut spilled = Vec::new();
+                let mut overflowed = false;
+                for (bytes, value) in widths.iter().zip(values) {
+                    let bytes = usize::from(*bytes);
+                    let encoded = value.to_le_bytes();
+                    if !overflowed && copied + bytes <= staged.len() {
+                        staged[copied..copied + bytes].copy_from_slice(&encoded[..bytes]);
+                        copied += bytes;
+                        continue;
+                    }
+                    if !overflowed {
+                        overflowed = true;
+                        spilled.extend_from_slice(&staged[..copied]);
+                    }
+                    spilled.extend_from_slice(&encoded[..bytes]);
                 }
-                reservation.commit(&output)
+                if overflowed {
+                    reservation.commit(&spilled)
+                } else {
+                    reservation.commit(&staged[..copied])
+                }
             }
         }
 
