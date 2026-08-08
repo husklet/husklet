@@ -10,6 +10,33 @@ workspaces, terminal, and desktop application. Do not add GPU, graphics translat
 surface, compositor, CUDA, OpenGL, Vulkan, or Wayland implementation back into this
 repository. Never edit `../engine` while studying it.
 
+## Reading code: CodeGraph first
+
+This repository is indexed by CodeGraph (`.codegraph/` at the root). Reach for it
+**before** grep, find, or opening files, both to answer a question and before
+editing a symbol. One `codegraph_explore` call returns the verbatim,
+line-numbered source of the matching symbols grouped by file — safe to edit from,
+and equivalent to having read them — plus the call path among them and a blast
+radius naming every caller and the tests that cover each symbol. Prefer the MCP
+tool `codegraph_explore`; `codegraph explore "<names>"` in a shell prints the same
+output when the tool is unavailable.
+
+The blast radius reports **`no covering tests found`** per symbol. Treat that as a
+first-class signal: it names the places where a green suite proves nothing, which
+is where this codebase has repeatedly hidden defects.
+
+Two failure modes, both observed:
+
+- **Query precise symbol names, two to four at a time. Never bare filenames.**
+  A filename matches repo-wide — `pool.rs` pulls in unrelated container and
+  launcher files and spends the whole budget on them.
+- **Output is budget-truncated and truncation is silent.** A broad query can drop
+  the symbol you asked about and leave it visible only in the blast radius. If the
+  source you needed is not in the reply, ask again with fewer, narrower names
+  rather than assuming it does not exist.
+
+Do not re-open a file whose source CodeGraph already returned.
+
 ## Time-to-evidence and agent utilization
 
 Elapsed time to authoritative compatibility evidence is the primary operational
