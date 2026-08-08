@@ -922,3 +922,157 @@ fn devpts_snapshot_lifetime() {
     assert_eq!(names, [b".".as_slice(), b"..".as_slice(), b"ptmx".as_slice()],);
     std::fs::remove_dir_all(path).unwrap();
 }
+
+/// Fixture: a rootfs whose `/etc/resolv.conf` is name-bound to a host file
+/// living outside it, mirroring the container identity bindings.
+fn bound_fixture(prefix: &str, read_only: bool) -> (std::path::PathBuf, std::path::PathBuf, NativePath) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = std::env::temp_dir().join(format!(
+        "hl-bound-{prefix}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let state = root.join("state");
+    std::fs::create_dir_all(root.join("rootfs/etc")).unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    // A decoy under the rootfs proves the mutation reached the bound file.
+    std::fs::write(root.join("rootfs/etc/resolv.conf"), b"decoy").unwrap();
+    std::fs::write(root.join("rootfs/etc/plain"), b"plain").unwrap();
+    let bound = state.join("resolv.conf");
+    std::fs::write(&bound, b"nameserver 1.1.1.1\n").unwrap();
+    for file in [
+        root.join("rootfs/etc/resolv.conf"),
+        root.join("rootfs/etc/plain"),
+        bound.clone(),
+    ] {
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let rootfs = root.join("rootfs");
+    let bytes = rootfs.as_os_str().as_encoded_bytes();
+    let host = NativePath::new(bytes, watch::Hub::new(bytes).unwrap()).unwrap();
+    let prefix = if read_only { "ro:" } else { "rw:" };
+    host.ordinary()
+        .unwrap()
+        .add_name_binds(&format!("{prefix}{}\t/etc/resolv.conf", bound.display()))
+        .unwrap();
+    (root, bound, host)
+}
+
+fn bound_identity(file: &std::path::Path) -> AccessIdentity {
+    AccessIdentity {
+        user: std::fs::metadata(file).unwrap().uid(),
+        group: 0,
+        supplementary_groups: Vec::new(),
+        capabilities: Capabilities::default(),
+    }
+}
+
+fn bound_operand(path: &'static [u8]) -> PathOperand {
+    PathOperand {
+        directory: OpenDirectory::default(),
+        path: GuestPathBytes::new(path).unwrap(),
+        allow_empty: false,
+        nofollow: false,
+    }
+}
+
+/// A writable binding must let chmod through, and it must land on the bound host
+/// file rather than the rootfs name it shadows.
+#[test]
+fn writable_binding_chmod_reaches_bound_host_file() {
+    let (root, bound, host) = bound_fixture("chmod-rw", false);
+    let base = host.root_base().unwrap();
+    let plan = hl_linux::FsMutationPlan::Chmod {
+        target: bound_operand(b"/etc/resolv.conf"),
+        mode: 0o600,
+    };
+    let mut prepared = host
+        .prepare_mutation(&[base], &plan, &bound_identity(&bound))
+        .expect("writable binding admits chmod");
+    prepared.commit().unwrap();
+    assert_eq!(std::fs::metadata(&bound).unwrap().mode() & 0o777, 0o600);
+    assert_eq!(
+        std::fs::metadata(root.join("rootfs/etc/resolv.conf")).unwrap().mode() & 0o777,
+        0o644,
+        "the shadowed rootfs name must be untouched"
+    );
+    drop(prepared);
+    drop(host);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The same chmod is refused once the binding is read-only.
+#[test]
+fn read_only_binding_refuses_chmod() {
+    let (root, bound, host) = bound_fixture("chmod-ro", true);
+    let base = host.root_base().unwrap();
+    let plan = hl_linux::FsMutationPlan::Chmod {
+        target: bound_operand(b"/etc/resolv.conf"),
+        mode: 0o600,
+    };
+    assert_eq!(
+        host.prepare_mutation(&[base], &plan, &bound_identity(&bound)).err(),
+        Some(hl_runtime::RuntimePathError::ReadOnly)
+    );
+    assert_eq!(std::fs::metadata(&bound).unwrap().mode() & 0o777, 0o644);
+    drop(host);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Unlink and rename stay refused even on a writable binding: the bound parent
+/// is the container's own state directory, and losing the name would break the
+/// runtime's exec and health probes for that container.
+#[test]
+fn writable_binding_still_refuses_namespace_mutations() {
+    let (root, bound, host) = bound_fixture("namespace-rw", false);
+    let identity = bound_identity(&bound);
+    let unlink = hl_linux::FsMutationPlan::Unlink {
+        target: bound_operand(b"/etc/resolv.conf"),
+        directory: false,
+    };
+    assert_eq!(
+        host.prepare_mutation(&[host.root_base().unwrap()], &unlink, &identity)
+            .err(),
+        Some(hl_runtime::RuntimePathError::ReadOnly)
+    );
+    let rename = hl_linux::FsMutationPlan::Rename {
+        from: bound_operand(b"/etc/resolv.conf"),
+        to: bound_operand(b"/etc/moved"),
+        exchange: false,
+        no_replace: false,
+    };
+    assert_eq!(
+        host.prepare_mutation(
+            &[host.root_base().unwrap(), host.root_base().unwrap()],
+            &rename,
+            &identity
+        )
+        .err(),
+        Some(hl_runtime::RuntimePathError::ReadOnly)
+    );
+    assert!(bound.is_file());
+    assert!(!root.join("rootfs/etc/moved").exists());
+    drop(host);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// An unbound name in the same directory behaves exactly as before the binding
+/// flag was consulted: chmod applies to the rootfs file itself.
+#[test]
+fn unbound_neighbour_is_unaffected() {
+    let (root, _, host) = bound_fixture("neighbour", false);
+    let plain = root.join("rootfs/etc/plain");
+    let plan = hl_linux::FsMutationPlan::Chmod {
+        target: bound_operand(b"/etc/plain"),
+        mode: 0o600,
+    };
+    let mut prepared = host
+        .prepare_mutation(&[host.root_base().unwrap()], &plan, &bound_identity(&plain))
+        .unwrap();
+    prepared.commit().unwrap();
+    assert_eq!(std::fs::metadata(&plain).unwrap().mode() & 0o777, 0o600);
+    drop(prepared);
+    drop(host);
+    std::fs::remove_dir_all(root).unwrap();
+}

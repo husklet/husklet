@@ -9,7 +9,7 @@ use hl_runtime::{GuestPath, MountKind, MountNamespace, MountSourceId, ReadOnlyPa
 use super::{HostError, pin};
 
 #[path = "source_binding.rs"]
-mod name_bind;
+pub(super) mod name_bind;
 
 use name_bind::NameBind;
 
