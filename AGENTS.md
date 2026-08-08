@@ -37,6 +37,10 @@ Two failure modes, both observed:
 
 Do not re-open a file whose source CodeGraph already returned.
 
+`no covering tests found` is a lead, not a verdict — it has been observed on
+symbols that do have tests. Confirm a gap by mutating the symbol and watching the
+suite, which is the standard this repository requires for a coverage claim anyway.
+
 ## Time-to-evidence and agent utilization
 
 Elapsed time to authoritative compatibility evidence is the primary operational
