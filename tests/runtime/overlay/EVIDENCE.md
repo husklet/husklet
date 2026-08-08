@@ -56,3 +56,34 @@ Generated binaries, namespace roots, and captures remain under
 `target/testing/runtime/overlay`. This folder contains only its source, golden,
 YAML definition, and audit evidence. No retained source or central legacy
 ledger was modified.
+
+## The runner can now describe lower, upper, and work
+
+The `unsupported` reason above no longer holds. `TestImage` materializes through
+`Images::materialize_overlay`, the case artifact is staged into the overlay
+upper, and the spec is built from the durable rootfs reference, so the harness
+takes the same `Service::rootfs_launch` overlay branch the product takes. The
+`runtime/overlay/lower-*` rows exercise it.
+
+Non-vacuity was established by mutation: with the spec rebuilt as
+`ContainerSpec::from_directory(upper)` so the lower is absent, all five
+`lower-*` rows fail at their first lower access (exit 1, 12, 20, 30, 40) and all
+77 `runtime/filesystem` arm64 rows still pass. The corpus at large is therefore
+insensitive to the lower by construction: 1674 of 1704 build-flag lines are
+`-static`, so a corpus case is a self-contained binary staged into the upper
+that resolves no name in the immutable chain.
+
+## Whiteout publication is unwired
+
+`runtime/overlay/lower-whiteout` and `runtime/overlay/coherence` both fail, on
+both ISAs, at the point where a lower-origin name must be removed:
+`unlink("/etc/passwd")` returns `EIO`, and `coherence` reaches exit 15, its
+`rename` away from `/etc/hostname`, after its copy-up, shared-mapping, `msync`
+and `ftruncate` assertions have all passed against the real lower.
+
+The cause is direct: `path/overlay_publish.rs` defines `publish_whiteout` and
+`publish_opaque` under `#[cfg(test)]`, and their only callers are that file's
+own unit test. No production path publishes a whiteout or an opaque marker, so
+no lower name can ever be hidden. Copy-up itself is wired and correct.
+
+Owner: the `hl-engine` path resolver lane (STAT-FSTATAT).

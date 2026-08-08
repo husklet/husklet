@@ -2841,6 +2841,7 @@ dependencies = [
  "hl-runtime",
  "libc",
  "nix",
+ "reflink-copy",
  "ring",
  "serde",
  "serde_yaml",

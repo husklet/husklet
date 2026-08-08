@@ -1,11 +1,15 @@
 mod worker;
 
 use super::diagnostic::Excerpt as _;
-use super::{Error, definition::App, image::TestImage};
+use super::{
+    Error,
+    definition::App,
+    image::{Materialization, TestImage},
+};
 use crate::suite::{BoundedCapture as _, Target};
 use hl_container::{Config, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
 use serde::{Deserialize, Serialize};
-use std::{fs, sync::Arc, time::Duration};
+use std::{fs, path::Path, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
 pub(crate) use worker::Options as WorkerOptions;
@@ -57,7 +61,14 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
     })
     .await??;
     let case = &app.cases[case_index];
-    let fixture = TestImage::materialize(&app.image, &target.platform())
+    // A mount that must be populated needs a materialized tree, exactly as the
+    // product's `create_image` falls back from overlay to a full copy.
+    let mode = if case.engine_options.mounts().iter().any(|mount| mount.populate) {
+        Materialization::Copy
+    } else {
+        Materialization::from_environment()
+    };
+    let mut fixture = TestImage::materialize_with(&app.image, &target.platform(), mode)
         .await
         .map_err(|error| format!("materialize image {} for {}: {error}", app.image, target.name()))?;
     let state = tempfile::tempdir().map_err(|error| format!("create container state directory: {error}"))?;
@@ -65,27 +76,60 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
     if let Some(cache) = case.engine_options.translation_cache() {
         config = config.translation_cache(cache);
     }
-    let containers = hl_container::Containers::builder(config).build().await?;
-    let destination = fixture.path().join(case.destination.trim_start_matches('/'));
+    let containers = hl_container::Containers::builder(config)
+        .images(fixture.images())
+        .build()
+        .await?;
+    let results = CaseExecution::new(&app, case, target, &containers, execution)
+        .run(&mut fixture, artifact.path())
+        .await;
+    fixture.release()?;
+    Ok(results)
+}
+
+/// Stages the case artifact into the writable root: the overlay upper, or the copied tree.
+async fn stage(root: &Path, case: &super::definition::RuntimeCase, artifact: &Path) -> Result<(), Error> {
+    let destination = root.join(case.destination.trim_start_matches('/'));
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|error| context("create staging directory", parent, &error))?;
     }
-    tokio::fs::copy(artifact.path(), &destination).await.map_err(|error| {
-        format!(
-            "stage {} into {}: {error}",
-            artifact.path().display(),
-            destination.display()
-        )
-    })?;
+    tokio::fs::copy(artifact, &destination)
+        .await
+        .map_err(|error| format!("stage {} into {}: {error}", artifact.display(), destination.display()))?;
     make_executable(&destination).map_err(|error| context("make executable", &destination, &error))?;
-    provision(fixture.path(), case).await?;
-    let results = CaseExecution::new(&app, case, target, fixture.path(), &containers, execution)
-        .run()
-        .await;
-    fixture.release()?;
-    Ok(results)
+    provision(root, case).await
+}
+
+/// Proves the run really took the product's overlay path rather than a flat copy.
+///
+/// The staged program must exist in the upper and nowhere in the lower, and the
+/// lower must still carry image content the upper does not: a resolution that
+/// launches the program at all has crossed both layers.
+fn assert_overlay(fixture: &TestImage, case: &super::definition::RuntimeCase) -> Result<(), Error> {
+    let Some(lower) = fixture.lower() else {
+        return Ok(());
+    };
+    let relative = case.destination.trim_start_matches('/');
+    let upper = fixture.path().join(relative);
+    if !upper.exists() {
+        return Err(format!(
+            "overlay proof: {} is not in the upper {}",
+            relative,
+            fixture.path().display()
+        )
+        .into());
+    }
+    if lower.join(relative).exists() {
+        return Err(format!("overlay proof: {relative} is already in the lower {}", lower.display()).into());
+    }
+    if fixture.reference().overlay().is_none() {
+        return Err("overlay proof: rootfs reference carries no lower/upper split"
+            .to_owned()
+            .into());
+    }
+    Ok(())
 }
 
 /// Stages the guest-side state a case declares, so a fixture never has to depend on the image alone.
@@ -146,7 +190,6 @@ struct CaseExecution<'a> {
     app: &'a App,
     case: &'a super::definition::RuntimeCase,
     target: Target,
-    fixture: &'a std::path::Path,
     containers: &'a Containers,
     execution: hl_container::Execution,
 }
@@ -156,7 +199,6 @@ impl<'a> CaseExecution<'a> {
         app: &'a App,
         case: &'a super::definition::RuntimeCase,
         target: Target,
-        fixture: &'a std::path::Path,
         containers: &'a Containers,
         execution: hl_container::Execution,
     ) -> Self {
@@ -177,15 +219,15 @@ impl<'a> CaseExecution<'a> {
             app,
             case,
             target,
-            fixture,
             containers,
             execution,
         }
     }
 
-    async fn run(&self) -> Vec<CaseResult> {
+    async fn run(&self, fixture: &mut TestImage, artifact: &Path) -> Vec<CaseResult> {
         let Some(plan) = &self.case.soak else {
-            return vec![self.attempt(1, 1, Duration::from_secs(self.case.timeout)).await];
+            let timeout = Duration::from_secs(self.case.timeout);
+            return vec![self.staged_attempt(fixture, artifact, 1, 1, timeout, false).await];
         };
         let end = Instant::now() + plan.total_duration();
         let mut results = Vec::with_capacity(plan.attempts().len());
@@ -200,14 +242,47 @@ impl<'a> CaseExecution<'a> {
                 break;
             }
             results.push(
-                self.attempt(attempt.ordinal(), plan.repetitions(), plan.duration().min(remaining))
-                    .await,
+                self.staged_attempt(
+                    fixture,
+                    artifact,
+                    attempt.ordinal(),
+                    plan.repetitions(),
+                    plan.duration().min(remaining),
+                    attempt.ordinal() > 1,
+                )
+                .await,
             );
         }
         results
     }
 
-    async fn attempt(&self, ordinal: u16, repetitions: u16, timeout: Duration) -> CaseResult {
+    /// Container removal consumes an image-backed rootfs, so every attempt after
+    /// the first gets a fresh writable root and is staged into it again.
+    async fn staged_attempt(
+        &self,
+        fixture: &mut TestImage,
+        artifact: &Path,
+        ordinal: u16,
+        repetitions: u16,
+        timeout: Duration,
+        refork: bool,
+    ) -> CaseResult {
+        let attempt = (repetitions > 1).then_some(ordinal);
+        let prepared = async {
+            if refork {
+                fixture.refork()?;
+            }
+            stage(fixture.path(), self.case, artifact).await?;
+            assert_overlay(fixture, self.case)
+        }
+        .await;
+        if let Err(error) = prepared {
+            return CaseResult::Failed(self.case.id.clone(), attempt, error.to_string());
+        }
+        self.attempt(fixture, ordinal, repetitions, timeout).await
+    }
+
+    async fn attempt(&self, fixture: &TestImage, ordinal: u16, repetitions: u16, timeout: Duration) -> CaseResult {
         let attempt = (repetitions > 1).then_some(ordinal);
         let name = format!(
             "testing-{}-{}-{}-{ordinal}",
@@ -226,7 +301,7 @@ impl<'a> CaseExecution<'a> {
         if let Some((uid, gid)) = options.user() {
             process = process.user(uid, gid);
         }
-        let mut spec = ContainerSpec::from_directory(self.fixture, process)
+        let mut spec = ContainerSpec::new(fixture.reference().clone(), process)
             .name(&name)
             .guest(self.target.guest())
             .execution(self.execution)
