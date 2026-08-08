@@ -338,9 +338,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unwired_option_is_named_rather_than_dropped() {
+    fn ulimits_reach_the_container_spec_rather_than_being_named_unwired() {
         let (_, options) = EngineOptions::split(&entries(&[("HL_ULIMITS", "nofile=1024:2048")])).unwrap();
-        assert!(options.unwired().unwrap().contains("HL_ULIMITS"), "{options:?}");
+        assert!(options.unwired().is_none(), "{options:?}");
     }
 
     #[test]
