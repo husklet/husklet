@@ -41,7 +41,7 @@ pub async fn run_case(app: Arc<App>, case_index: usize, target: Target) -> Resul
         || Duration::from_secs(case.timeout),
         super::scheduler::Plan::total_duration,
     );
-    worker::run(&app.name, &case.id, target, timeout).await
+    worker::run(&app.name, &case.id, target, timeout, &case.diagnostics).await
 }
 
 pub(crate) async fn worker(options: WorkerOptions) -> Result<(), Error> {

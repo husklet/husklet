@@ -657,7 +657,7 @@ cases:
     build: { source: source/dbt_smcrwxrewrite.c, inputs: [source/dbt.h], output: dbt-smc-rwx-rewrite, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-rwx-rewrite }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcrwxrewrite.out }
+    expect: { exit: 0, stdout: golden/dbt_smcrwxrewrite.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-bounce
     targets: [arm64, amd64]
     status: active
@@ -665,7 +665,7 @@ cases:
     build: { source: source/dbt_smcbounce.c, inputs: [source/dbt.h], output: dbt-smc-bounce, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-bounce }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcbounce.out }
+    expect: { exit: 0, stdout: golden/dbt_smcbounce.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-grow
     targets: [arm64, amd64]
     status: active
@@ -673,7 +673,7 @@ cases:
     build: { source: source/dbt_smcgrow.c, inputs: [source/dbt.h], output: dbt-smc-grow, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-grow }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcgrow.out }
+    expect: { exit: 0, stdout: golden/dbt_smcgrow.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-trampoline
     targets: [arm64, amd64]
     status: active
@@ -681,7 +681,7 @@ cases:
     build: { source: source/dbt_smctrampoline.c, inputs: [source/dbt.h], output: dbt-smc-trampoline, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-trampoline }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smctrampoline.out }
+    expect: { exit: 0, stdout: golden/dbt_smctrampoline.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-minijit
     targets: [arm64, amd64]
     status: active
@@ -689,7 +689,7 @@ cases:
     build: { source: source/dbt_smcminijit.c, inputs: [source/dbt.h], output: dbt-smc-minijit, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-minijit }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcminijit.out }
+    expect: { exit: 0, stdout: golden/dbt_smcminijit.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-manyslots
     targets: [arm64, amd64]
     status: active
@@ -697,7 +697,7 @@ cases:
     build: { source: source/dbt_smcmanyslots.c, inputs: [source/dbt.h], output: dbt-smc-manyslots, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-manyslots }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcmanyslots.out }
+    expect: { exit: 0, stdout: golden/dbt_smcmanyslots.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-crosspage
     targets: [arm64, amd64]
     status: active
@@ -705,7 +705,7 @@ cases:
     build: { source: source/dbt_smccrosspage.c, inputs: [source/dbt.h], output: dbt-smc-crosspage, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-crosspage }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smccrosspage.out }
+    expect: { exit: 0, stdout: golden/dbt_smccrosspage.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/memory/dbt-conc-same
     targets: [arm64, amd64]
     status: active
