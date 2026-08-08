@@ -231,6 +231,19 @@ impl Images {
             self.snapshots.remove(&snapshot)?;
         }
 
+        // A chain committed before layer application recorded declared ownership has a
+        // populated tree but an empty ownership sidecar, and nothing later repairs it.
+        // Every link is checked, because a forked cache hit inherits its parent's map.
+        for (_, id) in &chain {
+            if !self.pinned(id)?
+                && self.snapshots.contains(id)
+                && !self.snapshots.is_empty(id)?
+                && self.snapshots.ownership_is_empty(id)?
+            {
+                self.snapshots.remove(id)?;
+            }
+        }
+
         if !self.snapshots.contains(&snapshot) {
             let cached = chain.iter().rposition(|(_, id)| self.snapshots.contains(id));
             let first = cached.map_or(0, |index| index + 1);

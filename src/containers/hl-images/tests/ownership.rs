@@ -381,3 +381,57 @@ fn recursive_root_ownership_updates_children_without_an_empty_key() {
     assert_eq!(ownerships.get("top"), Some(owner));
     assert_eq!(ownerships.get(""), None);
 }
+
+/// A chain committed before layer application recorded declared ownership has a populated
+/// tree beside an empty sidecar, and reusing it as a cache hit silently drops that ownership.
+#[test]
+fn a_committed_chain_with_an_empty_ownership_sidecar_is_not_a_cache_hit() {
+    let mut layer = Vec::new();
+    {
+        let mut archive = tar::Builder::new(&mut layer);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(4);
+        header.set_mode(0o644);
+        header.set_uid(1234);
+        header.set_gid(5678);
+        header.set_cksum();
+        archive.append_data(&mut header, "file", &b"data"[..]).unwrap();
+        archive.finish().unwrap();
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let images = Images::open(temp.path()).unwrap();
+    let image = images
+        .commit(
+            &layer,
+            &RuntimeConfig {
+                entrypoint: Vec::new(),
+                command: Vec::new(),
+                environment: BTreeMap::new(),
+                working_directory: "/".into(),
+                user: String::new(),
+            },
+            &Platform::linux_arm64(),
+            &"example.test/stale-ownership:latest".parse().unwrap(),
+        )
+        .unwrap();
+
+    let owner = Ownership { uid: 1234, gid: 5678 };
+    let snapshots = Snapshots::open(temp.path().join("snapshots")).unwrap();
+    let ownership = |id: &Id| snapshots.view(id).unwrap().ownership().get("file");
+    let unpacked = images.unpack(&image, &Platform::linux_arm64()).unwrap();
+    let chain = unpacked.snapshot().clone();
+    assert_eq!(ownership(&chain), Some(owner));
+    // A live chain is never salvaged, so release the unpack lease the way a finished case does.
+    drop(unpacked);
+
+    let sidecar = temp
+        .path()
+        .join("snapshots/ownership/committed")
+        .join(format!("{}.json", chain.as_str()));
+    fs::write(&sidecar, b"{}").unwrap();
+    assert_eq!(ownership(&chain), None);
+
+    let repaired = images.unpack(&image, &Platform::linux_arm64()).unwrap();
+    assert_eq!(repaired.snapshot(), &chain);
+    assert_eq!(ownership(&chain), Some(owner));
+}
