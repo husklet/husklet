@@ -269,11 +269,11 @@ pub use hl_terminal::{
 pub use hl_vfs::{
     Access, AccessIdentity, AdvisoryLockCoordinator, BUILTIN_DEVICES, BuiltinDescription, Capabilities, DeviceEntropy,
     DeviceId, DeviceKind, DeviceOpenCapability, FileIdentity, FileKind, FileMetadata, FileTimestamp, FilesystemKind,
-    FilesystemStats, GuestName, GuestPath, GuestPathBytes, Identity, Kind, LockCancellation, LockError, LockRange,
-    Metadata, MountError, MountKind, MountNamespace, MountRoute, MountSourceId, NodeHandle, NodeKind, OpenDirectory,
-    OpenIntent, Permissions, ProcessLockOwner, RangeLockKind, RangeLockRequest, RangeWhence, ReadOnlyPaths,
-    ResolveConstraints, ResolveError, ResolveHostError, ResolveRequest, Resolver, Timestamp, VfsHost, XattrFlags,
-    XattrName,
+    FilesystemStats, FlockOwnerToken, GuestName, GuestPath, GuestPathBytes, Identity, Kind, LockCancellation,
+    LockError, LockRange, Metadata, MountError, MountKind, MountNamespace, MountRoute, MountSourceId, NodeHandle,
+    NodeKind, OpenDirectory, OpenIntent, Permissions, ProcessLockOwner, RangeLockKind, RangeLockRequest, RangeWhence,
+    ReadOnlyPaths, ResolveConstraints, ResolveError, ResolveHostError, ResolveRequest, Resolver, Timestamp, VfsHost,
+    XattrFlags, XattrName,
 };
 pub use ipc::BlockingWait;
 pub use ipc::MemoryLifecycle;
