@@ -380,6 +380,15 @@ cases:
     compat: { class: compatibility }
     build: { source: source/nonpie_dladdr.c, output: nonpie-dladdr, flags: ["-no-pie", "-O2", "-rdynamic", "-pthread", "-ldl"] }
     artifact: { destination: /opt/husklet/nonpie-dladdr }
+    # The only dynamically linked case in the corpus; the musl image has no glibc loader, so its
+    # PT_INTERP and libc come from the cross toolchain that built it.
+    guest:
+      libraries:
+        - host: { arm64: /usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1, amd64: /usr/x86_64-linux-gnu/lib/ld-linux-x86-64.so.2 }
+          guest: { arm64: /lib/ld-linux-aarch64.so.1, amd64: /lib64/ld-linux-x86-64.so.2 }
+        - host: { arm64: /usr/lib/aarch64-linux-gnu/libc.so.6, amd64: /usr/x86_64-linux-gnu/lib/libc.so.6 }
+          guest: { arm64: /lib/libc.so.6, amd64: /lib64/libc.so.6 }
+    environment: { LD_LIBRARY_PATH: "/lib64:/lib" }
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/nonpie_dladdr.txt }

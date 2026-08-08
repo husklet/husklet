@@ -89,7 +89,29 @@ pub(super) struct Case {
 pub(super) struct Guest {
     #[serde(default)]
     files: Vec<GuestFile>,
+    /// Host files a dynamically linked case needs inside the image, such as its `PT_INTERP` loader.
+    #[serde(default)]
+    libraries: Vec<GuestLibrary>,
     cwd: Option<String>,
+}
+
+/// A host file copied into the case root filesystem at mode 0755, with both sides chosen per target
+/// because a cross toolchain names its loader and sysroot differently for each guest ISA.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuestLibrary {
+    host: Commands,
+    guest: Commands,
+}
+
+impl GuestLibrary {
+    pub(crate) fn host(&self, target: Target) -> &str {
+        self.host.for_target(target)
+    }
+
+    pub(crate) fn guest(&self, target: Target) -> &str {
+        self.guest.for_target(target)
+    }
 }
 
 /// A regular file staged into the case root filesystem at mode 0600, filled with one repeated byte.
@@ -155,8 +177,16 @@ impl GuestFile {
 }
 
 impl Guest {
-    pub(super) fn validate(self) -> Result<(Vec<GuestFile>, Option<String>), Error> {
+    pub(super) fn validate(self) -> Result<(Vec<GuestFile>, Vec<GuestLibrary>, Option<String>), Error> {
         let mut seen = BTreeSet::new();
+        for library in &self.libraries {
+            for target in [Target::Arm64, Target::Amd64] {
+                std::path::Path::new(library.guest(target)).safe_absolute()?;
+                if !seen.insert(library.guest(target).to_owned()) {
+                    return Err(format!("guest library {:?} is declared twice", library.guest(target)).into());
+                }
+            }
+        }
         for file in &self.files {
             std::path::Path::new(&file.path).safe_absolute()?;
             if !(1..=GUEST_FILE_LIMIT).contains(&file.size) {
@@ -169,7 +199,7 @@ impl Guest {
         if let Some(cwd) = &self.cwd {
             std::path::Path::new(cwd).safe_absolute()?;
         }
-        Ok((self.files, self.cwd))
+        Ok((self.files, self.libraries, self.cwd))
     }
 }
 
