@@ -94,6 +94,13 @@ pub(super) struct NativeCounters {
     pub(super) fallbacks: u64,
     pub(super) runs: u64,
     pub(super) services: u64,
+    /// Turns that asked for native entry, and the named reasons entry was declined.
+    /// Anything not named lands in `probes - entries - (the named reasons)`.
+    pub(super) probes: u64,
+    pub(super) entries: u64,
+    pub(super) declined_suppressed: u64,
+    pub(super) declined_cold: u64,
+    pub(super) declined_executable: u64,
 }
 
 /// Process, image incarnation, executable-range version, entry PC. The ledger
@@ -547,6 +554,15 @@ impl Drop for NativePool {
             boundaries.report(None);
         }
         if self.diagnostics {
+            // The Rust interpreter's share of the guest instruction stream, which the native
+            // `completed` counter cannot see. Reported here so both arms print from one place.
+            use std::sync::atomic::Ordering::Relaxed;
+            eprintln!(
+                "hl-interp: instructions={} blocks={} slices={}",
+                hl_execution::INTERPRETED_INSTRUCTIONS.load(Relaxed),
+                hl_execution::INTERPRETED_BLOCKS.load(Relaxed),
+                hl_execution::INTERPRETED_SLICES.load(Relaxed),
+            );
             eprintln!(
                 "hl-native: runs={} builds={} hits={} fallbacks={} sites={} services={}",
                 self.counters.runs,
@@ -555,6 +571,20 @@ impl Drop for NativePool {
                 self.counters.fallbacks,
                 self.fallbacks.len(),
                 self.counters.services,
+            );
+            eprintln!(
+                "hl-native-entry: probes={} entries={} declined_executable={} declined_suppressed={} declined_cold={} declined_other={}",
+                self.counters.probes,
+                self.counters.entries,
+                self.counters.declined_executable,
+                self.counters.declined_suppressed,
+                self.counters.declined_cold,
+                self.counters
+                    .probes
+                    .saturating_sub(self.counters.entries)
+                    .saturating_sub(self.counters.declined_executable)
+                    .saturating_sub(self.counters.declined_suppressed)
+                    .saturating_sub(self.counters.declined_cold),
             );
             let mut fallback: Vec<_> = self.fallback_weight.iter().map(|(pc, n)| (*n, *pc)).collect();
             fallback.sort_unstable_by(|a, b| b.cmp(a));

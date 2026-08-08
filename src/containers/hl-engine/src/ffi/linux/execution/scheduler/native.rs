@@ -20,6 +20,7 @@ impl GuestExecutor {
         if !pool.enabled {
             return None;
         }
+        pool.counters.probes += 1;
         enum NativeCoordinates {
             Aarch64 { pc: u64, stack: u64 },
             X86_64,
@@ -43,10 +44,11 @@ impl GuestExecutor {
         };
         let lease = super::super::operand::ImageMemory::lease(memory);
         let mappings = lease.mappings();
-        let executable = mappings
-            .ledger()
-            .resolve(GuestAddress::new(pc), Protection::EXECUTE)?
-            .region;
+        let Some(executable) = mappings.ledger().resolve(GuestAddress::new(pc), Protection::EXECUTE) else {
+            pool.counters.declined_executable += 1;
+            return None;
+        };
+        let executable = executable.region;
         let available = executable.range().end().get().saturating_sub(pc).min(256);
         let length = available - available % 4;
         if length == 0 {
@@ -59,9 +61,11 @@ impl GuestExecutor {
             if pool.diagnostics {
                 *pool.suppressed_weight.entry(pc).or_default() += 1;
             }
+            pool.counters.declined_suppressed += 1;
             return None;
         }
         if pool.observe(fallback_key) < 2 {
+            pool.counters.declined_cold += 1;
             return None;
         }
         let allow_direct = pool.direct_admitted(run.process) && !pool.direct_declined.contains(&fallback_key);
@@ -113,6 +117,7 @@ impl GuestExecutor {
                 Some(mappings.executable_token(range, lease.generation()))
             },
         )?;
+        pool.counters.entries += 1;
         let executor = pool.executor(run.process)?;
         let source = [crate::native::NativeSource { guest_first: pc, bytes }];
         let checkpoint = projection.checkpoint_continuation();

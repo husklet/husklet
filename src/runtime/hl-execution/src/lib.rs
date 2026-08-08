@@ -54,8 +54,8 @@ pub use digest::{ArtifactDigest, DIGEST_SEED};
 pub use execution::{
     ArchitecturalCounter, BlockIdentity, CacheObservation, DispatchDecision, DispatchError, EXECUTION_SNAPSHOT_VERSION,
     ExecutionCpuSnapshot, ExecutionFault, ExecutionInstructionMemory, ExecutionMachine, ExecutionSnapshot,
-    ExecutionStateError, GUEST_COUNTER_FREQUENCY_HZ, InstructionEpoch, StepOutcome, SynchronousTrap,
-    TranslationEmission, TranslationRequest, TrapSignal, TrapState,
+    ExecutionStateError, GUEST_COUNTER_FREQUENCY_HZ, INTERPRETED_BLOCKS, INTERPRETED_INSTRUCTIONS, INTERPRETED_SLICES,
+    InstructionEpoch, StepOutcome, SynchronousTrap, TranslationEmission, TranslationRequest, TrapSignal, TrapState,
 };
 pub use identity::{CacheIdentity, FileIdentity};
 pub use operand_memory::{AccessKind, FaultAccess, GuestOperandMemory, MemoryFault};
