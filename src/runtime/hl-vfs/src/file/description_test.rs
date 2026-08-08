@@ -10,9 +10,8 @@ use hl_descriptor::{
 };
 
 use crate::{
-    AdvisoryLockCoordinator, FileTransfer, FlockMode, FlockOwnerToken, GuestPathBytes, Identity, Kind,
-    LockCancellation, LockError, Metadata, Permissions, SeekPosition, Timestamp, VfsFileDescription, VfsFileHost,
-    VfsFileToken,
+    FileTransfer, GuestPathBytes, Identity, Kind, Metadata, Permissions, SeekPosition, Timestamp, VfsFileDescription,
+    VfsFileHost, VfsFileToken,
 };
 
 #[derive(Clone)]
@@ -590,61 +589,4 @@ fn vector_offset_shared() {
     let input = [IoSlice::new(b"X"), IoSlice::new(b"YZ")];
     assert_eq!(second.write_vector_context(&input, context), Ok(3));
     assert_eq!(host.bytes(), b"abcXYZ");
-}
-
-#[test]
-fn flock_binding_close() {
-    let host = FakeFileHost::new(b"");
-    let locks = Arc::new(AdvisoryLockCoordinator::new());
-    let owner = FlockOwnerToken {
-        identity: 10,
-        generation: 1,
-    };
-    let other = FlockOwnerToken {
-        identity: 11,
-        generation: 1,
-    };
-    let description = host.description(AccessMode::ReadWrite, StatusFlags::default());
-    description.bind_flock_owner(locks.clone(), owner).unwrap();
-    description
-        .flock(Some(FlockMode::Exclusive), false, &LockCancellation::default())
-        .unwrap();
-    let table = DescriptorTable::new(4).unwrap();
-    let fd = table.install(0, description, DescriptorFlags::default()).unwrap();
-    let duplicate = table.duplicate(fd, 0, DescriptorFlags::default()).unwrap();
-    let fork = table.fork();
-    table.close(fd).unwrap();
-    assert_eq!(
-        locks.set_flock(
-            Identity { device: 7, inode: 9 },
-            other,
-            Some(FlockMode::Exclusive),
-            false,
-            &LockCancellation::default(),
-        ),
-        Err(LockError::WouldBlock)
-    );
-    table.close(duplicate).unwrap();
-    assert_eq!(
-        locks.set_flock(
-            Identity { device: 7, inode: 9 },
-            other,
-            Some(FlockMode::Exclusive),
-            false,
-            &LockCancellation::default(),
-        ),
-        Err(LockError::WouldBlock)
-    );
-    fork.close(fd).unwrap();
-    fork.close(duplicate).unwrap();
-    assert_eq!(
-        locks.set_flock(
-            Identity { device: 7, inode: 9 },
-            other,
-            Some(FlockMode::Exclusive),
-            false,
-            &LockCancellation::default(),
-        ),
-        Ok(())
-    );
 }

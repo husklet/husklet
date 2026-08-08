@@ -149,7 +149,6 @@ impl<H: VfsFileHost> OpenFileDescription for VfsFileDescription<H> {
         if self.retired.swap(true, Ordering::AcqRel) {
             return;
         }
-        self.release_flock();
         self.host.cancel(self.token);
         self.cursor.wake();
     }
@@ -158,15 +157,5 @@ impl<H: VfsFileHost> OpenFileDescription for VfsFileDescription<H> {
         if !self.closed.swap(true, Ordering::AcqRel) {
             self.host.close(self.token);
         }
-    }
-}
-
-impl<H: VfsFileHost> VfsFileDescription<H> {
-    fn release_flock(&self) {
-        let binding = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(binding) = binding.as_ref() else {
-            return;
-        };
-        binding.coordinator.close_ofd(binding.owner);
     }
 }

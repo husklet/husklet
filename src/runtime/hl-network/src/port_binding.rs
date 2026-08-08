@@ -51,32 +51,6 @@ impl Drop for PreparedBind<'_> {
     }
 }
 impl NetworkCatalog {
-    pub fn claim_port(&self, checkpoint: PortCheckpoint) -> Result<(), NetworkCatalogError> {
-        let _admission = self.activity.admit();
-        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let owner = match Self::slot(&slots, checkpoint.owner)?.socket.as_deref() {
-            Some(CatalogSocket::Host { snapshot, .. }) => snapshot,
-            Some(CatalogSocket::UnixPair { endpoints, .. }) => endpoints
-                .iter()
-                .find(|snapshot| snapshot.id == checkpoint.owner)
-                .ok_or(NetworkCatalogError::Stale)?,
-            Some(CatalogSocket::Unix { snapshot, .. }) => snapshot,
-            None => return Err(NetworkCatalogError::Stale),
-        };
-        if !Self::owns_port(owner, &checkpoint) {
-            return Err(NetworkCatalogError::Invalid);
-        }
-        let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if ports.iter().any(|port| {
-            let port = port.checkpoint();
-            port.family == checkpoint.family && port.port == checkpoint.port
-        }) {
-            return Err(NetworkCatalogError::Invalid);
-        }
-        ports.push(PortEntry::Published(checkpoint));
-        Ok(())
-    }
-
     /// Atomically publishes a bound host snapshot and reserves its port.
     ///
     /// Locks are acquired in `slots` then `ports` order and released before

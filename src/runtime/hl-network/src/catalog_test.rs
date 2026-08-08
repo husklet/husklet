@@ -39,6 +39,82 @@ impl NetworkCatalogRestore for StandaloneRestore {
     }
 }
 
+/// Restores host sockets so a checkpoint round trip can be replayed in-crate.
+struct RebindingRestore;
+
+impl NetworkCatalogRestore for RebindingRestore {
+    fn host_socket(
+        &mut self,
+        _: &SocketSnapshot,
+        _: NetworkResourceKey,
+    ) -> Result<Arc<dyn NetworkSocketResource>, NetworkCheckpointError> {
+        Ok(Arc::new(()))
+    }
+
+    fn accepted_socket(&mut self, _: &AcceptedSocketCheckpoint) -> Result<(), NetworkCheckpointError> {
+        Err(NetworkCheckpointError::InvalidImage)
+    }
+
+    fn descriptor(&mut self, _: u64) -> Result<hl_descriptor::DescriptionRef, NetworkCheckpointError> {
+        Err(NetworkCheckpointError::InvalidImage)
+    }
+
+    fn commit(&mut self) -> Result<(), NetworkCheckpointError> {
+        Ok(())
+    }
+
+    fn rollback(&mut self) {}
+
+    fn resume(&mut self) -> Result<(), NetworkCheckpointError> {
+        Ok(())
+    }
+}
+
+/// A port published before a checkpoint must still be reserved after the restore,
+/// so the guest's re-`bind()` of the same port is refused rather than granted twice.
+#[test]
+fn restored_port_reservation_still_refuses_a_second_bind() {
+    let catalog = catalog();
+    let owner = catalog
+        .insert_host(
+            CatalogScenario::socket(
+                SocketState::Bound,
+                Some(SocketAddress::Inet4 {
+                    address: [127, 0, 0, 1],
+                    port: 8080,
+                }),
+            ),
+            NetworkResourceKey::new(1).unwrap(),
+            Arc::new(()),
+            Vec::new(),
+        )
+        .unwrap();
+    let port = crate::PortCheckpoint {
+        family: AddressFamily::Inet4,
+        port: 8080,
+        owner,
+    };
+    let snapshot = catalog.snapshot(owner).unwrap();
+    catalog
+        .prepare_host_bind(snapshot, port.clone())
+        .unwrap()
+        .commit()
+        .unwrap();
+
+    catalog.freeze_checkpoint();
+    let image = catalog.checkpoint_image().unwrap();
+    catalog.thaw_checkpoint();
+    assert_eq!(image.ports.len(), 1);
+
+    let restored = NetworkCatalog::restore_checkpoint(&image, &mut RebindingRestore).unwrap();
+    let rebound = restored.snapshot(owner).unwrap();
+    assert_eq!(
+        restored.prepare_host_bind(rebound, port).err(),
+        Some(NetworkCatalogError::Invalid),
+        "restore dropped the port reservation, so the port could be bound twice"
+    );
+}
+
 struct CatalogScenario;
 
 impl CatalogScenario {
@@ -187,12 +263,18 @@ fn port_owner_must() {
             Vec::new(),
         )
         .unwrap();
+    let snapshot = catalog.snapshot(owner).unwrap();
     catalog
-        .claim_port(crate::PortCheckpoint {
-            family: AddressFamily::Inet4,
-            port: 8080,
-            owner,
-        })
+        .prepare_host_bind(
+            snapshot,
+            crate::PortCheckpoint {
+                family: AddressFamily::Inet4,
+                port: 8080,
+                owner,
+            },
+        )
+        .unwrap()
+        .commit()
         .unwrap();
     catalog.freeze_checkpoint();
     assert!(catalog.checkpoint_image().is_ok());
