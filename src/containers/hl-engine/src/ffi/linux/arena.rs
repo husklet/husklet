@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use hl_memory::{Backing, BackingChange, MapRequest, Protection, ReservationCoordinate};
 
 use super::MemoryError;
@@ -21,10 +19,40 @@ pub(super) enum Operation {
     Protect(u64, u64, Protection),
 }
 
+/// Arena mappings sorted by start offset. Guest accesses resolve far more often
+/// than mappings change, so this is a flat binary search rather than a tree
+/// descent; every mutating path below restores the sort before returning.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Ledger(BTreeMap<u64, Mapping>);
+pub(super) struct Ledger(Vec<(u64, Mapping)>);
 
 impl Ledger {
+    /// Returns the mapping covering the largest start offset at or below
+    /// `address`, the flat equivalent of `BTreeMap::range(..=address).next_back`.
+    fn preceding(&self, address: u64) -> Option<&(u64, Mapping)> {
+        let index = self.0.partition_point(|(start, _)| *start <= address);
+        self.0[..index].last()
+    }
+
+    /// Returns every entry starting strictly below `end`, which is a prefix
+    /// because the entries are sorted.
+    fn below(&self, end: u64) -> &[(u64, Mapping)] {
+        &self.0[..self.0.partition_point(|(start, _)| *start < end)]
+    }
+
+    /// Inserts or replaces the entry at `start`, matching `BTreeMap::insert`.
+    fn set(&mut self, start: u64, mapping: Mapping) {
+        match self.0.binary_search_by_key(&start, |(key, _)| *key) {
+            Ok(index) => self.0[index].1 = mapping,
+            Err(index) => self.0.insert(index, (start, mapping)),
+        }
+    }
+
+    fn remove(&mut self, start: u64) {
+        if let Ok(index) = self.0.binary_search_by_key(&start, |(key, _)| *key) {
+            self.0.remove(index);
+        }
+    }
+
     pub(super) fn access_prefix(&self, offset: u64, length: u64, required: Protection) -> Result<u64, MemoryError> {
         let end = offset.checked_add(length).ok_or(MemoryError::InvalidRange)?;
         if length == 0 {
@@ -32,7 +60,7 @@ impl Ledger {
         }
         let mut cursor = offset;
         while cursor < end {
-            let Some((start, mapping)) = self.0.range(..=cursor).next_back() else {
+            let Some((start, mapping)) = self.preceding(cursor) else {
                 break;
             };
             let mapping_end = start.checked_add(mapping.length).ok_or(MemoryError::InvalidRange)?;
@@ -51,7 +79,7 @@ impl Ledger {
         }
         let mut cursor = offset;
         while cursor < end {
-            let (start, mapping) = self.0.range(..=cursor).next_back().ok_or(MemoryError::InvalidRange)?;
+            let (start, mapping) = self.preceding(cursor).ok_or(MemoryError::InvalidRange)?;
             let mapping_end = start.checked_add(mapping.length).ok_or(MemoryError::InvalidRange)?;
             if cursor < *start || cursor >= mapping_end || !mapping.protection.contains(required) {
                 return Err(MemoryError::InvalidRange);
@@ -70,7 +98,7 @@ impl Ledger {
                 } else if self.overlaps(offset, request.length) {
                     return Err(MemoryError::InvalidRange);
                 }
-                self.0.insert(
+                self.set(
                     offset,
                     Mapping {
                         length: request.length,
@@ -98,20 +126,20 @@ impl Ledger {
     fn overlay(&mut self, offset: u64, length: u64) -> Result<(), MemoryError> {
         let end = offset.checked_add(length).ok_or(MemoryError::InvalidRange)?;
         let affected = self
-            .0
-            .range(..end)
+            .below(end)
+            .iter()
             .filter_map(|(start, mapping)| {
                 let mapping_end = start.checked_add(mapping.length)?;
                 (mapping_end > offset).then_some((*start, *mapping))
             })
             .collect::<Vec<_>>();
         for (start, _) in &affected {
-            self.0.remove(start);
+            self.remove(*start);
         }
         for (start, mapping) in affected {
             let mapping_end = start.checked_add(mapping.length).ok_or(MemoryError::InvalidRange)?;
             if start < offset {
-                self.0.insert(
+                self.set(
                     start,
                     Mapping {
                         length: offset - start,
@@ -122,7 +150,7 @@ impl Ledger {
                 );
             }
             if mapping_end > end {
-                self.0.insert(
+                self.set(
                     end,
                     Mapping {
                         length: mapping_end - end,
@@ -171,20 +199,20 @@ impl Ledger {
             self.intersections(offset, length)?;
         }
         let affected = self
-            .0
-            .range(..end)
+            .below(end)
+            .iter()
             .filter_map(|(start, mapping)| {
                 let mapping_end = start.checked_add(mapping.length)?;
                 (mapping_end > offset).then_some((*start, *mapping))
             })
             .collect::<Vec<_>>();
         for (start, _) in &affected {
-            self.0.remove(start);
+            self.remove(*start);
         }
         for (start, mapping) in affected {
             let mapping_end = start.checked_add(mapping.length).ok_or(MemoryError::InvalidRange)?;
             if start < offset {
-                self.0.insert(
+                self.set(
                     start,
                     Mapping {
                         length: offset - start,
@@ -197,7 +225,7 @@ impl Ledger {
             let middle_start = start.max(offset);
             let middle_end = mapping_end.min(end);
             if let Some(value) = protection {
-                self.0.insert(
+                self.set(
                     middle_start,
                     Mapping {
                         length: middle_end - middle_start,
@@ -211,7 +239,7 @@ impl Ledger {
                 );
             }
             if mapping_end > end {
-                self.0.insert(
+                self.set(
                     end,
                     Mapping {
                         length: mapping_end - end,
@@ -237,7 +265,7 @@ impl Ledger {
         let mut cursor = offset;
         let mut ranges = Vec::new();
         while cursor < end {
-            let (start, mapping) = self.0.range(..=cursor).next_back().ok_or(MemoryError::InvalidRange)?;
+            let (start, mapping) = self.preceding(cursor).ok_or(MemoryError::InvalidRange)?;
             let mapping_end = start.checked_add(mapping.length).ok_or(MemoryError::InvalidRange)?;
             if cursor < *start || cursor >= mapping_end {
                 return Err(MemoryError::InvalidRange);
@@ -265,8 +293,8 @@ impl Ledger {
         if length == 0 {
             return Err(MemoryError::InvalidRange);
         }
-        self.0
-            .range(..end)
+        self.below(end)
+            .iter()
             .filter_map(|(start, mapping)| {
                 let Some(mapping_end) = start.checked_add(mapping.length) else {
                     return Some(Err(MemoryError::InvalidRange));
@@ -299,9 +327,9 @@ impl Ledger {
     }
 
     fn coalesce(&mut self) {
-        let mut merged: BTreeMap<u64, Mapping> = BTreeMap::new();
+        let mut merged: Vec<(u64, Mapping)> = Vec::with_capacity(self.0.len());
         for (start, mapping) in std::mem::take(&mut self.0) {
-            let adjacent = merged.iter().next_back().and_then(|(prior_start, prior)| {
+            let adjacent = merged.last().and_then(|(prior_start, prior)| {
                 let end = start.checked_add(mapping.length)?;
                 let adjacent_offset = prior.backing_offset.checked_add(prior.length);
                 (prior_start.checked_add(prior.length) == Some(start)
@@ -310,25 +338,22 @@ impl Ledger {
                     && adjacent_offset == Some(mapping.backing_offset))
                 .then_some((*prior_start, end, prior.backing_offset))
             });
-            if let Some((prior_start, end, backing_offset)) = adjacent {
-                merged.insert(
-                    prior_start,
-                    Mapping {
-                        length: end - prior_start,
-                        protection: mapping.protection,
-                        backing: mapping.backing,
-                        backing_offset,
-                    },
-                );
+            if let Some(((prior_start, end, backing_offset), last)) = adjacent.zip(merged.last_mut()) {
+                last.1 = Mapping {
+                    length: end - prior_start,
+                    protection: mapping.protection,
+                    backing: mapping.backing,
+                    backing_offset,
+                };
             } else {
-                merged.insert(start, mapping);
+                merged.push((start, mapping));
             }
         }
         self.0 = merged;
     }
 
     pub(super) fn reservation(&self, address: u64) -> Result<(ReservationCoordinate, u64), MemoryError> {
-        let (start, mapping) = self.0.range(..=address).next_back().ok_or(MemoryError::InvalidRange)?;
+        let (start, mapping) = self.preceding(address).ok_or(MemoryError::InvalidRange)?;
         let end = start.checked_add(mapping.length).ok_or(MemoryError::InvalidRange)?;
         if address < *start || address >= end {
             return Err(MemoryError::InvalidRange);

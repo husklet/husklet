@@ -937,6 +937,37 @@ fn projection_dirty_journal_keeps_disjoint_executable_views_exact() {
     assert!(transcript.iter().any(|entry| entry.starts_with("rollback:")));
 }
 
+/// One guest store is a single admitted interval, so a checkpoint freeze
+/// observes it either wholly staged-and-published or not started, never
+/// half-applied between staging and publication.
+#[test]
+fn a_staged_write_span_holds_off_a_checkpoint_freeze_until_it_commits() {
+    let coordinator = Arc::new(MappingCoordinator::new(FakeHost::failing(usize::MAX)));
+    let mut mapping = request();
+    mapping.protection = Protection::WRITE;
+    coordinator.map(mapping).unwrap();
+    let prepared = coordinator.prepare_write_spans(GuestAddress::new(0x1000), 4).unwrap();
+
+    let (finished, completion) = mpsc::channel();
+    let freezer = Arc::clone(&coordinator);
+    let thread = thread::spawn(move || {
+        freezer.freeze_checkpoint();
+        finished.send(()).unwrap();
+    });
+
+    // The staged span still holds its admission, so the freeze cannot drain.
+    assert!(completion.recv_timeout(Duration::from_millis(250)).is_err());
+
+    coordinator.commit_write_spans(prepared, &[1, 2, 3, 4]).unwrap();
+    completion.recv_timeout(Duration::from_secs(5)).unwrap();
+    thread.join().unwrap();
+    coordinator.thaw_checkpoint();
+
+    let state = coordinator.host.state.lock().unwrap();
+    assert_eq!(state.bytes.get(&0x1000), Some(&1));
+    assert_eq!(state.bytes.get(&0x1003), Some(&4));
+}
+
 fn range() -> AddressRange {
     AddressRange::nonempty(GuestAddress::new(0x1000), 4096).unwrap()
 }

@@ -18,10 +18,15 @@ pub struct WriteTransaction<H: MemoryAccessHost> {
 
 /// Staged spans of one guest write. The first span is inline because almost
 /// every guest store is contiguous, so the common case never touches the heap.
+///
+/// The admission taken to stage the write is held until the commit consumes it,
+/// so one guest store is a single admitted interval rather than two. A
+/// checkpoint freeze therefore cannot land between staging and publication.
 pub struct WriteSpanTransaction<H: MemoryAccessHost> {
     first: WriteTransaction<H>,
     rest: Vec<WriteTransaction<H>>,
     length: usize,
+    admission: crate::checkpoint_activity::ActivityAdmission,
 }
 
 impl<H: MemoryAccessHost> WriteSpanTransaction<H> {
@@ -127,7 +132,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         address: GuestAddress,
         length: u64,
     ) -> Result<WriteSpanTransaction<H>, MemoryError> {
-        let _admission = self.activity.admit_memory()?;
+        let admission = self.activity.admit_memory()?;
         address.get().checked_add(length).ok_or(MemoryError::AddressOverflow)?;
         if length == 0 {
             return Err(MemoryError::EmptyRange);
@@ -154,11 +159,17 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             first,
             rest,
             length: usize::try_from(length).map_err(|_| MemoryError::AddressOverflow)?,
+            admission,
         })
     }
 
     pub fn commit_write_spans(&self, mut prepared: WriteSpanTransaction<H>, input: &[u8]) -> Result<u64, MemoryError> {
-        let _admission = self.activity.admit_memory()?;
+        // The staging admission is still held, so no freeze can have completed
+        // since. Only termination can still have raced, and it is checked here
+        // without retaking the admission mutex.
+        if prepared.admission.terminal() {
+            return Err(MemoryError::NoAddressSpace);
+        }
         self.request_mapping_change();
         let _transaction = self
             .transaction

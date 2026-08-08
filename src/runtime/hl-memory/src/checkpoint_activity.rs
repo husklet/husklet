@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 #[derive(Debug, Default)]
@@ -6,6 +6,9 @@ pub(crate) struct CheckpointActivity {
     state: Mutex<ActivityState>,
     idle: Condvar,
     requests: AtomicU64,
+    /// Mirrors `ActivityState::terminal` so a held admission can re-check it
+    /// without retaking the mutex. Published under the mutex, read freely.
+    terminal: AtomicBool,
 }
 
 #[derive(Debug, Default)]
@@ -86,6 +89,7 @@ impl CheckpointActivity {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.invalidate_continuations();
         state.terminal = true;
+        self.terminal.store(true, Ordering::Release);
         state.frozen = true;
         self.idle.notify_all();
     }
@@ -124,6 +128,13 @@ pub(crate) struct ActivityAdmission {
 }
 
 impl ActivityAdmission {
+    /// Reports whether the address space became terminal while this admission
+    /// was held. A freeze cannot complete under a live admission, so this is
+    /// the only transition an already-admitted caller can still observe.
+    pub(crate) fn terminal(&self) -> bool {
+        self.activity.terminal.load(Ordering::Acquire)
+    }
+
     pub(crate) fn continuation(&self) -> CheckpointContinuation {
         CheckpointContinuation {
             activity: Arc::clone(&self.activity),
