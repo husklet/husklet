@@ -152,6 +152,17 @@ impl Snapshots {
             && self.publication(id).is_ok()
     }
 
+    /// Report whether a committed snapshot's ownership sidecar declares no entries.
+    ///
+    /// A single entry serializes to at least `{"a":{"uid":0,"gid":0}}`, so a shorter
+    /// sidecar is an empty map and this stays a stat rather than a parse of the map.
+    pub(crate) fn ownership_is_empty(&self, id: &Id) -> Result<bool> {
+        const SHORTEST_ENTRY: u64 = 16;
+
+        let path = self.ownership_path("committed", id);
+        Ok(fs::metadata(&path).at(&path)?.len() < SHORTEST_ENTRY)
+    }
+
     pub(crate) fn layer_records(&self, id: &Id) -> Result<Option<Vec<LayerRecord>>> {
         Ok(self.publication(id)?.layers())
     }
