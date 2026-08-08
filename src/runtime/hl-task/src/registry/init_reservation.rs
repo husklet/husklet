@@ -76,7 +76,12 @@ impl TaskRegistry {
         if state.init.is_some() || state.init_reservation.is_some() {
             return Err(TaskError::InvalidLifecycle);
         }
-        let (process, thread) = Self::allocate_leader(&mut state)?;
+        // Slot zero is held back for the entrypoint init forks, so a container's
+        // first guest process is pid 1 the way Linux and Docker present it.
+        let (process, thread) = match Self::allocate_leader_from(&mut state, 1) {
+            Ok(leader) => leader,
+            Err(_) => Self::allocate_leader(&mut state)?,
+        };
         let session = Self::allocate_session(&mut state, process)?;
         let process_group = Self::allocate_process_group(&mut state, process)?;
         let slots = InitSlots {

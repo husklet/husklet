@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::thread;
 
@@ -35,7 +36,15 @@ fn init_and_fork() {
     let snapshot = registry.snapshot();
     assert_eq!(snapshot.sessions.len(), 1);
     assert_eq!(snapshot.process_groups.len(), 1);
-    assert_eq!(snapshot.process_groups[0].members, [init, child]);
+    // Membership is ordered by process identity, which init no longer leads.
+    assert_eq!(
+        snapshot.process_groups[0]
+            .members
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([init, child])
+    );
     assert_eq!(snapshot.processes[0].session, snapshot.processes[1].session);
     assert_eq!(snapshot.processes[0].process_group, snapshot.processes[1].process_group);
 }
@@ -123,7 +132,9 @@ fn setpgid_requires_same() {
     let (registry, init, source) = Fixture::registry();
     let (child, child_thread) = Fixture::fork(&registry, source);
     let group = registry.set_process_group(init, child, None).unwrap();
-    assert!(!registry.snapshot().process_groups[1].orphaned);
+    let snapshot = registry.snapshot();
+    let entry = snapshot.process_groups.iter().find(|entry| entry.id == group).unwrap();
+    assert!(!entry.orphaned);
     registry.mark_exec(child).unwrap();
     assert_eq!(
         registry.set_process_group(init, child, None),
@@ -526,7 +537,14 @@ fn deterministic_group_reuse() {
     }
     let snapshot = registry.snapshot();
     assert_eq!(snapshot.process_groups.len(), 1);
-    assert_eq!(snapshot.process_groups[0].members, [parent, child]);
+    assert_eq!(
+        snapshot.process_groups[0]
+            .members
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([parent, child])
+    );
 }
 
 #[test]
