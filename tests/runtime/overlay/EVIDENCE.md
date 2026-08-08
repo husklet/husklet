@@ -75,11 +75,8 @@ that resolves no name in the immutable chain.
 
 ## Whiteout publication is unwired
 
-`runtime/overlay/lower-whiteout` and `runtime/overlay/coherence` both fail, on
-both ISAs, at the point where a lower-origin name must be removed:
-`unlink("/etc/passwd")` returns `EIO`, and `coherence` reaches exit 15, its
-`rename` away from `/etc/hostname`, after its copy-up, shared-mapping, `msync`
-and `ftruncate` assertions have all passed against the real lower.
+`runtime/overlay/lower-whiteout` fails on both ISAs at the point where a
+lower-origin name must be removed: `unlink("/etc/passwd")` returns `EIO`.
 
 The cause is direct: `path/overlay_publish.rs` defines `publish_whiteout` and
 `publish_opaque` under `#[cfg(test)]`, and their only callers are that file's
@@ -87,3 +84,41 @@ own unit test. No production path publishes a whiteout or an opaque marker, so
 no lower name can ever be hidden. Copy-up itself is wired and correct.
 
 Owner: the `hl-engine` path resolver lane (STAT-FSTATAT).
+
+## `coherence` fails for an unrelated reason: `/etc/hostname` is a name binding
+
+The whiteout attribution above was wrong for `coherence`. That case never
+reaches a lower-layer name at all. `Identity::mounts` binds `hosts`,
+`resolv.conf` and `hostname` from the per-container service state directory onto
+`/etc/*`, and `Service::launch_locked` applies them on every launch, so the
+`/etc/hostname` the case opens is the runtime's own file, outside any layer.
+The probe agrees: `rename("/etc/passwd")` succeeds with copy-up and a published
+source whiteout, while `rename`/`unlink` of `hostname`, `hosts` and
+`resolv.conf` return `EROFS` — exactly the three bound names.
+
+Two independent defects sit behind exit 15, and only the first is a bug:
+
+1. `path::mutation::prepare` returns `ReadOnly` for *any* name binding, ignoring
+   the binding's `read_only` flag, while `path::host` honours it for `open`.
+   `Identity::access` yields `ReadWrite` unless `read_only_root`, and
+   `engine::spec` emits the `rw:` prefix, so all three identity bindings are
+   writable — writable through `open`, read-only through every mutation. The
+   case's `open(O_RDWR)`, `msync` and `ftruncate` therefore passed against the
+   bound identity file, not against a copied-up lower.
+
+2. Even if the rename were permitted the case would fail at exit 17. It asserts
+   the moved file reads `MMca`, which requires the oracle fixture's `caca`
+   contents; `Identity::prepare` writes `"{hostname}\n"`, and no harness path
+   sets `spec.hostname`, so the file holds the 12-character container id.
+
+Honouring `read_only` is therefore necessary but not sufficient, and it cannot
+turn this row green. It is also not sufficient for safety: `unlink` and `rename`
+must stay refused whatever the flag says, because the binding's parent is the
+service state directory. `Identity::open`, used by exec and health, returns
+`Corrupt` when one of the three names is missing, so a guest that could unlink
+its own `/etc/hostname` would break exec and health for its container.
+
+The engine oracle models these three paths differently again — as daemon-written
+files in the overlay upper rather than binds — which is why its own
+`tests/compat/overlay/coherence.c` can assert that the rename succeeds. Under a
+binding model that assertion does not hold.

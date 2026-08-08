@@ -8,7 +8,7 @@ build:
 cases:
   - id: runtime/overlay/coherence
     status: !broken
-      reason: "Overlay whiteout publication is unwired, so renaming a lower-origin name away fails (exit 15)"
+      reason: "/etc/hostname is a per-container identity name binding, not a lower-layer name: the rename at exit 15 is refused because path::mutation::prepare rejects every binding, and permitting it would still fail at exit 17 because the binding holds the container id, not the oracle fixture's caca"
       evidence: "tests/runtime/overlay/EVIDENCE.md"
     compat: { class: compatibility }
     build: { source: coherence.c, output: coherence, flags: [-static, -O2, -std=c11] }
