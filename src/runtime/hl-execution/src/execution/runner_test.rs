@@ -1115,3 +1115,37 @@ fn slice_yield_fetch() {
         StepOutcome::Fault(crate::ExecutionFault::Fetch(_)),
     ));
 }
+
+/// A store that patches a later instruction of its own block must not let the block's
+/// already-decoded tail run. Extending blocks past stores is only sound because the
+/// epoch is rechecked after each one; deleting that recheck returns 1 here.
+#[test]
+fn a_store_into_its_own_block_is_observed_before_the_decoded_tail_runs() {
+    let mut memory = Memory::new(0x2000);
+    for (offset, word) in [
+        0xb900_0001_u32, // str w1, [x0]
+        0xd503_201f,     // nop
+        0x5280_0020,     // mov w0, #1  <- patched to mov w0, #2 by the store above
+        0xd65f_03c0,     // ret
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        memory.put(0x1000 + offset * 4, &word.to_le_bytes());
+    }
+    let mut cpu = Aarch64CpuState {
+        pc: 0x1000,
+        ..Aarch64CpuState::default()
+    };
+    cpu.registers[0] = 0x1008;
+    cpu.registers[1] = 0x5280_0040;
+    let machine = Memory::machine(ExecutionCpuSnapshot::Aarch64(cpu));
+
+    assert_eq!(machine.run_slice(1, 3, &mut memory), StepOutcome::Yield);
+
+    machine.freeze().unwrap();
+    let ExecutionCpuSnapshot::Aarch64(final_cpu) = machine.snapshot().unwrap().cpu else {
+        panic!("AArch64")
+    };
+    assert_eq!(final_cpu.registers[0], 2);
+}
