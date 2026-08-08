@@ -352,6 +352,10 @@ impl<'namespace, H: VfsMutationHost> VfsMutations<'namespace, H> {
             .map_err(MutationError::from_access)
     }
 
+    /// Reference sticky policy; `VfsMutations` has no production caller, so this is the written
+    /// specification rather than an enforced check. Lifting it into `hl-engine` is blocked until a
+    /// guest-created file records its guest owner and `setuid` drops `CAP_FOWNER` — today both
+    /// operands read the engine's host uid and every guest process keeps `owner_override`.
     fn check_sticky(
         &self,
         parent: crate::NodeHandle,

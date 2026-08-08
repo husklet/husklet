@@ -261,6 +261,8 @@ impl DescriptorNode {
 
 pub(super) struct HostMetadata;
 
+/// Guest ownership overrides, written only by `chown`. A never-chowned file therefore projects the
+/// host inode's uid — the engine's own — so this table cannot answer "which guest uid owns this".
 #[derive(Debug, Default)]
 pub(super) struct Registry(Mutex<BTreeMap<(u64, u64), Ownership>>);
 
