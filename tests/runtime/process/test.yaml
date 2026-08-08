@@ -46,8 +46,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/inet_loopback.txt }
   - id: runtime/process/inet-isolated
-    status: !broken
-      reason: "re-derived 2026-08-08, both ISAs: the golden requires socket(AF_INET/AF_INET6) to fail ENOSYS under HL_NET_ISOLATE, but the engine now gives an isolated netns a loopback-only inet stack, so all three sockets are created and stdout reads stream4=0 datagram4=0 stream6=0. QEMU cannot referee it either, but the engine run is red on its own"
+    status: !oracle-excluded
+      reason: "QEMU user mode shares the host network namespace, so it cannot referee an isolated-netns routing contract"
       evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
     build: { source: source/inet_isolated.c, output: inet-isolated, flags: [-static, -O2, -std=gnu11] }
