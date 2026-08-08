@@ -111,6 +111,13 @@ impl ProcessCredentials {
         })
     }
 
+    /// `SECBIT_KEEP_CAPS` and `SECBIT_NO_SETUID_FIXUP` as `prctl(PR_SET_SECUREBITS)` encodes them.
+    const SECURE_NO_SETUID_FIXUP: u32 = 1 << 2;
+    const SECURE_KEEP_CAPS: u32 = 1 << 4;
+    /// `CAP_FS_MASK`: the chown, DAC, owner, set-id, immutable, mknod and MAC capabilities that
+    /// `setfsuid` moves.
+    const FILESYSTEM_MASK: u64 = 0b1_1111 | (1 << 9) | (1 << 27) | (1 << 32) | (1 << 33);
+
     #[must_use]
     pub fn supplementary_groups(&self) -> &[u32] {
         &self.groups
@@ -151,6 +158,41 @@ impl ProcessCredentials {
         self.setid_effective = false;
         if self.real_user != 0 && self.saved_user != 0 && !self.keep_capabilities {
             self.setid_permitted = false;
+        }
+    }
+
+    /// Linux `cap_emulate_setxuid`: a uid transition drops capabilities and never gains permitted ones.
+    /// Group transitions leave capabilities untouched, exactly as the kernel does.
+    pub fn apply_setuid_capabilities(&mut self, old: [u32; 3]) {
+        if self.secure_bits & Self::SECURE_NO_SETUID_FIXUP != 0 {
+            return;
+        }
+        let [old_real, old_effective, old_saved] = old;
+        let held_root = old_real == 0 || old_effective == 0 || old_saved == 0;
+        let keeps_root = self.real_user == 0 || self.effective_user == 0 || self.saved_user == 0;
+        if held_root && !keeps_root {
+            if !self.keep_capabilities && self.secure_bits & Self::SECURE_KEEP_CAPS == 0 {
+                self.capabilities.permitted = 0;
+                self.capabilities.effective = 0;
+            }
+            self.capabilities.ambient = 0;
+        }
+        if old_effective == 0 && self.effective_user != 0 {
+            self.capabilities.effective = 0;
+        } else if old_effective != 0 && self.effective_user == 0 {
+            self.capabilities.effective = self.capabilities.permitted;
+        }
+    }
+
+    /// Linux `LSM_SETID_FS`: only the filesystem capabilities move, and only within the permitted set.
+    pub fn apply_setfsuid_capabilities(&mut self, old_filesystem_user: u32) {
+        if self.secure_bits & Self::SECURE_NO_SETUID_FIXUP != 0 {
+            return;
+        }
+        if old_filesystem_user == 0 && self.filesystem_user != 0 {
+            self.capabilities.effective &= !Self::FILESYSTEM_MASK;
+        } else if old_filesystem_user != 0 && self.filesystem_user == 0 {
+            self.capabilities.effective |= self.capabilities.permitted & Self::FILESYSTEM_MASK;
         }
     }
 
@@ -210,6 +252,32 @@ mod credential_test {
         assert_eq!(credentials.setid_authority(), SetIdAuthority::None);
         credentials.raise_setid();
         assert!(!credentials.may_setid());
+    }
+
+    // The corpus case covers the reachable transitions; SECBIT_NO_SETUID_FIXUP and SECBIT_KEEP_CAPS
+    // are only settable with CAP_SETPCAP under the securebits locking rules, so they are held here.
+    #[test]
+    fn securebits_suppress_the_setuid_fixup() {
+        let mut credentials = ProcessCredentials::new(0, 0, &[], 8).unwrap();
+        credentials.secure_bits = 1 << 2;
+        credentials.real_user = 501;
+        credentials.effective_user = 501;
+        credentials.saved_user = 501;
+        credentials.apply_setuid_capabilities([0, 0, 0]);
+        assert_eq!(credentials.capabilities.effective, CapabilitySets::CONTAINER);
+        assert_eq!(credentials.capabilities.permitted, CapabilitySets::CONTAINER);
+    }
+
+    #[test]
+    fn keep_caps_securebit_holds_permitted_but_not_effective() {
+        let mut credentials = ProcessCredentials::new(0, 0, &[], 8).unwrap();
+        credentials.secure_bits = 1 << 4;
+        credentials.real_user = 501;
+        credentials.effective_user = 501;
+        credentials.saved_user = 501;
+        credentials.apply_setuid_capabilities([0, 0, 0]);
+        assert_eq!(credentials.capabilities.permitted, CapabilitySets::CONTAINER);
+        assert_eq!(credentials.capabilities.effective, 0);
     }
 
     #[test]

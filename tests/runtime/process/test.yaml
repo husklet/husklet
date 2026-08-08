@@ -592,6 +592,15 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/exec_errno.txt }
+  - id: runtime/process/capability-transition
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/capability_transition.c, output: capability-transition, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/capability-transition }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/capability_transition.txt }
   - id: runtime/process/credentials
     targets: [arm64, amd64]
     status: active
