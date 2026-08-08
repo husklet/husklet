@@ -907,7 +907,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/signalfd_rt.out }
   - id: runtime/ipc/scm-rights-trunc
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU reports MSG_CTRUNC=0 while the retained Linux contract requires MSG_CTRUNC=1 for the truncated SCM_RIGHTS control buffer"
       evidence: "tests/runtime/ipc/ORACLE.md"
     compat: { class: compatibility }
@@ -925,7 +925,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/scm_timerfd.out }
   - id: runtime/ipc/scm-epoll
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU times out without reporting the transferred epoll descriptor readiness event"
       evidence: "tests/runtime/ipc/ORACLE.md"
     compat: { class: compatibility }

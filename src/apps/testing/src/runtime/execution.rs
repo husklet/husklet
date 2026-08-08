@@ -333,6 +333,9 @@ impl<'a> CaseExecution<'a> {
             }))
             .network_mode(options.network_mode())
             .resources(options.resources());
+        if let Some(hostname) = options.hostname() {
+            spec = spec.hostname(hostname);
+        }
         for mount in options.mounts() {
             spec = spec.mount(mount.clone());
         }

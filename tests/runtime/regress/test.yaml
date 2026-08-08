@@ -137,7 +137,7 @@ cases:
     timeout: 120
     expect: { exit: 0, stdout: golden/nonpie_v8.out }
   - id: runtime/regress/nonpie-guest-ptrs
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU reports set_robust_list=BAD on both guest ISAs while every other token matches the retained engine golden"
       evidence: "tests/runtime/regress/EVIDENCE.md"
     compat: { class: compatibility }

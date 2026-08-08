@@ -16,7 +16,7 @@ cases:
     expect: { exit: 0, stdout: golden/empty.bin }
   - id: runtime/filesystem/positional-arm64
     status: !broken
-      reason: "QEMU oracle cannot create the fixture's absolute /positional path"
+      reason: "re-derived 2026-08-08, both ISAs: the engine creates /positional fine and clears checks 1-26, then fails check 27. preadv(fd, [{buf,1},{(void*)1,1}], 2, offset=0) must return -EFAULT; the engine returns 0 because filesystem/read.rs failed_read_probe probes the descriptor's shared file position (6, at EOF) instead of the supplied positional offset. The buffer is correctly left untouched, so only the return value diverges"
       evidence: "tests/runtime/filesystem/POSITIONAL_EVIDENCE.md"
     targets: [arm64]
     compat: { class: compatibility }
@@ -26,7 +26,7 @@ cases:
     expect: { exit: 0, stdout: golden/empty.bin }
   - id: runtime/filesystem/positional-amd64
     status: !broken
-      reason: "QEMU oracle cannot create the fixture's absolute /positional path"
+      reason: "re-derived 2026-08-08, both ISAs: the engine creates /positional fine and clears checks 1-26, then fails check 27. preadv(fd, [{buf,1},{(void*)1,1}], 2, offset=0) must return -EFAULT; the engine returns 0 because filesystem/read.rs failed_read_probe probes the descriptor's shared file position (6, at EOF) instead of the supplied positional offset. The buffer is correctly left untouched, so only the return value diverges"
       evidence: "tests/runtime/filesystem/POSITIONAL_EVIDENCE.md"
     targets: [amd64]
     compat: { class: compatibility }
@@ -35,7 +35,7 @@ cases:
     run: [io]
     expect: { exit: 0, stdout: golden/empty.bin }
   - id: runtime/filesystem/path-metadata
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU oracle requires a fresh isolated working directory not yet supplied by the shared runner"
       evidence: "tests/runtime/filesystem/POSITIONAL_EVIDENCE.md"
     compat: { class: compatibility }
@@ -51,7 +51,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/create_cache.out }
   - id: runtime/filesystem/bound-uaccess
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU cannot reproduce the provider-bound guest-memory contract; direct oracle exits 2 on both ISAs"
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
@@ -101,7 +101,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/image_ownership.out }
   - id: runtime/filesystem/fs-statfs-type
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU host filesystem type differs from the retained overlay-root golden on both ISAs"
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
@@ -119,7 +119,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/missing_stat.out }
   - id: runtime/filesystem/fs-mounttab
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU host mount table presentation differs from the retained engine golden on both ISAs"
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
@@ -128,7 +128,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/fs_mounttab.out }
   - id: runtime/filesystem/fs-mountpseudo
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU host mount presentation differs from the retained engine golden on both ISAs"
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
@@ -172,7 +172,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/xattr.out }
   - id: runtime/filesystem/xattr-edge
-    status: !broken
+    status: !oracle-excluded
       reason: "Native QEMU/Linux xattr edge output differs from the retained engine contract on both ISAs"
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
@@ -712,7 +712,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/openat_edges.out }
   - id: runtime/filesystem/openat2-einval
-    status: !broken
+    status: !oracle-excluded
       reason: "Native QEMU/Linux openat2 validation output differs from the retained engine contract on both ISAs"
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }

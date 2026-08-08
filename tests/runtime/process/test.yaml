@@ -24,14 +24,19 @@ cases:
     # reaches neither the admission warm-up nor the solo budget; measured runs=0 builds=0 services=8.
     expect: { exit: 0, stdout: golden/namespace_boundary.txt, diagnostics: [] }
   - id: runtime/process/uname-boundary
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU exposes host uname identity instead of the configured engine guest identity"
       evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
     build: { source: source/uname_boundary.c, output: uname-boundary, flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
     artifact: { destination: /opt/husklet/uname-boundary }
+    # The runner otherwise defaults the guest hostname to the container id, so the configured
+    # identity this case asserts has to be requested explicitly.
+    environment: { HL_HOSTNAME: "jit" }
     run: []
-    expect: { exit: 0, stdout: golden/uname_boundary.txt }
+    # A -nostdlib freestanding _start issuing nine straight-line syscalls, so like its
+    # namespace-boundary sibling it never reaches native translation.
+    expect: { exit: 0, stdout: golden/uname_boundary.txt, diagnostics: [] }
   - id: runtime/process/inet-loopback
     status: active
     compat: { class: compatibility }
@@ -42,7 +47,7 @@ cases:
     expect: { exit: 0, stdout: golden/inet_loopback.txt }
   - id: runtime/process/inet-isolated
     status: !broken
-      reason: "QEMU does not implement the engine HL_NET_ISOLATE launch policy"
+      reason: "re-derived 2026-08-08, both ISAs: the golden requires socket(AF_INET/AF_INET6) to fail ENOSYS under HL_NET_ISOLATE, but the engine now gives an isolated netns a loopback-only inet stack, so all three sockets are created and stdout reads stream4=0 datagram4=0 stream6=0. QEMU cannot referee it either, but the engine run is red on its own"
       evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
     build: { source: source/inet_isolated.c, output: inet-isolated, flags: [-static, -O2, -std=gnu11] }
@@ -51,7 +56,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/inet_isolated.txt }
   - id: runtime/process/credential-mutation
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU host credentials cannot satisfy the engine root credential mutation contract"
       evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
     compat: { class: compatibility }

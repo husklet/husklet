@@ -459,7 +459,7 @@ cases:
     build: { source: cpuid_features.c, output: cpuid_features, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/abi/cpuid_features }
     run: []
-    status: !broken
+    status: !oracle-excluded
       reason: QEMU CPU feature exposure is not pinned
       evidence: The retained golden depends on a specific CPUID feature set, while generic qemu-x86_64 exposes different feature bits.
     compat: { class: compatibility }

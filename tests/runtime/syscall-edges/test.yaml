@@ -8,7 +8,7 @@ build:
   flags: []
 cases:
   - id: runtime/syscall-edges/sc-flag-einval
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -24,7 +24,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/getresid_efault.out }
   - id: runtime/syscall-edges/sc-mem-validate
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -204,7 +204,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/ioctl_edges.out }
   - id: runtime/syscall-edges/sc-iov-edges
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -264,7 +264,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/sigsetsize_validate.out }
   - id: runtime/syscall-edges/sc-copyout-efault
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -273,7 +273,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/copyout_efault.out }
   - id: runtime/syscall-edges/sc-splice-edges
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -282,7 +282,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/splice_edges.out }
   - id: runtime/syscall-edges/sc-append-pwrite
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -326,7 +326,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/inotify_state.out }
   - id: runtime/syscall-edges/sc-timerfd-einval
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -370,7 +370,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/priority_contract.out }
   - id: runtime/syscall-edges/sc-read-badfd-order
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -379,7 +379,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/read_badfd.out }
   - id: runtime/syscall-edges/sc-read-eof-badbuf
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -388,7 +388,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/read_eof.out }
   - id: runtime/syscall-edges/sc-bound-io-order
-    status: !broken
+    status: !oracle-excluded
       reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
       evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
     compat: { class: compatibility }

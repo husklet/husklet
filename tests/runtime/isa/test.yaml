@@ -85,7 +85,7 @@ cases:
     timeout: 120
     expect: { exit: 0, stdout: golden/go_heapgc.out }
   - id: runtime/isa/x86_64/isa-regress
-    status: !broken
+    status: !oracle-excluded
       reason: "A source rebuild under current qemu-x86_64 diverges from the preserved SSE/SSE3 NaN contract"
       evidence: "tests/runtime/isa/QEMU_EVIDENCE.md"
     targets: [amd64]

@@ -32,7 +32,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/close_rangeunsharefork.out }
   - id: runtime/threads/close-range-unshare-exec
-    status: !broken
+    status: !oracle-excluded
       reason: "AMD64 QEMU oracle exits 1 despite matching registered stdout bytes"
       evidence: "18-job direct compile/QEMU sweep on 2026-08-03"
     compat: { class: compatibility }
@@ -42,7 +42,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/close_rangeunshareexec.out }
   - id: runtime/threads/exec-thread-binding
-    status: !broken
+    status: !oracle-excluded
       reason: "AMD64 QEMU oracle exits 1 despite matching registered stdout bytes"
       evidence: "18-job direct compile/QEMU sweep on 2026-08-03"
     compat: { class: compatibility }
@@ -68,7 +68,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/sentry_dup3cleanup.out }
   - id: runtime/threads/sentry-fd-emfile
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU oracle exits 1 instead of the registered exit 0"
       evidence: "testing oracle threads arm64 on 2026-08-03"
     compat: { class: compatibility }
@@ -78,7 +78,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/sentry_fdemfile.out }
   - id: runtime/threads/sentry-table-exhaustion
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU oracle diverges from the registered exit or output contract"
       evidence: "testing oracle threads on 2026-08-03"
     compat: { class: compatibility }
@@ -88,7 +88,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/sentry_tableexhaustion.out }
   - id: runtime/threads/sentry-fork-exhaustion
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU oracle diverges from the registered exit or output contract"
       evidence: "testing oracle threads on 2026-08-03"
     compat: { class: compatibility }
@@ -343,7 +343,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/tls_acrossthreads.out }
   - id: runtime/threads/errno-threadlocal
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU oracle diverges from the registered exit or output contract"
       evidence: "testing oracle threads on 2026-08-03"
     compat: { class: compatibility }
@@ -380,7 +380,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/futex_waiterrors.out }
   - id: runtime/threads/robust-mutex
-    status: !broken
+    status: !oracle-excluded
       reason: "AArch64 QEMU oracle does not complete within the bounded category sweep"
       evidence: "18-job testing oracle threads sweep on 2026-08-03"
     compat: { class: compatibility }

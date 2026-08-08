@@ -29,7 +29,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/apt_devpts.out }
   - id: runtime/posix/chmodchown
-    status: !broken
+    status: !oracle-excluded
       reason: "Unprivileged QEMU cannot satisfy the engine-root chown/fchown fixture contract"
       evidence: "tests/runtime/posix/ORACLE.md"
     compat: { class: compatibility }
