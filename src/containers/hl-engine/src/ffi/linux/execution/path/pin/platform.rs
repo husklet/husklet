@@ -164,12 +164,12 @@ impl Host {
     }
 
     #[cfg(target_os = "linux")]
-    pub(super) fn descriptor_path(descriptor: RawFd) -> std::io::Result<PathBuf> {
+    pub(in crate::ffi::linux::execution::path) fn descriptor_path(descriptor: RawFd) -> std::io::Result<PathBuf> {
         std::fs::read_link(format!("/proc/self/fd/{descriptor}"))
     }
 
     #[cfg(target_os = "macos")]
-    pub(super) fn descriptor_path(descriptor: RawFd) -> std::io::Result<PathBuf> {
+    pub(in crate::ffi::linux::execution::path) fn descriptor_path(descriptor: RawFd) -> std::io::Result<PathBuf> {
         let mut path = vec![0_i8; libc::PATH_MAX as usize];
         // SAFETY: F_GETPATH writes a terminated path into the bounded buffer.
         if unsafe { libc::fcntl(descriptor, libc::F_GETPATH, path.as_mut_ptr()) } != 0 {

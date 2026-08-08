@@ -403,7 +403,7 @@ impl RuntimePathHost for NativePath {
         mode: u32,
         identity: &AccessIdentity,
     ) -> Result<Box<dyn PreparedPathMutation>, RuntimePathError> {
-        attribute::prepare_chmod(source, mode, identity)
+        attribute::prepare_chmod(self, source, mode, identity)
     }
 
     fn prepare_descriptor_chown(
@@ -422,7 +422,7 @@ impl RuntimePathHost for NativePath {
         times: [hl_linux::TimestampChange; 2],
         identity: &AccessIdentity,
     ) -> Result<Box<dyn PreparedPathMutation>, RuntimePathError> {
-        attribute::prepare_times(source, times, identity)
+        attribute::prepare_times(self, source, times, identity)
     }
 
     fn access_identity(&self) -> Result<AccessIdentity, RuntimePathError> {

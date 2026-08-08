@@ -48,7 +48,9 @@ static int create_all(struct report *out) {
 
 int main(void) {
     char directory[] = "/tmp/hl-created-owner-XXXXXX";
-    if (!mkdtemp(directory) || chdir(directory) != 0) return 1;
+    // mkdtemp gives 0700 and mkdir below is masked by the umask; the child must be able to
+    // traverse and write here, which is a precondition of the case rather than part of it.
+    if (!mkdtemp(directory) || chmod(directory, 0755) != 0 || chdir(directory) != 0) return 1;
 
     // Root's own creation, for the contrast the whole case rests on.
     int fd = open("root-file", O_CREAT | O_RDWR, 0644);
@@ -57,7 +59,7 @@ int main(void) {
     unsigned root_user = 0, root_group = 0;
     if (owner("root-file", &root_user, &root_group) != 0) return 3;
 
-    if (mkdir("child", 0777) != 0) return 4;
+    if (mkdir("child", 0777) != 0 || chmod("child", 0777) != 0) return 4;
     if (mkdir("child/sg", 0777) != 0) return 5;
     if (chown("child/sg", CHILD_UID, SETGID_GID) != 0) return 6;
     if (chmod("child/sg", 02777) != 0) return 7;

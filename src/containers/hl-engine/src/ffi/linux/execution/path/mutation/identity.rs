@@ -1,23 +1,24 @@
 use hl_runtime::{AccessIdentity, Capabilities, RuntimePathError};
+use hl_task::CapabilitySets;
 
 use super::super::NativePath;
 
 pub(in crate::ffi::linux::execution::path) struct Identity;
 
 impl Identity {
-    /// Created files now carry a guest owner, so `metadata::Registry` can answer who owns an inode.
-    /// These bypasses stay pinned on because two checks still read `attribute::Descriptor::metadata`,
-    /// a raw fstat reporting the engine's host uid: `authorize_chmod`/`authorize_chown`/
-    /// `authorize_times` here, and `PinnedEntry::parent_access`. Unpinning before those project the
-    /// registry would deny a dropped-privilege task both metadata changes on files it owns and
-    /// creation inside directories it made. Projecting that one `metadata()` is what unpins them.
-    const BYPASS: Capabilities = Capabilities {
-        dac_override: true,
-        dac_read_search: true,
-        owner_override: true,
-        change_owner: true,
-        preserve_set_id: true,
-    };
+    /// The filesystem capabilities the task actually holds. Every authorization site now projects
+    /// `metadata::Registry` before comparing owners, so these no longer have to be pinned on to keep
+    /// a dropped-privilege task from being denied its own files.
+    fn capabilities(sets: CapabilitySets) -> Capabilities {
+        let held = |capability: u64| sets.effective & capability != 0;
+        Capabilities {
+            dac_override: held(CapabilitySets::DAC_OVERRIDE),
+            dac_read_search: held(CapabilitySets::DAC_READ_SEARCH),
+            owner_override: held(CapabilitySets::OWNER_OVERRIDE),
+            change_owner: held(CapabilitySets::CHANGE_OWNER),
+            preserve_set_id: held(CapabilitySets::PRESERVE_SET_ID),
+        }
+    }
 
     pub(in crate::ffi::linux::execution::path) fn project(
         host: &NativePath,
@@ -29,7 +30,7 @@ impl Identity {
             user: credentials.filesystem_user,
             group: credentials.filesystem_group,
             supplementary_groups: credentials.supplementary_groups().to_vec(),
-            capabilities: Self::BYPASS,
+            capabilities: Self::capabilities(credentials.capabilities),
         })
     }
 
@@ -52,7 +53,7 @@ impl Identity {
                 credentials.real_group
             },
             supplementary_groups: credentials.supplementary_groups().to_vec(),
-            capabilities: Self::BYPASS,
+            capabilities: Self::capabilities(credentials.capabilities),
         })
     }
 }
