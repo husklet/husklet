@@ -91,13 +91,12 @@ allocation, and descriptor duplication.
 
 ## Cache safety gate
 
-A positive descriptor cache was prototyped and deliberately not retained.
-`ParentLease::publish` is currently called only by successful regular-file
-copy-up. The following namespace mutations do not yet advance the resolver
-epoch: successful mkdir, mknod, unlink, rmdir, rename, link, symlink,
-`open(O_CREAT)`, upper-parent materialization, and descriptor/inode link
-publication. C covers these through the dispatch mutation bump and explicit
-copy-up/materialization bumps in `overlay.c` and `fdcache.c`.
+A positive descriptor cache was prototyped and deliberately not retained until
+publication was complete. That gap is now closed: mkdir, mknod, unlink, rmdir,
+rename, link, symlink, `open(O_CREAT)`, upper-parent materialization, and
+descriptor/inode link publication all advance the resolver epoch. C covers the
+same set through the dispatch mutation bump and explicit copy-up/materialization
+bumps in `overlay.c` and `fdcache.c`.
 
 Until those paths publish after every visible commit—including partial-failure
 paths—a cache could resurrect a renamed or deleted pathname. The eventual
@@ -155,5 +154,19 @@ commit rather than the final syscall return alone. Rust ownership maps to
 `renameat2` and descriptor-based `linkat`; macOS uses `renameat` and does not
 support the pinned-inode hard-link path. The Rust mutation publication now
 covers mkdir, mknod, unlink/rmdir, rename, link, and symlink immediately after
-host success, including a later tmpfs-accounting error. `open(O_CREAT)`, upper
-parent materialization, and descriptor/inode publication remain separate gaps.
+host success, including a later tmpfs-accounting error. `open(O_CREAT)`
+(`open.rs` create and discard), upper parent materialization
+(`overlay_publish.rs`, per ancestor), and descriptor/inode publication
+(`mutation/inode.rs`, linkat plus the copy fallback and its rollback) publish on
+the same rule. `mutation.rs` `epoch_tests` now drives each mutation through a
+real `PendingMutation::commit` against a live directory rather than calling the
+publication helper directly.
+
+## Remaining divergence from the C oracle
+
+The resolver epoch is a process-local `Arc<AtomicU64>` owned by `pin::Host`, not
+the oracle's `MAP_SHARED` anonymous page. It therefore serializes mutations
+across threads sharing one `Host`, but a mutation made by a *separate* host
+process is not observed. Any future negative-existence cache must account for
+this: the oracle's shared page is what stops a forked coprocess from making a
+parent's cached ENOENT permanent.

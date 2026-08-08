@@ -401,74 +401,134 @@ mod epoch_tests {
 
     use hl_runtime::GuestPathBytes;
 
-    use super::{ParentLease, PendingMutation};
+    use super::{CString, Mutation, ParentLease, Path, PendingMutation, PinnedEntry, PinnedInode};
 
-    fn publication() -> (ParentLease, Arc<AtomicU64>) {
-        let epoch = Arc::new(AtomicU64::new(11));
-        let directory = File::open(std::env::temp_dir()).unwrap();
-        let parent =
-            ParentLease::upper(GuestPathBytes::new(b"/").unwrap(), directory.into()).with_epoch(Arc::clone(&epoch));
-        (parent, epoch)
+    struct Root(std::path::PathBuf, Arc<AtomicU64>);
+
+    impl Root {
+        fn path(&self) -> &Path {
+            &self.0
+        }
     }
 
-    fn assert_namespace_success_publishes() {
-        let (parent, epoch) = publication();
-        PendingMutation::namespace_result(0, &parent).unwrap();
-        assert_eq!(epoch.load(Ordering::Acquire), 12);
+    impl Drop for Root {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn publication() -> (Root, Arc<AtomicU64>) {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+
+        let path = std::env::temp_dir().join(format!(
+            "hl-mutation-epoch-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let epoch = Arc::new(AtomicU64::new(11));
+        (Root(path, Arc::clone(&epoch)), epoch)
+    }
+
+    /// Drives one real `PendingMutation::commit` against a live temporary
+    /// directory so the assertion covers the host syscall, not just `publish`.
+    fn commit(action: Mutation) -> Result<(), hl_runtime::RuntimePathError> {
+        use hl_runtime::PreparedPathMutation;
+
+        let watches = super::super::watch::Hub::new(b"/").unwrap();
+        PendingMutation { action, watches }.commit()
+    }
+
+    /// `ParentLease` owns its descriptor, so each entry pins the root again
+    /// against the same shared epoch.
+    fn entry(root: &Root, name: &str) -> PinnedEntry {
+        let directory = File::open(root.path()).unwrap();
+        PinnedEntry {
+            parent: ParentLease::upper(GuestPathBytes::new(b"/").unwrap(), directory.into())
+                .with_epoch(Arc::clone(&root.1)),
+            name: CString::new(name).unwrap(),
+            path: root.path().join(name),
+        }
     }
 
     #[test]
     fn mkdir_success_publishes_namespace_epoch() {
-        assert_namespace_success_publishes();
-    }
-
-    #[test]
-    fn mknod_success_publishes_namespace_epoch() {
-        assert_namespace_success_publishes();
-    }
-
-    #[test]
-    fn unlink_success_publishes_namespace_epoch() {
-        assert_namespace_success_publishes();
-    }
-
-    #[test]
-    fn rmdir_success_publishes_namespace_epoch() {
-        assert_namespace_success_publishes();
-    }
-
-    #[test]
-    fn rename_success_publishes_namespace_epoch() {
-        let (parent, epoch) = publication();
-        PendingMutation::publish_namespace(&parent);
-        assert_eq!(epoch.load(Ordering::Acquire), 12);
-    }
-
-    #[test]
-    fn link_success_publishes_namespace_epoch() {
-        let (parent, epoch) = publication();
-        PendingMutation::publish_namespace(&parent);
+        let (root, epoch) = publication();
+        commit(Mutation::Directory(entry(&root, "made"), 0o755, None)).unwrap();
+        assert!(root.path().join("made").is_dir());
         assert_eq!(epoch.load(Ordering::Acquire), 12);
     }
 
     #[test]
     fn symlink_success_publishes_namespace_epoch() {
-        assert_namespace_success_publishes();
+        let (root, epoch) = publication();
+        commit(Mutation::Symlink(
+            CString::new("target").unwrap(),
+            entry(&root, "link"),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            std::fs::read_link(root.path().join("link")).unwrap(),
+            Path::new("target")
+        );
+        assert_eq!(epoch.load(Ordering::Acquire), 12);
+    }
+
+    #[test]
+    fn unlink_success_publishes_namespace_epoch() {
+        let (root, epoch) = publication();
+        std::fs::write(root.path().join("gone"), b"x").unwrap();
+        commit(Mutation::Unlink(entry(&root, "gone"), false, None)).unwrap();
+        assert!(!root.path().join("gone").exists());
+        assert_eq!(epoch.load(Ordering::Acquire), 12);
+    }
+
+    #[test]
+    fn rmdir_success_publishes_namespace_epoch() {
+        let (root, epoch) = publication();
+        std::fs::create_dir(root.path().join("empty")).unwrap();
+        commit(Mutation::Unlink(entry(&root, "empty"), true, None)).unwrap();
+        assert!(!root.path().join("empty").exists());
+        assert_eq!(epoch.load(Ordering::Acquire), 12);
+    }
+
+    #[test]
+    fn rename_success_publishes_namespace_epoch() {
+        let (root, epoch) = publication();
+        std::fs::write(root.path().join("from"), b"x").unwrap();
+        commit(Mutation::Rename(entry(&root, "from"), entry(&root, "to"), 0)).unwrap();
+        assert!(!root.path().join("from").exists());
+        assert!(root.path().join("to").is_file());
+        assert_eq!(epoch.load(Ordering::Acquire), 12);
+    }
+
+    #[test]
+    fn link_success_publishes_namespace_epoch() {
+        let (root, epoch) = publication();
+        std::fs::write(root.path().join("source"), b"x").unwrap();
+        let source = File::open(root.path().join("source")).unwrap();
+        commit(Mutation::Link(
+            PinnedInode {
+                descriptor: source.into(),
+                path: root.path().join("source"),
+            },
+            entry(&root, "alias"),
+        ))
+        .unwrap();
+        assert_eq!(
+            std::fs::metadata(root.path().join("alias")).unwrap().len(),
+            std::fs::metadata(root.path().join("source")).unwrap().len()
+        );
+        assert_eq!(epoch.load(Ordering::Acquire), 12);
     }
 
     #[test]
     fn failed_host_mutation_does_not_publish_namespace_epoch() {
-        let (parent, epoch) = publication();
-        assert!(PendingMutation::namespace_result(-1, &parent).is_err());
+        let (root, epoch) = publication();
+        std::fs::create_dir(root.path().join("taken")).unwrap();
+        // mkdirat over an existing name fails, so nothing became visible.
+        assert!(commit(Mutation::Directory(entry(&root, "taken"), 0o755, None)).is_err());
         assert_eq!(epoch.load(Ordering::Acquire), 11);
-    }
-
-    #[test]
-    fn publication_survives_visible_accounting_failure() {
-        let (parent, epoch) = publication();
-        PendingMutation::namespace_result(0, &parent).unwrap();
-        let accounting = Err::<(), _>(hl_runtime::RuntimePathError::NoSpace);
-        assert!(accounting.is_err());
-        assert_eq!(epoch.load(Ordering::Acquire), 12);
     }
 }
