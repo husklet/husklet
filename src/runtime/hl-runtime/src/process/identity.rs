@@ -192,6 +192,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if identifier != u32::MAX && (current.may_setid() || allowed.contains(&identifier) || old == identifier) {
             if user {
                 current.filesystem_user = identifier;
+                current.apply_setfsuid_capabilities(old);
             } else {
                 current.filesystem_group = identifier;
             }
@@ -216,6 +217,11 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         user: bool,
         sync_filesystem: bool,
     ) -> LinuxResult {
+        let old_users = [
+            credentials.real_user,
+            credentials.effective_user,
+            credentials.saved_user,
+        ];
         let target = if user {
             [
                 &mut credentials.real_user,
@@ -233,6 +239,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             if value != u32::MAX {
                 *field = value;
             }
+        }
+        if user {
+            credentials.apply_setuid_capabilities(old_users);
         }
         if !sync_filesystem {
             return self.replace_credentials(credentials);

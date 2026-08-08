@@ -366,8 +366,9 @@ fn credential_drop_isas() {
             ),
             (30, 31, 32, 31)
         );
-        assert_eq!(credentials.capabilities.effective, hl_task::CapabilitySets::CONTAINER);
-        assert_eq!(credentials.capabilities.permitted, hl_task::CapabilitySets::CONTAINER);
+        // Every uid is nonzero and keepcaps is off, so the drop takes both capability sets with it.
+        assert_eq!(credentials.capabilities.effective, 0);
+        assert_eq!(credentials.capabilities.permitted, 0);
         assert_eq!(credentials.setid_authority(), hl_task::SetIdAuthority::None);
     }
 }

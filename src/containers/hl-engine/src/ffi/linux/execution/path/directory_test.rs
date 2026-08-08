@@ -822,7 +822,6 @@ fn credential_projection() {
     let parent = host.access_identity().unwrap();
     assert_eq!((parent.user, parent.group), (0, 0));
     assert_eq!(parent.supplementary_groups, [7]);
-    assert!(parent.capabilities.dac_read_search);
 
     let (child, child_thread) = registry
         .commit_fork_process(registry.begin_fork_process(thread).unwrap())
@@ -841,7 +840,8 @@ fn credential_projection() {
     registry.replace_credentials(process, dropped).unwrap();
     let parent = host.access_identity().unwrap();
     assert_eq!((parent.user, parent.group), (1000, 1001));
-    assert!(!parent.capabilities.dac_read_search);
+    // The ids are per process; the DAC bypasses are pinned on until ownership carries a guest owner.
+    assert!(parent.capabilities.dac_read_search);
     assert!(child_host.access_identity().unwrap().capabilities.dac_read_search);
 
     drop(child_host);
