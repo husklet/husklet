@@ -180,6 +180,10 @@ impl TaskRegistry {
             .frames
             .pop()
             .map_or_else(|| SignalMask::from_bits(0), |frame| frame.deferred);
+        drop(state);
+        // Restoring the mask and deferred set can make a pending signal deliverable,
+        // so republish the token like the other mask writers do.
+        let _ = self.acknowledge_interrupt(thread)?;
         Ok(previous)
     }
 
