@@ -261,6 +261,7 @@ impl ProcfsSource for TaskProcfs {
             self.tasks.topology().online(),
             resources.cpu_limit,
             (resources.total_memory != 0).then_some(resources.total_memory),
+            resources.process_limit,
             resources.total_memory.saturating_sub(resources.free_memory),
             processes,
             threads,

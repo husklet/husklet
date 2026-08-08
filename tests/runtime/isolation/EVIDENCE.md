@@ -46,3 +46,24 @@ were removed. This is a disk-capacity blocker for that duplicate build, not a
 test verdict; the 42-row C build and existing-runner definition load are the
 available focused evidence until the boundary is committed and verified from a
 clean checkout.
+
+## 2026-08-08 restoration
+
+The 2026-08-03 `*** stack smashing detected ***` runner abort no longer
+reproduces at `refactor/merge-rust-engine`. The twenty rows that were broken
+solely for that abort were run from a clean release build of `engine` and
+`testing` and all forty case/target pairs passed. `runtime/isolation/ulimit-nofile`
+stays broken because `HL_ULIMITS` is still unwired in the runner, which reports
+it by name.
+
+Non-vacuity was proved by mutation rather than by the passing run. Making the
+engine read `HL_CPUS` under a name no launch ever sets failed exactly
+`cgroup-cpu-cap2`, `cpu-default-cap2`, `cpu-sysfs-dirs-cap2`, `cpucap-1` and
+`cpucap-2` on both ISAs (ten rows, each reporting the host's eighteen CPUs in
+place of the configured quota) while the other thirty-two rows still passed.
+
+`runtime/isolation/cgroup-pids-cap64` is new. It covers `HL_PIDS_MAX`, which no
+case in the corpus had ever set, and it found that `pids.max` was rendered as a
+constant `max` while the option really did clamp the runtime's process capacity:
+a guest saw an unlimited process quota and then `EAGAIN` from `fork`. Reverting
+that projection fails the new case on both ISAs and nothing else.
