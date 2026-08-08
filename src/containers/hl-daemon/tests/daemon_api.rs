@@ -65,6 +65,20 @@ async fn alpine_runtime_contracts() -> Result<(), Error> {
     api::daemon_runtime::run(containers, &rootfs, work.path()).await
 }
 
+/// Two containers, one volume, one host inode: the byte-range lock boundary that
+/// the per-container coordinator alone cannot enforce.
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn shared_mount_lock_contention() -> Result<(), Error> {
+    let work = TempDir::new()?;
+    let rootfs = work.path().join("rootfs");
+    let archive = env::var_os("HL_ALPINE_ARCHIVE")
+        .map(PathBuf::from)
+        .ok_or("HL_ALPINE_ARCHIVE must name the pinned Alpine minirootfs")?;
+    unpack(archive, rootfs.clone()).await?;
+    api::shared_lock::run(work.path(), &rootfs).await
+}
+
 #[tokio::test]
 #[ignore = "requires HL_ALPINE_ARCHIVE"]
 async fn attach_runtime_contracts() -> Result<(), Error> {

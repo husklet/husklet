@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::coordinator::{LockCoordinator, LockState, RangeRecord};
+
 use crate::{LockError, ProcessLockOwner, RangeLockSnapshot};
 
 /// Owner-scoped POSIX-lock removal with rollback capacity and admission held.
@@ -56,6 +57,7 @@ impl PreparedLockExit {
         state.ranges.retain(|_, records| !records.is_empty());
         state.exit_reservations += self.records.len();
         state.bump_owner(self.owner);
+        self.resync_shared(&state);
         self.committed = true;
         self.coordinator.changed.notify_all();
         Ok(())
@@ -81,8 +83,21 @@ impl PreparedLockExit {
         }
         state.bump_owner(self.owner);
         state.frozen_owners.remove(&self.owner);
+        self.resync_shared(&state);
         self.committed = false;
         self.coordinator.changed.notify_all();
+    }
+
+    /// Keeps tier 2 in step with the tier-1 records this transaction moved.
+    fn resync_shared(&self, state: &LockState) {
+        let mut seen = Vec::new();
+        for record in &self.records {
+            if seen.contains(&record.file) {
+                continue;
+            }
+            seen.push(record.file);
+            self.coordinator.resync_shared(state, record.file);
+        }
     }
 
     /// Releases rollback ownership after exit becomes irreversible.

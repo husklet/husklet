@@ -376,11 +376,14 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             device: metadata.device,
             inode: metadata.inode,
         };
+        // Mount provenance carried from open: true only for bind/volume files,
+        // whose inode another container in this daemon can also hold open.
+        let shared = lease.shared_domain();
         if command == 5 || command == 36 {
             let Some(kind) = kind else {
                 return LinuxResult::Error(Errno::EINVAL);
             };
-            if let Some(conflict) = locks.query_range(file, owner, kind, range) {
+            if let Some(conflict) = locks.query_range(file, owner, kind, range, shared) {
                 raw[0..2].copy_from_slice(
                     &(match conflict.kind {
                         RangeLockKind::Read => 0_i16,
@@ -420,7 +423,15 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         if observation.is_some_and(hl_descriptor::OperationCancellation::interrupted) {
             locks.interrupt(&cancellation);
         }
-        let result = locks.set_range(file, owner, kind, range, command == 7 || command == 38, &cancellation);
+        let result = locks.set_range(
+            file,
+            owner,
+            kind,
+            range,
+            command == 7 || command == 38,
+            shared,
+            &cancellation,
+        );
         drop(subscription);
         match result {
             Ok(()) => LinuxResult::Value(0),

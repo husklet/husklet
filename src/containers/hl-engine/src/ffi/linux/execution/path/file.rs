@@ -32,6 +32,9 @@ pub(in crate::ffi::linux::execution) struct NativeFile {
     ownership: Arc<metadata::Registry>,
     pub(super) shm_budget: Option<Arc<tmpfs::Budget>>,
     pub(super) shm_lease: Mutex<Option<tmpfs::Lease>>,
+    /// Set at open when the resolving mount is a bind or volume, so byte-range
+    /// locks on this file also reach the daemon-global tier.
+    shared_domain: AtomicBool,
     splice_gate: Arc<SpliceGate>,
 }
 
@@ -122,7 +125,13 @@ impl NativeFile {
             shm_budget,
             shm_lease: Mutex::new(None),
             splice_gate: Arc::new(SpliceGate::default()),
+            shared_domain: AtomicBool::new(false),
         })
+    }
+
+    /// Records that this file resolved through a host-passthrough mount.
+    pub(super) fn mark_shared_domain(&self) {
+        self.shared_domain.store(true, Ordering::Release);
     }
 
     pub(super) fn ownership(&self) -> &Arc<metadata::Registry> {
@@ -621,6 +630,10 @@ impl OpenFileDescription for NativeFile {
                 Err(error)
             }
         }
+    }
+
+    fn shared_domain(&self) -> bool {
+        self.shared_domain.load(Ordering::Acquire)
     }
 
     fn metadata(&self) -> Result<OfdMetadata, ObjectError> {

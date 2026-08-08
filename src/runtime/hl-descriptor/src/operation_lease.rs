@@ -287,6 +287,12 @@ impl OperationLease {
         self.description.object.metadata()
     }
 
+    /// Whether byte-range locks on this object must also consult the daemon-global tier.
+    #[must_use]
+    pub fn shared_domain(&self) -> bool {
+        self.description.object.shared_domain()
+    }
+
     ///
     /// # Errors
     /// Returns an error reported by the leased open-file description.

@@ -85,16 +85,40 @@ fn final_ofd_close_releases_range_locks() {
     let range = LockFixture::range(0, Some(16));
     let cancellation = LockCancellation::default();
     locks
-        .set_range(file, owner, Some(RangeLockKind::Write), range, false, &cancellation)
+        .set_range(
+            file,
+            owner,
+            Some(RangeLockKind::Write),
+            range,
+            false,
+            false,
+            &cancellation,
+        )
         .unwrap();
     assert_eq!(
-        locks.set_range(file, other, Some(RangeLockKind::Write), range, false, &cancellation),
+        locks.set_range(
+            file,
+            other,
+            Some(RangeLockKind::Write),
+            range,
+            false,
+            false,
+            &cancellation
+        ),
         Err(LockError::WouldBlock),
     );
 
     locks.close_ofd(ofd);
     locks
-        .set_range(file, other, Some(RangeLockKind::Write), range, false, &cancellation)
+        .set_range(
+            file,
+            other,
+            Some(RangeLockKind::Write),
+            range,
+            false,
+            false,
+            &cancellation,
+        )
         .unwrap();
 }
 
@@ -112,20 +136,52 @@ fn copy_up_keeps_lower_and_upper_on_one_lock_identity() {
     let held = LockFixture::range(0, Some(100));
     let later = LockFixture::range(200, Some(300));
     locks
-        .set_range(lower, holder, Some(RangeLockKind::Read), held, false, &cancellation)
+        .set_range(
+            lower,
+            holder,
+            Some(RangeLockKind::Read),
+            held,
+            false,
+            false,
+            &cancellation,
+        )
         .unwrap();
 
     locks.unify(lower, upper);
     assert_eq!(
-        locks.set_range(upper, writer, Some(RangeLockKind::Write), held, false, &cancellation),
+        locks.set_range(
+            upper,
+            writer,
+            Some(RangeLockKind::Write),
+            held,
+            false,
+            false,
+            &cancellation
+        ),
         Err(LockError::WouldBlock),
     );
 
     locks
-        .set_range(lower, holder, Some(RangeLockKind::Read), later, false, &cancellation)
+        .set_range(
+            lower,
+            holder,
+            Some(RangeLockKind::Read),
+            later,
+            false,
+            false,
+            &cancellation,
+        )
         .unwrap();
     assert_eq!(
-        locks.set_range(upper, writer, Some(RangeLockKind::Write), later, false, &cancellation),
+        locks.set_range(
+            upper,
+            writer,
+            Some(RangeLockKind::Write),
+            later,
+            false,
+            false,
+            &cancellation
+        ),
         Err(LockError::WouldBlock),
     );
 }
@@ -148,6 +204,7 @@ fn forgetting_an_upper_drops_its_translation() {
             Some(RangeLockKind::Write),
             range,
             false,
+            false,
             &cancellation,
         )
         .unwrap();
@@ -157,6 +214,7 @@ fn forgetting_an_upper_drops_its_translation() {
             LockFixture::process(2),
             Some(RangeLockKind::Write),
             range,
+            false,
             false,
             &cancellation,
         )
@@ -174,6 +232,7 @@ fn range_conflicts_coalesce() {
             Some(RangeLockKind::Write),
             LockFixture::range(0, Some(100)),
             false,
+            false,
             &cancel,
         )
         .unwrap();
@@ -183,6 +242,7 @@ fn range_conflicts_coalesce() {
             LockFixture::process(2),
             Some(RangeLockKind::Read),
             LockFixture::range(50, Some(60)),
+            false,
             false,
             &cancel,
         ),
@@ -194,7 +254,8 @@ fn range_conflicts_coalesce() {
                 LockFixture::file(1),
                 LockFixture::process(2),
                 RangeLockKind::Write,
-                LockFixture::range(10, Some(20))
+                LockFixture::range(10, Some(20)),
+                false,
             )
             .unwrap()
             .owner,
@@ -206,6 +267,7 @@ fn range_conflicts_coalesce() {
             LockFixture::process(1),
             None,
             LockFixture::range(25, Some(75)),
+            false,
             false,
             &cancel,
         )
@@ -220,6 +282,7 @@ fn range_conflicts_coalesce() {
             LockFixture::process(1),
             Some(RangeLockKind::Write),
             LockFixture::range(25, Some(75)),
+            false,
             false,
             &cancel,
         )
@@ -295,12 +358,13 @@ fn posix_fd_locks() {
                 Some(RangeLockKind::Read),
                 LockFixture::range(0, Some(10)),
                 false,
+                false,
                 &cancel,
             )
             .unwrap();
     }
     locks
-        .close_process_file(LockFixture::file(1), LockFixture::process(1))
+        .close_process_file(LockFixture::file(1), LockFixture::process(1), false)
         .unwrap();
     let snapshot = locks.snapshot();
     assert_eq!(snapshot.ranges.len(), 1);
@@ -325,6 +389,7 @@ fn exit_rollback_isolated() {
                 Some(RangeLockKind::Read),
                 LockFixture::range(start, Some(start + 5)),
                 false,
+                false,
                 &cancel,
             )
             .unwrap();
@@ -337,6 +402,7 @@ fn exit_rollback_isolated() {
             Some(RangeLockKind::Write),
             LockFixture::range(30, Some(40)),
             false,
+            false,
             &cancel,
         )
         .unwrap();
@@ -348,6 +414,7 @@ fn exit_rollback_isolated() {
             other,
             Some(RangeLockKind::Read),
             LockFixture::range(50, Some(60)),
+            false,
             false,
             &cancel,
         )
@@ -373,6 +440,7 @@ fn exit_admission_rejects() {
             Some(RangeLockKind::Read),
             LockFixture::range(0, Some(10)),
             false,
+            false,
             &cancel,
         )
         .unwrap();
@@ -383,6 +451,7 @@ fn exit_admission_rejects() {
             owner,
             Some(RangeLockKind::Read),
             LockFixture::range(0, Some(10)),
+            false,
             false,
             &cancel,
         ),
@@ -405,6 +474,7 @@ fn exit_admission_holds() {
             Some(RangeLockKind::Read),
             LockFixture::range(0, Some(10)),
             false,
+            false,
             &cancel,
         )
         .unwrap();
@@ -417,12 +487,13 @@ fn exit_admission_holds() {
             Some(RangeLockKind::Write),
             LockFixture::range(20, Some(30)),
             false,
+            false,
             &cancel,
         ),
         Err(LockError::ConcurrentMutation),
     );
     assert_eq!(
-        locks.close_process_file(LockFixture::file(1), owner),
+        locks.close_process_file(LockFixture::file(1), owner, false),
         Err(LockError::ConcurrentMutation),
     );
     prepared.rollback();
@@ -493,6 +564,7 @@ fn two_file_deadlock() {
             Some(RangeLockKind::Write),
             LockFixture::range(0, None),
             false,
+            false,
             &cancel,
         )
         .unwrap();
@@ -502,6 +574,7 @@ fn two_file_deadlock() {
             LockFixture::process(2),
             Some(RangeLockKind::Write),
             LockFixture::range(0, None),
+            false,
             false,
             &cancel,
         )
@@ -514,6 +587,7 @@ fn two_file_deadlock() {
             Some(RangeLockKind::Write),
             LockFixture::range(0, None),
             true,
+            false,
             &LockCancellation::default(),
         )
     });
@@ -527,12 +601,13 @@ fn two_file_deadlock() {
             Some(RangeLockKind::Write),
             LockFixture::range(0, None),
             true,
+            false,
             &cancel,
         ),
         Err(LockError::Deadlock)
     );
     locks
-        .close_process_file(LockFixture::file(2), LockFixture::process(2))
+        .close_process_file(LockFixture::file(2), LockFixture::process(2), false)
         .unwrap();
     assert_eq!(waiter.join().unwrap(), Ok(()));
 }
@@ -583,6 +658,7 @@ fn interrupt_before_range_wait() {
             Some(RangeLockKind::Write),
             LockFixture::range(0, Some(1)),
             true,
+            false,
             &cancellation,
         ),
         Ok(())
@@ -599,6 +675,7 @@ fn interrupt_after_range_wait() {
             Some(RangeLockKind::Write),
             LockFixture::range(0, Some(1)),
             false,
+            false,
             &LockCancellation::default(),
         )
         .unwrap();
@@ -612,6 +689,7 @@ fn interrupt_after_range_wait() {
             Some(RangeLockKind::Write),
             LockFixture::range(0, Some(1)),
             true,
+            false,
             &waiting_cancellation,
         )
     });
@@ -641,6 +719,7 @@ fn pointer_free_publish() {
             LockFixture::process(1),
             Some(RangeLockKind::Read),
             LockFixture::range(4, None),
+            false,
             false,
             &LockCancellation::default(),
         )
@@ -676,6 +755,7 @@ fn thousand_operation_merge() {
                 owner,
                 lock.then_some(RangeLockKind::Write),
                 LockFixture::range(start as u64, Some(end as u64)),
+                false,
                 false,
                 &cancel,
             )

@@ -4,6 +4,7 @@ mod algorithm;
 mod coordinator;
 mod exit;
 mod model;
+mod passthrough;
 
 pub use coordinator::LockCoordinator;
 pub use exit::PreparedLockExit;

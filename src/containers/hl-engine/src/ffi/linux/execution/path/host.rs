@@ -312,6 +312,9 @@ impl RuntimePathHost for NativePath {
             Arc::clone(&self.ownership),
             ordinary.shm_budget(&path),
         );
+        if ordinary.shared_mount(&path) {
+            file.mark_shared_domain();
+        }
         let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: the pinned parent and terminated name remain live and status is writable.
         let exists = unsafe {
