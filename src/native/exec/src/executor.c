@@ -1429,6 +1429,9 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                 atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
                 atomic_fetch_add_explicit(&executor->a64_fallback_generated, 1, memory_order_relaxed);
                 atomic_fetch_add_explicit(&executor->a64_fallback_form_memory, 1, memory_order_relaxed);
+                /* The word classifier credits both taxonomies together; a guard fault must
+                 * too, or form_memory reads as 100% while memory reads as 0 for the same exit. */
+                atomic_fetch_add_explicit(&executor->a64_fallback_memory, 1, memory_order_relaxed);
             }
         }
         if (cpu->reason == HL_NATIVE_EXIT_FALLBACK && cpu->fault_access != 0 &&

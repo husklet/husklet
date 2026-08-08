@@ -339,6 +339,50 @@ CPU layouts are generated from `src/schema/cpu` into C and Rust. Both sides comp
 size, alignment, and offset assertions. Hand-maintained duplicate layouts are
 forbidden.
 
+### Why arm64 translates far less than amd64
+
+Across the paired corpus 454 of 1073 rows build more than 10x the blocks on amd64,
+and 22 rows share one arm64 signature: `builds=1 hits=2 sites=1 entries=1
+completed=8`. Measured per case with `HL_NATIVE_DIAGNOSTICS=1`, this is **not** the
+sqlite suppression story: on every one of them `declined_suppressed=0`, `latches=0`,
+`clears=0`. Three arm64-only limiters compose instead, each measured on
+`runtime/syscalls/gettid` (amd64: `interp instructions=0`, `builds=86`,
+`completed=25558`; arm64: `interp instructions=97220`, `completed=8`):
+
+- **The first entry always takes direct authority, which has no operand resolver.**
+  `native_slice` computes `allow_direct` from tables that are empty on the first
+  probe, so the first run of every arm64 process cannot recover a memory access
+  outside its projected window and exits at ~8 instructions with
+  `a64_fallback_guard_write=1`. `native_x86` passes `allow_direct` as a literal
+  `false` and therefore never has this failure mode. Forcing `allow_direct=false`
+  on the arm64 path moves gettid from `builds=1 fallbacks=1 completed=8` to
+  `builds=36 fallbacks=0 completed=258`.
+- **The run then exits on a cold branch target instead of building it.** With
+  direct authority off the arm64 run ends at `a64_branch_exhaustion=1`,
+  `a64_branch_cold_relocation=27`. amd64 builds through the same targets
+  (`x86_cold_builds=86`, `relocation_cold_targets=138`) inside one lease.
+- **Re-entry then never happens.** `observe(key) < 2` requires the same
+  `(process, generation, version, pc)` to be probed twice, but native is probed at
+  most once per 4096-instruction interpreter slice; gettid gets 39 probes over 38
+  slices and 38 are `declined_cold`. amd64 escapes this only because, once in, it
+  does not come back out.
+
+Fixing the first limiter alone does not make a short program run translated: it
+buys ~259 instructions of one slice out of ~17,000. `signals/folded-fault-registers`
+and `signals/implicit-null-pc` therefore still fault interpreted, so they do not
+test the mechanism their sources claim. Making them honest requires changing the
+arm64 warm-up gate, which is an admission change and carries the full guard.
+
+`process/sysinfo` is the 22nd member of that arm64 set, not a separate weak row: its
+amd64 side reports `interp instructions=0`, so `builds=22 completed=79` is complete
+native coverage of a short program, and its floor is honest.
+
+Do not read `a64_fallback_form_memory` as a form classification. It is incremented
+both by the word classifier and, unconditionally, by the guard-fault path, so it is
+at least the guard-fault count by construction and can never be a minority. The
+claim that it was 278,672 of 278,672 on sqlite is that identity, not evidence that
+the operand-resolver memory path is the whole fallback population.
+
 ## Unsafe code
 
 Workspace code forbids unsafe by default.
