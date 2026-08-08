@@ -407,6 +407,13 @@ nix build -L --option cores 0 --max-jobs auto
 nix flake check -L --option cores 0 --max-jobs auto
 ```
 
+Run Clippy and rustfmt only through `make lint` (alias of `make clippy`), `make fmt`,
+`make fmt-check`, or `make gate`; each enters the pinned shell. A bare `cargo clippy`
+on a host whose `cargo`/`rustc` come from a distribution package but whose
+`clippy-driver` comes from Nix fails with `error[E0514]: found crate ... compiled by
+an incompatible version of rustc` even though both report the same version string,
+because the two builds hash crate metadata differently.
+
 The default shell exposes both Linux guest compilers and the retained
 `*_LINUX_CC`, `*_LINUX_STATIC_CC`, `*_DYNAMIC_LOADER`, and `*_DYNAMIC_LIBC`
 contracts. Interactive verification must override conservative environment

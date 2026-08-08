@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint gate lint-cases clippy fmt fmt-check test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
+.PHONY: all check design-lint gate lint lint-cases clippy fmt fmt-check test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
 
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
@@ -20,11 +20,15 @@ lint-cases:
 clippy:
 	$(NIX_DEV) cargo clippy --workspace --all-targets --locked --offline -- -D warnings
 
+lint: clippy
+
+# Rustfmt ships with the pinned flake toolchain, not with a distribution Rust, so route formatting through
+# the same shell as Clippy rather than whatever `cargo fmt` a host happens to resolve.
 fmt:
-	cargo fmt --all
+	$(NIX_DEV) cargo fmt --all
 
 fmt-check:
-	cargo fmt --all -- --check
+	$(NIX_DEV) cargo fmt --all -- --check
 
 test: design-lint
 	cargo build -p engine -p testing --bins --locked
