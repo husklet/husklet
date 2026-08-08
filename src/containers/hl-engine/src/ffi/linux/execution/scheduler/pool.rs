@@ -129,6 +129,9 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) direct_modes: BTreeMap<hl_task::ProcessId, (bool, u32)>,
     /// Runs still owed before a thrashing process may be offered direct authority again.
     pub(super) direct_holds: BTreeMap<hl_task::ProcessId, u64>,
+    /// Processes that armed an interval or POSIX timer, whose expiry is only observed
+    /// on a scheduler round trip. A merely pending signal is not recorded here: it is
+    /// already read live through the run's interrupt flag.
     pub(super) boundary_sensitive: BTreeSet<hl_task::ProcessId>,
     pub(super) boundaries: Option<NativeBoundaries>,
     pub(super) counters: NativeCounters,
