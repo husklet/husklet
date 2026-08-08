@@ -7,7 +7,8 @@ pub use dispatch::{
     BlockIdentity, CacheObservation, DispatchDecision, DispatchError, TranslationEmission, TranslationRequest,
 };
 pub use runner::{
-    ExecutionFault, ExecutionInstructionMemory, InstructionEpoch, StepOutcome, SynchronousTrap, TrapSignal, TrapState,
+    ExecutionFault, ExecutionInstructionMemory, INTERPRETED_BLOCKS, INTERPRETED_INSTRUCTIONS, INTERPRETED_SLICES,
+    InstructionEpoch, StepOutcome, SynchronousTrap, TrapSignal, TrapState,
 };
 pub use state::{
     ArchitecturalCounter, EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionMachine, ExecutionSnapshot,

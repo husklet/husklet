@@ -4,6 +4,29 @@ use crate::{
     GuestSystemPort, MemoryFault, PcCoordinatePort, ScalarInterpreter, ScalarIr, X86ScalarDecoder,
     aarch64::register::RegisterExecutor,
 };
+/// Guest instructions and basic blocks the Rust interpreter retired, as against the
+/// `completed` counter the native executor reports for translated code. Accumulated once
+/// per slice so the per-instruction path stays free of atomics.
+pub static INTERPRETED_INSTRUCTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static INTERPRETED_BLOCKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static INTERPRETED_SLICES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Publishes a slice's interpreter tally on every exit path, including the early returns
+/// a fault or an epoch mismatch takes.
+struct InterpreterTally {
+    instructions: u64,
+    blocks: u64,
+}
+
+impl Drop for InterpreterTally {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        INTERPRETED_SLICES.fetch_add(1, Relaxed);
+        INTERPRETED_INSTRUCTIONS.fetch_add(self.instructions, Relaxed);
+        INTERPRETED_BLOCKS.fetch_add(self.blocks, Relaxed);
+    }
+}
+
 const X86_MAXIMUM_INSTRUCTION: usize = 15;
 const BLOCK_INSTRUCTIONS: usize = 64;
 const BLOCK_LIMIT: usize = 4096;
@@ -644,6 +667,10 @@ impl ExecutionMachine {
         let mut cache = self.blocks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.synchronize(epoch);
         let mut remaining = budget;
+        let mut tally = InterpreterTally {
+            instructions: 0,
+            blocks: 0,
+        };
         while remaining > 0 {
             let current_epoch = if let Some(current) = memory.instruction_epoch() {
                 cache.synchronize(current);
@@ -655,13 +682,16 @@ impl ExecutionMachine {
                     return outcome;
                 }
                 remaining -= 1;
+                tally.instructions = budget - remaining;
                 continue;
             };
+            tally.blocks += 1;
             let address = cpu.pc;
             match DispatchDecision::from(cache.observe(address, current_epoch)) {
                 DispatchDecision::Translate => match self.prepare_block(&mut cache, address, cpu, memory) {
                     Ok(true) => {
                         remaining -= 1;
+                        tally.instructions = budget - remaining;
                         continue;
                     }
                     Ok(false) => {}
@@ -687,6 +717,7 @@ impl ExecutionMachine {
                     exit
                 };
                 remaining -= 1;
+                tally.instructions = budget - remaining;
                 match exit {
                     Aarch64ExecutionExit::Continue => {}
                     Aarch64ExecutionExit::Branch { .. } => break,
