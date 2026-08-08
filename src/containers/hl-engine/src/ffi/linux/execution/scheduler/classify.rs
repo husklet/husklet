@@ -49,6 +49,29 @@ impl GuestExecutor {
         outcome == StepOutcome::Continue && observes
     }
 
+    /// Syscalls that change which signals are deliverable: masks, dispositions,
+    /// alternate stacks, and handler return. Servicing one inline would apply the
+    /// new deliverability without passing a signal-delivery boundary.
+    pub(super) fn changes_signal_delivery(isa: GuestIsa, number: u64) -> bool {
+        match isa {
+            GuestIsa::Aarch64 => matches!(number, 132 | 134 | 135 | 138 | 139),
+            GuestIsa::X86_64 => matches!(number, 13 | 14 | 15 | 129 | 131),
+        }
+    }
+
+    pub(super) fn defers_signal_delivery(isa: GuestIsa, machine: &ExecutionMachine) -> bool {
+        let mut defers = false;
+        let outcome = machine.handle_syscall(1, |cpu| {
+            let number = match cpu {
+                ExecutionCpuSnapshot::Aarch64(cpu) => cpu.registers[8],
+                ExecutionCpuSnapshot::X86_64(cpu) => cpu.registers[0],
+            };
+            defers = Self::changes_signal_delivery(isa, number);
+            StepOutcome::Continue
+        });
+        outcome == StepOutcome::Continue && defers
+    }
+
     pub(super) fn descriptor_blocks(isa: GuestIsa, number: u64) -> bool {
         match isa {
             GuestIsa::Aarch64 => matches!(

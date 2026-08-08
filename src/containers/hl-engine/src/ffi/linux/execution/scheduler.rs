@@ -232,7 +232,6 @@ impl GuestExecutor {
                 }
             }
         }
-        let interrupted_boundary = run.interrupt.is_set();
         let signal = match Self::signal_boundary(threads, &run) {
             Ok(signal) => signal,
             Err(error) => return Self::apply_error(threads, run, error),
@@ -247,9 +246,6 @@ impl GuestExecutor {
             SignalTurn::GatePark => return Ok(None),
             SignalTurn::Terminal(terminal) => return Self::finish(plan, threads, run, terminal),
             SignalTurn::Continue => {}
-        }
-        if interrupted_boundary {
-            native.boundary_sensitive.insert(run.process);
         }
         if let Err(error) = threads.acknowledge_interrupt(run.thread) {
             return Self::apply_error(threads, run, Self::thread_error(error));
@@ -299,6 +295,7 @@ impl GuestExecutor {
                     .as_ref()
                     .is_some_and(threads::SchedulerContinuation::is_current)
                 && !threads.has_parked()
+                && !Self::defers_signal_delivery(isa, &run.machine)
                 && matches!(Self::blocks(isa, &run.machine, &run.router, true), Ok(false));
             if may_inline {
                 native.counters.services += 1;
@@ -329,8 +326,10 @@ impl GuestExecutor {
                     Ok(TraceBoundary::Continue | TraceBoundary::Dispatch | TraceBoundary::Signal(_)) => {}
                     Err(error) => return Self::apply_error(threads, run, error),
                 }
+                // A deliverable signal ends this activation so the next `advance`
+                // reaches its delivery boundary; it does not make the process
+                // permanently boundary-sensitive.
                 if run.interrupt.is_set() {
-                    native.boundary_sensitive.insert(run.process);
                     threads.release(&run).map_err(Self::thread_error)?;
                     return Ok(None);
                 }
