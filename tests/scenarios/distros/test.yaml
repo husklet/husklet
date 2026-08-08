@@ -36,7 +36,7 @@ cases:
   - registry
   actions:
   - shell:
-      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+      script: . /etc/os-release; echo "OS=$ID-$(echo "$VERSION_ID" | cut -d. -f1,2)"
   expect:
     stdout_contains: golden/os_alpine.txt
 - id: distros/alpine-319-osrelease
@@ -46,7 +46,7 @@ cases:
   - registry
   actions:
   - shell:
-      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+      script: . /etc/os-release; echo "OS=$ID-$(echo "$VERSION_ID" | cut -d. -f1,2)"
   expect:
     stdout_contains: golden/os_alpine2.txt
 - id: distros/alpine-320-osrelease
@@ -56,7 +56,7 @@ cases:
   - registry
   actions:
   - shell:
-      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+      script: . /etc/os-release; echo "OS=$ID-$(echo "$VERSION_ID" | cut -d. -f1,2)"
   expect:
     stdout_contains: golden/os_alpine3.txt
 - id: distros/alpine-apk-version

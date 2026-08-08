@@ -29,7 +29,7 @@ impl TryFrom<&ProcessConfig> for Spec {
             launch.checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.restore),
         )?;
 
-        let executable = launch.rootfs.join(launch.process.program.trim_start_matches('/'));
+        let executable = launch.rootfs.join(Self::guest_program(launch).trim_start_matches('/'));
         let arguments = std::iter::once(launch.process.program.as_bytes().to_vec())
             .chain(launch.process.args.iter().map(|argument| argument.as_bytes().to_vec()))
             .collect();
@@ -64,6 +64,42 @@ impl TryFrom<&ProcessConfig> for Spec {
 
 impl Spec {
     const MAX_NETWORK_INTERFACES: usize = 8;
+    const DEFAULT_PATH: &'static str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+    /// Resolves a bare initial-process name against the image `PATH` inside the rootfs, the way
+    /// `execvp` would; names containing a slash are already guest-absolute or relative.
+    fn guest_program(launch: &ProcessConfig) -> String {
+        let roots = std::iter::once(launch.rootfs.clone())
+            .chain(launch.overlay.iter().map(|overlay| overlay.lower.clone()))
+            .collect::<Vec<_>>();
+        Self::search_path(
+            &launch.process.program,
+            launch.process.env.get("PATH").unwrap_or(Self::DEFAULT_PATH),
+            &roots,
+        )
+    }
+
+    fn search_path(program: &str, search: &str, roots: &[std::path::PathBuf]) -> String {
+        let program = program.to_owned();
+        if program.contains('/') {
+            return program;
+        }
+        for directory in search.split(':').filter(|entry| !entry.is_empty()) {
+            let candidate = format!("{}/{program}", directory.trim_end_matches('/'));
+            if roots
+                .iter()
+                .any(|root| Self::executable_here(&root.join(candidate.trim_start_matches('/'))))
+            {
+                return candidate;
+            }
+        }
+        program
+    }
+
+    fn executable_here(path: &std::path::Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    }
 
     fn set(options: &mut Options, name: &str, value: impl AsRef<[u8]>) -> Result<()> {
         options
@@ -249,5 +285,84 @@ impl Spec {
             Self::set(options, "HL_PUBLISH", publish)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::Spec;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    fn plant(root: &Path, guest: &str) {
+        let path = root.join(guest.trim_start_matches('/'));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"\x7fELF").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("hl-spec-path-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// A bare name resolves to the `PATH` entry that actually holds an executable, skipping earlier
+    /// entries that do not.
+    #[test]
+    fn a_bare_name_resolves_against_the_image_path() {
+        let root = scratch("bare");
+        plant(&root, "/usr/local/bin/python");
+        let resolved = Spec::search_path("python", "/usr/sbin:/usr/local/bin:/bin", std::slice::from_ref(&root));
+        assert_eq!(resolved, "/usr/local/bin/python");
+        assert!(root.join("usr/local/bin/python").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A name the rootfs cannot supply stays bare so the loader still reports the lookup failure.
+    #[test]
+    fn an_absent_name_is_left_alone() {
+        let root = scratch("absent");
+        assert_eq!(
+            Spec::search_path("python", "/usr/bin:/bin", std::slice::from_ref(&root)),
+            "python"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A non-executable file of the right name never wins the search.
+    #[test]
+    fn a_non_executable_candidate_is_skipped() {
+        let root = scratch("mode");
+        let decoy = root.join("usr/bin/node");
+        std::fs::create_dir_all(decoy.parent().unwrap()).unwrap();
+        std::fs::write(&decoy, b"text").unwrap();
+        std::fs::set_permissions(&decoy, std::fs::Permissions::from_mode(0o644)).unwrap();
+        plant(&root, "/bin/node");
+        assert_eq!(
+            Spec::search_path("node", "/usr/bin:/bin", std::slice::from_ref(&root)),
+            "/bin/node"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A program only the lower layer supplies still resolves, and the guest path stays rootfs relative.
+    #[test]
+    fn a_lower_layer_supplies_the_program() {
+        let upper = scratch("upper");
+        let lower = scratch("lower");
+        plant(&lower, "/usr/local/bin/node");
+        let resolved = Spec::search_path("node", "/usr/local/bin:/bin", &[upper.clone(), lower.clone()]);
+        assert_eq!(resolved, "/usr/local/bin/node");
+        std::fs::remove_dir_all(&upper).unwrap();
+        std::fs::remove_dir_all(&lower).unwrap();
+    }
+
+    /// A name that already carries a separator is passed through untouched.
+    #[test]
+    fn an_explicit_path_is_not_searched() {
+        assert_eq!(Spec::search_path("/bin/sh", "/usr/bin", &[]), "/bin/sh");
+        assert_eq!(Spec::search_path("./tool", "/usr/bin", &[]), "./tool");
     }
 }

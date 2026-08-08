@@ -100,6 +100,31 @@ impl AddressSpaceAdapter {
     }
 }
 
+/// A hint is advisory: an image larger than the gap between two hints slides above everything
+/// already staged instead of failing the load.
+fn place(hint: u64, size: u64, staged: &[(u64, u64)], page: u64) -> u64 {
+    let overlaps = |address: u64| {
+        let end = address.saturating_add(size);
+        staged
+            .iter()
+            .any(|(start, len)| address < start.saturating_add(*len) && *start < end)
+    };
+    if !overlaps(hint) {
+        return hint;
+    }
+    staged
+        .iter()
+        .filter_map(|(start, len)| start.checked_add(*len))
+        .max()
+        .map_or(hint, |top| top.next_multiple_of(page))
+}
+
+impl AddressSpaceAdapter {
+    fn spans(&self) -> Vec<(u64, u64)> {
+        self.staged.values().map(|entry| (entry.address, entry.size)).collect()
+    }
+}
+
 impl TransactionalAddressSpace for AddressSpaceAdapter {
     type Reservation = Reservation;
 
@@ -115,8 +140,8 @@ impl TransactionalAddressSpace for AddressSpaceAdapter {
         }
         let address = match placement {
             MappingPlacement::Fixed(address) => address,
-            MappingPlacement::Hint(Some(address)) => address,
-            MappingPlacement::Hint(None) => self.hint,
+            MappingPlacement::Hint(Some(address)) => place(address, size, &self.spans(), PAGE),
+            MappingPlacement::Hint(None) => place(self.hint, size, &self.spans(), PAGE),
         };
         let end = address.checked_add(size).ok_or(AddressSpaceError::InvalidRange)?;
         if address % PAGE != 0 || end > self.length as u64 {
@@ -268,5 +293,32 @@ impl ImageProtectionRegistry<Reservation> for AddressSpaceAdapter {
         }
         self.entry(token)?.access.push((address, size, read_only));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::place;
+
+    const PAGE: u64 = 4096;
+
+    /// An unoccupied hint is honored exactly.
+    #[test]
+    fn a_free_hint_is_honored() {
+        assert_eq!(place(0x20_00000, PAGE, &[(0x10_00000, PAGE)], PAGE), 0x20_00000);
+    }
+
+    /// A main image wider than the gap to the interpreter hint pushes the interpreter above it
+    /// rather than colliding; this is the node-sized-image case.
+    #[test]
+    fn an_oversized_main_image_pushes_the_interpreter_up() {
+        let main = (0x10_00000_u64, 0x80_00000_u64);
+        assert_eq!(place(0x20_00000, 0x10000, &[main], PAGE), main.0 + main.1);
+    }
+
+    /// The slide lands page aligned even when the occupied top is not.
+    #[test]
+    fn the_slide_is_page_aligned() {
+        assert_eq!(place(0x1000, PAGE, &[(0x1000, 0x1001)], PAGE), 0x3000);
     }
 }
