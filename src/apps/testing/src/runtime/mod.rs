@@ -204,7 +204,7 @@ struct Completion {
     key: WorkKey,
     elapsed_ms: u64,
     host_load: String,
-    result: Result<Vec<execution::CaseResult>, String>,
+    result: Result<execution::Report, String>,
 }
 
 impl Completion {
@@ -222,18 +222,29 @@ impl Completion {
     }
 }
 
-fn outcome(result: &Result<Vec<execution::CaseResult>, String>) -> (&'static str, String) {
-    let (status, diagnostic) = match result {
-        Ok(results) if results.iter().all(execution::CaseResult::passed) => (ledger::PASS, String::new()),
-        Ok(results) => (
+/// The row's status and its diagnostic, which carries the engine counters even on a pass so the
+/// sweep stays auditable after the fact.
+fn outcome(result: &Result<execution::Report, String>) -> (&'static str, String) {
+    let (status, failure, counters) = match result {
+        Ok(report) if report.results.iter().all(execution::CaseResult::passed) => {
+            (ledger::PASS, String::new(), report.counters.as_str())
+        }
+        Ok(report) => (
             ledger::FAIL,
-            results
+            report
+                .results
                 .iter()
                 .filter_map(execution::CaseResult::diagnostic)
                 .collect::<Vec<_>>()
                 .join("; "),
+            report.counters.as_str(),
         ),
-        Err(error) => (ledger::FAIL, error.clone()),
+        Err(error) => (ledger::FAIL, error.clone(), ""),
+    };
+    let diagnostic = match (failure.is_empty(), counters.is_empty()) {
+        (_, true) => failure,
+        (true, false) => counters.to_owned(),
+        (false, false) => format!("{failure} || {counters}"),
     };
     (status, diagnostic.bounded_to(diagnostic::DIAGNOSTIC_LIMIT))
 }
@@ -282,11 +293,11 @@ fn summarize(
 
 fn summarize_completed(completed: Completion, passed: &mut usize, failed: &mut Vec<String>) {
     match completed.result {
-        Ok(results) => summarize_results(
+        Ok(report) => summarize_results(
             &completed.key,
             completed.elapsed_ms,
             &completed.host_load,
-            results,
+            report.results,
             passed,
             failed,
         ),
