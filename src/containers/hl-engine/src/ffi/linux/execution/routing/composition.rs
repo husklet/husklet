@@ -163,7 +163,8 @@ pub(in crate::ffi::linux::execution) fn create(
     let event_checkpoint = event_checkpoint::Resources::new(assembly);
     let tasks = assembly.tasks();
     let seccomp = assembly.seccomp();
-    let mut launch_credentials = ProcessCredentials::new(uid, gid, &[], 32).expect("valid launch credentials");
+    // Docker seeds the supplementary set with the primary group, so `id` reports a `groups=` field.
+    let mut launch_credentials = ProcessCredentials::new(uid, gid, &[gid], 32).expect("valid launch credentials");
     launch_credentials.capabilities = hl_task::CapabilitySets {
         effective: hl_task::CapabilitySets::CONTAINER,
         permitted: hl_task::CapabilitySets::CONTAINER,

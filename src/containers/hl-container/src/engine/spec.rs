@@ -16,6 +16,7 @@ impl TryFrom<&ProcessConfig> for Spec {
             crate::Guest::X86_64 => GuestIsa::X86_64,
         };
         let domain = launch.domain.unwrap_or(hl_engine::Domain::new()?);
+        Self::stage_working_directory(launch)?;
         let mut options = Options::default();
         Self::process(&mut options, launch, domain)?;
         Self::filesystem(&mut options, launch)?;
@@ -94,6 +95,34 @@ impl Spec {
             }
         }
         program
+    }
+
+    /// Docker creates a `WORKDIR`/`-w` directory that the image does not carry; the guest
+    /// working-directory base rejects a missing path, so materialize it before launch.
+    fn stage_working_directory(launch: &ProcessConfig) -> Result<()> {
+        let relative = launch.process.working_dir.as_os_str().as_encoded_bytes();
+        let relative = std::path::Path::new(
+            std::str::from_utf8(relative)
+                .map_err(|_| Error::InvalidSpec("working directory must be valid UTF-8".into()))?,
+        )
+        .strip_prefix("/")
+        .map_err(|_| Error::InvalidSpec("working directory must be absolute".into()))?;
+        if relative.as_os_str().is_empty() || launch.isolation.read_only_root {
+            return Ok(());
+        }
+        let present = std::iter::once(&launch.rootfs)
+            .chain(launch.overlay.iter().map(|overlay| &overlay.lower))
+            .any(|root| root.join(relative).is_dir());
+        if present {
+            return Ok(());
+        }
+        let destination = launch
+            .overlay
+            .as_ref()
+            .map_or(&launch.rootfs, |overlay| &overlay.upper)
+            .join(relative);
+        std::fs::create_dir_all(&destination)
+            .map_err(|error| Error::InvalidSpec(format!("working directory {}: {error}", destination.display())))
     }
 
     fn executable_here(path: &std::path::Path) -> bool {

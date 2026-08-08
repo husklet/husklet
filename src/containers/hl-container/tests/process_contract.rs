@@ -25,7 +25,8 @@ async fn launch_contracts() -> Result<(), Error> {
     within_deadline(async {
         let fixture = Fixture::new().await?;
         for case in launch_cases() {
-            fixture.run(case).await?;
+            let name = case.name;
+            fixture.run(case).await.map_err(|error| format!("{name}: {error}"))?;
         }
         Ok(())
     })
