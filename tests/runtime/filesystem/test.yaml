@@ -388,6 +388,13 @@ cases:
     artifact: { destination: /opt/husklet/filesystem-fchmodat2-empty }
     run: []
     expect: { exit: 0, stdout: golden/fchmodat2_empty.out }
+  - id: runtime/filesystem/chmod-dot-family
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/chmod_dot_family.c, output: chmod-dot-family, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-chmod-dot-family }
+    run: []
+    expect: { exit: 0, stdout: golden/chmod_dot_family.out }
   - id: runtime/filesystem/statx-probe
     status: active
     compat: { class: compatibility }
@@ -398,7 +405,7 @@ cases:
   - id: runtime/filesystem/statx-btime
     status: !host-excluded
       hosts: [macos]
-      reason: "excluded-macos: statx STATX_BTIME mask honesty diverges on the macOS engine. The Linux engine now runs this and is RED: it reports tmp-btime-mask=0 btime-nonzero=0 fd-btime-mask=0 where the golden requires 1/1/1, so the Linux STATX_BTIME gap is a real uncovered engine defect that the former !unsupported marker hid."
+      reason: "excluded-macos: statx STATX_BTIME mask honesty diverges on the macOS engine. The Linux engine passes: linux_extensions() requests STATX_BTIME|STATX_MNT_ID through host SYS_statx and reports exactly what the host supplies. A red here means the guest rootfs was materialized on a backing filesystem that does not report birth time (a virtiofs/9p-shared checkout answers mask 0x17ff: MNT_ID yes, BTIME no), not an engine gap; point HL_SCENARIO_IMAGE_CACHE at a btime-capable filesystem and both ISAs pass."
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/statx_btime.c, output: statx-btime, flags: [-static, -O2, -std=gnu11] }
