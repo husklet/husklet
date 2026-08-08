@@ -125,6 +125,10 @@ impl NativeFile {
         })
     }
 
+    pub(super) fn ownership(&self) -> &Arc<metadata::Registry> {
+        &self.ownership
+    }
+
     pub(super) fn modified(&self, result: Result<usize, ObjectError>) -> Result<usize, ObjectError> {
         if result.as_ref().is_ok_and(|count| *count != 0) {
             self.watches.publish(&self.path, hl_event::InotifyMask::MODIFY);

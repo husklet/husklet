@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs::File;
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -261,33 +261,95 @@ impl DescriptorNode {
 
 pub(super) struct HostMetadata;
 
-/// Guest ownership overrides, written only by `chown`. A never-chowned file therefore projects the
-/// host inode's uid — the engine's own — so this table cannot answer "which guest uid owns this".
+/// Guest ownership of every inode this container created or chowned, keyed by host device and
+/// inode. Entries hold no descriptor, so the table costs memory rather than a per-inode fd; the
+/// creation paths that free an inode call [`Registry::forget`] so a recycled inode number cannot
+/// inherit a stale owner.
 #[derive(Debug, Default)]
 pub(super) struct Registry(Mutex<BTreeMap<(u64, u64), Ownership>>);
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct Ownership {
-    _pin: File,
     user: u32,
     group: u32,
 }
 
 impl Registry {
     pub(super) fn set(&self, descriptor: RawFd, user: u32, group: u32) -> Result<(), RuntimePathError> {
-        // SAFETY: fcntl duplicates the live inode capability and returns unique ownership.
-        let duplicated = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 0) };
-        if duplicated < 0 {
-            return Err(HostError::map(std::io::Error::last_os_error()));
-        }
-        // SAFETY: successful fcntl returned one descriptor not owned elsewhere.
-        let pin = unsafe { File::from_raw_fd(duplicated) };
-        let value = pin.metadata().map_err(HostError::map)?;
+        let status = Self::stat(descriptor)?;
+        self.insert(status.st_dev, status.st_ino, user, group);
+        Ok(())
+    }
+
+    fn insert(&self, device: u64, inode: u64, user: u32, group: u32) {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert((value.dev(), value.ino()), Ownership { _pin: pin, user, group });
-        Ok(())
+            .insert((device, inode), Ownership { user, group });
+    }
+
+    fn lookup(&self, device: u64, inode: u64) -> Option<Ownership> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(device, inode))
+            .copied()
+    }
+
+    /// Drops the record for an inode whose last link is going away, so the number is safe to reuse.
+    pub(super) fn forget(&self, device: u64, inode: u64) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(device, inode));
+    }
+
+    fn stat(descriptor: RawFd) -> Result<libc::stat, RuntimePathError> {
+        let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: the descriptor stays live and fstat writes status without retaining either.
+        if unsafe { libc::fstat(descriptor, status.as_mut_ptr()) } != 0 {
+            return Err(HostError::map(std::io::Error::last_os_error()));
+        }
+        // SAFETY: a successful fstat initialized the complete value.
+        Ok(unsafe { status.assume_init() })
+    }
+
+    /// Records the guest owner of a just-created entry, following Linux `inode_init_owner`: the
+    /// creator's filesystem uid owns it, and a setgid parent lends its own group instead of the
+    /// creator's. Hard links are not creations — they share the source inode's existing record.
+    pub(super) fn record_created(&self, parent: RawFd, name: &std::ffi::CStr, user: u32, group: u32) {
+        let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: parent and name stay live and fstatat writes status without retaining them.
+        if unsafe { libc::fstatat(parent, name.as_ptr(), status.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            return;
+        }
+        // SAFETY: a successful fstatat initialized the complete value.
+        let status = unsafe { status.assume_init() };
+        self.record(parent, &status, user, group);
+    }
+
+    /// The anonymous form, for an `O_TMPFILE` inode that has no name to stat through.
+    pub(super) fn record_created_fd(&self, parent: RawFd, child: RawFd, user: u32, group: u32) {
+        if let Ok(status) = Self::stat(child) {
+            self.record(parent, &status, user, group);
+        }
+    }
+
+    fn record(&self, parent: RawFd, status: &libc::stat, user: u32, group: u32) {
+        let group = self.inherited_group(parent).unwrap_or(group);
+        self.insert(status.st_dev, status.st_ino, user, group);
+    }
+
+    /// The group a setgid parent lends its children, in guest terms.
+    fn inherited_group(&self, parent: RawFd) -> Option<u32> {
+        let directory = Self::stat(parent).ok()?;
+        if directory.st_mode & libc::S_ISGID == 0 {
+            return None;
+        }
+        Some(
+            self.lookup(directory.st_dev, directory.st_ino)
+                .map_or(directory.st_gid, |owner| owner.group),
+        )
     }
 
     pub(super) fn project(&self, metadata: &mut FileMetadata) {

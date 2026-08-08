@@ -16,6 +16,9 @@ const EXCHANGE: u32 = 2;
 pub(super) struct PendingMutation {
     pub(super) action: Mutation,
     pub(super) watches: std::sync::Arc<super::super::watch::Hub>,
+    pub(super) ownership: std::sync::Arc<super::super::metadata::Registry>,
+    /// Filesystem uid and gid of the task issuing the mutation, which owns whatever it creates.
+    pub(super) creator: (u32, u32),
 }
 
 impl PreparedPathMutation for PendingMutation {
@@ -55,7 +58,7 @@ impl PreparedPathMutation for PendingMutation {
                     .as_ref()
                     .map_or(Ok(()), |budget| entry.track_created(budget, false))
             }
-            Mutation::Unlink(entry, directory, charge) => {
+            Mutation::Unlink(entry, directory, charge, _) => {
                 // A lower copy the removal would expose is hidden by a published
                 // whiteout; anything upper-only takes the kernel's own unlinkat
                 // so its ENOTDIR/EISDIR/ENOTEMPTY reach the guest unchanged.
@@ -115,6 +118,7 @@ impl PreparedPathMutation for PendingMutation {
             Mutation::SetTimes(inode, times, nofollow) => Self::set_times(inode, *times, *nofollow),
         };
         if result.is_ok() {
+            self.settle_ownership();
             self.publish();
         }
         result
@@ -153,9 +157,23 @@ impl PendingMutation {
         Ok(())
     }
 
+    /// Gives a newly created node its creating guest owner, and drops the record of an inode the
+    /// removal just freed. A hard link creates no inode, so it keeps the source's existing record.
+    fn settle_ownership(&self) {
+        let (user, group) = self.creator;
+        match &self.action {
+            Mutation::Directory(entry, ..) | Mutation::Node(entry, ..) | Mutation::Symlink(_, entry, _) => {
+                self.ownership
+                    .record_created(entry.parent.as_raw_fd(), &entry.name, user, group);
+            }
+            Mutation::Unlink(_, _, _, Some((device, inode))) => self.ownership.forget(*device, *inode),
+            _ => {}
+        }
+    }
+
     fn publish(&self) {
         match &self.action {
-            Mutation::Unlink(entry, _, _) => {
+            Mutation::Unlink(entry, _, _, _) => {
                 self.watches.publish(&entry.path, hl_event::InotifyMask::DELETE_SELF);
                 if let (Some(parent), Some(name)) = (entry.path.parent(), entry.path.file_name()) {
                     self.watches
@@ -184,7 +202,10 @@ impl PendingMutation {
         group: Option<u32>,
         ownership: &super::super::metadata::Registry,
     ) -> Result<(), RuntimePathError> {
-        let current = super::super::attribute::Descriptor::new(inode.descriptor.as_raw_fd()).metadata()?;
+        // `Descriptor::metadata` is a raw fstat, so an omitted id would otherwise be refilled from the
+        // engine's host uid and silently discard the recorded guest owner.
+        let mut current = super::super::attribute::Descriptor::new(inode.descriptor.as_raw_fd()).metadata()?;
+        ownership.project(&mut current);
         ownership.set(
             inode.descriptor.as_raw_fd(),
             user.unwrap_or(current.user),

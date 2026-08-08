@@ -5,13 +5,12 @@ use super::super::NativePath;
 pub(in crate::ffi::linux::execution::path) struct Identity;
 
 impl Identity {
-    /// The filesystem checks compare a guest id against the HOST inode owner: `Descriptor::metadata`
-    /// fstats the host file, and only chown records a guest owner, so almost every path reports the
-    /// engine's own uid. Until created files carry a guest owner, an honest projection would deny a
-    /// dropped-privilege task every mutation outside a world-writable directory -- measured EACCES on
-    /// both a root-chowned directory and one the task created itself. The DAC bypasses therefore stay
-    /// pinned on here, so this layer is exactly as permissive as before capabilities became droppable;
-    /// making ownership real is what unpins them.
+    /// Created files now carry a guest owner, so `metadata::Registry` can answer who owns an inode.
+    /// These bypasses stay pinned on because two checks still read `attribute::Descriptor::metadata`,
+    /// a raw fstat reporting the engine's host uid: `authorize_chmod`/`authorize_chown`/
+    /// `authorize_times` here, and `PinnedEntry::parent_access`. Unpinning before those project the
+    /// registry would deny a dropped-privilege task both metadata changes on files it owns and
+    /// creation inside directories it made. Projecting that one `metadata()` is what unpins them.
     const BYPASS: Capabilities = Capabilities {
         dac_override: true,
         dac_read_search: true,

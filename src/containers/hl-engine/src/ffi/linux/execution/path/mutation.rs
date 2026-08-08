@@ -22,7 +22,7 @@ use pending::PendingMutation;
 enum Mutation {
     Directory(PinnedEntry, u32, Option<std::sync::Arc<super::tmpfs::Budget>>),
     Node(PinnedEntry, u32, u64, Option<std::sync::Arc<super::tmpfs::Budget>>),
-    Unlink(PinnedEntry, bool, Option<UnlinkCharge>),
+    Unlink(PinnedEntry, bool, Option<UnlinkCharge>, Option<(u64, u64)>),
     Rename(PinnedEntry, PinnedEntry, u32),
     Link(PinnedInode, PinnedEntry),
     Symlink(CString, PinnedEntry, Option<std::sync::Arc<super::tmpfs::Budget>>),
@@ -96,6 +96,27 @@ impl PinnedEntry {
         })
     }
 
+    /// The host identity of an entry whose removal frees the inode, so its ownership record can go
+    /// with it. `None` whenever another link survives and the record must stay.
+    fn freed_identity(&self) -> Option<(u64, u64)> {
+        let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: parent and name are retained by this entry and fstatat writes status only.
+        if unsafe {
+            libc::fstatat(
+                self.parent.selected().as_raw_fd(),
+                self.name.as_ptr(),
+                status.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } != 0
+        {
+            return None;
+        }
+        // SAFETY: successful fstatat initialized the complete value.
+        let status = unsafe { status.assume_init() };
+        (status.st_nlink == 1).then_some((status.st_dev, status.st_ino))
+    }
+
     fn track_created(&self, budget: &super::tmpfs::Budget, directory: bool) -> Result<(), RuntimePathError> {
         let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: the created entry remains named below the retained parent.
@@ -145,7 +166,7 @@ impl Mutation {
         match self {
             Self::Rename(from, to, _) => Ok(denied(&from.path)? || denied(&to.path)?),
             Self::Link(_, to) | Self::Symlink(_, to, _) => denied(&to.path),
-            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _) => {
+            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _, _) => {
                 denied(&entry.path)
             }
             Self::Chmod(inode, _, _) | Self::Chown(inode, _, _, _) | Self::SetTimes(inode, _, _) => {
@@ -173,7 +194,7 @@ impl Mutation {
                 from.parent_access(identity)?;
                 to.parent_access(identity)
             }
-            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _) => {
+            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _, _) => {
                 entry.parent_access(identity)
             }
             Self::Link(_, to) | Self::Symlink(_, to, _) => to.parent_access(identity),
@@ -242,7 +263,8 @@ pub(super) fn prepare(
                 .shm_budget(&entry.path)
                 .map(|budget| entry.charge(budget))
                 .transpose()?;
-            Mutation::Unlink(entry, *directory, charge)
+            let freed = entry.freed_identity();
+            Mutation::Unlink(entry, *directory, charge, freed)
         }
         hl_linux::FsMutationPlan::Rename {
             from,
@@ -296,6 +318,8 @@ pub(super) fn prepare(
     Ok(Box::new(PendingMutation {
         action,
         watches: std::sync::Arc::clone(&host.watches),
+        ownership: std::sync::Arc::clone(&host.ownership),
+        creator: (identity.user, identity.group),
     }))
 }
 
@@ -482,7 +506,13 @@ mod epoch_tests {
         use hl_runtime::PreparedPathMutation;
 
         let watches = super::super::watch::Hub::new(b"/").unwrap();
-        PendingMutation { action, watches }.commit()
+        PendingMutation {
+            action,
+            watches,
+            ownership: std::sync::Arc::new(crate::ffi::linux::execution::path::metadata::Registry::default()),
+            creator: (0, 0),
+        }
+        .commit()
     }
 
     /// `ParentLease` owns its descriptor, so each entry pins the root again
@@ -525,7 +555,7 @@ mod epoch_tests {
     fn unlink_success_publishes_namespace_epoch() {
         let (root, epoch) = publication();
         std::fs::write(root.path().join("gone"), b"x").unwrap();
-        commit(Mutation::Unlink(entry(&root, "gone"), false, None)).unwrap();
+        commit(Mutation::Unlink(entry(&root, "gone"), false, None, None)).unwrap();
         assert!(!root.path().join("gone").exists());
         assert_eq!(epoch.load(Ordering::Acquire), 12);
     }
@@ -534,7 +564,7 @@ mod epoch_tests {
     fn rmdir_success_publishes_namespace_epoch() {
         let (root, epoch) = publication();
         std::fs::create_dir(root.path().join("empty")).unwrap();
-        commit(Mutation::Unlink(entry(&root, "empty"), true, None)).unwrap();
+        commit(Mutation::Unlink(entry(&root, "empty"), true, None, None)).unwrap();
         assert!(!root.path().join("empty").exists());
         assert_eq!(epoch.load(Ordering::Acquire), 12);
     }
