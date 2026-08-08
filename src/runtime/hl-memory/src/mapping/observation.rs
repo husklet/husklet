@@ -27,4 +27,14 @@ impl<H: Host> Coordinator<H> {
     pub fn publish_instruction(&self) {
         self.host.executable.publish_all();
     }
+
+    /// Publishes instruction-cache maintenance that named one address. `ic ivau` invalidates a
+    /// single cache line, so it supersedes that line's page rather than the whole executable era.
+    pub fn publish_instruction_at(&self, address: u64) {
+        let Ok(range) = AddressRange::nonempty(hl_isa::GuestAddress::new(address), 1) else {
+            self.host.executable.publish_all();
+            return;
+        };
+        self.host.executable.publish([range]);
+    }
 }
