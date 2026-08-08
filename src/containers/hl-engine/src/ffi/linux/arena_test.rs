@@ -641,3 +641,67 @@ fn atomic_later_mismatch() {
     .unwrap();
     assert_eq!(observed, [0; 4]);
 }
+
+/// Builds one registered backing file of `length` bytes for the cache tests.
+fn registered_file(tag: &str, length: u64) -> (VirtualMemory, fs::File, std::path::PathBuf, FileIdentity) {
+    let path = std::path::PathBuf::from(format!("/tmp/hl-{tag}-{}", process::id()));
+    let _ = fs::remove_file(&path);
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
+    file.set_len(length).unwrap();
+    let identity = FileIdentity { device: 91, object: 92 };
+    let arena = VirtualMemory::reserve((PAGE * 8) as usize).unwrap();
+    arena.register_file(identity, &file).unwrap();
+    (arena, file, path, identity)
+}
+
+#[test]
+fn file_prefix_restats_past_the_cached_length() {
+    let (arena, file, path, identity) = registered_file("prefix-growth", PAGE);
+    assert_eq!(arena.file_prefix(identity, 0, PAGE, 0), Ok(PAGE));
+    file.set_len(PAGE * 3).unwrap();
+    // The request runs past the cached bound, so the stale length cannot
+    // answer it and the fresh stat observes the growth.
+    assert_eq!(arena.file_prefix(identity, 0, PAGE * 3, 0), Ok(PAGE * 3));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn file_prefix_answers_within_the_cached_length() {
+    let (arena, file, path, identity) = registered_file("prefix-cached", PAGE * 4);
+    assert_eq!(arena.file_prefix(identity, 0, PAGE * 4, 0), Ok(PAGE * 4));
+    file.set_len(PAGE).unwrap();
+    // An unpublished shrink stays invisible: this is exactly the staleness the
+    // invalidation contract has to cover.
+    assert_eq!(arena.file_prefix(identity, 0, PAGE * 4, 0), Ok(PAGE * 4));
+    arena.invalidate_file_size(identity);
+    // Ask past the shrunken end: a prefix clamped to a one-page request would
+    // look identical whether or not the stale length survived.
+    assert_eq!(arena.file_prefix(identity, 0, PAGE * 4, 0), Ok(PAGE));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn registering_a_file_drops_the_cached_length() {
+    let (arena, file, path, identity) = registered_file("prefix-reregister", PAGE * 4);
+    assert_eq!(arena.file_prefix(identity, 0, PAGE * 4, 0), Ok(PAGE * 4));
+    file.set_len(PAGE).unwrap();
+    arena.register_file(identity, &file).unwrap();
+    // Every mmap re-registers, so the shrink is observed without any explicit
+    // invalidation on that path.
+    assert_eq!(arena.file_prefix(identity, 0, PAGE * 4, 0), Ok(PAGE));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn validate_file_still_raises_the_bus_fault_past_eof() {
+    let (arena, _file, path, identity) = registered_file("prefix-bus", PAGE);
+    assert_eq!(arena.validate_file(identity, 0, PAGE, 0x4000), Ok(()));
+    assert!(arena.validate_file(identity, PAGE, PAGE, 0x4000).is_err());
+    assert!(arena.take_bus(0x4000));
+    fs::remove_file(path).unwrap();
+}

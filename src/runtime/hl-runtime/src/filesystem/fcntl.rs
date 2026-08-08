@@ -49,7 +49,16 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             offset: offset as u64,
             length: length as u64,
         }) {
-            Ok(()) => LinuxResult::Value(0),
+            Ok(()) => {
+                // COLLAPSE_RANGE shortens the file without a truncate, so no
+                // BackingChange names it and mapped-file lengths must be reread.
+                if mode & 0x08 != 0
+                    && let Some(changes) = &self.backing_changes
+                {
+                    changes.lengths_changed();
+                }
+                LinuxResult::Value(0)
+            }
             Err(hl_descriptor::ObjectError::NotSupported) => LinuxResult::Error(Errno::EOPNOTSUPP),
             Err(error) => LinuxResult::Error(FileErrno::object(error)),
         }

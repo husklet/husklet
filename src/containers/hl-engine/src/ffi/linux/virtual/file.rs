@@ -12,6 +12,37 @@ pub(super) struct Canonical {
     pub(super) offset: u64,
 }
 
+/// A registered backing file and the last length observed for it.
+#[derive(Debug)]
+pub(super) struct Registered {
+    pub(super) file: File,
+    /// `None` forces a fresh stat. A cached length is only trusted while it
+    /// already covers the requested end, so growth restats and only shrink
+    /// has to be published.
+    pub(super) size: Option<u64>,
+}
+
+impl Registered {
+    pub(super) const fn new(file: File) -> Self {
+        Self { file, size: None }
+    }
+
+    /// Returns the page-rounded valid length, restating only when the cached
+    /// length cannot already answer for `need`.
+    fn valid(&mut self, page: u64, need: u64) -> Result<u64, MemoryError> {
+        let round = |size: u64| size.checked_add(page - 1).map(|value| value / page * page);
+        if let Some(size) = self.size
+            && let Some(valid) = round(size)
+            && valid >= need
+        {
+            return Ok(valid);
+        }
+        let size = self.file.metadata().map_err(|_| MemoryError::Host)?.len();
+        self.size = Some(size);
+        round(size).ok_or(MemoryError::InvalidRange)
+    }
+}
+
 impl Memory {
     pub(super) fn prepare_canonical(&self, request: hl_memory::MapRequest) -> Result<Option<Canonical>, MemoryError> {
         let (file, offset) = match request.backing {
@@ -20,6 +51,7 @@ impl Memory {
                 let file = files
                     .get(&(identity.device, identity.object))
                     .ok_or(MemoryError::Host)?
+                    .file
                     .try_clone()
                     .map_err(|_| MemoryError::Host)?;
                 (file, request.backing_offset)
@@ -144,9 +176,9 @@ impl Memory {
                     .ok_or(MemoryError::InvalidRange)?,
             )
             .map_err(|_| MemoryError::Host)?;
-            e.insert(file);
+            e.insert(Registered::new(file));
         }
-        let file = files.get(&key).ok_or(MemoryError::Host)?;
+        let file = &files.get(&key).ok_or(MemoryError::Host)?.file;
         let backing_offset = i64::try_from(request.backing_offset).map_err(|_| MemoryError::InvalidRange)?;
         self.host
             .map(
@@ -163,11 +195,12 @@ impl Memory {
     }
 
     pub(super) fn apply_backing(&self, change: hl_memory::BackingChange) -> Result<(), MemoryError> {
-        let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let file = files
-            .get(&(change.identity.device, change.identity.object))
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = files
+            .get_mut(&(change.identity.device, change.identity.object))
             .ok_or(MemoryError::Host)?;
-        let size = file.metadata().map_err(|_| MemoryError::Host)?.len();
+        let size = entry.file.metadata().map_err(|_| MemoryError::Host)?.len();
+        entry.size = Some(size);
         (size == change.new_size).then_some(()).ok_or(MemoryError::Host)
     }
 
@@ -178,9 +211,10 @@ impl Memory {
         let (address, length) = self.host_range(offset, request.length)?;
         let native = Self::native_protection(request.protection)?;
         let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let file = files
+        let file = &files
             .get(&(identity.device, identity.object))
-            .ok_or(MemoryError::Host)?;
+            .ok_or(MemoryError::Host)?
+            .file;
         let offset = i64::try_from(request.backing_offset).map_err(|_| MemoryError::InvalidRange)?;
         self.host
             .map(
@@ -203,7 +237,7 @@ impl Memory {
         }
         files.insert(
             (identity.device, identity.object),
-            file.try_clone().map_err(|_| MemoryError::Host)?,
+            Registered::new(file.try_clone().map_err(|_| MemoryError::Host)?),
         );
         Ok(())
     }
@@ -229,17 +263,16 @@ impl Memory {
         length: u64,
         address: u64,
     ) -> Result<u64, MemoryError> {
-        let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let file = files
-            .get(&(identity.device, identity.object))
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = files
+            .get_mut(&(identity.device, identity.object))
             .ok_or(MemoryError::Host)?;
-        let size = file.metadata().map_err(|_| MemoryError::Host)?.len();
         // Linux permits the partial EOF page and zero-fills its tail. Access to
         // a later whole page raises SIGBUS even when the VMA extends farther.
         // SAFETY: sysconf receives no pointer, retains no state, and cannot unwind.
         let page = unsafe { abi::sysconf(abi::_SC_PAGESIZE) };
         let page = u64::try_from(page).map_err(|_| MemoryError::Host)?;
-        let valid = size.checked_add(page - 1).ok_or(MemoryError::InvalidRange)? / page * page;
+        let valid = entry.valid(page, offset.saturating_add(length))?;
         let available = valid.saturating_sub(offset).min(length);
         if available != 0 || length == 0 {
             return Ok(available);
@@ -249,16 +282,35 @@ impl Memory {
     }
 
     pub(super) fn file_valid_length(&self, identity: hl_memory::FileIdentity) -> Result<u64, MemoryError> {
-        let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let file = files
-            .get(&(identity.device, identity.object))
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = files
+            .get_mut(&(identity.device, identity.object))
             .ok_or(MemoryError::Host)?;
-        let length = file.metadata().map_err(|_| MemoryError::Host)?.len();
+        let length = entry.file.metadata().map_err(|_| MemoryError::Host)?.len();
+        entry.size = Some(length);
         let page = 4096_u64;
         length
             .checked_add(page - 1)
             .map(|value| value & !(page - 1))
             .ok_or(MemoryError::InvalidRange)
+    }
+
+    /// Drops every cached length. Used by size-changing paths that publish no
+    /// `BackingChange`, so no identity is available to narrow the reset.
+    pub(super) fn invalidate_file_sizes(&self) {
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for entry in files.values_mut() {
+            entry.size = None;
+        }
+    }
+
+    /// Drops the cached length so the next access restats. Called for every
+    /// published backing change, including ones no live mapping observes.
+    pub(super) fn invalidate_file_size(&self, identity: hl_memory::FileIdentity) {
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = files.get_mut(&(identity.device, identity.object)) {
+            entry.size = None;
+        }
     }
 
     pub(super) fn take_bus(&self, address: u64) -> bool {

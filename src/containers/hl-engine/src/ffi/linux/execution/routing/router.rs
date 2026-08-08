@@ -111,7 +111,7 @@ impl ProcessContext {
                 .with_fs_context(Arc::clone(&self.fs_context))
                 .with_actor(self.process, thread)
                 .with_advisory_locks(Arc::clone(&self.locks))
-                .with_backing_changes(Arc::new(BackingChanges::new(self.space.mappings())))
+                .with_backing_changes(Arc::new(BackingChanges::new(self.space.mappings(), self.space.arena())))
                 .with_socket_ioctl(self.network.socket_ioctl())
                 .with_vector_terminal(Arc::new(super::super::vector::VectorAdapter::new(
                     process_memory.clone(),

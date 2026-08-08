@@ -68,18 +68,27 @@ impl Drop for DirectProjection {
 
 pub struct BackingChanges {
     mappings: Arc<hl_memory::MappingCoordinator<MappingHostAdapter>>,
+    arena: Arc<VirtualMemory>,
 }
 
 impl BackingChanges {
     #[must_use]
-    pub fn new(mappings: Arc<hl_memory::MappingCoordinator<MappingHostAdapter>>) -> Self {
-        Self { mappings }
+    pub fn new(mappings: Arc<hl_memory::MappingCoordinator<MappingHostAdapter>>, arena: Arc<VirtualMemory>) -> Self {
+        Self { mappings, arena }
     }
 }
 
 impl hl_runtime::BackingChangePort for BackingChanges {
     fn changed(&self, change: BackingChange) -> Result<(), ()> {
+        // Drop the cached length first: the coordinator skips reconciliation
+        // when this address space holds no alias, but a sibling that shares the
+        // registry may still have one mapped.
+        self.arena.invalidate_file_size(change.identity);
         self.mappings.backing_changed(change).map(drop).map_err(|_| ())
+    }
+
+    fn lengths_changed(&self) {
+        self.arena.invalidate_file_sizes();
     }
 }
 

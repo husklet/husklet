@@ -5,7 +5,6 @@ use super::virtual_host::{GuestVm, LinuxGuestVm};
 use super::virtual_lock::Locks;
 use hl_memory::Protection;
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
@@ -51,7 +50,7 @@ pub struct Memory {
     pub(super) shared_backings: Option<Arc<super::shared_backing::Registry>>,
     pub(super) snapshot_backings: bool,
     pub(super) inherited_shared: bool,
-    pub(super) files: Arc<Mutex<BTreeMap<(u64, u64), File>>>,
+    pub(super) files: Arc<Mutex<BTreeMap<(u64, u64), super::virtual_file::Registered>>>,
     pub(super) bus_fault: AtomicU64,
     pub(super) advice: Mutex<Advice>,
     pub(super) locks: Mutex<Locks>,
@@ -173,12 +172,15 @@ impl Memory {
     }
 
     #[must_use]
-    pub(super) fn with_file_registry(mut self, files: Arc<Mutex<BTreeMap<(u64, u64), File>>>) -> Self {
+    pub(super) fn with_file_registry(
+        mut self,
+        files: Arc<Mutex<BTreeMap<(u64, u64), super::virtual_file::Registered>>>,
+    ) -> Self {
         self.files = files;
         self
     }
 
-    pub(super) fn file_registry(&self) -> Arc<Mutex<BTreeMap<(u64, u64), File>>> {
+    pub(super) fn file_registry(&self) -> Arc<Mutex<BTreeMap<(u64, u64), super::virtual_file::Registered>>> {
         Arc::clone(&self.files)
     }
 
