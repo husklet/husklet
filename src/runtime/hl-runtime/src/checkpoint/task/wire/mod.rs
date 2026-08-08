@@ -5,7 +5,7 @@ use hl_task::*;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 pub(in crate::checkpoint) const TASK_BYTES_MAXIMUM: usize = 4 * 1024 * 1024;
-const WIRE_VERSION: u32 = 7;
+const WIRE_VERSION: u32 = 8;
 struct BoundedBytes(Vec<u8>);
 impl BoundedBytes {
     fn new() -> Self {
@@ -226,11 +226,6 @@ struct UserNamespaceWire {
     id: NamespaceWire,
     parent: Option<NamespaceWire>,
     owner: u32,
-    user_map: Option<Vec<[u32; 3]>>,
-    group_map: Option<Vec<[u32; 3]>>,
-    setgroups: u8,
-    user_authority: bool,
-    group_authority: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

@@ -63,14 +63,6 @@ impl UserNamespaceWire {
             id: NamespaceWire::from_value(value.id),
             parent: value.parent.map(NamespaceWire::from_value),
             owner: value.owner,
-            user_map: value.user_map.as_ref().map(Self::map_wire),
-            group_map: value.group_map.as_ref().map(Self::map_wire),
-            setgroups: match value.setgroups {
-                SetgroupsState::Allow => 1,
-                SetgroupsState::Deny => 2,
-            },
-            user_authority: value.user_authority,
-            group_authority: value.group_authority,
         }
     }
     pub(super) fn into_value(self) -> Result<UserNamespace, ()> {
@@ -78,35 +70,6 @@ impl UserNamespaceWire {
             id: NamespaceWire::into_value(self.id)?,
             parent: self.parent.map(NamespaceWire::into_value).transpose()?,
             owner: self.owner,
-            user_map: self.user_map.map(Self::map_value).transpose()?,
-            group_map: self.group_map.map(Self::map_value).transpose()?,
-            setgroups: match self.setgroups {
-                1 => SetgroupsState::Allow,
-                2 => SetgroupsState::Deny,
-                _ => return Err(()),
-            },
-            user_authority: self.user_authority,
-            group_authority: self.group_authority,
         })
-    }
-    pub(super) fn map_wire(value: &IdMap) -> Vec<[u32; 3]> {
-        value
-            .ranges()
-            .iter()
-            .map(|range| [range.inside, range.outside, range.length])
-            .collect()
-    }
-    pub(super) fn map_value(value: Vec<[u32; 3]>) -> Result<IdMap, ()> {
-        IdMap::new(
-            &value
-                .into_iter()
-                .map(|item| IdRange {
-                    inside: item[0],
-                    outside: item[1],
-                    length: item[2],
-                })
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|_| ())
     }
 }
