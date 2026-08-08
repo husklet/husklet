@@ -208,6 +208,9 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         for span in prepared.spans_mut() {
             let length = usize::try_from(span.range.length()).map_err(|_| MemoryError::AddressOverflow)?;
             let end = copied + length;
+            // Retaining this resolution from staging instead is sound under the
+            // generation check above, but measured slower: carrying a Resolution
+            // through the transaction costs more than re-resolving a warm ledger.
             let resolution = self
                 .ledger
                 .resolve(span.range.start(), Protection::WRITE)
