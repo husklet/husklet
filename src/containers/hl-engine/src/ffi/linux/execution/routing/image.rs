@@ -1,5 +1,6 @@
 //! Executable image, signal gateway, and workspace-root routing.
 
+use std::os::unix::ffi::OsStrExt;
 use std::sync::{Arc, Mutex};
 
 use hl_isa::AddressRange;
@@ -92,6 +93,8 @@ impl WorkspaceRoot {
             super::super::watch::Hub::new(watch_root)
         }
         .map_err(|_| EngineError::LaunchFailed)?;
+        // Every layer root a declared path could sit under, so ownership survives an upper-miss.
+        let mut owner_roots = vec![std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&root))];
         let native = if projected {
             super::super::path::NativePath::projected(&root, Arc::clone(&watches))
         } else if let Some(upper) = overlay_upper {
@@ -105,11 +108,21 @@ impl WorkspaceRoot {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            owner_roots.push(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&upper)));
+            owner_roots.extend(
+                lowers
+                    .iter()
+                    .map(|lower| std::path::PathBuf::from(std::ffi::OsStr::from_bytes(lower))),
+            );
             super::super::path::NativePath::layered(&upper, &lowers, Arc::clone(&watches))
         } else {
             super::super::path::NativePath::new(&root, Arc::clone(&watches))
         }
         .map_err(|_| EngineError::LaunchFailed)?;
+        let native = native.with_file_owners(
+            plan.options.get_bytes("HL_FILE_OWNERS").unwrap_or_default(),
+            owner_roots,
+        );
         let native = match authority {
             Some(tree) => native.with_projection(tree).map_err(|_| EngineError::LaunchFailed)?,
             None => native,

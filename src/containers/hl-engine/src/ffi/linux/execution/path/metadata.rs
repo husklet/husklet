@@ -109,6 +109,15 @@ impl Node {
     fn path(&self) -> Result<&Path, RuntimePathError> {
         self.rendered().map(|rendered| rendered.path.as_path())
     }
+
+    /// Applies the guest owner, rendering the host path only when this inode still needs the
+    /// image's declaration. An anchored node otherwise never pays for the name it avoided.
+    fn project_owner(&self, value: &mut FileMetadata) {
+        let path = (!self.ownership.knows(value.identity.device, value.identity.inode))
+            .then(|| self.path().ok())
+            .flatten();
+        self.ownership.project_at(path, value);
+    }
 }
 
 impl ResolvedPathLease for Node {
@@ -117,7 +126,7 @@ impl ResolvedPathLease for Node {
             Location::Anchored { parent, name, .. } => HostMetadata::anchored(parent, name)?,
             Location::Rendered(rendered) => HostMetadata::path(&rendered.path)?,
         };
-        self.ownership.project(&mut value);
+        self.project_owner(&mut value);
         Ok(value)
     }
     fn resolved_metadata(&self) -> Result<ResolvedMetadata, RuntimePathError> {
@@ -125,7 +134,7 @@ impl ResolvedPathLease for Node {
             Location::Anchored { parent, name, .. } => HostMetadata::anchored_resolved(parent, name)?,
             Location::Rendered(rendered) => HostMetadata::path_resolved(&rendered.path)?,
         };
-        self.ownership.project(&mut value.file);
+        self.project_owner(&mut value.file);
         Ok(value)
     }
     fn filesystem(&self) -> Result<FilesystemStats, RuntimePathError> {
@@ -261,12 +270,71 @@ impl DescriptorNode {
 
 pub(super) struct HostMetadata;
 
+/// Ownership the image layers declared, keyed by the root-relative host path the way
+/// `hl_images::snapshot::Ownerships` keys it. Layer trees are immutable, so this map is built once
+/// from `HL_FILE_OWNERS` and only ever read.
+#[derive(Debug, Default)]
+pub(super) struct Declared {
+    /// Longest-first, so an overlay upper nested under a lower still strips its own prefix.
+    roots: Vec<PathBuf>,
+    entries: BTreeMap<Vec<u8>, Ownership>,
+}
+
+impl Declared {
+    /// Parses the launch records, one `path\tuid\tgid` line each. Malformed lines are skipped
+    /// rather than failing launch, since a dropped record only costs the host-uid answer.
+    pub(super) fn parse(records: &[u8], roots: Vec<PathBuf>) -> Self {
+        let mut entries = BTreeMap::new();
+        for line in records.split(|byte| *byte == b'\n') {
+            let mut fields = line.split(|byte| *byte == b'\t');
+            let (Some(path), Some(user), Some(group), None) =
+                (fields.next(), fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            let parse = |field: &[u8]| std::str::from_utf8(field).ok()?.parse::<u32>().ok();
+            let (Some(user), Some(group)) = (parse(user), parse(group)) else {
+                continue;
+            };
+            let path = path.strip_prefix(b"/").unwrap_or(path);
+            if path.is_empty() {
+                continue;
+            }
+            entries.insert(path.to_vec(), Ownership { user, group });
+        }
+        let mut roots = roots;
+        roots.sort_by_key(|root| std::cmp::Reverse(root.as_os_str().len()));
+        Self { roots, entries }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The owner declared for a host path, found by stripping whichever layer root contains it.
+    fn get(&self, path: &Path) -> Option<Ownership> {
+        let relative = self
+            .roots
+            .iter()
+            .find_map(|root| path.strip_prefix(root).ok())?
+            .as_os_str()
+            .as_bytes();
+        self.entries.get(relative).copied()
+    }
+}
+
 /// Guest ownership of every inode this container created or chowned, keyed by host device and
 /// inode. Entries hold no descriptor, so the table costs memory rather than a per-inode fd; the
 /// creation paths that free an inode call [`Registry::forget`] so a recycled inode number cannot
 /// inherit a stale owner.
+///
+/// A `None` value is a resolved absence: the inode has no guest owner and the image declared none
+/// either, so the host stat stands. Caching that keeps a path lookup off every repeat stat.
 #[derive(Debug, Default)]
-pub(super) struct Registry(Mutex<BTreeMap<(u64, u64), Ownership>>);
+pub(super) struct Registry {
+    entries: Mutex<BTreeMap<(u64, u64), Option<Ownership>>>,
+    declared: std::sync::OnceLock<Declared>,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Ownership {
@@ -275,6 +343,43 @@ struct Ownership {
 }
 
 impl Registry {
+    pub(super) fn declare(&self, declared: Declared) {
+        let _ = self.declared.set(declared);
+    }
+
+    /// Folds the image's declaration for `path` into the table, if this inode has no answer yet.
+    ///
+    /// Precedence: a guest creation or chown already recorded here outranks the image, because the
+    /// registry is consulted first and only an absent key reaches the declared map. Copy-up moves a
+    /// file to a fresh inode, which re-derives from the same declared path, so a layer owner
+    /// survives it while a guest chown survives by having been re-recorded against the new inode.
+    pub(super) fn seed(&self, path: &Path, device: u64, inode: u64) {
+        let Some(declared) = self.declared.get() else {
+            return;
+        };
+        if declared.is_empty() {
+            return;
+        }
+        let mut entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries.entry((device, inode)).or_insert_with(|| declared.get(path));
+    }
+
+    /// Whether this inode already has a settled answer, so no path has to be rendered for it.
+    pub(super) fn knows(&self, device: u64, inode: u64) -> bool {
+        self.declared.get().is_none_or(Declared::is_empty)
+            || self
+                .entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(&(device, inode))
+    }
+
+    fn seeded(&self, path: Option<&Path>, device: u64, inode: u64) {
+        if let Some(path) = path {
+            self.seed(path, device, inode);
+        }
+    }
+
     pub(super) fn set(&self, descriptor: RawFd, user: u32, group: u32) -> Result<(), RuntimePathError> {
         let status = Self::stat(descriptor)?;
         self.insert(status.st_dev, status.st_ino, user, group);
@@ -282,23 +387,24 @@ impl Registry {
     }
 
     fn insert(&self, device: u64, inode: u64, user: u32, group: u32) {
-        self.0
+        self.entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert((device, inode), Ownership { user, group });
+            .insert((device, inode), Some(Ownership { user, group }));
     }
 
     fn lookup(&self, device: u64, inode: u64) -> Option<Ownership> {
-        self.0
+        self.entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(device, inode))
             .copied()
+            .flatten()
     }
 
     /// Drops the record for an inode whose last link is going away, so the number is safe to reuse.
     pub(super) fn forget(&self, device: u64, inode: u64) {
-        self.0
+        self.entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&(device, inode));
@@ -353,24 +459,25 @@ impl Registry {
     }
 
     pub(super) fn project(&self, metadata: &mut FileMetadata) {
-        if let Some(owner) = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&(metadata.identity.device, metadata.identity.inode))
-        {
+        self.project_at(None, metadata);
+    }
+
+    /// Projects the guest owner, first letting `path` fold in whatever the image declared for it.
+    pub(super) fn project_at(&self, path: Option<&Path>, metadata: &mut FileMetadata) {
+        self.seeded(path, metadata.identity.device, metadata.identity.inode);
+        if let Some(owner) = self.lookup(metadata.identity.device, metadata.identity.inode) {
             metadata.user = owner.user;
             metadata.group = owner.group;
         }
     }
 
     pub(super) fn project_ofd(&self, metadata: &mut OfdMetadata) {
-        if let Some(owner) = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&(metadata.device, metadata.inode))
-        {
+        self.project_ofd_at(None, metadata);
+    }
+
+    pub(super) fn project_ofd_at(&self, path: Option<&Path>, metadata: &mut OfdMetadata) {
+        self.seeded(path, metadata.device, metadata.inode);
+        if let Some(owner) = self.lookup(metadata.device, metadata.inode) {
             metadata.user = owner.user;
             metadata.group = owner.group;
         }

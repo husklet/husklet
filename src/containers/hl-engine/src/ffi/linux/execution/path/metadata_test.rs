@@ -1,7 +1,7 @@
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 
-use super::metadata::{HostMetadata, Node, Registry};
+use super::metadata::{Declared, HostMetadata, Node, Registry};
 use hl_linux::{AccessPlan, PathOperand};
 use hl_runtime::{Access, GuestPath, GuestPathBytes, OpenDirectory, ResolvedPathLease};
 
@@ -157,6 +157,44 @@ fn ownership_hardlink() {
         let physical = std::fs::metadata(path).unwrap();
         assert_eq!((physical.uid(), physical.gid()), (host.uid(), host.gid()));
     }
+
+    drop(file);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A layer declaration is the starting owner, and a guest chown of the same inode outranks it.
+#[test]
+fn declared_ownership_seeds_and_yields_to_a_chown() {
+    let root = std::env::temp_dir().join(format!("hl-owner-declared-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("declared"), b"data").unwrap();
+    std::fs::write(root.join("plain"), b"data").unwrap();
+    let host = std::fs::symlink_metadata(root.join("declared")).unwrap();
+    let (user, group) = (host.uid().wrapping_add(3_000), host.gid().wrapping_add(4_000));
+    // Without this the projection below would agree with the host by accident.
+    assert_ne!(user, host.uid());
+
+    let registry = Registry::default();
+    registry.declare(Declared::parse(
+        format!("declared\t{user}\t{group}").as_bytes(),
+        vec![root.clone()],
+    ));
+
+    let mut projected = HostMetadata::path(&root.join("declared")).unwrap();
+    registry.project_at(Some(&root.join("declared")), &mut projected);
+    assert_eq!((projected.user, projected.group), (user, group));
+
+    // A path the layers never declared keeps the host answer.
+    let mut plain = HostMetadata::path(&root.join("plain")).unwrap();
+    registry.project_at(Some(&root.join("plain")), &mut plain);
+    assert_eq!((plain.user, plain.group), (host.uid(), host.gid()));
+
+    // The guest chowning the declared inode wins: the registry is consulted before the layers.
+    let file = std::fs::File::open(root.join("declared")).unwrap();
+    registry.set(file.as_raw_fd(), 4_242, 4_343).unwrap();
+    let mut chowned = HostMetadata::path(&root.join("declared")).unwrap();
+    registry.project_at(Some(&root.join("declared")), &mut chowned);
+    assert_eq!((chowned.user, chowned.group), (4_242, 4_343));
 
     drop(file);
     std::fs::remove_dir_all(root).unwrap();
