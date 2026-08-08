@@ -64,12 +64,49 @@ impl PinnedEntry {
     /// Authorization reads the parent the guest can see, not the writable one:
     /// a lower-only parent has no upper copy until a mutation materializes it,
     /// and the copy inherits the mode being checked here anyway.
-    fn parent_access(&self, identity: &AccessIdentity) -> Result<(), RuntimePathError> {
-        let metadata = super::attribute::Descriptor::new(self.parent.selected().as_raw_fd()).metadata()?;
+    fn parent_access(
+        &self,
+        ownership: &super::metadata::Registry,
+        identity: &AccessIdentity,
+    ) -> Result<(), RuntimePathError> {
+        let selected = self.parent.selected().as_raw_fd();
+        // The path is read back from the descriptor rather than derived from the entry, because the
+        // visible layer for the leaf need not be the layer this parent descriptor came from.
+        let metadata = super::attribute::Descriptor::new(selected)
+            .projected(ownership, || pin::Host::descriptor_path(selected).ok())?;
         let access = Access::from_bits(Access::WRITE | Access::EXECUTE).map_err(|_| RuntimePathError::Invalid)?;
         identity
             .check_access(&metadata, access)
             .map_err(|_| RuntimePathError::Access)
+    }
+
+    /// Linux sticky policy: in a `01777` directory a name may be removed or renamed only by the
+    /// owner of the entry, the owner of the directory, or `CAP_FOWNER`. Both operands are guest
+    /// owners, so this can only deny once the registry is projected and the bypass is off.
+    fn sticky_access(
+        &self,
+        ownership: &super::metadata::Registry,
+        identity: &AccessIdentity,
+    ) -> Result<(), RuntimePathError> {
+        if identity.capabilities.owner_override {
+            return Ok(());
+        }
+        let selected = self.parent.selected().as_raw_fd();
+        let directory = super::attribute::Descriptor::new(selected)
+            .projected(ownership, || pin::Host::descriptor_path(selected).ok())?;
+        if directory.permissions.bits() & hl_runtime::Permissions::STICKY == 0 || identity.user == directory.user {
+            return Ok(());
+        }
+        // A name that cannot be statted is left to the operation's own error, not turned into EPERM.
+        let Ok(mut entry) = super::metadata::HostMetadata::anchored(&self.parent, &self.name) else {
+            return Ok(());
+        };
+        ownership.project_at(Some(&self.path), &mut entry);
+        if identity.user == entry.user {
+            Ok(())
+        } else {
+            Err(RuntimePathError::OperationNotPermitted)
+        }
     }
 
     fn charge(&self, budget: std::sync::Arc<super::tmpfs::Budget>) -> Result<UnlinkCharge, RuntimePathError> {
@@ -179,25 +216,46 @@ impl Mutation {
         }
     }
 
-    fn authorize(&mut self, identity: &AccessIdentity) -> Result<(), RuntimePathError> {
+    fn authorize(
+        &mut self,
+        ownership: &super::metadata::Registry,
+        identity: &AccessIdentity,
+    ) -> Result<(), RuntimePathError> {
         match self {
-            Self::Chmod(inode, mode, _) => {
-                super::attribute::authorize_chmod(inode.descriptor.as_raw_fd(), mode, identity)
-            }
-            Self::Chown(inode, user, group, _) => {
-                super::attribute::authorize_chown(inode.descriptor.as_raw_fd(), *user, *group, identity)
-            }
-            Self::SetTimes(inode, times, _) => {
-                super::attribute::authorize_times(inode.descriptor.as_raw_fd(), times, identity)
-            }
+            Self::Chmod(inode, mode, _) => super::attribute::authorize_chmod(
+                inode.descriptor.as_raw_fd(),
+                mode,
+                ownership,
+                Some(&inode.path),
+                identity,
+            ),
+            Self::Chown(inode, user, group, _) => super::attribute::authorize_chown(
+                inode.descriptor.as_raw_fd(),
+                *user,
+                *group,
+                ownership,
+                Some(&inode.path),
+                identity,
+            ),
+            Self::SetTimes(inode, times, _) => super::attribute::authorize_times(
+                inode.descriptor.as_raw_fd(),
+                times,
+                ownership,
+                Some(&inode.path),
+                identity,
+            ),
             Self::Rename(from, to, _) => {
-                from.parent_access(identity)?;
-                to.parent_access(identity)
+                from.parent_access(ownership, identity)?;
+                to.parent_access(ownership, identity)?;
+                from.sticky_access(ownership, identity)?;
+                to.sticky_access(ownership, identity)
             }
-            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _, _) => {
-                entry.parent_access(identity)
+            Self::Unlink(entry, _, _, _) => {
+                entry.parent_access(ownership, identity)?;
+                entry.sticky_access(ownership, identity)
             }
-            Self::Link(_, to) | Self::Symlink(_, to, _) => to.parent_access(identity),
+            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) => entry.parent_access(ownership, identity),
+            Self::Link(_, to) | Self::Symlink(_, to, _) => to.parent_access(ownership, identity),
         }
     }
 }
@@ -314,7 +372,7 @@ pub(super) fn prepare(
     if action.denied(host)? {
         return Err(RuntimePathError::ReadOnly);
     }
-    action.authorize(identity)?;
+    action.authorize(&host.ownership, identity)?;
     Ok(Box::new(PendingMutation {
         action,
         watches: std::sync::Arc::clone(&host.watches),

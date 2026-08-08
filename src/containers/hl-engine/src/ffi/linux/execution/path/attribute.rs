@@ -1,4 +1,5 @@
 use std::os::fd::{AsRawFd, RawFd};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hl_runtime::{
@@ -51,16 +52,34 @@ impl Descriptor {
             },
         })
     }
+
+    /// Metadata carrying the guest owner rather than the host inode's. The host path is rendered
+    /// only when the registry has no settled answer for this inode, so a recorded owner is free.
+    pub(super) fn projected<F: FnOnce() -> Option<PathBuf>>(
+        &self,
+        ownership: &super::metadata::Registry,
+        path: F,
+    ) -> Result<Metadata, RuntimePathError> {
+        let mut value = self.metadata()?;
+        let path = (!ownership.knows(value.identity.device, value.identity.inode))
+            .then(path)
+            .flatten();
+        ownership.project_at(path.as_deref(), &mut value);
+        Ok(value)
+    }
 }
 
 pub(super) fn authorize_chmod(
     descriptor: RawFd,
     mode: &mut u32,
+    ownership: &super::metadata::Registry,
+    path: Option<&std::path::Path>,
     identity: &AccessIdentity,
 ) -> Result<(), RuntimePathError> {
-    let current = Descriptor::new(descriptor).metadata()?;
+    let current = Descriptor::new(descriptor).projected(ownership, || path.map(Path::to_path_buf))?;
+    // Linux `chmod` on a file another uid owns is EPERM, matching `prepare_chmod`, not EACCES.
     if identity.user != current.user && !identity.capabilities.owner_override {
-        return Err(RuntimePathError::Access);
+        return Err(RuntimePathError::OperationNotPermitted);
     }
     if *mode & u32::from(Permissions::SET_GROUP_ID) != 0
         && !identity.belongs_to_group(current.group)
@@ -75,10 +94,13 @@ pub(super) fn authorize_chown(
     descriptor: RawFd,
     user: Option<u32>,
     group: Option<u32>,
+    ownership: &super::metadata::Registry,
+    path: Option<&Path>,
     identity: &AccessIdentity,
 ) -> Result<(), RuntimePathError> {
+    let current = Descriptor::new(descriptor).projected(ownership, || path.map(Path::to_path_buf))?;
     identity
-        .chown(&Descriptor::new(descriptor).metadata()?, user, group)
+        .chown(&current, user, group)
         .map(|_| ())
         .map_err(|_| RuntimePathError::OperationNotPermitted)
 }
@@ -86,17 +108,21 @@ pub(super) fn authorize_chown(
 pub(super) fn authorize_times(
     descriptor: RawFd,
     times: &[hl_linux::TimestampChange; 2],
+    ownership: &super::metadata::Registry,
+    path: Option<&Path>,
     identity: &AccessIdentity,
 ) -> Result<(), RuntimePathError> {
-    let current = Descriptor::new(descriptor).metadata()?;
+    let current = Descriptor::new(descriptor).projected(ownership, || path.map(Path::to_path_buf))?;
     if identity.user == current.user || identity.capabilities.owner_override {
         return Ok(());
     }
+    // A non-owner setting explicit times is EPERM; only the now-or-omit form falls back to needing
+    // write access, which is the EACCES case.
     if times
         .iter()
         .any(|change| matches!(change, hl_linux::TimestampChange::Value { .. }))
     {
-        return Err(RuntimePathError::Access);
+        return Err(RuntimePathError::OperationNotPermitted);
     }
     let write = Access::from_bits(Access::WRITE).map_err(|_| RuntimePathError::Invalid)?;
     identity
@@ -105,12 +131,14 @@ pub(super) fn authorize_times(
 }
 
 pub(super) fn prepare_chmod(
+    host: &NativePath,
     source: hl_descriptor::OperationLease,
     mode: u32,
     identity: &AccessIdentity,
 ) -> Result<Box<dyn PreparedPathMutation>, RuntimePathError> {
     let file = NativeLink::acquire(source)?;
-    let current = Descriptor::new(file.as_raw_fd()).metadata()?;
+    // A descriptor names no path, so only a recorded creation or chown can answer here.
+    let current = Descriptor::new(file.as_raw_fd()).projected(&host.ownership, || None)?;
     if identity.user != current.user && !identity.capabilities.owner_override {
         return Err(RuntimePathError::OperationNotPermitted);
     }
@@ -128,8 +156,9 @@ pub(super) fn prepare_chown(
     identity: &AccessIdentity,
 ) -> Result<Box<dyn PreparedPathMutation>, RuntimePathError> {
     let file = NativeLink::acquire(source)?;
+    let current = Descriptor::new(file.as_raw_fd()).projected(&host.ownership, || None)?;
     let changed = identity
-        .chown(&Descriptor::new(file.as_raw_fd()).metadata()?, user, group)
+        .chown(&current, user, group)
         .map_err(|_| RuntimePathError::OperationNotPermitted)?;
     Ok(Box::new(PendingChown {
         file,
@@ -140,12 +169,13 @@ pub(super) fn prepare_chown(
 }
 
 pub(super) fn prepare_times(
+    host: &NativePath,
     source: hl_descriptor::OperationLease,
     times: [hl_linux::TimestampChange; 2],
     identity: &AccessIdentity,
 ) -> Result<Box<dyn PreparedPathMutation>, RuntimePathError> {
     let file = NativeLink::acquire(source)?;
-    authorize_times(file.as_raw_fd(), &times, identity)?;
+    authorize_times(file.as_raw_fd(), &times, &host.ownership, None, identity)?;
     Ok(Box::new(PendingTimes { file, times }))
 }
 

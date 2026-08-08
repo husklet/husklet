@@ -76,6 +76,22 @@ cases:
     environment: { HL_UID: "0", HL_GID: "0" }
     run: []
     expect: { exit: 0, stdout: golden/created_ownership.out }
+  - id: runtime/filesystem/dac-denial
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dac_denial.c, output: dac-denial, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-dac-denial }
+    environment: { HL_UID: "0", HL_GID: "0" }
+    run: []
+    expect: { exit: 0, stdout: golden/dac_denial.out }
+  - id: runtime/filesystem/sticky-dir
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sticky_dir.c, output: sticky-dir, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-sticky-dir }
+    environment: { HL_UID: "0", HL_GID: "0" }
+    run: []
+    expect: { exit: 0, stdout: golden/sticky_dir.out }
   - id: runtime/filesystem/image-ownership
     status: active
     compat: { class: compatibility }
