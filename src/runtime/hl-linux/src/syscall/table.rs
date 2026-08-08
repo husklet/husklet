@@ -333,6 +333,22 @@ definitions!(
 /// x86-64 operations whose Linux ABI has no `AArch64` syscall-number peer.
 pub const X86_LEGACY_SYSCALLS: &[LegacyDefinition] = &[
     LegacyDefinition {
+        raw_number: 4,
+        operation: Operation {
+            canonical_number: 32793,
+            name: "stat",
+            family: Family::Filesystem,
+        },
+    },
+    LegacyDefinition {
+        raw_number: 6,
+        operation: Operation {
+            canonical_number: 32794,
+            name: "lstat",
+            family: Family::Filesystem,
+        },
+    },
+    LegacyDefinition {
         raw_number: 132,
         operation: Operation {
             canonical_number: 32790,

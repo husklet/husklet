@@ -57,7 +57,12 @@ impl Backing {
             });
         // SAFETY: the host chooses an unrelated interval, retains no pointer,
         // and Backing owns the complete result until its final Arc is dropped.
-        let address = unsafe { abi::mmap(std::ptr::null_mut(), length, 1 | 2, flags, descriptor, offset) };
+        let mut address = unsafe { abi::mmap(std::ptr::null_mut(), length, 1 | 2, flags, descriptor, offset) };
+        if address == abi::MAP_FAILED && descriptor >= 0 {
+            // Linux refuses PROT_WRITE|MAP_SHARED on a read-only description, so a read-only
+            // canonical view is the only one such a guest mapping can ever need.
+            address = unsafe { abi::mmap(std::ptr::null_mut(), length, 1, flags, descriptor, offset) };
+        }
         if address == abi::MAP_FAILED {
             return Err(MemoryError::Host);
         }

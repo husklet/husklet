@@ -350,6 +350,9 @@ impl<M: GuestMemory> FilesystemSyscalls for RuntimeFilesystemSyscalls<M> {
             "openat" => self.openat(arguments, false),
             "openat2" => self.openat(arguments, true),
             "newfstatat" => self.path_stat(arguments, false),
+            // Legacy x86-64 `stat`/`lstat` carry (path, buf); `lstat` is `newfstatat` with AT_SYMLINK_NOFOLLOW.
+            "stat" => self.path_stat([(-100_i64) as u64, arguments[0], arguments[1], 0, 0, 0], false),
+            "lstat" => self.path_stat([(-100_i64) as u64, arguments[0], arguments[1], 0x100, 0, 0], false),
             "statx" => self.path_stat(arguments, true),
             "statfs" => self.statfs(arguments, false),
             "fstatfs" => self.statfs(arguments, true),
