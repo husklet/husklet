@@ -80,6 +80,23 @@ int main(void) {
     CHECK(hl_a64_assembler_size(&assembler) == 0);
     CHECK(hl_a64_trace_effect(0xd65f0bffu, 0x9000).control); /* retaa terminates trace */
     CHECK(hl_a64_trace_effect(0xd65f0fffu, 0x9000).control); /* retab terminates trace */
+
+    /* trace_build calls the body entry directly, bypassing the capacity check
+     * in hl_a64_indirect_emit, so an exactly exhausted buffer leaves every
+     * inline-cache placeholder one past the end.  Those patchers only OR in
+     * zero bits there, so a value canary cannot see them; end the buffer on an
+     * unmapped page instead and let the read-modify-write fault. */
+    unsigned ibtc[4] = {0};
+    uint8_t *bounded = mmap(NULL, (size_t)page * 2, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(bounded != MAP_FAILED);
+    CHECK(mprotect(bounded, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+    uint8_t *edge = bounded + (size_t)page - 64;
+    CHECK(hl_a64_assembler_begin(&assembler, edge, edge, 64));
+    while (hl_a64_assembler_remaining(&assembler) != 0)
+        hl_a64_emit32(&assembler, 0xd503201fu);
+    CHECK(hl_a64_assembler_ok(&assembler));
+    CHECK(!hl_a64_indirect_body(&assembler, words[0], 0x9000, ibtc));
+    CHECK(munmap(bounded, (size_t)page * 2) == 0);
     return 0;
 #endif
 }

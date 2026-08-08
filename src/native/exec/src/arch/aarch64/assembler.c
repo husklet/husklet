@@ -25,6 +25,15 @@ size_t hl_a64_assembler_remaining(const hl_a64_assembler *state) {
 
 int hl_a64_assembler_ok(const hl_a64_assembler *state) { return state != NULL && state->failed == 0; }
 
+/* Placeholder patchers write through a captured cursor rather than through
+ * bounded emission, and a full buffer leaves that capture at the one-past-end
+ * cursor.  Only patch a word the assembler actually wrote. */
+int hl_a64_assembler_wrote(const hl_a64_assembler *state, const void *site) {
+    if (!hl_a64_assembler_ok(state) || site == NULL) return 0;
+    if ((uintptr_t)site < (uintptr_t)state->writable) return 0;
+    return (uintptr_t)state->cursor - (uintptr_t)site >= sizeof(uint32_t);
+}
+
 void *hl_a64_assembler_rx(const hl_a64_assembler *state, const void *pointer) {
     if (state == NULL || pointer == NULL) return NULL;
     return state->executable + ((const uint8_t *)pointer - state->writable);

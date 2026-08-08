@@ -29,13 +29,7 @@ static void source(hl_a64_assembler *assembler, unsigned reg) {
 static void patch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target,
                   uint32_t word, predicate_kind kind) {
     uint32_t distance;
-    /* Placeholder patchers write directly, unlike bounded instruction
-     * emission.  A full buffer leaves the placeholder at the one-past-end
-     * cursor, so never patch a site the assembler did not actually write. */
-    if (!hl_a64_assembler_ok(assembler) || instruction == NULL || target == NULL) return;
-    if ((uintptr_t)instruction < (uintptr_t)assembler->writable ||
-        (uintptr_t)assembler->cursor - (uintptr_t)instruction < sizeof(*instruction))
-        return;
+    if (target == NULL || !hl_a64_assembler_wrote(assembler, instruction)) return;
     distance = (uint32_t)((target - (const uint8_t *)instruction) / 4);
     if (kind == PREDICATE_CONDITION && (word & 15u) >= 14)
         *instruction = 0x14000000u | (distance & 0x03FFFFFFu);

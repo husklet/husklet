@@ -17,6 +17,7 @@ int hl_a64_assembler_begin(hl_a64_assembler *, void *, void *, size_t);
 size_t hl_a64_assembler_size(const hl_a64_assembler *);
 size_t hl_a64_assembler_remaining(const hl_a64_assembler *);
 int hl_a64_assembler_ok(const hl_a64_assembler *);
+int hl_a64_assembler_wrote(const hl_a64_assembler *, const void *);
 void *hl_a64_assembler_rx(const hl_a64_assembler *, const void *);
 void hl_a64_emit32(hl_a64_assembler *, uint32_t);
 void hl_a64_str(hl_a64_assembler *, int, int, int);
