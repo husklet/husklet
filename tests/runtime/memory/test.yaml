@@ -326,7 +326,11 @@ cases:
     build: { source: source/aarch64_pairwriteback.c, output: aarch64-pair-writeback, flags: ["-static","-O2","-std=gnu11"] }
     artifact: { destination: /opt/husklet/memory/aarch64-pair-writeback }
     run: []
-    expect: { exit: 0, stdout: golden/aarch64_pairwriteback.out }
+    # Measured runs=42 builds=14; floored well under that so the hot loop cannot silently go cold.
+    expect:
+      exit: 0
+      stdout: golden/aarch64_pairwriteback.out
+      diagnostics: [{ counter: runs, greater-than: 10 }, { counter: builds, greater-than: 5 }]
   - id: runtime/memory/aarch64-logical-atomics
     targets: [arm64]
     status: active
@@ -350,7 +354,11 @@ cases:
     build: { source: source/aarch64_logicalops.c, output: aarch64-logical-ops, flags: ["-static","-O2","-std=gnu11"] }
     artifact: { destination: /opt/husklet/memory/aarch64-logical-ops }
     run: []
-    expect: { exit: 0, stdout: golden/aarch64_logicalops.out }
+    # Measured runs=22 builds=51; floored well under that so the hot loop cannot silently go cold.
+    expect:
+      exit: 0
+      stdout: golden/aarch64_logicalops.out
+      diagnostics: [{ counter: runs, greater-than: 5 }, { counter: builds, greater-than: 10 }]
   - id: runtime/memory/aarch64-smc-targeted
     targets: [arm64]
     status: active
