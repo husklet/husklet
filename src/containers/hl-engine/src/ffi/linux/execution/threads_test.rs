@@ -337,31 +337,35 @@ fn deterministic_rotation() {
         selected.push((run.thread, pc));
         threads.release(&run).unwrap();
     }
-    assert_eq!(
-        selected,
-        [(first, 0x1000), (second, 0x2000), (third, 0x3000), (first, 0x1000),]
-    );
-    assert!(!threads.is_only_runnable(first));
-    let second_run = threads.next().unwrap();
-    assert_eq!(second_run.thread, second);
-    threads.park(second).unwrap();
-    assert!(threads.is_parked(&second_run));
-    assert_eq!(threads.release(&second_run), Err(RuntimeThreadError::Missing));
-    let third_run = threads.next().unwrap();
-    assert_eq!(third_run.thread, third);
-    threads.park(third).unwrap();
-    assert!(threads.is_only_runnable(first));
-    threads.resume(second).unwrap();
-    threads.resume(third).unwrap();
-    assert!(!threads.is_only_runnable(first));
+    // The rotation is round-robin over the thread-id-ordered set, which is not the
+    // order the threads were published in now that init no longer holds slot zero.
+    let mut rotation = [(first, 0x1000_u64), (second, 0x2000), (third, 0x3000)];
+    rotation.sort_by_key(|(thread, _)| *thread);
+    assert_eq!(selected, [rotation[0], rotation[1], rotation[2], rotation[0]]);
+    // The remainder walks that same cycle: the loop left `a` released, so the next
+    // selections are `b` then `c`.
+    let (a, b, c) = (rotation[0].0, rotation[1].0, rotation[2].0);
+    assert!(!threads.is_only_runnable(a));
+    let b_run = threads.next().unwrap();
+    assert_eq!(b_run.thread, b);
+    threads.park(b).unwrap();
+    assert!(threads.is_parked(&b_run));
+    assert_eq!(threads.release(&b_run), Err(RuntimeThreadError::Missing));
+    let c_run = threads.next().unwrap();
+    assert_eq!(c_run.thread, c);
+    threads.park(c).unwrap();
+    assert!(threads.is_only_runnable(a));
+    threads.resume(b).unwrap();
+    threads.resume(c).unwrap();
+    assert!(!threads.is_only_runnable(a));
 
-    threads.terminate(second).unwrap();
-    assert_eq!(threads.terminate(second), Err(RuntimeThreadError::Missing));
+    threads.terminate(b).unwrap();
+    assert_eq!(threads.terminate(b), Err(RuntimeThreadError::Missing));
     let run = threads.next().unwrap();
-    assert_eq!(run.thread, first);
+    assert_eq!(run.thread, a);
     threads.release(&run).unwrap();
     let run = threads.next().unwrap();
-    assert_eq!(run.thread, third);
+    assert_eq!(run.thread, c);
     threads.release(&run).unwrap();
 }
 
@@ -522,17 +526,20 @@ fn spaces_isolate_writes() {
     );
     first_space.guest_memory().write(64, b"parent").unwrap();
     child_space.guest_memory().write(64, b"child!").unwrap();
-    let mut parent = [0; 6];
-    let mut child = [0; 6];
-    first_space.guest_memory().read(64, &mut parent).unwrap();
-    child_space.guest_memory().read(64, &mut child).unwrap();
-    assert_eq!(&parent, b"parent");
-    assert_eq!(&child, b"child!");
-    let first_run = threads.next().unwrap();
-    let child_run = threads.next().unwrap();
+    let mut parent_bytes = [0; 6];
+    let mut child_bytes = [0; 6];
+    first_space.guest_memory().read(64, &mut parent_bytes).unwrap();
+    child_space.guest_memory().read(64, &mut child_bytes).unwrap();
+    assert_eq!(&parent_bytes, b"parent");
+    assert_eq!(&child_bytes, b"child!");
+    // Bind each run to its thread rather than to rotation order, which follows
+    // thread identity and so no longer matches the order the two were published.
+    let taken = [threads.next().unwrap(), threads.next().unwrap()];
+    let first_run = taken.iter().find(|run| run.thread == first).unwrap();
+    let child_run = taken.iter().find(|run| run.thread == child).unwrap();
     assert!(!std::sync::Arc::ptr_eq(&first_run.space, &child_run.space));
-    threads.terminate_group(&child_run).unwrap();
-    threads.release(&first_run).unwrap();
+    threads.terminate_group(child_run).unwrap();
+    threads.release(first_run).unwrap();
     let first_run = threads.next().unwrap();
     assert_eq!(first_run.thread, first);
     threads.terminate_group(&first_run).unwrap();
@@ -653,7 +660,9 @@ fn process_control_cancels_one_syscall_owned_run() {
     let threads = ThreadSet::with_tasks(2, Arc::clone(&tasks)).unwrap();
     publish(&threads, process, first, 0x1000, space());
     publish(&threads, process, second, 0x2000, space());
-    let first = threads.next().unwrap();
+    // Claim the init thread's run by identity; rotation order follows thread
+    // identity and would otherwise hand back the clone under the name `first`.
+    let first = threads.claim(first, threads.find(first).unwrap().generation).unwrap();
     let second = threads.find(second).unwrap();
     threads.park_syscall(&first).unwrap();
     assert_eq!(
@@ -744,7 +753,9 @@ fn run_ownership_transfers_once_and_rejects_stale_claims() {
     publish(&threads, process, first, 0x1000, Arc::clone(&shared));
     publish(&threads, process, second, 0x2000, shared);
 
-    let running = threads.next().unwrap();
+    // Take the run for `first` by identity; rotation order follows thread identity
+    // and hands out the clone before init.
+    let running = threads.claim(first, threads.find(first).unwrap().generation).unwrap();
     assert_eq!(running.thread, first);
     assert!(matches!(
         threads.claim(first, running.generation),

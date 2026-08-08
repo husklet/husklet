@@ -77,7 +77,7 @@ static _Alignas(64) uint8_t buffer_a[4096];
 static _Alignas(64) uint8_t buffer_b[4096];
 static _Alignas(64) uint8_t buffer_c[4096];
 
-typedef struct arm_result { uint64_t write_cache_hits, guards, fallbacks, write_faults; } arm_result;
+typedef struct arm_result { uint64_t fast_guards, guards, fallbacks, write_faults; } arm_result;
 
 /* mode: 0 distinct buffers, 1 one shared buffer, 2 store target read-only. */
 static int measure(int mode, arm_result *result) {
@@ -184,7 +184,7 @@ static int measure(int mode, arm_result *result) {
 
     hl_native_diagnostics stats = {.abi = HL_NATIVE_ABI, .size = sizeof(stats)};
     CHECK(hl_native_diagnose(executor, &stats) == HL_NATIVE_OK);
-    result->write_cache_hits = stats.a64_guard_fast;
+    result->fast_guards = stats.a64_guard_fast;
     result->guards = stats.a64_guard_full;
     result->fallbacks = stats.a64_guard_fallback;
     result->write_faults = stats.a64_fallback_guard_write;
@@ -250,18 +250,22 @@ int main(void) {
     if (measure(0, &distinct) != 0 || measure(1, &shared) != 0 || measure(2, &denied) != 0)
         return 1;
     if (measure_adjacent() != 0) return 1;
+    /* a64_guard_fast counts read-cache and write-cache resolutions alike, so the
+     * write-side claim below is the total less this fixed read-side baseline: the
+     * two loads are resolved by the read cache once per round in every mode. */
+    const unsigned reads = 2 * rounds;
     /* Three buffers: every store misses the single latched window, and the
      * write cache resolves all of them without a dispatcher exit. */
     CHECK(distinct.guards == 4 * rounds);
-    CHECK(distinct.write_cache_hits == 2 * rounds);
+    CHECK(distinct.fast_guards == reads + 2 * rounds);
     CHECK(distinct.fallbacks == 0 && distinct.write_faults == 0);
     /* One buffer: the store reuses the already-active view and never scans. */
     CHECK(shared.guards == 4 * rounds);
-    CHECK(shared.write_cache_hits == 0);
+    CHECK(shared.fast_guards == reads + 0);
     CHECK(shared.fallbacks == 0 && shared.write_faults == 0);
     /* A denied store is never resolved by the cache; only the two loads reach
      * resume, and every store leaves as a write-permission fallback. */
-    CHECK(denied.write_cache_hits == 0);
+    CHECK(denied.fast_guards == reads + 0);
     CHECK(denied.guards == 2 * rounds);
     CHECK(denied.fallbacks == rounds && denied.write_faults == rounds);
     return 0;

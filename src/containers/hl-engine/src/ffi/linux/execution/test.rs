@@ -461,13 +461,15 @@ fn segmented_arm_loads() {
 
 #[test]
 fn router_resumes_isas() {
+    // Both images are `exit(getpid())`, so the exit code pins that the guest
+    // entrypoint is pid 1: init reserves slot zero for the task it forks.
     assert_eq!(
         run_image(routed_arm(), "routed-arm", GuestIsa::Aarch64),
-        GuestExecutor::code(2),
+        GuestExecutor::code(1),
     );
     assert_eq!(
         run_image(routed_x86(), "routed-x86", GuestIsa::X86_64),
-        GuestExecutor::code(2),
+        GuestExecutor::code(1),
     );
 }
 
