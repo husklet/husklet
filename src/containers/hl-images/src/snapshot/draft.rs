@@ -69,7 +69,9 @@ impl Draft {
             &self.root.join("drafts").join(format!("{}.json", self.key.as_str())),
             &serde_json::to_vec(&DraftOwner::publishing(self.key.clone(), id.clone()))?,
         )?;
-        Tree::from(self.path.as_path()).sync()?;
+        if publication.durable_contents() {
+            Tree::from(self.path.as_path()).sync()?;
+        }
         let target = self.root.join("committed").join(id.as_str());
         let ownership_target = self
             .root

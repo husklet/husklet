@@ -113,6 +113,12 @@ impl Publication {
         }
     }
 
+    /// Only a content-addressed layer chain must survive a crash intact; a generic
+    /// snapshot is a per-container fork that is discarded with the container.
+    pub(super) fn durable_contents(&self) -> bool {
+        matches!(*self, Self::LayerChain { .. })
+    }
+
     pub(super) fn layers(self) -> Option<Vec<LayerRecord>> {
         match self {
             Self::LayerChain { layers, .. } => Some(layers),
