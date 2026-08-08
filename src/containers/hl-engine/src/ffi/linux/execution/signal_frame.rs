@@ -186,7 +186,7 @@ impl FramePort for Port {
 impl PreparedFramePublication for Publication {
     fn publish(&mut self) -> Result<(), ()> {
         let replacement = self.replacement.take().ok_or(())?;
-        let previous = self.machine.replace(replacement).map_err(|_| ())?;
+        let previous = self.machine.replace_context(replacement).map_err(|_| ())?;
         self.previous_snapshot = Some(previous);
         self.published = true;
         Ok(())
@@ -204,7 +204,7 @@ impl Drop for Publication {
             && !self.committed
             && let Some(previous) = self.previous_snapshot.take()
         {
-            let _ = self.machine.replace(previous);
+            let _ = self.machine.replace_context(previous);
         }
         if !self.committed {
             if let Some(address) = self.address {

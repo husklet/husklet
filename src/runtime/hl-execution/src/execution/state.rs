@@ -163,6 +163,26 @@ impl ExecutionMachine {
         Ok(std::mem::replace(&mut *state, replacement))
     }
 
+    /// Swaps the architectural state without discarding translated blocks. Signal
+    /// delivery and `rt_sigreturn` change registers and the program counter only, so
+    /// the instructions the cache holds are still the instructions the guest will run.
+    /// A replacement that carries a different cache epoch is a new image, not a new
+    /// register file, and is refused rather than silently kept stale.
+    pub fn replace_context(&self, replacement: ExecutionSnapshot) -> Result<ExecutionSnapshot, ExecutionStateError> {
+        replacement.validate()?;
+        if !self.frozen.load(Ordering::Acquire) {
+            return Err(ExecutionStateError::NotFrozen);
+        }
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.architecture() != replacement.architecture() {
+            return Err(ExecutionStateError::Architecture);
+        }
+        if state.cache_epoch != replacement.cache_epoch {
+            return Err(ExecutionStateError::InvalidSnapshot);
+        }
+        Ok(std::mem::replace(&mut *state, replacement))
+    }
+
     pub fn fork_child(&self) -> Result<Self, ExecutionStateError> {
         let child = Self::new_with_counter(self.snapshot()?.fork_child()?, Arc::clone(&self.architectural_counter))?;
         child
