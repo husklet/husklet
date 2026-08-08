@@ -263,7 +263,7 @@ mod test {
         ExclusiveMemory, ExclusiveReservation as GuestReservation, GuestSystemPort,
     };
     use hl_isa::{AddressRange, GuestAddress};
-    use hl_memory::{Backing, MapRequest, MappingHost, MemoryError, Placement};
+    use hl_memory::{Backing, MapRequest, MappingHost, MemoryError, Placement, WriteReservation};
 
     use super::*;
 
@@ -322,16 +322,17 @@ mod test {
             Ok(())
         }
 
-        fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError> {
+        fn prepare_write(&self, range: AddressRange) -> Result<WriteReservation, MemoryError> {
             let token = self.next.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
             self.writes
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(token, range);
-            Ok(token)
+            Ok(WriteReservation::new(token, range))
         }
 
-        fn commit_write(&self, reservation: u64, input: &[u8]) -> Result<(), MemoryError> {
+        fn commit_write(&self, reservation: WriteReservation, input: &[u8]) -> Result<(), MemoryError> {
+            let reservation = reservation.token;
             let range = self
                 .writes
                 .lock()
@@ -348,7 +349,8 @@ mod test {
             Ok(())
         }
 
-        fn rollback_write(&self, reservation: u64) {
+        fn rollback_write(&self, reservation: WriteReservation) {
+            let reservation = reservation.token;
             self.writes
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)

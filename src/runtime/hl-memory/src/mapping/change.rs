@@ -99,6 +99,7 @@ mod tests {
     };
 
     use super::{BackingChange, BackingChangeFlags, BackingChangeHost};
+    use crate::WriteReservation;
 
     const FILE: crate::FileIdentity = crate::FileIdentity { device: 7, object: 9 };
 
@@ -154,15 +155,15 @@ mod tests {
             Ok(())
         }
 
-        fn prepare_write(&self, _: AddressRange) -> Result<u64, MemoryError> {
-            Ok(1)
+        fn prepare_write(&self, _: AddressRange) -> Result<WriteReservation, MemoryError> {
+            Ok(WriteReservation::new(1, AddressRange::nonempty(GuestAddress::ZERO, 1).unwrap()))
         }
 
-        fn commit_write(&self, _: u64, _: &[u8]) -> Result<(), MemoryError> {
+        fn commit_write(&self, _: WriteReservation, _: &[u8]) -> Result<(), MemoryError> {
             Ok(())
         }
 
-        fn rollback_write(&self, _: u64) {}
+        fn rollback_write(&self, _: WriteReservation) {}
     }
 
     fn request(address: u64, identity: crate::FileIdentity) -> MapRequest {

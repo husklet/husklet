@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use hl_isa::{AddressRange, GuestAddress};
-use hl_memory::{AtomicU32Write, AtomicWriteBatchHost, MemoryAccessHost, MemoryError, Protection};
+use hl_memory::{AtomicU32Write, AtomicWriteBatchHost, MemoryAccessHost, MemoryError, Protection, WriteReservation};
 
 use super::mapping::{DirectProjection, MappingHostAdapter, Projection};
 
@@ -81,21 +81,14 @@ impl MemoryAccessHost for MappingHostAdapter {
             .map_err(|_| MemoryError::NoAddressSpace)
     }
 
-    fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError> {
-        let mut state = self.writes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let token = Self::token(&mut state);
-        state.plain.insert(token, range);
-        Ok(token)
+    fn prepare_write(&self, range: AddressRange) -> Result<WriteReservation, MemoryError> {
+        // The arena addresses the range directly, so the reservation carries it
+        // by value instead of parking it in a mutex-guarded side table.
+        Ok(WriteReservation::new(0, range))
     }
 
-    fn commit_write(&self, reservation: u64, input: &[u8]) -> Result<(), MemoryError> {
-        let range = self
-            .writes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .plain
-            .remove(&reservation)
-            .ok_or(MemoryError::InvariantViolation)?;
+    fn commit_write(&self, reservation: WriteReservation, input: &[u8]) -> Result<(), MemoryError> {
+        let range = reservation.range;
         if range.length() != input.len() as u64 {
             return Err(MemoryError::InvariantViolation);
         }
@@ -132,27 +125,14 @@ impl MemoryAccessHost for MappingHostAdapter {
             .map_err(|_| MemoryError::NoAddressSpace)
     }
 
-    fn commit_external_write(&self, reservation: u64, length: u64) -> Result<(), MemoryError> {
-        let range = self
-            .writes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .plain
-            .remove(&reservation)
-            .ok_or(MemoryError::InvariantViolation)?;
-        if length > range.length() {
+    fn commit_external_write(&self, reservation: WriteReservation, length: u64) -> Result<(), MemoryError> {
+        if length > reservation.range.length() {
             return Err(MemoryError::InvariantViolation);
         }
         Ok(())
     }
 
-    fn rollback_write(&self, reservation: u64) {
-        self.writes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .plain
-            .remove(&reservation);
-    }
+    fn rollback_write(&self, _reservation: WriteReservation) {}
 }
 
 impl AtomicWriteBatchHost for MappingHostAdapter {

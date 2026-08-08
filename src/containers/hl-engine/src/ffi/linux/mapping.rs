@@ -86,7 +86,6 @@ impl hl_runtime::BackingChangePort for BackingChanges {
 #[derive(Debug, Default)]
 pub(super) struct WriteState {
     next: u64,
-    pub(super) plain: BTreeMap<u64, AddressRange>,
     pub(super) atomic: BTreeMap<u64, Vec<AtomicU32Write>>,
 }
 

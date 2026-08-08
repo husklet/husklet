@@ -24,6 +24,24 @@ pub trait Host: std::fmt::Debug + Send + Sync {
     }
 }
 
+/// A staged write returned by [`MemoryAccessHost::prepare_write`].
+///
+/// The reservation carries the validated range by value so a host that can
+/// address the range directly needs no side table to recover it at commit.
+/// Hosts that still need per-reservation state keep using `token`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WriteReservation {
+    pub token: u64,
+    pub range: AddressRange,
+}
+
+impl WriteReservation {
+    #[must_use]
+    pub fn new(token: u64, range: AddressRange) -> Self {
+        Self { token, range }
+    }
+}
+
 pub trait MemoryAccessHost: Host {
     type Projection: HostProjection;
 
@@ -66,8 +84,8 @@ pub trait MemoryAccessHost: Host {
     /// performs a second protection check; substituting read authority would
     /// reject execute-only instruction fetches and write-only reconciliation.
     fn read(&self, range: AddressRange, output: &mut [u8], access: Protection) -> Result<(), MemoryError>;
-    fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError>;
-    fn commit_write(&self, reservation: u64, input: &[u8]) -> Result<(), MemoryError>;
+    fn prepare_write(&self, range: AddressRange) -> Result<WriteReservation, MemoryError>;
+    fn commit_write(&self, reservation: WriteReservation, input: &[u8]) -> Result<(), MemoryError>;
     /// Commits one already validated atomic write without requiring a retained
     /// host reservation. Hosts with directly addressable memory should override
     /// this to avoid allocating a transaction record for every atomic update.
@@ -98,12 +116,12 @@ pub trait MemoryAccessHost: Host {
     ///
     /// Implementations must only accept a prefix of the range supplied to
     /// `prepare_write`. The bytes are already present in host storage.
-    fn commit_external_write(&self, reservation: u64, length: u64) -> Result<(), MemoryError> {
+    fn commit_external_write(&self, reservation: WriteReservation, length: u64) -> Result<(), MemoryError> {
         self.rollback_write(reservation);
         let _ = length;
         Err(MemoryError::InvariantViolation)
     }
-    fn rollback_write(&self, reservation: u64);
+    fn rollback_write(&self, reservation: WriteReservation);
 }
 
 pub trait HostProjection: Send {

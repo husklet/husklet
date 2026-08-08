@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use hl_isa::AddressRange;
 
 use super::{DIRTY_RANGE_MAXIMUM, ProjectionLease, ProjectionView, contains};
-use crate::mapping::port::{HostProjection, MemoryAccessHost};
+use crate::mapping::port::{HostProjection, MemoryAccessHost, WriteReservation};
 use crate::{Backing, MemoryError, Protection};
 
 impl<H: MemoryAccessHost> ProjectionLease<'_, H> {
@@ -131,7 +131,7 @@ impl<H: MemoryAccessHost> ProjectionLease<'_, H> {
     fn publish_ranges(
         &self,
         view: ProjectionView,
-        reservation: u64,
+        reservation: WriteReservation,
         dirty: &[AddressRange],
         executable: &mut Vec<AddressRange>,
     ) -> Result<(), MemoryError> {
@@ -168,7 +168,7 @@ impl<H: MemoryAccessHost> ProjectionLease<'_, H> {
             .commit_external_write(reservation, view.range.length())
     }
 
-    fn publish_view(&self, view: ProjectionView, reservation: u64) -> Result<(), MemoryError> {
+    fn publish_view(&self, view: ProjectionView, reservation: WriteReservation) -> Result<(), MemoryError> {
         let resolution = self.validate_writable(view)?;
         if let Backing::Shared(_) = resolution.region.backing()
             && !self.view_shared_backing_is_coherent(view)

@@ -8,7 +8,7 @@ mod publish;
 
 use super::host::Coordinator;
 use super::port::HostProjection;
-use super::port::MemoryAccessHost;
+use super::port::{MemoryAccessHost, WriteReservation};
 use crate::{Backing, MemoryError, Protection};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,7 +35,7 @@ pub struct ProjectionLease<'a, H: MemoryAccessHost> {
     authority: Protection,
     backing: Backing,
     generation: ProjectionGeneration,
-    write_reservation: Option<u64>,
+    write_reservation: Option<WriteReservation>,
     additional: Vec<LiveProjection<H::Projection>>,
 }
 
@@ -102,7 +102,7 @@ pub struct ProjectionView {
 struct LiveProjection<P> {
     view: ProjectionView,
     backing: Backing,
-    write_reservation: Option<u64>,
+    write_reservation: Option<WriteReservation>,
     projection: P,
 }
 
