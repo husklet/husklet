@@ -3720,3 +3720,160 @@ fn x86_string_compare_equal_any_matches_interpreter_over_operand_and_null_patter
         assert_string_compare_immediate(immediate);
     }
 }
+
+/// `bsf`/`bsr` leave CF/OF/SF/AF/PF undefined per the manual, but the two paths must still
+/// agree: a guest whose behaviour changed with translation would be nondeterministic. The
+/// seeded flags make preserve-versus-clear observable, and the zero sources pin both the
+/// unchanged destination and ZF.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_bit_scan_flags_match_interpreter_at_each_boundary() {
+    let bytes = [
+        0x48, 0x0f, 0xbc, 0xc3, // bsf %rbx,%rax
+        0x48, 0x0f, 0xbd, 0xc3, // bsr %rbx,%rax
+        0x0f, 0xbc, 0xc3, // bsf %ebx,%eax
+        0x0f, 0xbd, 0xc3, // bsr %ebx,%eax
+        0x66, 0x0f, 0xbc, 0xc3, // bsf %bx,%ax
+        0x66, 0x0f, 0xbd, 0xc3, // bsr %bx,%ax
+        0x48, 0x0f, 0xbc, 0x06, // bsf (%rsi),%rax
+        0x48, 0x0f, 0xbd, 0x06, // bsr (%rsi),%rax
+    ];
+    let ends = [4, 8, 11, 14, 18, 22, 26, 30];
+    let operand: [u8; 8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80];
+    for source in [
+        0x0000_0000_0000_0000_u64,
+        0x8000_0000_0000_0000,
+        0x0000_0000_0000_0010,
+        0x0000_0000_8000_0000,
+        0x0000_0000_0000_8000,
+        0xffff_ffff_ffff_ffff,
+    ] {
+        for seed in [0u16, 0x08d5] {
+            let mut initial = X86CpuState {
+                scalar: ScalarState {
+                    rip: 0x402720,
+                    flags: hl_execution::FlagState::from_bits(seed),
+                    ..Default::default()
+                },
+                ..X86CpuState::default()
+            };
+            initial.registers[0] = 0x5555_aaaa_5555_aaaa;
+            initial.registers[3] = source;
+            initial.registers[6] = 0x7000;
+            assert_x86_boundaries(0x402720, &bytes, &ends, &initial, 0x7000, &operand);
+        }
+    }
+}
+
+/// `imul`'s SF/ZF/AF/PF are undefined while CF/OF are not, so the same agreement bar
+/// applies. The operand set covers a zero product, a negative product and both the
+/// overflowing and the exact cases at each admitted width.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_multiply_flags_match_interpreter_at_each_boundary() {
+    let bytes = [
+        0x48, 0x0f, 0xaf, 0xc3, // imul %rbx,%rax
+        0x0f, 0xaf, 0xc3, // imul %ebx,%eax
+        0x66, 0x0f, 0xaf, 0xc3, // imul %bx,%ax
+        0x48, 0x6b, 0xc3, 0x05, // imul $5,%rbx,%rax
+        0x48, 0xf7, 0xe3, // mul %rbx (widening)
+        0x48, 0x0f, 0xaf, 0x06, // imul (%rsi),%rax
+    ];
+    let ends = [4, 7, 11, 15, 18, 22];
+    let operand: [u8; 8] = [0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    for (left, right) in [
+        (0u64, 5u64),
+        (3, 5),
+        (u64::MAX - 2, 5),
+        (0x7fff_ffff_ffff_ffff, 3),
+        (0x0000_0000_8000_0000, 2),
+        (0x0000_0000_0000_4000, 4),
+        (0xffff_ffff_ffff_ffff, 0xffff_ffff_ffff_ffff),
+    ] {
+        for seed in [0u16, 0x08d5] {
+            let mut initial = X86CpuState {
+                scalar: ScalarState {
+                    rip: 0x402720,
+                    flags: hl_execution::FlagState::from_bits(seed),
+                    ..Default::default()
+                },
+                ..X86CpuState::default()
+            };
+            initial.registers[0] = left;
+            initial.registers[3] = right;
+            initial.registers[6] = 0x7000;
+            assert_x86_boundaries(0x402720, &bytes, &ends, &initial, 0x7000, &operand);
+        }
+    }
+}
+
+/// The rest of the undefined-flag family the bit-scan audit covers: the `tzcnt`/`lzcnt`
+/// count forms, the register-form `bt` family whose index is masked rather than truncated,
+/// a shift by zero that must touch no flag at all, and `div`, which defines none.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_undefined_flag_family_matches_interpreter_at_each_boundary() {
+    let bytes = [
+        0xf3, 0x48, 0x0f, 0xbc, 0xc3, // tzcnt %rbx,%rax
+        0xf3, 0x48, 0x0f, 0xbd, 0xc3, // lzcnt %rbx,%rax
+        0xf3, 0x0f, 0xbc, 0xc3, // tzcnt %ebx,%eax
+        0xf3, 0x66, 0x0f, 0xbd, 0xc3, // lzcnt %bx,%ax
+        0x48, 0x0f, 0xa3, 0xd8, // bt  %rbx,%rax
+        0x48, 0x0f, 0xab, 0xd8, // bts %rbx,%rax
+        0x48, 0x0f, 0xb3, 0xd8, // btr %rbx,%rax
+        0x48, 0x0f, 0xbb, 0xd8, // btc %rbx,%rax
+        0x48, 0xd3, 0xe0, // shl %cl,%rax
+        0x48, 0xd3, 0xe8, // shr %cl,%rax
+    ];
+    let ends = [5, 10, 14, 19, 23, 27, 31, 35, 38, 41];
+    let operand: [u8; 8] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+    for source in [0u64, 1, 9, 0x10, 63, 64, 0x8000, 0xffff_ffff_ffff_ffff] {
+        for seed in [0u16, 0x08d5] {
+            let mut initial = X86CpuState {
+                scalar: ScalarState {
+                    rip: 0x402720,
+                    flags: hl_execution::FlagState::from_bits(seed),
+                    ..Default::default()
+                },
+                ..X86CpuState::default()
+            };
+            initial.registers[0] = 0x5555_aaaa_5555_aaaa;
+            initial.registers[3] = source;
+            initial.registers[6] = 0x7000;
+            // rcx = 0 keeps the two shifts at a zero count, which must leave every flag alone.
+            initial.registers[1] = 0;
+            assert_x86_boundaries(0x402720, &bytes, &ends, &initial, 0x7000, &operand);
+        }
+    }
+}
+
+/// `div` and `idiv` leave every flag undefined; neither path may publish one.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_divide_leaves_every_flag_alone_in_both_paths() {
+    let operand: [u8; 8] = [0; 8];
+    // One instruction per program: a divide leaves a remainder in rdx, so a second one in the
+    // same block would divide a different dividend and could take the overflow bail instead.
+    for bytes in [
+        [0x48_u8, 0xf7, 0xf3], // div %rbx
+        [0x48, 0xf7, 0xfb],    // idiv %rbx
+    ] {
+        let ends = [3];
+        for (low, divisor) in [(100u64, 7u64), (0, 3), (0xffff_ffff, 0x1_0000), (5, 5)] {
+            for seed in [0u16, 0x08d5] {
+                let mut initial = X86CpuState {
+                    scalar: ScalarState {
+                        rip: 0x402720,
+                        flags: hl_execution::FlagState::from_bits(seed),
+                        ..Default::default()
+                    },
+                    ..X86CpuState::default()
+                };
+                initial.registers[0] = low;
+                initial.registers[2] = 0;
+                initial.registers[3] = divisor;
+                assert_x86_boundaries(0x402720, &bytes, &ends, &initial, 0x7000, &operand);
+            }
+        }
+    }
+}

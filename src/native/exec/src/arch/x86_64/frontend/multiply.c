@@ -241,7 +241,8 @@ uint32_t hl_x86_mul_words(const instruction *item) {
     } else {
         words += 4u; /* low/high products and architectural writes */
     }
-    return words + 2u + flags_words(); /* high-half test and CF/OF materialization */
+    /* High-half test, then the CF/OF-only materialization. */
+    return words + 2u + 6u + constant_words(HL_X86_RFLAGS_CF | HL_X86_RFLAGS_OF);
 }
 
 void hl_x86_emit_mul(uint32_t *words, uint32_t *cursor, const instruction *item) {
@@ -286,13 +287,15 @@ void hl_x86_emit_mul(uint32_t *words, uint32_t *cursor, const instruction *item)
     }
     words[(*cursor)++] = UINT32_C(0xeb1f02bf); /* cmp x21,#0 */
     words[(*cursor)++] = UINT32_C(0x9a9f07f5); /* cset x21,ne */
-    emit_constant(words, cursor, 23u, 1u);
-    words[(*cursor)++] = UINT32_C(0xca1702b6);
-    words[(*cursor)++] = lsl(22u, 22u, 29u);
-    words[(*cursor)++] = lsl(21u, 21u, 28u);
-    words[(*cursor)++] = UINT32_C(0xaa1502d6);
-    words[(*cursor)++] = UINT32_C(0xd51b4216);
-    hl_x86_emit_nzcv(words, cursor);
+    /* The widening forms define only CF and OF; routing them through the NZCV transfer would
+       also clear SF and ZF, which the interpreter leaves alone. */
+    words[(*cursor)++] = load_word(20u, offsetof(hl_native_x86_64_cpu, flags));
+    emit_constant(words, cursor, 23u, HL_X86_RFLAGS_CF | HL_X86_RFLAGS_OF);
+    words[(*cursor)++] = UINT32_C(0x8a200000) | 23u << 16 | 20u << 5 | 20u;
+    words[(*cursor)++] = UINT32_C(0xaa000000) | 21u << 16 | 20u << 5 | 20u;
+    words[(*cursor)++] = lsl(22u, 21u, 11u);
+    words[(*cursor)++] = UINT32_C(0xaa000000) | 22u << 16 | 20u << 5 | 20u;
+    words[(*cursor)++] = store_word(20u, offsetof(hl_native_x86_64_cpu, flags));
 }
 
 uint32_t hl_x86_imul_words(const instruction *item) {
@@ -300,7 +303,8 @@ uint32_t hl_x86_imul_words(const instruction *item) {
     if (item->has_immediate != 0u) words += constant_words(item->operand_immediate);
     /* With NZCV dead the overflow test and its materialization both go, leaving the product alone. */
     if (item->nzcv_dead != 0u) return words + (item->width == 8u ? 2u : 4u);
-    words += item->width == 8u ? 6u : 7u;
+    /* The SF/ZF test costs an extra shift at halfword width, plus the read-back and the merge. */
+    words += (item->width == 8u ? 6u : 7u) + (item->width == 2u ? 4u : 3u);
     return words + flags_words();
 }
 
@@ -357,11 +361,22 @@ void hl_x86_emit_imul(uint32_t *words, uint32_t *cursor, const instruction *item
     else
         words[(*cursor)++] = move(item->destination, 18u, item->width == 8u);
     if (item->nzcv_dead != 0u) return;
+    /* SF and ZF are undefined but not free: the interpreter publishes them from the truncated
+       product, so build them here rather than letting a zeroed NZCV word claim both are clear. */
+    if (item->width == 2u) {
+        words[(*cursor)++] = UINT32_C(0x53103c00) | 18u << 5 | 19u;
+        words[(*cursor)++] = UINT32_C(0x6a00001f) | 19u << 16 | 19u << 5;
+    } else {
+        words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xea00001f) : UINT32_C(0x6a00001f)) |
+                               18u << 16 | 18u << 5;
+    }
+    words[(*cursor)++] = UINT32_C(0xd53b4200) | 19u; /* mrs x19,nzcv: N and Z, with C and V clear */
     emit_constant(words, cursor, 23u, 1u);
     words[(*cursor)++] = UINT32_C(0xca1702b6);
     words[(*cursor)++] = lsl(22u, 22u, 29u);
     words[(*cursor)++] = lsl(21u, 21u, 28u);
     words[(*cursor)++] = UINT32_C(0xaa1502d6);
+    words[(*cursor)++] = UINT32_C(0xaa1302d6); /* orr x22,x22,x19 */
     words[(*cursor)++] = UINT32_C(0xd51b4216);
     hl_x86_emit_nzcv(words, cursor);
 }

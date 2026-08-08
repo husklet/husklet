@@ -170,15 +170,29 @@ impl ScalarState {
             BitScanOperation::TrailingZeroCount => crate::BitScan::trailing_zero_count(integer_width, source),
             BitScanOperation::LeadingZeroCount => crate::BitScan::leading_zero_count(integer_width, source),
         };
-        self.flags = self.flags.with(Flag::Zero, scan.zero);
+        // CF/OF/SF are architecturally undefined here, but both execution paths must still agree:
+        // the native lowering tests the source (bit scan) or the count (tzcnt/lzcnt) and publishes
+        // SF, CF and OF from it, leaving only PF and AF alone.
+        self.flags = self.flags.with(Flag::Zero, scan.zero).with(Flag::Overflow, false);
         if matches!(
             operation,
             BitScanOperation::TrailingZeroCount | BitScanOperation::LeadingZeroCount
         ) {
-            self.flags = self.flags.with(Flag::Carry, scan.carry);
+            self.flags = self.flags.with(Flag::Carry, scan.carry).with(Flag::Sign, false);
+        } else {
+            let mask = integer_width.mask();
+            let sign = source & (mask ^ (mask >> 1)) != 0;
+            self.flags = self.flags.with(Flag::Carry, false).with(Flag::Sign, sign);
         }
-        if let Some(result) = scan.result {
-            self.write_register(destination, width, result);
+        match scan.result {
+            Some(result) => self.write_register(destination, width, result),
+            // A zero source leaves the destination alone, but the 32-bit form still performs the
+            // register write, so its zero-extension of the upper half survives.
+            None if width == ScalarWidth::Dword => {
+                let kept = self.read_register(destination, width);
+                self.write_register(destination, width, kept);
+            }
+            None => {}
         }
     }
 

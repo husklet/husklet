@@ -113,12 +113,13 @@ impl FlagUpdate {
         if overflow {
             values |= Flag::Carry.mask() | Flag::Overflow.mask();
         }
-        let defined =
-            Flag::Carry.mask() | Flag::Overflow.mask() | Flag::Parity.mask() | Flag::Zero.mask() | Flag::Sign.mask();
+        // PF and AF stay put: the native lowering computes no parity for a multiply, and matching
+        // it there would put a parity tail on every imul to settle a flag the manual leaves undefined.
+        let defined = Flag::Carry.mask() | Flag::Overflow.mask() | Flag::Zero.mask() | Flag::Sign.mask();
         Self {
             values,
             defined,
-            undefined: 0,
+            undefined: Flag::Parity.mask() | Flag::Auxiliary.mask(),
         }
     }
 }
