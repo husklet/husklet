@@ -25,6 +25,9 @@ async fn containers(work: &TempDir) -> Result<Containers, Error> {
         .await?)
 }
 
+/// Currently RED, and deliberately left so: the builder's `RUN` step fails with
+/// `Construction(Start)` (guest launch) while the sibling workflows start real
+/// containers from the same fixture, so the defect is in the daemon build path.
 #[tokio::test(flavor = "multi_thread")]
 async fn docker_build() -> Result<(), Error> {
     if unavailable() {
