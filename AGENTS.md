@@ -42,6 +42,20 @@ including on symbols whose removal reddens both unit and integration tests.
 Confirm a gap by mutating the symbol and watching the suite, which is the standard
 this repository requires for a coverage claim anyway.
 
+## What "green" means
+
+The corpus is not the gate. `make gate` runs
+`cargo test --workspace --all-targets`, which covers the Rust library tests and
+the C program suite (`src/native/tests/exec_c.rs`); the corpus reaches neither.
+Eleven stale assertions once survived because every lane ran the corpus and a
+targeted `cargo test -p <pkg>` and nobody ran the workspace.
+
+Before committing, run `cargo test --workspace --lib` and
+`cargo test -p hl-native --test exec_c` — about a minute, and it catches that
+whole class. Run them in debug or inside `make gate`: under `--release`,
+`hl-log`'s verbose tests compile out and the daemon tests need
+`HL_ALPINE_ARCHIVE`, so both report spurious failures.
+
 ## Reading a profile
 
 High self-time and removable cost are independent properties, and this engine has
