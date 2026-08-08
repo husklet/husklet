@@ -250,8 +250,12 @@ impl NativePool {
             if direct_guard && !self.direct_declined.contains(&entry) && self.direct_declined.len() < NATIVE_SITE_LIMIT
             {
                 self.direct_declined.insert(entry);
-            } else if self.suppressed.len() < NATIVE_SITE_LIMIT {
-                self.suppressed.insert(entry);
+            } else if self.suppressed.len() < NATIVE_SITE_LIMIT && self.suppressed.insert(entry) && self.diagnostics {
+                // One line per latch rather than per refusal, so the site limit bounds the output.
+                eprintln!(
+                    "hl-native-suppress-cause: entry={:#x} instruction={:#x} executed={executed} budget={budget}",
+                    entry.4, instruction.4,
+                );
             }
         }
         if self.fallbacks.len() < NATIVE_SITE_LIMIT {
