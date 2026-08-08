@@ -522,7 +522,8 @@ cases:
     expect: { exit: 0, stdout: golden/reap_storm.txt }
   - id: runtime/process/subreaper-reparent
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: Darwin has no PR_SET_CHILD_SUBREAPER equivalent, so an orphaned grandchild reparents to launchd and the engine cannot harvest it. Linux engine forwards to the host and still runs+passes this."
       evidence: "tests/runtime/process/ORACLE.md"
     compat: { class: compatibility }
@@ -562,7 +563,8 @@ cases:
     expect: { exit: 0, stdout: golden/clone_stack.txt }
   - id: runtime/process/prctl-name-pdeathsig
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: prctl pdeathsig/name, SIGCHLD siginfo, pidfd-getfd and reparent topology diverge on the macOS engine process model; Linux engine still runs+enforces this."
       evidence: "tests/runtime/process/ORACLE.md"
     compat: { class: compatibility }
@@ -627,7 +629,8 @@ cases:
     expect: { exit: 0, stdout: golden/waitstop.txt }
   - id: runtime/process/sigchld-siginfo
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: prctl pdeathsig/name, SIGCHLD siginfo, pidfd-getfd and reparent topology diverge on the macOS engine process model; Linux engine still runs+enforces this."
       evidence: "tests/runtime/process/ORACLE.md"
     compat: { class: compatibility }
@@ -638,7 +641,8 @@ cases:
     expect: { exit: 0, stdout: golden/sigchld_info.txt }
   - id: runtime/process/pidfd-getfd-dup
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: prctl pdeathsig/name, SIGCHLD siginfo, pidfd-getfd and reparent topology diverge on the macOS engine process model; Linux engine still runs+enforces this."
       evidence: "tests/runtime/process/ORACLE.md"
     compat: { class: compatibility }
@@ -705,7 +709,8 @@ cases:
     expect: { exit: 0, stdout: golden/exit_teardown.txt }
   - id: runtime/process/reparent-topology
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: prctl pdeathsig/name, SIGCHLD siginfo, pidfd-getfd and reparent topology diverge on the macOS engine process model; Linux engine still runs+enforces this."
       evidence: "tests/runtime/process/ORACLE.md"
     compat: { class: compatibility }

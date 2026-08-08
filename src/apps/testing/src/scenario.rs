@@ -74,10 +74,6 @@ pub(crate) fn provenance(options: ProvenanceOptions) -> Result<(), Error> {
     report::provenance(load_scenarios(None)?, options)
 }
 
-pub(crate) fn workflows() {
-    report::workflows();
-}
-
 pub(crate) fn cache_preflight(options: CachePreflightOptions) -> Result<(), Error> {
     report::cache_preflight(load_scenarios(None)?, options)
 }

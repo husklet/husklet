@@ -396,8 +396,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/statx_probe.out }
   - id: runtime/filesystem/statx-btime
-    status: !unsupported
-      reason: "excluded-macos: statx STATX_BTIME mask honesty diverges on the macOS engine. Linux engine still runs+passes this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "excluded-macos: statx STATX_BTIME mask honesty diverges on the macOS engine. The Linux engine now runs this and is RED: it reports tmp-btime-mask=0 btime-nonzero=0 fd-btime-mask=0 where the golden requires 1/1/1, so the Linux STATX_BTIME gap is a real uncovered engine defect that the former !unsupported marker hid."
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/statx_btime.c, output: statx-btime, flags: [-static, -O2, -std=gnu11] }
@@ -468,7 +469,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/flock_probe.out }
   - id: runtime/filesystem/flock-ofd
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: OFD/flock lock and getdents64/unlink errno semantics diverge on the macOS engine host FS backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
@@ -575,7 +577,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/openat2_resolve.out }
   - id: runtime/filesystem/ofd-lock
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: OFD/flock lock and getdents64/unlink errno semantics diverge on the macOS engine host FS backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
@@ -598,7 +601,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/otmpfile_link.out }
   - id: runtime/filesystem/unlink-errno
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: OFD/flock lock and getdents64/unlink errno semantics diverge on the macOS engine host FS backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
@@ -670,7 +674,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/dev_random.out }
   - id: runtime/filesystem/getdents64-fault
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: OFD/flock lock and getdents64/unlink errno semantics diverge on the macOS engine host FS backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }

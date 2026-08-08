@@ -177,7 +177,8 @@ cases:
     expect: { exit: 0, stdout: golden/mremap.out }
   - id: runtime/memory/mprotect-enforcement
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: PROT_NONE and read-only enforcement is deliberately non-enforced on the macOS engine (mem.c case 226 forces host PROT_READ). Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -442,7 +443,8 @@ cases:
     expect: { exit: 0, stdout: golden/map_populate.out }
   - id: runtime/memory/mremap-shrink
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -452,7 +454,8 @@ cases:
     expect: { exit: 0, stdout: golden/mremap_shrink.out }
   - id: runtime/memory/mprotect-split
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -462,7 +465,8 @@ cases:
     expect: { exit: 0, stdout: golden/mprotect_split.out }
   - id: runtime/memory/unmap-middle
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -472,7 +476,8 @@ cases:
     expect: { exit: 0, stdout: golden/unmap_middle.out }
   - id: runtime/memory/map-over-existing
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -498,7 +503,8 @@ cases:
     expect: { exit: 0, stdout: golden/memfd_seal.out }
   - id: runtime/memory/madv-remove-shared
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -519,7 +525,8 @@ cases:
       stderr: ["A both", "B neither", "C huge", "D misalign-fixed", "E anon-fd", "Z done"]
   - id: runtime/memory/mprotect-none-cycle
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -529,7 +536,8 @@ cases:
     expect: { exit: 0, stdout: golden/mprotect_nonecycle.out }
   - id: runtime/memory/brk-edges
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: the macOS engine's x86_64 target SIGSEGVs outright in this case (HLFATAL, si_addr=-1, empty stdout) rather than reporting brk edge errnos; the aarch64 target diverges on the same Mach VM/brk emulation. Linux engine runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -539,14 +547,18 @@ cases:
     expect: { exit: 0, stdout: golden/brk_edges.out }
   - id: runtime/memory/zz-iso-brk
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: brk growth fails on the macOS engine x86_64 target ('grow-failed', exit 3) -- the Mach VM backend cannot extend the guest break in place. Linux engine runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/zz_isobrk.c, output: zz-iso-brk, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/zz-iso-brk }
     run: []
-    expect: { exit: 0, stdout: golden/zz_isobrk.out }
+    expect:
+      exit: 0
+      stdout: golden/zz_isobrk.out
+      stderr: ["A sbrk0", "B grow", "C read", "D write", "E verify", "F shrink", "Z done"]
   - id: runtime/memory/dbt-ibtc-mega
     targets: [arm64, amd64]
     status: active
@@ -791,7 +803,8 @@ cases:
     expect: { exit: 0, stdout: golden/dbt_concmmapexec.out }
   - id: runtime/memory/wild-highva
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: a wild high-VA access is not classified as a guest SEGV_MAPERR on the macOS engine (the run dies with an engine HLFATAL instead), a consequence of the deliberate PROT_NONE non-enforcement plus Mach VM divergence. Linux engine runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -801,7 +814,8 @@ cases:
     expect: { exit: 0, stdout: golden/wild_highva.out }
   - id: runtime/memory/null-page
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -835,7 +849,8 @@ cases:
     expect: { exit: 0, stdout: golden/edge_faults.out }
   - id: runtime/memory/devzero-mmap
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -870,7 +885,8 @@ cases:
     expect: { exit: 0, stdout: golden/memfd_sealbusy.out }
   - id: runtime/memory/noreplace-anon
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
@@ -880,7 +896,8 @@ cases:
     expect: { exit: 0, stdout: golden/noreplace_anon.out }
   - id: runtime/memory/map-flags
     targets: [arm64, amd64]
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }

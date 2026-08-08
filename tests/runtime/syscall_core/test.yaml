@@ -21,7 +21,8 @@ cases:
   - { id: runtime/syscall_core/lseekhole, status: active, compat: { class: compatibility }, build: { source: lseekhole.c, output: lseekhole, flags: [-static-pie, -O2, -pthread, -lm] }, artifact: { destination: /opt/husklet/syscall_core/lseekhole }, run: [], timeout: 120, expect: { exit: 0, stdout: golden/lseekhole.out } }
   - { id: runtime/syscall_core/memfd, status: active, compat: { class: compatibility }, build: { source: memfd.c, output: memfd, flags: [-static-pie, -O2, -pthread, -lm] }, artifact: { destination: /opt/husklet/syscall_core/memfd }, run: [], timeout: 120, expect: { exit: 0, stdout: golden/memfd.out } }
   - id: runtime/syscall_core/mprotect
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "retained registration excludes the macOS engine because it did not enforce guest PROT_NONE"
       evidence: "tests/runtime/syscall_core/EVIDENCE.md"
     compat: { class: compatibility }

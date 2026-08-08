@@ -512,8 +512,14 @@ incomplete execution. Interrupted work retains a resumable record.
 ## Scenario workflow migration closure
 
 The former Rust workflow registry under `tests/scenarios/workflows/` was not
-invoked by scenario discovery. Behavior was moved to package public-contract
-tests or direct child YAML scenarios before detached modules were removed.
+invoked by scenario discovery, and its modules were never removed, so nothing in
+the tree compiled them. The `docker-build`, `docker-net`, `compose` and
+`compose-multinet` orchestration now runs as the real cargo target
+`hl-daemon/tests/workflow_orchestration.rs`, closing the build-execution,
+cache-reuse, multistage-copy, run-mount and two-network routing gaps this
+section had left open. The `pty-conformance` module was deleted rather than
+transferred: its five cases are already live under `tests/scenarios/terminal/`
+with the same names, and it referenced a `Fixture` type that never existed.
 
 | Former workflow | Durable owner or remaining typed pipeline requirement |
 |---|---|

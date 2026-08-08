@@ -18,7 +18,7 @@ use support::append;
 
 type Error = Box<dyn std::error::Error>;
 
-pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
+pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
     let work = TempDir::new()?;
     let base = fixture::alpine(work.path())?;
     let socket = work.path().join("daemon.sock");
