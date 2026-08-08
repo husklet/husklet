@@ -74,14 +74,13 @@ void hl_x86_emit_set(uint32_t *words, uint32_t *cursor, const instruction *item)
     }
 }
 
+/* Counted by emitting into a scratch buffer: the four forms differ by several words each and a
+   hand-kept constant has to be an exact match, not an upper bound. */
 uint32_t hl_x86_bitscan_words(const instruction *item) {
-    if (item->memory_operand == 0u) return 48u;
-    instruction load = *item;
-    load.operation = OP_LOAD;
-    load.destination = 16u;
-    load.width = item->width;
-    load.load_width = item->width;
-    return 48u + hl_x86_load_words(&load);
+    uint32_t scratch[512];
+    uint32_t cursor = 0;
+    hl_x86_emit_bitscan(scratch, &cursor, item);
+    return cursor;
 }
 
 void hl_x86_emit_bitscan(uint32_t *words, uint32_t *cursor, const instruction *item) {
@@ -115,7 +114,9 @@ void hl_x86_emit_bitscan(uint32_t *words, uint32_t *cursor, const instruction *i
         words[(*cursor)++] = (wide ? UINT32_C(0xdac01000) : UINT32_C(0x5ac01000)) | source << 5 | scan;
     } else {
         words[(*cursor)++] = (wide ? UINT32_C(0xdac01000) : UINT32_C(0x5ac01000)) | source << 5 | 20u;
-        emit_constant(words, cursor, 19u, wide ? 63u : item->width == 2u ? 15u : 31u);
+        /* The halfword source was already zero-extended into a 32-bit scratch, so its leading
+           zero count is the 32-bit one and the index it subtracts from is 31, not 15. */
+        emit_constant(words, cursor, 19u, wide ? 63u : 31u);
         words[(*cursor)++] = (wide ? UINT32_C(0xcb000000) : UINT32_C(0x4b000000)) |
                                20u << 16 | 19u << 5 | scan;
     }
@@ -129,8 +130,15 @@ void hl_x86_emit_bitscan(uint32_t *words, uint32_t *cursor, const instruction *i
                                    target << 5 | target;
         }
     }
-    words[(*cursor)++] = (wide ? UINT32_C(0xea00001f) : UINT32_C(0x6a00001f)) |
-                           source << 16 | source << 5;
+    if (item->conditional == 0u && item->width == 2u) {
+        /* A 32-bit test of the zero-extended halfword always reports N=0, so shift the
+           halfword's own sign bit up before the test that publishes SF. */
+        words[(*cursor)++] = UINT32_C(0x53103c00) | source << 5 | 19u;
+        words[(*cursor)++] = UINT32_C(0x6a00001f) | 19u << 16 | 19u << 5;
+    } else {
+        words[(*cursor)++] = (wide ? UINT32_C(0xea00001f) : UINT32_C(0x6a00001f)) |
+                               source << 16 | source << 5;
+    }
     if (item->conditional != 0u) {
         words[(*cursor)++] = UINT32_C(0x1a9f17f3); /* cset w19,eq: count-form CF */
         words[(*cursor)++] = (wide ? UINT32_C(0xea00001f) : UINT32_C(0x6a00001f)) |
@@ -148,6 +156,11 @@ void hl_x86_emit_bitscan(uint32_t *words, uint32_t *cursor, const instruction *i
         if (item->width == 2u)
             words[(*cursor)++] = UINT32_C(0xb3403c00) | target << 5 | item->destination;
         hl_x86_emit_nzcv(words, cursor);
+        /* The NZCV transfer reads ARM C as a borrow, so a logical test lands as CF=1; bsf
+           and bsr clear CF, and PF and AF stay as the interpreter leaves them. */
+        words[(*cursor)++] = load_word(20u, offsetof(hl_native_x86_64_cpu, flags));
+        words[(*cursor)++] = UINT32_C(0x927ff800) | 20u << 5 | 20u;
+        words[(*cursor)++] = store_word(20u, offsetof(hl_native_x86_64_cpu, flags));
     }
 }
 

@@ -8522,8 +8522,11 @@ fn bit_scan_basis() {
             );
             assert_eq!(cpu.read_register(ScalarRegister::General(0), width), u64::from(bit));
             assert!(!cpu.flags.contains(Flag::Zero));
-            assert!(cpu.flags.contains(Flag::Carry));
-            assert!(cpu.flags.contains(Flag::Sign));
+            // CF and SF are undefined here, but the native lowering tests the source and
+            // publishes both, so the interpreter has to land on the same answer.
+            assert!(!cpu.flags.contains(Flag::Carry));
+            assert!(!cpu.flags.contains(Flag::Overflow));
+            assert_eq!(cpu.flags.contains(Flag::Sign), bit == bits - 1);
         }
     }
 }
@@ -8691,8 +8694,9 @@ fn bit_scan_zero() {
     );
     assert_eq!(cpu.registers[9], 0x1122_3344_5566_7788);
     assert!(cpu.flags.contains(Flag::Zero));
-    assert!(cpu.flags.contains(Flag::Carry));
-    assert!(cpu.flags.contains(Flag::Overflow));
+    assert!(!cpu.flags.contains(Flag::Carry));
+    assert!(!cpu.flags.contains(Flag::Overflow));
+    assert!(!cpu.flags.contains(Flag::Sign));
 
     cpu.rip = 0x41000;
     cpu.registers[0] = 1 << 13;
@@ -8900,8 +8904,10 @@ fn tzcnt_values() {
             assert_eq!(cpu.flags.contains(Flag::Zero), bit == 0);
             assert!(cpu.flags.contains(Flag::Parity));
             assert!(cpu.flags.contains(Flag::Auxiliary));
-            assert!(cpu.flags.contains(Flag::Sign));
-            assert!(cpu.flags.contains(Flag::Overflow));
+            // The count never has its width's sign bit set and the native lowering tests it,
+            // so both paths clear SF and OF here while leaving PF and AF alone.
+            assert!(!cpu.flags.contains(Flag::Sign));
+            assert!(!cpu.flags.contains(Flag::Overflow));
             assert!(width != ScalarWidth::Dword || cpu.registers[0] >> 32 == 0);
         }
 
@@ -12266,8 +12272,10 @@ fn reverse_scan_basis() {
             );
             assert_eq!(cpu.read_register(ScalarRegister::General(0), width), u64::from(bit));
             assert!(!cpu.flags.contains(Flag::Zero));
-            assert!(cpu.flags.contains(Flag::Carry));
-            assert!(cpu.flags.contains(Flag::Overflow));
+            // Same agreement bar as the forward scan: CF and OF clear, SF from the source.
+            assert!(!cpu.flags.contains(Flag::Carry));
+            assert!(!cpu.flags.contains(Flag::Overflow));
+            assert_eq!(cpu.flags.contains(Flag::Sign), bit == bits - 1);
         }
     }
 }
@@ -12299,8 +12307,9 @@ fn reverse_scan_zero() {
     );
     assert_eq!(cpu.registers[9], 0x1122_3344_5566_7788);
     assert!(cpu.flags.contains(Flag::Zero));
-    assert!(cpu.flags.contains(Flag::Carry));
-    assert!(cpu.flags.contains(Flag::Sign));
+    assert!(!cpu.flags.contains(Flag::Carry));
+    assert!(!cpu.flags.contains(Flag::Sign));
+    assert!(!cpu.flags.contains(Flag::Overflow));
 
     cpu.rip = 0x4d000;
     cpu.registers[0] = 0xffff_ffff_8000_0001;

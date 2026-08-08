@@ -5169,8 +5169,12 @@ static void imul_reference(unsigned bits, uint64_t left, uint64_t right, uint64_
     int64_t truncated = (int64_t)(((uint64_t)product & mask) << (64u - bits)) >> (64u - bits);
     int overflow = product != (__int128)truncated;
     *result = (uint64_t)product & mask;
+    /* SF and ZF are undefined but the interpreter publishes them from the truncated product,
+       so this lowering owes the same answer; PF and AF stay untouched on both paths. */
     *flags = prior & ~(HL_X86_RFLAGS_CF | HL_X86_RFLAGS_ZF | HL_X86_RFLAGS_SF | HL_X86_RFLAGS_OF);
     if (overflow) *flags |= HL_X86_RFLAGS_CF | HL_X86_RFLAGS_OF;
+    if (*result == 0u) *flags |= HL_X86_RFLAGS_ZF;
+    if ((truncated < 0)) *flags |= HL_X86_RFLAGS_SF;
 }
 
 static void mul_reference(unsigned bits, uint64_t left, uint64_t right, uint64_t prior,
@@ -5179,7 +5183,9 @@ static void mul_reference(unsigned bits, uint64_t left, uint64_t right, uint64_t
     unsigned __int128 product = (unsigned __int128)(left & mask) * (right & mask);
     *low = (uint64_t)product & mask;
     *high = (uint64_t)(product >> bits) & mask;
-    *flags = prior & ~(HL_X86_RFLAGS_CF | HL_X86_RFLAGS_ZF | HL_X86_RFLAGS_SF | HL_X86_RFLAGS_OF);
+    /* The widening form redefines only CF and OF; ZF and SF are undefined and the interpreter
+       leaves them where they were, so the lowering has to leave them too. */
+    *flags = prior & ~(HL_X86_RFLAGS_CF | HL_X86_RFLAGS_OF);
     if (*high != 0u) *flags |= HL_X86_RFLAGS_CF | HL_X86_RFLAGS_OF;
 }
 

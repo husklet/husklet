@@ -191,14 +191,17 @@ impl BitScan {
         } else {
             u64::from(value.trailing_zeros())
         };
+        // lzcnt returns a count, not the bit index the reverse scan produces, and ZF follows the
+        // value the instruction writes back.
+        let written = if count && reverse {
+            u64::from(bits - 1) - result
+        } else {
+            result
+        };
         Self {
-            result: Some(if count && reverse {
-                u64::from(bits - 1) - result
-            } else {
-                result
-            }),
+            result: Some(written),
             carry: false,
-            zero: count && result == 0,
+            zero: count && written == 0,
         }
     }
 }

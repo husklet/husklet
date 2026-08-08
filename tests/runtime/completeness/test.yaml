@@ -349,6 +349,17 @@ cases:
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/x86_64/bittest.out }
+  - id: runtime/completeness/amd64-undefined-flags
+    targets: [amd64]
+    build: { source: x86_64/undefined_flags.c, output: amd64-undefined-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-undefined-flags }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    # The runs floor keeps this from passing as an interpreter-against-itself check: the whole
+    # point is that a translated block and the interpreter answer identically.
+    expect: { exit: 0, stdout: golden/x86_64/undefined_flags.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/completeness/amd64-shld
     targets: [amd64]
     build: { source: x86_64/shld.c, output: amd64-shld, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
