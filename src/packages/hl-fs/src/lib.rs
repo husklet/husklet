@@ -160,6 +160,9 @@ impl File {
     }
 }
 
+pub mod layer_index;
+pub use layer_index::LayerIndex;
+
 #[cfg(target_os = "linux")]
 mod anchor;
 #[cfg(target_os = "linux")]

@@ -113,10 +113,16 @@ impl Publication {
         }
     }
 
+    /// Only immutable layer chains are name-indexed; writable uppers and
+    /// forked container snapshots publish generically.
+    pub(super) const fn is_layer_chain(&self) -> bool {
+        matches!(self, Self::LayerChain { .. })
+    }
+
     /// Only a content-addressed layer chain must survive a crash intact; a generic
     /// snapshot is a per-container fork that is discarded with the container.
-    pub(super) fn durable_contents(&self) -> bool {
-        matches!(*self, Self::LayerChain { .. })
+    pub(super) const fn durable_contents(&self) -> bool {
+        self.is_layer_chain()
     }
 
     pub(super) fn layers(self) -> Option<Vec<LayerRecord>> {

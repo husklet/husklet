@@ -108,6 +108,12 @@ impl Draft {
         for directory in [self.root.join("ownership/committed"), self.root.join("names/committed")] {
             File::open(&directory).at(&directory)?.sync_all().at(&directory)?;
         }
+        // The tree is final and immutable from here, so its name index is emitted
+        // before the publication record that makes the snapshot visible: nothing
+        // can observe a published chain whose index is still being written.
+        if publication.is_layer_chain() {
+            super::index::publish(&self.root, &id, &target)?;
+        }
         Native.replace(
             &self
                 .root
