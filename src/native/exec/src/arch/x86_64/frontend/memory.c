@@ -24,7 +24,10 @@ static void zero_test(uint32_t *instruction, uint32_t *target, unsigned source) 
 }
 
 #define HL_X86_READ_VIEWS 4u
-#define HL_X86_WRITE_CACHE_WORDS 85u
+#define HL_X86_WRITE_CACHE_WORDS 84u
+/* The hit exit restores the spilled temporaries, rebuilds the end address the
+ * window base displaced, and branches past the caller's bounds guard. */
+#define HL_X86_WRITE_CACHE_HIT_WORDS (HL_X86_WRITE_CACHE_WORDS + 4u)
 
 /* The empty-journal sentinel is UINT64_MAX.  emit_constant reaches it with a
  * movz and three movk; MOVN writes the same all-ones pattern in one word. */
@@ -164,7 +167,7 @@ void hl_x86_patch_read_hit(uint32_t *hit, uint32_t *target) { jump(hit, target);
  * dispatcher.  A view transition archives the old exact dirty owner before
  * changing active projection state; a full journal falls through to the
  * ordinary miss path before any guest byte is changed. */
-static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) {
+static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width, uint32_t **hit) {
     uint32_t *overflow;
     words[(*cursor)++] = UINT32_C(0xa9be53f3); /* preserve caller temporaries */
     words[(*cursor)++] = UINT32_C(0xa9015bf5);
@@ -272,10 +275,20 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     words[(*cursor)++] = pair_load(20, 21, 22, 0); /* view first,last */
     words[(*cursor)++] = pair_store(20, 21, HL_X86_WINDOW_BASE,
                                     window_word(offsetof(hl_native_x86_64_cpu, memory_first)));
+    /* An interval match does not identify a projection: the run cache keeps two
+     * views of one range whose host delta differs or whose permissions are
+     * incomparable, so the already-active path must still adopt this view's
+     * delta and permissions before anything reads them. */
+    uint32_t *install_projection = &words[*cursor];
     words[(*cursor)++] = pair_load(20, 21, 22, 2); /* view delta,permissions */
     words[(*cursor)++] = pair_store(20, 21, HL_X86_WINDOW_BASE,
                                     window_word(offsetof(hl_native_x86_64_cpu, memory_delta)));
-    uint32_t *installed = &words[(*cursor)++];
+    if (hit != NULL) {
+        words[(*cursor)++] = UINT32_C(0xa9415bf5);
+        words[(*cursor)++] = UINT32_C(0xa8c253f3);
+        words[(*cursor)++] = UINT32_C(0x91000000) | width << 10 | 16u << 5 | 18u; /* add x18,x16,#width */
+        *hit = &words[(*cursor)++];
+    }
     uint32_t *active = &words[*cursor];
     words[(*cursor)++] = UINT32_C(0xa9415bf5);
     words[(*cursor)++] = UINT32_C(0xa8c253f3);
@@ -290,7 +303,7 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     jump(again, loop);
     branch(different_first, archive, 1u);
     branch(different_last, archive, 1u);
-    jump(already_active, active);
+    jump(already_active, install_projection);
     branch(empty, install, 0u);
     *append = UINT32_C(0xb4000000) |
               ((uint32_t)(append_target - append) & UINT32_C(0x7ffff)) << 5 | 21u;
@@ -303,7 +316,6 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     jump(merged_install, install);
     jump(scan_again, scan);
     branch(full, active, 2u);
-    jump(installed, active);
 }
 
 void hl_x86_emit_dirty(uint32_t *words, uint32_t *cursor) {
@@ -348,7 +360,7 @@ void hl_x86_emit_load(uint32_t *words, uint32_t *cursor, const instruction *item
     if (item->memory_write == 0u)
         hl_x86_emit_read_cache(words, cursor, access_width, 18u, 0, &cache_hit);
     else
-        emit_write_cache(words, cursor, access_width);
+        emit_write_cache(words, cursor, access_width, NULL);
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
     words[(*cursor)++] = UINT32_C(0xeb11021f);
     below = &words[(*cursor)++];
@@ -427,7 +439,7 @@ void hl_x86_emit_load(uint32_t *words, uint32_t *cursor, const instruction *item
 
 uint32_t hl_x86_store_words(const instruction *item) {
     return hl_x86_address_words(item) - 1u + (item->source_high == 8u ? 1u : 0u) +
-           41u + HL_X86_WRITE_CACHE_WORDS + (item->live_chain != 0u ? 19u : 0u) + constant_words(item->pc) +
+           41u + HL_X86_WRITE_CACHE_HIT_WORDS + (item->live_chain != 0u ? 19u : 0u) + constant_words(item->pc) +
            (item->has_immediate != 0u ? constant_words(item->operand_immediate) : 0u);
 }
 
@@ -437,19 +449,22 @@ void hl_x86_emit_store(uint32_t *words, uint32_t *cursor, const instruction *ite
     uint32_t *above;
     uint32_t *permission;
     uint32_t *skip;
+    uint32_t *cache_hit;
     unsigned source = item->source;
     if (item->has_immediate != 0u) source = 20u;
     hl_x86_emit_address(words, cursor, item);
     --*cursor;
-    emit_write_cache(words, cursor, item->width);
+    /* x18 carries the end-of-access address through the bounds checks below, so the
+     * high-byte source must land in x20 instead.  Both forms of that value are
+     * materialised before the cache, whose hit exit branches past the guard, and
+     * survive it in the temporaries the cache spills and restores. */
     if (item->has_immediate != 0u)
         emit_constant(words, cursor, 20u, item->operand_immediate);
-    /* x18 carries the end-of-access address through the bounds checks below, so the
-     * high-byte source must land in x20 instead. */
     if (item->source_high == 8u) {
         words[(*cursor)++] = UINT32_C(0x53083c00) | source << 5 | 20u; /* ubfx w20,wS,#8,#8 */
         source = 20u;
     }
+    emit_write_cache(words, cursor, item->width, &cache_hit);
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
     words[(*cursor)++] = UINT32_C(0xeb11021f);
     below = &words[(*cursor)++];
@@ -460,6 +475,9 @@ void hl_x86_emit_store(uint32_t *words, uint32_t *cursor, const instruction *ite
     above = &words[(*cursor)++];
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_permissions));
     permission = &words[(*cursor)++];
+    /* The cache selected this view by the same interval and write bit the guard
+     * above re-tests, and installed it, so a hit resumes at the translation. */
+    jump(cache_hit, &words[*cursor]);
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_delta));
     words[(*cursor)++] = UINT32_C(0x8b110211);
     words[(*cursor)++] = (item->width == 1u ? UINT32_C(0x39000220) :
@@ -528,7 +546,7 @@ void hl_x86_emit_xchg(uint32_t *words, uint32_t *cursor, const instruction *item
     unsigned source = item->source;
     hl_x86_emit_address(words, cursor, item);
     --*cursor; /* retain the EA in x16 */
-    emit_write_cache(words, cursor, item->width);
+    emit_write_cache(words, cursor, item->width, NULL);
     if (item->source_high == 8u) {
         words[(*cursor)++] = UINT32_C(0x53083c00) | source << 5 | 20u; /* ubfx w20,wS,#8,#8 */
         source = 20u;
@@ -686,7 +704,7 @@ void hl_x86_emit_xadd(uint32_t *words, uint32_t *cursor, const instruction *item
         uint32_t *below, *overflow, *above, *readable, *writable, *unaligned, *done;
         unsigned source = item->source;
         hl_x86_emit_address(words, cursor, item); --*cursor;
-        emit_write_cache(words, cursor, item->width);
+        emit_write_cache(words, cursor, item->width, NULL);
         if (item->has_immediate) {
             emit_constant(words, cursor, 21u, item->operand_immediate);
             source = 21u;
@@ -814,7 +832,7 @@ void hl_x86_emit_cmpxchg(uint32_t *words, uint32_t *cursor, const instruction *i
 
     hl_x86_emit_address(words, cursor, item);
     --*cursor;
-    emit_write_cache(words, cursor, item->width);
+    emit_write_cache(words, cursor, item->width, NULL);
     if (item->source_high == 8u) {
         words[(*cursor)++] = UINT32_C(0x53083c00) | source << 5 | 21u;
         source = 21u;
@@ -1602,7 +1620,7 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
                                    item->vector_kind == VECTOR_COPY ? item->destination : 16u,
                                !scalar_vector, &cache_hit);
     else
-        emit_write_cache(words, cursor, width);
+        emit_write_cache(words, cursor, width, NULL);
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
     words[(*cursor)++] = UINT32_C(0xeb11021f); /* cmp x16,x17 */
     below = &words[(*cursor)++];
