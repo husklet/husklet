@@ -1322,6 +1322,45 @@ fn atomics_are_transactional() {
     assert_eq!(u64::from_le_bytes(bytes), 13);
 }
 
+/// A write published by another thread must break a monitor this thread armed.
+/// Same-granule coverage elsewhere is single-threaded, so it cannot catch an
+/// invalidation that is skipped only for writers that did not arm.
+#[test]
+fn foreign_thread_write_breaks_exclusive() {
+    let coordinator = std::sync::Arc::new(MappingCoordinator::new(FakeHost::failing(usize::MAX)));
+    let mut writable = request();
+    writable.protection = Protection::READ.union(Protection::WRITE);
+    coordinator.map(writable).unwrap();
+    let initial = coordinator.prepare_write(GuestAddress::new(0x1000), 8).unwrap();
+    coordinator.commit_write(initial, &5_u64.to_le_bytes()).unwrap();
+
+    let (loaded, exclusive) = coordinator
+        .load_exclusive(GuestAddress::new(0x1000), 8, false, AtomicOrder::Acquire)
+        .unwrap();
+    assert_eq!(loaded.low, 5);
+
+    // The interfering write lands on a different address inside the same
+    // 64-byte reservation granule, on a thread that armed nothing.
+    let writer = std::sync::Arc::clone(&coordinator);
+    std::thread::spawn(move || {
+        let prepared = writer.prepare_write(GuestAddress::new(0x1008), 8).unwrap();
+        writer.commit_write(prepared, &7_u64.to_le_bytes()).unwrap();
+    })
+    .join()
+    .unwrap();
+
+    assert_eq!(
+        coordinator.store_exclusive(exclusive, AtomicValue { low: 9, high: 0 }, AtomicOrder::Release),
+        Ok(false),
+        "a foreign thread's same-granule write must break the reservation",
+    );
+    let mut bytes = [0_u8; 8];
+    coordinator
+        .read(GuestAddress::new(0x1000), &mut bytes, Protection::READ)
+        .unwrap();
+    assert_eq!(u64::from_le_bytes(bytes), 5, "the failed store must not have published");
+}
+
 #[test]
 fn disjoint_write_preserves() {
     let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
