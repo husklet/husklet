@@ -19,30 +19,40 @@ impl SignalGateway {
         memory: &super::super::process_memory::ProcessMemory,
         architecture: hl_linux::GuestArchitecture,
     ) -> Result<u64, EngineError> {
-        mappings
-            .map(MapRequest {
-                placement: Placement::FixedNoReplace(GuestAddress::new(SIGRETURN_PAGE)),
-                length: 4096,
-                alignment: 4096,
-                protection: Protection::READ.union(Protection::WRITE),
-                backing: Backing::Anonymous {
-                    identity: 0x5349_4752,
-                    shared: false,
-                },
-                backing_offset: 0,
-            })
-            .map_err(|_| EngineError::LaunchFailed)?;
+        let request = |placement| MapRequest {
+            placement,
+            length: 4096,
+            alignment: 4096,
+            protection: Protection::READ.union(Protection::WRITE),
+            backing: Backing::Anonymous {
+                identity: 0x5349_4752,
+                shared: false,
+            },
+            backing_offset: 0,
+        };
+        // A main image wider than the gap from its load hint to this page already owns the preferred
+        // address; the gateway then takes the first free page above it instead of failing the launch.
+        let page = match mappings.map(request(Placement::FixedNoReplace(GuestAddress::new(SIGRETURN_PAGE)))) {
+            Ok(address) => address,
+            Err(_) => mappings
+                .map(request(Placement::Anywhere {
+                    minimum: GuestAddress::new(SIGRETURN_PAGE),
+                    maximum: GuestAddress::new(hl_memory::MEMORY_ADDRESS_MAXIMUM),
+                    hint: None,
+                }))
+                .map_err(|_| EngineError::LaunchFailed)?,
+        }
+        .get();
         let code: &[u8] = match architecture {
             hl_linux::GuestArchitecture::Aarch64 => &[0x68, 0x11, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4],
             hl_linux::GuestArchitecture::X86_64 => &[0xb8, 0x0f, 0x00, 0x00, 0x00, 0x0f, 0x05],
         };
-        hl_linux::GuestMemory::write(memory, SIGRETURN_PAGE, code).map_err(|_| EngineError::LaunchFailed)?;
-        let range =
-            AddressRange::nonempty(GuestAddress::new(SIGRETURN_PAGE), 4096).map_err(|_| EngineError::LaunchFailed)?;
+        hl_linux::GuestMemory::write(memory, page, code).map_err(|_| EngineError::LaunchFailed)?;
+        let range = AddressRange::nonempty(GuestAddress::new(page), 4096).map_err(|_| EngineError::LaunchFailed)?;
         mappings
             .protect(range, Protection::READ.union(Protection::EXECUTE))
             .map_err(|_| EngineError::LaunchFailed)?;
-        Ok(SIGRETURN_PAGE)
+        Ok(page)
     }
 }
 
