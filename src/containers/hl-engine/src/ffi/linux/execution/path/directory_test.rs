@@ -840,8 +840,9 @@ fn credential_projection() {
     registry.replace_credentials(process, dropped).unwrap();
     let parent = host.access_identity().unwrap();
     assert_eq!((parent.user, parent.group), (1000, 1001));
-    // The ids are per process; the DAC bypasses are pinned on until ownership carries a guest owner.
-    assert!(parent.capabilities.dac_read_search);
+    // Credentials are per process: clearing the parent's effective set really clears its bypass,
+    // and the forked child keeps its own.
+    assert!(!parent.capabilities.dac_read_search);
     assert!(child_host.access_identity().unwrap().capabilities.dac_read_search);
 
     drop(child_host);
