@@ -256,6 +256,13 @@ impl NativePool {
     /// re-entering, so a run that did substantial native work keeps its entry. A first
     /// memory fallback under direct authority buys one retry without it instead, because
     /// that run mode has no operand resolver and so cannot be the entry's verdict.
+    ///
+    /// Every arm64 fallback on malloc, syscall, file, mmap and sqlite is a guard fault on an
+    /// operand address, never an untranslatable instruction: `a64_fallback_form_memory` equals
+    /// `a64_fallback_generated` equals `guard_read + guard_write`, and
+    /// `a64_fallback_entry_rejection` is zero on all five. The failing PCs disassemble as plain
+    /// loads that pass their guard millions of times each, so there is no bad instruction for a
+    /// shorter block to cut before; the address coverage of the operand views is what fails.
     pub(super) fn record_fallback(
         &mut self,
         entry: NativeSite,
