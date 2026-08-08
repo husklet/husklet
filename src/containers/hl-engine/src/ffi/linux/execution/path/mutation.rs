@@ -505,8 +505,17 @@ fn pin_entry(
     let parent = resolved
         .duplicate_parent()
         .map_err(|error| super::resolution::Policy::runtime_error(ResolveError::Host(error)))?;
-    let name = CString::new(resolved.final_name().ok_or(RuntimePathError::Invalid)?.as_bytes())
-        .map_err(|_| RuntimePathError::Invalid)?;
+    // A walk ending at a directory root (`/`, `.`, `..`) names no child. A creation against one
+    // still addresses a directory that exists, which Linux reports as EEXIST, not EINVAL; busybox
+    // `mkdir -p` walks from `/` and depends on it.
+    let Some(final_name) = resolved.final_name() else {
+        return Err(if missing {
+            RuntimePathError::Exists
+        } else {
+            RuntimePathError::Invalid
+        });
+    };
+    let name = CString::new(final_name.as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
     if operand.path.as_bytes().ends_with(b"/") {
         require_trailing_slash_directory(&parent, &name, missing)?;
     }

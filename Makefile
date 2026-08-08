@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint gate lint lint-cases clippy fmt fmt-check test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
+.PHONY: all check design-lint gate gate-fixture lint lint-cases clippy fmt fmt-check test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
 
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
@@ -50,6 +50,41 @@ gate:
 	  cargo clippy -p husklet --all-targets --features runtime --locked --offline -- -D warnings || status=1; \
 	  cargo test --workspace --all-targets --locked --offline --no-fail-fast || status=1; \
 	  cargo test --workspace --doc --locked --offline || status=1; \
+	  exit $$status'
+
+# The Alpine-fixture tests, which the workspace sweep never runs because they are `#[ignore]`d behind
+# HL_ALPINE_ARCHIVE. Deliberately not part of `gate`: they need the fixture and a host `cc` that can
+# link `-static`, so they are environment-conditional in a way the sweep is not. Each case runs alone
+# under a hard timeout because a stuck guest otherwise hangs the whole invocation. Promote a case into
+# FIXTURE_CASES only once it has been proven green and non-vacuous; `descendant_cleanup` stays out
+# because it never terminates and its liveness assertions probe host pids for guest processes.
+FIXTURE_TIMEOUT ?= 180
+FIXTURE_CASES = \
+  hl-container:filesystem_coherence:new_file_is_visible \
+  hl-container:filesystem_coherence:overwritten_file_is_visible \
+  hl-container:filesystem_coherence:directory_tree_is_visible \
+  hl-container:filesystem_coherence:held_directory_is_coherent \
+  hl-container:lifecycle_contract:hangup_reaches_the_guest_signal_handler \
+  hl-container:lifecycle_contract:configured_quit_reaches_the_guest_signal_handler \
+  hl-container:lifecycle_contract:pause_stops_guest_progress_until_unpause \
+  hl-container:lifecycle_contract:health_probes_reach_healthy_and_unhealthy_states \
+  hl-container:process_contract:sigterm_stop \
+  hl-container:process_contract:exec_contracts \
+  hl-container:run_options:process_run_options \
+  hl-daemon:daemon-api:shared_mount_lock_contention
+
+gate-fixture:
+	$(NIX_DEV) bash -uc '\
+	  export HL_TEST_ENGINE_APP_BIN_DIR="$(CURDIR)/target/debug"; \
+	  cargo build -p engine -p testing --bins --locked --offline || exit 1; \
+	  cargo test -p hl-container -p hl-daemon --tests --locked --offline --no-run || exit 1; \
+	  status=0; \
+	  for entry in $(FIXTURE_CASES); do \
+	    package=$${entry%%:*}; rest=$${entry#*:}; target=$${rest%%:*}; name=$${rest#*:}; \
+	    echo "== $$package $$target $$name"; \
+	    timeout -s KILL $(FIXTURE_TIMEOUT) cargo test -p $$package --test $$target --locked --offline \
+	      -- --exact --ignored --nocapture $$name || status=1; \
+	  done; \
 	  exit $$status'
 
 # husklet's `runtime` feature is off by default and `gui` needs the macOS GTK stack, so the workspace
