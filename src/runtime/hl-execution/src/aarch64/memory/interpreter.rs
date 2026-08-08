@@ -1,3 +1,4 @@
+use super::super::state::ScalarAccess;
 use crate::{
     Aarch64CpuState, Aarch64ExecutionExit, Aarch64Instruction, Aarch64Ir, AccessKind, GuestOperandMemory,
     IndexExtension, LoadExtension, MemoryAddress, MemoryWidth, PcCoordinatePort, Writeback,
@@ -139,7 +140,7 @@ impl Aarch64MemoryInterpreter {
         let Ok(value) = memory.read(resolved.address, width.bytes()) else {
             return Self::fault(instruction, resolved.address, AccessKind::Read, width.bytes());
         };
-        let mut staged = cpu.clone();
+        let mut staged = cpu.stage_scalar();
         Self::write_load(&mut staged, destination, width, extension, value);
         Self::writeback(&mut staged, resolved);
         staged.pc = instruction.wrapping_add(4);
@@ -164,7 +165,7 @@ impl Aarch64MemoryInterpreter {
         if memory.commit_write(reservation, value).is_err() {
             return Self::fault(instruction, resolved.address, AccessKind::Write, width.bytes());
         }
-        let mut staged = cpu.clone();
+        let mut staged = cpu.stage_scalar();
         Self::writeback(&mut staged, resolved);
         staged.pc = instruction.wrapping_add(4);
         cpu.commit_scalar(&staged);
@@ -189,7 +190,7 @@ impl Aarch64MemoryInterpreter {
         let Ok(second) = memory.read(second_address, width.bytes()) else {
             return Self::fault(instruction, second_address, AccessKind::Read, width.bytes());
         };
-        let mut staged = cpu.clone();
+        let mut staged = cpu.stage_scalar();
         let extension = if sign_extend {
             LoadExtension::SignTo64
         } else {
@@ -228,7 +229,7 @@ impl Aarch64MemoryInterpreter {
                 u64::from(width.bytes()) * 2,
             );
         }
-        let mut staged = cpu.clone();
+        let mut staged = cpu.stage_scalar();
         Self::writeback(&mut staged, resolved);
         staged.pc = instruction.wrapping_add(4);
         cpu.commit_scalar(&staged);
@@ -292,8 +293,8 @@ impl Aarch64MemoryInterpreter {
         }
     }
 
-    fn write_load(
-        cpu: &mut Aarch64CpuState,
+    fn write_load<S: ScalarAccess>(
+        cpu: &mut S,
         destination: u8,
         width: MemoryWidth,
         extension: LoadExtension,
@@ -301,21 +302,21 @@ impl Aarch64MemoryInterpreter {
     ) {
         match extension {
             LoadExtension::SignTo64 => {
-                cpu.set_register(destination, Self::sign_extend(value, width.bytes() * 8));
+                cpu.write(destination, Self::sign_extend(value, width.bytes() * 8));
             }
             LoadExtension::SignTo32 => {
-                cpu.set_narrow_register(destination, Self::sign_extend(value, width.bytes() * 8) as u32);
+                cpu.write_narrow(destination, Self::sign_extend(value, width.bytes() * 8) as u32);
             }
             LoadExtension::Zero if width == MemoryWidth::Double => {
-                cpu.set_register(destination, value);
+                cpu.write(destination, value);
             }
-            LoadExtension::Zero => cpu.set_narrow_register(destination, value as u32),
+            LoadExtension::Zero => cpu.write_narrow(destination, value as u32),
         }
     }
 
-    pub(super) fn writeback(cpu: &mut Aarch64CpuState, resolved: ResolvedAddress) {
+    pub(super) fn writeback<S: ScalarAccess>(cpu: &mut S, resolved: ResolvedAddress) {
         if let Some((register, value)) = resolved.writeback {
-            cpu.set_destination(register, value);
+            cpu.write_destination(register, value);
         }
     }
 

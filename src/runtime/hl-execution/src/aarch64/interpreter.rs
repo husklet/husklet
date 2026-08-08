@@ -1,4 +1,5 @@
 use super::coordinate::{Identity as IdentityCoordinates, stage_branch};
+use super::state::ScalarAccess;
 use super::{atomic, system};
 use crate::aarch64_integer_support::{
     add_carry, arithmetic, bitfield, logical, logical_flags, logical_operand, multiply, reverse_bytes, select_value,
@@ -126,7 +127,7 @@ impl Aarch64Interpreter {
                 access: crate::AccessKind::Execute,
             };
         }
-        let mut staged = cpu.clone();
+        let mut staged = cpu.stage_scalar();
         staged.pc = instruction.wrapping_add(4);
         let exit = match ir.instruction {
             Aarch64Instruction::AddSubtractImmediate {
@@ -350,7 +351,7 @@ impl Aarch64Interpreter {
                 } else {
                     (cpu.register(source) as u32).leading_zeros()
                 };
-                staged.set_register(destination, u64::from(value));
+                staged.write(destination, u64::from(value));
                 Aarch64ExecutionExit::Continue
             }
             Aarch64Instruction::ConditionalCompare {
@@ -376,7 +377,7 @@ impl Aarch64Interpreter {
                 let base = coordinates.architectural_pc(instruction);
                 let base = if page { base & !0xfff } else { base };
                 let scale = if page { 4096 } else { 1 };
-                staged.set_register(
+                staged.write(
                     destination,
                     base.wrapping_add((displacement as u64).wrapping_mul(scale)),
                 );
@@ -384,14 +385,14 @@ impl Aarch64Interpreter {
             }
             Aarch64Instruction::BranchImmediate { displacement, link } => {
                 if link {
-                    staged.set_register(30, coordinates.architectural_pc(instruction).wrapping_add(4));
+                    staged.write(30, coordinates.architectural_pc(instruction).wrapping_add(4));
                 }
                 stage_branch(&mut staged, instruction, instruction.wrapping_add(displacement as u64))
             }
             Aarch64Instruction::BranchRegister { source, link } => {
                 let target = cpu.register(source);
                 if link {
-                    staged.set_register(30, coordinates.architectural_pc(instruction).wrapping_add(4));
+                    staged.write(30, coordinates.architectural_pc(instruction).wrapping_add(4));
                 }
                 stage_branch(&mut staged, instruction, target)
             }
@@ -459,7 +460,7 @@ impl Aarch64Interpreter {
                         word: ir.word,
                     };
                 };
-                staged.set_register(destination, value);
+                staged.write(destination, value);
                 Aarch64ExecutionExit::Continue
             }
             Aarch64Instruction::SystemWrite { source, register } => {

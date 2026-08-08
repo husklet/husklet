@@ -1449,3 +1449,63 @@ fn reserved_memory_encodings() {
         assert_eq!(Aarch64Decoder::decode(load).is_ok(), operation != 3, "{load:#010x}");
     }
 }
+
+#[test]
+fn scalar_memory_steps_leave_the_vector_file_alone() {
+    let mut memory = Memory::default();
+    let mut cpu = Aarch64CpuState {
+        pc: 0x1000,
+        ..Default::default()
+    };
+    for (index, vector) in cpu.vectors.iter_mut().enumerate() {
+        *vector = (index as u128) << 96 | 0xdead_beef;
+    }
+    let vectors = cpu.vectors;
+    memory.put(0x2000, 8, 0x1122_3344_5566_7788);
+    memory.put(0x3000, 8, 0x0102_0304_0506_0708);
+    memory.put(0x3008, 8, 0x1112_1314_1516_1718);
+    cpu.set_register(1, 0x2000);
+    cpu.set_register(2, 0xaabb_ccdd_eeff_0011);
+    cpu.set_register(3, 0x2100);
+    cpu.set_register(6, 0x3000);
+    cpu.set_register(7, 0x7777);
+    cpu.set_register(8, 0x8888);
+    cpu.set_register(9, 0x3100);
+
+    // LDR X0, [X1], #8
+    assert_eq!(
+        cpu.execute_memory(&mut memory, &IDENTITY, 0xf840_8420),
+        Aarch64ExecutionExit::Continue
+    );
+    assert_eq!(cpu.register(0), 0x1122_3344_5566_7788);
+    assert_eq!(cpu.register(1), 0x2008);
+
+    // STR X2, [X3, #8]!
+    assert_eq!(
+        cpu.execute_memory(&mut memory, &IDENTITY, 0xf800_8c62),
+        Aarch64ExecutionExit::Continue
+    );
+    assert_eq!(memory.get(0x2108, 8), 0xaabb_ccdd_eeff_0011);
+    assert_eq!(cpu.register(3), 0x2108);
+
+    // LDP X4, X5, [X6], #16
+    assert_eq!(
+        cpu.execute_memory(&mut memory, &IDENTITY, 0xa8c1_14c4),
+        Aarch64ExecutionExit::Continue
+    );
+    assert_eq!(cpu.register(4), 0x0102_0304_0506_0708);
+    assert_eq!(cpu.register(5), 0x1112_1314_1516_1718);
+    assert_eq!(cpu.register(6), 0x3010);
+
+    // STP X7, X8, [X9, #16]!
+    assert_eq!(
+        cpu.execute_memory(&mut memory, &IDENTITY, 0xa981_2127),
+        Aarch64ExecutionExit::Continue
+    );
+    assert_eq!(memory.get(0x3110, 8), 0x7777);
+    assert_eq!(memory.get(0x3118, 8), 0x8888);
+    assert_eq!(cpu.register(9), 0x3110);
+
+    assert_eq!(cpu.pc, 0x1010);
+    assert_eq!(cpu.vectors, vectors);
+}
