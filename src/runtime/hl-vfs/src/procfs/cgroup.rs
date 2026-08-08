@@ -4,6 +4,7 @@ pub struct View {
     online_cpus: usize,
     cpu_limit: Option<usize>,
     memory_limit: Option<u64>,
+    process_limit: Option<usize>,
     memory_current: u64,
     processes: Vec<u32>,
     threads: Vec<u32>,
@@ -53,6 +54,7 @@ impl View {
         online_cpus: usize,
         cpu_limit: Option<usize>,
         memory_limit: Option<u64>,
+        process_limit: Option<usize>,
         memory_current: u64,
         mut processes: Vec<u32>,
         mut threads: Vec<u32>,
@@ -62,6 +64,7 @@ impl View {
             || cpu_limit == Some(0)
             || cpu_limit.is_some_and(|limit| limit > online_cpus)
             || memory_limit == Some(0)
+            || process_limit == Some(0)
             || memory_limit.is_some_and(|limit| memory_current > limit)
             || processes.contains(&0)
             || threads.contains(&0)
@@ -76,6 +79,7 @@ impl View {
             online_cpus,
             cpu_limit,
             memory_limit,
+            process_limit,
             memory_current,
             processes,
             threads,
@@ -130,7 +134,9 @@ impl View {
             Leaf::SwapCurrent | Leaf::SwapPeak | Leaf::OomGroup => b"0\n".to_vec(),
             Leaf::SwapHigh => b"max\n".to_vec(),
             Leaf::SwapEvents => b"high 0\nmax 0\nfail 0\n".to_vec(),
-            Leaf::PidsMax => b"max\n".to_vec(),
+            Leaf::PidsMax => self
+                .process_limit
+                .map_or_else(|| b"max\n".to_vec(), |limit| format!("{limit}\n").into_bytes()),
             Leaf::PidsCurrent | Leaf::PidsPeak => format!("{}\n", self.threads.len()).into_bytes(),
             Leaf::PidsEvents => b"max 0\n".to_vec(),
             Leaf::CpuStatLocal => b"throttled_usec 0\n".to_vec(),
@@ -253,7 +259,16 @@ mod test {
     use super::{Leaf, ROOT_NAMES, View};
 
     fn view(cpus: usize, cpu_limit: Option<usize>, memory_limit: Option<u64>) -> View {
-        View::new(cpus, cpu_limit, memory_limit, 4096, vec![7, 1, 7], vec![9, 1, 8]).unwrap()
+        View::new(cpus, cpu_limit, memory_limit, None, 4096, vec![7, 1, 7], vec![9, 1, 8]).unwrap()
+    }
+
+    /// An unset process quota keeps `pids.max` unlimited; a set one is rendered exactly.
+    #[test]
+    fn process_quota_renders_only_when_configured() {
+        assert_eq!(view(4, None, None).render(Leaf::PidsMax), b"max\n");
+        let limited = View::new(4, None, None, Some(64), 4096, vec![7], vec![9]).unwrap();
+        assert_eq!(limited.render(Leaf::PidsMax), b"64\n");
+        assert!(View::new(4, None, None, Some(0), 4096, vec![7], vec![9]).is_none());
     }
 
     #[test]
@@ -316,11 +331,11 @@ mod test {
 
     #[test]
     fn invalid_values() {
-        assert!(View::new(0, None, None, 0, vec![1], vec![1]).is_none());
-        assert!(View::new(1, Some(0), None, 0, vec![1], vec![1]).is_none());
-        assert!(View::new(1, Some(2), None, 0, vec![1], vec![1]).is_none());
-        assert!(View::new(1, None, Some(0), 0, vec![1], vec![1]).is_none());
-        assert!(View::new(1, None, Some(5), 6, vec![1], vec![1]).is_none());
-        assert!(View::new(1, None, None, 0, vec![0], vec![1]).is_none());
+        assert!(View::new(0, None, None, None, 0, vec![1], vec![1]).is_none());
+        assert!(View::new(1, Some(0), None, None, 0, vec![1], vec![1]).is_none());
+        assert!(View::new(1, Some(2), None, None, 0, vec![1], vec![1]).is_none());
+        assert!(View::new(1, None, Some(0), None, 0, vec![1], vec![1]).is_none());
+        assert!(View::new(1, None, Some(5), None, 6, vec![1], vec![1]).is_none());
+        assert!(View::new(1, None, None, None, 0, vec![0], vec![1]).is_none());
     }
 }

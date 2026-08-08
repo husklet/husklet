@@ -9,6 +9,8 @@ pub struct ResourceSnapshot {
     pub free_memory: u64,
     /// Explicit CPU quota; `None` keeps `cpu.max` unlimited even when topology is finite.
     pub cpu_limit: Option<usize>,
+    /// Explicit process quota; `None` keeps `pids.max` unlimited even though registry capacity is finite.
+    pub process_limit: Option<usize>,
 }
 
 /// One coherent observation of the guest-visible boot and resource tuple.

@@ -255,6 +255,7 @@ impl SystemAuthority {
 
     fn validate_resources(resources: ResourceSnapshot) -> Result<(), SystemLaunchError> {
         if resources.cpu_limit == Some(0)
+            || resources.process_limit == Some(0)
             || (resources.total_memory == 0 && resources.free_memory != 0)
             || (resources.total_memory != 0 && resources.free_memory > resources.total_memory)
         {

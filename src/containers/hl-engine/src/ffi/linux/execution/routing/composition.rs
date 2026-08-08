@@ -218,6 +218,11 @@ pub(in crate::ffi::linux::execution) fn create(
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value != 0)
         .map(|_| tasks.topology().online());
+    let process_limit = plan
+        .options
+        .get("HL_PIDS_MAX")
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value != 0);
     let uptime_seconds =
         crate::native::HostSyscalls::clock_ns(&crate::ffi::LinuxHost, crate::native::ClockKind::Monotonic)
             .unwrap_or(1_000_000_000)
@@ -242,6 +247,7 @@ pub(in crate::ffi::linux::execution) fn create(
             total_memory: memory_limit.unwrap_or(0),
             free_memory: memory_limit.unwrap_or(0),
             cpu_limit,
+            process_limit,
             ..hl_runtime::ResourceSnapshot::default()
         },
     ) {

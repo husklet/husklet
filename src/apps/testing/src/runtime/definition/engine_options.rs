@@ -6,7 +6,7 @@ use hl_container::{EndpointSpec, Isolation, Mount, NetworkMode, NetworkSpec, Res
 use std::path::PathBuf;
 
 /// Names hl-container can honour, and the ones it cannot express yet.
-const SUPPORTED: [&str; 13] = [
+const SUPPORTED: [&str; 14] = [
     "HL_NETNS",
     "HL_NETBR",
     "HL_IP",
@@ -19,6 +19,7 @@ const SUPPORTED: [&str; 13] = [
     "HL_VOLUMES",
     "HL_CPUS",
     "HL_MEM_MAX",
+    "HL_PIDS_MAX",
     "HL_PCACHE_DIR",
 ];
 /// Recognised engine options with no hl-container expression; a case asking for one cannot run.
@@ -34,6 +35,7 @@ pub(crate) struct EngineOptions {
     mounts: Vec<Mount>,
     cpu_count: Option<u32>,
     memory_bytes: Option<u64>,
+    process_count: Option<u32>,
     translation_cache: Option<PathBuf>,
     bridge: Option<String>,
     address: Option<std::net::Ipv4Addr>,
@@ -78,6 +80,7 @@ impl EngineOptions {
             "HL_GID" => self.gid = Some(setting.number()?),
             "HL_CPUS" => self.cpu_count = Some(setting.number()?),
             "HL_MEM_MAX" => self.memory_bytes = Some(setting.number()?),
+            "HL_PIDS_MAX" => self.process_count = Some(setting.number()?),
             "HL_PCACHE_DIR" => self.translation_cache = Some(PathBuf::from(value)),
             // Every non-host container already owns a network namespace, so the legacy name is satisfied on arrival.
             "HL_NETNS" if value.is_empty() => return Err("HL_NETNS is empty".into()),
@@ -179,7 +182,7 @@ impl EngineOptions {
         Resources {
             cpu_count: self.cpu_count.unwrap_or_default(),
             memory_bytes: self.memory_bytes.unwrap_or_default(),
-            process_count: 0,
+            process_count: self.process_count.unwrap_or_default(),
         }
     }
 }

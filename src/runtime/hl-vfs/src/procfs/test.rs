@@ -145,7 +145,7 @@ impl super::Source for Source {
     }
 
     fn cgroup(&self) -> Result<super::CgroupView, Error> {
-        super::CgroupView::new(3, Some(2), Some(4096), 1024, vec![7], vec![7, 9]).ok_or(Error::Invalid)
+        super::CgroupView::new(3, Some(2), Some(4096), None, 1024, vec![7], vec![7, 9]).ok_or(Error::Invalid)
     }
 
     fn descriptor_numbers(&self, process: super::ProcessIdentity) -> Result<Vec<i32>, Error> {
