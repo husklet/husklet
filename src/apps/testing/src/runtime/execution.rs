@@ -35,7 +35,17 @@ impl CaseResult {
     }
 }
 
-pub async fn run_case(app: Arc<App>, case_index: usize, target: Target) -> Result<Vec<CaseResult>, Error> {
+/// A case outcome plus the engine counters observed while it ran.
+///
+/// The counters were stderr-only and vanished with the run, so no sweep could be audited
+/// afterwards for which cases actually translated their own body.
+pub struct Report {
+    pub results: Vec<CaseResult>,
+    /// One `native counter=value ...` line, empty when the app does not emit diagnostics.
+    pub counters: String,
+}
+
+pub async fn run_case(app: Arc<App>, case_index: usize, target: Target) -> Result<Report, Error> {
     let case = &app.cases[case_index];
     let timeout = case.soak.as_ref().map_or_else(
         || Duration::from_secs(case.timeout),

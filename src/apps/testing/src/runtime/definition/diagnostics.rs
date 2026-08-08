@@ -9,7 +9,90 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// The records that carry named counters; other `hl-native-*` lines are per-site histograms.
-const RECORDS: [&str; 2] = ["hl-native:", "hl-native-detail:"];
+const RECORDS: [&str; 4] = ["hl-native:", "hl-native-detail:", "hl-native-entry:", "hl-interp:"];
+
+/// The counters written into every result row, in this order. Deliberately a subset: five emitted
+/// counters carry no information (`ibtc_shared_hits`, `ibtc_authenticated_entries`,
+/// `ibtc_auth_rejections` are constant zero, `ibtc_site_misses`/`ibtc_shared_misses` merely
+/// restate `fills`, and `a64_slim_exits` is a format-string literal with no field behind it).
+const DIGEST: [&str; 22] = [
+    "runs",
+    "builds",
+    "hits",
+    "fallbacks",
+    "sites",
+    "services",
+    "probes",
+    "entries",
+    "declined_executable",
+    "declined_suppressed",
+    "declined_cold",
+    "declined_other",
+    "instructions",
+    "blocks",
+    "slices",
+    "completed",
+    "fills",
+    "operand_callbacks",
+    "operand_cache_hits",
+    "a64_guard_fast",
+    "a64_guard_full",
+    "a64_dirty_committed",
+];
+
+/// Per-site histogram lines, kept as `pc:weight` pairs so a row records *which* body translated.
+const HISTOGRAMS: [(&str, &str); 2] = [
+    ("hl-native-fallback-pc:", "fallback_pc"),
+    ("hl-native-suppressed-entry:", "suppressed_pc"),
+];
+
+/// Hottest histogram entries retained per record; the engine already prints at most 24.
+const HISTOGRAM_WIDTH: usize = 4;
+
+/// One line of `counter=value` for the result row, empty when the engine emitted no record.
+///
+/// This is the whole reason the counters outlive the run: they were stderr-only, so a sweep could
+/// not be audited after the fact for which cases actually translated their own body.
+pub(crate) fn digest(stderr: &[u8]) -> String {
+    let counters = Counters::parse(stderr);
+    let mut fields: Vec<String> = DIGEST
+        .iter()
+        .filter_map(|name| counters.get(name).map(|value| format!("{name}={value}")))
+        .collect();
+    if fields.is_empty() {
+        return String::new();
+    }
+    fields.extend(histograms(stderr));
+    format!("native {}", fields.join(" "))
+}
+
+/// Collapses the per-pc lines into one field each, hottest first.
+fn histograms(stderr: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(stderr);
+    HISTOGRAMS
+        .iter()
+        .filter_map(|(record, label)| {
+            let entries: Vec<String> = text
+                .lines()
+                .filter_map(|line| line.trim_start().strip_prefix(record))
+                .filter_map(|fields| {
+                    let mut pc = None;
+                    let mut weight = None;
+                    for (name, value) in fields.split_whitespace().filter_map(|field| field.split_once('=')) {
+                        match name {
+                            "pc" => pc = Some(value),
+                            "count" | "refused" => weight = Some(value),
+                            _ => {}
+                        }
+                    }
+                    Some(format!("{}:{}", pc?, weight?))
+                })
+                .take(HISTOGRAM_WIDTH)
+                .collect();
+            (!entries.is_empty()).then(|| format!("{label}={}", entries.join(",")))
+        })
+        .collect()
+}
 
 /// One counter comparison from a case `expect.diagnostics` list.
 #[derive(Clone, Debug, Deserialize)]
@@ -183,6 +266,42 @@ mod tests {
         let report = b"hl-native-fallback-pc: pc=0x4000 count=12\nhl-native-suppressed-entry: pc=0x8 refused=3\n";
         assert_eq!(Counters::parse(report).get("count"), None);
         assert_eq!(Counters::parse(report).get("refused"), None);
+    }
+
+    #[test]
+    fn the_digest_carries_counters_and_the_pcs_that_identify_the_translated_body() {
+        let report = b"hl-native: runs=1 builds=1 hits=2 fallbacks=3 sites=1 services=0\n\
+                       hl-native-entry: probes=9 entries=1 declined_executable=0 declined_suppressed=8 declined_cold=0 declined_other=0\n\
+                       hl-interp: instructions=4000 blocks=70 slices=3\n\
+                       hl-native-fallback-pc: pc=0x426a1c count=12\n\
+                       hl-native-suppressed-entry: pc=0x8 refused=3\n";
+        let digest = super::digest(report);
+        assert!(
+            digest.starts_with("native runs=1 builds=1 hits=2 fallbacks=3 sites=1 services=0"),
+            "{digest}"
+        );
+        assert!(digest.contains("instructions=4000"), "{digest}");
+        assert!(digest.contains("fallback_pc=0x426a1c:12"), "{digest}");
+        assert!(digest.contains("suppressed_pc=0x8:3"), "{digest}");
+        // The counters that carry no information stay out of the row.
+        assert!(!digest.contains("ibtc_"), "{digest}");
+        assert!(!digest.contains("a64_slim_exits"), "{digest}");
+    }
+
+    /// The digest sits inside the measured window, so it is bounded against the stderr ceiling
+    /// rather than against the few kilobytes a typical case emits.
+    #[test]
+    fn the_digest_stays_far_under_a_millisecond_at_the_stderr_capture_ceiling() {
+        let line = "hl-native-entry: probes=1 entries=1 declined_executable=0 declined_suppressed=0 declined_cold=0 declined_other=0\n";
+        let report = line.repeat(8 * 1024 * 1024 / line.len()).into_bytes();
+        let started = std::time::Instant::now();
+        assert!(!super::digest(&report).is_empty());
+        assert!(started.elapsed() < std::time::Duration::from_millis(200));
+    }
+
+    #[test]
+    fn a_run_without_engine_diagnostics_writes_no_digest() {
+        assert_eq!(super::digest(b"some unrelated stderr\n"), "");
     }
 
     #[test]

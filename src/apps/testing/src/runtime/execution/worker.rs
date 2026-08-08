@@ -1,4 +1,4 @@
-use super::CaseResult;
+use super::{CaseResult, Report};
 use crate::runtime::definition::diagnostics::{self, Assertion};
 use crate::runtime::diagnostic::Excerpt as _;
 use crate::runtime::{self, workspace};
@@ -64,7 +64,7 @@ pub(super) async fn run(
     target: Target,
     timeout: Duration,
     assertions: &[Assertion],
-) -> Result<Vec<CaseResult>, Error> {
+) -> Result<Report, Error> {
     let interrupts = Interrupts::new()?;
     let cancellation = Arc::new(AtomicBool::new(false));
     let guard = Cancellation(Arc::clone(&cancellation));
@@ -86,10 +86,10 @@ impl Drop for Cancellation {
 }
 
 async fn interrupted(
-    mut task: tokio::task::JoinHandle<Result<Vec<CaseResult>, String>>,
+    mut task: tokio::task::JoinHandle<Result<Report, String>>,
     cancellation: &AtomicBool,
     mut interrupts: Interrupts,
-) -> Result<Result<Vec<CaseResult>, String>, String> {
+) -> Result<Result<Report, String>, String> {
     #[cfg(unix)]
     {
         tokio::select! {
@@ -110,10 +110,10 @@ async fn interrupted(
 
 async fn interrupt_result(
     received: Option<()>,
-    task: tokio::task::JoinHandle<Result<Vec<CaseResult>, String>>,
+    task: tokio::task::JoinHandle<Result<Report, String>>,
     cancellation: &AtomicBool,
     name: &str,
-) -> Result<Result<Vec<CaseResult>, String>, String> {
+) -> Result<Result<Report, String>, String> {
     cancellation.store(true, Ordering::Release);
     let result = joined(task.await);
     if received.is_none() {
@@ -160,9 +160,7 @@ impl Interrupts {
     }
 }
 
-fn joined(
-    result: Result<Result<Vec<CaseResult>, String>, tokio::task::JoinError>,
-) -> Result<Result<Vec<CaseResult>, String>, String> {
+fn joined(result: Result<Result<Report, String>, tokio::task::JoinError>) -> Result<Result<Report, String>, String> {
     result.map_err(|error| format!("runtime worker supervision task failed: {error}"))
 }
 
@@ -173,7 +171,7 @@ fn supervise(
     timeout: Duration,
     cancelled: &AtomicBool,
     assertions: &[Assertion],
-) -> Result<Vec<CaseResult>, String> {
+) -> Result<Report, String> {
     let root = workspace().map_err(|error| error.to_string())?;
     let workers = root.join("target/testing/runtime/workers");
     fs::create_dir_all(&workers).map_err(|error| format!("create worker directory: {error}"))?;
@@ -256,7 +254,10 @@ fn supervise(
     if decoded.token != token {
         return Err("runtime worker result correlation token mismatched".to_owned());
     }
-    Ok(judged(decoded.result?, case, assertions, &stderr))
+    Ok(Report {
+        results: judged(decoded.result?, case, assertions, &stderr),
+        counters: diagnostics::digest(&stderr),
+    })
 }
 
 /// Counters accumulate over the whole worker run, so an assertion judges the aggregate and every
