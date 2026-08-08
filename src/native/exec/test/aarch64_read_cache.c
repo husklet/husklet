@@ -178,6 +178,76 @@ static int measure(int mode, arm_result *result) {
     return 0;
 }
 
+/* A load with base writeback recovers its guest address by subtracting the
+ * latched delta, so a cache hit that projects the address from one view while
+ * another view stays latched writes a host address back into the base register.
+ * Each load here selects a different owner than the one before it. */
+static int writeback(void) {
+    executable_memory host = {0};
+    hl_native_executor *executor = create(&host);
+    CHECK(executor != NULL);
+    const hl_native_change replace = {.abi = HL_NATIVE_ABI, .size = sizeof(replace),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 11};
+    CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+
+    const uint64_t a = 0x100000, b = 0x200000, c = 0x300000;
+    uint8_t *const hosts[3] = {buffer_a, buffer_b, buffer_c};
+    const uint64_t guests[3] = {a, b, c};
+    hl_a64_view views[3];
+    for (unsigned i = 0; i < 3; ++i)
+        views[i] = (hl_a64_view){guests[i], guests[i] + 4096,
+            (uint64_t)(uintptr_t)hosts[i], 11,
+            HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE, HL_NATIVE_WRITE_EXACT, i};
+    const hl_a64_projection projection = {views, 3, 11, 0};
+
+    const uint32_t words[] = {
+        UINT32_C(0xf9400085), /* ldr x5,[x4]       : latches owner a */
+        UINT32_C(0xf8410466), /* ldr x6,[x3],#16   : owner b, single writeback */
+        UINT32_C(0xa8c12047), /* ldp x7,x8,[x2],#16: owner c, pair writeback */
+        UINT32_C(0xd4000001), /* svc #0 */
+    };
+    const hl_native_source_span span = {0x4000, (const uint8_t *)words, sizeof(words), 11, 5};
+    const hl_native_source source = {&span, 1, 11, 5};
+
+    hl_native_aarch64_cpu state = {0};
+    hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
+        .architecture = HL_NATIVE_AARCH64, .state.aarch64 = &state};
+    hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
+        .architecture = HL_NATIVE_AARCH64, .mapping_epoch = 11, .budget = 8,
+        .source = &source, .projection = &projection};
+    hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
+
+    memset(buffer_a, 0, sizeof(buffer_a));
+    memset(buffer_b, 0, sizeof(buffer_b));
+    memset(buffer_c, 0, sizeof(buffer_c));
+
+    for (unsigned round = 0; round < 200; ++round) {
+        const uint64_t offset = (round % 16) * 8;
+        const uint64_t value_a = VALUE_A + round, value_b = VALUE_B + round,
+                       value_c = VALUE_C + round;
+        memcpy(buffer_a + offset, &value_a, sizeof(value_a));
+        memcpy(buffer_b + offset, &value_b, sizeof(value_b));
+        memcpy(buffer_c + offset, &value_c, sizeof(value_c));
+        memset(&state, 0, sizeof(state));
+        state.program = 0x4000;
+        state.registers[4] = a + offset;
+        state.registers[3] = b + offset;
+        state.registers[2] = c + offset;
+        state.stack = a + 2048;
+        state.dirty_first = UINT64_MAX;
+        CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+        /* The run reached the syscall, so every load above it retired. */
+        CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL);
+        CHECK(state.registers[5] == value_a && state.registers[6] == value_b);
+        CHECK(state.registers[7] == value_c);
+        /* The writeback is a guest address in the same view, not a host one. */
+        CHECK(state.registers[3] == b + offset + 16);
+        CHECK(state.registers[2] == c + offset + 16);
+    }
+    hl_native_destroy(executor);
+    return 0;
+}
+
 /* The entry trampoline proves the table once and parks the usable count. An
  * unpublished, stale or oversized table must leave zero, so every guard in the
  * entry exhausts its scan on the first slot and falls closed to the window. */
@@ -208,6 +278,7 @@ int main(void) {
     const unsigned rounds = 200;
     arm_result distinct = {0}, shared = {0}, denied = {0};
     if (proof() != 0) return 1;
+    if (writeback() != 0) return 1;
     if (measure(0, &distinct) != 0 || measure(1, &shared) != 0 || measure(2, &denied) != 0)
         return 1;
     /* Three owners in one entry: the cache resolves every load itself, so none

@@ -468,7 +468,18 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     hl_a64_ldr(assembler, 18, 30, 3 * (int)sizeof(uint64_t));
     denied = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
+    /* Install the selected view as the latched window, exactly as write_cache
+     * does. A load with base writeback recovers its guest address by subtracting
+     * the latched delta, so projecting the EA from this view while leaving the
+     * previous view's delta latched writes a host address back into the base. */
+    hl_a64_ldr(assembler, 18, 30, 0);
+    hl_a64_str(assembler, 18, CPU, OFFSET_FIRST);
+    hl_a64_ldr(assembler, 18, 30, (int)sizeof(uint64_t));
+    hl_a64_str(assembler, 18, CPU, OFFSET_LAST);
+    hl_a64_ldr(assembler, 18, 30, 3 * (int)sizeof(uint64_t));
+    hl_a64_str(assembler, 18, CPU, OFFSET_PERMISSIONS);
     hl_a64_ldr(assembler, 18, 30, 2 * (int)sizeof(uint64_t));
+    hl_a64_str(assembler, 18, CPU, OFFSET_DELTA);
     hl_a64_emit32(assembler, 0x8B120210u); /* add projected EA */
     selected = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
