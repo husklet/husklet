@@ -26,9 +26,17 @@ static void source(hl_a64_assembler *assembler, unsigned reg) {
         hl_a64_movr(assembler, 16, (int)reg);
 }
 
-static void patch(uint32_t *instruction, const uint8_t *target, uint32_t word,
-                  predicate_kind kind) {
-    uint32_t distance = (uint32_t)((target - (const uint8_t *)instruction) / 4);
+static void patch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target,
+                  uint32_t word, predicate_kind kind) {
+    uint32_t distance;
+    /* Placeholder patchers write directly, unlike bounded instruction
+     * emission.  A full buffer leaves the placeholder at the one-past-end
+     * cursor, so never patch a site the assembler did not actually write. */
+    if (!hl_a64_assembler_ok(assembler) || instruction == NULL || target == NULL) return;
+    if ((uintptr_t)instruction < (uintptr_t)assembler->writable ||
+        (uintptr_t)assembler->cursor - (uintptr_t)instruction < sizeof(*instruction))
+        return;
+    distance = (uint32_t)((target - (const uint8_t *)instruction) / 4);
     if (kind == PREDICATE_CONDITION && (word & 15u) >= 14)
         *instruction = 0x14000000u | (distance & 0x03FFFFFFu);
     else if (kind == PREDICATE_CONDITION)
@@ -71,7 +79,7 @@ int hl_a64_conditional_chain(hl_a64_assembler *assembler, uint32_t word, uint64_
     if (fall_patch != NULL) *fall_patch = fall_reservation;
     if (fall_target != NULL) *fall_target = pc + 4;
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_BRANCH, pc + 4);
-    patch(branch, assembler->cursor, word, kind);
+    patch(assembler, branch, assembler->cursor, word, kind);
     uint32_t *taken_reservation = hl_a64_stub_edge_reserve(assembler);
     if (taken_patch != NULL) *taken_patch = taken_reservation;
     if (taken_target != NULL) *taken_target = pc + (uint64_t)displacement;
@@ -108,7 +116,7 @@ int hl_a64_conditional_stitch(hl_a64_assembler *assembler, uint32_t word, uint64
     if (taken_patch != NULL) *taken_patch = taken_reservation;
     if (taken_target != NULL) *taken_target = pc + (uint64_t)displacement;
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_BRANCH, pc + (uint64_t)displacement);
-    patch(branch, assembler->cursor, inverted, kind);
+    patch(assembler, branch, assembler->cursor, inverted, kind);
     return hl_a64_assembler_ok(assembler);
 }
 
