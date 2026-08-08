@@ -70,7 +70,7 @@ impl GuestExecutor {
         if pool.observe(fallback_key) < 2 {
             return None;
         }
-        let allow_direct = !pool.direct_declined.contains(&fallback_key);
+        let allow_direct = pool.direct_admitted(run.process) && !pool.direct_declined.contains(&fallback_key);
         let mut bytes = [0_u8; 256];
         let bytes = &mut bytes[..usize::try_from(length).ok()?];
         mappings
@@ -222,6 +222,7 @@ impl GuestExecutor {
             pool.counters.runs += 1;
             pool.counters.builds += stats.builds;
             pool.counters.hits += stats.hits;
+            pool.observe_direct_mode(run.process, stats.direct);
             pool.merge_observed_sources(run.process, lease.generation(), stats.sources, stats.sources_complete)?;
         }
         if fallback {

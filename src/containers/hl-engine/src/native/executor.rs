@@ -419,6 +419,9 @@ pub(crate) struct RunStatistics {
     /// A guard fault under direct authority, which carries no operand resolver: a limit
     /// of the run mode rather than a verdict on the entry.
     pub(crate) direct_guard: bool,
+    /// Whether the run took direct authority. The cache identity carries the run mode, so
+    /// alternating it between entries reissues the identity and resets every translation.
+    pub(crate) direct: bool,
     pub(crate) sources: Vec<(u64, u64, ExecutableToken)>,
     pub(crate) sources_complete: bool,
 }
@@ -2485,6 +2488,7 @@ impl Executor {
                         .iter()
                         .find_map(|source| source.instruction_at(instruction))
                         .is_some_and(|word| word.scalar_access().is_some()),
+                direct: direct_protection.is_some(),
                 sources: provider.observed,
                 sources_complete: provider.complete,
             },
@@ -2948,6 +2952,7 @@ impl Executor {
                     .map_or(0, |(after, before)| after.cache_hits.saturating_sub(before.cache_hits)),
                 fallback: exit == Exit::Fallback,
                 direct_guard: false,
+                direct: false,
                 sources: provider.observed,
                 sources_complete: provider.complete,
             },
