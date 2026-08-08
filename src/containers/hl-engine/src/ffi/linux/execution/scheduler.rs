@@ -659,14 +659,8 @@ mod tests {
         pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2, NATIVE_SOLO_BUDGET, false);
         assert!(pool.suppressed.is_empty());
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
-        // One instruction short of half the budget is not worth the entry.
-        pool.record_fallback(
-            entry,
-            instruction,
-            NATIVE_SOLO_BUDGET / 2 - 1,
-            NATIVE_SOLO_BUDGET,
-            false,
-        );
+        // One instruction short of half a slice is not worth the entry, whatever the native budget.
+        pool.record_fallback(entry, instruction, SLICE_BUDGET / 2 - 1, NATIVE_SOLO_BUDGET, false);
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
     }
 
@@ -699,6 +693,8 @@ mod tests {
         assert!(NativePool::fallback_suppresses(37, SLICE_BUDGET));
         assert!(NativePool::fallback_suppresses(37, NATIVE_SOLO_BUDGET));
         assert!(!NativePool::fallback_suppresses(SLICE_BUDGET, SLICE_BUDGET));
+        // A solo run is measured against the slice a decline buys, not against its own budget.
+        assert!(!NativePool::fallback_suppresses(SLICE_BUDGET / 2, NATIVE_SOLO_BUDGET));
     }
 
     #[test]

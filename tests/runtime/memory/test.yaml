@@ -677,15 +677,28 @@ cases:
     # fallback at the patch store are all scored failures. Each suppression moves the entry one
     # instruction deeper into the loop, leaving fewer instructions before the same fault, so the
     # next entry retires less and latches too until all seven PCs are held for the remaining rounds.
-    # Relaxing the bar to `budget.min(SLICE_BUDGET)` takes arm64 to runs=240, builds=1436, native
-    # instructions 162302 -> 7699844, and 269ms -> 177ms. It was NOT landed: it also makes arm64
-    # PASS the frozen-`ExecutableVersions::token` mutation this case exists to fail. arm64's arm of
-    # that oracle is an artifact of the suppression -- it discriminates only because native runs are
-    # long and rare enough to span a patch. Once entries are admitted every round, native always
-    # exits at the patch store and never holds a translation across a patch, so the token is never
-    # consulted and the mutation is invisible. Restore an arm64 probe that patches without leaving
-    # native (a second thread patching while the first spins) BEFORE relaxing the suppression bar.
+    # Relaxing the bar to the slice a decline actually buys took arm64 to runs=240, builds=1436 and
+    # 269ms -> 177ms, and that relaxation is now landed. It costs this case its arm64 arm of the
+    # frozen-`ExecutableVersions::token` mutation: that arm was an artifact of the suppression, since
+    # it discriminated only because native runs were long and rare enough to span a patch. With
+    # entries admitted every round native always exits at the patch store, holds no translation
+    # across a patch, and the mutation is invisible (counters byte-identical at 240/1436/3350).
+    # arm64 coverage of the token moved to dbt-smc-xthread, where a peer thread patches while this
+    # thread is still spinning; this case keeps the amd64 arm and both arms of the RWX shape.
     expect: { exit: 0, stdout: golden/dbt_smchotpatch.out, diagnostics: [{ counter: builds, greater-than: 30 }] }
+  - id: runtime/memory/dbt-smc-xthread
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_smcxthread.c, inputs: [source/dbt.h], output: dbt-smc-xthread, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-smc-xthread }
+    run: []
+    # The `runs` floor is the point of this case: the spinner must actually be executing natively
+    # when the peer thread patches, or nothing holds a translation across the patch and the
+    # executable token is never consulted. Observed 15431 arm64 / 16371 amd64, deterministic to
+    # within one run over 20 repetitions; freezing `ExecutableVersions::token` drops it to 180/247
+    # and fails the case, so 5000 separates a live oracle from one that has gone cold.
+    expect: { exit: 0, stdout: golden/dbt_smcxthread.out, diagnostics: [{ counter: runs, greater-than: 5000 }] }
   - id: runtime/memory/dbt-smc-bounce
     targets: [arm64, amd64]
     status: active

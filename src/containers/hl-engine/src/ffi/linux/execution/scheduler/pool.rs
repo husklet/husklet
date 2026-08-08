@@ -261,9 +261,16 @@ impl NativePool {
 
     /// Declining an entry hands the turn a whole `SLICE_BUDGET` interpreter slice, while a
     /// fallback yields only what the run retired plus one interpreted instruction, so a
-    /// retry only pays for itself once it retires a substantial part of its budget.
+    /// retry only pays for itself once it retires a substantial part of its budget. The
+    /// slice is what a decline actually buys, so a larger native budget cannot raise the
+    /// bar the retry has to clear.
     pub(super) const fn fallback_suppresses(executed: u64, budget: u64) -> bool {
-        executed * 2 < budget
+        executed * 2
+            < if budget < super::SLICE_BUDGET {
+                budget
+            } else {
+                super::SLICE_BUDGET
+            }
     }
 
     /// The observation table is a warm-up heuristic keyed by mapping generation,
