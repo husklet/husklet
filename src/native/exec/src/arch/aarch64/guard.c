@@ -500,6 +500,9 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
 
     resume = assembler->cursor;
     budget_recover(assembler);
+    /* Only a selected view reaches here, so this is the read-side twin of the
+     * write_cache resolution that guard_fast already counts. */
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_fast));
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
