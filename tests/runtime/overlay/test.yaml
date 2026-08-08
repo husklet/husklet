@@ -8,7 +8,7 @@ build:
 cases:
   - id: runtime/overlay/coherence
     status: !broken
-      reason: "Overlay whiteout publication is unwired, so renaming a lower-origin name away fails (exit 15)"
+      reason: "Not whiteouts: /etc/hostname is an identity name bind, and path::mutation::prepare refuses every name-bound operand as ReadOnly instead of honouring the binding's rw flag, so the rename returns EROFS (exit 15)"
       evidence: "tests/runtime/overlay/EVIDENCE.md"
     compat: { class: compatibility }
     build: { source: coherence.c, output: coherence, flags: [-static, -O2, -std=c11] }
@@ -37,9 +37,7 @@ cases:
     run: [copy-up]
     expect: { exit: 0, stdout: golden/lower-copy-up.out }
   - id: runtime/overlay/lower-whiteout
-    status: !broken
-      reason: "unlink of a lower-only name returns EIO: overlay_publish::publish_whiteout is #[cfg(test)] and has no production caller"
-      evidence: "tests/runtime/overlay/EVIDENCE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/lower.c, output: lower-whiteout, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/lower-whiteout }
@@ -52,3 +50,10 @@ cases:
     artifact: { destination: /opt/husklet/overlay/lower-merge }
     run: [merge]
     expect: { exit: 0, stdout: golden/lower-merge.out }
+  - id: runtime/overlay/lower-whiteout-dir
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/lower.c, output: lower-whiteout-dir, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/lower-whiteout-dir }
+    run: [whiteout-dir]
+    expect: { exit: 0, stdout: golden/lower-whiteout-dir.out }

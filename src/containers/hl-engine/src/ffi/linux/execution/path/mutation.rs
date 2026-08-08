@@ -57,8 +57,11 @@ struct UnlinkCharge {
 }
 
 impl PinnedEntry {
+    /// Authorization reads the parent the guest can see, not the writable one:
+    /// a lower-only parent has no upper copy until a mutation materializes it,
+    /// and the copy inherits the mode being checked here anyway.
     fn parent_access(&self, identity: &AccessIdentity) -> Result<(), RuntimePathError> {
-        let metadata = super::attribute::Descriptor::new(self.parent.as_raw_fd()).metadata()?;
+        let metadata = super::attribute::Descriptor::new(self.parent.selected().as_raw_fd()).metadata()?;
         let access = Access::from_bits(Access::WRITE | Access::EXECUTE).map_err(|_| RuntimePathError::Invalid)?;
         identity
             .check_access(&metadata, access)
@@ -71,7 +74,7 @@ impl PinnedEntry {
         // initializes status without retaining any argument.
         if unsafe {
             libc::fstatat(
-                self.parent.as_raw_fd(),
+                self.parent.selected().as_raw_fd(),
                 self.name.as_ptr(),
                 status.as_mut_ptr(),
                 libc::AT_SYMLINK_NOFOLLOW,
@@ -230,7 +233,7 @@ pub(super) fn prepare(
             let source_base = base(0)?;
             let target = pin_entry(host, base(1)?, to, true)?;
             let source_device = host.resolve(source_base, from)?.metadata()?.identity.device;
-            let target_device = super::attribute::Descriptor::new(target.parent.as_raw_fd())
+            let target_device = super::attribute::Descriptor::new(target.parent.selected().as_raw_fd())
                 .metadata()?
                 .identity
                 .device;
