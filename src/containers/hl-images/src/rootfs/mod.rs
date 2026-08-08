@@ -89,6 +89,35 @@ mod tests {
         roots.release(&reference).unwrap();
         assert!(!view.work().exists());
     }
+
+    /// Forks are reflinked, not fsynced; a write through one must still never reach
+    /// the shared parent or a sibling fork.
+    #[test]
+    fn copied_forks_stay_private_from_the_parent_and_each_other() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(root.path().join("snapshots")).unwrap();
+        let parent = Id::new("parent").unwrap();
+        let draft = snapshots.prepare(parent.clone(), None).unwrap();
+        std::fs::write(draft.path().join("value"), b"base").unwrap();
+        draft.commit(parent.clone()).unwrap();
+        let roots = Roots::new(snapshots, Leases::open(root.path().join("metadata")).unwrap());
+
+        let first = roots.fork(&parent).unwrap();
+        let second = roots.fork(&parent).unwrap();
+        let first_view = roots.open(&first).unwrap();
+        let second_view = roots.open(&second).unwrap();
+        assert_eq!(std::fs::read(first_view.path().join("value")).unwrap(), b"base");
+        assert_eq!(std::fs::read(second_view.path().join("value")).unwrap(), b"base");
+
+        std::fs::write(first_view.path().join("value"), b"mutated").unwrap();
+        assert_eq!(std::fs::read(first_view.path().join("value")).unwrap(), b"mutated");
+        assert_eq!(std::fs::read(second_view.path().join("value")).unwrap(), b"base");
+        let parent_path = roots.snapshots.view(&parent).unwrap().path().join("value");
+        assert_eq!(std::fs::read(parent_path).unwrap(), b"base");
+
+        roots.release(&first).unwrap();
+        roots.release(&second).unwrap();
+    }
 }
 
 /// A validated view of a pinned rootfs. Dropping it does not release durable ownership.
