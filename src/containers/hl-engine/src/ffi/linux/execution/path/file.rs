@@ -663,7 +663,9 @@ impl OpenFileDescription for NativeFile {
             modified: timestamp(value.mtime(), value.mtime_nsec()),
             changed: timestamp(value.ctime(), value.ctime_nsec()),
         };
-        self.ownership.project_ofd(&mut projected);
+        // An anonymous inode has no name in the image, so only a named file consults the layers.
+        let declared = (!self.anonymous()).then_some(self.path.as_path());
+        self.ownership.project_ofd_at(declared, &mut projected);
         Ok(projected)
     }
 

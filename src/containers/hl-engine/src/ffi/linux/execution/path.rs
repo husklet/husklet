@@ -293,6 +293,15 @@ impl NativePath {
         self
     }
 
+    /// Seeds the ownership table with what the image layers declared, so a file the guest never
+    /// touched still reports the uid and gid its layer shipped rather than the engine's own.
+    pub(super) fn with_file_owners(self, records: &[u8], roots: Vec<std::path::PathBuf>) -> Self {
+        if !records.is_empty() {
+            self.ownership.declare(metadata::Declared::parse(records, roots));
+        }
+        self
+    }
+
     pub(super) fn set_executable(&self, host: &[u8]) -> Result<(), RuntimePathError> {
         let path = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(host));
         let resolved = path.canonicalize().map_err(HostError::map)?;
