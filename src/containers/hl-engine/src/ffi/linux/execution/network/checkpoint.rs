@@ -237,7 +237,10 @@ impl NetworkCheckpointHost for Native {
 
 #[cfg(test)]
 mod tests {
-    use hl_network::{NETWORK_CHECKPOINT_VERSION, NetworkCheckpointImage, NetworkConfiguration};
+    use hl_network::{
+        AuthoritySocketKey, AuthoritySocketLease, NETWORK_CHECKPOINT_VERSION, NetworkCheckpointError,
+        NetworkCheckpointImage, NetworkConfiguration, NetworkResourceKey,
+    };
     use hl_runtime::NetworkCheckpointHost;
 
     use super::Native;
@@ -264,5 +267,26 @@ mod tests {
         host.restore_begin([9; 32], &image).unwrap();
         host.checkpoint_commit().unwrap();
         host.checkpoint_resume().unwrap();
+    }
+
+    #[test]
+    fn internal_network_restore_rejects_an_image_carrying_authority_state() {
+        let host = Native::new();
+        let image = NetworkCheckpointImage {
+            version: NETWORK_CHECKPOINT_VERSION,
+            generations: Vec::new(),
+            configuration: NetworkConfiguration::new(Vec::new(), Vec::new(), Vec::new()).unwrap(),
+            ports: Vec::new(),
+            authority: vec![AuthoritySocketLease {
+                resource: NetworkResourceKey::new(1).unwrap(),
+                key: AuthoritySocketKey::new(1, 1).unwrap(),
+            }],
+            sockets: Vec::new(),
+        };
+        // A host with no authority cannot restore sockets the image says an authority retained.
+        assert!(matches!(
+            host.restore_begin([9; 32], &image),
+            Err(NetworkCheckpointError::InvalidImage)
+        ));
     }
 }

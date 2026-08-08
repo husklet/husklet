@@ -61,6 +61,8 @@ impl Backing {
         if address == abi::MAP_FAILED && descriptor >= 0 {
             // Linux refuses PROT_WRITE|MAP_SHARED on a read-only description, so a read-only
             // canonical view is the only one such a guest mapping can ever need.
+            // SAFETY: the retry differs from the attempt above only in dropping PROT_WRITE, so
+            // the host still chooses an unrelated interval and Backing still owns the result.
             address = unsafe { abi::mmap(std::ptr::null_mut(), length, 1, flags, descriptor, offset) };
         }
         if address == abi::MAP_FAILED {
