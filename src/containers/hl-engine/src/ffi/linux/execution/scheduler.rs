@@ -135,9 +135,13 @@ impl GuestExecutor {
             .and_then(|owner| owner.attach().ok().map(|()| FaultAttachment(Arc::clone(owner))));
         let active_faults = attachment.as_ref().and(host_faults);
         let mut native = NativePool::new(isa, plan, active_faults);
+        let mut live = std::collections::BTreeSet::new();
         loop {
-            if native.tracks_processes() {
-                native.retain_processes(&threads.active_processes());
+            if native.tracks_processes()
+                && let Some(updated) = threads.active_processes_changed(&live)
+            {
+                live = updated;
+                native.retain_processes(&live);
             }
             if let Some(exit) = Self::cancelled(plan, threads)? {
                 return Ok(exit);
