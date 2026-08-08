@@ -696,6 +696,8 @@ fn process_control_cancels_one_syscall_owned_run() {
     assert_eq!(first.cancellation.signal(), None);
     assert!(first.cancellation.interruption().take_pending());
     assert_eq!(second.cancellation.signal(), None);
+    // Only the syscall-owned run is cancelled: the merely parked one is untouched.
+    assert!(!second.cancellation.interruption().take_pending());
 }
 
 #[test]
