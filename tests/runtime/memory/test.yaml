@@ -1079,6 +1079,27 @@ cases:
     # rather than a reprotected page -- because host protection would otherwise
     # backstop the widening and hide it.
     expect: { exit: 0, stdout: golden/nativeviewboundary.out }
+  - id: runtime/memory/native-view-sparse
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/nativeviewsparse.c, output: native-view-sparse, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/native-view-sparse }
+    run: []
+    # The neighbour of the over-wide page is the point here, not the hole.
+    # native-view-boundary walks off the end of a mapping and stays green on
+    # arm64 under `guest_last + 4096` because the guest space is one flat host
+    # arena: every published read view carries the same host_first - guest_first,
+    # so an over-wide view still names the right host bytes, and the arena's own
+    # hole faults the walk on schedule. A file-backed page is the exception --
+    # mapping_access.rs projects it through the sparse host mapping at its own
+    # delta -- so a private view that reaches one page into it resolves the file
+    # through the arena. That makes this case red on both ISAs under the same
+    # one-page widening at native/executor.rs 1012/2358/2809, where the walk
+    # probe is red on amd64 only. The `warm` pass is load-bearing: without a
+    # counted walk over a whole page the straddle loops never reach native
+    # admission on arm64 and the case measures nothing.
+    expect: { exit: 0, stdout: golden/nativeviewsparse.out }
   - id: runtime/memory/native-view-hints
     targets: [amd64]
     status: active
