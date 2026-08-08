@@ -1,3 +1,5 @@
+# No diagnostics-floor: both passing rows sit at runs=0 in three sweeps; the case only reports
+# an exit status.
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }

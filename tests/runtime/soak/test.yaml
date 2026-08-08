@@ -1,6 +1,7 @@
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
+diagnostics-floor: [{ counter: runs, greater-than: 0 }]
 artifact: { destination: /opt/husklet/soak/atomic_churn }
 oracle:
   provider: qemu

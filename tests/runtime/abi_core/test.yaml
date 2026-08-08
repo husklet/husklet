@@ -1,3 +1,5 @@
+# No diagnostics-floor: 29 of 62 passing rows never reach the native tier in three sweeps,
+# at builds=0. Semantic-equivalence probes, not native-entry coverage.
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }

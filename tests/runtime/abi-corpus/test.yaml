@@ -1,3 +1,5 @@
+# No diagnostics-floor: 53 of 263 passing rows never reach the native tier in three
+# sweeps, at builds=0. This corpus asserts instruction semantics against QEMU, not native entry.
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }

@@ -1,3 +1,5 @@
+# No diagnostics-floor: 37 of 261 passing rows never reach the native tier in three
+# sweeps, at builds=0. Per-case floors are used where a case exists to exercise translation.
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }

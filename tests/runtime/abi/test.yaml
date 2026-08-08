@@ -1,3 +1,5 @@
+# No diagnostics-floor: 42 of 147 passing rows (all arm64) never reach the native tier in
+# three sweeps, at builds=0 -- single-shot ABI probes finish inside the solo budget.
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
