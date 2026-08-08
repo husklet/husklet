@@ -201,9 +201,11 @@ impl Memory {
                 1 => {
                     let word = &*address.cast::<AtomicU8>();
                     let (expected, replacement) = (expected as u8, replacement as u8);
-                    u64::from(match word.compare_exchange(expected, replacement, Ordering::AcqRel, Ordering::Acquire) {
-                        Ok(previous) | Err(previous) => previous,
-                    })
+                    u64::from(
+                        match word.compare_exchange(expected, replacement, Ordering::AcqRel, Ordering::Acquire) {
+                            Ok(previous) | Err(previous) => previous,
+                        },
+                    )
                 }
                 2 => {
                     let word = &*address.cast::<AtomicU16>();

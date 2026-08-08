@@ -5,6 +5,7 @@ use std::fmt;
 pub struct ByteSize(i64);
 
 impl ByteSize {
+    #[must_use]
     pub fn new(bytes: i64) -> Self {
         Self(bytes.max(0))
     }

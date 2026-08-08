@@ -486,7 +486,10 @@ mod tests {
 
         tasks.set_signal_mask(thread, SignalMask::from_bits(0)).unwrap();
         alarms.deliver_timer_signal(PendingTarget::Process(process), SignalInfo::bare(signal));
-        assert!(interruption.is_pending(), "a deliverable timer signal must wake the sleeper");
+        assert!(
+            interruption.is_pending(),
+            "a deliverable timer signal must wake the sleeper"
+        );
     }
 
     #[test]

@@ -135,7 +135,10 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
         // the ownership authority, rather than stranding every waiter. A cache
         // entry the word still agrees with stays authoritative so a recycled
         // thread number cannot unlock its predecessor's futex.
-        if state.owner.is_some_and(|owner| (self.number)(owner) != observed & FUTEX_TID_MASK) {
+        if state
+            .owner
+            .is_some_and(|owner| (self.number)(owner) != observed & FUTEX_TID_MASK)
+        {
             state.owner = None;
         }
         if state.owner.is_some_and(|owner| owner != caller) {

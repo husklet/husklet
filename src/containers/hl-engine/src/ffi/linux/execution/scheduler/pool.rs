@@ -244,7 +244,8 @@ impl NativePool {
             *self.fallback_weight.entry(instruction.4).or_default() += 1;
         }
         if Self::fallback_suppresses(executed, budget) {
-            if direct_guard && !self.direct_declined.contains(&entry) && self.direct_declined.len() < NATIVE_SITE_LIMIT {
+            if direct_guard && !self.direct_declined.contains(&entry) && self.direct_declined.len() < NATIVE_SITE_LIMIT
+            {
                 self.direct_declined.insert(entry);
             } else if self.suppressed.len() < NATIVE_SITE_LIMIT {
                 self.suppressed.insert(entry);
@@ -354,7 +355,8 @@ impl NativePool {
             self.suppressed.retain(|(process, _, _, _, _)| live.contains(process));
         }
         if !self.direct_declined.is_empty() {
-            self.direct_declined.retain(|(process, _, _, _, _)| live.contains(process));
+            self.direct_declined
+                .retain(|(process, _, _, _, _)| live.contains(process));
         }
         if !self.fallbacks.is_empty() {
             self.fallbacks.retain(|(process, _, _, _, _)| live.contains(process));

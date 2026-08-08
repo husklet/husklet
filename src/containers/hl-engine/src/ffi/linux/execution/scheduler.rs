@@ -659,7 +659,13 @@ mod tests {
         assert!(pool.suppressed.is_empty());
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
         // One instruction short of half the budget is not worth the entry.
-        pool.record_fallback(entry, instruction, NATIVE_SOLO_BUDGET / 2 - 1, NATIVE_SOLO_BUDGET, false);
+        pool.record_fallback(
+            entry,
+            instruction,
+            NATIVE_SOLO_BUDGET / 2 - 1,
+            NATIVE_SOLO_BUDGET,
+            false,
+        );
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
     }
 

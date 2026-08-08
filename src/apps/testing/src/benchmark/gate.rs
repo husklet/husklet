@@ -243,7 +243,11 @@ fn slot(affinity: &str, requested: Option<usize>, seed: usize) -> Result<(usize,
         return Err("unreadable CPU affinity".into());
     }
     // CPU 0 carries most IRQ work, so defaults avoid it whenever anything else is allowed.
-    let pool = if allowed.len() > 1 && allowed[0] == 0 { &allowed[1..] } else { &allowed[..] };
+    let pool = if allowed.len() > 1 && allowed[0] == 0 {
+        &allowed[1..]
+    } else {
+        &allowed[..]
+    };
     let cpu = requested.unwrap_or_else(|| pool[seed % pool.len()]);
     if !allowed.contains(&cpu) {
         return Err(format!("CPU {cpu} is outside the inherited affinity {affinity}"));
@@ -625,7 +629,9 @@ fn describe(measured: &BTreeMap<&String, (u64, usize)>, render: impl Fn(&(u64, u
 
 #[cfg(test)]
 mod tests {
-    use super::{Baseline, ENGINE_BUILD, Isa, Provenance, Statistics, artifact, collect, pinning, revision, slot, wiring};
+    use super::{
+        Baseline, ENGINE_BUILD, Isa, Provenance, Statistics, artifact, collect, pinning, revision, slot, wiring,
+    };
 
     fn provenance() -> Provenance {
         Provenance {
@@ -749,11 +755,7 @@ mod tests {
     const HEADER: &str = "env,arch,phase,us,ok,guest_sha256,engine_sha256";
 
     fn row(path: &std::path::Path, us: u64, engine: &str) {
-        std::fs::write(
-            path,
-            format!("{HEADER}\nrust-engine,arm64,compute,{us},7,g,{engine}\n"),
-        )
-        .unwrap();
+        std::fs::write(path, format!("{HEADER}\nrust-engine,arm64,compute,{us},7,g,{engine}\n")).unwrap();
     }
 
     /// Writes one cycle file per provider, each carrying `phases` as `(name, ok)`.
@@ -818,7 +820,10 @@ mod tests {
         );
         let error = collect(&paths).unwrap_err();
         assert!(error.contains("phase file did unequal work"), "{error}");
-        assert!(error.contains("c-engine ok=400") && error.contains("rust-engine ok=137"), "{error}");
+        assert!(
+            error.contains("c-engine ok=400") && error.contains("rust-engine ok=137"),
+            "{error}"
+        );
         assert!(!error.contains("phase compute"), "{error}");
     }
 
@@ -845,7 +850,10 @@ mod tests {
         paths.extend(cycle(directory.path(), "c2", &[("c-engine", phases)]));
         let error = collect(&paths).unwrap_err();
         assert!(error.contains("unequal sample counts"), "{error}");
-        assert!(error.contains("c-engine n=2") && error.contains("rust-engine n=1"), "{error}");
+        assert!(
+            error.contains("c-engine n=2") && error.contains("rust-engine n=1"),
+            "{error}"
+        );
     }
 
     #[test]

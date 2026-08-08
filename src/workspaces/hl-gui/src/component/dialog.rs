@@ -17,11 +17,13 @@ impl Dialog {
         }
     }
 
+    #[must_use]
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
     }
 
+    #[must_use]
     pub fn action(mut self, action: Action) -> Self {
         self.actions.push(action);
         self
@@ -45,11 +47,13 @@ impl Action {
         }
     }
 
+    #[must_use]
     pub fn suggested(mut self) -> Self {
         self.role = Role::Suggested;
         self
     }
 
+    #[must_use]
     pub fn destructive(mut self) -> Self {
         self.role = Role::Destructive;
         self

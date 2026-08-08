@@ -162,7 +162,11 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
         let expected = Self::masked_value(expected, element_bytes, pair);
         if let Some((range, resolution)) = self.host_atomic_site(address, element_bytes, pair) {
             let replacement = Self::masked_value(replacement, element_bytes, pair);
-            if let Some(observed) = self.host.host.compare_exchange_atomic(range, expected.low, replacement.low)? {
+            if let Some(observed) = self
+                .host
+                .host
+                .compare_exchange_atomic(range, expected.low, replacement.low)?
+            {
                 if observed == expected.low {
                     self.publish_atomic(range, resolution)?;
                 }

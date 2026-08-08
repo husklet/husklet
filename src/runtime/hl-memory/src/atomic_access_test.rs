@@ -38,7 +38,11 @@ impl ArenaHost {
     fn site(offset: u64, width: u64) -> (usize, u32, u64) {
         let relative = offset - BASE;
         let shift = ((relative % 8) * 8) as u32;
-        let mask = if width == 8 { u64::MAX } else { ((1 << (width * 8)) - 1) << shift };
+        let mask = if width == 8 {
+            u64::MAX
+        } else {
+            ((1 << (width * 8)) - 1) << shift
+        };
         ((relative / 8) as usize, shift, mask)
     }
 
@@ -143,7 +147,12 @@ impl MemoryAccessHost for ArenaHost {
         expected: u64,
         replacement: u64,
     ) -> Result<Option<u64>, MemoryError> {
-        Ok(Some(self.cas(range.start().get(), range.length(), expected, replacement)))
+        Ok(Some(self.cas(
+            range.start().get(),
+            range.length(),
+            expected,
+            replacement,
+        )))
     }
 }
 
@@ -221,34 +230,38 @@ fn fetch_update_does_not_lose_a_peer_host_atomic() {
 fn compare_exchange_does_not_lose_a_peer_host_atomic() {
     let mut lost = Vec::new();
     for width in [1_u8, 2, 4, 8] {
-        let limit = if width == 8 { u64::MAX } else { (1 << (u64::from(width) * 8)) - 1 };
+        let limit = if width == 8 {
+            u64::MAX
+        } else {
+            (1 << (u64::from(width) * 8)) - 1
+        };
         let (rounds, repeats) = plan(width);
         for _ in 0..repeats {
-        let observed = race(width, rounds, |coordinator, address| {
-            let mut current = AtomicValue { low: 0, high: 0 };
-            loop {
-                let seen = coordinator
-                    .compare_exchange(
-                        address,
-                        width,
-                        false,
-                        current,
-                        AtomicValue {
-                            low: current.low.wrapping_add(1) & limit,
-                            high: 0,
-                        },
-                        AtomicOrder::AcquireRelease,
-                    )
-                    .unwrap();
-                if seen == current {
-                    return;
+            let observed = race(width, rounds, |coordinator, address| {
+                let mut current = AtomicValue { low: 0, high: 0 };
+                loop {
+                    let seen = coordinator
+                        .compare_exchange(
+                            address,
+                            width,
+                            false,
+                            current,
+                            AtomicValue {
+                                low: current.low.wrapping_add(1) & limit,
+                                high: 0,
+                            },
+                            AtomicOrder::AcquireRelease,
+                        )
+                        .unwrap();
+                    if seen == current {
+                        return;
+                    }
+                    current = seen;
                 }
-                current = seen;
+            });
+            if observed != 2 * rounds {
+                lost.push(format!("width {width}: {observed} != {}", 2 * rounds));
             }
-        });
-        if observed != 2 * rounds {
-            lost.push(format!("width {width}: {observed} != {}", 2 * rounds));
-        }
         }
     }
     assert!(lost.is_empty(), "{lost:?}");

@@ -2910,9 +2910,7 @@ fn x86_address_displacement_staircase_matches_interpreter_at_each_boundary() {
     initial.registers[10] = 0x8000;
     initial.registers[11] = 0x0200_8000;
     initial.registers[12] = 1;
-    let operand: Vec<u8> = (0..64_u32)
-        .map(|index| (index.wrapping_mul(89) ^ 0x3c) as u8)
-        .collect();
+    let operand: Vec<u8> = (0..64_u32).map(|index| (index.wrapping_mul(89) ^ 0x3c) as u8).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x0100_8000, &operand);
 }
 
@@ -2938,9 +2936,7 @@ fn x86_address_baseless_and_32_bit_folding_matches_interpreter_at_each_boundary(
     };
     initial.registers[3] = 0xdead_beef_ffff_f008;
     initial.registers[1] = 0x1234_5678_0000_7008;
-    let operand: Vec<u8> = (0..64_u32)
-        .map(|index| (index.wrapping_mul(53) ^ 0x27) as u8)
-        .collect();
+    let operand: Vec<u8> = (0..64_u32).map(|index| (index.wrapping_mul(53) ^ 0x27) as u8).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -2962,9 +2958,7 @@ fn x86_address_32_bit_absolute_folding_matches_interpreter_at_each_boundary() {
         },
         ..X86CpuState::default()
     };
-    let operand: Vec<u8> = (0..64_u32)
-        .map(|index| (index.wrapping_mul(71) ^ 0x6b) as u8)
-        .collect();
+    let operand: Vec<u8> = (0..64_u32).map(|index| (index.wrapping_mul(71) ^ 0x6b) as u8).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0xffff_f000, &operand);
 }
 
