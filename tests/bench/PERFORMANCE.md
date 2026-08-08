@@ -1,5 +1,387 @@
 # Engine performance checkpoint
 
+## 2026-08-08: BENCH-MAP-4 re-take after the scheduler, store-protocol and signal fixes
+
+Head `3315d2a046b7` on `refactor/merge-rust-engine`, release build, Linux ARM64
+host, 18 logical CPUs, `CARGO_TARGET_DIR` under `/var/tmp` with `target/release`
+symlinked into the tree, lane-private scratch. Every row used the benchmark gate
+at `--repeats 9 --divisor 1 --max-spread 0.05` against the retained C build
+`/Users/x/dd/engine/build/unit-audit` (`c_build_id sha256:9c2701b3…`, unchanged
+from all three previous maps). Rust engine `sha256:7f1a34880c25…`, revision
+`3315d2a046b7` (clean, not `-dirty`).
+
+**The guest is byte-identical to the previous three maps'.**
+`git log d6861edf3..3315d2a04 -- tests/bench/combined/main.c` is empty, so every
+number below is engine behaviour, not a changed guest. 32 commits touching
+`src/containers/hl-engine` landed between BENCH-MAP-3's head and this one,
+including all four fixes this lane existed to check.
+
+**Completion was verified per arm, not by exit code.** All eleven rows recorded
+9 sample files for each of `native`, `c-engine` and `rust-engine` (297 CSVs), and
+the per-arm `ok` checksum (column 5 of `cycle-NNN-<env>-arm64.csv`) is identical
+across all three arms on every row except `syscall`, whose checksum embeds the
+guest TID and is intentionally not compared. No row came from an aborted
+baseline. The gate also enforces this itself (`f419cf905`).
+
+**Measurement caveat — the promised idle box did not materialise, and this is
+the map's main limitation.** The lane was briefed that the host was idle at load
+0.15. It was quiet only between roughly 08:50 and 09:05; for the rest of the
+session a sibling lane ran `rustc` and its own `testing` binaries, and the
+1-minute load average swung between 2.4 and 31.1. Per-row `host_load` is recorded
+below and ranges 2.45 to 27.34 out of 18. Per the lane rule, `--max-spread` was
+**not** relaxed. **Two rows returned a pass verdict** (`calls` at spread 0.016,
+`memory` at 0.034); the other nine are **indicative** — treat `rust_x_c` and the
+ordering as sound and the absolute microseconds as inflated.
+
+**A structural note on `host_load` that previous maps did not record.** This host
+is an **LXC container inside a Linux VM on macOS** (`systemd-detect-virt` reports
+`lxc`; CPU implementer `0x61`). `/proc/loadavg` therefore reports only what is
+visible *inside* the container — macOS-side contention is invisible to it. A
+reported `host_load` of 2.4 is consistent with a busy machine, and this is the
+most likely reason spread does not converge even when the box looks quiet. **An
+"idle box" claim taken from inside this container is not verifiable**, which is
+worth knowing before another lane is told to wait for one.
+
+Ranked by absolute time lost against C (`rust_us - c_us`), which is the ordering
+the optimisation lanes should prioritise by — not by ratio. Where a row was taken
+twice, the take with the lower spread is shown and the other is noted.
+
+| rank | workload | native_us | c_us | rust_us | rust_x_c | rust_x_native | spread | verdict | host_load | lost vs C (us) |
+|---:|---|---:|---:|---:|---:|---:|---:|---|---:|---:|
+| 1 | malloc | 195,753 | 315,530 | 72,777,986 | 230.653 | 371.785 | 0.414 | no verdict (spread) | 27.34 | 72,462,456 |
+| 2 | signal | 599,605 | 501,100 | 10,947,690 | 21.847 | 18.258 | 0.139 | no verdict (spread) | 11.79 | 10,446,590 |
+| 3 | tlb | 263,448 | 281,678 | 4,944,639 | 17.554 | 18.769 | 0.064 | no verdict (spread) | 5.19 | 4,662,961 |
+| 4 | file | 168,483 | 257,339 | 4,128,889 | 16.045 | 24.506 | 0.147 | no verdict (spread) | 2.64 | 3,871,550 |
+| 5 | pipe | 339,835 | 1,519,157 | 4,547,254 | 2.993 | 13.381 | 0.149 | no verdict (spread) | 7.63 | 3,028,097 |
+| 6 | mmap | 249,975 | 358,528 | 2,644,525 | 7.376 | 10.579 | 0.150 | no verdict (spread) | 6.29 | 2,285,997 |
+| 7 | syscall | 942,778 | 471,582 | 2,521,400 | 5.347 | 2.674 | 0.287 | no verdict (spread) | 2.45 | 2,049,818 |
+| 8 | calls | 92,922 | 142,761 | 1,480,773 | 10.372 | 15.936 | 0.016 | **pass** | 3.20 | 1,338,012 |
+| 9 | memory | 136,464 | 137,425 | 1,457,567 | 10.606 | 10.681 | 0.034 | **pass** | 3.16 | 1,320,142 |
+| 10 | branch | 364,498 | 360,091 | 412,565 | 1.146 | 1.132 | 0.132 | no verdict (spread) | 13.50 | 52,474 |
+| 11 | compute | 49,483 | 52,028 | 55,238 | 1.062 | 1.116 | 0.117 | no verdict (spread) | 2.47 | 3,210 |
+
+Second takes, for the rows measured twice: `malloc` 255.651 (spread 0.340,
+`host_load` 4.84 rising to ~20 mid-row), `signal` 23.528 (0.363, 8.00),
+`file` 17.951 (0.222, 6.60), `tlb` 18.614 (0.283, 13.78), `branch` 1.185
+(0.191, 2.43), `compute` 1.091 (0.207, 13.71). **Every row that was taken twice
+reproduced its ratio to within about 10%**, which is the strongest available
+evidence that the ordering below is real even though only two rows earn verdicts.
+
+**Total time lost fell from about 126 seconds to about 101.5 seconds.** `malloc`
+and `signal` together are 82.9 of the 101.5 seconds, or **82%**, so the
+concentration is unchanged. The single largest remaining gap in the tree is
+still `malloc`, by a factor of 7 over the next row.
+
+**The ordering method continues to earn its keep, and mis-ranks worse than ever
+by ratio.** `pipe` at 2.99x loses more than `mmap` at 7.4x, more than `syscall`
+at 5.3x, and more than `calls` and `memory` at ~10.5x each. `branch` at 1.15x and
+`compute` at 1.06x are last by both measures, `compute` losing 3.2 ms against
+`malloc`'s 72.5 s — a factor of about 22,600.
+
+### Before/after for the three rows the lane existed to check
+
+The "before" column is the committed BENCH-MAP-3 row measured at `d6861edf3`.
+**All three claims are directionally confirmed. Two are smaller than briefed.**
+
+| workload | metric | BENCH-MAP-3 | briefed | BENCH-MAP-4 measured | verdict on the claim |
+|---|---|---:|---:|---:|---|
+| malloc | `rust_x_c` | 280.913 | 218.6 | **230.7 / 255.7** | confirmed, **smaller than briefed** |
+| signal | `rust_x_c` | 58.727 | ~24.9 | **21.8 / 23.5** | **confirmed, slightly better than briefed** |
+| syscall | `rust_x_c` | 5.733 | 4.958 | **5.347** | confirmed, **about half the briefed gain** |
+
+**`malloc`: real but overstated.** Both takes (230.7 and 255.7) sit above the
+briefed 218.6 and well below BENCH-MAP-3's 280.9. The honest statement is a
+**1.10x–1.22x improvement**, not the 1.29x the briefed figure implies. Neither
+take earns a verdict and both were contended, so 218.6 is not refuted — it is
+simply not what this lane measured, twice. Its counters are unchanged from
+BENCH-MAP-3 (`runs` 6,437,891, `builds` 165,579, `completed` 3,853,984,500),
+which is the expected signature of a **scheduler and protocol** fix: the same
+work, dispatched more cheaply.
+
+**`signal`: confirmed, and the largest proportional win in the map.** 58.727 →
+21.8–23.5 is a **2.5x–2.7x improvement**, slightly better than the briefed ~24.9.
+Counters corroborate the mechanism rather than the volume: `builds` is 3,641 and
+`completed` 19,800,525, both unchanged from BENCH-MAP-3, so the engine is doing
+identical work — the saving is the 4,096-entry translated-block cache no longer
+being cleared per delivery (`2a565c834`, `c92eae79c`).
+
+**`syscall`: confirmed but half-sized.** 5.733 → 5.347 is a 1.07x improvement,
+against the briefed 4.958 (1.16x). `services` is 10,830,786 and `completed`
+9,500,030, both unchanged. The row's spread (0.287) is the second-widest in the
+map, so a tighter re-take could plausibly land nearer 4.958; on this evidence it
+does not.
+
+**`calls`, `memory`, `branch`, `compute` all held their verdicts**, as briefed:
+`calls` 10.592 → **10.372** (pass), `memory` 10.871 → **10.606** (pass),
+`branch` 1.053 → **1.146**, `compute` 1.014 → **1.062**. The two `branch` and
+`compute` figures drifted up by ~9% and ~5%, both without verdicts and both on a
+contended box; they are consistent with no change.
+
+**`tlb` improved without being a target**, 20.930 → **17.554**, consistent with
+the per-boundary `getrusage`+`clock_gettime` pair having been gated away. Its
+counters confirm the standing **adversarial-by-construction** attribution
+exactly: `a64_dirty_merged` is **0** while `a64_dirty_overflow` is **1,591,601**,
+i.e. every one of the 1.59 M runs fills all 16 dirty slots and merges nothing,
+because the guest strides 4099 pages. `tlb` is rank 3 by time lost, but it is
+measuring a case the guest was written to make worst.
+
+### The one regression this map found
+
+**`file` roughly tripled against C and is now rank 4.** BENCH-MAP-3 recorded
+6.387; this map measures **16.045 and 17.951** across two independent takes 40
+minutes apart, at `host_load` 2.64 and 6.60.
+
+The attribution is unusually clean, and it is not contention:
+
+* **The C and native arms did not move.** `c_us` 324,170 → 257,339/318,149 and
+  `native_us` 209,184 → 168,483/241,409 — both flat within noise, on the same
+  box, in the same runs. Only the Rust arm changed: `rust_us` 2,070,393 →
+  **4,128,889 / 5,711,077**. A filesystem or I/O-contention explanation would
+  have moved all three arms.
+* **The counters are byte-identical to BENCH-MAP-3.** `runs=3`, `builds=9`,
+  `hits=21`, `fallbacks=3`, `sites=3`, `services=866,490`, `completed=48`. The
+  engine is translating and executing exactly the same amount of code and
+  performing exactly the same number of syscall services as before.
+
+Same work, same translations, twice the wall time, Rust arm only. `file` is
+almost pure syscall-service cost (`services` 866,490 against `completed` 48), so
+this points at the **host-side buffered read/write service path**, not at
+translation. **This is unowned and worth a lane.** It is the only row in four
+maps to have gone backwards.
+
+### Native counters per workload (arm64, this head)
+
+Counters are load-independent, so unlike the timings they are exact.
+
+| workload | runs | builds | hits | fallbacks | sites | services | completed | dirty_committed | dirty_merged | dirty_overflow | reloc_invalid |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| malloc | 6,437,891 | 165,579 | 12,233,480 | 6 | 6 | 14 | 3,853,984,500 | 337,603,368 | 228,159,307 | 6,437,885 | 0 |
+| signal | 3,300,008 | 3,641 | 3,306,696 | 3 | 3 | 4,400,022 | 19,800,525 | 1,100,058 | 31 | 1 | 0 |
+| tlb | 1,591,616 | 38 | 1,591,681 | 12 | 6 | 20 | 229,183,481 | 27,057,256 | **0** | 1,591,601 | 0 |
+| file | 3 | 9 | 21 | 3 | 3 | 866,490 | 48 | 0 | 0 | 0 | 0 |
+| pipe | 4 | 14 | 31 | 4 | 3 | 3,249,259 | 149 | 7 | 3 | 0 | 0 |
+| mmap | 7,504 | 30,007 | 67,519 | 5 | 5 | 487,405 | 180,056 | 7,499 | 0 | 0 | 0 |
+| syscall | 500,002 | 9 | 500,021 | 3 | 3 | 10,830,786 | 9,500,030 | 0 | 0 | 0 | 0 |
+| calls | 8,693 | 20,560 | 126,578 | 3,006 | 6 | 14 | 2,915,326,810 | 238,906,982 | 238,854,847 | 0 | 0 |
+| memory | 1,129 | 144 | 36,205 | 4 | 4 | 22 | 1,175,973,419 | 288,521,929 | 288,518,517 | 0 | 0 |
+| branch | 1,280 | 16 | 40,749 | 4 | 4 | 14 | 1,338,907,323 | 0 | 0 | 0 | 0 |
+| compute | 364 | 17 | 11,576 | 4 | 4 | 14 | 377,955,317 | 7 | 3 | 0 | 0 |
+
+Three attributions worth carrying forward:
+
+**Nothing regressed in the counters.** `relocation_invalidations` is still 0 on
+all eleven rows, and `builds` is flat or lower everywhere against BENCH-MAP-3.
+The four fixes in this window were scheduler, protocol and cache-lifetime
+changes; none of them changed what gets translated, and the counters say so.
+
+**`tlb`'s adversarial signature is now explicit.** `dirty_merged=0` against
+`dirty_overflow=1,591,601` is the whole attribution in two numbers, and it is
+load-independent. Any future `tlb` work should change the guest's stride or the
+slot count, not the dispatcher.
+
+**`signal`'s `services` doubled, 3,300,020 → 4,400,022, while its time fell by
+2.6x.** More syscall services for less time is the expected shape of removing a
+fixed per-delivery memset, and is further evidence the win is real.
+
+### First measured sqlite figure, and the six phases `--workload` rejects
+
+**`sqlite` has never been measured in this file before.** All three previous maps
+record it as "guarded by `#ifdef HL_BENCH_SQLITE` and not compiled in". It was
+compiled here against `/usr/lib/aarch64-linux-gnu/libsqlite3.a`. **A figure of
+"375x C / 5,981x native" was carried into this lane's brief as a prior
+measurement; it appears nowhere in this file or its history, and should be
+treated as unsourced.** The numbers below are the first committed measurement.
+
+`sqlite` is not a `--workload` value. It, and the six phases `--workload`
+rejects, are reachable only through `--workload full`. `full` at `--divisor 1`
+is not affordable (it runs all 17 phases including the 12 M-iteration `malloc`),
+so this was taken at **`--divisor 20`**, `--repeats 9`, `host_load` 14.70.
+**No phase earned a verdict** and all are indicative. Ratios at divisor 20 are
+not directly comparable to the divisor-1 table above — warm-up amortises over
+20x fewer iterations, which inflates translation-heavy rows (`malloc` reads
+300.4 here against 230.7 at divisor 1).
+
+| phase | native_us | c_us | rust_us | rust_x_c | rust_x_native | spread | reachable via `--workload`? |
+|---|---:|---:|---:|---:|---:|---:|---|
+| **sqlite** | 2,462 | 6,417 | 3,695,756 | **575.932** | **1501.119** | 0.267 | no — `full` only, needs `-DHL_BENCH_SQLITE` |
+| malloc | 10,062 | 16,171 | 4,857,761 | 300.400 | 482.783 | 0.205 | yes |
+| mmap | 19,166 | 25,810 | 680,741 | 26.375 | 35.518 | 0.263 | yes |
+| float_simd | 6,655 | 7,922 | 196,217 | **24.769** | 29.484 | 0.343 | **no — `full` only** |
+| signal | 28,714 | 23,961 | 583,487 | 24.352 | 20.321 | 0.202 | yes |
+| file | 11,131 | 14,088 | 263,759 | 18.722 | 23.696 | 0.336 | yes |
+| tlb | 17,729 | 21,184 | 321,663 | 15.184 | 18.143 | 0.198 | yes |
+| calls | 5,286 | 8,063 | 109,053 | 13.525 | 20.631 | 0.195 | yes |
+| memory | 7,074 | 7,706 | 92,128 | 11.955 | 13.023 | 0.122 | yes |
+| string | 10,148 | 11,810 | 138,408 | **11.720** | 13.639 | 0.207 | **no — `full` only** |
+| atomics | 10,309 | 9,466 | 62,480 | **6.600** | 6.061 | 0.252 | **no — `full` only** |
+| syscall | 45,254 | 25,522 | 137,140 | 5.373 | 3.030 | 0.217 | yes |
+| pipe | 18,688 | 81,777 | 269,202 | 3.292 | 14.405 | 0.259 | yes |
+| compute_cold | 2,458 | 2,548 | 3,983 | **1.563** | 1.620 | 0.490 | **no — `full` only** |
+| crypto | 40,427 | 40,514 | 46,766 | **1.154** | 1.157 | 0.260 | **no — `full` only** |
+| compute | 2,399 | 2,576 | 2,976 | 1.155 | 1.241 | 0.310 | yes |
+| branch | 18,347 | 19,751 | 22,017 | 1.115 | 1.200 | 0.117 | yes |
+| intdiv | 17,028 | 17,022 | 17,840 | **1.048** | 1.048 | 0.327 | **no — `full` only** |
+
+**`sqlite` is by a wide margin the worst ratio in the tree — 576x C — and it is
+the most realistic code in it.** It is 1.9x worse than `malloc` measured in the
+same run under identical conditions. It is also the row with the largest
+native-to-C gap (native 2,462 µs against C 6,417 µs), so the 1501x native figure
+overstates the engine's deficit relative to a fair baseline; **576x C is the
+number to quote.** A real database workload is a mix of pointer chasing,
+branchy B-tree descent and small allocations — the three things `malloc`,
+`calls` and `branch` measure separately — and it is worse than any of them
+individually. **This should be the next lane's target, ahead of `malloc`.**
+
+**Two of the six previously-unreachable phases are material.** `float_simd` at
+**24.8x** would rank between `tlb` and `file` in the main table, and `string` at
+**11.7x** would rank alongside `calls` and `memory`. Neither has ever appeared in
+a ranked table. The other four are benign: `intdiv` 1.05x, `crypto` 1.15x,
+`compute_cold` 1.56x and `atomics` 6.6x. **`crypto` at 1.15x is worth noting as a
+positive** — the AES/SHA paths are essentially at parity with the C engine.
+
+The prior lane's `full` figures (`malloc 465.7, signal 167.8, calls 89.4,
+string 29.5, compute 3.4` at `host_load` 13.64) predate every fix in the last two
+maps; against this run they are superseded on all five rows.
+
+### Real container workloads, re-taken — and re-interpreted
+
+Re-taken at this head with `--jobs 1`. All five cases passed their output
+contracts. Both definitions run with `native: true, diagnostics: false`, so they
+carry timings but **no native counters**.
+
+| benchmark | case | cold_ms | warm median_ms | warm min_ms | p90_ms | materialize_us |
+|---|---|---:|---:|---:|---:|---:|
+| interp-python | startup | **8,679** | 3,458 | 3,443 | 3,554 | 1,247,070 |
+| interp-python | import | **41,083** | 6,192 | 5,954 | 6,336 | 4,505,753 |
+| interp-python | work | **104,818** | 102,486 | 78,104 | 229,632 | 1,047,723 |
+| fs-churn | spawn (500 fork/exec) | **8,255** | 7,212 | 6,831 | 7,822 | 505,059 |
+| fs-churn | unpack (2,000 files) | **11,246** | 9,180 | 8,922 | 9,219 | 163,887 |
+
+**Read the cold column, not the warm one.** This inverts how the previous three
+maps presented these rows, and the reason is a `__pycache__` artefact of the
+harness rather than anything about the engine. `run_case` materializes **one**
+rootfs and all five reps share it as `Rootfs::Directory`, so guest writes persist
+across reps. `python:3.12-alpine` ships its stdlib with an **empty
+`__pycache__`**; rep 0 compiles the imports and writes `.pyc`, and reps 1–4 read
+them back. A sibling lane proved this by mutation: running `python -B` (never
+write `.pyc`) collapses warm to cold's level — 6,098 → 45,816 ms and 8,627 →
+38,850 ms across two alternating pairs — while cold is unchanged, because cold
+never had a cache. **A real container, with a fresh rootfs and an empty
+`__pycache__`, pays the ~40 s figure on every run.** The 6.2 s warm median is
+reachable only because five reps share one mutated rootfs. The warm medians here
+measure **a pre-warmed guest bytecode cache, not steady-state execution.**
+
+**The container-setup hypothesis is dead, and this map's own numbers close it.**
+`COLD_LIFECYCLE` instrumentation already existed and had simply never been read.
+On `interp-python/import`: `create_us=165`, `attach_us=368`, `start_us=1,335`,
+`output_read_us=226` — **about 2.1 ms of setup in total** — against
+`wait_and_drain_us=41,081,914`. Setup is **0.005% of cold**. The same shape holds
+on `startup` (1.48 ms against 8.68 s) and `work` (1.36 ms against 104.8 s).
+**100% of the excess is inside guest execution.** No amount of container,
+namespace or descriptor work will move these rows.
+
+**Materialization is 0% of `cold_ms`.** It happens once, *before* rep 0, and is
+not inside the measured interval — the `materialize_us` column above is reported
+for completeness and **must not be divided into `cold_ms`**. An earlier
+circulated figure of "~8% of cold" was arithmetic on these two columns and is
+wrong. I/O is eliminated as a factor too: the whole 53 MB rootfs reads in 148 ms
+and is page-cache resident by the time the guest starts.
+
+**The `startup` improvement from the statx fix is confirmed.** `7b4513b83`
+("answer the mapped-file EOF boundary from a cached length") landed 90 seconds
+*after* BENCH-MAP-3 was taken, so that map's `interp-python` rows are pre-fix
+baselines. A sibling lane A/B'd it at this head against a no-cache mutant:
+**18,165,781 → 16,659 statx calls per python startup (1090x)**, warm median
+4.45 → 3.47 s, cold 10.19 → 8.53 s. This lane's independent re-take measures
+**3,458 ms warm and 8,679 ms cold**, within 1% and 2% of those post-fix
+predictions. Against the *committed* BENCH-MAP-3 row (3,844 ms warm) the delta is
+only −386 ms, because that row was taken under different load; the mutant A/B is
+the sounder comparison and the fix is real.
+
+**`interp-python/work` still cannot support a number.** Its three samples span
+min 78,104 ms, median 102,486 ms and p90 229,632 ms — a **2.9x span**. A prior
+baseline spanned min 51,938 ms against a median of 102,776 ms. **This case cannot
+resolve a small effect and no conclusion should be drawn from a change in it**
+until it gets more samples or a tighter workload.
+
+**`fs-churn`'s "faster cold than warm" result did not reproduce.** BENCH-MAP-3
+recorded `spawn` 6,107 cold against 6,487 warm and `unpack` 9,580 against 9,824,
+and concluded there was no measurable first-run cost left. This map measures
+`spawn` **8,255 cold against 7,212 warm** and `unpack` **11,246 against 9,180** —
+a real cold penalty of 14% and 23% in both cases. Given the `__pycache__` finding
+above, the honest reading is that **any warm-versus-cold delta on a shared-rootfs
+bench is a statement about guest-visible state carried between reps**, not about
+husklet's first-run cost, in whichever direction it points.
+
+### The inflation control: what `combined` overstates
+
+**`combined/main.c` overstates translation work by roughly three orders of
+magnitude relative to a real container, and the ranked table must not be read as
+if it predicted product behaviour.** Carried forward from the calibration lane
+and *not* re-measured here: a real dotnet container run is about **86% image
+materialization and 4.2% guest execution**, with roughly **2,100 translations for
+the whole run against `combined/main.c`'s 9,591**.
+
+**The 86% materialization figure is a property of that one dotnet workload and
+does not generalize — state it that way, never as a general property.** On every
+case in this map's container table, materialization happens outside the measured
+interval entirely (0% of `cold_ms`), and guest execution is essentially 100% of
+it. The materialization share is image size divided by run length, and
+`alpine:3.20` or `python:3.12-alpine` with a ten-second workload sits at the
+opposite end of that ratio from a large dotnet image with a short one. Both
+numbers are correct about their own workload; neither generalises.
+
+**Only 11% of `malloc`'s time runs guest code** — `hl-engine` is 80.4% of samples
+— so that row measures **slice-dispatch machinery, not translation quality**, and
+it produces 9,591 translations against a real dotnet container's ~2,100. **Do not
+quote `malloc`'s 230x for container workloads.** The `sqlite` row is the better
+proxy for realistic code, and it is worse.
+
+Materialization here is also measured on a filesystem **without reflink support**
+— the harness warns that every copy-materialized rootfs is a full byte copy — so
+the `materialize_us` column is an upper bound.
+
+### Not measured, and why
+
+* **`interp-python` with `diagnostics: true` aborts** with
+  `*** stack smashing detected ***` (exit 134). This is a **real latent bug and
+  currently unowned.** Its practical effect on this page is that the `hl-native:`
+  counter route is **unavailable for every container row**, which is why the
+  container table carries timings only. Fixing it would let the container rows be
+  attributed the way the `combined` rows are.
+* **`malloc`, amd64** — still not attempted; the gate's 600-second internal
+  deadline fires before the phase completes under the x86 interpreter at
+  `--divisor 1`. **Restated, not resolved**, for the fourth map running.
+* **All amd64 timings** — not attempted. `native_baseline` is absent on amd64
+  because the host is aarch64, so only `rust_x_c` would be meaningful there, and
+  any "native" figure for amd64 comes from binfmt and **must never be quoted as a
+  baseline**.
+* **`+lse`** — measured and **rejected** by a sibling lane; it never landed.
+  **Do not record any ~6.5% figure against it.**
+* **A verdict on the nine unverdicted rows** — not obtainable in this session.
+  The box was never quiet for long enough, and per the standing rule
+  `--max-spread` was not relaxed and repeats were not raised to compensate.
+
+### Rerun note
+
+The ordering, the counter table, the `file` regression, the first `sqlite`
+figure and the `__pycache__` re-interpretation of the container rows do not
+depend on a quiet box and are this map's durable output. What a quiet box would
+buy is verdicts on `tlb` (0.064), `signal` (0.139), `file` (0.147), `pipe`
+(0.149) and `mmap` (0.150) — all five are within 3x of the 0.05 threshold and
+would plausibly convert.
+
+Three operational notes that cost this lane real time:
+
+* **`/target/` in `.gitignore` is directory-only, so symlinking `target` itself
+  leaves the tree `-dirty` and stamps `-dirty` into every `rust_revision`.**
+  Make `target` a real directory and symlink `target/release` into it instead.
+* **`--workload full --divisor 1` is not affordable** and `full` is the only
+  route to `sqlite` and the six rejected phases. Use `--divisor 20` and say so.
+* **This host is an LXC container in a VM**, so `/proc/loadavg` cannot see
+  macOS-side contention. Treat any "the box is idle" instruction as unverifiable
+  and record `host_load` per row regardless.
+
 ## 2026-08-08: BENCH-MAP-3 re-take after the dispatcher and trace-budget fixes
 
 Head `d6861edf3` on `refactor/merge-rust-engine`, release build, Linux ARM64
