@@ -406,7 +406,9 @@ fn pin_inode(
     let parent = resolved
         .duplicate_parent()
         .map_err(|error| super::resolution::Policy::runtime_error(ResolveError::Host(error)))?;
-    let name = CString::new(resolved.final_name().ok_or(RuntimePathError::Invalid)?.as_bytes())
+    // A walk ending at a directory root (`.`, `..`, a trailing `/.`) names no child, so address the
+    // pinned directory itself the way the open path already does rather than rejecting it as EINVAL.
+    let name = CString::new(resolved.final_name().map_or(b".".as_slice(), |name| name.as_bytes()))
         .map_err(|_| RuntimePathError::Invalid)?;
     let path = pin::Host::path(&parent, &name)?;
     #[cfg(target_os = "linux")]
