@@ -302,8 +302,15 @@ impl Declared {
             }
             entries.insert(path.to_vec(), Ownership { user, group });
         }
-        let mut roots = roots;
+        // Resolution canonicalizes every layer root, so a root reached through a symlink must be
+        // matched in that form too. Both spellings are kept, since neither is authoritative here.
+        let mut roots = roots
+            .iter()
+            .flat_map(|root| [root.canonicalize().ok(), Some(root.clone())])
+            .flatten()
+            .collect::<Vec<_>>();
         roots.sort_by_key(|root| std::cmp::Reverse(root.as_os_str().len()));
+        roots.dedup();
         Self { roots, entries }
     }
 

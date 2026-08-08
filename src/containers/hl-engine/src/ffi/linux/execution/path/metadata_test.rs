@@ -200,6 +200,37 @@ fn declared_ownership_seeds_and_yields_to_a_chown() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Path resolution canonicalizes every layer root, so a root configured through a symlink arrives
+/// here in a spelling the declaration never used; matching it lexically loses every declared owner.
+#[test]
+fn declared_ownership_survives_a_layer_root_reached_through_a_symlink() {
+    let base = std::env::temp_dir().join(format!("hl-owner-symlink-{}", std::process::id()));
+    let (target, link) = (base.join("store"), base.join("link"));
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("declared"), b"data").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let host = std::fs::symlink_metadata(target.join("declared")).unwrap();
+    let (user, group) = (host.uid().wrapping_add(3_000), host.gid().wrapping_add(4_000));
+    assert_ne!(user, host.uid());
+
+    // The launch plan carries the symlinked spelling, exactly as a configured image root does.
+    let registry = Registry::default();
+    registry.declare(Declared::parse(
+        format!("declared\t{user}\t{group}").as_bytes(),
+        vec![link.clone()],
+    ));
+
+    // Resolution hands back the canonical path, which must still find the declaration.
+    let resolved = link.join("declared").canonicalize().unwrap();
+    assert!(resolved.starts_with(&target));
+    let mut projected = HostMetadata::path(&resolved).unwrap();
+    registry.project_at(Some(&resolved), &mut projected);
+    assert_eq!((projected.user, projected.group), (user, group));
+
+    std::fs::remove_dir_all(&base).unwrap();
+}
+
 /// Eviction is what replaced the per-inode fd pin: the record must die with the inode so a recycled
 /// inode number cannot inherit a stale guest owner.
 #[test]
