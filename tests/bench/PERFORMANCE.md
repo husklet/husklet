@@ -1,6 +1,282 @@
 # Engine performance checkpoint
 
+## 2026-08-08: BENCH-MAP-3 re-take after the dispatcher and trace-budget fixes
+
+Head `d6861edf3` on `refactor/merge-rust-engine`, release build, Linux ARM64
+host, 18 logical CPUs, `CARGO_TARGET_DIR` under `/var/tmp`, lane-private scratch.
+Every row used the benchmark gate at `--repeats 9 --divisor 1 --max-spread 0.05`
+against the retained C build `/Users/x/dd/engine/build/unit-audit`
+(`c_build_id sha256:9c2701b3…`, unchanged from both previous maps). Rust engine
+`sha256:45b5be6a7482…`, revision `d6861edf3704` (clean, not `-dirty`).
+
+**The guest is byte-identical to the previous two maps'.**
+`git log a1cf286dd..d6861edf3 -- tests/bench/combined/main.c` is empty, so every
+number below is engine behaviour, not a changed guest. The CPU pin is now
+per-PID rather than fixed to the highest core, so rows in this sweep ran on
+CPUs 3, 5, 6, 7, 8, 9, 10, 12 and 17 rather than stacking on 17.
+
+**Completion was verified per arm, not by exit code.** All eleven rows recorded
+9 sample files for each of `native`, `c-engine` and `rust-engine`, and the
+per-arm `ok=` checksum in `cycle-NNN-<env>-arm64.csv` is identical across all
+three arms on every row except `syscall`, whose checksum embeds the guest TID and
+is intentionally not compared. No row in this table came from an aborted
+baseline. The gate now enforces this cross-arm itself (`f419cf905`).
+
+**Measurement caveat — read before using the absolute numbers.** The box was
+contended for most of the sweep by four sibling lanes, and per-row `host_load`
+ranged 4.19 to 10.20 out of 18. It fell to ~2.8 only for the final `malloc` row.
+Per the lane rule, `--max-spread` was **not** relaxed and repeats were not
+raised. Unlike the two previous maps, which returned **no verdict on any row**,
+this sweep returned a **pass verdict on three rows** (`branch`, `memory`,
+`calls`); `malloc` and `pipe` missed only narrowly, at spread 0.063 and 0.058.
+Rows without a verdict are **indicative**: treat `rust_x_c` and the ordering as
+sound and the absolute microseconds as inflated run to run.
+
+Ranked by absolute time lost against C (`rust_us - c_us`), which is the ordering
+the optimisation lanes should prioritise by — not by ratio.
+
+| rank | workload | native_us | c_us | rust_us | rust_x_c | rust_x_native | spread | verdict | host_load | lost vs C (us) |
+|---:|---|---:|---:|---:|---:|---:|---:|---|---:|---:|
+| 1 | malloc | 186,523 | 292,343 | 82,123,062 | 280.913 | 440.284 | 0.063 | no verdict (spread) | 9.51 | 81,830,719 |
+| 2 | signal | 550,266 | 454,367 | 26,683,451 | 58.727 | 48.492 | 0.162 | no verdict (spread) | 10.20 | 26,229,084 |
+| 3 | tlb | 270,770 | 253,374 | 5,303,049 | 20.930 | 19.585 | 0.123 | no verdict (spread) | 8.33 | 5,049,675 |
+| 4 | mmap | 340,850 | 413,770 | 3,784,190 | 9.146 | 11.102 | 0.326 | no verdict (spread) | 6.69 | 3,370,420 |
+| 5 | pipe | 344,855 | 1,471,969 | 4,275,257 | 2.904 | 12.397 | 0.058 | no verdict (spread) | 5.21 | 2,803,288 |
+| 6 | syscall | 920,802 | 448,661 | 2,572,251 | 5.733 | 2.793 | 0.180 | no verdict (spread) | 5.09 | 2,123,590 |
+| 7 | file | 209,184 | 324,170 | 2,070,393 | 6.387 | 9.897 | 0.323 | no verdict (spread) | 4.19 | 1,746,223 |
+| 8 | calls | 94,873 | 145,610 | 1,542,359 | 10.592 | 16.257 | 0.038 | **pass** | 8.31 | 1,396,749 |
+| 9 | memory | 135,266 | 136,378 | 1,482,602 | 10.871 | 10.961 | 0.046 | **pass** | 4.67 | 1,346,224 |
+| 10 | branch | 335,459 | 356,554 | 375,365 | 1.053 | 1.119 | 0.029 | **pass** | 4.88 | 18,811 |
+| 11 | compute | 49,118 | 53,323 | 54,056 | 1.014 | 1.101 | 0.140 | no verdict (spread) | 5.05 | 733 |
+
+**Total time lost fell from about 382 seconds to about 126 seconds — a 3.0x
+reduction across the board.** `malloc` and `signal` together are 108 of the 126
+seconds, or 86%, so the concentration of the problem is unchanged even though its
+size is not. The whole eleven-row sweep now completes in 25 minutes; the previous
+map needed 48 minutes for `malloc` alone.
+
+**The ordering method continues to earn its keep.** `compute` is still last, now
+losing 0.7 ms against C while `malloc` loses 81.8 s — a factor of about 111,000.
+Ranking by ratio would still mis-order the middle: `pipe` at 2.9x loses twice
+what `memory` at 10.9x does and twice what `calls` at 10.6x does, and `mmap` at
+9.1x loses more than `syscall`, `file`, `calls` and `memory` combined.
+
+### Before/after for the two rows the lane existed to check
+
+Both claims are **confirmed**, and both are larger than the recorded map showed.
+The "before" column is the committed BENCH-MAP-2 row measured at `a1cf286dd`.
+
+| workload | metric | BENCH-MAP-2 | BENCH-MAP-3 | change |
+|---|---|---:|---:|---|
+| malloc | `rust_x_c` | 536.416 | **280.913** | 1.91x better |
+| malloc | `rust_us` | 263,421,862 | **82,123,062** | 3.21x faster |
+| malloc | `runs` | 824 | **6,437,891** | 7,812x |
+| malloc | `completed` | 506,533 | **3,853,984,494** | 7,608x |
+| malloc | `fallbacks` | 824 | **6** | 137x fewer |
+| malloc | `sites` | 257 | **6** | 43x fewer |
+| malloc | suppressed-entry sites | 24 | **1** | — |
+| calls | `rust_x_c` | 56.414 | **10.592** | 5.33x better |
+| calls | `rust_us` | 9,920,061 | **1,542,359** | 6.43x faster |
+| calls | `builds` | 250,071 | **20,560** | 12.2x fewer |
+| calls | `relocation_invalidations` | (1,038,222 reported) | **0** | eliminated |
+| calls | `completed` | 2,913,647,524 | 2,915,326,804 | flat |
+
+**`malloc`: the recorded conclusion is overturned.** BENCH-MAP-2 concluded the
+wall time "did not move" and, with `native_us` above `c_us`, that native was
+intrinsically slower than the interpreter on this workload. That conclusion was
+an artefact of native not running. With `HL_NATIVE_EXIT_EPOCH` no longer
+rewritten as `FALLBACK` (`18811d6ef`, `bf41b444a`), `runs` goes from 824 to
+6.4 million and `completed` from half a million to 3.85 billion — the engine is
+now executing natively at all — and `native_us` (186,523) is now comfortably
+below `c_us` (292,343), which is the opposite of the recorded relationship.
+`malloc` remains rank 1 by a wide margin, but it is no longer evidence against
+native execution.
+
+**`calls`: confirmed, and the fix is broader than `calls`.** Sizing a cached
+trace by the budget left in its slice (`659c7e126`) was invalidating traces,
+their relocations and the whole IBTC whenever a wider entry arrived.
+`relocation_invalidations` is now **0 on every one of the eleven workloads**, not
+only on `calls`, and `calls` earns a gate verdict at spread 0.038 — the tightest
+row in the sweep. `completed` is flat, confirming this was build churn and not a
+change in work done.
+
+### Rows that moved without being the lane's target
+
+| workload | `rust_x_c` before | after | note |
+|---|---:|---:|---|
+| compute | 3.585 | **1.014** | now within 1.4% of the retained C engine |
+| branch | 2.218 | **1.053** | passing verdict, spread 0.029 |
+| file | 18.394 | **6.387** | 2.88x better |
+| signal | 130.832 | **58.727** | `builds` 6,600,042 → 3,641; `fills` 2,199,965 → 1,195 |
+| tlb | 33.576 | **20.930** | `runs` 28 → 1,590,747; `completed` 1,432 → 229,077,823 |
+| memory | 13.509 | **10.871** | `builds` 1,527 → 76 |
+| pipe | 3.089 | **2.904** | little changed |
+| syscall | 5.439 | **5.733** | **the one row that got worse** |
+| mmap | (no row) | **9.146** | first measurement ever taken; see below |
+
+**`signal`'s BENCH-MAP-2 verdict is itself overturned.** That map recorded the
+signal fix as "claim refuted, and worse", with `builds` rising to 6,600,042 and
+`fills` to 2,199,965. Both counters have now collapsed to 3,641 and 1,195 — close
+to the originally claimed 42 and 10 — and `completed` is flat at 19.8 million.
+The restored inline syscall service is visible as `services` 17 → 3,300,020.
+`signal` is still rank 2 and still the second-largest gap on the board.
+
+**`syscall` is the only regression** (5.439 → 5.733, and it was 5.720 in the
+first map). It is also the row where the retained C engine beats host-native
+execution (448,661us against 920,802us), so its `rust_x_native` of 2.79
+understates the real gap; use `rust_x_c`. Its diagnostics show a single
+suppressed-entry site refusing 10,500,001 times, which is the obvious thing for a
+follow-up lane to look at.
+
+### Native counters per workload (arm64, this head)
+
+Counters are load-independent, so unlike the timings they are exact.
+
+| workload | runs | builds | hits | fallbacks | sites | services | fills | completed | a64_guard_fast | a64_guard_full | reloc_invalid |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| malloc | 6,437,891 | 165,579 | 12,233,480 | 6 | 6 | 14 | 17,838 | 3,853,984,494 | 146,504,775 | 985,644,326 | 0 |
+| signal | 3,300,008 | 3,641 | 3,306,696 | 3 | 3 | 3,300,020 | 1,195 | 19,800,519 | 13 | 2,200,142 | 0 |
+| tlb | 1,590,747 | 46 | 1,590,811 | 22 | 10 | 20 | 0 | 229,077,823 | 1,590,722 | 55,675,327 | 0 |
+| mmap | 1 | 1 | 2 | 1 | 1 | 487,405 | 0 | 2 | 0 | 0 | 0 |
+| pipe | 4 | 14 | 31 | 4 | 3 | 3,249,259 | 3 | 143 | 0 | 13 | 0 |
+| syscall | 500,002 | 9 | 500,021 | 3 | 3 | 10,830,786 | 4 | 9,500,024 | 0 | 4 | 0 |
+| file | 3 | 9 | 21 | 3 | 3 | 866,490 | 3 | 42 | 0 | 3 | 0 |
+| calls | 8,693 | 20,560 | 126,578 | 3,006 | 6 | 14 | 3,551 | 2,915,326,804 | 62,998 | 477,877,014 | 0 |
+| memory | 1,124 | 76 | 36,048 | 1 | 1 | 22 | 11 | 1,175,874,955 | 13,138,535 | 585,563,034 | 0 |
+| branch | 1,280 | 16 | 40,749 | 4 | 4 | 14 | 3 | 1,338,907,317 | 0 | 1 | 0 |
+| compute | 364 | 17 | 11,576 | 4 | 4 | 14 | 7 | 377,955,311 | 0 | 29 | 0 |
+
+Three attributions worth carrying forward:
+
+**Build churn is broadly gone.** `builds` fell on every row that had it:
+`calls` 250,071 → 20,560, `memory` 1,527 → 76, `branch` 435 → 16, `compute`
+57 → 17, `signal` 6,600,042 → 3,641. `malloc` is the exception, rising 9,757 →
+165,579, but that is because it is now translating code it previously refused to
+run at all; its `hits`/`builds` ratio is 74:1.
+
+**The inline syscall service is restored and visible.** `services` was 17 across
+the board in the previous map. It is now 10,830,786 on `syscall`, 3,300,020 on
+`signal`, 3,249,259 on `pipe`, 866,490 on `file` and 487,405 on `mmap` — every
+syscall-shaped workload.
+
+**`tlb` is now genuinely executing natively.** `runs` 28 → 1,590,747 and
+`completed` 1,432 → 229,077,823, against a `builds` count that barely moved
+(41 → 46). The previous map's `tlb` numbers described an engine that was
+translating and then discarding; this one describes an engine that runs.
+
+### Real container workloads, re-taken
+
+These are closer to the product than `combined` is, and they were re-taken at
+this head with `--jobs 1` in the sweep's quiet window (`host_load` 2.7 to 3.1).
+Both definitions run with `native: true, diagnostics: false`, so they carry
+timings but no native counters. All five cases passed their output contracts.
+
+| benchmark | case | cold_ms | warm median_ms | p90_ms | image materialize_us | image identity_us |
+|---|---|---:|---:|---:|---:|---:|
+| interp-python | startup | 7,959 | **3,844** | 3,874 | 1,531,570 | 1,289 |
+| interp-python | import | 43,066 | **6,727** | 6,759 | 3,310,354 | 9,138,247 |
+| interp-python | work | 133,925 | **111,920** | 236,629 | 1,430,585 | 1,135 |
+| fs-churn | spawn (500 fork/exec) | 6,107 | **6,487** | 6,608 | 321,772 | 5,550,129 |
+| fs-churn | unpack (2,000 files) | 9,580 | **9,824** | 9,928 | 107,548 | 1,604 |
+
+Three things this shows that `combined` cannot.
+
+**The cold-start penalty is gone on the file-churn cases.** `fs-churn/spawn` and
+`fs-churn/unpack` are *faster* cold than warm (6,107 against 6,487; 9,580 against
+9,824), i.e. there is no measurable first-run cost left. That is consistent with
+no longer fsyncing every file of a throwaway container tree (`0791af30a`).
+`interp-python` still shows a real cold penalty — `import` is 43.1 s cold against
+6.7 s warm, a 6.4x ratio — and that first-run cost, not steady-state execution,
+is where the remaining container-startup work is.
+
+**The prior lane's "13.50 s → 0.79 s" startup figure was not reproduced.** The
+closest analogue here, `interp-python/startup`, measures 3,844 ms warm and
+7,959 ms cold. It is not the same case, so this is not a refutation; it is a
+statement that no case in the committed suite currently measures 0.79 s, and the
+figure should not be quoted against these benchmarks.
+
+**`interp-python/work` is the least stable measurement on this page.** Its p90
+(236.6 s) is more than double its median (111.9 s) across only three samples.
+Treat it as an order-of-magnitude figure.
+
+### The inflation control: what `combined` overstates
+
+**`combined/main.c` overstates translation work by roughly three orders of
+magnitude relative to a real container, and this table must not be read as if it
+predicted product behaviour.** The finding this rests on, carried forward from
+the calibration lane and *not* re-measured here: a real dotnet container run is
+about **86% image materialization and 4.2% guest execution**, with roughly
+**2,100 translations for the whole run against `combined/main.c`'s 9,591**.
+
+Two honest qualifications on that control, both visible in the table above:
+
+* **The 86%/4.2% split does not reproduce on these benchmarks, and should not be
+  expected to.** Here guest execution dominates: `fs-churn/unpack` spends 9.82 s
+  in the guest against 0.11 s materializing, and `interp-python/work` spends
+  111.9 s against 1.43 s. The materialization share is a function of image size
+  divided by run length, and `alpine:3.20` with a ten-second workload sits at the
+  opposite end of that ratio from a large dotnet image with a short one. Both
+  numbers are correct about their own workload; neither generalises.
+* **Materialization here is measured on a filesystem without reflink support.**
+  The harness warns that every copy-materialized rootfs is therefore a full byte
+  copy. The materialize figures above are an upper bound, and
+  `HL_SCENARIO_IMAGE_CACHE` should be pointed at a reflink-capable filesystem
+  before anyone takes materialization measurements seriously.
+
+The practical consequence is unchanged: the synthetic ranking tells you where the
+*engine* is slow, and `malloc` and `signal` are genuinely where that is. It does
+not tell you what fraction of a real container run those rows control, and on the
+evidence here that fraction is small for short-lived containers and large for
+long-running ones.
+
+### Not measured, and why
+
+* **`mmap`, arm64 — resolved, not restated.** The deterministic
+  `native execution was requested but native diagnostics are missing` failure,
+  observed at `host_load` 4.14 and again at 9.58, **no longer reproduces at this
+  head.** `mmap` produced a complete 9/9/9 row with matching `ok=` checksums for
+  the first time. The likely fix is the a64 `read_cache` view-publication change
+  (`d3860b637`). Its spread (0.326) is the widest in the sweep, so its absolute
+  numbers are the least trustworthy of the eleven, but the harness gap is closed.
+* **`malloc`, amd64** — still not attempted. The gate's 600-second internal
+  deadline firing before the phase completes under the x86 interpreter at
+  `--divisor 1` was not re-tested. arm64 `malloc` is now fast enough (about 15
+  minutes) that an amd64 attempt is affordable for the first time, but it was not
+  spent here. **Restated, not resolved.**
+* **All amd64 timings** — not attempted. `native_baseline` is absent on amd64
+  because the host is aarch64, so only `rust_x_c` would be meaningful there, and
+  any "native" figure for amd64 comes from binfmt and must never be quoted as a
+  baseline.
+* **`compute_cold`, `intdiv`, `float_simd`, `crypto`, `atomics`, `string`** —
+  **still holds, verified directly at this head.** `--workload intdiv` reports
+  `[possible values: compute, branch, calls, memory, tlb, malloc, syscall, mmap,
+  file, pipe, signal, full]`. The 17-phase guest defines the other six but they
+  are reachable only through the guest's own `--phase` flag, so they carry no C
+  baseline and no verdict. A prior lane reached them via `--workload full` and
+  recorded `malloc 465.7, signal 167.8, calls 89.4, string 29.5, compute 3.4` at
+  `host_load` 13.64 with no verdict on any row; those figures predate every fix
+  in this map and should not be compared against the table above.
+* **`sqlite`** — still guarded by `#ifdef HL_BENCH_SQLITE` and not compiled in.
+* **`full`** — supported by the gate but not run here.
+
+### Rerun note
+
+The ordering, the counter table and the two before/after verdicts do not depend
+on a quiet box and are this map's durable output. Three rows now carry gate
+verdicts, which neither previous map achieved; the remaining eight want a quiet
+re-take, and `malloc` at spread 0.063 and `pipe` at 0.058 would likely convert on
+a genuinely idle host. Operational notes that cost previous lanes real time and
+still apply: the agent scratchpad is shared between lanes, so drive long sweeps
+from a lane-private directory with `setsid`; a foreground harness timeout has
+reaped an in-flight gate run before; and `pkill -f "testing runtime"` matches
+every lane's binary — scope kills to your own target-dir path.
+
 ## 2026-08-07: BENCH-MAP-2 re-take after the four counter-verified fixes
+
+> **Superseded by the BENCH-MAP-3 section above.** Its `malloc` conclusion
+> ("wall time unmoved", and native intrinsically slower than the interpreter) and
+> its `signal` conclusion ("claim refuted, and worse") are both overturned there
+> against a byte-identical guest.
 
 Head `a1cf286dd` on `refactor/merge-rust-engine`, release build, Linux ARM64
 host, 18 logical CPUs, harness-pinned CPU 17, `CARGO_TARGET_DIR` under
