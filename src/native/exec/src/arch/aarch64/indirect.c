@@ -9,19 +9,28 @@
 #define OFFSET_IBTC_BASE ((int)offsetof(hl_native_aarch64_cpu, ibtc_base))
 #define OFFSET_BUDGET ((int)offsetof(hl_native_aarch64_cpu, budget))
 
-static void patch_cbnz(uint32_t *branch, const uint8_t *target) {
-    uint32_t distance = (uint32_t)((target - (const uint8_t *)branch) / 4);
+/* trace_build calls hl_a64_indirect_body directly, bypassing the capacity
+ * check in hl_a64_indirect_emit, so every placeholder below may sit at the
+ * one-past-end cursor of an exhausted buffer. */
+static void patch_cbnz(hl_a64_assembler *assembler, uint32_t *branch, const uint8_t *target) {
+    uint32_t distance;
+    if (!hl_a64_assembler_wrote(assembler, branch)) return;
+    distance = (uint32_t)((target - (const uint8_t *)branch) / 4);
     *branch |= (distance & UINT32_C(0x7ffff)) << 5;
 }
 
-static void patch_adr(uint32_t *instruction, const uint8_t *target) {
-    int64_t distance = target - (const uint8_t *)instruction;
+static void patch_adr(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target) {
+    int64_t distance;
+    if (!hl_a64_assembler_wrote(assembler, instruction)) return;
+    distance = target - (const uint8_t *)instruction;
     *instruction |= ((uint32_t)distance & 3u) << 29;
     *instruction |= (((uint32_t)(distance >> 2)) & UINT32_C(0x7ffff)) << 5;
 }
 
-static void patch_literal(uint32_t *instruction, const uint8_t *target) {
-    int64_t distance = target - (const uint8_t *)instruction;
+static void patch_literal(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target) {
+    int64_t distance;
+    if (!hl_a64_assembler_wrote(assembler, instruction)) return;
+    distance = target - (const uint8_t *)instruction;
     *instruction |= (((uint32_t)(distance / 4)) & UINT32_C(0x7ffff)) << 5;
 }
 
@@ -99,11 +108,11 @@ int hl_a64_indirect_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc
         int64_t hit_delta = (uint8_t *)site_hit - site;
         hl_a64_emit32(assembler, (uint32_t)(uint64_t)hit_delta);
         hl_a64_emit32(assembler, (uint32_t)((uint64_t)hit_delta >> 32));
-        patch_adr(miss_site, site);
-        patch_literal(site_target, site);
-        patch_cbnz(site_miss, shared);
-        patch_cbnz(shared_miss, miss);
-        patch_cbnz(shared_empty, miss);
+        patch_adr(assembler, miss_site, site);
+        patch_literal(assembler, site_target, site);
+        patch_cbnz(assembler, site_miss, shared);
+        patch_cbnz(assembler, shared_miss, miss);
+        patch_cbnz(assembler, shared_empty, miss);
         return hl_a64_assembler_ok(assembler);
     }
     hl_a64_stub_exit_register(assembler, HL_NATIVE_EXIT_BRANCH, 17);

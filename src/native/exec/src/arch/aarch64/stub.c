@@ -115,13 +115,19 @@ void hl_a64_stub_exit_register(hl_a64_assembler *assembler, uint32_t kind, int t
     hl_a64_br(assembler, 9);
 }
 
-static void patch_condition(uint32_t *branch, const uint8_t *target) {
-    uint32_t distance = (uint32_t)((target - (const uint8_t *)branch) / 4);
+/* The budget placeholders are captured before emission, so an exhausted
+ * buffer leaves them at the one-past-end cursor. */
+static void patch_condition(hl_a64_assembler *assembler, uint32_t *branch, const uint8_t *target) {
+    uint32_t distance;
+    if (!hl_a64_assembler_wrote(assembler, branch)) return;
+    distance = (uint32_t)((target - (const uint8_t *)branch) / 4);
     *branch |= (distance & UINT32_C(0x7ffff)) << 5;
 }
 
-static void patch_branch(uint32_t *branch, const uint8_t *target) {
-    uint32_t distance = (uint32_t)((target - (const uint8_t *)branch) / 4);
+static void patch_branch(hl_a64_assembler *assembler, uint32_t *branch, const uint8_t *target) {
+    uint32_t distance;
+    if (!hl_a64_assembler_wrote(assembler, branch)) return;
+    distance = (uint32_t)((target - (const uint8_t *)branch) / 4);
     *branch |= distance & UINT32_C(0x03ffffff);
 }
 
@@ -151,7 +157,7 @@ void hl_a64_stub_budget_begin(hl_a64_assembler *assembler, uint64_t pc, hl_a64_b
     hl_a64_emit32(assembler, UINT32_C(0xc8dffe10)); /* ldar x16,[x16] */
     guard->token_interrupt_branch = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, UINT32_C(0xb5000010)); /* cbnz x16,interrupt */
-    patch_condition(guard->token_skip_branch, assembler->cursor);
+    patch_condition(assembler, guard->token_skip_branch, assembler->cursor);
     guard->subtract = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, UINT32_C(0xd10003d1)); /* sub x17,x30,#count */
     /* Borrow test, so entry admission leaves guest NZCV alone. The reject arm
@@ -163,11 +169,11 @@ void hl_a64_stub_budget_begin(hl_a64_assembler *assembler, uint64_t pc, hl_a64_b
 }
 
 void hl_a64_stub_budget_finish(hl_a64_assembler *assembler, hl_a64_budget_guard *guard, uint32_t count) {
-    *guard->subtract |= count << 10;
-    patch_condition(guard->interrupt_branch, assembler->cursor);
-    patch_condition(guard->token_interrupt_branch, assembler->cursor);
+    if (hl_a64_assembler_wrote(assembler, guard->subtract)) *guard->subtract |= count << 10;
+    patch_condition(assembler, guard->interrupt_branch, assembler->cursor);
+    patch_condition(assembler, guard->token_interrupt_branch, assembler->cursor);
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_INTERRUPT, guard->pc);
-    patch_branch(guard->budget_branch, assembler->cursor);
+    patch_branch(assembler, guard->budget_branch, assembler->cursor);
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_YIELD, guard->pc);
 }
 

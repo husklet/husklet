@@ -68,6 +68,24 @@ int main(void) {
     CHECK(!hl_a64_stub_emit(&assembler, HL_NATIVE_EXIT_FALLBACK, 0x9000));
     CHECK(hl_a64_assembler_size(&assembler) == 0);
     for (size_t index = 0; index < sizeof(short_buffer); index++) CHECK(short_buffer[index] == 0xa5);
+
+    /* The budget guard captures its placeholders before emitting them, so an
+     * exactly exhausted buffer leaves them one past the end.  Those patchers
+     * mostly OR in zero bits there, so a value canary cannot see them; end the
+     * buffer on an unmapped page instead and let the write fault. */
+    hl_a64_budget_guard budget;
+    uint8_t *bounded = mmap(NULL, (size_t)page * 2, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(bounded != MAP_FAILED);
+    CHECK(mprotect(bounded, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+    uint8_t *edge = bounded + (size_t)page - 64;
+    CHECK(hl_a64_assembler_begin(&assembler, edge, edge, 64));
+    while (hl_a64_assembler_remaining(&assembler) != 0)
+        hl_a64_emit32(&assembler, 0xd503201fu);
+    CHECK(hl_a64_assembler_ok(&assembler));
+    hl_a64_stub_budget_begin(&assembler, 0x9000, &budget);
+    hl_a64_stub_budget_finish(&assembler, &budget, 4);
+    CHECK(!hl_a64_assembler_ok(&assembler));
+    CHECK(munmap(bounded, (size_t)page * 2) == 0);
     return 0;
 #endif
 }
