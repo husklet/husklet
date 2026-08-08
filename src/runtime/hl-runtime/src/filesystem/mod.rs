@@ -74,6 +74,11 @@ pub trait PipeCancellationPort: Send + Sync {
 /// Publishes successful native-file extent changes into mapped-file ownership.
 pub trait BackingChangePort: Send + Sync {
     fn changed(&self, change: hl_memory::BackingChange) -> Result<(), ()>;
+
+    /// Discards every cached backing length. Used by the size-changing paths
+    /// that cannot name one identity and a prior size, so they cannot publish
+    /// a `BackingChange`.
+    fn lengths_changed(&self) {}
 }
 
 /// Socket-specific ioctl capability consumed by the descriptor syscall router.

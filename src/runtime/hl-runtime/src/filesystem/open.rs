@@ -199,6 +199,13 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 return LinuxResult::Error(error.errno());
             }
         }
+        // O_TRUNC shortens the file without a truncate syscall, so no
+        // BackingChange names it and mapped-file lengths must be reread.
+        if plan.intent.bits() & hl_vfs::OpenIntent::TRUNCATE != 0
+            && let Some(changes) = &self.backing_changes
+        {
+            changes.lengths_changed();
+        }
         LinuxResult::Value(install.publish() as u64)
     }
 }
