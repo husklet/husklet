@@ -1,3 +1,5 @@
+# No diagnostics-floor: 5 of 6 passing rows sit at runs=0 in three sweeps. The amd64 cases are
+# -nostdlib micro programs. runtime/isa/aarch64/isa-regress at runs=0 is reported, not tagged.
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }

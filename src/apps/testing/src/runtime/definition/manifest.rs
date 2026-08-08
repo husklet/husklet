@@ -13,6 +13,9 @@ pub(super) struct Document {
     pub(super) image: String,
     #[serde(default)]
     pub(super) execution: Execution,
+    /// The counter floor every case inherits unless it declares its own `expect.diagnostics`.
+    #[serde(default, rename = "diagnostics-floor")]
+    pub(super) diagnostics_floor: Vec<super::diagnostics::Assertion>,
     pub(super) artifact: Option<Artifact>,
     pub(super) build: Build,
     pub(super) oracle: Option<Oracle>,
@@ -161,9 +164,10 @@ pub(super) struct Expectation {
     /// Declared stderr line patterns; an absent list keeps the default that stderr must be empty.
     #[serde(default)]
     pub(super) stderr: Vec<String>,
-    /// Engine counter assertions; an absent list asserts nothing, so every manifest still parses.
+    /// Engine counter assertions. Absent inherits the app `diagnostics-floor`; an explicit empty
+    /// list is how a case that legitimately never enters native opts out of it.
     #[serde(default)]
-    pub(super) diagnostics: Vec<super::diagnostics::Assertion>,
+    pub(super) diagnostics: Option<Vec<super::diagnostics::Assertion>>,
 }
 
 /// Guest files are bounded so a manifest typo cannot ask the harness to write an unbounded fixture.

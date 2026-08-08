@@ -168,3 +168,60 @@ fn repository_yaml_inventory_is_fully_discovered_and_planned() {
     assert_eq!(recorded, inactive);
     assert_eq!(scheduled.union(&recorded).cloned().collect::<BTreeSet<_>>(), declared);
 }
+
+/// Builds a one-case app whose manifest header and expectation are supplied, so floor inheritance
+/// can be exercised without a real toolchain.
+fn floored(header: &str, expect: &str) -> Result<App, crate::suite::Error> {
+    let directory = tempfile::tempdir().unwrap();
+    let definition = directory.path().join("test.yaml");
+    fs::write(directory.path().join("only.c"), "only").unwrap();
+    fs::create_dir(directory.path().join("golden")).unwrap();
+    fs::write(directory.path().join("golden/only.out"), []).unwrap();
+    fs::write(
+        &definition,
+        format!(
+            "targets: [arm64]\nimage: alpine\n{header}\n\
+             build: {{ compiler: {{ arm64: arm-cc, amd64: amd-cc }}, flags: [] }}\ncases:\n  \
+             - {{ id: runtime/only, build: {{ source: only.c, output: only, flags: [] }}, \
+             artifact: {{ destination: /opt/only }}, status: active, \
+             compat: {{ class: compatibility }}, run: [], \
+             expect: {{ exit: 0, stdout: golden/only.out{expect} }} }}\n"
+        ),
+    )
+    .unwrap();
+    App::load(directory.path(), &definition)
+}
+
+const NATIVE: &str = "execution: { native: true, diagnostics: true }\n\
+                      diagnostics-floor: [{ counter: runs, greater-than: 0 }]";
+
+#[test]
+fn a_case_without_its_own_assertions_inherits_the_app_floor() {
+    assert_eq!(floored(NATIVE, "").unwrap().cases[0].diagnostics.len(), 1);
+}
+
+#[test]
+fn an_explicit_empty_list_opts_a_case_out_of_the_floor() {
+    assert!(
+        floored(NATIVE, ", diagnostics: []").unwrap().cases[0]
+            .diagnostics
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_case_list_replaces_the_floor_rather_than_adding_to_it() {
+    let app = floored(NATIVE, ", diagnostics: [{ counter: builds, greater-than: 4 }]").unwrap();
+    assert_eq!(app.cases[0].diagnostics.len(), 1);
+}
+
+#[test]
+fn a_floor_on_an_app_that_never_emits_counters_is_a_load_error() {
+    let error = floored(
+        "execution: {}\ndiagnostics-floor: [{ counter: runs, greater-than: 0 }]",
+        "",
+    )
+    .err()
+    .expect("a floor without native diagnostics unexpectedly loaded");
+    assert!(error.to_string().contains("diagnostics-floor"), "{error}");
+}

@@ -1,6 +1,7 @@
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
+diagnostics-floor: [{ counter: runs, greater-than: 0 }]
 oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
 build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
@@ -281,7 +282,9 @@ cases:
     build: { source: source/fork_cowdontneed.c, output: fork-cow-dontneed, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/fork-cow-dontneed }
     run: []
-    expect: { exit: 0, stdout: golden/fork_cowdontneed.out }
+    # Exempt from the app floor: arm64 measured runs=[1,0,1] over three sweeps, so the counter
+    # straddles the solo-budget boundary and any floor on it would be flaky rather than useful.
+    expect: { exit: 0, stdout: golden/fork_cowdontneed.out, diagnostics: [] }
   - id: runtime/memory/fork-cow-private
     targets: [arm64, amd64]
     status: active
@@ -289,7 +292,8 @@ cases:
     build: { source: source/fork_cowprivate.c, output: fork-cow-private, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/fork-cow-private }
     run: []
-    expect: { exit: 0, stdout: golden/fork_cowprivate.out }
+    # Exempt from the app floor: arm64 measured runs=[1,0,1] over three sweeps.
+    expect: { exit: 0, stdout: golden/fork_cowprivate.out, diagnostics: [] }
   - id: runtime/memory/fork-shared-anon
     targets: [arm64, amd64]
     status: active
@@ -297,7 +301,8 @@ cases:
     build: { source: source/fork_sharedanon.c, output: fork-shared-anon, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/fork-shared-anon }
     run: []
-    expect: { exit: 0, stdout: golden/fork_sharedanon.out }
+    # Exempt from the app floor: arm64 measured runs=[0,1,0] over three sweeps.
+    expect: { exit: 0, stdout: golden/fork_sharedanon.out, diagnostics: [] }
   - id: runtime/memory/memfd-share
     targets: [arm64, amd64]
     status: active
