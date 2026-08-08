@@ -3,7 +3,7 @@
 
 use super::{Isa, LIMIT, matrix::Matrix, parse_duration, workload::Workload};
 use clap::Args;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -514,8 +514,16 @@ impl Gate {
 
 type Series = BTreeMap<(String, String), Vec<u64>>;
 
+/// Work done per `(phase, provider)`: the summed `ok=` checksum and the rows it came from.
+type Totals = BTreeMap<(String, String), (u64, usize)>;
+
+/// The syscall checksum is a sum of thread ids, so it legitimately differs between
+/// providers; every other phase counts iterations and must agree across arms.
+const UNCOMPARABLE: [&str; 1] = ["syscall"];
+
 fn collect(paths: &[PathBuf]) -> Result<Series, String> {
     let mut series: Series = BTreeMap::new();
+    let mut totals: Totals = BTreeMap::new();
     let mut builds: BTreeMap<String, String> = BTreeMap::new();
     for path in paths {
         let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -531,7 +539,7 @@ fn collect(paths: &[PathBuf]) -> Result<Series, String> {
                 .ok_or_else(|| format!("{} lacks column {name}", path.display()))
         };
         let (provider, phase, us) = (index("env")?, index("phase")?, index("us")?);
-        let (guest, engine) = (index("guest_sha256")?, index("engine_sha256")?);
+        let (guest, engine, ok) = (index("guest_sha256")?, index("engine_sha256")?, index("ok")?);
         for line in lines {
             let fields = line.split(',').collect::<Vec<_>>();
             let field = |position: usize| {
@@ -554,13 +562,65 @@ fn collect(paths: &[PathBuf]) -> Result<Series, String> {
                     ));
                 }
             }
-            series
-                .entry((field(phase)?.to_owned(), field(provider)?.to_owned()))
-                .or_default()
-                .push(value);
+            let checksum: u64 = field(ok)?
+                .parse()
+                .map_err(|_| "invalid benchmark checksum".to_owned())?;
+            let key = (field(phase)?.to_owned(), field(provider)?.to_owned());
+            let done = totals.entry(key.clone()).or_insert((0, 0));
+            *done = (done.0.saturating_add(checksum), done.1 + 1);
+            series.entry(key).or_default().push(value);
         }
     }
+    identical_work(&totals)?;
     Ok(series)
+}
+
+/// Refuses a verdict unless every arm ran every phase to the same completion, so a
+/// run that aborted partway cannot be read as a smaller-is-faster win.
+fn identical_work(totals: &Totals) -> Result<(), String> {
+    let providers = totals.keys().map(|(_, provider)| provider).collect::<BTreeSet<_>>();
+    let mut phases: BTreeMap<&String, BTreeMap<&String, (u64, usize)>> = BTreeMap::new();
+    for ((phase, provider), done) in totals {
+        phases.entry(phase).or_default().insert(provider, *done);
+    }
+    for (phase, measured) in phases {
+        let absent = providers
+            .iter()
+            .filter(|provider| !measured.contains_key(**provider))
+            .map(|provider| provider.as_str())
+            .collect::<Vec<_>>();
+        if !absent.is_empty() {
+            return Err(format!(
+                "refusing the verdict: phase {phase} has no rows for {}; that arm stopped before it ran",
+                absent.join(", ")
+            ));
+        }
+        if measured.values().map(|(_, rows)| *rows).collect::<BTreeSet<_>>().len() > 1 {
+            return Err(format!(
+                "refusing the verdict: phase {phase} has unequal sample counts across arms ({}); an arm stopped early",
+                describe(&measured, |(_, rows)| format!("n={rows}"))
+            ));
+        }
+        if UNCOMPARABLE.contains(&phase.as_str()) {
+            continue;
+        }
+        if measured.values().map(|(ok, _)| *ok).collect::<BTreeSet<_>>().len() > 1 {
+            return Err(format!(
+                "refusing the verdict: phase {phase} did unequal work across arms ({}); an arm stopped early and its smaller ok= is not a speedup",
+                describe(&measured, |(ok, rows)| format!("ok={ok} over {rows} samples"))
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Renders one clause per arm so a refusal names every side of the disagreement.
+fn describe(measured: &BTreeMap<&String, (u64, usize)>, render: impl Fn(&(u64, usize)) -> String) -> String {
+    measured
+        .iter()
+        .map(|(provider, done)| format!("{provider} {}", render(done)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -686,12 +746,29 @@ mod tests {
         assert!(!revision().is_empty());
     }
 
+    const HEADER: &str = "env,arch,phase,us,ok,guest_sha256,engine_sha256";
+
     fn row(path: &std::path::Path, us: u64, engine: &str) {
         std::fs::write(
             path,
-            format!("env,arch,phase,us,guest_sha256,engine_sha256\nrust-engine,arm64,compute,{us},g,{engine}\n"),
+            format!("{HEADER}\nrust-engine,arm64,compute,{us},7,g,{engine}\n"),
         )
         .unwrap();
+    }
+
+    /// Writes one cycle file per provider, each carrying `phases` as `(name, ok)`.
+    fn cycle(directory: &std::path::Path, name: &str, arms: &[(&str, &[(&str, u64)])]) -> Vec<std::path::PathBuf> {
+        arms.iter()
+            .map(|(provider, phases)| {
+                let path = directory.join(format!("{name}-{provider}.csv"));
+                let mut text = format!("{HEADER}\n");
+                for (phase, ok) in *phases {
+                    text.push_str(&format!("{provider},arm64,{phase},10,{ok},g,e\n"));
+                }
+                std::fs::write(&path, text).unwrap();
+                path
+            })
+            .collect()
     }
 
     #[test]
@@ -710,5 +787,72 @@ mod tests {
         row(&foreign, 11, "other");
         paths.push(foreign);
         assert!(collect(&paths).unwrap_err().contains("different trees"));
+    }
+
+    #[test]
+    fn a_healthy_run_where_every_arm_did_the_same_work_still_yields_a_series() {
+        let directory = tempfile::tempdir().unwrap();
+        let full: &[(&str, u64)] = &[("compute", 40), ("file", 400), ("syscall", 11)];
+        let mut paths = cycle(directory.path(), "c1", &[("c-engine", full), ("rust-engine", full)]);
+        // The syscall checksum is thread-id derived, so a divergent one must not refuse.
+        let second: &[(&str, u64)] = &[("compute", 40), ("file", 400), ("syscall", 99)];
+        paths.extend(cycle(
+            directory.path(),
+            "c2",
+            &[("c-engine", full), ("rust-engine", second)],
+        ));
+        let series = collect(&paths).unwrap();
+        assert_eq!(series[&("compute".to_owned(), "rust-engine".to_owned())].len(), 2);
+    }
+
+    #[test]
+    fn an_arm_that_truncated_a_phase_is_refused_by_name_with_both_checksums() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = cycle(
+            directory.path(),
+            "c1",
+            &[
+                ("c-engine", &[("compute", 40), ("file", 400)]),
+                ("rust-engine", &[("compute", 40), ("file", 137)]),
+            ],
+        );
+        let error = collect(&paths).unwrap_err();
+        assert!(error.contains("phase file did unequal work"), "{error}");
+        assert!(error.contains("c-engine ok=400") && error.contains("rust-engine ok=137"), "{error}");
+        assert!(!error.contains("phase compute"), "{error}");
+    }
+
+    #[test]
+    fn an_arm_that_never_reached_a_phase_is_refused_as_missing_not_as_disagreement() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = cycle(
+            directory.path(),
+            "c1",
+            &[
+                ("c-engine", &[("compute", 40), ("file", 400)]),
+                ("rust-engine", &[("compute", 40)]),
+            ],
+        );
+        let error = collect(&paths).unwrap_err();
+        assert!(error.contains("phase file has no rows for rust-engine"), "{error}");
+    }
+
+    #[test]
+    fn an_arm_with_fewer_cycles_is_refused_even_when_its_checksum_matches() {
+        let directory = tempfile::tempdir().unwrap();
+        let phases: &[(&str, u64)] = &[("compute", 40), ("syscall", 11)];
+        let mut paths = cycle(directory.path(), "c1", &[("c-engine", phases), ("rust-engine", phases)]);
+        paths.extend(cycle(directory.path(), "c2", &[("c-engine", phases)]));
+        let error = collect(&paths).unwrap_err();
+        assert!(error.contains("unequal sample counts"), "{error}");
+        assert!(error.contains("c-engine n=2") && error.contains("rust-engine n=1"), "{error}");
+    }
+
+    #[test]
+    fn a_run_that_skipped_the_native_arm_is_not_treated_as_a_missing_arm() {
+        let directory = tempfile::tempdir().unwrap();
+        let phases: &[(&str, u64)] = &[("compute", 40)];
+        let paths = cycle(directory.path(), "c1", &[("c-engine", phases), ("rust-engine", phases)]);
+        assert!(collect(&paths).is_ok());
     }
 }
