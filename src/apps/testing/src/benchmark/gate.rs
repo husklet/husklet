@@ -40,7 +40,7 @@ pub(crate) struct Gate {
     /// Rewrite the committed baseline from this run instead of judging it.
     #[arg(long)]
     update: bool,
-    /// CPU the harness pins every provider to; defaults to the highest allowed CPU.
+    /// CPU the harness pins every provider to; defaults to a PID-derived slot in the inherited affinity.
     #[arg(long)]
     cpu: Option<usize>,
     #[arg(long, default_value = "600", value_parser = parse_duration)]
@@ -223,6 +223,12 @@ fn ratio(value: u64, reference: u64) -> f64 {
 
 /// Parses `Cpus_allowed_list` and reports the CPU the run must be pinned to.
 pub(crate) fn pinning(affinity: &str, requested: Option<usize>) -> Result<(usize, bool), String> {
+    slot(affinity, requested, std::process::id() as usize)
+}
+
+/// Spreads defaulted pins across the allowed set by `seed`, so concurrent lanes
+/// do not all land on the same core.
+fn slot(affinity: &str, requested: Option<usize>, seed: usize) -> Result<(usize, bool), String> {
     let mut allowed = Vec::new();
     for span in affinity.trim().split(',') {
         let (start, end) = span.split_once('-').unwrap_or((span, span));
@@ -233,8 +239,12 @@ pub(crate) fn pinning(affinity: &str, requested: Option<usize>) -> Result<(usize
         }
         allowed.extend(start..=end);
     }
-    let last = *allowed.last().ok_or("unreadable CPU affinity")?;
-    let cpu = requested.unwrap_or(last);
+    if allowed.is_empty() {
+        return Err("unreadable CPU affinity".into());
+    }
+    // CPU 0 carries most IRQ work, so defaults avoid it whenever anything else is allowed.
+    let pool = if allowed.len() > 1 && allowed[0] == 0 { &allowed[1..] } else { &allowed[..] };
+    let cpu = requested.unwrap_or_else(|| pool[seed % pool.len()]);
     if !allowed.contains(&cpu) {
         return Err(format!("CPU {cpu} is outside the inherited affinity {affinity}"));
     }
@@ -555,7 +565,7 @@ fn collect(paths: &[PathBuf]) -> Result<Series, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Baseline, ENGINE_BUILD, Isa, Provenance, Statistics, artifact, collect, pinning, revision, wiring};
+    use super::{Baseline, ENGINE_BUILD, Isa, Provenance, Statistics, artifact, collect, pinning, revision, slot, wiring};
 
     fn provenance() -> Provenance {
         Provenance {
@@ -600,11 +610,25 @@ mod tests {
 
     #[test]
     fn pinning_selects_one_cpu_and_rejects_foreign_requests() {
-        assert_eq!(pinning("0-17", None).unwrap(), (17, false));
-        assert_eq!(pinning("5", None).unwrap(), (5, true));
-        assert_eq!(pinning("0-3,8", Some(8)).unwrap(), (8, false));
-        assert!(pinning("0-3", Some(9)).is_err());
-        assert!(pinning("unknown", None).is_err());
+        assert_eq!(slot("0-17", None, 4).unwrap(), (5, false));
+        assert_eq!(slot("5", None, 12345).unwrap(), (5, true));
+        assert_eq!(slot("0-3,8", Some(8), 0).unwrap(), (8, false));
+        assert!(slot("0-3", Some(9), 0).is_err());
+        assert!(slot("unknown", None, 0).is_err());
+        assert!(pinning("0-17", None).unwrap().0 <= 17);
+    }
+
+    #[test]
+    fn defaulted_pins_spread_across_the_allowed_set() {
+        let pins = (1000..1017)
+            .map(|seed| slot("0-17", None, seed).unwrap().0)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(pins.len(), 17);
+        assert!(!pins.contains(&0));
+        assert_eq!(slot("0", None, 3).unwrap(), (0, true));
+        assert_eq!(slot("0-3,8", None, 4).unwrap().0, 1);
+        // An explicit request still wins whatever the seed is.
+        assert_eq!(slot("0-17", Some(12), 999).unwrap().0, 12);
     }
 
     #[test]
