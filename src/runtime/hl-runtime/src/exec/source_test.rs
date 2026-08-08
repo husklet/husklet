@@ -189,6 +189,7 @@ impl RuntimePathHost for Host {
         &self,
         _: &DirectoryBaseLease,
         _: &hl_linux::OpenAbiPlan,
+        _: &hl_vfs::AccessIdentity,
     ) -> Result<Box<dyn PreparedPathOpen>, RuntimePathError> {
         Err(RuntimePathError::Unsupported)
     }

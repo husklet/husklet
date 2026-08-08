@@ -163,7 +163,11 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Ok(reservation) => reservation,
             Err(error) => return LinuxResult::Error(FileErrno::descriptor(error)),
         };
-        let mut opened = match host.prepare_open(&base, &plan) {
+        let identity = match host.access_identity() {
+            Ok(identity) => identity,
+            Err(error) => return LinuxResult::Error(error.errno()),
+        };
+        let mut opened = match host.prepare_open(&base, &plan, &identity) {
             Ok(opened) => opened,
             Err(crate::RuntimePathError::WouldBlock) if !plan.nonblocking => {
                 return LinuxResult::Restart(RestartKind::NoInterrupt);

@@ -29,6 +29,19 @@
 // path that fails for an unrelated reason cannot be read as enforcement.
 static unsigned denied(int result, int wanted) { return result != 0 && errno == wanted; }
 
+// The same rule for `open`, whose failure is a negative descriptor rather than a non-zero status.
+// Verified against this Linux host at an unprivileged uid: reading a 0640 root:shadow file, creating
+// in root-owned 0755 /etc, and O_WRONLY on a root-owned 0644 file are each EACCES, and so is
+// O_RDONLY|O_TRUNC on that file -- O_TRUNC demands write access whatever the access mode asks for.
+static unsigned denied_open(const char *path, int flags, mode_t mode, int wanted) {
+    int fd = open(path, flags, mode);
+    if (fd >= 0) {
+        close(fd);
+        return 0;
+    }
+    return errno == wanted;
+}
+
 // The capability sets as /proc/self/status reports them. The bounding set has no behavioural
 // consequence for this task, so only reading it back can pin it against the Docker contract.
 static unsigned long long cap_line(const char *name) {
@@ -54,6 +67,10 @@ int main(void) {
     // The image content the denials are measured against, and the identity the guard compares to.
     unsigned etc_uid = lstat("/etc", &status) == 0 ? status.st_uid : 12345;
     unsigned etc_mode = status.st_mode & 07777;
+    // The unreadable-to-others file the read denial is measured against, stat'd up front so the
+    // guard can prove it really is root-owned and really is 0640 rather than assuming the image.
+    unsigned shadow_uid = lstat("/etc/shadow", &status) == 0 ? status.st_uid : 12345;
+    unsigned shadow_mode = status.st_mode & 07777;
 
     // Ordinary work: a directory of its own, a file in it, and the two mkdir shapes a dropped
     // privilege task must keep. Explicit modes, because the umask would otherwise decide this.
@@ -78,6 +95,15 @@ int main(void) {
     fd = open("/etc/alpine-release", O_RDONLY);
     unsigned image_read = fd >= 0;
     if (fd >= 0) close(fd);
+    // The write and truncate modes against a file this task owns. A permission check on `open` that
+    // mapped the access bits too broadly would deny these, so they are the counterweight to the
+    // denial columns below.
+    fd = open("created/file", O_RDWR);
+    unsigned own_rdwr = fd >= 0;
+    if (fd >= 0) close(fd);
+    fd = open("created/file", O_WRONLY | O_TRUNC);
+    unsigned own_trunc = fd >= 0;
+    if (fd >= 0) close(fd);
 
     // What CAP_DAC_OVERRIDE and CAP_CHOWN were papering over. /etc is root-owned 0755, so a non-root
     // task may search and read it but never write into it.
@@ -85,20 +111,35 @@ int main(void) {
     // Giving a file away needs CAP_CHOWN even when the task owns it.
     unsigned chown_other_denied = denied(chown("created/file", OTHER_UID, OTHER_UID), EPERM);
 
-    // Root holds the container set, so it must clear both denials above rather than be exempted
-    // from them. Undo the mutation root is allowed to make, so the columns stay comparable.
-    if (live_uid == 0) rmdir("/etc/hl-usercaps");
+    // The same policy reached through `open` rather than through a mutation syscall. Creating needs
+    // write on the parent, O_RDONLY needs read on the file, and O_WRONLY and O_TRUNC each need write
+    // -- including O_RDONLY|O_TRUNC, which asks for no write in its access mode and needs one anyway.
+    unsigned etc_create_denied = denied_open("/etc/hl-usercaps-file", O_CREAT | O_WRONLY, 0644, EACCES);
+    unsigned shadow_read_denied = denied_open("/etc/shadow", O_RDONLY, 0, EACCES);
+    unsigned etc_write_denied = denied_open("/etc/alpine-release", O_WRONLY, 0, EACCES);
+    unsigned etc_trunc_denied = denied_open("/etc/alpine-release", O_RDONLY | O_TRUNC, 0, EACCES);
+
+    // Root holds the container set, so it must clear every denial above rather than be exempted
+    // from them. Undo the mutations root is allowed to make, so the columns stay comparable.
+    if (live_uid == 0) {
+        rmdir("/etc/hl-usercaps");
+        unlink("/etc/hl-usercaps-file");
+    }
 
     // Non-vacuity: the task really is the requested uid, and the image content the denials are
     // measured against really belongs to a different uid with a mode that permits the read but not
     // the write. Without this a run that stayed root would satisfy the ordinary columns silently.
+    // The read denial is measured against a 0640 root-owned file, so the guard pins that mode too:
+    // were it 0644 the denial column would go vacuous by reading as permitted for the wrong reason.
     unsigned distinct = live_uid == (unsigned)geteuid() && etc_uid == 0 && etc_mode == 0755
-                        && (live_uid == 0 || live_uid != etc_uid);
+                        && shadow_uid == 0 && shadow_mode == 0640
+                        && (live_uid == 0 || (live_uid != etc_uid && live_uid != shadow_uid));
 
     printf(
         "user-caps uid=%u distinct=%u prm=%llx eff=%llx bnd=%llx inh=%llx amb=%llx dir=%u file=%u "
-        "mkdir_created=%u chown_self=%u owned=%u mkdir_chowned=%u image_read=%u etc_mkdir=%u "
-        "chown_other=%u\n",
+        "mkdir_created=%u chown_self=%u owned=%u mkdir_chowned=%u image_read=%u own_rdwr=%u "
+        "own_trunc=%u etc_mkdir=%u chown_other=%u etc_create=%u shadow_read=%u etc_write=%u "
+        "etc_trunc=%u\n",
         live_uid,
         distinct,
         cap_line("CapPrm:"),
@@ -113,7 +154,13 @@ int main(void) {
         made_owned,
         mkdir_chowned,
         image_read,
+        own_rdwr,
+        own_trunc,
         etc_mkdir_denied,
-        chown_other_denied);
+        chown_other_denied,
+        etc_create_denied,
+        shadow_read_denied,
+        etc_write_denied,
+        etc_trunc_denied);
     return 0;
 }

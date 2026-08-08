@@ -105,6 +105,7 @@ fn magic_link_follow() {
             .prepare_open(
                 &base,
                 &Fixture::plan(path, OpenIntent::READ | OpenIntent::DIRECTORY, false),
+                &super::test_identity(),
             )
             .unwrap();
         opened.commit().unwrap();
@@ -121,6 +122,7 @@ fn followed_magic_link_open_survives_task_reap() {
         .prepare_open(
             &base,
             &Fixture::plan(b"/proc/self/cwd", OpenIntent::READ | OpenIntent::DIRECTORY, false),
+            &super::test_identity(),
         )
         .unwrap();
     let object = opened.object();
@@ -141,7 +143,10 @@ fn magic_link_nofollow() {
     let fixture = Fixture::new();
     let base = fixture.host.root_base().unwrap();
     let plan = Fixture::plan(b"/proc/self/cwd", OpenIntent::PATH_ONLY | OpenIntent::NOFOLLOW, true);
-    let opened = fixture.host.prepare_open(&base, &plan).unwrap();
+    let opened = fixture
+        .host
+        .prepare_open(&base, &plan, &super::test_identity())
+        .unwrap();
     assert_eq!(opened.object().metadata().unwrap().kind, 10);
 
     let directory = Fixture::plan(
@@ -150,20 +155,30 @@ fn magic_link_nofollow() {
         true,
     );
     assert_eq!(
-        fixture.host.prepare_open(&base, &directory).unwrap_err(),
+        fixture
+            .host
+            .prepare_open(&base, &directory, &super::test_identity())
+            .unwrap_err(),
         RuntimePathError::NotDirectory,
     );
     assert_eq!(
         fixture
             .host
-            .prepare_open(&base, &Fixture::plan(b"/proc/self/cwd", OpenIntent::READ, true))
+            .prepare_open(
+                &base,
+                &Fixture::plan(b"/proc/self/cwd", OpenIntent::READ, true),
+                &super::test_identity()
+            )
             .unwrap_err(),
         RuntimePathError::Loop,
     );
     let mut no_magic = Fixture::plan(b"/proc/self/cwd", OpenIntent::READ, false);
     no_magic.resolve.no_magic_links = true;
     assert_eq!(
-        fixture.host.prepare_open(&base, &no_magic).unwrap_err(),
+        fixture
+            .host
+            .prepare_open(&base, &no_magic, &super::test_identity())
+            .unwrap_err(),
         RuntimePathError::Loop,
     );
 }

@@ -200,6 +200,7 @@ pub trait RuntimePathHost: Send + Sync {
         &self,
         base: &DirectoryBaseLease,
         plan: &OpenAbiPlan,
+        identity: &AccessIdentity,
     ) -> Result<Box<dyn PreparedPathOpen>, RuntimePathError>;
     /// Whether an admitted open can wait for a guest peer or a blocking
     /// provider response. Implementations must return `true` unless they can

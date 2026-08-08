@@ -175,6 +175,7 @@ impl RuntimePathHost for Host {
         &self,
         base: &DirectoryBaseLease,
         _plan: &hl_linux::OpenAbiPlan,
+        _identity: &hl_vfs::AccessIdentity,
     ) -> Result<Box<dyn PreparedPathOpen>, RuntimePathError> {
         self.prepares.fetch_add(1, Ordering::AcqRel);
         if let Some(lease) = base.descriptor_lease() {
