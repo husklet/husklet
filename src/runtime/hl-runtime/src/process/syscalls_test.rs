@@ -1230,13 +1230,16 @@ fn alarm_previous_rounds_up_isas() {
 fn rlimit_owned_state() {
     let fixture = Fixture::new();
     let mut runtime = fixture.runtime(GuestArchitecture::Aarch64, fixture.thread);
+    // Init leads its own session and process group, so both report its own number
+    // rather than a fixed 1 — it holds slot one now that slot zero is reserved.
+    let own = u64::from(fixture.process.number());
     assert_eq!(
         runtime.handle(Fixture::operation("getpgid"), [0, 0, 0, 0, 0, 0]),
-        LinuxResult::Value(1),
+        LinuxResult::Value(own),
     );
     assert_eq!(
         runtime.handle(Fixture::operation("getsid"), [0, 0, 0, 0, 0, 0]),
-        LinuxResult::Value(1),
+        LinuxResult::Value(own),
     );
     assert_eq!(
         runtime.handle(Fixture::operation("getrlimit"), [7, 32, 0, 0, 0, 0]),

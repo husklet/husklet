@@ -447,7 +447,7 @@ fn task_projection() {
         .with_root(b"/guest".to_vec())
         .with_fs_context(Arc::clone(&fs_context));
     let view = source.process(identity(&source, process.number())).unwrap();
-    assert_eq!(view.process, 1);
+    assert_eq!(view.process, process.number());
     assert_eq!(view.threads, 1);
     assert_eq!(view.real_user, 12);
     assert_eq!(view.real_group, 34);
@@ -544,7 +544,8 @@ fn stat_joins_domains() {
     let fields = suffix.split_ascii_whitespace().collect::<Vec<_>>();
     assert_eq!(fields.len(), 50);
     assert_eq!(fields[0], "R");
-    assert_eq!(fields[3], "1");
+    // Field three is the session id, which init leads, so it is init's own number.
+    assert_eq!(fields[3], process.number().to_string());
     assert_eq!(fields[7..11], ["1", "2", "3", "4"]);
     assert_eq!(fields[11..15], ["5", "6", "7", "8"]);
     assert_eq!(fields[19..22], ["9", "65536", "10"]);
@@ -631,7 +632,10 @@ fn live_task_identity() {
     let child_thread_identity = source
         .resolve_thread(child_identity, Some(child_thread.number()))
         .unwrap();
-    assert_eq!(source.processes().unwrap(), [parent.number(), child.number()]);
+    // `processes` is ordered by identity, which init no longer leads.
+    let mut expected = [parent.number(), child.number()];
+    expected.sort_unstable();
+    assert_eq!(source.processes().unwrap(), expected);
     assert_eq!(
         source
             .resolve_thread(child_identity, Some(child_thread.number()))

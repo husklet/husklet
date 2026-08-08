@@ -180,7 +180,9 @@ fn portable_corruption_rejected() {
     let digest = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
     });
-    assert_eq!(digest, 0xe038_d820_1de4_4884);
+    // Re-baselined when init moved off slot zero: the snapshot carries init's
+    // identity, so its encoded bytes changed while the wire format did not.
+    assert_eq!(digest, 0xddcc_f8b5_93d8_9e7d);
     assert_eq!(codec.encode(&image).unwrap(), bytes);
     assert_eq!(codec.decode(&bytes).unwrap(), image);
     assert_eq!(bytes.first(), Some(&b'{'));
