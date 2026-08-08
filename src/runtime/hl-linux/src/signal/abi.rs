@@ -8,7 +8,6 @@ const SIGNAL_SET_SIZE: usize = 8;
 const SIGNAL_ACTION_SIZE: usize = 32;
 const SIGNAL_INFO_SIZE: usize = 128;
 const ALTERNATE_STACK_SIZE: usize = 24;
-const ACTION_FLAGS: u64 = 0xdc00_0c07;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbiError {
@@ -110,9 +109,7 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         let bytes = self.marshaller.copy_struct_from::<SIGNAL_ACTION_SIZE>(address)?;
         let handler = Self::word(&bytes, 0);
         let flags = Self::word(&bytes, 8);
-        if flags & !ACTION_FLAGS != 0 {
-            return Err(AbiError::Invalid);
-        }
+        // Linux keeps unknown sa_flags bits verbatim; musl sign-extends its int sa_flags, so rejecting them breaks node.
         let disposition = match handler {
             0 => SignalDisposition::Default,
             1 => SignalDisposition::Ignore,

@@ -31,7 +31,11 @@ impl Decoder {
         // Translated execution reads guest instructions as coherent data and
         // never instruction-fetches from the guest mapping, so cleaning that
         // mapping to the point of unification needs no host operation.
-        if word & 0xffff_ffe0 == 0xd50b_7b20 {
+        // The same reasoning covers the EL0-permitted clean and clean-invalidate variants.
+        if matches!(
+            word & 0xffff_ffe0,
+            0xd50b_7b20 | 0xd50b_7a20 | 0xd50b_7c20 | 0xd50b_7d20 | 0xd50b_7e20
+        ) {
             return Some(Ok(Aarch64Instruction::Nop));
         }
         if word & 0xffff_ffe0 == 0xd50b_7420 {

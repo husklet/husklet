@@ -66,10 +66,13 @@ fn decoder_words() {
 
 #[test]
 fn data_cache_clean_is_a_translated_noop() {
-    for source in 0..32_u32 {
-        let word = 0xd50b_7b20 | source;
-        let ir = Aarch64Decoder::decode(word).unwrap();
-        assert_eq!(ir.instruction, crate::Aarch64Instruction::Nop);
+    // cvau, cvac, cvap, cvadp and civac: every EL0-permitted clean variant.
+    for base in [0xd50b_7b20_u32, 0xd50b_7a20, 0xd50b_7c20, 0xd50b_7d20, 0xd50b_7e20] {
+        for source in 0..32_u32 {
+            let word = base | source;
+            let ir = Aarch64Decoder::decode(word).unwrap();
+            assert_eq!(ir.instruction, crate::Aarch64Instruction::Nop, "{word:#010x}");
+        }
     }
 }
 

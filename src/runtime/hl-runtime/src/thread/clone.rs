@@ -16,8 +16,10 @@ const SETTLS: u64 = 0x0008_0000;
 const PARENT_SETTID: u64 = 0x0010_0000;
 const CHILD_CLEARTID: u64 = 0x0020_0000;
 const CHILD_SETTID: u64 = 0x0100_0000;
+/// Linux has ignored this bit since 2.6; musl still sets it on every `pthread_create`.
+const DETACHED: u64 = 0x0040_0000;
 const REQUIRED: u64 = VM | FS | FILES | SIGHAND | THREAD | SYSVSEM;
-const OPTIONAL: u64 = SETTLS | PARENT_SETTID | CHILD_CLEARTID | CHILD_SETTID;
+const OPTIONAL: u64 = SETTLS | PARENT_SETTID | CHILD_CLEARTID | CHILD_SETTID | DETACHED;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -456,6 +458,13 @@ mod tests {
         let mut signaled = linux(REQUIRED);
         signaled.exit_signal = 17;
         assert_eq!(Plan::from_linux(signaled), Err(Error::Invalid));
+    }
+
+    #[test]
+    fn musl_pthread_flags_accepted() {
+        // The exact flag word musl's pthread_create passes, CLONE_DETACHED included.
+        let plan = Plan::from_linux(linux(0x007d_0f00)).unwrap();
+        assert_eq!((plan.parent_tid, plan.clear_tid), (Some(0x1000), Some(0x2000)));
     }
 
     #[test]
