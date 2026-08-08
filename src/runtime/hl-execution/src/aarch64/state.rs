@@ -259,5 +259,4 @@ impl Aarch64CpuState {
         self.fpsr = staged.fpsr();
         self.exclusive = staged.exclusive();
     }
-
 }

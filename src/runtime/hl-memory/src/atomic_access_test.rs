@@ -5,8 +5,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use hl_isa::{AddressRange, GuestAddress};
 use crate::WriteReservation;
+use hl_isa::{AddressRange, GuestAddress};
 
 use crate::{
     AtomicOperation, AtomicOrder, AtomicValue, Backing, FileIdentity, MapRequest, MappingCoordinator, MappingHost,

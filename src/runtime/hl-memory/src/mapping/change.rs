@@ -156,7 +156,10 @@ mod tests {
         }
 
         fn prepare_write(&self, _: AddressRange) -> Result<WriteReservation, MemoryError> {
-            Ok(WriteReservation::new(1, AddressRange::nonempty(GuestAddress::ZERO, 1).unwrap()))
+            Ok(WriteReservation::new(
+                1,
+                AddressRange::nonempty(GuestAddress::ZERO, 1).unwrap(),
+            ))
         }
 
         fn commit_write(&self, _: WriteReservation, _: &[u8]) -> Result<(), MemoryError> {

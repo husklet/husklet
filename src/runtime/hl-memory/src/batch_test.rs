@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use hl_isa::{AddressRange, GuestAddress};
 use crate::WriteReservation;
+use hl_isa::{AddressRange, GuestAddress};
 
 use crate::{
     AddressSpaceId, AtomicBatchHost, AtomicU32Write, Backing, MapRequest, MappingCoordinator, MappingHost,

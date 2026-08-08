@@ -88,7 +88,12 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
 }
 
 /// Stages the case artifact into the writable root: the overlay upper, or the copied tree.
-async fn stage(root: &Path, case: &super::definition::RuntimeCase, artifact: &Path, target: Target) -> Result<(), Error> {
+async fn stage(
+    root: &Path,
+    case: &super::definition::RuntimeCase,
+    artifact: &Path,
+    target: Target,
+) -> Result<(), Error> {
     let destination = root.join(case.destination.trim_start_matches('/'));
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)

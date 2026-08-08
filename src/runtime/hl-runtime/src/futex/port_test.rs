@@ -6,8 +6,8 @@ use std::thread;
 use std::time::Duration;
 
 use hl_isa::{AddressRange, GuestAddress};
-use hl_memory::WriteReservation;
 use hl_linux::{FutexOperation, FutexPlan, FutexWaitVector, LinuxResult};
+use hl_memory::WriteReservation;
 use hl_memory::{
     AddressSpaceId, Backing, FileIdentity, MapRequest, MappingCoordinator, MappingHost, MemoryAccessHost, MemoryError,
     Placement, Protection,
