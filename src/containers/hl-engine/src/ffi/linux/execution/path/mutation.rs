@@ -47,6 +47,10 @@ struct PinnedEntry {
 struct PinnedInode {
     descriptor: OwnedFd,
     path: PathBuf,
+    /// Set when the inode came from a name binding, whose host file lies outside
+    /// the rootfs and so is described by the binding flag rather than the mount
+    /// table, exactly as an `open` of the same name is.
+    bound: bool,
 }
 
 #[derive(Debug)]
@@ -144,7 +148,13 @@ impl Mutation {
             Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _) => {
                 denied(&entry.path)
             }
-            Self::Chmod(inode, _, _) | Self::Chown(inode, _, _, _) | Self::SetTimes(inode, _, _) => denied(&inode.path),
+            Self::Chmod(inode, _, _) | Self::Chown(inode, _, _, _) | Self::SetTimes(inode, _, _) => {
+                if inode.bound {
+                    Ok(false)
+                } else {
+                    denied(&inode.path)
+                }
+            }
         }
     }
 
@@ -179,26 +189,41 @@ pub(super) fn prepare(
 ) -> Result<Box<dyn PreparedPathMutation>, RuntimePathError> {
     let base = |index| bases.get(index).ok_or(RuntimePathError::Invalid);
     let aliases = host.ordinary()?;
-    let alias_target = |index: usize, operand: &PathOperand| {
-        aliases
-            .name_binding(base(index)?.path(), operand.path.as_bytes())
-            .map(|binding| binding.is_some())
-    };
-    let projected = match plan {
+    let alias_target =
+        |index: usize, operand: &PathOperand| aliases.name_binding(base(index)?.path(), operand.path.as_bytes());
+    // A binding's parent is the per-container state directory, not the rootfs, so
+    // renaming or unlinking a bound name would damage the runtime's own files
+    // whatever the binding's write flag says.
+    let namespaced = match plan {
         hl_linux::FsMutationPlan::CreateDirectory { target, .. }
         | hl_linux::FsMutationPlan::CreateNode { target, .. }
-        | hl_linux::FsMutationPlan::Unlink { target, .. }
-        | hl_linux::FsMutationPlan::Chmod { target, .. }
-        | hl_linux::FsMutationPlan::Chown { target, .. }
-        | hl_linux::FsMutationPlan::SetTimes { target, .. } => alias_target(0, target)?,
+        | hl_linux::FsMutationPlan::Unlink { target, .. } => alias_target(0, target)?.is_some(),
         hl_linux::FsMutationPlan::Rename { from, to, .. } | hl_linux::FsMutationPlan::Link { from, to, .. } => {
-            alias_target(0, from)? || alias_target(1, to)?
+            alias_target(0, from)?.is_some() || alias_target(1, to)?.is_some()
         }
-        hl_linux::FsMutationPlan::Symlink { link, .. } => alias_target(0, link)?,
+        hl_linux::FsMutationPlan::Symlink { link, .. } => alias_target(0, link)?.is_some(),
+        hl_linux::FsMutationPlan::Chmod { .. }
+        | hl_linux::FsMutationPlan::Chown { .. }
+        | hl_linux::FsMutationPlan::SetTimes { .. } => false,
     };
-    if projected {
+    if namespaced {
         return Err(RuntimePathError::ReadOnly);
     }
+    // Metadata mutations reach the bound host file itself, so they honour the
+    // binding's own flag the way `open` does.
+    let bound = match plan {
+        hl_linux::FsMutationPlan::Chmod { target, .. }
+        | hl_linux::FsMutationPlan::Chown { target, .. }
+        | hl_linux::FsMutationPlan::SetTimes { target, .. } => alias_target(0, target)?,
+        _ => None,
+    };
+    if bound.as_ref().is_some_and(|binding| binding.read_only) {
+        return Err(RuntimePathError::ReadOnly);
+    }
+    let metadata_inode = |operand: &PathOperand| match &bound {
+        Some(binding) => pin_bound_inode(binding),
+        None => pin_inode(host, base(0)?, operand, operand.nofollow),
+    };
     let mut action = match plan {
         hl_linux::FsMutationPlan::CreateDirectory { target, mode } => {
             let entry = pin_entry(host, base(0)?, target, true)?;
@@ -251,22 +276,18 @@ pub(super) fn prepare(
                 budget,
             )
         }
-        hl_linux::FsMutationPlan::Chmod { target, mode } => Mutation::Chmod(
-            pin_inode(host, base(0)?, target, target.nofollow)?,
-            *mode,
-            target.nofollow,
-        ),
+        hl_linux::FsMutationPlan::Chmod { target, mode } => {
+            Mutation::Chmod(metadata_inode(target)?, *mode, target.nofollow)
+        }
         hl_linux::FsMutationPlan::Chown { target, user, group } => Mutation::Chown(
-            pin_inode(host, base(0)?, target, target.nofollow)?,
+            metadata_inode(target)?,
             *user,
             *group,
             std::sync::Arc::clone(&host.ownership),
         ),
-        hl_linux::FsMutationPlan::SetTimes { target, times } => Mutation::SetTimes(
-            pin_inode(host, base(0)?, target, target.nofollow)?,
-            *times,
-            target.nofollow,
-        ),
+        hl_linux::FsMutationPlan::SetTimes { target, times } => {
+            Mutation::SetTimes(metadata_inode(target)?, *times, target.nofollow)
+        }
     };
     if action.denied(host)? {
         return Err(RuntimePathError::ReadOnly);
@@ -319,6 +340,28 @@ fn pin_inode(
     Ok(PinnedInode {
         descriptor: unsafe { OwnedFd::from_raw_fd(descriptor) },
         path,
+        bound: false,
+    })
+}
+
+/// Pins the bound host file directly: it lives beside the container's state, not
+/// under the rootfs, so no resolver walk can reach it.
+fn pin_bound_inode(binding: &super::source::name_bind::NameBinding) -> Result<PinnedInode, RuntimePathError> {
+    #[cfg(target_os = "linux")]
+    let flags = libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+    #[cfg(target_os = "macos")]
+    let flags = libc::O_RDONLY | libc::O_CLOEXEC;
+    // SAFETY: the binding retains its parent descriptor and terminated leaf;
+    // success yields one descriptor owned immediately below.
+    let descriptor = unsafe { libc::openat(binding.parent.as_raw_fd(), binding.leaf.as_ptr(), flags) };
+    if descriptor < 0 {
+        return Err(HostError::map(std::io::Error::last_os_error()));
+    }
+    // SAFETY: successful openat returned one descriptor not owned elsewhere.
+    Ok(PinnedInode {
+        descriptor: unsafe { OwnedFd::from_raw_fd(descriptor) },
+        path: binding.host.clone(),
+        bound: true,
     })
 }
 
@@ -515,6 +558,7 @@ mod epoch_tests {
             PinnedInode {
                 descriptor: source.into(),
                 path: root.path().join("source"),
+                bound: false,
             },
             entry(&root, "alias"),
         ))
