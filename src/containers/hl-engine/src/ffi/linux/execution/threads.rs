@@ -176,6 +176,20 @@ impl ThreadSet {
             .map(|run| run.process)
             .collect()
     }
+
+    /// Rebuilds the live process set only when it differs from `cached`. The
+    /// scheduler asks once per turn, so the unchanged case must not allocate.
+    pub(super) fn active_processes_changed(&self, cached: &BTreeSet<ProcessId>) -> Option<BTreeSet<ProcessId>> {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let unchanged = state.machines.values().all(|run| cached.contains(&run.process))
+            && cached
+                .iter()
+                .all(|process| state.machines.values().any(|run| run.process == *process));
+        if unchanged {
+            return None;
+        }
+        Some(state.machines.values().map(|run| run.process).collect())
+    }
     #[cfg(test)]
     pub(super) fn with_state_lock_for_test<T>(&self, operation: impl FnOnce() -> T) -> T {
         let _state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
