@@ -37,9 +37,28 @@ Two failure modes, both observed:
 
 Do not re-open a file whose source CodeGraph already returned.
 
-`no covering tests found` is a lead, not a verdict — it has been observed on
-symbols that do have tests. Confirm a gap by mutating the symbol and watching the
-suite, which is the standard this repository requires for a coverage claim anyway.
+`no covering tests found` is a lead, not a verdict. It has misfired repeatedly,
+including on symbols whose removal reddens both unit and integration tests.
+Confirm a gap by mutating the symbol and watching the suite, which is the standard
+this repository requires for a coverage claim anyway.
+
+## Reading a profile
+
+High self-time and removable cost are independent properties, and this engine has
+produced both failure modes:
+
+- **Misattributed self-time.** `with_execution_memory` compiles to 4032 bytes
+  because the guest-slice closure is inlined wholesale into it, so its row credits
+  work done by its callees. Disassemble before believing a row; a function whose
+  body should be twenty instructions and measures a thousand is reporting someone
+  else's cost.
+- **Real self-time that is still free to keep.** `ReservationEpochs::invalidate_at`
+  is a genuine 112-byte function and its row is honestly its own, but deleting it
+  along with all 5.17 billion of its atomics changed nothing measurable, because
+  the `ldadd` discards its result and retires without blocking anything.
+
+So a profile row justifies investigating a symbol. Only a mutation justifies
+believing the cost can be recovered.
 
 ## Time-to-evidence and agent utilization
 
