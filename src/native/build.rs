@@ -131,6 +131,16 @@ fn main() {
         .warnings(true)
         .extra_warnings(true)
         .flag_if_supported("-Werror");
+    // Opt-in AddressSanitizer over the engine's own C only, so the sanitizer
+    // never reaches vendored C such as `ring` where it breaks the link.
+    if std::env::var_os("HL_NATIVE_ASAN").is_some() {
+        build
+            .flag("-fsanitize=address")
+            .flag("-fno-omit-frame-pointer")
+            .flag("-g");
+        println!("cargo:rustc-link-lib=asan");
+    }
+    println!("cargo:rerun-if-env-changed=HL_NATIVE_ASAN");
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") && !allocation_test {
         build.files(
             inputs

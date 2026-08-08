@@ -88,6 +88,25 @@ int main(void) {
     CHECK(hl_a64_assembler_begin(&assembler, short_buffer, short_buffer, sizeof(short_buffer)));
     CHECK(!hl_a64_conditional_emit(&assembler, 0xd503201fu, 0x9000));
     CHECK(hl_a64_assembler_size(&assembler) == 0);
+
+    /* The chain and stitch entry points capture their placeholder before
+     * emitting it, so an exactly exhausted buffer leaves the site one past the
+     * end.  A trailing canary catches a patch written there. */
+    struct { uint8_t body[64]; uint32_t canary; } bounded;
+    for (int stitch = 0; stitch < 2; stitch++) {
+        memset(bounded.body, 0, sizeof(bounded.body));
+        bounded.canary = UINT32_C(0x5a5a5a5a);
+        CHECK(hl_a64_assembler_begin(&assembler, bounded.body, bounded.body, sizeof(bounded.body)));
+        while (hl_a64_assembler_remaining(&assembler) != 0)
+            hl_a64_emit32(&assembler, 0xd503201fu);
+        CHECK(hl_a64_assembler_ok(&assembler));
+        CHECK(hl_a64_assembler_remaining(&assembler) == 0);
+        if (stitch)
+            CHECK(!hl_a64_conditional_stitch(&assembler, words[0], 0x9000, NULL, NULL, NULL));
+        else
+            CHECK(!hl_a64_conditional_chain(&assembler, words[0], 0x9000, NULL, NULL, NULL, NULL));
+        CHECK(bounded.canary == UINT32_C(0x5a5a5a5a));
+    }
     return 0;
 #endif
 }
