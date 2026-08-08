@@ -1022,6 +1022,14 @@ cases:
     artifact: { destination: /opt/husklet/memory/logical-transition-race }
     run: []
     expect: { exit: 0, stdout: golden/logical_transitionrace.out }
+  - id: runtime/memory/staged-store-transition
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/staged_storetransition.c, output: staged-store-transition, flags: ["-static","-O2","-std=gnu11","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/staged-store-transition }
+    run: []
+    expect: { exit: 0, stdout: golden/staged_storetransition.out }
   - id: runtime/memory/gna-negative-cache
     targets: [arm64, amd64]
     status: active
