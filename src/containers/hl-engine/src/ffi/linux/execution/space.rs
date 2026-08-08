@@ -396,6 +396,8 @@ impl AddressSpace {
         }
     }
 
+    /// This runs once per turn, not per access: profiles attributing ~8-10% of
+    /// sqlite to its name are reading the inlined slice loop, not the lock.
     pub(super) fn with_execution_memory<R>(self: &Arc<Self>, callback: impl FnOnce(&mut SliceMemory<'_>) -> R) -> R {
         let current = self.current.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let lease = SpaceLease {
