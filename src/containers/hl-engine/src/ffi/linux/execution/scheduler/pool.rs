@@ -7,6 +7,11 @@ use super::{NATIVE_BOUNDARY_CAPACITY, NATIVE_SITE_LIMIT, NATIVE_SOURCE_LIMIT};
 use crate::activation::GuestIsa;
 use crate::launch_plan::RuntimeLaunchPlan;
 
+/// Leaky flip score that identifies a process whose entries alternate between direct
+/// authority and the operand resolver, and the runs each such finding holds for.
+const DIRECT_FLIP_LIMIT: u32 = 32;
+const DIRECT_HOLD_RUNS: u64 = 1 << 16;
+
 #[derive(Clone, Copy)]
 pub(super) struct NativeBoundary {
     pub(super) process: hl_task::ProcessId,
@@ -120,6 +125,10 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) sources: BTreeMap<NativeSource, hl_memory::ExecutableToken>,
     pub(super) source_incarnations: BTreeMap<hl_task::ProcessId, u64>,
     pub(super) instruction_epochs: BTreeMap<hl_task::ProcessId, u64>,
+    /// Last run mode and the leaky score of how much that mode has been alternating.
+    pub(super) direct_modes: BTreeMap<hl_task::ProcessId, (bool, u32)>,
+    /// Runs still owed before a thrashing process may be offered direct authority again.
+    pub(super) direct_holds: BTreeMap<hl_task::ProcessId, u64>,
     pub(super) boundary_sensitive: BTreeSet<hl_task::ProcessId>,
     pub(super) boundaries: Option<NativeBoundaries>,
     pub(super) counters: NativeCounters,
@@ -151,6 +160,8 @@ impl NativePool {
             sources: BTreeMap::new(),
             source_incarnations: BTreeMap::new(),
             instruction_epochs: BTreeMap::new(),
+            direct_modes: BTreeMap::new(),
+            direct_holds: BTreeMap::new(),
             boundary_sensitive: BTreeSet::new(),
             boundaries: (plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1")).then(NativeBoundaries::new),
             counters: NativeCounters::default(),
@@ -182,6 +193,39 @@ impl NativePool {
             );
         }
         self.executors.get(&process)
+    }
+
+    /// Whether this process may still be offered direct authority. A held process is
+    /// serving out a hold because its run mode was alternating; each call spends one run.
+    pub(super) fn direct_admitted(&mut self, process: hl_task::ProcessId) -> bool {
+        let Some(remaining) = self.direct_holds.get_mut(&process) else {
+            return true;
+        };
+        *remaining = remaining.saturating_sub(1);
+        if *remaining != 0 {
+            return false;
+        }
+        self.direct_holds.remove(&process);
+        self.direct_modes.remove(&process);
+        true
+    }
+
+    /// Records the run mode this process just used. The cache identity carries the mode, so
+    /// sustained alternation resets every translation twice per cycle; hold direct
+    /// authority off for a bounded run of turns so the resolver mode can keep its cache.
+    pub(super) fn observe_direct_mode(&mut self, process: hl_task::ProcessId, direct: bool) {
+        let (previous, flips) = self.direct_modes.entry(process).or_insert((direct, 0));
+        if *previous == direct {
+            // A steady run pays down the score, so an isolated flip never accumulates.
+            *flips = flips.saturating_sub(1);
+            return;
+        }
+        *previous = direct;
+        *flips += 2;
+        if *flips >= DIRECT_FLIP_LIMIT {
+            self.direct_modes.remove(&process);
+            self.direct_holds.insert(process, DIRECT_HOLD_RUNS);
+        }
     }
 
     /// Suppression is reserved for entries whose run retired too little to be worth
@@ -246,6 +290,8 @@ impl NativePool {
         self.suppressed.clear();
         self.direct_declined.clear();
         self.fallbacks.clear();
+        self.direct_modes.clear();
+        self.direct_holds.clear();
     }
 
     pub(super) fn reset_observed_sources(&mut self, process: hl_task::ProcessId, incarnation: u64) -> Option<()> {
@@ -266,6 +312,8 @@ impl NativePool {
         self.fallbacks.retain(|(owner, _, _, _, _)| *owner != process);
         self.source_incarnations.remove(&process);
         self.instruction_epochs.remove(&process);
+        self.direct_modes.remove(&process);
+        self.direct_holds.remove(&process);
         self.boundary_sensitive.remove(&process);
     }
 
@@ -286,6 +334,8 @@ impl NativePool {
             || !self.fallbacks.is_empty()
             || !self.source_incarnations.is_empty()
             || !self.instruction_epochs.is_empty()
+            || !self.direct_modes.is_empty()
+            || !self.direct_holds.is_empty()
             || !self.boundary_sensitive.is_empty()
     }
 
@@ -314,6 +364,12 @@ impl NativePool {
         }
         if !self.instruction_epochs.is_empty() {
             self.instruction_epochs.retain(|process, _| live.contains(process));
+        }
+        if !self.direct_modes.is_empty() {
+            self.direct_modes.retain(|process, _| live.contains(process));
+        }
+        if !self.direct_holds.is_empty() {
+            self.direct_holds.retain(|process, _| live.contains(process));
         }
         if !self.boundary_sensitive.is_empty() {
             self.boundary_sensitive.retain(|process| live.contains(process));

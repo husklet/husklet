@@ -727,6 +727,8 @@ mod tests {
             pool.fallbacks.insert((process, 1, 1, 1, 0x1004));
             pool.source_incarnations.insert(process, 1);
             pool.instruction_epochs.insert(process, 1);
+            pool.direct_modes.insert(process, (true, 0));
+            pool.direct_holds.insert(process, 1);
             pool.boundary_sensitive.insert(process);
         }
 
@@ -748,7 +750,28 @@ mod tests {
         assert!(pool.fallbacks.is_empty());
         assert!(pool.source_incarnations.is_empty());
         assert!(pool.instruction_epochs.is_empty());
+        assert!(pool.direct_modes.is_empty());
+        assert!(pool.direct_holds.is_empty());
         assert!(pool.boundary_sensitive.is_empty());
+    }
+
+    /// Sustained run-mode alternation must trip a hold, while a steady mode never does.
+    #[test]
+    fn direct_run_mode_holds_only_on_sustained_alternation() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        for index in 0..1024 {
+            pool.observe_direct_mode(process, index % 3 == 0);
+        }
+        assert!(pool.direct_holds.contains_key(&process));
+        assert!(!pool.direct_admitted(process));
+
+        let steady = hl_task::ProcessId::from_wire(2, 1).unwrap();
+        for index in 0..1024 {
+            pool.observe_direct_mode(steady, index != 512);
+        }
+        assert!(!pool.direct_holds.contains_key(&steady));
+        assert!(pool.direct_admitted(steady));
     }
 
     #[test]
