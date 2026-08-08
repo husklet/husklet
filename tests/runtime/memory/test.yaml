@@ -658,6 +658,18 @@ cases:
     artifact: { destination: /opt/husklet/memory/dbt-smc-rwx-rewrite }
     run: []
     expect: { exit: 0, stdout: golden/dbt_smcrwxrewrite.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+  - id: runtime/memory/dbt-smc-hotpatch
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_smchotpatch.c, inputs: [source/dbt.h], output: dbt-smc-hotpatch, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-smc-hotpatch }
+    run: []
+    # The `builds` floor is the point of this case: the sibling SMC guests call each generated body
+    # once, so the patched leaf is never translated and they still pass with SMC detection removed.
+    # Observed deterministically at builds=50 arm64 / 362 amd64; the once-per-body shape this case
+    # exists to avoid degenerates to 18 arm64, so 30 separates them and catches a case going cold.
+    expect: { exit: 0, stdout: golden/dbt_smchotpatch.out, diagnostics: [{ counter: builds, greater-than: 30 }] }
   - id: runtime/memory/dbt-smc-bounce
     targets: [arm64, amd64]
     status: active
