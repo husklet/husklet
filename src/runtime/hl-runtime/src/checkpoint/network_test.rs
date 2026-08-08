@@ -553,11 +553,16 @@ mod port_restore {
                 .unwrap();
             snapshot.id = id;
             catalog
-                .claim_port(PortCheckpoint {
-                    family: AddressFamily::Inet4,
-                    port,
-                    owner: id,
-                })
+                .prepare_host_bind(
+                    snapshot.clone(),
+                    PortCheckpoint {
+                        family: AddressFamily::Inet4,
+                        port,
+                        owner: id,
+                    },
+                )
+                .unwrap()
+                .commit()
                 .unwrap();
             let description = Arc::new(SocketDescription::restored(
                 host.clone(),

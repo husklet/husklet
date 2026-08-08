@@ -1,14 +1,11 @@
 use std::fmt;
 use std::io::{IoSlice, IoSliceMut};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use hl_descriptor::{AccessMode, ObjectError, Readiness, ReadinessObserver, ReadinessSubscription, StatusFlags};
 
-use crate::{
-    AdvisoryLockCoordinator, FlockMode, FlockOwnerToken, GuestPathBytes, Identity, LockCancellation, LockError,
-    Metadata,
-};
+use crate::{GuestPathBytes, Identity, Metadata};
 
 #[path = "description_adapter.rs"]
 mod adapter;
@@ -93,11 +90,6 @@ pub trait VfsFileHost: Send + Sync + 'static {
     fn close(&self, file: VfsFileToken);
 }
 
-struct LockBinding {
-    coordinator: Arc<AdvisoryLockCoordinator>,
-    owner: FlockOwnerToken,
-}
-
 /// Regular-file implementation of the descriptor-owned object contract.
 pub struct VfsFileDescription<H: VfsFileHost> {
     pub(super) host: Arc<H>,
@@ -106,7 +98,6 @@ pub struct VfsFileDescription<H: VfsFileHost> {
     path: GuestPathBytes,
     access: AccessMode,
     pub(super) cursor: Arc<Cursor>,
-    locks: Mutex<Option<LockBinding>>,
     pub(super) retired: AtomicBool,
     closed: AtomicBool,
 }
@@ -140,7 +131,6 @@ impl<H: VfsFileHost> VfsFileDescription<H> {
             path,
             access,
             cursor: Arc::new(Cursor::new(status)),
-            locks: Mutex::new(None),
             retired: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         }
@@ -225,37 +215,6 @@ impl<H: VfsFileHost> VfsFileDescription<H> {
     pub fn metadata(&self) -> Result<Metadata, ObjectError> {
         self.ensure_live()?;
         self.host.metadata(self.token)
-    }
-
-    /// Binds the OFD identity assigned by the descriptor/runtime layer.
-    pub fn bind_flock_owner(
-        &self,
-        coordinator: Arc<AdvisoryLockCoordinator>,
-        owner: FlockOwnerToken,
-    ) -> Result<(), LockError> {
-        let mut binding = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(existing) = binding.as_ref() {
-            return if existing.owner == owner && Arc::ptr_eq(&existing.coordinator, &coordinator) {
-                Ok(())
-            } else {
-                Err(LockError::InvalidArgument)
-            };
-        }
-        *binding = Some(LockBinding { coordinator, owner });
-        Ok(())
-    }
-
-    pub fn flock(
-        &self,
-        mode: Option<FlockMode>,
-        blocking: bool,
-        cancellation: &LockCancellation,
-    ) -> Result<(), LockError> {
-        let binding = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let binding = binding.as_ref().ok_or(LockError::InvalidArgument)?;
-        binding
-            .coordinator
-            .set_flock(self.identity, binding.owner, mode, blocking, cancellation)
     }
 
     fn read_cursor(
