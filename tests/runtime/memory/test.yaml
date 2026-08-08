@@ -1042,3 +1042,41 @@ cases:
     artifact: { destination: /opt/husklet/memory/nonpie-mmap-hint }
     run: []
     expect: { exit: 0, stdout: golden/nonpie_mmaphint.out }
+  - id: runtime/memory/native-view-boundary
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/nativeviewboundary.c, output: native-view-boundary, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/native-view-boundary }
+    run: []
+    # The point of this case is the edge of a projection view, driven from a hot
+    # native body: two probes walk off the end of a mapping into an unmapped hole
+    # and report the distance, and a third stores across a private page into the
+    # shared page mapped immediately after it and reads the result back through a
+    # second mapping of the same object. Widening every operand view by one page
+    # (`guest_last + 4096` in native/executor.rs) turns this red on amd64 with a
+    # NativeFatal. It stays green on arm64 under the same mutation, as does the
+    # whole of runtime/memory: the aarch64 lease path does not resolve through a
+    # widened operand view, so nothing here covers an arm64 view widening. The
+    # walk distances are host-MMU-independent by construction -- an unmapped hole
+    # rather than a reprotected page -- because host protection would otherwise
+    # backstop the widening and hide it.
+    expect: { exit: 0, stdout: golden/nativeviewboundary.out }
+  - id: runtime/memory/native-view-hints
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/nativeviewboundary.c, output: native-view-hints, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/native-view-hints }
+    run: []
+    # The `x86_hints_accepted` floor is the point of this case, and it is the only
+    # thing the corpus has on the cross-run view hint path: dropping every hint is
+    # otherwise invisible, doubling amd64 fallbacks while runtime/memory and
+    # runtime/threads stay green. The counter is sound -- x86_hints_in equals
+    # accepted plus overlap_rejected plus unprojectable on every record, and
+    # accepted is incremented at native/executor.rs:2839, on the admitting arm.
+    # amd64 only, because the aarch64 lease path admits none of its hints and
+    # reports the counter as zero. This is a liveness floor over the whole guest
+    # process, not over this guest's own hints: a trivial static guest already
+    # reaches ~470, so it catches the mechanism dying, not a case going cold.
+    expect: { exit: 0, stdout: golden/nativeviewboundary.out, diagnostics: [{ counter: x86_hints_accepted, greater-than: 100 }] }
