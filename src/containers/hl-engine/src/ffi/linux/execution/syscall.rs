@@ -107,7 +107,8 @@ impl hl_linux::DescriptorIoSyscalls for DescriptorPort {
         }
         if matches!(
             operation.name,
-            "pipe2"
+            "pipe"
+                | "pipe2"
                 | "copy_file_range"
                 | "sendfile"
                 | "splice"

@@ -35,6 +35,80 @@ fn tables_no_operation() {
     }
 }
 
+/// `access` and `chmod` once shared 32780, which anything keying on the canonical number would conflate.
+#[test]
+fn legacy_numbers_are_unique() {
+    let raw = X86_LEGACY_SYSCALLS
+        .iter()
+        .map(|entry| entry.raw_number)
+        .collect::<BTreeSet<_>>();
+    let canonical = X86_LEGACY_SYSCALLS
+        .iter()
+        .map(|entry| entry.operation.canonical_number)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(raw.len(), X86_LEGACY_SYSCALLS.len());
+    assert_eq!(canonical.len(), X86_LEGACY_SYSCALLS.len());
+    let shared = CANONICAL_SYSCALLS
+        .iter()
+        .map(|entry| entry.operation.canonical_number)
+        .collect::<BTreeSet<_>>();
+    assert!(canonical.iter().all(|number| !shared.contains(number)));
+}
+
+/// Every rewrite case in the oracle's `translator/guest/x86_64/legacy.c` must route to a typed operation.
+#[test]
+fn oracle_legacy_cases_all_route() {
+    const ORACLE_CASES: [(u16, &str); 36] = [
+        (2, "open"),
+        (4, "stat"),
+        (6, "lstat"),
+        (7, "poll"),
+        (21, "access"),
+        (22, "pipe"),
+        (23, "select"),
+        (33, "dup2"),
+        (34, "pause"),
+        (37, "alarm"),
+        (56, "clone"),
+        (57, "fork"),
+        (58, "vfork"),
+        (82, "rename"),
+        (83, "mkdir"),
+        (84, "rmdir"),
+        (85, "creat"),
+        (86, "link"),
+        (87, "unlink"),
+        (88, "symlink"),
+        (89, "readlink"),
+        (90, "chmod"),
+        (92, "chown"),
+        (94, "lchown"),
+        (111, "getpgrp"),
+        (132, "utime"),
+        (133, "mknod"),
+        // 158 arch_prctl is intercepted ahead of the table by the runtime router, so it stays untyped here.
+        (158, "arch_prctl"),
+        (201, "time"),
+        (213, "epoll_create"),
+        (232, "epoll_wait"),
+        (235, "utimes"),
+        (253, "inotify_init"),
+        (261, "futimesat"),
+        (282, "signalfd"),
+        (284, "eventfd"),
+    ];
+    for (number, name) in ORACLE_CASES {
+        if name == "arch_prctl" {
+            continue;
+        }
+        let route = SyscallDispatcher::route(GuestArchitecture::X86_64, u64::from(number));
+        let SyscallDisposition::Operation(operation) = route.disposition else {
+            panic!("x86 {number} ({name}) must be typed");
+        };
+        assert_eq!(operation.name, name, "x86 {number}");
+    }
+}
+
 #[test]
 fn x86_chown_routes_to_filesystem() {
     let route = SyscallDispatcher::route(GuestArchitecture::X86_64, 92);

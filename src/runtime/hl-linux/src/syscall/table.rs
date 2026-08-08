@@ -333,6 +333,62 @@ definitions!(
 /// x86-64 operations whose Linux ABI has no `AArch64` syscall-number peer.
 pub const X86_LEGACY_SYSCALLS: &[LegacyDefinition] = &[
     LegacyDefinition {
+        raw_number: 2,
+        operation: Operation {
+            canonical_number: 32795,
+            name: "open",
+            family: Family::Filesystem,
+        },
+    },
+    LegacyDefinition {
+        raw_number: 22,
+        operation: Operation {
+            canonical_number: 32796,
+            name: "pipe",
+            family: Family::DescriptorIo,
+        },
+    },
+    LegacyDefinition {
+        raw_number: 94,
+        operation: Operation {
+            canonical_number: 32797,
+            name: "lchown",
+            family: Family::Filesystem,
+        },
+    },
+    LegacyDefinition {
+        raw_number: 133,
+        operation: Operation {
+            canonical_number: 32798,
+            name: "mknod",
+            family: Family::Filesystem,
+        },
+    },
+    LegacyDefinition {
+        raw_number: 253,
+        operation: Operation {
+            canonical_number: 32799,
+            name: "inotify_init",
+            family: Family::Event,
+        },
+    },
+    LegacyDefinition {
+        raw_number: 282,
+        operation: Operation {
+            canonical_number: 32800,
+            name: "signalfd",
+            family: Family::Event,
+        },
+    },
+    LegacyDefinition {
+        raw_number: 284,
+        operation: Operation {
+            canonical_number: 32801,
+            name: "eventfd",
+            family: Family::Event,
+        },
+    },
+    LegacyDefinition {
         raw_number: 4,
         operation: Operation {
             canonical_number: 32793,
@@ -503,7 +559,7 @@ pub const X86_LEGACY_SYSCALLS: &[LegacyDefinition] = &[
     LegacyDefinition {
         raw_number: 90,
         operation: Operation {
-            canonical_number: 32780,
+            canonical_number: 32784,
             name: "chmod",
             family: Family::Filesystem,
         },

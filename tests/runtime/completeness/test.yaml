@@ -1674,6 +1674,15 @@ cases:
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/x86_64/arch_ptrs.out }
+  - id: runtime/completeness/amd64-legacy-syscalls
+    targets: [amd64]
+    build: { source: x86_64/legacy_syscalls.c, output: amd64-legacy-syscalls, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-legacy-syscalls }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/legacy_syscalls.out }
   - id: runtime/completeness/arm64-neon-recip
     targets: [arm64]
     build: { source: aarch64/neon_recip.c, output: arm64-neon-recip, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
