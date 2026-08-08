@@ -76,6 +76,24 @@ fn action_isas() {
 }
 
 #[test]
+fn action_keeps_unknown_flag_bits() {
+    // musl assigns its int sa_flags into an unsigned long, so SA_RESETHAND arrives sign-extended.
+    let memory = Memory::new();
+    let abi = SignalAbi::new(&memory, GuestArchitecture::Aarch64);
+    let action = SignalAction {
+        disposition: SignalDisposition::Handler(0x1234),
+        flags: 0xffff_ffff_8400_0000,
+        restorer: 0,
+        mask: SignalMask::from_bits(0),
+    };
+    abi.stage_action(BASE, action)
+        .unwrap()
+        .commit(&GuestMarshaller::new(&memory, GuestArchitecture::Aarch64))
+        .unwrap();
+    assert_eq!(abi.action(2, BASE, 8).unwrap().1, Some(action));
+}
+
+#[test]
 fn sigset_size_access() {
     let memory = Memory::new();
     let abi = SignalAbi::new(&memory, GuestArchitecture::X86_64);

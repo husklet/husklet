@@ -72,6 +72,9 @@ impl Aarch64SimdDecoder {
         if let Some(decoded) = crate::aarch64_simd_scalar::Scalar::decode(word) {
             return Some(decoded);
         }
+        if let Some(decoded) = Self::scalar_shift(word) {
+            return Some(decoded);
+        }
         if let Some(decoded) = crate::aarch64_simd_variable::VariableShift::decode(word) {
             return Some(decoded);
         }
@@ -460,6 +463,43 @@ impl Aarch64SimdDecoder {
             destination: Self::register(word, 0),
             wide,
         })
+    }
+
+    /// Advanced SIMD scalar shift by immediate; the vector encoding leaves the doubleword forms undecoded.
+    fn scalar_shift(word: u32) -> Option<Result<Aarch64Instruction, Aarch64DecodeError>> {
+        if word & 0xdf80_0400 != 0x5f00_0400 {
+            return None;
+        }
+        let opcode = word >> 11 & 31;
+        let unsigned = word >> 29 & 1 != 0;
+        let operation = match opcode {
+            0x0a if !unsigned => SimdShift::Left,
+            0x08 if unsigned => SimdShift::Insert { left: false },
+            0x0a if unsigned => SimdShift::Insert { left: true },
+            0x00 | 0x02 | 0x04 | 0x06 => SimdShift::Right {
+                signed: !unsigned,
+                rounding: opcode == 0x04 || opcode == 0x06,
+                accumulating: opcode == 0x02 || opcode == 0x06,
+            },
+            _ => return None,
+        };
+        let immh = (word >> 19 & 15) as u8;
+        if immh < 8 {
+            return Some(Err(Aarch64DecodeError::Reserved));
+        }
+        let combined = immh << 3 | (word >> 16 & 7) as u8;
+        let amount = match operation {
+            SimdShift::Left | SimdShift::Insert { left: true } => combined - 64,
+            _ => 128 - combined,
+        };
+        Some(Ok(Aarch64Instruction::SimdShift {
+            operation,
+            amount,
+            lane_bits: 64,
+            source: Self::register(word, 5),
+            destination: Self::register(word, 0),
+            wide: false,
+        }))
     }
 
     fn shift(word: u32) -> Result<Aarch64Instruction, Aarch64DecodeError> {

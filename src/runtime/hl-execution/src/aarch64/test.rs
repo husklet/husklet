@@ -1203,3 +1203,35 @@ fn misaligned_indirect_branch_commits_nothing() {
     );
     assert_eq!(cpu, before);
 }
+
+#[test]
+fn scalar_shift_by_immediate() {
+    // sshr, ushr, shl and ssra on d30/d31; the upper half of the destination must be cleared.
+    let cases = [
+        (
+            0x5f60_07fe_u32,
+            0_u128,
+            0xffff_ffff_8000_0000_u128,
+            0xffff_ffff_ffff_ffff_u128,
+        ),
+        (0x7f60_07fe, 0, 0xffff_ffff_8000_0000, 0xffff_ffff),
+        (0x5f44_57fe, 0, 0x8000_0001, 0x8_0000_0010),
+        (0x5f60_17fe, 7, 0xffff_ffff_8000_0000, 6),
+    ];
+    for (word, seed, source, expected) in cases {
+        let mut cpu = Aarch64CpuState::default();
+        cpu.set_vector(30, seed | 1 << 100);
+        cpu.set_vector(31, source);
+        assert_eq!(cpu.execute_word(word), Aarch64ExecutionExit::Continue, "{word:#010x}");
+        assert_eq!(cpu.vector(30), expected, "{word:#010x}");
+    }
+}
+
+#[test]
+fn scalar_shift_rejects_narrow_immediate() {
+    let mut cpu = Aarch64CpuState::default();
+    assert!(matches!(
+        cpu.execute_word(0x5f20_07fe),
+        Aarch64ExecutionExit::UndefinedInstruction { .. }
+    ));
+}
