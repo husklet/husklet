@@ -12,8 +12,19 @@ impl<H: MemoryAccessHost> Coordinator<H> {
     /// The result deliberately stops at the current mapping/backing boundary.
     /// User-copy callers can publish this prefix before resolving the next span.
     pub fn access_prefix(&self, address: GuestAddress, length: u64, access: Protection) -> Result<u64, MemoryError> {
+        Ok(self.access_prefix_resolved(address, length, access)?.1)
+    }
+
+    /// Reports the accessible prefix together with the resolution that proved it,
+    /// so a caller staging that same span does not resolve the address twice.
+    pub(crate) fn access_prefix_resolved(
+        &self,
+        address: GuestAddress,
+        length: u64,
+        access: Protection,
+    ) -> Result<(Option<crate::Resolution>, u64), MemoryError> {
         if length == 0 {
-            return Ok(0);
+            return Ok((None, 0));
         }
         address.get().checked_add(length).ok_or(MemoryError::AddressOverflow)?;
         let resolution = self
@@ -27,7 +38,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
                 .file_prefix(identity, resolution.backing_offset, available, address)?
                 .min(available);
         }
-        Ok(available)
+        Ok((Some(resolution), available))
     }
 
     /// Copies one access across mapping and 4 KiB guest-page boundaries.
