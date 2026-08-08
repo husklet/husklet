@@ -207,6 +207,14 @@ pub trait OpenFileDescription: Debug + Send + Sync + 'static {
     fn metadata(&self) -> Result<OfdMetadata, ObjectError> {
         Err(ObjectError::NotSupported)
     }
+    /// Whether this object's resolving mount is a host-passthrough bind or volume,
+    /// making its inode reachable from other containers in the same daemon process.
+    ///
+    /// Only host-backed files can answer yes; image layers, tmpfs, procfs and
+    /// synthetic objects are all confined to one container.
+    fn shared_domain(&self) -> bool {
+        false
+    }
     ///
     /// # Errors
     /// Returns an error if the object does not support the operation or the operation fails.

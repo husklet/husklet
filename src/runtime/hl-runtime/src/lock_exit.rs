@@ -73,6 +73,7 @@ mod tests {
                 Some(RangeLockKind::Write),
                 LockRange { start: 0, end: None },
                 false,
+                false,
                 &LockCancellation::default(),
             )
             .unwrap();

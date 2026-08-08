@@ -159,16 +159,23 @@ impl DescriptorPort {
     fn pending_lock_release(
         &self,
         number: i32,
-    ) -> (Option<hl_runtime::FileIdentity>, Option<hl_runtime::FlockOwnerToken>) {
+    ) -> (
+        Option<(hl_runtime::FileIdentity, bool)>,
+        Option<hl_runtime::FlockOwnerToken>,
+    ) {
         let descriptors = self.epoll_table.descriptor_table();
-        let file = descriptors
-            .pin(number)
-            .ok()
-            .and_then(|lease| lease.metadata().ok())
-            .map(|metadata| hl_runtime::FileIdentity {
-                device: metadata.device,
-                inode: metadata.inode,
-            });
+        let file = descriptors.pin(number).ok().and_then(|lease| {
+            let shared = lease.shared_domain();
+            lease.metadata().ok().map(|metadata| {
+                (
+                    hl_runtime::FileIdentity {
+                        device: metadata.device,
+                        inode: metadata.inode,
+                    },
+                    shared,
+                )
+            })
+        });
         let open_file = descriptors
             .active_snapshots()
             .into_iter()
@@ -183,10 +190,10 @@ impl DescriptorPort {
 
     fn apply_lock_release(
         &self,
-        file: Option<hl_runtime::FileIdentity>,
+        file: Option<(hl_runtime::FileIdentity, bool)>,
         open_file: Option<hl_runtime::FlockOwnerToken>,
     ) {
-        if let Some(file) = file {
+        if let Some((file, shared)) = file {
             let (identity, generation) = self.process.wire_parts();
             let _ = self.locks.close_process_file(
                 file,
@@ -194,6 +201,7 @@ impl DescriptorPort {
                     identity: u64::from(identity),
                     generation: u32::from(generation),
                 },
+                shared,
             );
         }
         if let Some(open_file) = open_file {

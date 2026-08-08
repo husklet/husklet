@@ -1,9 +1,10 @@
+use super::passthrough::{LockDomain, SharedLockRegistry};
 use crate::{
     AdvisoryLockSnapshot, FlockMode, FlockOwnerToken, FlockSnapshot, Identity, LockCancellation, LockError, LockRange,
     ProcessLockOwner, RangeConflict, RangeLockKind, RangeLockSnapshot,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 pub(crate) const LOCK_MAXIMUM: usize = 16_384;
 const WAITER_MAXIMUM: usize = 4_096;
 #[derive(Clone, Copy)]
@@ -47,19 +48,29 @@ pub(crate) struct LockState {
     aliases: HashMap<Identity, Identity>,
 }
 
-/// Per-runtime advisory-lock namespace.
+/// Per-runtime advisory-lock namespace, tier 1 of two.
 ///
-/// One coordinator exists per `RuntimeAssembly`, so byte-range locks are scoped
-/// to a single container and two containers sharing a bind mount or volume both
-/// win a conflicting write lock.
+/// This table owns every byte-range lock the container holds, along with its
+/// waits, deadlock detection, per-container limit and checkpoint snapshot. Files
+/// whose resolving mount came from outside the image are additionally mirrored
+/// into the daemon-global tier-2 registry, because those inodes are reachable
+/// from other containers in the same daemon process.
 pub struct LockCoordinator {
     state: Mutex<LockState>,
-    pub(crate) changed: Condvar,
+    pub(crate) changed: Arc<Condvar>,
+    pub(crate) shared: &'static SharedLockRegistry,
+    pub(crate) domain: LockDomain,
+    /// Set once this container has ever mirrored a lock, so containers that never
+    /// touch a shared mount never reach the global registry at all.
+    pub(crate) shared_active: std::sync::atomic::AtomicBool,
 }
 
 impl LockCoordinator {
     #[must_use]
     pub fn new() -> Self {
+        let changed = Arc::new(Condvar::new());
+        let shared = SharedLockRegistry::global();
+        let domain = shared.attach(Arc::clone(&changed));
         Self {
             state: Mutex::new(LockState {
                 flocks: HashMap::new(),
@@ -71,7 +82,10 @@ impl LockCoordinator {
                 frozen_owners: HashSet::new(),
                 aliases: HashMap::new(),
             }),
-            changed: Condvar::new(),
+            changed,
+            shared,
+            domain,
+            shared_active: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -104,6 +118,11 @@ impl LockCoordinator {
             }
         }
         state.aliases.insert(lower, upper);
+        // Records just moved between identities, so tier 2 has to follow them.
+        // Copy-up only ever targets image layers, but a shared mount must never
+        // be left with a record filed under an identity nothing consults again.
+        self.resync_shared(&state, lower);
+        self.resync_shared(&state, upper);
         self.changed.notify_all();
     }
 
@@ -162,6 +181,9 @@ impl LockCoordinator {
         }
     }
 
+    /// `shared` is true only when the file's resolving mount is a host-passthrough
+    /// bind or volume. It is the single bit that selects tier 2; when false this
+    /// runs exactly the tier-1 path it always did.
     pub fn set_range(
         &self,
         file: Identity,
@@ -169,6 +191,7 @@ impl LockCoordinator {
         kind: Option<RangeLockKind>,
         range: LockRange,
         blocking: bool,
+        shared: bool,
         cancellation: &LockCancellation,
     ) -> Result<(), LockError> {
         let mut state = self.lock_state();
@@ -179,14 +202,16 @@ impl LockCoordinator {
         if kind.is_none() {
             Self::rewrite_owner_range(&mut state, file, owner, range, None)?;
             state.bump_owner(owner);
+            self.mirror(&state, file, shared);
             self.changed.notify_all();
             return Ok(());
         }
         let kind = kind.expect("checked above");
-        let blockers = Self::range_blockers(&state, file, owner, kind, range);
+        let blockers = self.all_blockers(&state, file, owner, kind, range, shared);
         if blockers.is_empty() {
             Self::rewrite_owner_range(&mut state, file, owner, range, Some(kind))?;
             state.bump_owner(owner);
+            self.mirror(&state, file, shared);
             return Ok(());
         }
         if !blocking {
@@ -202,11 +227,12 @@ impl LockCoordinator {
                 self.changed.notify_all();
                 return Err(error);
             }
-            let blockers = Self::range_blockers(&state, file, owner, kind, range);
+            let blockers = self.all_blockers(&state, file, owner, kind, range, shared);
             if Self::eligible(&state, ticket) && blockers.is_empty() {
                 Self::remove_waiter(&mut state, ticket);
                 Self::rewrite_owner_range(&mut state, file, owner, range, Some(kind))?;
                 state.bump_owner(owner);
+                self.mirror(&state, file, shared);
                 self.changed.notify_all();
                 return Ok(());
             }
@@ -233,23 +259,31 @@ impl LockCoordinator {
         owner: ProcessLockOwner,
         kind: RangeLockKind,
         range: LockRange,
+        shared: bool,
     ) -> Option<RangeConflict> {
         let state = self.lock_state();
+        // Tier 2 is consulted on the translated identity, so a copy-up cannot
+        // leave the two tiers disagreeing about which inode is being locked.
         let file = Self::translate(&state, file);
-        state
+        let local = state
             .ranges
-            .get(&file)?
-            .iter()
-            .find(|record| {
-                record.owner != owner
-                    && record.range.overlaps(range)
-                    && (kind == RangeLockKind::Write || record.kind == RangeLockKind::Write)
+            .get(&file)
+            .and_then(|records| {
+                records.iter().find(|record| {
+                    record.owner != owner
+                        && record.range.overlaps(range)
+                        && (kind == RangeLockKind::Write || record.kind == RangeLockKind::Write)
+                })
             })
             .map(|record| RangeConflict {
                 owner: record.owner,
                 kind: record.kind,
                 range: record.range,
-            })
+            });
+        if local.is_some() || !shared {
+            return local;
+        }
+        self.shared.conflict(file, self.domain, kind, range)
     }
 
     /// BSD locks disappear at final OFD close, including after dup/fork.
@@ -265,11 +299,12 @@ impl LockCoordinator {
         }
         state.ranges.retain(|_, records| !records.is_empty());
         state.bump_owner(range_owner);
+        self.release_shared_owner(range_owner);
         self.changed.notify_all();
     }
 
     /// POSIX locks disappear when this process closes any fd for `file`.
-    pub fn close_process_file(&self, file: Identity, owner: ProcessLockOwner) -> Result<(), LockError> {
+    pub fn close_process_file(&self, file: Identity, owner: ProcessLockOwner, shared: bool) -> Result<(), LockError> {
         let mut state = self.lock_state();
         if state.frozen_owners.contains(&owner) {
             return Err(LockError::ConcurrentMutation);
@@ -282,6 +317,7 @@ impl LockCoordinator {
             }
         }
         state.bump_owner(owner);
+        self.mirror(&state, file, shared);
         self.changed.notify_all();
         Ok(())
     }
@@ -337,6 +373,10 @@ impl LockCoordinator {
 
     /// Restores only into an empty coordinator and validates conflicts before
     /// publishing the replacement state.
+    ///
+    /// Snapshot and restore stay tier-1 only. A globalized table would make this
+    /// emptiness check fail whenever any *other* container held a lock, and would
+    /// let one container's checkpoint capture its neighbours' records.
     pub fn restore(&self, snapshot: &AdvisoryLockSnapshot) -> Result<(), LockError> {
         if snapshot.flocks.len() + snapshot.ranges.len() > LOCK_MAXIMUM {
             return Err(LockError::ResourceLimit);
@@ -419,7 +459,7 @@ impl LockCoordinator {
         }
     }
 
-    fn range_blockers(
+    pub(crate) fn range_blockers(
         state: &LockState,
         file: Identity,
         owner: ProcessLockOwner,
@@ -508,5 +548,11 @@ impl std::fmt::Debug for LockCoordinator {
 impl Default for LockCoordinator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for LockCoordinator {
+    fn drop(&mut self) {
+        self.shared.detach(self.domain);
     }
 }

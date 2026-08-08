@@ -24,6 +24,24 @@ pub struct ProcessLockOwner {
 
 impl ProcessLockOwner {
     const OPEN_FILE: u32 = 1 << 31;
+    const FOREIGN: u32 = 1 << 30;
+
+    /// Stands in for a holder in another container's namespace.
+    ///
+    /// It can never equal a local owner, so it blocks without ever closing a
+    /// local deadlock cycle, and `F_GETLK` reports it as a pid-less holder.
+    #[must_use]
+    pub const fn foreign() -> Self {
+        Self {
+            identity: 0,
+            generation: Self::OPEN_FILE | Self::FOREIGN,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_foreign(self) -> bool {
+        self.generation & Self::FOREIGN != 0
+    }
 
     /// Produces a range-lock owner scoped to one open file description.
     #[must_use]

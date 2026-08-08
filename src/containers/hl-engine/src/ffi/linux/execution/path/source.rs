@@ -20,6 +20,9 @@ pub(super) struct MountPath {
     guest: GuestPath,
     host: PathBuf,
     root: Arc<File>,
+    /// Host passthrough: the source came from outside the image, so another
+    /// container in this daemon can hold the same inode open.
+    shared: bool,
 }
 
 /// Bounded reverse registry shared by the native resolver and path projection.
@@ -44,6 +47,20 @@ impl MountPaths {
             .find(|entry| entry.source == source)
             .map(|entry| Arc::clone(&entry.root))
             .ok_or(RuntimePathError::NotFound)
+    }
+
+    /// Whether a resolved host path lies under a host-passthrough mount.
+    ///
+    /// The longest host prefix wins, matching `guest`, so a nested image-backed
+    /// path under a shared root still reports its own mount.
+    pub(super) fn shared(&self, path: &Path) -> bool {
+        self.entries
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|entry| path.starts_with(&entry.host))
+            .max_by_key(|entry| entry.host.components().count())
+            .is_some_and(|entry| entry.shared)
     }
 
     fn guest(&self, path: &Path) -> Result<Option<GuestPath>, RuntimePathError> {
@@ -149,6 +166,8 @@ impl OrdinaryContext {
             guest: GuestPath::new("/dev/shm").map_err(|_| RuntimePathError::Invalid)?,
             host: shared.path().to_owned(),
             root: shared.root(),
+            // Container-private tmpfs despite being a Directory mount.
+            shared: false,
         });
         let host = if lower_roots.is_empty() {
             pin::Host::new(Arc::clone(&root_pin), Arc::clone(&paths))
@@ -244,8 +263,14 @@ impl OrdinaryContext {
             guest,
             host,
             root,
+            shared: true,
         });
         Ok(())
+    }
+
+    /// Whether a resolved host path came from a bind or volume rather than the image.
+    pub(super) fn shared_mount(&self, path: &Path) -> bool {
+        self.paths.shared(path)
     }
 
     pub(super) fn guest_path(&self, path: &Path) -> Result<GuestPath, RuntimePathError> {
