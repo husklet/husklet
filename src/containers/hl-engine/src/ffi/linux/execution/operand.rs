@@ -123,8 +123,8 @@ macro_rules! impl_operand_memory {
                 Some(self.epoch())
             }
 
-            fn invalidate_instruction(&mut self, _address: u64) {
-                self.with_mappings(|mappings| mappings.publish_instruction());
+            fn invalidate_instruction(&mut self, address: u64) {
+                self.with_mappings(|mappings| mappings.publish_instruction_at(address));
             }
         }
     };

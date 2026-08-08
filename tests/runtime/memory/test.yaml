@@ -665,7 +665,12 @@ cases:
     build: { source: source/dbt_smcbounce.c, inputs: [source/dbt.h], output: dbt-smc-bounce, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-bounce }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcbounce.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+    # No native assertion: this guest mprotects twice per iteration, so the mapping generation
+    # advances faster than the native warm-up can observe an entry twice and arm64 stays at runs=0.
+    # That gate is load-bearing -- keying warm-up without the mapping generation admits it at 134506
+    # runs for 20000 iterations and times out at 30s against 1.9s interpreted -- and amd64 only
+    # reaches runs=1, so neither bound is worth asserting until expectations can be per-target.
+    expect: { exit: 0, stdout: golden/dbt_smcbounce.out }
   - id: runtime/memory/dbt-smc-grow
     targets: [arm64, amd64]
     status: active
