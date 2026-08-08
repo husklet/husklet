@@ -438,9 +438,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/sa_nocldwait.out }
   - id: runtime/signals/rt-signal-order
-    status: !broken
-      reason: "x86_64 realtime signal delivery ordering diverges from the native Linux oracle"
-      evidence: "tests/runtime/signals/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: rt_order.c, output: rt-signal-order, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
     artifact: { destination: /opt/husklet/signals-rt-signal-order }

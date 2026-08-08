@@ -1,16 +1,6 @@
-// EXCLUDED-KNOWN-BUG repro. Two background-tty job-control deviations from native (golden below is the
-// native aarch64 oracle: both booleans 1). Skipped by the matrix (excluded-known-bug) until fixed.
-//
-//  (1) tcset_sigttou (BOTH engines wrong -> 0): a background-group tcsetattr must raise SIGTTOU and stop
-//      the group. The engine blocks SIGTTOU around tcsetattr/tcsetpgrp/tcflush (fs.c tty_ctl_block) to
-//      dodge a shell give_terminal_to handoff race, so a genuine background tcsetattr silently SUCCEEDS
-//      instead of stopping. A well-behaved shell already blocks SIGTTOU itself (and that block is mirrored
-//      onto the host by rt_sigprocmask, signal.c case 135), so scoping the engine block to callers that did
-//      NOT block it would match native for both the shell path and this background path.
-//  (2) blk_eio (x86_64 engine wrong -> stops instead of EIO): with SIGTTIN BLOCKED (not ignored), a
-//      background read of the ctty must return EIO. The aarch64 engine does; the x86_64 engine stops the
-//      process (SIGTTIN delivered) -- the guest's blocked SIGTTIN is not reflected onto the host thread at
-//      read time on the x86 target, so the host kernel generates the stop instead of EIO. aarch64 correct.
+// Background-tty job control against native (golden: both booleans 1). (1) tcset_sigttou: a background-group
+// tcsetattr must raise SIGTTOU and stop the group. (2) blk_eio: with SIGTTIN BLOCKED (not ignored), a
+// background read of the controlling terminal must return EIO rather than stopping the process.
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <stdio.h>

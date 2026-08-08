@@ -229,7 +229,7 @@ cases:
   - id: runtime/process/proc-self-exe
     targets: [arm64, amd64]
     status: !broken
-      reason: "fdlink closed=0: readlink of a dup()'d-then-close()d /proc/self/fd/N still resolves (should ENOENT) on the typed engine -- the closed bound fd's number still resolves via a live native/shadow descriptor. Same bound-vfd fd-identity class as pf-peer-fd's peer view; clearing g_fdpath on bound close alone does not shed it. Deferred pending the unified shared-path vfd teardown."
+      reason: "the previous reason was WRONG. Re-derived 2026-08-08 on both ISAs: fdlink closed=1 -- readlink of a dup()'d-then-close()d /proc/self/fd/N already ENOENTs, that defect is gone. The live residual is /proc/self/exe spelling coverage: got 'exe abs=1 canon=1 alias=0 tself=0 dirfd=0 cwdrel=0 selfpid=1 open=1 lstat=0 stat=0 access=0' and 'magic mounts=0'. Cause: hl-vfs procfs has no exe node at all (no b\"exe\" in procfs/model/node.rs), so exe exists only as the literal-string special cases NativePath::procfs_link path == \"/proc/self/exe\" and HostPaths::resolve's identical literal compare. Every other spelling -- /proc/<pid>/exe, /proc/thread-self/exe, readlinkat(dirfd of /proc/self, \"exe\"), the cwd-relative \"proc/self/exe\" -- misses the literal and falls through to procfs.read_link_for, which has no exe node and returns NotFound; and lstat/stat/access fail because procfs_node consults procfs.metadata first, which likewise has no exe node, so the literal special case is never reached. /proc/mounts is separately missing as a symlink to \"self/mounts\". Fix is an Exe node in hl-vfs procfs whose target the engine supplies, replacing both literal compares."
       evidence: "tests/runtime/process/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/proc_exe.c, output: proc-self-exe, flags: ["-static-pie", "-O2", "-std=gnu11", "-pthread"] }
@@ -818,7 +818,7 @@ cases:
   - id: runtime/process/spawn-concurrent
     targets: [arm64, amd64]
     status: !broken
-      reason: "posix_spawn from 8 threads x 12 rounds with per-thread waitpid. ENGINE BUG surfaced by registering a case that had been built but never run: the guest's pthread_create intermittently fails with EAGAIN while concurrent posix_spawn/fork children are in flight (~1 run in 10 standalone; under the matrix runner the same shape also wedges past the 120s per-case budget). Native never fails. spawn_thread's only EAGAIN paths are the cgroup pids gate (unset here) and a host pthread_create failure, so the engine is losing host thread-creation capacity around guest fork. Native golden is the correct behavior"
+      reason: "posix_spawn from 8 threads x 12 rounds with per-thread waitpid; the recorded symptom was pthread_create intermittently returning EAGAIN around concurrent guest fork, about 1 standalone run in 10. Re-derived 2026-08-08 on an idle box: 10 consecutive runs, 20 target-runs, all PASS on both ISAs, well inside the 120s budget -- so the reason is at best stale and the flake did not reproduce. NOT flipped to active, because 20 clean runs only bounds a 1-in-10 flake to roughly a 12 percent chance of being missed; this needs a soak before it can gate the suite. Native golden is the correct behavior."
       evidence: "tests/runtime/process/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/spawn_concurrent.c, output: spawn-concurrent, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }

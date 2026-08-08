@@ -827,9 +827,7 @@ cases:
     expect: { exit: 0, stdout: golden/nx_exec.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
   - id: runtime/memory/edge-faults
     targets: [arm64, amd64]
-    status: !broken
-      reason: "page just past / just below a live mapping does not fault (should SEGV_MAPERR); satisfied by the 64KB anon guard tail + adjacency grow cushion. Fidelity gap only -- verified over-read stays within private zero guard, no cross-mapping leak"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/edge_faults.c, output: edge-faults, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/edge-faults }
