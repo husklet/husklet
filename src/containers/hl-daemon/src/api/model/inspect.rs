@@ -567,6 +567,7 @@ mod tests {
                 memory_bytes: 64 * 1024 * 1024,
                 process_count: 37,
                 cpu_count: 2,
+                limits: Vec::new(),
             });
         let durable = hl_container::Container::new(
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

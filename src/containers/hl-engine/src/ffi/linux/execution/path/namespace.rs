@@ -108,7 +108,11 @@ impl NativePath {
         let (Some(procfs), Some(process)) = (&self.procfs, self.process) else {
             return Ok(None);
         };
-        let Some(metadata) = procfs.metadata(path, process.number()).map_err(Self::procfs_error)? else {
+        let thread = self.thread.map_or(process.number(), hl_task::ThreadId::number);
+        let Some(metadata) = procfs
+            .metadata_for(path, process.number(), thread)
+            .map_err(Self::procfs_error)?
+        else {
             return Ok(None);
         };
         let target = procfs
@@ -156,11 +160,21 @@ impl NativePath {
         }))
     }
 
-    pub(super) fn procfs_link(&self, path: &[u8]) -> Result<Option<Vec<u8>>, RuntimePathError> {
-        if path == b"/proc/self/exe" {
-            let target = self.executable.lock().map_err(|_| RuntimePathError::Io)?.clone();
-            return Ok((!target.is_empty()).then_some(target));
+    /// Anchors a procfs magic-link target that names its sibling relatively, as
+    /// `/proc/self` names a PID and `/proc/mounts` names `self/mounts`.
+    pub(super) fn procfs_target(path: &[u8], target: Vec<u8>) -> Vec<u8> {
+        const RELATIVE: &[&[u8]] = &[b"/proc/self", b"/proc/thread-self", b"/proc/mounts"];
+        if !RELATIVE.contains(&path) {
+            return target;
         }
+        let slash = path.iter().rposition(|byte| *byte == b'/').unwrap_or(0);
+        let mut absolute = path[..slash].to_vec();
+        absolute.push(b'/');
+        absolute.extend_from_slice(&target);
+        absolute
+    }
+
+    pub(super) fn procfs_link(&self, path: &[u8]) -> Result<Option<Vec<u8>>, RuntimePathError> {
         let (Some(procfs), Some(process)) = (&self.procfs, self.process) else {
             return Ok(None);
         };
@@ -192,12 +206,10 @@ impl NativePath {
         {
             return Ok(None);
         }
-        let Some(mut target) = self.procfs_link(plan.operand.path.as_bytes())? else {
+        let Some(target) = self.procfs_link(plan.operand.path.as_bytes())? else {
             return Ok(None);
         };
-        if matches!(plan.operand.path.as_bytes(), b"/proc/self" | b"/proc/thread-self") {
-            target.splice(..0, b"/proc/".iter().copied());
-        }
+        let target = Self::procfs_target(plan.operand.path.as_bytes(), target);
         if plan.operand.nofollow && plan.intent.bits() & OpenIntent::PATH_ONLY == 0 {
             return Err(RuntimePathError::Loop);
         }
@@ -248,7 +260,12 @@ impl NativePath {
             return Ok(Some(Box::new(ProcfsOpen(Arc::new(node)))));
         }
         if let (Some(procfs), Some(process)) = (&self.procfs, self.process) {
-            match procfs.open(plan.operand.path.as_bytes(), process.number(), plan.intent) {
+            match procfs.open_for(
+                plan.operand.path.as_bytes(),
+                process.number(),
+                self.thread.map_or(process.number(), hl_task::ThreadId::number),
+                plan.intent,
+            ) {
                 Ok(Some(object)) => return Ok(Some(Box::new(ProcfsOpen(object)))),
                 Ok(None) => {}
                 Err(hl_runtime::ProcfsError::NotFound) => return Err(RuntimePathError::NotFound),

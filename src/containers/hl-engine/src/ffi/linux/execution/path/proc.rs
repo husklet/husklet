@@ -126,6 +126,7 @@ impl super::NativePath {
                 working,
                 fs_context,
                 self.source.mount_port(),
+                executable.clone(),
                 memory,
                 network,
                 resources,
@@ -175,6 +176,7 @@ pub(super) fn source(
     working: Arc<hl_runtime::WorkingDirectory>,
     fs_context: Arc<hl_runtime::FsContext>,
     mounts: Option<Arc<dyn hl_runtime::ProcfsMountPort>>,
+    executable: Vec<u8>,
     memory: Option<Arc<super::super::process_memory::ProcfsMemory>>,
     network: Option<Arc<dyn hl_runtime::ProcfsNetworkPort>>,
     resources: Option<Arc<super::super::process_resources::Catalog>>,
@@ -190,6 +192,7 @@ pub(super) fn source(
     );
     let source = source
         .with_root(root.to_vec())
+        .with_executable(executable)
         .with_working(working)
         .with_fs_context(fs_context)
         .with_cpu(Arc::new(HostCpu))

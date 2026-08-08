@@ -172,15 +172,28 @@ impl NativePath {
     }
 
     fn synthetic_plan(base: &DirectoryBaseLease, plan: &OpenAbiPlan) -> Result<Option<OpenAbiPlan>, RuntimePathError> {
-        if plan.operand.path.is_absolute() {
+        let Some(operand) = Self::synthetic_operand(base, &plan.operand)? else {
+            return Ok(None);
+        };
+        let mut absolute = plan.clone();
+        absolute.operand = operand;
+        Ok(Some(absolute))
+    }
+
+    /// Composes a dirfd-relative spelling against its base so a synthetic node is
+    /// reached by the same absolute path an unqualified lookup would use.
+    fn synthetic_operand(
+        base: &DirectoryBaseLease,
+        operand: &PathOperand,
+    ) -> Result<Option<PathOperand>, RuntimePathError> {
+        if operand.path.is_absolute() {
             return Ok(None);
         }
-        let operand = std::str::from_utf8(plan.operand.path.as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
-        let joined = format!("{}/{}", base.path().as_str().trim_end_matches('/'), operand);
+        let relative = std::str::from_utf8(operand.path.as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
+        let joined = format!("{}/{}", base.path().as_str().trim_end_matches('/'), relative);
         let normalized = GuestPath::new(&joined).map_err(|_| RuntimePathError::Invalid)?;
-        let mut absolute = plan.clone();
-        absolute.operand.path =
-            GuestPathBytes::new(normalized.as_str().as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
+        let mut absolute = operand.clone();
+        absolute.path = GuestPathBytes::new(normalized.as_str().as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
         Ok(Some(absolute))
     }
 
@@ -275,6 +288,7 @@ impl NativePath {
             Arc::new(hl_runtime::WorkingDirectory::root()),
             Arc::new(hl_runtime::FsContext::default()),
             self.source.mount_port(),
+            self.executable_bytes(),
             None,
             None,
             None,

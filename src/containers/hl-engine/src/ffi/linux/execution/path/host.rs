@@ -149,15 +149,19 @@ impl RuntimePathHost for NativePath {
         base: &DirectoryBaseLease,
         operand: &PathOperand,
     ) -> Result<Box<dyn ResolvedPathLease>, RuntimePathError> {
+        // A dirfd-relative spelling is composed only for the synthetic lookup; the
+        // ordinary walk keeps the original operand so the base still anchors it.
+        let composed = Self::synthetic_operand(base, operand)?;
+        let synthetic = composed.as_ref().unwrap_or(operand);
         if !base.confines_root()
-            && let Some(node) = self.procfs_node(operand.path.as_bytes())?
+            && let Some(node) = self.procfs_node(synthetic.path.as_bytes())?
         {
-            if !operand.nofollow && self.procfs_namespace(operand.path.as_bytes())? {
+            if !synthetic.nofollow && self.procfs_namespace(synthetic.path.as_bytes())? {
                 return Ok(Box::new(node.follow_namespace()));
             }
-            if let Some(target) = node.target().filter(|_| !operand.nofollow) {
+            if let Some(target) = node.target().filter(|_| !synthetic.nofollow) {
                 let target = PathOperand {
-                    directory: operand.directory,
+                    directory: synthetic.directory,
                     path: GuestPathBytes::new(target).map_err(|_| RuntimePathError::Invalid)?,
                     allow_empty: false,
                     nofollow: false,
@@ -165,9 +169,6 @@ impl RuntimePathHost for NativePath {
                 return self.resolve_projected(base, &target);
             }
             return Ok(Box::new(node));
-        }
-        if !base.confines_root() && operand.path.as_bytes() == b"/proc/self/exe" {
-            return self.resolve_node(base, operand);
         }
         self.resolve_projected(base, operand)
     }

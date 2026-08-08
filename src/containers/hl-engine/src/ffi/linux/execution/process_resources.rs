@@ -8,6 +8,7 @@ use hl_task::ProcessId;
 struct Resources {
     descriptors: Weak<DescriptorTable>,
     working: Weak<WorkingDirectory>,
+    executable: Vec<u8>,
 }
 
 /// Instance-owned publication of process filesystem resources for procfs.
@@ -18,9 +19,10 @@ impl Catalog {
         process: ProcessId,
         descriptors: &Arc<DescriptorTable>,
         working: &Arc<WorkingDirectory>,
+        executable: Vec<u8>,
     ) -> Arc<Self> {
         let catalog = Arc::new(Self(Mutex::new(BTreeMap::new())));
-        catalog.publish(process, descriptors, working);
+        catalog.publish(process, descriptors, working, executable);
         catalog
     }
 
@@ -29,12 +31,14 @@ impl Catalog {
         process: ProcessId,
         descriptors: &Arc<DescriptorTable>,
         working: &Arc<WorkingDirectory>,
+        executable: Vec<u8>,
     ) {
         self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(
             process,
             Resources {
                 descriptors: Arc::downgrade(descriptors),
                 working: Arc::downgrade(working),
+                executable,
             },
         );
     }
@@ -61,6 +65,21 @@ impl hl_runtime::ProcfsResourcePort for Catalog {
     fn working(&self, process: ProcessId) -> Result<Arc<WorkingDirectory>, ProcfsError> {
         self.resolve(process, |resources| resources.working.upgrade())
     }
+
+    fn executable(&self, process: ProcessId) -> Result<Vec<u8>, ProcfsError> {
+        // Reuse the descriptor weak as the liveness witness so a retired process
+        // prunes here exactly as it does for the other resources.
+        let mut entries = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(path) = entries
+            .get(&process)
+            .filter(|resources| resources.descriptors.strong_count() != 0)
+            .map(|resources| resources.executable.clone())
+        else {
+            entries.remove(&process);
+            return Err(ProcfsError::NotFound);
+        };
+        Ok(path)
+    }
 }
 
 #[cfg(test)]
@@ -72,9 +91,13 @@ mod tests {
         let process = ProcessId::from_wire(7, 1).unwrap();
         let descriptors = Arc::new(DescriptorTable::new(4).unwrap());
         let working = Arc::new(WorkingDirectory::root());
-        let catalog = Catalog::new(process, &descriptors, &working);
+        let catalog = Catalog::new(process, &descriptors, &working, b"/bin/sh".to_vec());
         assert!(hl_runtime::ProcfsResourcePort::descriptors(catalog.as_ref(), process).is_ok());
         assert!(hl_runtime::ProcfsResourcePort::working(catalog.as_ref(), process).is_ok());
+        assert_eq!(
+            hl_runtime::ProcfsResourcePort::executable(catalog.as_ref(), process),
+            Ok(b"/bin/sh".to_vec())
+        );
         drop(descriptors);
         assert!(matches!(
             hl_runtime::ProcfsResourcePort::descriptors(catalog.as_ref(), process),
@@ -84,5 +107,9 @@ mod tests {
             hl_runtime::ProcfsResourcePort::working(catalog.as_ref(), process),
             Err(ProcfsError::NotFound)
         ));
+        assert_eq!(
+            hl_runtime::ProcfsResourcePort::executable(catalog.as_ref(), process),
+            Err(ProcfsError::NotFound)
+        );
     }
 }

@@ -53,10 +53,12 @@ impl Node {
             Self::Smaps => 0x1e,
             Self::Limits => 2,
             Self::Mounts => 0x16,
+            Self::MountsLink => 0x34,
             Self::MountInfo => 0x15,
             Self::MountStats => 0x32,
             Self::Root => 5,
             Self::Cwd => 6,
+            Self::Exe => 0x33,
             Self::Fd => 3,
             Self::FdInfo => 4,
             Self::FdLink(number) => 0x1000_0000_u64 + number as u64,
@@ -122,6 +124,8 @@ impl Node {
             self,
             Self::Root
                 | Self::Cwd
+                | Self::Exe
+                | Self::MountsLink
                 | Self::UtsNamespace
                 | Self::NetworkNamespace
                 | Self::FdLink(_)

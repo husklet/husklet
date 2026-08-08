@@ -49,10 +49,12 @@ pub(in crate::procfs) enum Node {
     Smaps,
     Limits,
     Mounts,
+    MountsLink,
     MountInfo,
     MountStats,
     Root,
     Cwd,
+    Exe,
     Fd,
     FdInfo,
     FdLink(i32),
@@ -123,6 +125,7 @@ impl Node {
             (b"cmdline", 8),
             (b"comm", 8),
             (b"cwd", 10),
+            (b"exe", 10),
             (b"fd", 4),
             (b"fdinfo", 4),
             (b"environ", 8),
@@ -151,6 +154,7 @@ impl Node {
         const THREAD: &[(&[u8], u8)] = &[
             (b"comm", 8),
             (b"cwd", 10),
+            (b"exe", 10),
             (b"fd", 4),
             (b"fdinfo", 4),
             (b"environ", 8),
@@ -190,7 +194,7 @@ impl Node {
             return Some((current, None, Self::FdLink(Self::number(number)?)));
         }
         if path == b"proc/mounts" {
-            return Some((current, None, Self::Mounts));
+            return Some((current, None, Self::MountsLink));
         }
         if path == b"proc/net" || path == b"proc/net/" {
             return Some((current, None, Self::NetworkDirectory));
@@ -382,6 +386,7 @@ impl Node {
             b"ns/user" => Self::UserNamespace,
             b"root" => Self::Root,
             b"cwd" => Self::Cwd,
+            b"exe" => Self::Exe,
             b"fd" => Self::Fd,
             b"fdinfo" => Self::FdInfo,
             _ if leaf.starts_with(b"fd/") => Self::FdLink(Self::number(&leaf[3..])?),

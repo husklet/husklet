@@ -228,7 +228,7 @@ impl ContainerSpec {
     }
 
     #[must_use]
-    pub const fn resources(mut self, value: Resources) -> Self {
+    pub fn resources(mut self, value: Resources) -> Self {
         self.resources = value;
         self
     }

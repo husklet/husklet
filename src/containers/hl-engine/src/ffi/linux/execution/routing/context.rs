@@ -314,7 +314,14 @@ impl ProcessContext {
 
     pub(in crate::ffi::linux::execution) fn publish_procfs(&self) {
         self.procfs_spaces.publish(self.process, &self.space);
-        self.procfs_resources
-            .publish(self.process, &self.epoll_table.descriptor_table(), &self.working);
+        self.procfs_resources.publish(
+            self.process,
+            &self.epoll_table.descriptor_table(),
+            &self.working,
+            self.path_host
+                .as_ref()
+                .map(|host| host.executable_bytes())
+                .unwrap_or_default(),
+        );
     }
 }

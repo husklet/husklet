@@ -3,12 +3,13 @@
 use super::super::Error;
 use super::environment::EnvironmentEntry;
 use hl_container::{
-    EndpointSpec, Isolation, Mount, NetworkMode, NetworkSpec, Resources, Sandbox, SeccompBaseline, Subnet,
+    EndpointSpec, Isolation, Mount, NetworkMode, NetworkSpec, ResourceLimit, Resources, Sandbox, SeccompBaseline,
+    Subnet,
 };
 use std::path::PathBuf;
 
 /// Names hl-container can honour, and the ones it cannot express yet.
-const SUPPORTED: [&str; 15] = [
+const SUPPORTED: [&str; 16] = [
     "HL_NETNS",
     "HL_NETBR",
     "HL_IP",
@@ -24,9 +25,10 @@ const SUPPORTED: [&str; 15] = [
     "HL_PIDS_MAX",
     "HL_PCACHE_DIR",
     "HL_SECCOMP_BASELINE",
+    "HL_ULIMITS",
 ];
 /// Recognised engine options with no hl-container expression; a case asking for one cannot run.
-const UNWIRED: [&str; 1] = ["HL_ULIMITS"];
+const UNWIRED: [&str; 0] = [];
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct EngineOptions {
@@ -41,6 +43,7 @@ pub(crate) struct EngineOptions {
     process_count: Option<u32>,
     translation_cache: Option<PathBuf>,
     seccomp_baseline: Option<SeccompBaseline>,
+    limits: Vec<ResourceLimit>,
     bridge: Option<String>,
     address: Option<std::net::Ipv4Addr>,
     /// Recognised but unwired names, retained so the case fails by name rather than silently.
@@ -85,6 +88,7 @@ impl EngineOptions {
             "HL_CPUS" => self.cpu_count = Some(setting.number()?),
             "HL_MEM_MAX" => self.memory_bytes = Some(setting.number()?),
             "HL_PIDS_MAX" => self.process_count = Some(setting.number()?),
+            "HL_ULIMITS" => self.limits = setting.limits()?,
             "HL_PCACHE_DIR" => self.translation_cache = Some(PathBuf::from(value)),
             "HL_SECCOMP_BASELINE" => {
                 self.seccomp_baseline = Some(match value {
@@ -195,6 +199,7 @@ impl EngineOptions {
             cpu_count: self.cpu_count.unwrap_or_default(),
             memory_bytes: self.memory_bytes.unwrap_or_default(),
             process_count: self.process_count.unwrap_or_default(),
+            limits: self.limits.clone(),
         }
     }
 }
@@ -206,6 +211,37 @@ struct Setting<'a> {
 }
 
 impl Setting<'_> {
+    /// Parses the `nofile=1024:2048,core=unlimited` form the engine's `HL_ULIMITS` reader accepts.
+    fn limits(&self) -> Result<Vec<ResourceLimit>, Error> {
+        self.value
+            .split(',')
+            .filter(|record| !record.is_empty())
+            .map(|record| {
+                let (name, values) = record
+                    .split_once('=')
+                    .ok_or_else(|| format!("{} record {record:?} is not name=value", self.name))?;
+                if !ResourceLimit::NAMES.contains(&name) {
+                    return Err(Error::from(format!("{} names unknown resource {name:?}", self.name)));
+                }
+                let (soft, hard) = values.split_once(':').unwrap_or((values, values));
+                Ok(ResourceLimit {
+                    name: name.to_owned(),
+                    soft: Self::limit_value(self.name, soft)?,
+                    hard: Self::limit_value(self.name, hard)?,
+                })
+            })
+            .collect()
+    }
+
+    fn limit_value(name: &str, value: &str) -> Result<u64, Error> {
+        match value {
+            "unlimited" | "-1" => Ok(u64::MAX),
+            _ => value
+                .parse()
+                .map_err(|_| format!("{name} value {value:?} is not a number").into()),
+        }
+    }
+
     fn flag(&self) -> Result<bool, Error> {
         match self.value {
             "1" => Ok(true),

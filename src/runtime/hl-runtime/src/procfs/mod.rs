@@ -34,6 +34,7 @@ pub struct TaskProcfs {
     system: Option<Arc<crate::SystemAuthority>>,
     root: Option<Vec<u8>>,
     working: Option<Arc<crate::WorkingDirectory>>,
+    executable: Option<Vec<u8>>,
     fs_context: Option<Arc<crate::FsContext>>,
     stat: Option<Arc<dyn StatPort>>,
     memory: Option<Arc<dyn MemoryPort>>,
@@ -69,6 +70,7 @@ impl TaskProcfs {
             system: None,
             root: None,
             working: None,
+            executable: None,
             fs_context: None,
             stat: None,
             memory: None,
@@ -100,6 +102,7 @@ impl TaskProcfs {
             system: None,
             root: None,
             working: None,
+            executable: None,
             fs_context: None,
             stat: None,
             memory: None,
@@ -149,6 +152,12 @@ impl TaskProcfs {
     #[must_use]
     pub fn with_root(mut self, root: Vec<u8>) -> Self {
         self.root = Some(root);
+        self
+    }
+
+    #[must_use]
+    pub fn with_executable(mut self, executable: Vec<u8>) -> Self {
+        self.executable = Some(executable);
         self
     }
 

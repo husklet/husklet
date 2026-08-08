@@ -97,6 +97,19 @@ impl ProcfsSource for TaskProcfs {
         Ok(path)
     }
 
+    fn executable(&self, process: ProcfsProcessIdentity) -> Result<Vec<u8>, ProcfsError> {
+        let id = self.process_id(process)?;
+        let path = match &self.resources {
+            Some(resources) => resources.executable(id)?,
+            None if self.current == Some(id) => self.executable.clone().ok_or(ProcfsError::NotFound)?,
+            None => return Err(ProcfsError::NotFound),
+        };
+        if path.is_empty() {
+            return Err(ProcfsError::NotFound);
+        }
+        Ok(path)
+    }
+
     fn process(&self, process: ProcfsProcessIdentity) -> Result<ProcfsProcessView, ProcfsError> {
         self.view(process)
     }

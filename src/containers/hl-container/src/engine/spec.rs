@@ -224,6 +224,24 @@ impl Spec {
                 Self::set(options, name, value.to_string())?;
             }
         }
+        if let Some(limit) = launch
+            .resources
+            .limits
+            .iter()
+            .find(|limit| !crate::ResourceLimit::NAMES.contains(&limit.name.as_str()))
+        {
+            return Err(Error::InvalidSpec(format!("unknown resource limit {:?}", limit.name)));
+        }
+        if !launch.resources.limits.is_empty() {
+            let records = launch
+                .resources
+                .limits
+                .iter()
+                .map(crate::ResourceLimit::record)
+                .collect::<Vec<_>>()
+                .join(",");
+            Self::set(options, "HL_ULIMITS", records)?;
+        }
         Ok(())
     }
 

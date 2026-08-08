@@ -414,7 +414,15 @@ pub(in crate::ffi::linux::execution) fn create(
     }
     let working = Arc::new(hl_runtime::WorkingDirectory::root());
     working.replace(working_path);
-    let procfs_resources = super::super::process_resources::Catalog::new(child.0, &table, &working);
+    let procfs_resources = super::super::process_resources::Catalog::new(
+        child.0,
+        &table,
+        &working,
+        path_host
+            .as_ref()
+            .map(|host| host.executable_bytes())
+            .unwrap_or_default(),
+    );
     let process = Arc::new(ProcessContext {
         projected,
         aio: Arc::new(hl_runtime::AioCatalog::default()),

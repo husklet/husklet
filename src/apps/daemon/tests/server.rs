@@ -61,6 +61,7 @@ async fn process_restart_preserves_container_state() {
                     memory_bytes: 64 * 1024 * 1024,
                     process_count: 23,
                     cpu_count: 2,
+                    limits: Vec::new(),
                 }),
         )
         .await

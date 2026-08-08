@@ -69,7 +69,7 @@ impl Service {
                 process,
                 hostname: Some(container.hostname()),
                 mounts,
-                resources: container.spec.resources,
+                resources: container.spec.resources.clone(),
                 isolation: container.spec.isolation,
                 network_mode: container.spec.network_mode,
                 networks,

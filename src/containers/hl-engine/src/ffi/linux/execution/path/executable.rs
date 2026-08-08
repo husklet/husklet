@@ -13,21 +13,6 @@ use hl_runtime::{
     ResolvedPathLease, Resolver, RuntimeExecError, RuntimePathError,
 };
 
-#[derive(Debug)]
-pub(super) struct ProcessExecutable(pub(super) Vec<u8>);
-
-impl ResolvedPathLease for ProcessExecutable {
-    fn metadata(&self) -> Result<FileMetadata, RuntimePathError> {
-        Err(RuntimePathError::Unsupported)
-    }
-    fn read_link(&self) -> Result<Vec<u8>, RuntimePathError> {
-        Ok(self.0.clone())
-    }
-    fn access(&self, _: &AccessPlan) -> Result<(), RuntimePathError> {
-        Err(RuntimePathError::Access)
-    }
-}
-
 pub(in crate::ffi::linux::execution) struct ExecTarget {
     pub(in crate::ffi::linux::execution) identity: Arc<Mutex<Vec<u8>>>,
     pub(in crate::ffi::linux::execution) executable: Vec<u8>,
@@ -36,6 +21,14 @@ pub(in crate::ffi::linux::execution) struct ExecTarget {
 }
 
 impl NativePath {
+    /// Guest path of the image this process is running, as procfs projects it.
+    pub(in crate::ffi::linux::execution) fn executable_bytes(&self) -> Vec<u8> {
+        self.executable
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     pub(in crate::ffi::linux::execution) fn stage_projected(
         &self,
         plan: &hl_linux::ExecPlan,
@@ -117,17 +110,15 @@ impl NativePath {
         const RECURSION_LIMIT: usize = 4;
         let execfn = plan.path.clone();
         let mut candidate = plan.clone();
-        let mut identity = None;
         for depth in 0..=RECURSION_LIMIT {
             let (resolved, guest) = self.exec_path(&candidate, working)?;
-            if identity.is_none() {
-                identity = Some(guest.clone());
-            }
             let Some((interpreter, argument)) = Self::script_line(&resolved)? else {
-                candidate.path = guest;
+                // The image identity is the final interpreter, not the script that
+                // named it; only AT_EXECFN keeps the originally requested path.
+                candidate.path = guest.clone();
                 return Ok(ExecTarget {
                     identity: Arc::clone(&self.executable),
-                    executable: identity.ok_or(RuntimeExecError::Failed)?,
+                    executable: guest,
                     plan: candidate,
                     execfn,
                 });
