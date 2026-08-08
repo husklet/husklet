@@ -17,12 +17,14 @@ pub(super) struct PendingMutation {
     pub(super) action: Mutation,
     pub(super) watches: std::sync::Arc<super::super::watch::Hub>,
     pub(super) ownership: std::sync::Arc<super::super::metadata::Registry>,
+    pub(super) locks: Option<std::sync::Arc<hl_runtime::AdvisoryLockCoordinator>>,
     /// Filesystem uid and gid of the task issuing the mutation, which owns whatever it creates.
     pub(super) creator: (u32, u32),
 }
 
 impl PreparedPathMutation for PendingMutation {
     fn commit(&mut self) -> Result<(), RuntimePathError> {
+        let locks = self.locks.clone();
         let result = match &mut self.action {
             Mutation::Directory(entry, mode, budget) => {
                 let opaque = Self::prepare_create(entry)?;
@@ -83,7 +85,9 @@ impl PreparedPathMutation for PendingMutation {
                 let hide_source = *flags != EXCHANGE
                     && overlay_publish::lower_backed(&from.parent, &from.name).map_err(HostError::map)?;
                 if hide_source {
-                    overlay_publish::prepare_write(&mut from.parent, &from.name).map_err(HostError::map)?;
+                    let copied =
+                        overlay_publish::prepare_write(&mut from.parent, &from.name).map_err(HostError::map)?;
+                    Self::unify_copy_up(locks.as_deref(), copied);
                 }
                 Self::prepare_create(to)?;
                 Self::rename(from, to, *flags)?;
@@ -166,8 +170,33 @@ impl PendingMutation {
                 self.ownership
                     .record_created(entry.parent.as_raw_fd(), &entry.name, user, group);
             }
-            Mutation::Unlink(_, _, _, Some((device, inode))) => self.ownership.forget(*device, *inode),
+            Mutation::Unlink(_, _, _, Some((device, inode))) => {
+                self.ownership.forget(*device, *inode);
+                if let Some(locks) = self.locks.as_ref() {
+                    locks.forget(hl_runtime::FileIdentity {
+                        device: *device,
+                        inode: *inode,
+                    });
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Reports a rename's copy-up so locks taken through the lower keep meeting
+    /// the ones taken through the upper the move left behind.
+    fn unify_copy_up(locks: Option<&hl_runtime::AdvisoryLockCoordinator>, copied: Option<overlay_publish::CopiedUp>) {
+        if let (Some(copied), Some(locks)) = (copied, locks) {
+            locks.unify(
+                hl_runtime::FileIdentity {
+                    device: copied.lower.0,
+                    inode: copied.lower.1,
+                },
+                hl_runtime::FileIdentity {
+                    device: copied.upper.0,
+                    inode: copied.upper.1,
+                },
+            );
         }
     }
 

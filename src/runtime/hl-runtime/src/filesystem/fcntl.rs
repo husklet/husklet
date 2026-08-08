@@ -370,8 +370,8 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         let Some(locks) = &self.locks else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        // Lock identity is the raw host (dev, ino), which the overlay never
-        // rewrites, so a lower file and its copied-up upper lock independently.
+        // The raw host (dev, ino) a copy-up splits in two; the coordinator holds
+        // the per-container translation that puts both halves back on one file.
         let file = FileIdentity {
             device: metadata.device,
             inode: metadata.inode,

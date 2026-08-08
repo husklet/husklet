@@ -70,6 +70,7 @@ impl WorkspaceRoot {
         transfers: Arc<super::super::path::FileTransferRegistry>,
         entropy: Arc<dyn super::super::ports::random::EntropySource>,
         system: Arc<hl_runtime::SystemAuthority>,
+        locks: Arc<hl_runtime::AdvisoryLockCoordinator>,
         architecture: hl_linux::GuestArchitecture,
     ) -> Result<
         (
@@ -134,6 +135,7 @@ impl WorkspaceRoot {
                         architecture,
                         super::super::GuestExecutor::guest_features(architecture),
                     ))
+                    .with_advisory_locks(locks)
                     .with_entropy(entropy)
                     .with_transfers(transfers)
                     .with_system(system)

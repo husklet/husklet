@@ -43,6 +43,8 @@ pub(crate) struct LockState {
     pub(crate) owner_versions: HashMap<ProcessLockOwner, u64>,
     pub(crate) exit_reservations: usize,
     pub(crate) frozen_owners: HashSet<ProcessLockOwner>,
+    /// Lower identity to the upper one a copy-up published, so both name one lock file.
+    aliases: HashMap<Identity, Identity>,
 }
 
 /// Per-runtime advisory-lock namespace.
@@ -67,9 +69,54 @@ impl LockCoordinator {
                 owner_versions: HashMap::new(),
                 exit_reservations: 0,
                 frozen_owners: HashSet::new(),
+                aliases: HashMap::new(),
             }),
             changed: Condvar::new(),
         }
+    }
+
+    /// Binds the lower identity a copy-up read from to the upper one it published.
+    ///
+    /// Locks already held through the lower move to the upper, and a descriptor
+    /// opened before the copy-up keeps stating the lower, so the translation is
+    /// consulted on every later lock rather than only at this point.
+    pub fn unify(&self, lower: Identity, upper: Identity) {
+        if lower == upper {
+            return;
+        }
+        let mut state = self.lock_state();
+        // A freshly published upper inherits nothing: any alias on that number is recycled.
+        state.aliases.remove(&upper);
+        for target in state.aliases.values_mut() {
+            if *target == lower {
+                *target = upper;
+            }
+        }
+        if let Some(records) = state.flocks.remove(&lower) {
+            state.flocks.entry(upper).or_default().extend(records);
+        }
+        if let Some(records) = state.ranges.remove(&lower) {
+            state.ranges.entry(upper).or_default().extend(records);
+        }
+        for waiter in &mut state.waiters {
+            if waiter.file == lower {
+                waiter.file = upper;
+            }
+        }
+        state.aliases.insert(lower, upper);
+        self.changed.notify_all();
+    }
+
+    /// Drops translations naming an inode whose last link is going away, so the
+    /// number is safe for the host to reuse.
+    pub fn forget(&self, file: Identity) {
+        let mut state = self.lock_state();
+        state.aliases.remove(&file);
+        state.aliases.retain(|_, target| *target != file);
+    }
+
+    fn translate(state: &LockState, file: Identity) -> Identity {
+        state.aliases.get(&file).copied().unwrap_or(file)
     }
 
     pub fn set_flock(
@@ -81,6 +128,7 @@ impl LockCoordinator {
         cancellation: &LockCancellation,
     ) -> Result<(), LockError> {
         let mut state = self.lock_state();
+        let file = Self::translate(&state, file);
         if mode.is_none() {
             Self::remove_flock(&mut state, file, owner);
             self.changed.notify_all();
@@ -127,6 +175,7 @@ impl LockCoordinator {
         if state.frozen_owners.contains(&owner) {
             return Err(LockError::ConcurrentMutation);
         }
+        let file = Self::translate(&state, file);
         if kind.is_none() {
             Self::rewrite_owner_range(&mut state, file, owner, range, None)?;
             state.bump_owner(owner);
@@ -185,7 +234,9 @@ impl LockCoordinator {
         kind: RangeLockKind,
         range: LockRange,
     ) -> Option<RangeConflict> {
-        self.lock_state()
+        let state = self.lock_state();
+        let file = Self::translate(&state, file);
+        state
             .ranges
             .get(&file)?
             .iter()
@@ -223,6 +274,7 @@ impl LockCoordinator {
         if state.frozen_owners.contains(&owner) {
             return Err(LockError::ConcurrentMutation);
         }
+        let file = Self::translate(&state, file);
         if let Some(records) = state.ranges.get_mut(&file) {
             records.retain(|record| record.owner != owner);
             if records.is_empty() {
@@ -325,6 +377,8 @@ impl LockCoordinator {
         {
             return Err(LockError::InvalidArgument);
         }
+        // Copy-up translations describe the live filesystem, not the checkpoint.
+        replacement.aliases = std::mem::take(&mut state.aliases);
         *state = replacement;
         self.changed.notify_all();
         Ok(())
@@ -442,6 +496,12 @@ impl LockCoordinator {
 
     pub(crate) fn lock_state(&self) -> std::sync::MutexGuard<'_, LockState> {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl std::fmt::Debug for LockCoordinator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("LockCoordinator")
     }
 }
 

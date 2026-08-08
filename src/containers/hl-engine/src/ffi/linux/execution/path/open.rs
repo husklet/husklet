@@ -31,11 +31,17 @@ pub(super) struct PendingOpen {
     /// Filesystem uid and gid of the opening task, which owns the file if this open creates it.
     /// `None` leaves ownership unrecorded, as it was before creation carried a guest owner.
     creator: Option<(u32, u32)>,
+    locks: Option<Arc<hl_runtime::AdvisoryLockCoordinator>>,
 }
 
 impl PendingOpen {
     pub(super) fn with_creator(mut self, creator: (u32, u32)) -> Self {
         self.creator = Some(creator);
+        self
+    }
+
+    pub(super) fn with_advisory_locks(mut self, locks: Option<Arc<hl_runtime::AdvisoryLockCoordinator>>) -> Self {
+        self.locks = locks;
         self
     }
 
@@ -65,6 +71,7 @@ impl PendingOpen {
             name,
             transfers,
             creator: None,
+            locks: None,
         }
     }
 
@@ -94,6 +101,7 @@ impl PendingOpen {
             name,
             transfers,
             creator: None,
+            locks: None,
         }
     }
 
@@ -179,7 +187,19 @@ impl PreparedPathOpen for PendingOpen {
                 && bits & OpenIntent::PATH_ONLY == 0
                 && !temporary;
         if named_mutation {
-            super::overlay_publish::prepare_write(&mut self.parent, &self.name).map_err(HostError::map)?;
+            let copied = super::overlay_publish::prepare_write(&mut self.parent, &self.name).map_err(HostError::map)?;
+            if let (Some(copied), Some(locks)) = (copied, self.locks.as_ref()) {
+                locks.unify(
+                    hl_runtime::FileIdentity {
+                        device: copied.lower.0,
+                        inode: copied.lower.1,
+                    },
+                    hl_runtime::FileIdentity {
+                        device: copied.upper.0,
+                        inode: copied.upper.1,
+                    },
+                );
+            }
             self.path = pin::Host::mutation_path(&self.parent, &self.name)?;
         }
         let created = temporary || bits & OpenIntent::CREATE != 0 && !self.exists()?;

@@ -98,6 +98,71 @@ fn final_ofd_close_releases_range_locks() {
         .unwrap();
 }
 
+/// Copy-up gives one guest file two host identities. A lock held through the
+/// lower must move to the upper, and a descriptor that still stats the lower
+/// must keep landing there afterwards.
+#[test]
+fn copy_up_keeps_lower_and_upper_on_one_lock_identity() {
+    let locks = AdvisoryLockCoordinator::new();
+    let lower = LockFixture::file(41);
+    let upper = LockFixture::file(42);
+    let holder = LockFixture::process(1);
+    let writer = LockFixture::process(2);
+    let cancellation = LockCancellation::default();
+    let held = LockFixture::range(0, Some(100));
+    let later = LockFixture::range(200, Some(300));
+    locks
+        .set_range(lower, holder, Some(RangeLockKind::Read), held, false, &cancellation)
+        .unwrap();
+
+    locks.unify(lower, upper);
+    assert_eq!(
+        locks.set_range(upper, writer, Some(RangeLockKind::Write), held, false, &cancellation),
+        Err(LockError::WouldBlock),
+    );
+
+    locks
+        .set_range(lower, holder, Some(RangeLockKind::Read), later, false, &cancellation)
+        .unwrap();
+    assert_eq!(
+        locks.set_range(upper, writer, Some(RangeLockKind::Write), later, false, &cancellation),
+        Err(LockError::WouldBlock),
+    );
+}
+
+/// An upper whose last link is going away must stop attracting the lower, or a
+/// recycled inode number inherits the translation.
+#[test]
+fn forgetting_an_upper_drops_its_translation() {
+    let locks = AdvisoryLockCoordinator::new();
+    let lower = LockFixture::file(51);
+    let upper = LockFixture::file(52);
+    let cancellation = LockCancellation::default();
+    let range = LockFixture::range(0, Some(100));
+    locks.unify(lower, upper);
+    locks.forget(upper);
+    locks
+        .set_range(
+            lower,
+            LockFixture::process(1),
+            Some(RangeLockKind::Write),
+            range,
+            false,
+            &cancellation,
+        )
+        .unwrap();
+    locks
+        .set_range(
+            upper,
+            LockFixture::process(2),
+            Some(RangeLockKind::Write),
+            range,
+            false,
+            &cancellation,
+        )
+        .unwrap();
+}
+
 #[test]
 fn range_conflicts_coalesce() {
     let locks = Arc::new(AdvisoryLockCoordinator::new());

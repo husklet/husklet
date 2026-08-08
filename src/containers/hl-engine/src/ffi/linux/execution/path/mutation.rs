@@ -319,6 +319,7 @@ pub(super) fn prepare(
         action,
         watches: std::sync::Arc::clone(&host.watches),
         ownership: std::sync::Arc::clone(&host.ownership),
+        locks: host.locks.clone(),
         creator: (identity.user, identity.group),
     }))
 }
@@ -510,6 +511,7 @@ mod epoch_tests {
             action,
             watches,
             ownership: std::sync::Arc::new(crate::ffi::linux::execution::path::metadata::Registry::default()),
+            locks: None,
             creator: (0, 0),
         }
         .commit()

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* Every corpus binary is statically linked and staged into the overlay upper, so
@@ -148,6 +149,58 @@ static int probe_whiteout_dir(void) {
     return 0;
 }
 
+static int lock_range(int fd, int type, off_t start, off_t length) {
+    struct flock request;
+    memset(&request, 0, sizeof request);
+    request.l_type = (short)type;
+    request.l_whence = SEEK_SET;
+    request.l_start = start;
+    request.l_len = length;
+    return fcntl(fd, F_SETLK, &request);
+}
+
+/* Forks a writer that opens the file read-write and must be refused the range. */
+static int contend(off_t start, off_t length, int codes[3]) {
+    int status;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        int code = 0;
+        int upper = open("/etc/passwd", O_RDWR);
+        if (upper < 0) code = codes[0];
+        else if (lock_range(upper, F_WRLCK, start, length) == 0) code = codes[1];
+        else if (errno != EAGAIN && errno != EACCES) code = codes[2];
+        _exit(code);
+    }
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) return -1;
+    return WEXITSTATUS(status);
+}
+
+/* A lock on a lower file and a lock taken after copy-up are locks on one file.
+   Both read locks are taken through a read-only descriptor, which is the only
+   way to hold a lower inode: a write lock needs a writable fd, and opening one
+   copies the file up by itself. The two ranges are disjoint so neither phase can
+   be answered by the other's record. */
+static int probe_lock_copy_up(void) {
+    int first[3] = {82, 83, 84};
+    int second[3] = {87, 88, 89};
+    int result;
+    int fd = open("/etc/passwd", O_RDONLY);
+    if (fd < 0) return 80;
+    /* Taken before any copy-up, so the record has to move to the upper inode. */
+    if (lock_range(fd, F_RDLCK, 0, 100) != 0) return 81;
+    result = contend(0, 100, first);
+    if (result != 0) return result < 0 ? 85 : result;
+    /* This descriptor still stats the lower, so a lock taken through it after the
+       copy-up has to be translated instead of opening a second lock identity. */
+    if (lock_range(fd, F_RDLCK, 200, 100) != 0) return 86;
+    result = contend(200, 100, second);
+    if (result != 0) return result < 0 ? 90 : result;
+    if (close(fd) != 0) return 91;
+    puts("lower lock copy-up ok");
+    return 0;
+}
+
 /* A directory that exists in both layers must list the union of their children. */
 static int probe_merge(void) {
     DIR *directory;
@@ -176,5 +229,6 @@ int main(int count, char **arguments) {
     if (strcmp(arguments[1], "whiteout") == 0) return probe_whiteout();
     if (strcmp(arguments[1], "whiteout-dir") == 0) return probe_whiteout_dir();
     if (strcmp(arguments[1], "merge") == 0) return probe_merge();
+    if (strcmp(arguments[1], "lock-copy-up") == 0) return probe_lock_copy_up();
     return 91;
 }

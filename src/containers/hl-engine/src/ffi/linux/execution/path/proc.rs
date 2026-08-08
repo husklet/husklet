@@ -142,6 +142,7 @@ impl super::NativePath {
             projected: self.projected.clone(),
             writes: Arc::clone(&self.writes),
             ownership: Arc::clone(&self.ownership),
+            locks: self.locks.clone(),
             watches: Arc::clone(&self.watches),
             executable: Arc::new(Mutex::new(executable)),
             auxiliary: Arc::new(Mutex::new(auxiliary)),

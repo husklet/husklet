@@ -103,6 +103,7 @@ pub(super) struct NativePath {
     projected: projected::Registry,
     writes: Arc<Mutex<BTreeMap<(u64, u64), usize>>>,
     ownership: Arc<metadata::Registry>,
+    locks: Option<Arc<hl_runtime::AdvisoryLockCoordinator>>,
     watches: Arc<watch::Hub>,
     executable: Arc<Mutex<Vec<u8>>>,
     auxiliary: Arc<Mutex<Vec<u8>>>,
@@ -188,6 +189,13 @@ impl NativePath {
         self
     }
 
+    /// Lets copy-up report the lower and upper identities it joined, which is the
+    /// only place the two are both known.
+    pub(super) fn with_advisory_locks(mut self, locks: Arc<hl_runtime::AdvisoryLockCoordinator>) -> Self {
+        self.locks = Some(locks);
+        self
+    }
+
     pub(super) fn new(root: &[u8], watches: Arc<watch::Hub>) -> Result<Self, RuntimePathError> {
         Ok(Self::from_source(source::Source::ordinary(root)?, watches))
     }
@@ -208,6 +216,7 @@ impl NativePath {
             projected: projected::Registry::default(),
             writes: Arc::new(Mutex::new(BTreeMap::new())),
             ownership: Arc::new(metadata::Registry::default()),
+            locks: None,
             watches,
             executable: Arc::new(Mutex::new(Vec::new())),
             auxiliary: Arc::new(Mutex::new(Vec::new())),
