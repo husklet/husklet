@@ -20,7 +20,9 @@ cases:
     build: { source: source/namespace_boundary.c, output: namespace-boundary, flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
     artifact: { destination: /opt/husklet/namespace-boundary }
     run: []
-    expect: { exit: 0, stdout: golden/namespace_boundary.txt }
+    # A -nostdlib freestanding _start that issues eight syscalls straight-line and exits, so it
+    # reaches neither the admission warm-up nor the solo budget; measured runs=0 builds=0 services=8.
+    expect: { exit: 0, stdout: golden/namespace_boundary.txt, diagnostics: [] }
   - id: runtime/process/uname-boundary
     status: !broken
       reason: "QEMU exposes host uname identity instead of the configured engine guest identity"
