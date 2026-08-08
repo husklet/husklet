@@ -497,7 +497,9 @@ mod test {
             redirected.operand.path.as_bytes(),
             format!("/proc/{}", process.number()).as_bytes()
         );
-        let mut prepared = host.prepare_open(&host.root_base().unwrap(), &plan).unwrap();
+        let mut prepared = host
+            .prepare_open(&host.root_base().unwrap(), &plan, &super::super::test_identity())
+            .unwrap();
         let object = prepared.object();
         prepared.commit().unwrap();
         let mut output = [0_u8; 4096];
@@ -521,7 +523,13 @@ mod test {
             no_controlling_terminal: false,
             resolve: ResolveFlags::default(),
         };
-        let mut namespace_open = host.prepare_open(&host.root_base().unwrap(), &namespace_plan).unwrap();
+        let mut namespace_open = host
+            .prepare_open(
+                &host.root_base().unwrap(),
+                &namespace_plan,
+                &super::super::test_identity(),
+            )
+            .unwrap();
         let namespace_object = namespace_open.object();
         assert_eq!(namespace_object.metadata().unwrap().inode, namespace.serial);
         namespace_open.commit().unwrap();

@@ -185,6 +185,7 @@ impl RuntimePathHost for NativePath {
         &self,
         base: &DirectoryBaseLease,
         plan: &OpenAbiPlan,
+        identity: &hl_runtime::AccessIdentity,
     ) -> Result<Box<dyn PreparedPathOpen>, RuntimePathError> {
         let redirected = if base.confines_root() {
             None
@@ -326,6 +327,7 @@ impl RuntimePathHost for NativePath {
                 libc::AT_SYMLINK_NOFOLLOW,
             )
         } == 0;
+        super::attribute::authorize_open(&parent, &name, &path, plan.intent, &self.ownership, identity)?;
         if exists {
             // SAFETY: successful fstatat initialized status.
             let status = unsafe { status.assume_init() };

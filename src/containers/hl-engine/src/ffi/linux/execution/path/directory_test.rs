@@ -81,7 +81,7 @@ fn open_wait_classification() {
     );
 
     let swap = plan(b"/regular", OpenIntent::READ, false);
-    let mut prepared = host.prepare_open(&base, &swap).unwrap();
+    let mut prepared = host.prepare_open(&base, &swap, &super::test_identity()).unwrap();
     std::fs::remove_file(path.join("regular")).unwrap();
     assert!(
         std::process::Command::new("mkfifo")
@@ -97,7 +97,7 @@ fn open_wait_classification() {
     assert!(host.open_may_block(&base, &reverse).unwrap());
     std::fs::remove_file(path.join("fifo")).unwrap();
     std::fs::write(path.join("fifo"), b"").unwrap();
-    let mut prepared = host.prepare_open(&base, &reverse).unwrap();
+    let mut prepared = host.prepare_open(&base, &reverse, &super::test_identity()).unwrap();
     prepared.commit().unwrap();
 
     let projected = NativePath::projected(b"/workspace", watch::Hub::projected(b"/workspace").unwrap()).unwrap();
@@ -144,7 +144,9 @@ fn writable_bind_open_retains_guest_identity() {
         no_controlling_terminal: false,
         resolve: ResolveFlags::default(),
     };
-    let mut opened = host.prepare_open(&host.root_base().unwrap(), &plan).unwrap();
+    let mut opened = host
+        .prepare_open(&host.root_base().unwrap(), &plan, &super::test_identity())
+        .unwrap();
     let object = opened.object();
     opened.commit().unwrap();
     assert_eq!(object.write(b"mounted"), Ok(7));
@@ -176,7 +178,9 @@ fn builtin_descriptor_preserves_filesystem() {
         no_controlling_terminal: false,
         resolve: ResolveFlags::default(),
     };
-    let mut opened = host.prepare_open(&host.root_base().unwrap(), &plan).unwrap();
+    let mut opened = host
+        .prepare_open(&host.root_base().unwrap(), &plan, &super::test_identity())
+        .unwrap();
     let object = opened.object();
     opened.commit().unwrap();
     let table = DescriptorTable::new(4).unwrap();
@@ -304,7 +308,7 @@ fn pinned_swap_safe() {
         no_controlling_terminal: false,
         resolve: ResolveFlags::default(),
     };
-    let mut prepared = host.prepare_open(&base, &plan).unwrap();
+    let mut prepared = host.prepare_open(&base, &plan, &super::test_identity()).unwrap();
     let object = prepared.object();
     std::fs::remove_file(path.join("link")).unwrap();
     std::os::unix::fs::symlink("outside", path.join("link")).unwrap();
@@ -387,7 +391,7 @@ fn opath_contract() {
         no_controlling_terminal: false,
         resolve: ResolveFlags::default(),
     };
-    let mut prepared = host.prepare_open(&base, &plan).unwrap();
+    let mut prepared = host.prepare_open(&base, &plan, &super::test_identity()).unwrap();
     let object = prepared.object();
     prepared.commit().unwrap();
     assert_eq!(object.metadata().unwrap().size, 4);
@@ -429,7 +433,7 @@ fn unlinked_metadata() {
         no_controlling_terminal: false,
         resolve: ResolveFlags::default(),
     };
-    let mut opened = host.prepare_open(&base, &plan).unwrap();
+    let mut opened = host.prepare_open(&base, &plan, &super::test_identity()).unwrap();
     let object = opened.object();
     opened.commit().unwrap();
     std::fs::remove_file(path.join("file")).unwrap();
@@ -470,7 +474,7 @@ fn readonly_open() {
         resolve: ResolveFlags::default(),
     };
     assert_eq!(
-        host.prepare_open(&base, &plan).unwrap_err(),
+        host.prepare_open(&base, &plan, &super::test_identity()).unwrap_err(),
         hl_runtime::RuntimePathError::ReadOnly,
     );
     assert_eq!(std::fs::read(path.join("file")).unwrap(), b"data");
@@ -672,7 +676,7 @@ fn tmpfile_anonymous() {
         no_controlling_terminal: false,
         resolve: ResolveFlags::default(),
     };
-    let mut prepared = host.prepare_open(&base, &plan).unwrap();
+    let mut prepared = host.prepare_open(&base, &plan, &super::test_identity()).unwrap();
     let object = prepared.object();
     prepared.commit().unwrap();
     assert_eq!(object.write(b"anonymous").unwrap(), 9);
@@ -736,7 +740,7 @@ fn tmpfile_descriptor_link() {
         no_controlling_terminal: false,
         resolve: ResolveFlags::default(),
     };
-    let mut opened = host.prepare_open(&base, &plan).unwrap();
+    let mut opened = host.prepare_open(&base, &plan, &super::test_identity()).unwrap();
     let object = opened.object();
     opened.commit().unwrap();
     assert_eq!(object.write(b"linked").unwrap(), 6);
@@ -768,7 +772,9 @@ fn tmpfile_descriptor_link() {
         intent: OpenIntent::from_bits(plan.intent.bits() | OpenIntent::EXCLUSIVE),
         ..plan.clone()
     };
-    let mut exclusive = host.prepare_open(&base, &exclusive_plan).unwrap();
+    let mut exclusive = host
+        .prepare_open(&base, &exclusive_plan, &super::test_identity())
+        .unwrap();
     let exclusive_object = exclusive.object();
     exclusive.commit().unwrap();
     let exclusive_descriptor = table.install(0, exclusive_object, DescriptorFlags::default()).unwrap();

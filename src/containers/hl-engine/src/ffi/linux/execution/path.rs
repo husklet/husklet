@@ -460,6 +460,24 @@ impl NativePath {
     }
 }
 
+/// The container root identity these path tests run as, so a case about resolution keeps measuring
+/// resolution rather than the `open` permission check.
+#[cfg(test)]
+pub(super) fn test_identity() -> hl_runtime::AccessIdentity {
+    hl_runtime::AccessIdentity {
+        user: 0,
+        group: 0,
+        supplementary_groups: Vec::new(),
+        capabilities: hl_runtime::Capabilities {
+            dac_override: true,
+            dac_read_search: false,
+            owner_override: true,
+            change_owner: true,
+            preserve_set_id: true,
+        },
+    }
+}
+
 #[cfg(test)]
 mod terminal_window_test {
     use super::*;

@@ -90,6 +90,58 @@ pub(super) fn authorize_chmod(
     Ok(())
 }
 
+/// Linux permission policy for `open`. Creating a name that does not exist is a write to the
+/// parent directory; opening one that does needs read for `O_RDONLY` and write for `O_WRONLY`,
+/// `O_RDWR`, `O_APPEND`, and `O_TRUNC` -- `O_TRUNC` included, because it shortens the file whatever
+/// the access mode asks for, so `O_RDONLY|O_TRUNC` on a file the task may only read is EACCES.
+/// `O_PATH` describes a name rather than opening it and is exempt, as it is on Linux.
+pub(super) fn authorize_open(
+    parent: &super::overlay_lease::ParentLease,
+    name: &std::ffi::CString,
+    path: &Path,
+    intent: hl_runtime::OpenIntent,
+    ownership: &super::metadata::Registry,
+    identity: &AccessIdentity,
+) -> Result<(), RuntimePathError> {
+    let bits = intent.bits();
+    if bits & hl_runtime::OpenIntent::PATH_ONLY != 0 {
+        return Ok(());
+    }
+    let granted = |metadata: &Metadata, wanted: u8| -> Result<(), RuntimePathError> {
+        let access = Access::from_bits(wanted).map_err(|_| RuntimePathError::Invalid)?;
+        identity
+            .check_access(metadata, access)
+            .map_err(|_| RuntimePathError::Access)
+    };
+    // Existence is the visible-layer answer, not an `fstatat` of the pinned parent: image content
+    // lives in a lower layer whose name the upper parent does not carry, and treating that as a
+    // creation would demand write on a read-only image directory for an ordinary read.
+    let current = match super::metadata::HostMetadata::anchored(parent, name) {
+        Ok(mut current) => {
+            ownership.project_at(Some(path), &mut current);
+            Some(current)
+        }
+        Err(RuntimePathError::NotFound) => None,
+        Err(error) => return Err(error),
+    };
+    let Some(current) = current else {
+        // A name with no inode is about to be created, so the parent must be writable and
+        // searchable. The file itself has no mode to check yet.
+        let selected = parent.selected().as_raw_fd();
+        let directory =
+            Descriptor::new(selected).projected(ownership, || super::pin::Host::descriptor_path(selected).ok())?;
+        return granted(&directory, Access::WRITE | Access::EXECUTE);
+    };
+    let mut wanted = 0;
+    if bits & hl_runtime::OpenIntent::READ != 0 {
+        wanted |= Access::READ;
+    }
+    if bits & (hl_runtime::OpenIntent::WRITE | hl_runtime::OpenIntent::TRUNCATE | hl_runtime::OpenIntent::APPEND) != 0 {
+        wanted |= Access::WRITE;
+    }
+    granted(&current, wanted)
+}
+
 pub(super) fn authorize_chown(
     descriptor: RawFd,
     user: Option<u32>,
