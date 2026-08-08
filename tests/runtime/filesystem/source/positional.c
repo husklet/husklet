@@ -111,8 +111,15 @@ void _start(void) {
     bad_read[0].base = first; bad_read[0].length = 1;
     bad_read[1].base = (void *)1; bad_read[1].length = 1;
     first[0] = 0;
-    if (call6(SYS_PREADV, fd, (long)bad_read, 2, 0, 0, 0) != -14
-        || first[0] != 0) finish(27);
+    /* Linux publishes the bytes copied before the fault and only reports
+       EFAULT when nothing at all was transferred. */
+    if (call6(SYS_PREADV, fd, (long)bad_read, 2, 0, 0, 0) != 1
+        || first[0] != 'a') finish(27);
+    if (call6(SYS_LSEEK, fd, 0, SEEK_CUR, 0, 0, 0) != 6) finish(36);
+    volatile struct vector lead_fault[2];
+    lead_fault[0].base = (void *)1; lead_fault[0].length = 1;
+    lead_fault[1].base = first; lead_fault[1].length = 1;
+    if (call6(SYS_PREADV, fd, (long)lead_fault, 2, 0, 0, 0) != -14) finish(37);
     if (call6(SYS_PREADV, -1, 1, 2, 0, 0, 0) != -9) finish(28);
     if (call6(SYS_PWRITEV, -1, 1, 2, 0, 0, 0) != -9) finish(29);
     if (call6(SYS_PREADV, fd, 1, 1025, 0, 0, 0) != -22) finish(30);

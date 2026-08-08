@@ -15,25 +15,23 @@ cases:
     run: [lifecycle]
     expect: { exit: 0, stdout: golden/empty.bin }
   - id: runtime/filesystem/positional-arm64
-    status: !broken
-      reason: "re-derived 2026-08-08, both ISAs: the engine creates /positional fine and clears checks 1-26, then fails check 27. preadv(fd, [{buf,1},{(void*)1,1}], 2, offset=0) must return -EFAULT; the engine returns 0 because filesystem/read.rs failed_read_probe probes the descriptor's shared file position (6, at EOF) instead of the supplied positional offset. The buffer is correctly left untouched, so only the return value diverges"
-      evidence: "tests/runtime/filesystem/POSITIONAL_EVIDENCE.md"
+    status: active
     targets: [arm64]
     compat: { class: compatibility }
     build: { source: source/positional.c, output: positional, flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
     artifact: { destination: /opt/husklet/runtime-positional }
     run: [io]
-    expect: { exit: 0, stdout: golden/empty.bin }
+    # Straight-line syscall code with no hot loop, so the native tier never builds a region.
+    expect: { exit: 0, stdout: golden/empty.bin, diagnostics: [] }
   - id: runtime/filesystem/positional-amd64
-    status: !broken
-      reason: "re-derived 2026-08-08, both ISAs: the engine creates /positional fine and clears checks 1-26, then fails check 27. preadv(fd, [{buf,1},{(void*)1,1}], 2, offset=0) must return -EFAULT; the engine returns 0 because filesystem/read.rs failed_read_probe probes the descriptor's shared file position (6, at EOF) instead of the supplied positional offset. The buffer is correctly left untouched, so only the return value diverges"
-      evidence: "tests/runtime/filesystem/POSITIONAL_EVIDENCE.md"
+    status: active
     targets: [amd64]
     compat: { class: compatibility }
     build: { source: source/positional.c, output: positional-amd64, flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
     artifact: { destination: /opt/husklet/runtime-positional-amd64 }
     run: [io]
-    expect: { exit: 0, stdout: golden/empty.bin }
+    # Straight-line syscall code with no hot loop, so the native tier never builds a region.
+    expect: { exit: 0, stdout: golden/empty.bin, diagnostics: [] }
   - id: runtime/filesystem/path-metadata
     status: !oracle-excluded
       reason: "QEMU oracle requires a fresh isolated working directory not yet supplied by the shared runner"

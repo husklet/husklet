@@ -1,1 +1,1 @@
-inet isolated stream4=1 datagram4=1 stream6=1
+inet isolated stream4=1 datagram4=1 stream6=1 external4=1 external6=1 loopback=1

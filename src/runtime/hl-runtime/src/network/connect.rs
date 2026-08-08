@@ -259,6 +259,11 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let Some(host) = &self.host else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
+        // Route admission precedes the transport split: a datagram connect is a
+        // route lookup too, so isolation must refuse it exactly as it does a stream.
+        if let Err(error) = self.route(&address) {
+            return LinuxResult::Error(error);
+        }
         if socket
             .snapshot
             .lock()
@@ -288,9 +293,6 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 SocketConnectStatus::Failed(error) => return LinuxResult::Error(Self::connect_errno(error)),
                 _ => return LinuxResult::Error(Errno::EIO),
             }
-        }
-        if let Err(error) = self.route(&address) {
-            return LinuxResult::Error(error);
         }
         if let Err(error) = host.prepare_connect_route(*token, self.connect_route(address.clone())) {
             return LinuxResult::Error(SocketErrno::runtime(error));
