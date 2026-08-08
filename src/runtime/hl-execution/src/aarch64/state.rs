@@ -58,6 +58,118 @@ pub struct CpuState {
 }
 pub type Aarch64CpuState = CpuState;
 
+/// The half of the architectural state a staged scalar step can reach. Staging
+/// through this type is what makes such a step physically unable to name a
+/// vector register, and drops 512 bytes from the per-instruction copy.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ScalarStage {
+    pub(crate) registers: [u64; 31],
+    pub(crate) sp: u64,
+    pub(crate) pc: u64,
+    pub(crate) nzcv: Nzcv,
+    pub(crate) tls: u64,
+    pub(crate) fpcr: u64,
+    pub(crate) fpsr: u64,
+    pub(crate) exclusive: Option<crate::ExclusiveReservation>,
+}
+
+/// The scalar fields shared by the live state and a staging scratch, so a
+/// helper can write either without knowing which it has.
+pub(crate) trait ScalarAccess {
+    fn registers(&self) -> &[u64; 31];
+    fn registers_mut(&mut self) -> &mut [u64; 31];
+    fn sp(&self) -> u64;
+    fn set_sp(&mut self, value: u64);
+    fn pc(&self) -> u64;
+    fn set_pc(&mut self, value: u64);
+    fn nzcv(&self) -> Nzcv;
+    fn nzcv_mut(&mut self) -> &mut Nzcv;
+    fn tls(&self) -> u64;
+    fn set_tls(&mut self, value: u64);
+    fn fpcr(&self) -> u64;
+    fn set_fpcr(&mut self, value: u64);
+    fn fpsr(&self) -> u64;
+    fn set_fpsr(&mut self, value: u64);
+    fn exclusive(&self) -> Option<crate::ExclusiveReservation>;
+
+    fn write(&mut self, register: u8, value: u64) {
+        if let Some(destination) = self.registers_mut().get_mut(usize::from(register)) {
+            *destination = value;
+        }
+    }
+
+    fn write_narrow(&mut self, register: u8, value: u32) {
+        self.write(register, u64::from(value));
+    }
+
+    fn write_destination(&mut self, register: u8, value: u64) {
+        if register == 31 {
+            self.set_sp(value);
+        } else {
+            self.write(register, value);
+        }
+    }
+
+    fn write_narrow_destination(&mut self, register: u8, value: u32) {
+        self.write_destination(register, u64::from(value));
+    }
+}
+
+macro_rules! scalar_access {
+    ($type:ty) => {
+        impl ScalarAccess for $type {
+            fn registers(&self) -> &[u64; 31] {
+                &self.registers
+            }
+            fn registers_mut(&mut self) -> &mut [u64; 31] {
+                &mut self.registers
+            }
+            fn sp(&self) -> u64 {
+                self.sp
+            }
+            fn set_sp(&mut self, value: u64) {
+                self.sp = value;
+            }
+            fn pc(&self) -> u64 {
+                self.pc
+            }
+            fn set_pc(&mut self, value: u64) {
+                self.pc = value;
+            }
+            fn nzcv(&self) -> Nzcv {
+                self.nzcv
+            }
+            fn nzcv_mut(&mut self) -> &mut Nzcv {
+                &mut self.nzcv
+            }
+            fn tls(&self) -> u64 {
+                self.tls
+            }
+            fn set_tls(&mut self, value: u64) {
+                self.tls = value;
+            }
+            fn fpcr(&self) -> u64 {
+                self.fpcr
+            }
+            fn set_fpcr(&mut self, value: u64) {
+                self.fpcr = value;
+            }
+            fn fpsr(&self) -> u64 {
+                self.fpsr
+            }
+            fn set_fpsr(&mut self, value: u64) {
+                self.fpsr = value;
+            }
+            fn exclusive(&self) -> Option<crate::ExclusiveReservation> {
+                self.exclusive
+            }
+        }
+    };
+}
+
+scalar_access!(CpuState);
+scalar_access!(ScalarStage);
+
 impl Aarch64CpuState {
     pub fn vector(&self, register: u8) -> u128 {
         self.vectors.get(usize::from(register)).copied().unwrap_or(0)
@@ -117,35 +229,35 @@ impl Aarch64CpuState {
         }
     }
 
-    pub(crate) fn set_destination(&mut self, register: u8, value: u64) {
-        if register == 31 {
-            self.sp = value;
-        } else {
-            self.set_register(register, value);
-        }
-    }
-
     pub(crate) fn set_narrow_register(&mut self, register: u8, value: u32) {
         self.set_register(register, u64::from(value));
     }
 
-    /// Commits a staged step that never wrote the vector file, skipping its 512-byte copy-back.
-    pub(crate) fn commit_scalar(&mut self, staged: &Self) {
-        self.registers = staged.registers;
-        self.sp = staged.sp;
-        self.pc = staged.pc;
-        self.nzcv = staged.nzcv;
-        self.tls = staged.tls;
-        self.fpcr = staged.fpcr;
-        self.fpsr = staged.fpsr;
-        self.exclusive = staged.exclusive;
-    }
-
-    pub(crate) fn set_narrow_destination(&mut self, register: u8, value: u32) {
-        if register == 31 {
-            self.sp = u64::from(value);
-        } else {
-            self.set_narrow_register(register, value);
+    /// Snapshots only the scalar half, so a staged step that cannot name a
+    /// vector register does not copy the 512-byte vector file to reach it.
+    pub(crate) fn stage_scalar(&self) -> ScalarStage {
+        ScalarStage {
+            registers: self.registers,
+            sp: self.sp,
+            pc: self.pc,
+            nzcv: self.nzcv,
+            tls: self.tls,
+            fpcr: self.fpcr,
+            fpsr: self.fpsr,
+            exclusive: self.exclusive,
         }
     }
+
+    /// Commits a staged step that never wrote the vector file, skipping its 512-byte copy-back.
+    pub(crate) fn commit_scalar<S: ScalarAccess>(&mut self, staged: &S) {
+        self.registers = *staged.registers();
+        self.sp = staged.sp();
+        self.pc = staged.pc();
+        self.nzcv = staged.nzcv();
+        self.tls = staged.tls();
+        self.fpcr = staged.fpcr();
+        self.fpsr = staged.fpsr();
+        self.exclusive = staged.exclusive();
+    }
+
 }

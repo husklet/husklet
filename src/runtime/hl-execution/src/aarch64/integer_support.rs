@@ -1,3 +1,4 @@
+use super::state::ScalarAccess;
 use crate::{Aarch64CpuState, Aarch64Shift, BitfieldOperation, LogicalOperation, MultiplyOperation};
 
 pub(crate) fn multiply(
@@ -94,19 +95,19 @@ pub(crate) fn bitfield(
     top & !top_mask | bottom & top_mask
 }
 
-pub(crate) fn write_register(cpu: &mut Aarch64CpuState, wide: bool, register: u8, value: u64) {
+pub(crate) fn write_register<S: ScalarAccess>(cpu: &mut S, wide: bool, register: u8, value: u64) {
     if wide {
-        cpu.set_register(register, value);
+        cpu.write(register, value);
     } else {
-        cpu.set_narrow_register(register, value as u32);
+        cpu.write_narrow(register, value as u32);
     }
 }
 
-pub(crate) fn write_destination(cpu: &mut Aarch64CpuState, wide: bool, register: u8, value: u64) {
+pub(crate) fn write_destination<S: ScalarAccess>(cpu: &mut S, wide: bool, register: u8, value: u64) {
     if wide {
-        cpu.set_destination(register, value);
+        cpu.write_destination(register, value);
     } else {
-        cpu.set_narrow_destination(register, value as u32);
+        cpu.write_narrow_destination(register, value as u32);
     }
 }
 
@@ -138,14 +139,14 @@ pub(crate) fn logical(operation: LogicalOperation, left: u64, right: u64, wide: 
     if wide { result } else { u64::from(result as u32) }
 }
 
-pub(crate) fn logical_flags(cpu: &mut Aarch64CpuState, result: u64, wide: bool) {
+pub(crate) fn logical_flags<S: ScalarAccess>(cpu: &mut S, result: u64, wide: bool) {
     let negative = if wide { result >> 63 != 0 } else { result >> 31 & 1 != 0 };
     let zero = if wide { result == 0 } else { result as u32 == 0 };
-    cpu.nzcv.set(negative, zero, false, false);
+    cpu.nzcv_mut().set(negative, zero, false, false);
 }
 
-pub(crate) fn arithmetic(
-    cpu: &mut Aarch64CpuState,
+pub(crate) fn arithmetic<S: ScalarAccess>(
+    cpu: &mut S,
     wide: bool,
     left: u64,
     right: u64,
@@ -161,7 +162,7 @@ pub(crate) fn arithmetic(
             (result, carry, (left as i64).overflowing_add(right as i64).1)
         };
         if set_flags {
-            cpu.nzcv.set(result >> 63 != 0, result == 0, carry, overflow);
+            cpu.nzcv_mut().set(result >> 63 != 0, result == 0, carry, overflow);
         }
         result
     } else {
@@ -175,14 +176,14 @@ pub(crate) fn arithmetic(
             (result, carry, (left as i32).overflowing_add(right as i32).1)
         };
         if set_flags {
-            cpu.nzcv.set(result >> 31 != 0, result == 0, carry, overflow);
+            cpu.nzcv_mut().set(result >> 31 != 0, result == 0, carry, overflow);
         }
         u64::from(result)
     }
 }
 
-pub(crate) fn add_carry(
-    cpu: &mut Aarch64CpuState,
+pub(crate) fn add_carry<S: ScalarAccess>(
+    cpu: &mut S,
     wide: bool,
     left: u64,
     right: u64,
@@ -199,7 +200,7 @@ pub(crate) fn add_carry(
     if set_flags {
         let sign = 1_u64 << (bits - 1);
         let overflow = (!(left ^ operand) & (left ^ result) & sign) != 0;
-        cpu.nzcv
+        cpu.nzcv_mut()
             .set(result & sign != 0, result == 0, unsigned >> bits != 0, overflow);
     }
     result

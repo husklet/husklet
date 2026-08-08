@@ -13,8 +13,8 @@ impl Port for Identity {
     }
 }
 
-pub(crate) fn stage_branch(
-    staged: &mut crate::Aarch64CpuState,
+pub(crate) fn stage_branch<S: super::state::ScalarAccess>(
+    staged: &mut S,
     instruction: u64,
     target: u64,
 ) -> crate::Aarch64ExecutionExit {
@@ -25,6 +25,6 @@ pub(crate) fn stage_branch(
             access: crate::AccessKind::Execute,
         };
     }
-    staged.pc = target;
+    staged.set_pc(target);
     crate::Aarch64ExecutionExit::Branch { target }
 }

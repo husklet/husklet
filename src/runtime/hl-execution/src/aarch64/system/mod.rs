@@ -49,13 +49,13 @@ impl Register {
         }
     }
 
-    pub(crate) fn write_local(self, cpu: &mut Aarch64CpuState, value: u64) -> bool {
+    pub(crate) fn write_local<S: crate::aarch64::state::ScalarAccess>(self, cpu: &mut S, value: u64) -> bool {
         match self {
-            Self::Nzcv => cpu.nzcv = crate::Nzcv::from_bits(value as u32),
+            Self::Nzcv => *cpu.nzcv_mut() = crate::Nzcv::from_bits(value as u32),
             Self::InterruptMask => {}
-            Self::Fpcr => cpu.fpcr = value & 0x07c8_0000,
-            Self::Fpsr => cpu.fpsr = value & 0x0800_009f,
-            Self::ThreadPointer => cpu.tls = value,
+            Self::Fpcr => cpu.set_fpcr(value & 0x07c8_0000),
+            Self::Fpsr => cpu.set_fpsr(value & 0x0800_009f),
+            Self::ThreadPointer => cpu.set_tls(value),
             Self::CacheType
             | Self::ZeroBlock
             | Self::ReadonlyThreadPointer
