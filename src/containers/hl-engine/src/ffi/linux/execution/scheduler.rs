@@ -375,9 +375,11 @@ impl GuestExecutor {
             ..
         } = &action
         {
+            // This fires for every guest SIGSEGV, whether or not native execution ran and whether
+            // or not the guest handles it, so it must not name native execution or call it terminal.
             hl_log::hl_error!(
                 hl_log::tag::EXEC,
-                "native execution took a terminal fault signal=11 code={code} address={address:#x} process={:?}",
+                "guest took a fault signal=11 code={code} address={address:#x} process={:?}",
                 run.process,
             );
             if let Some(boundaries) = &native.boundaries {
