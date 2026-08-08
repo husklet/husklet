@@ -8,7 +8,7 @@ build:
   flags: []
 cases:
   - id: runtime/memory/mlockall-scope
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU host mlock policy diverges from the engine lock-scope contract on both guest ISAs"
       evidence: "tests/runtime/memory/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
@@ -17,16 +17,19 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/mlockallscope.txt }
   - id: runtime/memory/vector-limits
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU host writev limits diverge from the engine Linux cap contract on both guest ISAs"
       evidence: "tests/runtime/memory/QEMU_EVIDENCE.md"
     compat: { class: compatibility }
     build: { source: source/vectorlimits.c, output: vector-limits, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/vector-limits }
     run: []
-    expect: { exit: 0, stdout: golden/vectorlimits.txt }
+    expect:
+      exit: 0
+      stdout: golden/vectorlimits.txt
+      stderr: ["vector-limits capped=2147479552 signed=-1 errno=22"]
   - id: runtime/memory/vector-order
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU host vector admission ordering diverges from the engine contract on both guest ISAs"
       evidence: "tests/runtime/memory/QEMU_EVIDENCE.md"
     compat: { class: compatibility }

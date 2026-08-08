@@ -8,7 +8,7 @@ build:
   flags: []
 cases:
   - id: runtime/syscalls/aio-pread
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -17,7 +17,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/aio_pread.out }
   - id: runtime/syscalls/aio-persist
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -26,7 +26,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/aio_persist.out }
   - id: runtime/syscalls/aio-bad-opcode
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -77,7 +77,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/epoll_pwait.out }
   - id: runtime/syscalls/epoll-pwait2
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -86,7 +86,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/epoll_pwait2.out }
   - id: runtime/syscalls/epoll-reblock-fin
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -109,7 +109,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/eventfd_nonblock.out }
   - id: runtime/syscalls/fanotify
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -174,7 +174,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/getpid_cache.out }
   - id: runtime/syscalls/high-fd-emul
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -239,7 +239,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/pidfd_open.out }
   - id: runtime/syscalls/pidfd-signal
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -262,7 +262,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/prctl_dumpable.out }
   - id: runtime/syscalls/prctl-ltp
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -299,7 +299,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/fork_registry.out }
   - id: runtime/syscalls/process-vm
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -406,7 +406,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/prctl_name.out }
   - id: runtime/syscalls/getrandom-len
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -464,7 +464,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/rlimit_fsize.out }
   - id: runtime/syscalls/pipe2-badflag
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -501,7 +501,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/prctl_timerslack.out }
   - id: runtime/syscalls/pwritev2-rwf
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -603,7 +603,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/fcntl_probe.out }
   - id: runtime/syscalls/modern-procfd
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -666,7 +666,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/output_fault3.out }
   - id: runtime/syscalls/iov-bounds
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }

@@ -9,7 +9,7 @@ use hl_container::{
 use std::path::PathBuf;
 
 /// Names hl-container can honour, and the ones it cannot express yet.
-const SUPPORTED: [&str; 16] = [
+const SUPPORTED: [&str; 17] = [
     "HL_NETNS",
     "HL_NETBR",
     "HL_IP",
@@ -26,6 +26,7 @@ const SUPPORTED: [&str; 16] = [
     "HL_PCACHE_DIR",
     "HL_SECCOMP_BASELINE",
     "HL_ULIMITS",
+    "HL_HOSTNAME",
 ];
 /// Recognised engine options with no hl-container expression; a case asking for one cannot run.
 const UNWIRED: [&str; 0] = [];
@@ -44,6 +45,7 @@ pub(crate) struct EngineOptions {
     translation_cache: Option<PathBuf>,
     seccomp_baseline: Option<SeccompBaseline>,
     limits: Vec<ResourceLimit>,
+    hostname: Option<String>,
     bridge: Option<String>,
     address: Option<std::net::Ipv4Addr>,
     /// Recognised but unwired names, retained so the case fails by name rather than silently.
@@ -89,6 +91,8 @@ impl EngineOptions {
             "HL_MEM_MAX" => self.memory_bytes = Some(setting.number()?),
             "HL_PIDS_MAX" => self.process_count = Some(setting.number()?),
             "HL_ULIMITS" => self.limits = setting.limits()?,
+            "HL_HOSTNAME" if value.is_empty() => return Err("HL_HOSTNAME is empty".into()),
+            "HL_HOSTNAME" => self.hostname = Some(value.to_owned()),
             "HL_PCACHE_DIR" => self.translation_cache = Some(PathBuf::from(value)),
             "HL_SECCOMP_BASELINE" => {
                 self.seccomp_baseline = Some(match value {
@@ -148,6 +152,10 @@ impl EngineOptions {
             (None, Some(gid)) => Some((0, gid)),
             (None, None) => None,
         }
+    }
+
+    pub(crate) fn hostname(&self) -> Option<&str> {
+        self.hostname.as_deref()
     }
 
     pub(crate) fn mounts(&self) -> &[Mount] {

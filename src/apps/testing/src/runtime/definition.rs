@@ -661,4 +661,22 @@ mod tests {
             assert!(category(&invalid).is_err());
         }
     }
+
+    #[test]
+    fn oracle_exclusion_skips_the_oracle_and_keeps_the_engine_active() {
+        let row = |reason: &str, evidence: &str| {
+            format!(
+                "  - id: runtime/one\n    build: {{ source: one.c, output: one, flags: [] }}\n    artifact: {{ destination: /opt/one }}\n    status: !oracle-excluded\n      reason: {reason:?}\n      evidence: {evidence:?}\n    compat: {{ class: compatibility }}\n    run: []\n    expect: {{ exit: 0, stdout: golden/one.out }}\n"
+            )
+        };
+
+        let app = category(&row("QEMU cannot referee this", "ORACLE.md")).unwrap();
+        assert!(app.cases[0].inactive(EngineHost::Macos).is_none());
+        assert!(app.cases[0].inactive(EngineHost::Linux).is_none());
+        assert_eq!(app.cases[0].status.oracle_inactive().unwrap().0, "ORACLE-EXCLUDED");
+
+        for invalid in [row("", "evidence"), row("reason", "")] {
+            assert!(category(&invalid).is_err());
+        }
+    }
 }

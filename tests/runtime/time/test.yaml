@@ -50,7 +50,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/clockids.out }
   - id: runtime/time/posixtimer
-    status: !broken
+    status: !oracle-excluded
       reason: "QEMU user mode exposes fewer than the fixture's required 64 simultaneous POSIX timers"
       evidence: "tests/runtime/time/ORACLE.md"
     compat: { class: compatibility }

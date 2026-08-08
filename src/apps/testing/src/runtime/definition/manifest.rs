@@ -133,6 +133,8 @@ pub(super) enum Status {
     Broken(Evidence),
     Unsupported(Evidence),
     HostExcluded(HostExclusion),
+    /// The QEMU oracle cannot referee this case, but the engine still runs it against the golden.
+    OracleExcluded(Evidence),
 }
 
 #[derive(Deserialize)]
@@ -251,7 +253,7 @@ impl Build {
 
 impl Status {
     pub(super) fn validate(&self) -> Result<(), Error> {
-        if let Self::Broken(evidence) | Self::Unsupported(evidence) = self
+        if let Self::Broken(evidence) | Self::Unsupported(evidence) | Self::OracleExcluded(evidence) = self
             && (evidence.reason.trim().is_empty() || evidence.evidence.trim().is_empty())
         {
             return Err("non-active status requires non-empty reason and evidence".into());
@@ -264,7 +266,7 @@ impl Status {
 
     pub(super) fn inactive(&self, host: EngineHost) -> Option<(&'static str, &str, &str)> {
         match self {
-            Self::Active => None,
+            Self::Active | Self::OracleExcluded(_) => None,
             Self::Broken(evidence) => Some(("BROKEN", &evidence.reason, &evidence.evidence)),
             Self::Unsupported(evidence) => Some(("UNSUPPORTED", &evidence.reason, &evidence.evidence)),
             Self::HostExcluded(exclusion) => exclusion.inactive(host),
@@ -276,6 +278,7 @@ impl Status {
             Self::Active | Self::HostExcluded(_) => None,
             Self::Broken(evidence) => Some(("BROKEN", &evidence.reason, &evidence.evidence)),
             Self::Unsupported(evidence) => Some(("UNSUPPORTED", &evidence.reason, &evidence.evidence)),
+            Self::OracleExcluded(evidence) => Some(("ORACLE-EXCLUDED", &evidence.reason, &evidence.evidence)),
         }
     }
 }
