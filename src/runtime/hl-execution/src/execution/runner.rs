@@ -429,9 +429,11 @@ impl ExecutionMachine {
         memory: &mut M,
     ) -> StepOutcome {
         let instruction = cpu.pc;
-        let word = match memory.read(instruction, 4) {
-            Ok(value) => value as u32,
-            Err(()) => {
+        // Instruction fetch must demand EXECUTE; an operand read would only demand READ and defeat NX.
+        let mut encoded = [0_u8; 4];
+        let word = match memory.fetch(instruction, &mut encoded) {
+            Ok(4) => u32::from_le_bytes(encoded),
+            _ => {
                 return StepOutcome::Fault(ExecutionFault::Fetch(MemoryFault {
                     instruction,
                     address: instruction,

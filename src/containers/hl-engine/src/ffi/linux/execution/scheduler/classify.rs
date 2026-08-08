@@ -140,7 +140,10 @@ impl GuestExecutor {
         M: super::super::operand::ImageMemory,
     {
         let (address, span) = match fault {
-            hl_execution::ExecutionFault::Memory(value) => (value.address, None),
+            // A denied instruction fetch is a guest SIGSEGV like any other permission fault, not a thread kill.
+            hl_execution::ExecutionFault::Memory(value) | hl_execution::ExecutionFault::Fetch(value) => {
+                (value.address, None)
+            }
             hl_execution::ExecutionFault::Operand(value) => (value.address(), Some(value.length())),
             hl_execution::ExecutionFault::Alignment { address, .. } => {
                 return Some((7, 1, address));
