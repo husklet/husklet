@@ -96,7 +96,11 @@ pub(super) struct NativeCounters {
     pub(super) services: u64,
 }
 
-pub(super) type NativeSite = (hl_task::ProcessId, u64, u64, u64, u64);
+/// Process, image incarnation, executable-range version, entry PC. The ledger
+/// generation is deliberately absent: it counts every mapping transition in the
+/// space, while the range version already moves for exactly the transitions that
+/// can change the bytes at this PC.
+pub(super) type NativeSite = (hl_task::ProcessId, u64, u64, u64);
 pub(super) type NativeSource = (hl_task::ProcessId, u64, u64, u64);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,7 +251,7 @@ impl NativePool {
         direct_guard: bool,
     ) {
         if self.diagnostics {
-            *self.fallback_weight.entry(instruction.4).or_default() += 1;
+            *self.fallback_weight.entry(instruction.3).or_default() += 1;
         }
         if Self::fallback_suppresses(executed, budget) {
             if direct_guard && !self.direct_declined.contains(&entry) && self.direct_declined.len() < NATIVE_SITE_LIMIT
@@ -257,7 +261,7 @@ impl NativePool {
                 // One line per latch rather than per refusal, so the site limit bounds the output.
                 eprintln!(
                     "hl-native-suppress-cause: entry={:#x} instruction={:#x} executed={executed} budget={budget}",
-                    entry.4, instruction.4,
+                    entry.3, instruction.3,
                 );
             }
         }
@@ -280,15 +284,14 @@ impl NativePool {
             }
     }
 
-    /// The observation table is a warm-up heuristic keyed by mapping generation,
-    /// so a remapping workload fills it with keys no lookup can match again.
-    /// Reclaim those instead of giving up native execution for the whole process.
+    /// The observation table is a warm-up heuristic keyed by image incarnation,
+    /// so an exec fills it with keys no lookup can match again. Reclaim those
+    /// instead of giving up native execution for the whole process.
     pub(super) fn observe(&mut self, key: NativeSite) -> u8 {
-        let (process, lease, ledger, _, _) = key;
+        let (process, lease, _, _) = key;
         if !self.observations.contains_key(&key) && self.observations.len() >= NATIVE_SITE_LIMIT {
-            self.observations.retain(|(owner, held, ledgered, _, _), _| {
-                *owner != process || (*held == lease && *ledgered == ledger)
-            });
+            self.observations
+                .retain(|(owner, held, _, _), _| *owner != process || *held == lease);
             if self.observations.len() >= NATIVE_SITE_LIMIT {
                 self.observations.clear();
             }
@@ -315,19 +318,19 @@ impl NativePool {
     pub(super) fn reset_observed_sources(&mut self, process: hl_task::ProcessId, incarnation: u64) -> Option<()> {
         self.executor(process)?.reset(incarnation).ok()?;
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
-        self.observations.retain(|(owner, _, _, _, _), _| *owner != process);
-        self.suppressed.retain(|(owner, _, _, _, _)| *owner != process);
-        self.direct_declined.retain(|(owner, _, _, _, _)| *owner != process);
-        self.fallbacks.retain(|(owner, _, _, _, _)| *owner != process);
+        self.observations.retain(|(owner, _, _, _), _| *owner != process);
+        self.suppressed.retain(|(owner, _, _, _)| *owner != process);
+        self.direct_declined.retain(|(owner, _, _, _)| *owner != process);
+        self.fallbacks.retain(|(owner, _, _, _)| *owner != process);
         Some(())
     }
 
     pub(super) fn purge_process_metadata(&mut self, process: hl_task::ProcessId) {
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
-        self.observations.retain(|(owner, _, _, _, _), _| *owner != process);
-        self.suppressed.retain(|(owner, _, _, _, _)| *owner != process);
-        self.direct_declined.retain(|(owner, _, _, _, _)| *owner != process);
-        self.fallbacks.retain(|(owner, _, _, _, _)| *owner != process);
+        self.observations.retain(|(owner, _, _, _), _| *owner != process);
+        self.suppressed.retain(|(owner, _, _, _)| *owner != process);
+        self.direct_declined.retain(|(owner, _, _, _)| *owner != process);
+        self.fallbacks.retain(|(owner, _, _, _)| *owner != process);
         self.source_incarnations.remove(&process);
         self.instruction_epochs.remove(&process);
         self.direct_modes.remove(&process);
@@ -372,18 +375,16 @@ impl NativePool {
             self.sources.retain(|(process, _, _, _), _| live.contains(process));
         }
         if !self.observations.is_empty() {
-            self.observations
-                .retain(|(process, _, _, _, _), _| live.contains(process));
+            self.observations.retain(|(process, _, _, _), _| live.contains(process));
         }
         if !self.suppressed.is_empty() {
-            self.suppressed.retain(|(process, _, _, _, _)| live.contains(process));
+            self.suppressed.retain(|(process, _, _, _)| live.contains(process));
         }
         if !self.direct_declined.is_empty() {
-            self.direct_declined
-                .retain(|(process, _, _, _, _)| live.contains(process));
+            self.direct_declined.retain(|(process, _, _, _)| live.contains(process));
         }
         if !self.fallbacks.is_empty() {
-            self.fallbacks.retain(|(process, _, _, _, _)| live.contains(process));
+            self.fallbacks.retain(|(process, _, _, _)| live.contains(process));
         }
         if !self.source_incarnations.is_empty() {
             self.source_incarnations.retain(|process, _| live.contains(process));
