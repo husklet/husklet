@@ -101,6 +101,13 @@ pub(super) struct NativeCounters {
     pub(super) declined_suppressed: u64,
     pub(super) declined_cold: u64,
     pub(super) declined_executable: u64,
+    /// Diagnostic: how the suppression verdict is faring. `verdicts` counts fallbacks whose
+    /// run retired too little, `latches` the ones that newly entered `suppressed`, and
+    /// `clears` the entries any reset or sweep removed from it.
+    pub(super) suppress_verdicts: u64,
+    pub(super) suppress_latches: u64,
+    pub(super) suppress_deferred: u64,
+    pub(super) suppress_clears: u64,
 }
 
 /// Process, image incarnation, executable-range version, entry PC. The ledger
@@ -261,15 +268,20 @@ impl NativePool {
             *self.fallback_weight.entry(instruction.3).or_default() += 1;
         }
         if Self::fallback_suppresses(executed, budget) {
+            self.counters.suppress_verdicts += 1;
             if direct_guard && !self.direct_declined.contains(&entry) && self.direct_declined.len() < NATIVE_SITE_LIMIT
             {
+                self.counters.suppress_deferred += 1;
                 self.direct_declined.insert(entry);
-            } else if self.suppressed.len() < NATIVE_SITE_LIMIT && self.suppressed.insert(entry) && self.diagnostics {
-                // One line per latch rather than per refusal, so the site limit bounds the output.
-                eprintln!(
-                    "hl-native-suppress-cause: entry={:#x} instruction={:#x} executed={executed} budget={budget}",
-                    entry.3, instruction.3,
-                );
+            } else if self.suppressed.len() < NATIVE_SITE_LIMIT && self.suppressed.insert(entry) {
+                self.counters.suppress_latches += 1;
+                if self.diagnostics {
+                    // One line per latch rather than per refusal, so the site limit bounds the output.
+                    eprintln!(
+                        "hl-native-suppress-cause: entry={:#x} instruction={:#x} executed={executed} budget={budget}",
+                        entry.3, instruction.3,
+                    );
+                }
             }
         }
         if self.fallbacks.len() < NATIVE_SITE_LIMIT {
@@ -326,7 +338,9 @@ impl NativePool {
         self.executor(process)?.reset(incarnation).ok()?;
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _), _| *owner != process);
+        let held = self.suppressed.len();
         self.suppressed.retain(|(owner, _, _, _)| *owner != process);
+        self.counters.suppress_clears += (held - self.suppressed.len()) as u64;
         self.direct_declined.retain(|(owner, _, _, _)| *owner != process);
         self.fallbacks.retain(|(owner, _, _, _)| *owner != process);
         Some(())
@@ -335,7 +349,9 @@ impl NativePool {
     pub(super) fn purge_process_metadata(&mut self, process: hl_task::ProcessId) {
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _), _| *owner != process);
+        let held = self.suppressed.len();
         self.suppressed.retain(|(owner, _, _, _)| *owner != process);
+        self.counters.suppress_clears += (held - self.suppressed.len()) as u64;
         self.direct_declined.retain(|(owner, _, _, _)| *owner != process);
         self.fallbacks.retain(|(owner, _, _, _)| *owner != process);
         self.source_incarnations.remove(&process);
@@ -385,7 +401,9 @@ impl NativePool {
             self.observations.retain(|(process, _, _, _), _| live.contains(process));
         }
         if !self.suppressed.is_empty() {
+            let held = self.suppressed.len();
             self.suppressed.retain(|(process, _, _, _)| live.contains(process));
+            self.counters.suppress_clears += (held - self.suppressed.len()) as u64;
         }
         if !self.direct_declined.is_empty() {
             self.direct_declined.retain(|(process, _, _, _)| live.contains(process));
@@ -585,6 +603,14 @@ impl Drop for NativePool {
                     .saturating_sub(self.counters.declined_executable)
                     .saturating_sub(self.counters.declined_suppressed)
                     .saturating_sub(self.counters.declined_cold),
+            );
+            eprintln!(
+                "hl-native-suppress: verdicts={} latches={} deferred={} clears={} held={}",
+                self.counters.suppress_verdicts,
+                self.counters.suppress_latches,
+                self.counters.suppress_deferred,
+                self.counters.suppress_clears,
+                self.suppressed.len(),
             );
             let mut fallback: Vec<_> = self.fallback_weight.iter().map(|(pc, n)| (*n, *pc)).collect();
             fallback.sort_unstable_by(|a, b| b.cmp(a));
