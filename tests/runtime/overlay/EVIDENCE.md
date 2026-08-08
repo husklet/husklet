@@ -75,9 +75,14 @@ that resolves no name in the immutable chain.
 
 ## Whiteout publication was unwired, and is now wired
 
+<<<<<<< HEAD
 `path/overlay_publish.rs` defined `publish_whiteout` and `publish_opaque` under
 `#[cfg(test)]`, with that file's own unit test as their only caller, so no
 production path ever hid a lower name. `unlink("/etc/passwd")` returned `EIO`.
+=======
+`runtime/overlay/lower-whiteout` fails on both ISAs at the point where a
+lower-origin name must be removed: `unlink("/etc/passwd")` returns `EIO`.
+>>>>>>> 36a060744
 
 The `EIO` was `EBADF`: `ParentLease::as_raw_fd` yields `-1` when the walk
 selected a lower parent and no upper copy exists, and `HostError` maps an
@@ -85,6 +90,7 @@ unlisted errno to `Io`. Three separate operations reached the host that way —
 `unlinkat`, and also `mkdirat`/`symlinkat` under a lower-only parent, neither of
 which had anything to do with markers.
 
+<<<<<<< HEAD
 What now publishes a marker, and when:
 
 * `overlay_publish::remove` runs for every `Unlink`. It publishes `.wh.NAME` in
@@ -160,3 +166,44 @@ reason rather than being made green.
 
 Owner: the `hl-engine` path resolver lane (STAT-FSTATAT); the remaining
 `coherence` obligation belongs with name bindings.
+=======
+Owner: the `hl-engine` path resolver lane (STAT-FSTATAT).
+
+## `coherence` fails for an unrelated reason: `/etc/hostname` is a name binding
+
+The whiteout attribution above was wrong for `coherence`. That case never
+reaches a lower-layer name at all. `Identity::mounts` binds `hosts`,
+`resolv.conf` and `hostname` from the per-container service state directory onto
+`/etc/*`, and `Service::launch_locked` applies them on every launch, so the
+`/etc/hostname` the case opens is the runtime's own file, outside any layer.
+The probe agrees: `rename("/etc/passwd")` succeeds with copy-up and a published
+source whiteout, while `rename`/`unlink` of `hostname`, `hosts` and
+`resolv.conf` return `EROFS` — exactly the three bound names.
+
+Two independent defects sit behind exit 15, and only the first is a bug:
+
+1. `path::mutation::prepare` returns `ReadOnly` for *any* name binding, ignoring
+   the binding's `read_only` flag, while `path::host` honours it for `open`.
+   `Identity::access` yields `ReadWrite` unless `read_only_root`, and
+   `engine::spec` emits the `rw:` prefix, so all three identity bindings are
+   writable — writable through `open`, read-only through every mutation. The
+   case's `open(O_RDWR)`, `msync` and `ftruncate` therefore passed against the
+   bound identity file, not against a copied-up lower.
+
+2. Even if the rename were permitted the case would fail at exit 17. It asserts
+   the moved file reads `MMca`, which requires the oracle fixture's `caca`
+   contents; `Identity::prepare` writes `"{hostname}\n"`, and no harness path
+   sets `spec.hostname`, so the file holds the 12-character container id.
+
+Honouring `read_only` is therefore necessary but not sufficient, and it cannot
+turn this row green. It is also not sufficient for safety: `unlink` and `rename`
+must stay refused whatever the flag says, because the binding's parent is the
+service state directory. `Identity::open`, used by exec and health, returns
+`Corrupt` when one of the three names is missing, so a guest that could unlink
+its own `/etc/hostname` would break exec and health for its container.
+
+The engine oracle models these three paths differently again — as daemon-written
+files in the overlay upper rather than binds — which is why its own
+`tests/compat/overlay/coherence.c` can assert that the rename succeeds. Under a
+binding model that assertion does not hold.
+>>>>>>> 36a060744
