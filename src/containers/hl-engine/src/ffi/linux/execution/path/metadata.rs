@@ -23,51 +23,134 @@ mod xattr;
 
 use xattr::{XattrTarget, XattrTransaction};
 
+/// Host and guest names of a resolved node.
 #[derive(Debug)]
-pub(super) struct Node {
+struct NodeNames {
     path: PathBuf,
     guest: GuestPath,
+}
+
+/// How a resolved node names its host object.
+///
+/// The anchored form keeps the pinned parent and the leaf name the walk already
+/// produced, so metadata is one descriptor-relative call instead of a rendered
+/// path the kernel would have to walk again.
+enum Location {
+    Rendered(NodeNames),
+    Anchored {
+        parent: super::overlay_lease::ParentLease,
+        name: CString,
+        source: std::sync::Arc<super::source::OrdinaryContext>,
+        rendered: std::sync::OnceLock<NodeNames>,
+    },
+}
+
+pub(super) struct Node {
+    location: Location,
     ownership: std::sync::Arc<Registry>,
+}
+
+impl std::fmt::Debug for Node {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.location {
+            Location::Rendered(rendered) => formatter.debug_struct("Node").field("path", &rendered.path).finish(),
+            Location::Anchored { name, .. } => formatter.debug_struct("Node").field("name", name).finish(),
+        }
+    }
 }
 
 impl Node {
     pub(super) fn new(path: PathBuf, guest: GuestPath, ownership: std::sync::Arc<Registry>) -> Self {
-        Self { path, guest, ownership }
+        Self {
+            location: Location::Rendered(NodeNames { path, guest }),
+            ownership,
+        }
+    }
+
+    pub(super) fn anchored(
+        parent: super::overlay_lease::ParentLease,
+        name: CString,
+        source: std::sync::Arc<super::source::OrdinaryContext>,
+        ownership: std::sync::Arc<Registry>,
+    ) -> Self {
+        Self {
+            location: Location::Anchored {
+                parent,
+                name,
+                source,
+                rendered: std::sync::OnceLock::new(),
+            },
+            ownership,
+        }
+    }
+
+    /// Materializes the host path only for the operations that cannot be
+    /// expressed against the pinned parent.
+    fn rendered(&self) -> Result<&NodeNames, RuntimePathError> {
+        match &self.location {
+            Location::Rendered(rendered) => Ok(rendered),
+            Location::Anchored {
+                parent,
+                name,
+                source,
+                rendered,
+            } => {
+                if let Some(value) = rendered.get() {
+                    return Ok(value);
+                }
+                let path = super::pin::Host::path(parent, name)?;
+                let guest = source.guest_path(&path)?;
+                let _ = rendered.set(NodeNames { path, guest });
+                rendered.get().ok_or(RuntimePathError::Invalid)
+            }
+        }
+    }
+
+    fn path(&self) -> Result<&Path, RuntimePathError> {
+        self.rendered().map(|rendered| rendered.path.as_path())
     }
 }
 
 impl ResolvedPathLease for Node {
     fn metadata(&self) -> Result<FileMetadata, RuntimePathError> {
-        let mut value = HostMetadata::path(&self.path)?;
+        let mut value = match &self.location {
+            Location::Anchored { parent, name, .. } => HostMetadata::anchored(parent, name)?,
+            Location::Rendered(rendered) => HostMetadata::path(&rendered.path)?,
+        };
         self.ownership.project(&mut value);
         Ok(value)
     }
     fn resolved_metadata(&self) -> Result<ResolvedMetadata, RuntimePathError> {
-        let mut value = HostMetadata::path_resolved(&self.path)?;
+        let mut value = match &self.location {
+            Location::Anchored { parent, name, .. } => HostMetadata::anchored_resolved(parent, name)?,
+            Location::Rendered(rendered) => HostMetadata::path_resolved(&rendered.path)?,
+        };
         self.ownership.project(&mut value.file);
         Ok(value)
     }
     fn filesystem(&self) -> Result<FilesystemStats, RuntimePathError> {
-        super::filesystem::HostFilesystem::read(&self.path, &self.guest)
+        let rendered = self.rendered()?;
+        super::filesystem::HostFilesystem::read(&rendered.path, &rendered.guest)
     }
     fn truncate(&self, size: u64) -> Result<(), RuntimePathError> {
         std::fs::OpenOptions::new()
             .write(true)
-            .open(&self.path)
+            .open(self.path()?)
             .map_err(HostError::map)?
             .set_len(size)
             .map_err(HostError::map)
     }
     fn read_link(&self) -> Result<Vec<u8>, RuntimePathError> {
-        std::fs::read_link(&self.path)
+        std::fs::read_link(self.path()?)
             .map(|path| path.as_os_str().as_encoded_bytes().to_vec())
             .map_err(HostError::map)
     }
     fn access(&self, plan: &AccessPlan) -> Result<(), RuntimePathError> {
+        let path = self.path()?;
         let metadata = if plan.operand.nofollow {
-            std::fs::symlink_metadata(&self.path)
+            std::fs::symlink_metadata(path)
         } else {
-            std::fs::metadata(&self.path)
+            std::fs::metadata(path)
         }
         .map_err(HostError::map)?;
         let bits = plan.access.bits();
@@ -83,13 +166,19 @@ impl ResolvedPathLease for Node {
         Ok(())
     }
     fn xattr_get(&self, name: &XattrName) -> Result<Vec<u8>, Errno> {
-        XattrTarget::Path(self.path.clone()).get(name)
+        XattrTarget::Path(self.xattr_path()?).get(name)
     }
     fn xattr_list(&self) -> Result<Vec<u8>, Errno> {
-        XattrTarget::Path(self.path.clone()).list()
+        XattrTarget::Path(self.xattr_path()?).list()
     }
     fn prepare_xattr(&self, mutation: RuntimeXattrMutation) -> Result<Box<dyn PreparedXattrMutation>, Errno> {
-        XattrTransaction::prepare(XattrTarget::Path(self.path.clone()), mutation)
+        XattrTransaction::prepare(XattrTarget::Path(self.xattr_path()?), mutation)
+    }
+}
+
+impl Node {
+    fn xattr_path(&self) -> Result<PathBuf, Errno> {
+        self.path().map(Path::to_path_buf).map_err(RuntimePathError::errno)
     }
 }
 
@@ -230,19 +319,39 @@ impl HostMetadata {
         Self::value(&value)
     }
 
+    /// Stats the leaf through the pinned parent, which also selects the layer
+    /// that owns it, so no host path is rendered and no walk is repeated.
+    pub(super) fn anchored(
+        parent: &super::overlay_lease::ParentLease,
+        name: &CString,
+    ) -> Result<FileMetadata, RuntimePathError> {
+        let (_, status) = super::pin::Host::visible_status(parent, name)?;
+        Self::status(&status)
+    }
+
+    pub(super) fn anchored_resolved(
+        parent: &super::overlay_lease::ParentLease,
+        name: &CString,
+    ) -> Result<ResolvedMetadata, RuntimePathError> {
+        let (directory, status) = super::pin::Host::visible_status(parent, name)?;
+        let file = Self::status(&status)?;
+        let (birth, mount) = Self::status_extensions(directory.as_raw_fd(), name, &status);
+        Ok(ResolvedMetadata { birth, mount, file })
+    }
+
     pub(super) fn file(file: &File) -> Result<FileMetadata, RuntimePathError> {
         let value = file.metadata().map_err(HostError::map)?;
         Self::value(&value)
     }
 
-    fn path_resolved(path: &Path) -> Result<ResolvedMetadata, RuntimePathError> {
+    pub(super) fn path_resolved(path: &Path) -> Result<ResolvedMetadata, RuntimePathError> {
         let value = std::fs::symlink_metadata(path).map_err(HostError::map)?;
         let file = Self::value(&value)?;
         let (birth, mount) = Self::path_extensions(path, &value);
         Ok(ResolvedMetadata { birth, mount, file })
     }
 
-    fn file_resolved(file: &File, metadata: FileMetadata) -> Result<ResolvedMetadata, RuntimePathError> {
+    pub(super) fn file_resolved(file: &File, metadata: FileMetadata) -> Result<ResolvedMetadata, RuntimePathError> {
         let value = file.metadata().map_err(HostError::map)?;
         let (birth, mount) = Self::file_extensions(file, &value);
         Ok(ResolvedMetadata {
@@ -323,17 +432,76 @@ impl HostMetadata {
         (None, None)
     }
 
+    #[cfg(target_os = "linux")]
+    fn status_extensions(
+        directory: RawFd,
+        name: &CString,
+        _status: &libc::stat,
+    ) -> (Option<FileTimestamp>, Option<u64>) {
+        Self::linux_extensions(directory, name.as_ptr(), libc::AT_SYMLINK_NOFOLLOW)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn status_extensions(
+        _directory: RawFd,
+        _name: &CString,
+        status: &libc::stat,
+    ) -> (Option<FileTimestamp>, Option<u64>) {
+        (
+            Some(Self::time(status.st_birthtime, status.st_birthtime_nsec)),
+            Some(status.st_dev as u64),
+        )
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn status_extensions(
+        _directory: RawFd,
+        _name: &CString,
+        _status: &libc::stat,
+    ) -> (Option<FileTimestamp>, Option<u64>) {
+        (None, None)
+    }
+
+    /// Builds the guest-facing record from a raw `fstatat` result. The casts
+    /// are identities on Linux but narrow or widen on macOS, whose `stat` uses
+    /// different field widths.
+    #[allow(clippy::unnecessary_cast)]
+    fn status(value: &libc::stat) -> Result<FileMetadata, RuntimePathError> {
+        let kind = Self::kind(value.st_mode as u32)?;
+        Ok(FileMetadata {
+            identity: FileIdentity {
+                device: value.st_dev as u64,
+                inode: value.st_ino as u64,
+            },
+            kind,
+            permissions: Permissions::from_bits((value.st_mode & 0o7777) as u16),
+            links: value.st_nlink as u64,
+            user: value.st_uid,
+            group: value.st_gid,
+            special_device: value.st_rdev as u64,
+            size: value.st_size as u64,
+            blocks_512: value.st_blocks as u64,
+            accessed: Self::time(value.st_atime, value.st_atime_nsec as i64),
+            modified: Self::time(value.st_mtime, value.st_mtime_nsec as i64),
+            changed: Self::time(value.st_ctime, value.st_ctime_nsec as i64),
+        })
+    }
+
+    fn kind(mode: u32) -> Result<FileKind, RuntimePathError> {
+        match mode & native::mode::TYPE_MASK {
+            native::mode::FIFO => Ok(FileKind::Fifo),
+            native::mode::CHARACTER => Ok(FileKind::Character),
+            native::mode::DIRECTORY => Ok(FileKind::Directory),
+            native::mode::BLOCK => Ok(FileKind::Block),
+            native::mode::REGULAR => Ok(FileKind::Regular),
+            native::mode::SYMLINK => Ok(FileKind::Symlink),
+            native::mode::SOCKET => Ok(FileKind::Socket),
+            _ => Err(RuntimePathError::Invalid),
+        }
+    }
+
     fn value(value: &std::fs::Metadata) -> Result<FileMetadata, RuntimePathError> {
-        let kind = match value.mode() & native::mode::TYPE_MASK {
-            native::mode::FIFO => FileKind::Fifo,
-            native::mode::CHARACTER => FileKind::Character,
-            native::mode::DIRECTORY => FileKind::Directory,
-            native::mode::BLOCK => FileKind::Block,
-            native::mode::REGULAR => FileKind::Regular,
-            native::mode::SYMLINK => FileKind::Symlink,
-            native::mode::SOCKET => FileKind::Socket,
-            _ => return Err(RuntimePathError::Invalid),
-        };
+        let kind = Self::kind(value.mode())?;
         Ok(FileMetadata {
             identity: FileIdentity {
                 device: value.dev(),
@@ -397,84 +565,5 @@ impl HostMetadata {
             seconds,
             nanoseconds: u32::try_from(nanoseconds).unwrap_or(0),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::MetadataExt;
-
-    use super::{HostMetadata, Node, Registry};
-    use hl_linux::{AccessPlan, PathOperand};
-    use hl_runtime::{Access, GuestPath, GuestPathBytes, OpenDirectory, ResolvedPathLease};
-
-    #[test]
-    fn nofollow_access_checks_the_symlink_node() {
-        let root = std::env::temp_dir().join(format!("hl-access-link-{}", std::process::id()));
-        let link = root.join("dangling");
-        std::fs::create_dir_all(&root).unwrap();
-        let _ = std::fs::remove_file(&link);
-        std::os::unix::fs::symlink("missing", &link).unwrap();
-        let node = Node::new(
-            link.clone(),
-            GuestPath::new("/dangling").unwrap(),
-            std::sync::Arc::new(Registry::default()),
-        );
-        let plan = |nofollow| AccessPlan {
-            operand: PathOperand {
-                directory: OpenDirectory::default(),
-                path: GuestPathBytes::new(b"/dangling").unwrap(),
-                allow_empty: false,
-                nofollow,
-            },
-            access: Access::from_bits(0).unwrap(),
-            effective_ids: false,
-        };
-        assert!(node.access(&plan(false)).is_err());
-        assert_eq!(node.access(&plan(true)), Ok(()));
-        std::fs::remove_file(link).unwrap();
-        std::fs::remove_dir(root).unwrap();
-    }
-
-    #[test]
-    fn resolved_metadata_extensions() {
-        let path = std::env::temp_dir().join(format!("hl-statx-meta-{}", std::process::id()));
-        let file = std::fs::File::create(&path).unwrap();
-        let path_metadata = HostMetadata::path_resolved(&path).unwrap();
-        let file_metadata = HostMetadata::file(&file).unwrap();
-        let descriptor_metadata = HostMetadata::file_resolved(&file, file_metadata).unwrap();
-        assert!(path_metadata.birth.is_some());
-        assert_eq!(path_metadata.birth, descriptor_metadata.birth);
-        assert!(path_metadata.mount.is_some());
-        assert_eq!(path_metadata.mount, descriptor_metadata.mount);
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn ownership_hardlink() {
-        let root = std::env::temp_dir().join(format!("hl-owner-{}", std::process::id()));
-        let source = root.join("source");
-        let alias = root.join("alias");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(&source, b"data").unwrap();
-        std::fs::hard_link(&source, &alias).unwrap();
-        let file = std::fs::File::open(&source).unwrap();
-        let host = file.metadata().unwrap();
-        let user = host.uid().wrapping_add(10_000);
-        let group = host.gid().wrapping_add(20_000);
-        let registry = Registry::default();
-        registry.set(file.as_raw_fd(), user, group).unwrap();
-
-        for path in [&source, &alias] {
-            let mut projected = HostMetadata::path(path).unwrap();
-            registry.project(&mut projected);
-            assert_eq!((projected.user, projected.group), (user, group));
-            let physical = std::fs::metadata(path).unwrap();
-            assert_eq!((physical.uid(), physical.gid()), (host.uid(), host.gid()));
-        }
-
-        drop(file);
-        std::fs::remove_dir_all(root).unwrap();
     }
 }

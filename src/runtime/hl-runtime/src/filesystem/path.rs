@@ -248,6 +248,11 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Ok(node) => node,
             Err(error) => return LinuxResult::Error(error),
         };
+        // F_OK asks only whether the name resolves, which the walk above already
+        // proved, so it never needs the node's metadata.
+        if plan.access.bits() == 0 {
+            return LinuxResult::Value(0);
+        }
         let metadata = match node.metadata() {
             Ok(metadata) => metadata,
             Err(error) => return LinuxResult::Error(error.errno()),

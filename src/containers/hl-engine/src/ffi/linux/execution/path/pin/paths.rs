@@ -58,6 +58,15 @@ impl Host {
         parent: &'lease ParentLease,
         name: &CStr,
     ) -> Result<&'lease OwnedFd, RuntimePathError> {
+        Self::visible_status(parent, name).map(|(parent, _)| parent)
+    }
+
+    /// Selects the layer holding `name` and returns its status from the same
+    /// `fstatat` that decided the layer, so no caller needs a second walk.
+    pub(in crate::ffi::linux::execution::path) fn visible_status<'lease>(
+        parent: &'lease ParentLease,
+        name: &CStr,
+    ) -> Result<(&'lease OwnedFd, libc::stat), RuntimePathError> {
         let mut candidates = Vec::with_capacity(parent.lower_parents().len() + 1);
         candidates.push(parent.selected());
         candidates.extend(parent.lower_parents());
@@ -76,7 +85,8 @@ impl Host {
                 )
             };
             if result == 0 {
-                return Ok(candidate);
+                // SAFETY: the successful fstatat initialized every field.
+                return Ok((candidate, unsafe { status.assume_init() }));
             }
             let error = std::io::Error::last_os_error();
             if error.raw_os_error() != Some(libc::ENOENT) {

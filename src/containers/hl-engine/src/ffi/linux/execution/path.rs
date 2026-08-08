@@ -42,6 +42,9 @@ pub(in crate::ffi::linux::execution) use mapping::MappingPaths;
 mod materialization;
 #[path = "path/metadata.rs"]
 mod metadata;
+#[cfg(test)]
+#[path = "path/metadata_test.rs"]
+mod metadata_tests;
 mod mutation;
 #[path = "path/namespace.rs"]
 mod namespace;
