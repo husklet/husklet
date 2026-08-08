@@ -199,6 +199,14 @@ async fn execute(
         return Err("benchmark artifact identity changed after resume admission".into());
     }
     let image_us = elapsed_us(image_started);
+    // Attribution probe: reading the fresh rootfs sequentially isolates first-touch demand paging
+    // from the cold measurement. Off unless HL_BENCH_ROOTFS_PREFETCH is set.
+    let prefetch_started = Instant::now();
+    if std::env::var_os("HL_BENCH_ROOTFS_PREFETCH").is_some() {
+        let root = image.path().to_path_buf();
+        tokio::task::spawn_blocking(move || prefetch_tree(&root)).await?;
+    }
+    let prefetch_us = elapsed_us(prefetch_started);
     let outcome = execute_with_image(
         Arc::clone(&benchmark),
         case_index,
@@ -221,6 +229,7 @@ async fn execute(
             release?;
             result.setup.extend(prepared.setup);
             result.setup.insert("execution_image_materialize".into(), image_us);
+            result.setup.insert("execution_rootfs_prefetch".into(), prefetch_us);
             result
                 .setup
                 .insert("execution_image_release".into(), elapsed_us(cleanup_started));
@@ -274,6 +283,37 @@ async fn execute_with_image(
     measurement.setup.insert("container_service".into(), service_us);
     measurement.setup.insert("guest_stage".into(), stage_us);
     Ok(measurement)
+}
+
+/// Reads every regular file in the tree so the page cache is warm before the first invocation.
+fn prefetch_tree(root: &std::path::Path) {
+    let mut pending = vec![root.to_path_buf()];
+    let mut buffer = vec![0_u8; 1 << 20];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                read_fully(&entry.path(), &mut buffer);
+            }
+        }
+    }
+}
+
+fn read_fully(path: &std::path::Path, buffer: &mut [u8]) {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return;
+    };
+    while let Ok(read) = file.read(buffer) {
+        if read == 0 {
+            break;
+        }
+    }
 }
 
 fn elapsed_us(started: Instant) -> u128 {
