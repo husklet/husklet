@@ -8,7 +8,7 @@ use super::fixture;
 
 type Error = Box<dyn std::error::Error>;
 
-pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
+pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
     let roots = TempDir::new()?;
     let server_root = fixture::rootfs(roots.path(), "server")?;
     let client_root = fixture::rootfs(roots.path(), "client")?;

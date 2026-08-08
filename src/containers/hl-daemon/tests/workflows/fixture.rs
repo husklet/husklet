@@ -11,11 +11,11 @@ use std::{
 
 type Error = Box<dyn std::error::Error>;
 
-pub(super) const IMAGE: &str = "workflow/alpine:test";
+pub(crate) const IMAGE: &str = "workflow/alpine:test";
 
 /// Wrap the pinned Alpine minirootfs as a Docker save archive accepted by the
 /// daemon's real image-load endpoint. The minirootfs itself is the OCI layer.
-pub(super) fn alpine(work: &Path) -> Result<PathBuf, Error> {
+pub(crate) fn alpine(work: &Path) -> Result<PathBuf, Error> {
     let source = env::var_os("HL_ALPINE_ARCHIVE")
         .map(PathBuf::from)
         .ok_or("HL_ALPINE_ARCHIVE must name the pinned Alpine minirootfs")?;
@@ -53,7 +53,7 @@ pub(super) fn alpine(work: &Path) -> Result<PathBuf, Error> {
 
 /// Materialize the same pinned layer as an executable directory fixture for
 /// headless container workflows that exercise the domain API directly.
-pub(super) fn rootfs(work: &Path, name: &str) -> Result<PathBuf, Error> {
+pub(crate) fn rootfs(work: &Path, name: &str) -> Result<PathBuf, Error> {
     let source = env::var_os("HL_ALPINE_ARCHIVE")
         .map(PathBuf::from)
         .ok_or("HL_ALPINE_ARCHIVE must name the pinned Alpine minirootfs")?;

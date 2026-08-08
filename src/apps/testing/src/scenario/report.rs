@@ -6,14 +6,6 @@ use crate::{
 use clap::Args;
 use std::collections::BTreeSet;
 
-const LEGACY_WORKFLOWS: [&str; 5] = [
-    "docker-build",
-    "docker-net",
-    "compose",
-    "compose-multinet",
-    "pty-conformance",
-];
-
 #[derive(Args)]
 pub(crate) struct ProvenanceOptions {
     /// Print one tab-separated row per YAML case.
@@ -37,9 +29,8 @@ pub(super) fn inventory(scenarios: Vec<Scenario>) -> Result<(), Error> {
         .sum::<usize>();
     let images = image_references(&scenarios).len();
     println!(
-        "{{\"scenario_definitions\":{},\"scenario_cases\":{cases},\"case_target_pairs\":{targets},\"image_references\":{images},\"legacy_workflows\":{}}}",
-        scenarios.len(),
-        LEGACY_WORKFLOWS.len()
+        "{{\"scenario_definitions\":{},\"scenario_cases\":{cases},\"case_target_pairs\":{targets},\"image_references\":{images}}}",
+        scenarios.len()
     );
     Ok(())
 }
@@ -90,12 +81,6 @@ pub(super) fn provenance(scenarios: Vec<Scenario>, options: ProvenanceOptions) -
             opaque.into_iter().take(10).collect::<Vec<_>>().join(", ")
         )
         .into())
-    }
-}
-
-pub(super) fn workflows() {
-    for name in LEGACY_WORKFLOWS {
-        println!("{name}");
     }
 }
 

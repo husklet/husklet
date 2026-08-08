@@ -46,8 +46,6 @@ enum Command {
     ScenarioInventory,
     /// Audit YAML case identity, image, target, and action provenance.
     ScenarioProvenance(scenario::ProvenanceOptions),
-    /// List retained workflow names while their orchestration is migrated.
-    ScenarioWorkflows,
     /// Verify that every selected scenario image exists in the exact offline cache.
     ScenarioCachePreflight(scenario::CachePreflightOptions),
     /// Run repository benchmark definitions.
@@ -87,10 +85,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Scenarios(options) => scenario::run(options).await,
         Command::ScenarioInventory => scenario::inventory(),
         Command::ScenarioProvenance(options) => scenario::provenance(options),
-        Command::ScenarioWorkflows => {
-            scenario::workflows();
-            Ok(())
-        }
         Command::ScenarioCachePreflight(options) => scenario::cache_preflight(options),
         Command::Bench(options) => bench::run(options).await,
         Command::Benchmark { command } => benchmark::Application::new(std::env::var_os("PATH"))
@@ -114,7 +108,6 @@ mod cli_tests {
             "scenarios",
             "scenario-inventory",
             "scenario-provenance",
-            "scenario-workflows",
             "scenario-cache-preflight",
             "bench",
             "benchmark",
@@ -133,7 +126,6 @@ mod cli_tests {
     fn scenario_ci_replacements_are_typed() {
         assert!(Cli::try_parse_from(["testing", "scenario-inventory"]).is_ok());
         assert!(Cli::try_parse_from(["testing", "scenario-provenance", "--details"]).is_ok());
-        assert!(Cli::try_parse_from(["testing", "scenario-workflows"]).is_ok());
         assert!(Cli::try_parse_from(["testing", "scenario-cache-preflight", "arm64"]).is_ok());
         assert!(Cli::try_parse_from(["testing", "scenario-cache-preflight", "x86"]).is_err());
         assert!(Cli::try_parse_from(["testing", "scenarios", "--target", "amd64", "--list"]).is_ok());

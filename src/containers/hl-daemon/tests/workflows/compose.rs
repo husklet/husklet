@@ -1,8 +1,8 @@
 //! Compose project topology, labels, network, volume, and teardown workflows.
 
 use hl_container::{
-    ContainerSpec, Containers, EndpointSpec, ExecSpec, ExecState, ExitStatus, Isolation, NetworkSpec, Process, Sandbox,
-    Stream, Subnet, VolumeSpec,
+    ContainerSpec, Containers, EndpointSpec, ExecSpec, ExecState, ExitStatus, Isolation, Mount, NetworkSpec, Process,
+    Sandbox, Stream, Subnet, VolumeSpec,
 };
 use std::net::Ipv4Addr;
 use std::time::Duration;
@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 type Error = Box<dyn std::error::Error>;
 
-pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
+pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
     let roots = TempDir::new()?;
     let api = super::fixture::rootfs(roots.path(), "api")?;
     let worker = super::fixture::rootfs(roots.path(), "worker")?;
@@ -33,6 +33,7 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
                     .args(["-c", "printf 'api-marker:%s\\n' \"$COMPOSE_VALUE\"; exec sleep 60"])
                     .env("COMPOSE_VALUE", &interpolated),
             )
+            .mount(Mount::volume_read_write("hlcompose_shared", "/shared"))
             .name("hlcompose-api-1")
             .label("com.docker.compose.project", "hlcompose")
             .label("com.docker.compose.service", "api")
@@ -47,8 +48,12 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
         .create(
             ContainerSpec::from_directory(
                 &worker,
-                Process::new("/bin/sh").args(["-c", "echo worker-marker; exec sleep 60"]),
+                Process::new("/bin/sh").args([
+                    "-c",
+                    "echo worker-marker > /shared/worker.txt; echo worker-marker; exec sleep 60",
+                ]),
             )
+            .mount(Mount::volume_read_write("hlcompose_shared", "/shared"))
             .name("hlcompose-worker-1")
             .label("com.docker.compose.project", "hlcompose")
             .label("com.docker.compose.service", "worker")
@@ -123,15 +128,23 @@ impl Project<'_> {
         check(api.contains("api-marker:"), "logs-api-marker")?;
         check(worker.contains("worker-marker"), "logs-worker-marker")?;
         check(api.contains("api-marker:compose-resolved"), "logs-env-interp")?;
-        self.execution().await
+        self.execution("echo exec-api", b"exec-api\n", "exec-into-api").await?;
+        // The named volume is the project's shared storage: what the worker wrote
+        // through its own mount must be readable through the api container's mount.
+        self.execution(
+            "cat /shared/worker.txt",
+            b"worker-marker\n",
+            "volume-shared-across-services",
+        )
+        .await
     }
 
-    async fn execution(&self) -> Result<(), Error> {
+    async fn execution(&self, script: &str, expected: &[u8], label: &'static str) -> Result<(), Error> {
         let executions = self.containers.executions();
         let execution = executions
             .create(
                 "hlcompose-api-1",
-                ExecSpec::new(Process::new("/bin/sh").args(["-c", "echo exec-api"])),
+                ExecSpec::new(Process::new("/bin/sh").args(["-c", script])),
             )
             .await?;
         let mut session = executions.start(&execution.id).await?;
@@ -149,8 +162,8 @@ impl Project<'_> {
                     result: ExitStatus::Code(0),
                     ..
                 }
-            ) && output == b"exec-api\n",
-            "exec-into-api",
+            ) && output == expected,
+            label,
         )
     }
 
@@ -173,7 +186,7 @@ impl Project<'_> {
     }
 }
 
-pub(super) async fn multinet(containers: &Containers) -> Result<(), Error> {
+pub(crate) async fn multinet(containers: &Containers) -> Result<(), Error> {
     let root = TempDir::new()?;
     let app_root = super::fixture::rootfs(root.path(), "multinet-app")?;
     let front_root = super::fixture::rootfs(root.path(), "multinet-front")?;

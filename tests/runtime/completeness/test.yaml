@@ -1491,7 +1491,8 @@ cases:
     build: { source: syscall/getdents64.c, inputs: [compat.h], output: getdents64, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getdents64 }
     run: []
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "excluded-macos: getdents64 enumeration over the synthetic /proc returns open_ok=0 on the macOS engine (procfs directory backend gap). Linux engine still runs+passes this."
       evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
