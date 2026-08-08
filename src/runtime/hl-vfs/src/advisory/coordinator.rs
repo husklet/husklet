@@ -46,6 +46,10 @@ pub(crate) struct LockState {
 }
 
 /// Per-runtime advisory-lock namespace.
+///
+/// One coordinator exists per `RuntimeAssembly`, so byte-range locks are scoped
+/// to a single container and two containers sharing a bind mount or volume both
+/// win a conflicting write lock.
 pub struct LockCoordinator {
     state: Mutex<LockState>,
     pub(crate) changed: Condvar,
