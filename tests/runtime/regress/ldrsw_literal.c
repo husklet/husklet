@@ -17,11 +17,19 @@
 #include <stdio.h>
 #include <stdint.h>
 
+// Native admission needs the same site observed twice, so the literal pool is read in a hot loop.
+// The count keeps the run far past NATIVE_SOLO_BUDGET, which a single pass finished inside.
+#define REPEATS 200000
+
 int main(void) {
     int64_t  sw_neg = 0, sw_pos = 0;
     uint32_t w32 = 0, sbits = 0;
     uint64_t x64 = 0, dbits = 0, q_lo = 0, q_hi = 0;
 
+    // Every round reloads the same constants, so the printed values match a single pass; the repeat
+    // count is what makes the block hot enough for the literal-rewrite path to be translated at all.
+    volatile int repeats = REPEATS;
+    for (int round = 0; round < repeats; ++round) {
     // One volatile asm block with its own literal pool. `b 1f` jumps over the pool; every load references
     // its pool entry PC-relative (backward), exactly the encoding hl must rewrite to the guest address.
     __asm__ volatile(
@@ -54,6 +62,7 @@ int main(void) {
           "=r"(sbits), "=r"(dbits), "=r"(q_lo), "=r"(q_hi)
         :
         : "v0", "v1", "v2", "memory");
+    }
 
     // FNV-1a over every loaded value: any single wrong bit (wrong address / wrong sign-extend) changes it.
     uint64_t acc = 1469598103934665603ULL;

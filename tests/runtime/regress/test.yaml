@@ -55,7 +55,11 @@ cases:
     artifact: { destination: /opt/husklet/regress/nonpie_ldapr }
     run: []
     timeout: 120
-    expect: { exit: 0, stdout: golden/nonpie_ldapr.out }
+    # Measured runs=25 builds=22; floored well under that so the hot loop cannot silently go cold.
+    expect:
+      exit: 0
+      stdout: golden/nonpie_ldapr.out
+      diagnostics: [{ counter: runs, greater-than: 5 }, { counter: builds, greater-than: 5 }]
   - id: runtime/regress/pairatomics-nonpie
     status: active
     targets: [arm64]
@@ -118,7 +122,11 @@ cases:
     artifact: { destination: /opt/husklet/regress/ldrsw_literal }
     run: []
     timeout: 120
-    expect: { exit: 0, stdout: golden/ldrsw_literal.out }
+    # Measured runs=19 builds=24; floored well under that so the hot loop cannot silently go cold.
+    expect:
+      exit: 0
+      stdout: golden/ldrsw_literal.out
+      diagnostics: [{ counter: runs, greater-than: 5 }, { counter: builds, greater-than: 5 }]
   - id: runtime/regress/nonpie-v8blob
     status: active
     targets: [amd64]

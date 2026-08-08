@@ -27,12 +27,22 @@ static uint32_t ld_w(const uint32_t *p){ uint32_t v; __asm__ volatile(".arch arm
 static uint32_t ld_h(const uint16_t *p){ uint32_t v; __asm__ volatile(".arch armv8.3-a\n\tldaprh %w0,[%1]":"=r"(v):"r"(p):"memory"); return v; }
 static uint32_t ld_b(const uint8_t  *p){ uint32_t v; __asm__ volatile(".arch armv8.3-a\n\tldaprb %w0,[%1]":"=r"(v):"r"(p):"memory"); return v; }
 
+// The per-width loops have constant trip counts and are fully unrolled at -O2, so a single pass
+// never observes an ldapr site twice and the block is never admitted to native translation.
+#define REPEATS 4000
+
 int main(void){
     uint64_t acc = 0;
-    for (int i = 0; i < 4; i++) acc = acc * 1000003 + ld_q(&g_q[i]);
-    for (int i = 0; i < 4; i++) acc = acc * 1000003 + ld_w(&g_w[i]);
-    for (int i = 0; i < 4; i++) acc = acc * 1000003 + ld_h(&g_h[i]);
-    for (int i = 0; i < 8; i++) acc = acc * 1000003 + ld_b(&g_b[i]);
+    // Each round recomputes acc from zero over the same constants, so the printed value is identical
+    // to a single pass; the repeat count is what makes the ldapr sites hot enough to translate.
+    volatile int repeats = REPEATS;
+    for (int round = 0; round < repeats; round++) {
+        acc = 0;
+        for (int i = 0; i < 4; i++) acc = acc * 1000003 + ld_q(&g_q[i]);
+        for (int i = 0; i < 4; i++) acc = acc * 1000003 + ld_w(&g_w[i]);
+        for (int i = 0; i < 4; i++) acc = acc * 1000003 + ld_h(&g_h[i]);
+        for (int i = 0; i < 8; i++) acc = acc * 1000003 + ld_b(&g_b[i]);
+    }
     // spot values prove per-width zero/sign handling (ldapr* zero-extend to X)
     printf("ldapr q0=%016llx w0=%08x h0=%04x b3=%02x acc=%016llx\n",
         (unsigned long long)ld_q(&g_q[0]), ld_w(&g_w[0]),
