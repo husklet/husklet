@@ -98,6 +98,8 @@ impl App {
         }
         document.execution.container()?;
         let emits_diagnostics = document.execution.emits_diagnostics();
+        let floor = diagnostics::validate(document.diagnostics_floor, emits_diagnostics)
+            .map_err(|error| format!("{}: diagnostics-floor: {error}", definition.display()))?;
         let mut ids = BTreeSet::new();
         let mut outputs = BTreeSet::new();
         let mut destinations = BTreeSet::new();
@@ -144,7 +146,8 @@ impl App {
                 let golden = validate_golden(directory, &case.expect.stdout)?;
                 let stderr =
                     manifest::stderr_patterns(case.expect.stderr).map_err(|error| format!("{}: {error}", case.id))?;
-                let diagnostics = diagnostics::validate(case.expect.diagnostics, emits_diagnostics)
+                let declared = case.expect.diagnostics.unwrap_or_else(|| floor.clone());
+                let diagnostics = diagnostics::validate(declared, emits_diagnostics)
                     .map_err(|error| format!("{}: {error}", case.id))?;
                 let (guest_files, guest_libraries, working_directory) =
                     case.guest.validate().map_err(|error| format!("{}: {error}", case.id))?;
