@@ -2308,7 +2308,16 @@ impl Executor {
             retained.begin(hint_epoch);
             retained.entries.clone()
         };
-        let primary_range = (primary.guest_first, primary.guest_last);
+        let lease_range = (primary.guest_first, primary.guest_last);
+        let direct_literal = direct_literal_target(state.pc, sources, lease_range.0, lease_range.1);
+        // The authority identity is cache-wide: a per-entry narrowing of the same window
+        // reissues it and resets every translation, so admit the whole lease instead.
+        let direct_protection = self
+            .direct_scalar_trace(state.pc, sources)
+            .or_else(|| direct_literal.then_some(Protection::READ))
+            .filter(|required| allow_direct && lease.allows(*required))
+            .map(|_| lease.authority());
+        let mut primary_range = lease_range;
         let mut views = vec![primary];
         const OPERAND_SPAN: u64 = u64::MAX;
         let mut live_hints = Vec::new();
@@ -2334,12 +2343,50 @@ impl Executor {
                 write_policy: WRITE_EXACT,
                 write_index: view.index,
             };
-            if !views.iter().any(|existing| {
+            let candidate_range = (candidate.guest_first, candidate.guest_last);
+            let projected = view.protection;
+            let overlaps = |existing: &ProjectionView| {
                 existing.guest_first < candidate.guest_last && candidate.guest_first < existing.guest_last
-            }) {
-                let candidate_range = (candidate.guest_first, candidate.guest_last);
-                let projected = view.protection;
-                views.push(candidate);
+            };
+            // A hint that subsumes a view under the same translation and permissions
+            // replaces it, since every address the narrow view resolved resolves
+            // identically through the wider one.
+            // The direct authority is issued against the lease window itself, so a
+            // widened view there fails the direct synchronize check.
+            let subsumed = direct_protection.is_none().then(|| {
+                views.iter().position(|existing| {
+                    overlaps(existing)
+                        && candidate.guest_first <= existing.guest_first
+                        && existing.guest_last <= candidate.guest_last
+                        && candidate.permissions == existing.permissions
+                        && candidate.host_first.wrapping_sub(candidate.guest_first)
+                            == existing.host_first.wrapping_sub(existing.guest_first)
+                })
+            });
+            let admitted = match subsumed.flatten() {
+                Some(index)
+                    if !views
+                        .iter()
+                        .enumerate()
+                        .any(|(other, existing)| other != index && overlaps(existing)) =>
+                {
+                    let replaced = (views[index].guest_first, views[index].guest_last);
+                    views[index] = candidate;
+                    if primary_range == replaced {
+                        primary_range = candidate_range;
+                    }
+                    if warm_write == Some(replaced) {
+                        warm_write = Some(candidate_range);
+                    }
+                    true
+                }
+                _ if !views.iter().any(overlaps) => {
+                    views.push(candidate);
+                    true
+                }
+                _ => false,
+            };
+            if admitted {
                 if required.contains(Protection::WRITE) && projected.contains(Protection::WRITE) && warm_write.is_none()
                 {
                     warm_write = Some(candidate_range);
@@ -2348,14 +2395,6 @@ impl Executor {
             }
         }
         views.sort_unstable_by_key(|view| view.guest_first);
-        let direct_literal = direct_literal_target(state.pc, sources, primary_range.0, primary_range.1);
-        // The authority identity is cache-wide: a per-entry narrowing of the same window
-        // reissues it and resets every translation, so admit the whole lease instead.
-        let direct_protection = self
-            .direct_scalar_trace(state.pc, sources)
-            .or_else(|| direct_literal.then_some(Protection::READ))
-            .filter(|required| allow_direct && lease.allows(*required))
-            .map(|_| lease.authority());
         let active_range = if direct_protection.is_some() {
             primary_range
         } else {
