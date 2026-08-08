@@ -1,0 +1,32 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/publication/shared-writeback
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/shared_writeback.c, output: shared-writeback, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/publication/shared-writeback }
+    run: []
+    expect: { exit: 0, stdout: golden/shared_writeback.out }
+  - id: runtime/publication/multi-view
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/multi_view.c, output: multi-view, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/publication/multi-view }
+    run: []
+    expect: { exit: 0, stdout: golden/multi_view.out }
+  - id: runtime/publication/code-patch
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/code_patch.c, output: code-patch, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/publication/code-patch }
+    run: []
+    expect: { exit: 0, stdout: golden/code_patch.out }
