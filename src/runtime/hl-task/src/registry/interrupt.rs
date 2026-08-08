@@ -72,12 +72,13 @@ impl TaskRegistry {
         }
         let process = Self::process(state, thread_state.process)?;
         let blocked = SignalMask::from_bits(thread_state.signals.mask.bits() | thread_state.signals.deferred.bits());
+        // Borrows the queues rather than collecting them; this runs on every
+        // interrupt acknowledgement, so the snapshot allocation dominated it.
         let deliverable = thread_state
             .signals
             .pending
-            .snapshot()
-            .into_iter()
-            .chain(process.signals.pending.snapshot())
+            .iter()
+            .chain(process.signals.pending.iter())
             .any(|info| {
                 info.is_synchronous()
                     || (!blocked.contains(info.signal)
