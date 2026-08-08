@@ -342,8 +342,6 @@ struct Diagnostics {
 
 #[cfg(test)]
 const A64_BRANCH_FORM_EXHAUSTION: u64 = 1;
-#[cfg(test)]
-const A64_BRANCH_FORM_COLD_RELOCATION: u64 = 2;
 
 #[derive(Clone, Copy)]
 pub(crate) struct BorrowedSource<'a> {
