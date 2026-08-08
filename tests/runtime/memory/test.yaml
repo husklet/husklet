@@ -713,6 +713,11 @@ cases:
     # across a patch, and the mutation is invisible (counters byte-identical at 240/1436/3350).
     # arm64 coverage of the token moved to dbt-smc-xthread, where a peer thread patches while this
     # thread is still spinning; this case keeps the amd64 arm and both arms of the RWX shape.
+    # Re-mutated and confirmed: under a frozen token arm64 is byte-identical at 241/1437/3352 and
+    # passes, while the same mutation reddens xthread arm64, so the token arm really is dead here.
+    # The arm64 arm is not vacuous though -- freezing the interpreter-visible `generation()` instead
+    # collapses it to runs=3 builds=8, so this is the strongest arm64 detector of that epoch and the
+    # `builds > 30` floor is what catches it.
     expect: { exit: 0, stdout: golden/dbt_smchotpatch.out, diagnostics: [{ counter: builds, greater-than: 30 }] }
   - id: runtime/memory/dbt-smc-xthread
     targets: [arm64, amd64]

@@ -417,7 +417,14 @@ impl<H: MappingHost, M: GuestMemory> MemorySyscalls for RuntimeMemorySyscalls<H,
             "memfd_create" => self.memfd_create(arguments),
             "membarrier" => match arguments[0] {
                 0 => LinuxResult::Value(0x7f),
-                1 | 2 | 8 | 32 => {
+                // SYNC_CORE is the JIT's alternative to `ic ivau`: it must publish the
+                // executable epoch, since a data fence alone leaves peers on stale code.
+                32 => {
+                    std::sync::atomic::fence(Ordering::SeqCst);
+                    self.coordinator.publish_instruction();
+                    LinuxResult::Value(0)
+                }
+                1 | 2 | 8 => {
                     std::sync::atomic::fence(Ordering::SeqCst);
                     LinuxResult::Value(0)
                 }

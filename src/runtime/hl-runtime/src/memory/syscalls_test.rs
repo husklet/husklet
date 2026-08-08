@@ -527,11 +527,20 @@ fn membarrier_commands() {
             hl_linux::MemorySyscalls::handle(&mut runtime, operation, [0, u64::MAX, u64::MAX, 0, 0, 0]),
             LinuxResult::Value(0x7f)
         );
+        // Returning 0 is not the contract: only SYNC_CORE must publish the executable
+        // epoch, so assert the epoch moves for 32 and stands still for every other command.
         for command in [1, 2, 4, 8, 16, 32, 64] {
+            let before = runtime.coordinator.instruction_epoch();
             assert_eq!(
                 hl_linux::MemorySyscalls::handle(&mut runtime, operation, [command, u64::MAX, u64::MAX, 0, 0, 0]),
                 LinuxResult::Value(0)
             );
+            let after = runtime.coordinator.instruction_epoch();
+            if command == 32 {
+                assert!(after > before, "SYNC_CORE must publish the executable epoch");
+            } else {
+                assert_eq!(after, before, "command {command} must not publish");
+            }
         }
         assert_eq!(
             hl_linux::MemorySyscalls::handle(&mut runtime, operation, [3, 0, 0, 0, 0, 0]),
