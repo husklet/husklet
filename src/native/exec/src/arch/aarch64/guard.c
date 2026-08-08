@@ -31,6 +31,7 @@
 #define OFFSET_DIRTY_LAST ((int)offsetof(hl_native_aarch64_cpu, dirty_last))
 #define OFFSET_DIRTY_COUNT ((int)offsetof(hl_native_aarch64_cpu, dirty_count))
 #define OFFSET_DIRTY_RECORDS ((int)offsetof(hl_native_aarch64_cpu, dirty_records))
+#define OFFSET_DIRTY_OVERFLOW ((int)offsetof(hl_native_aarch64_cpu, dirty_overflow))
 #define OFFSET_BUDGET ((int)offsetof(hl_native_aarch64_cpu, budget))
 #define DIRTY_CAPACITY \
     ((uint32_t)(sizeof(((hl_native_aarch64_cpu *)0)->dirty_records) / \
@@ -301,7 +302,7 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
 
 void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *after_merge, *after_range,
-        *after_contiguous;
+        *after_contiguous, *full;
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
@@ -359,6 +360,11 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     condition(assembler, above, disjoint, 8u);
     condition(assembler, below, disjoint, 3u);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
+    /* dirty_records[16] is read_token, not padding, so a full ring must report
+     * through dirty_overflow exactly as flush_dirty does instead of appending. */
+    hl_a64_emit32(assembler, UINT32_C(0xf100023f) | (DIRTY_CAPACITY << 10)); /* cmp x17,#capacity */
+    full = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
     hl_a64_addi(assembler, 9, CPU, OFFSET_DIRTY_RECORDS);
     hl_a64_addlsl4(assembler, 9, 9, 17);
     hl_a64_addlsl4(assembler, 9, 9, 17);
@@ -371,8 +377,15 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
     hl_a64_addi(assembler, 17, 17, 1);
     hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
+    uint32_t *appended = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    uint8_t *full_target = assembler->cursor;
+    hl_a64_movconst(assembler, 17, 1);
+    hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_OVERFLOW);
     uint8_t *set = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
+    branch(assembler, appended, set);
+    condition(assembler, full, full_target, 2u);
     condition(assembler, empty, set, 0u);
     hl_a64_str(assembler, 16, CPU, OFFSET_DIRTY_FIRST);
     hl_a64_addi(assembler, 18, 16, (unsigned)bytes);
