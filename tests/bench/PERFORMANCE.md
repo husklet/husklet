@@ -337,9 +337,17 @@ it produces 9,591 translations against a real dotnet container's ~2,100. **Do no
 quote `malloc`'s 230x for container workloads.** The `sqlite` row is the better
 proxy for realistic code, and it is worse.
 
-Materialization here is also measured on a filesystem **without reflink support**
-— the harness warns that every copy-materialized rootfs is a full byte copy — so
-the `materialize_us` column is an upper bound.
+Materialization here is measured on a filesystem **without reflink support**, so
+the `materialize_us` column is an upper bound. **That bound has now been measured
+and it does not matter.** On btrfs, `fs-churn/unpack` materialization falls 30%,
+saving 31 ms — against a row that improves by 902 ms. Reflink is **3.4%** of the
+gain; the other 871 ms is the guest's own file I/O against the cache filesystem.
+Materialization is ~1% of that row either way.
+
+The mechanism is the between-case split on identical infrastructure: `spawn` (500
+fork/execs, little file I/O) moves −2.5%, `unpack` (2,000 file create/read/delete)
+moves −9.2%. The effect tracks guest file I/O volume, because the materialized
+rootfs — including guest `/tmp` — lives on the cache filesystem.
 
 ### Not measured, and why
 
@@ -635,11 +643,13 @@ Two honest qualifications on that control, both visible in the table above:
   divided by run length, and `alpine:3.20` with a ten-second workload sits at the
   opposite end of that ratio from a large dotnet image with a short one. Both
   numbers are correct about their own workload; neither generalises.
-* **Materialization here is measured on a filesystem without reflink support.**
-  The harness warns that every copy-materialized rootfs is therefore a full byte
-  copy. The materialize figures above are an upper bound, and
-  `HL_SCENARIO_IMAGE_CACHE` should be pointed at a reflink-capable filesystem
-  before anyone takes materialization measurements seriously.
+* **Materialization here is measured on a filesystem without reflink support**,
+  so the materialize figures above are an upper bound. Measured on btrfs, the
+  bound is real and irrelevant: materialization is ~1% of the row, and reflink
+  buys 3.4% of the 9.2% that moving the cache off virtiofs is actually worth.
+  Retarget `target/testing/images`, which is per-ISA and so fixes both at once —
+  not `HL_SCENARIO_IMAGE_CACHE`, which is an exact leaf serving only the ISA it
+  names.
 
 The practical consequence is unchanged: the synthetic ranking tells you where the
 *engine* is slow, and `malloc` and `signal` are genuinely where that is. It does

@@ -56,6 +56,66 @@ whole class. Run them in debug or inside `make gate`: under `--release`,
 `hl-log`'s verbose tests compile out and the daemon tests need
 `HL_ALPINE_ARCHIVE`, so both report spurious failures.
 
+## Checking whether the box is busy
+
+Use `pgrep -cx testing`, which matches the exact process name. Every
+pattern-matching form is wrong in one direction or the other:
+
+- `pgrep -cf "target/release/testing"` is **structurally blind**. Lanes set
+  `CARGO_TARGET_DIR` under `/var/tmp`, so their binaries live at
+  `/var/tmp/<lane>/release/testing` and never match. A measured instance reported
+  2 against a true 11. A lane invoking `./target/release/testing` relatively from
+  a worktree defeats it too.
+- `pgrep -f "testing runtime"` and `pgrep -af "/release/testing"` **over-report**:
+  the querying shell's own command line contains the pattern, so they count
+  themselves. Measured 2 against a true 1.
+
+Use `pgrep -ax testing` when you need the rows as well as the count.
+
+Timings taken without this check are not evidence. Counter ratios, code-size
+deltas and categorical pass/timeout results survive contention; minima do not.
+
+## Know which tree you are standing in
+
+`cd` persists across shell calls. A single `cd` into a worktree silently
+relocates every later `git`, `grep` and `cargo` until something changes it back,
+and the output looks identical either way. This has produced a merge and a push
+against the wrong tree, and a "this symbol no longer exists" conclusion drawn
+from a lane's worktree and nearly recorded as a fact about the shared branch.
+
+Prefer `git -C <path>` and absolute paths over `cd`. When a finding depends on
+which tree it came from — a grep that found nothing, a test that passed, a file
+that is missing — re-run it from the shared tree before recording it, and say
+which tree the evidence came from.
+
+CodeGraph resolves against the tree its index was built in, not your current
+directory, so a shell that has wandered into a worktree gets structure from
+somewhere else. Worktrees carry their own `.codegraph/`; if yours does not, run
+`codegraph init -i` there rather than trusting the parent's index.
+
+## The x86 arm of the scheduler lags the arm64 arm
+
+`native_aarch64` and `native_x86` are maintained in parallel by hand and the x86
+side is repeatedly the one missing a piece. Two independent lanes found this on
+the same day, both in `scheduler/native.rs`:
+
+- `native_x86` never called `mark_productive`, so the entry-productivity set was
+  permanently empty on amd64 and every suppressed entry latched forever — an
+  ISA-wide regression invisible to any arm64 benchmark.
+- `native_x86` never bumped `entries`, `declined_suppressed`, `declined_cold` or
+  `declined_executable`, so `hl-native-entry:` printed all zeros on every amd64
+  run and dumped the whole probe population into `declined_other`. Every amd64
+  admission reading ever taken from that line was meaningless.
+
+Neither would fail a test. Both would ship green, because the gates and the
+benchmarks lanes reach for are arm64.
+
+So: when you touch either arm, **enumerate what the other one does** and say
+which of the two you checked. Confirm by enumerating the call sites or match
+arms, not by reading the surrounding prose — one of the above was found only
+because a lane listed which `NativeExit` variants reach a call and compared the
+two functions side by side.
+
 ## Reading a profile
 
 High self-time and removable cost are independent properties, and this engine has
@@ -178,6 +238,32 @@ before the lane is accepted.
 An agent report that cites only tests, manifests, expected output, or summaries
 does not satisfy this requirement. Never edit `../engine` while performing the
 audit.
+
+### The oracle is authoritative about intent, not about the kernel
+
+`../engine` shipped, so what it *does* is strong evidence about what guests
+depend on. It is not evidence about what Linux does, and where a host
+measurement and the C disagree, **the kernel wins**. An oracle comment asserting
+kernel behavior is a claim to test, not a fact to port.
+
+Two lanes found this the same day, in unrelated domains:
+
+- `src/linux_abi/syscall/io.c:1384` states that a comm write "drop[s] one
+  trailing newline" and implements it, and ignores a zero-length write. The host
+  kernel does neither — only NUL terminates, and a zero-length write clears
+  comm. The Rust had faithfully reproduced the wrong comment.
+- `src/linux_abi/container/state.c:596` initializes the capability sets to
+  `HL_CAP_DEFAULT` unconditionally and `HL_UID` never reaches them, so a C
+  `--user` container reports the full container set. Linux clears
+  permitted/effective across a root-to-non-root transition. The Rust is ahead of
+  the oracle here, and following the C would have been a container-escape
+  regression.
+
+So: measure the host first, then read the C to learn what the guest-visible
+contract is meant to be. When you override the oracle, say so and show the
+measurement. A fixture that passes on the bare host kernel as well as in the
+engine validates the assertion; one that only passes in the engine validates
+nothing.
 
 ### Port domains, not failing cases
 
