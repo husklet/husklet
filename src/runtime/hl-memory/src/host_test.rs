@@ -772,6 +772,49 @@ fn projection_shared_coherence() {
 }
 
 #[test]
+fn full_projection_publication_breaks_shared_exclusive() {
+    let store = Arc::new(SharedObjectStore::new(SharedLimits::default()).unwrap());
+    let object = store.create(72, 4096).unwrap();
+    let writer = MappingCoordinator::with_shared_space(
+        FakeHost::failing(usize::MAX),
+        Arc::clone(&store),
+        crate::AddressSpaceId { slot: 1, generation: 1 },
+    );
+    let competitor = MappingCoordinator::with_shared_space(
+        FakeHost::failing(usize::MAX),
+        store,
+        crate::AddressSpaceId { slot: 2, generation: 1 },
+    );
+    writer.map(request()).unwrap();
+    let protection = Protection::READ.union(Protection::WRITE);
+    writer.map(shared_request(object, 0x3000, protection)).unwrap();
+    competitor.map(shared_request(object, 0x4000, protection)).unwrap();
+    let (_, exclusive) = competitor
+        .load_exclusive(GuestAddress::new(0x4000), 8, false, AtomicOrder::Acquire)
+        .unwrap();
+
+    let mut lease = writer
+        .project_contiguous(GuestAddress::new(0x1000), 8, Protection::READ, 1)
+        .unwrap();
+    lease
+        .project_additional(GuestAddress::new(0x3008), 8, Protection::WRITE)
+        .unwrap();
+    {
+        let mut state = writer.host.state.lock().unwrap();
+        for (offset, byte) in b"changed!".iter().enumerate() {
+            state.bytes.insert(0x3008 + offset as u64, *byte);
+        }
+    }
+    lease.publish_written().unwrap();
+
+    assert_eq!(
+        competitor.store_exclusive(exclusive, AtomicValue { low: 9, high: 0 }, AtomicOrder::Release),
+        Ok(false),
+        "Full publication through an additional shared view must break a competing reservation",
+    );
+}
+
+#[test]
 fn projection_dirty_journal_reconciles_only_recorded_ranges() {
     let store = Arc::new(SharedObjectStore::new(SharedLimits::default()).unwrap());
     let object = store.create(72, 4096).unwrap();
