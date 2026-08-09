@@ -274,8 +274,10 @@ async fn signalling_a_paused_container_resumes_it_first_like_docker() {
 /// and `stop` must still reach the KILL fallback rather than hanging on the graceful signal.
 #[tokio::test]
 async fn a_stop_signalled_container_stays_running_and_still_tears_down() {
+    // Long enough that the graceful signal cannot be what ends the guest, short enough that it
+    // stays clear of `FORCE_STOP_TIMEOUT`, which this raced exactly when both were 30 seconds.
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_secs(30);
+    runtime.delay = Duration::from_secs(1);
     let runtime = Arc::new(runtime);
     let containers = service(Arc::clone(&runtime)).await;
     containers.create(spec("stop-signalled")).await.unwrap();
