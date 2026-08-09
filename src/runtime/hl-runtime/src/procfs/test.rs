@@ -57,6 +57,7 @@ impl hl_descriptor::OpenFileDescription for DescriptorObject {
             special_device: 0,
             size: 0,
             blocks_512: 0,
+            block_size: 4096,
             accessed: timestamp,
             modified: timestamp,
             changed: timestamp,
@@ -1122,5 +1123,34 @@ fn numeric_pid_and_self_report_the_same_zero_sized_stat() {
         let mut bytes = [0; 4096];
         assert!(opened.read(&mut bytes).unwrap() > 0, "{leaf}");
         assert_eq!(opened.metadata().unwrap().size, 0, "{leaf}");
+    }
+}
+
+/// A `--user` container's `/proc/<pid>` inodes belong to that user, not to root.
+/// Measured on Linux 7.0.11 as uid 501: every `/proc/self` entry reported 501:501
+/// while `/proc`, the `/proc/self` link, and `/proc/1/stat` reported 0:0.
+#[test]
+fn process_inodes_are_owned_by_the_container_user() {
+    let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let (process, _) = tasks
+        .create_init(
+            ProcessCredentials::new(1000, 1000, &[], 8).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let number = process.number();
+    let procfs = hl_vfs::Procfs::new(Arc::new(TaskProcfs::new(tasks).with_stat(Arc::new(StatMetrics))));
+    for leaf in ["stat", "status", "limits", "auxv", "pagemap"] {
+        let metadata = procfs
+            .metadata(format!("/proc/{number}/{leaf}").as_bytes(), number)
+            .unwrap()
+            .unwrap_or_else(|| panic!("/proc/{number}/{leaf} is not projected"));
+        assert_eq!((leaf, metadata.user, metadata.group), (leaf, 1000, 1000));
+        assert!(metadata.accessed.seconds > 0, "{leaf}");
+        assert_eq!(metadata.block_size, 1024, "{leaf}");
+    }
+    for path in ["/proc", "/proc/self"] {
+        let metadata = procfs.metadata(path.as_bytes(), number).unwrap().unwrap();
+        assert_eq!((path, metadata.user, metadata.group), (path, 0, 0));
     }
 }

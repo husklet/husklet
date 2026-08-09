@@ -17,6 +17,7 @@ impl MetadataFixture {
             special_device: 0,
             size: 17,
             blocks_512: 8,
+            block_size: 4096,
             accessed: Timestamp::new(1, 2).unwrap(),
             modified: Timestamp::new(3, 4).unwrap(),
             changed: Timestamp::new(5, 6).unwrap(),

@@ -23,6 +23,7 @@ impl EventStatus {
             special_device: 0,
             size: self.size,
             blocks_512: self.size.saturating_add(511) / 512,
+            block_size: 4096,
             accessed: timestamp,
             modified: timestamp,
             changed: timestamp,

@@ -470,3 +470,66 @@ impl OpenFileDescription for SnapshotFile {
         Ok(*cursor as u64)
     }
 }
+
+/// `/proc/<pid>/pagemap` is virtual-address indexed: eight bytes per page, read
+/// at `address / page_size * 8`. Every entry reports the page present, which is
+/// what an unprivileged reader sees once the kernel redacts the frame number.
+pub(super) struct PagemapFile {
+    cursor: Mutex<u64>,
+    metadata: OfdMetadata,
+}
+
+impl PagemapFile {
+    const PRESENT: u64 = 1 << 63;
+
+    pub(super) const fn new(metadata: OfdMetadata) -> Self {
+        Self {
+            cursor: Mutex::new(0),
+            metadata,
+        }
+    }
+
+    /// Fills whole eight-byte entries only, as Linux does for a misaligned length.
+    fn fill(output: &mut [u8]) -> usize {
+        let count = output.len() & !7;
+        for entry in output[..count].chunks_exact_mut(8) {
+            entry.copy_from_slice(&Self::PRESENT.to_le_bytes());
+        }
+        count
+    }
+}
+
+impl fmt::Debug for PagemapFile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProcfsPagemapFile")
+    }
+}
+
+impl OpenFileDescription for PagemapFile {
+    fn metadata(&self) -> Result<OfdMetadata, ObjectError> {
+        Ok(self.metadata.clone())
+    }
+
+    fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
+        let count = Self::fill(output);
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        *cursor = cursor.saturating_add(count as u64);
+        Ok(count)
+    }
+
+    fn read_at(&self, _offset: u64, output: &mut [u8]) -> Result<usize, ObjectError> {
+        Ok(Self::fill(output))
+    }
+
+    fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let next = match position {
+            SeekPosition::Start(value) => i128::from(value),
+            SeekPosition::Current(value) => i128::from(*cursor) + i128::from(value),
+            SeekPosition::End(value) => i128::from(value),
+            SeekPosition::Data(_) | SeekPosition::Hole(_) => return Err(ObjectError::InvalidArgument),
+        };
+        *cursor = u64::try_from(next).map_err(|_| ObjectError::InvalidArgument)?;
+        Ok(*cursor)
+    }
+}

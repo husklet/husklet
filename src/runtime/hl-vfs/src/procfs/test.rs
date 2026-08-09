@@ -1506,3 +1506,216 @@ fn open_description_reports_zero_size() {
         assert_eq!(metadata.blocks_512, 0);
     }
 }
+
+/// Every name `/proc/<pid>` lists must also stat and open. Measured on Linux
+/// 7.0.11: `auxv` and `pagemap` are both listed with `d_type` 8 and both stat as
+/// `100400` with a zero size.
+#[test]
+fn listed_process_names_all_stat() {
+    let procfs = procfs();
+    let directory = procfs
+        .open(b"/proc/self", 7, OpenIntent::from_bits(0))
+        .unwrap()
+        .unwrap();
+    let listed = directory.read_directory(64).unwrap().entries;
+    assert!(listed.iter().any(|entry| entry.name == b"auxv" && entry.file_type == 8));
+    assert!(
+        listed
+            .iter()
+            .any(|entry| entry.name == b"pagemap" && entry.file_type == 8)
+    );
+    // `Ok(None)` is "procfs has no such node at all", which is the gap: a name the
+    // directory just listed must never be absent. A fixture without that snapshot
+    // reports `Err(NotFound)` instead, which is a source gap, not a taxonomy gap.
+    for entry in listed.iter().filter(|entry| entry.name != b"." && entry.name != b"..") {
+        let path = [b"/proc/self/".as_slice(), &entry.name].concat();
+        let name = String::from_utf8_lossy(&entry.name).into_owned();
+        match procfs.metadata_for(&path, 7, 7) {
+            Ok(Some(metadata)) => assert_eq!((&name, metadata.kind), (&name, entry.file_type)),
+            Ok(None) => panic!("{name} is listed but has no node"),
+            Err(_) => assert!(super::model::Node::parse(&path, 7).is_some(), "{name}"),
+        }
+    }
+}
+
+/// `auxv` stats through every spelling of the owning task; the bytes themselves
+/// belong to the execution boundary, so the projection declines the open.
+#[test]
+fn auxv_stats_through_every_spelling() {
+    let procfs = procfs();
+    for path in [
+        b"/proc/self/auxv".as_slice(),
+        b"/proc/7/auxv",
+        b"/proc/thread-self/auxv",
+        b"/proc/7/task/7/auxv",
+    ] {
+        let spelling = String::from_utf8_lossy(path).into_owned();
+        let metadata = procfs
+            .metadata_for(path, 7, 7)
+            .unwrap_or_else(|error| panic!("{spelling}: {error:?}"))
+            .unwrap_or_else(|| panic!("{spelling} is not projected"));
+        assert_eq!((&spelling, metadata.kind), (&spelling, 8));
+        assert_eq!((&spelling, metadata.permissions), (&spelling, 0o400));
+        assert_eq!((&spelling, metadata.size), (&spelling, 0));
+        assert!(
+            procfs.open_for(path, 7, 7, OpenIntent::from_bits(0)).unwrap().is_none(),
+            "{spelling}"
+        );
+        assert!(procfs.auxv(path, 7, 7).unwrap(), "{spelling}");
+    }
+    assert!(!procfs.auxv(b"/proc/self/cmdline", 7, 7).unwrap());
+}
+
+/// `pagemap` is virtual-address indexed and reports one present-marked entry per
+/// page. Linux fills whole eight-byte entries only.
+#[test]
+fn pagemap_reports_present_entries() {
+    let procfs = procfs();
+    let metadata = procfs.metadata(b"/proc/self/pagemap", 7).unwrap().unwrap();
+    assert_eq!(metadata.kind, 8);
+    assert_eq!(metadata.permissions, 0o400);
+    assert_eq!(metadata.size, 0);
+
+    let file = procfs
+        .open(b"/proc/self/pagemap", 7, OpenIntent::from_bits(0))
+        .unwrap()
+        .unwrap();
+    // The entry for the page at virtual address 0x1000, at offset 0x1000 / 4096 * 8.
+    assert_eq!(file.seek(SeekPosition::Start(8)).unwrap(), 8);
+    let mut entries = [0_u8; 24];
+    assert_eq!(file.read(&mut entries).unwrap(), 24);
+    for entry in entries.chunks_exact(8) {
+        assert_eq!(u64::from_le_bytes(entry.try_into().unwrap()) >> 63, 1);
+    }
+    let mut partial = [0_u8; 4];
+    assert_eq!(file.read(&mut partial).unwrap(), 0);
+}
+
+/// Every `/proc/<pid>/ns` entry is a symlink whose inode is the namespace
+/// identity, and an open of one yields the `nsfs` object: a regular `0444` file
+/// keyed by the same inode. Both halves measured on Linux 7.0.11.
+#[test]
+fn namespace_entries_are_symlinks_over_nsfs_objects() {
+    let procfs = procfs();
+    for name in ["uts", "net", "cgroup", "ipc", "mnt", "pid", "time", "user"] {
+        let path = format!("/proc/self/ns/{name}").into_bytes();
+        let metadata = procfs
+            .metadata(&path, 7)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"))
+            .unwrap_or_else(|| panic!("ns/{name} is not projected"));
+        assert_eq!((name, metadata.kind), (name, 10));
+        assert_eq!((name, metadata.permissions), (name, 0o777));
+
+        let target = procfs.read_link(&path, 7).unwrap().unwrap();
+        let inode = String::from_utf8(target)
+            .unwrap()
+            .trim_start_matches(|byte| byte != '[')
+            .trim_matches(['[', ']'])
+            .parse::<u64>()
+            .unwrap();
+        assert_eq!((name, metadata.inode), (name, inode));
+        assert_eq!((name, procfs.namespace_inode(&path, 7).unwrap()), (name, Some(inode)));
+
+        // `uts` binds a live namespace handle at the execution boundary instead.
+        if name == "uts" {
+            continue;
+        }
+        let opened = procfs
+            .open(&path, 7, OpenIntent::from_bits(0))
+            .unwrap()
+            .unwrap()
+            .metadata()
+            .unwrap();
+        assert_eq!((name, opened.kind), (name, 8));
+        assert_eq!((name, opened.permissions), (name, 0o444));
+        assert_eq!((name, opened.inode), (name, inode));
+    }
+}
+
+/// A `/proc/<pid>` inode is owned by the task's effective credentials; `/proc`
+/// itself, the `self` link, and the sysfs projection stay root-owned. Measured
+/// on Linux 7.0.11 as uid 501, where `/proc/self` and `/proc/1/stat` report 0.
+#[test]
+fn process_inodes_carry_the_task_owner() {
+    let procfs = procfs();
+    for path in [
+        b"/proc/self/status".as_slice(),
+        b"/proc/self/limits",
+        b"/proc/7/limits",
+        b"/proc/self/ns",
+        b"/proc/self/ns/pid",
+        b"/proc/self/fd",
+        b"/proc/7",
+    ] {
+        let spelling = String::from_utf8_lossy(path).into_owned();
+        let metadata = procfs
+            .metadata(path, 7)
+            .unwrap_or_else(|error| panic!("{spelling}: {error:?}"))
+            .unwrap();
+        assert_eq!((&spelling, metadata.user, metadata.group), (&spelling, 11, 21));
+    }
+    for path in [
+        b"/proc".as_slice(),
+        b"/proc/self",
+        b"/proc/filesystems",
+        b"/proc/cpuinfo",
+        b"/sys/devices/system/cpu/online",
+    ] {
+        let spelling = String::from_utf8_lossy(path).into_owned();
+        let metadata = procfs
+            .metadata(path, 7)
+            .unwrap_or_else(|error| panic!("{spelling}: {error:?}"))
+            .unwrap();
+        assert_eq!((&spelling, metadata.user, metadata.group), (&spelling, 0, 0));
+    }
+}
+
+/// Linux stamps a procfs inode once, so all three timestamps are equal and none
+/// is the epoch. Measured on Linux 7.0.11, where every `/proc` entry reported
+/// `atime == mtime == ctime` at a real wall-clock second.
+#[test]
+fn procfs_timestamps_are_real_and_identical() {
+    let procfs = procfs();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    for path in [b"/proc/self/status".as_slice(), b"/proc", b"/proc/cpuinfo"] {
+        let spelling = String::from_utf8_lossy(path).into_owned();
+        let metadata = procfs
+            .metadata(path, 7)
+            .unwrap_or_else(|error| panic!("{spelling}: {error:?}"))
+            .unwrap();
+        assert!(metadata.accessed.seconds > 0, "{spelling}");
+        assert!(metadata.accessed.seconds <= now, "{spelling}");
+        assert_eq!((&spelling, metadata.accessed), (&spelling, metadata.modified));
+        assert_eq!((&spelling, metadata.accessed), (&spelling, metadata.changed));
+    }
+}
+
+/// `st_blksize` is a filesystem property: 1024 on procfs and 4096 on the sysfs
+/// and cgroup2 attributes projected beside it. Measured on Linux 7.0.11.
+#[test]
+fn procfs_reports_a_kilobyte_block_size() {
+    let procfs = procfs();
+    for (path, block_size) in [
+        (b"/proc/self/status".as_slice(), 1024),
+        (b"/proc", 1024),
+        (b"/proc/cpuinfo", 1024),
+        (b"/proc/self/ns/pid", 1024),
+        (b"/sys/devices/system/cpu/online", 4096),
+        (b"/sys/devices/system/cpu", 4096),
+    ] {
+        let spelling = String::from_utf8_lossy(path).into_owned();
+        let metadata = procfs
+            .metadata(path, 7)
+            .unwrap_or_else(|error| panic!("{spelling}: {error:?}"))
+            .unwrap();
+        assert_eq!((&spelling, metadata.block_size), (&spelling, block_size));
+    }
+    let opened = procfs
+        .open(b"/proc/self/status", 7, OpenIntent::from_bits(0))
+        .unwrap()
+        .unwrap();
+    assert_eq!(opened.metadata().unwrap().block_size, 1024);
+}

@@ -45,6 +45,9 @@ pub enum Error {
 /// Process-filesystem namespace backed by typed domain snapshots.
 pub struct Procfs {
     source: Arc<dyn Source>,
+    /// Instant this projection was published. Linux stamps a procfs inode when it
+    /// is instantiated and never advances it, so this is read once, not per stat.
+    published: hl_descriptor::OfdTimestamp,
 }
 
 struct Identity([u8; 16]);
@@ -100,7 +103,36 @@ mod identity_test {
 impl Procfs {
     #[must_use]
     pub fn new(source: Arc<dyn Source>) -> Self {
-        Self { source }
+        let published = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(
+                hl_descriptor::OfdTimestamp {
+                    seconds: 0,
+                    nanoseconds: 0,
+                },
+                |value| hl_descriptor::OfdTimestamp {
+                    seconds: i64::try_from(value.as_secs()).unwrap_or(i64::MAX),
+                    nanoseconds: value.subsec_nanos(),
+                },
+            );
+        Self { source, published }
+    }
+
+    /// Ownership and timestamps for one node. A `None` identity is a global
+    /// `/proc` or `sysfs` node, which Linux owns as root.
+    pub(in crate::procfs) fn context(
+        &self,
+        identity: Option<model::ProcessIdentity>,
+    ) -> Result<metadata::Context, Error> {
+        let Some(identity) = identity else {
+            return Ok(metadata::Context::global(self.published));
+        };
+        let (user, group) = self.source.owner(identity)?;
+        Ok(metadata::Context {
+            user,
+            group,
+            time: self.published,
+        })
     }
 
     pub fn read_link(&self, path: &[u8], current: u32) -> Result<Option<Vec<u8>>, Error> {
@@ -236,7 +268,7 @@ impl Procfs {
         node: model::Node,
         identity: model::ProcessIdentity,
     ) -> Result<OfdMetadata, Error> {
-        let mut metadata = node.metadata(process);
+        let mut metadata = node.metadata(process, self.context(Some(identity))?);
         if node == model::Node::UtsNamespace {
             metadata.inode = self.source.uts(identity)?.namespace;
         } else if node == model::Node::NetworkNamespace {
@@ -263,6 +295,19 @@ impl Procfs {
         };
         let identity = self.resolve_path_process(process, thread)?;
         self.source.uts(identity).map(|view| Some(view.namespace))
+    }
+
+    /// Whether this path names the calling task's own `/proc/<pid>/auxv`, whose
+    /// bytes the execution boundary owns rather than this projection.
+    pub fn auxv(&self, path: &[u8], current: u32, thread: u32) -> Result<bool, Error> {
+        let path = match Self::thread_self(path, current, thread) {
+            Some(rewritten) => rewritten,
+            None => path.to_vec(),
+        };
+        let Some((process, _, model::Node::Auxv)) = model::Node::parse(&path, current) else {
+            return Ok(false);
+        };
+        Ok(process == current)
     }
 
     pub fn namespace_inode(&self, path: &[u8], current: u32) -> Result<Option<u64>, Error> {

@@ -30,6 +30,7 @@ impl OpenFileDescription for PipeEndpoint {
             special_device: 0,
             size: status.size,
             blocks_512: 0,
+            block_size: 4096,
             accessed: timestamp,
             modified: timestamp,
             changed: timestamp,

@@ -144,6 +144,7 @@ impl NativePath {
                 special_device: metadata.special_device,
                 size: metadata.size,
                 blocks_512: metadata.blocks_512,
+                block_size: metadata.block_size,
                 accessed: hl_runtime::FileTimestamp {
                     seconds: metadata.accessed.seconds,
                     nanoseconds: metadata.accessed.nanoseconds,
@@ -198,9 +199,11 @@ impl NativePath {
     }
 
     pub(super) fn procfs_plan(&self, plan: &OpenAbiPlan) -> Result<Option<OpenAbiPlan>, RuntimePathError> {
+        // A namespace magic link never resolves through its "pid:[...]" target;
+        // an open of it binds the namespace object itself.
         if let (Some(procfs), Some(process)) = (&self.procfs, self.process)
             && procfs
-                .uts_namespace(plan.operand.path.as_bytes(), process.number())
+                .namespace_inode(plan.operand.path.as_bytes(), process.number())
                 .map_err(Self::procfs_error)?
                 .is_some()
         {
@@ -296,17 +299,23 @@ impl NativePath {
                 .map(Some);
             }
         }
-        match plan.operand.path.as_bytes() {
-            b"/proc/self/auxv" | b"proc/self/auxv" => {
-                let bytes = self
-                    .auxiliary
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone();
-                super::auxiliary::AuxiliaryFile::prepare(bytes, plan.intent).map(Some)
-            }
-            _ => Ok(None),
+        if let (Some(procfs), Some(process)) = (&self.procfs, self.process)
+            && procfs
+                .auxv(
+                    plan.operand.path.as_bytes(),
+                    process.number(),
+                    self.thread.map_or(process.number(), hl_task::ThreadId::number),
+                )
+                .map_err(Self::procfs_error)?
+        {
+            let bytes = self
+                .auxiliary
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            return super::auxiliary::AuxiliaryFile::prepare(bytes, plan.intent).map(Some);
         }
+        Ok(None)
     }
 }
 
@@ -410,6 +419,7 @@ mod test {
                 special_device,
                 size: 0,
                 blocks_512: 0,
+                block_size: 4096,
                 accessed: timestamp,
                 modified: timestamp,
                 changed: timestamp,
@@ -545,6 +555,61 @@ mod test {
         let metadata = mount.metadata().unwrap();
         assert_eq!(metadata.identity.inode, 4_026_531_841);
         assert_eq!(metadata.kind, hl_runtime::FileKind::Regular);
+
+        // Measured on Linux 7.0.11: `lstat` of every `/proc/<pid>/ns` entry is
+        // `120777` with the namespace identity as the inode, and an `open` of one
+        // binds the nsfs object rather than resolving the "mnt:[...]" target.
+        let link_operand = PathOperand {
+            nofollow: true,
+            ..mount_operand.clone()
+        };
+        let link = host.resolve(&host.root_base().unwrap(), &link_operand).unwrap();
+        let link_metadata = link.metadata().unwrap();
+        assert_eq!(link_metadata.kind, hl_runtime::FileKind::Symlink);
+        assert_eq!(link_metadata.permissions.bits(), 0o777);
+        assert_eq!(link_metadata.identity.inode, 4_026_531_841);
+        assert_eq!(link.read_link().unwrap(), b"mnt:[4026531841]");
+
+        let mount_plan = OpenAbiPlan {
+            operand: mount_operand.clone(),
+            ..plan.clone()
+        };
+        assert!(host.procfs_plan(&mount_plan).unwrap().is_none());
+        let mut mount_open = host
+            .prepare_open(&host.root_base().unwrap(), &mount_plan, &super::super::test_identity())
+            .unwrap();
+        let mount_object = mount_open.object();
+        let mount_raw = mount_object.metadata().unwrap();
+        assert_eq!(mount_raw.inode, 4_026_531_841);
+        assert_eq!((mount_raw.kind, mount_raw.permissions), (8, 0o444));
+        mount_open.commit().unwrap();
+
+        // `auxv` and `pagemap` stat and open on every pid spelling, not only the
+        // two `self` literals the boundary used to match.
+        for leaf in ["auxv", "pagemap"] {
+            let path = format!("/proc/{}/{leaf}", process.number());
+            let operand = PathOperand {
+                directory: OpenDirectory::default(),
+                path: GuestPathBytes::new(path.as_bytes()).unwrap(),
+                allow_empty: false,
+                nofollow: false,
+            };
+            let node = host.resolve(&host.root_base().unwrap(), &operand).unwrap();
+            let node_metadata = node.metadata().unwrap();
+            assert_eq!((leaf, node_metadata.kind), (leaf, hl_runtime::FileKind::Regular));
+            assert_eq!((leaf, node_metadata.permissions.bits()), (leaf, 0o400));
+            assert_eq!((leaf, node_metadata.size), (leaf, 0));
+            assert_eq!((leaf, node_metadata.block_size), (leaf, 1024));
+            let leaf_plan = OpenAbiPlan {
+                operand,
+                ..plan.clone()
+            };
+            let mut opened = host
+                .prepare_open(&host.root_base().unwrap(), &leaf_plan, &super::super::test_identity())
+                .unwrap();
+            let _ = opened.object();
+            opened.commit().unwrap();
+        }
 
         drop(object);
         drop(prepared);

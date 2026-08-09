@@ -6,7 +6,10 @@ pub const STATX_BASIC_STATS: u32 = 0x07ff;
 pub const STATX_BTIME: u32 = 0x0800;
 pub const STATX_MNT_ID: u32 = 0x1000;
 
-const BLOCK_SIZE: u64 = 4096;
+/// The attribute bits this kernel can report at all. Measured on Linux 7.0.11:
+/// every filesystem sets `AUTOMOUNT | MOUNT_ROOT | DAX`, and only the on-disk
+/// filesystems widen it further.
+const STATX_ATTRIBUTES_MASK: u64 = 0x0020_3000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatEncodingError {
@@ -76,7 +79,7 @@ impl StatEncoder {
             mask |= STATX_MNT_ID;
         }
         Self::u32(output, 0, mask);
-        Self::u32(output, 4, BLOCK_SIZE as u32);
+        Self::u32(output, 4, metadata.block_size);
         Self::u32(output, 16, links);
         Self::u32(output, 20, metadata.user);
         Self::u32(output, 24, metadata.group);
@@ -84,6 +87,7 @@ impl StatEncoder {
         Self::u64(output, 32, metadata.identity.inode);
         Self::u64(output, 40, metadata.size);
         Self::u64(output, 48, metadata.blocks_512);
+        Self::u64(output, 56, STATX_ATTRIBUTES_MASK);
         Self::timestamp(output, 64, metadata.accessed);
         if let Some(birth) = extensions.birth {
             Self::timestamp(output, 80, birth);
@@ -136,7 +140,7 @@ impl StatEncoder {
         Self::u32(output, 28, metadata.group);
         Self::u64(output, 32, metadata.special_device);
         Self::u64(output, 48, metadata.size);
-        Self::u32(output, 56, BLOCK_SIZE as u32);
+        Self::u32(output, 56, metadata.block_size);
         Self::u64(output, 64, metadata.blocks_512);
         Self::stat_timestamps(metadata, output);
     }
@@ -150,7 +154,7 @@ impl StatEncoder {
         Self::u32(output, 32, metadata.group);
         Self::u64(output, 40, metadata.special_device);
         Self::u64(output, 48, metadata.size);
-        Self::u64(output, 56, BLOCK_SIZE);
+        Self::u64(output, 56, u64::from(metadata.block_size));
         Self::u64(output, 64, metadata.blocks_512);
         Self::stat_timestamps(metadata, output);
     }

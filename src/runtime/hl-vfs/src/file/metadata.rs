@@ -85,6 +85,7 @@ pub struct Metadata {
     pub special_device: u64,
     pub size: u64,
     pub blocks_512: u64,
+    pub block_size: u32,
     pub accessed: Timestamp,
     pub modified: Timestamp,
     pub changed: Timestamp,

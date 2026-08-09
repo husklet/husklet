@@ -71,6 +71,7 @@ fn metadata() -> FileMetadata {
         special_device: 0,
         size: 4,
         blocks_512: 8,
+        block_size: 4096,
         accessed: timestamp,
         modified: timestamp,
         changed: timestamp,

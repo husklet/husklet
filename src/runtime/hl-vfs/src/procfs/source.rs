@@ -37,6 +37,12 @@ pub trait Source: Send + Sync {
         Err(Error::NotFound)
     }
     fn process(&self, process: ProcessIdentity) -> Result<ProcessView, Error>;
+    /// Effective credentials owning this task's `/proc/<pid>` inodes. Separate
+    /// from `process` because every stat needs it and the full view is costly.
+    fn owner(&self, process: ProcessIdentity) -> Result<(u32, u32), Error> {
+        self.process(process)
+            .map(|view| (view.effective_user, view.effective_group))
+    }
     fn cmdline(&self, _process: ProcessIdentity) -> Result<Vec<u8>, Error> {
         Err(Error::NotFound)
     }

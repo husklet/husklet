@@ -2,6 +2,25 @@ use hl_descriptor::{OfdMetadata, OfdTimestamp};
 
 use super::model::Node;
 
+/// Per-node facts procfs cannot derive from the path alone: the owning task's
+/// effective credentials and the instant the projection was published.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::procfs) struct Context {
+    pub(in crate::procfs) user: u32,
+    pub(in crate::procfs) group: u32,
+    pub(in crate::procfs) time: OfdTimestamp,
+}
+
+impl Context {
+    pub(in crate::procfs) const fn global(time: OfdTimestamp) -> Self {
+        Self {
+            user: 0,
+            group: 0,
+            time,
+        }
+    }
+}
+
 impl Node {
     /// Nodes projected from sysfs or cgroup2 rather than from `/proc`.
     fn sysfs(self) -> bool {
@@ -58,15 +77,23 @@ impl Node {
         }
     }
 
-    pub(super) fn link_metadata(inode: u64) -> OfdMetadata {
-        let mut metadata = Self::ProcRoot.metadata(0);
+    pub(super) fn link_metadata(inode: u64, context: Context) -> OfdMetadata {
+        let mut metadata = Self::ProcRoot.metadata(0, context);
         metadata.inode = inode;
         metadata.kind = 10;
         metadata.permissions = 0o777;
         metadata
     }
 
-    pub(super) fn metadata(self, process: u32) -> OfdMetadata {
+    /// The `nsfs` object an opened or followed namespace magic link names: a
+    /// regular `0444` inode keyed by the namespace identity, as `fstat` reports.
+    pub(super) fn namespace_file(mut metadata: OfdMetadata) -> OfdMetadata {
+        metadata.kind = 8;
+        metadata.permissions = 0o444;
+        metadata
+    }
+
+    pub(super) fn metadata(self, process: u32, context: Context) -> OfdMetadata {
         let identity = match self {
             Self::CgroupRoot => 0x6000_0000,
             Self::Cgroup(name) => 0x6100_0000 + name as u64,
@@ -90,6 +117,8 @@ impl Node {
             Self::PidNamespace => 0x2b,
             Self::TimeNamespace => 0x2c,
             Self::UserNamespace => 0x2d,
+            Self::Auxv => 0x35,
+            Self::Pagemap => 0x36,
             Self::Comm => 0x13,
             Self::Cmdline => 0x1a,
             Self::Environ => 0x24,
@@ -183,6 +212,12 @@ impl Node {
                 | Self::MountsLink
                 | Self::UtsNamespace
                 | Self::NetworkNamespace
+                | Self::CgroupNamespace
+                | Self::IpcNamespace
+                | Self::MountNamespace
+                | Self::PidNamespace
+                | Self::TimeNamespace
+                | Self::UserNamespace
                 | Self::FdLink(_)
                 | Self::MapFile(_, _)
         );
@@ -193,7 +228,7 @@ impl Node {
             (10, 0o777)
         } else if matches!(self, Self::Comm | Self::OomScoreAdj | Self::Hostname | Self::Domainname) {
             (8, 0o644)
-        } else if matches!(self, Self::Environ | Self::Io) {
+        } else if matches!(self, Self::Environ | Self::Io | Self::Auxv | Self::Pagemap) {
             (8, 0o400)
         } else {
             (8, 0o444)
@@ -205,24 +240,23 @@ impl Node {
             _ if sysfs && kind == 8 => 4096,
             _ => 0,
         };
-        let zero = OfdTimestamp {
-            seconds: 0,
-            nanoseconds: 0,
-        };
         OfdMetadata {
             device: 0x7072_6f63,
             inode: (u64::from(process) << 32) | identity,
             kind,
             permissions,
             links: self.link_count(),
-            user: 0,
-            group: 0,
+            user: context.user,
+            group: context.group,
             special_device: 0,
             size,
             blocks_512: 0,
-            accessed: zero,
-            modified: zero,
-            changed: zero,
+            // Linux reports a 1024-byte `st_blksize` for procfs and 4096 for the
+            // sysfs and cgroup2 attributes projected beside it.
+            block_size: if sysfs { 4096 } else { 1024 },
+            accessed: context.time,
+            modified: context.time,
+            changed: context.time,
         }
     }
 }

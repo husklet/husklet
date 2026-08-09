@@ -672,6 +672,7 @@ impl OpenFileDescription for NativeFile {
             special_device: value.rdev(),
             size: value.size(),
             blocks_512: value.blocks(),
+            block_size: 4096,
             accessed: timestamp(value.atime(), value.atime_nsec()),
             modified: timestamp(value.mtime(), value.mtime_nsec()),
             changed: timestamp(value.ctime(), value.ctime_nsec()),

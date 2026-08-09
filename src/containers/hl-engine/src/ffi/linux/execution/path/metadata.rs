@@ -659,6 +659,7 @@ impl HostMetadata {
             special_device: value.st_rdev as u64,
             size: value.st_size as u64,
             blocks_512: value.st_blocks as u64,
+            block_size: value.st_blksize as u32,
             accessed: Self::time(value.st_atime, value.st_atime_nsec as i64),
             modified: Self::time(value.st_mtime, value.st_mtime_nsec as i64),
             changed: Self::time(value.st_ctime, value.st_ctime_nsec as i64),
@@ -693,6 +694,7 @@ impl HostMetadata {
             special_device: value.rdev(),
             size: value.size(),
             blocks_512: value.blocks(),
+            block_size: 4096,
             accessed: Self::time(value.atime(), value.atime_nsec()),
             modified: Self::time(value.mtime(), value.mtime_nsec()),
             changed: Self::time(value.ctime(), value.ctime_nsec()),
@@ -723,6 +725,7 @@ impl HostMetadata {
             special_device: value.special_device,
             size: value.size,
             blocks_512: value.blocks_512,
+            block_size: value.block_size,
             accessed: FileTimestamp {
                 seconds: value.accessed.seconds,
                 nanoseconds: value.accessed.nanoseconds,
