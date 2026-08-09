@@ -362,6 +362,12 @@ any other name runs unseen for its entire measurement and every other lane
 reads the box as free. If you copy the driver, keep the basename `testing`
 (`bin/testing` is fine — `-x` matches the name, not the path).
 
+**`pkill -x` kills other lanes' shared tooling.** Cancelling your own build with
+`pkill -x flock` matches every lane queued on the box lock, not just yours: one
+lane lost nineteen minutes of queueing that way. The name you are killing is
+almost never yours alone — `flock`, `cargo`, `rustc`, `sleep` are all shared.
+Kill your own process group or a PID you recorded when you started it.
+
 **`pkill -f` kills the caller.** The killer's own argv contains the pattern, so
 `pkill -f "bash timing.sh"` matches the cutover script running it and takes
 both down — before it can start the replacement. A lane did this one message
