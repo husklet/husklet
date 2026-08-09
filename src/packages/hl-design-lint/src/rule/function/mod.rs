@@ -22,6 +22,7 @@ impl Rule for FreeFunction {
     }
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
+        let owned = owned_types(workspace);
         let mut candidates = Vec::new();
         let mut definitions = HashMap::<String, usize>::new();
         let mut references = HashMap::<String, Vec<crate::rule::references::Reference>>::new();
@@ -29,6 +30,7 @@ impl Rule for FreeFunction {
         for source in workspace.production() {
             let mut functions = Functions {
                 path: &source.path,
+                owned: &owned,
                 test_scope: false,
                 nesting: Vec::new(),
                 values: Vec::new(),
@@ -139,6 +141,7 @@ impl Candidate {
 
 struct Functions<'a> {
     path: &'a std::path::Path,
+    owned: &'a HashSet<String>,
     test_scope: bool,
     nesting: Vec<String>,
     values: Vec<Candidate>,
@@ -146,7 +149,11 @@ struct Functions<'a> {
 
 impl<'ast> Visit<'ast> for Functions<'_> {
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
-        if !self.test_scope && !requires_test(&function.attrs) && candidate(function) {
+        if !self.test_scope
+            && !requires_test(&function.attrs)
+            && candidate(function)
+            && receives_owned(function, self.owned)
+        {
             let mut dependencies = Dependencies::default();
             dependencies.visit_item_fn(function);
             let span = function
@@ -174,6 +181,59 @@ impl<'ast> Visit<'ast> for Functions<'_> {
         syn::visit::visit_item_mod(self, module);
         self.nesting.pop();
         self.test_scope = previous;
+    }
+}
+
+/// Names every type the scanned tree declares, so a free function can be asked whether a receiver
+/// for it exists at all.
+fn owned_types(workspace: &Workspace) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for source in workspace.production() {
+        let mut declarations = Declarations { names: &mut names };
+        declarations.visit_file(&source.syntax);
+    }
+    names
+}
+
+struct Declarations<'a> {
+    names: &'a mut HashSet<String>,
+}
+
+impl<'ast> Visit<'ast> for Declarations<'_> {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        match item {
+            syn::Item::Struct(value) => drop(self.names.insert(value.ident.to_string())),
+            syn::Item::Enum(value) => drop(self.names.insert(value.ident.to_string())),
+            syn::Item::Union(value) => drop(self.names.insert(value.ident.to_string())),
+            syn::Item::Type(value) => drop(self.names.insert(value.ident.to_string())),
+            syn::Item::Trait(value) => drop(self.names.insert(value.ident.to_string())),
+            _ => {}
+        }
+        syn::visit::visit_item(self, item);
+    }
+}
+
+/// Reports whether any argument names a type this tree declares. A function over only foreign and
+/// primitive types has no receiver to become a method on, so the rule's remedy does not exist for it.
+fn receives_owned(function: &ItemFn, owned: &HashSet<String>) -> bool {
+    function.sig.inputs.iter().any(|argument| {
+        let FnArg::Typed(argument) = argument else {
+            return true;
+        };
+        let mut mentioned = Mentioned { names: Vec::new() };
+        mentioned.visit_type(&argument.ty);
+        mentioned.names.iter().any(|name| owned.contains(name))
+    })
+}
+
+struct Mentioned {
+    names: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for Mentioned {
+    fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+        self.names.push(segment.ident.to_string());
+        syn::visit::visit_path_segment(self, segment);
     }
 }
 

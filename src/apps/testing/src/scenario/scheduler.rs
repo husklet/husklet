@@ -1,6 +1,6 @@
 use super::{
     Options,
-    definition::{Resource, Scenario},
+    definition::{Resource, Scenario, ScenarioCase},
     execution, ledger,
 };
 use crate::suite::{Error, Target};
@@ -310,39 +310,56 @@ fn plan(scenarios: Vec<Scenario>, options: &Options) -> Result<Vec<Work>, Error>
     for scenario in scenarios {
         let scenario = Arc::new(scenario);
         for target in options.selection.targets() {
-            for (case_index, case) in scenario.cases.iter().enumerate() {
-                if case.supports(target) && selected_class(options.class, case.class) {
-                    let mut samples = Vec::with_capacity(usize::from(case.repetitions));
-                    for sample in 1..=case.repetitions {
-                        let key = WorkKey {
-                            id: case.id.clone(),
-                            target,
-                            sample,
-                        };
-                        if !keys.insert(key.clone()) {
-                            return Err(format!(
-                                "duplicate scenario case/target/sample key {} {} {sample}",
-                                case.id,
-                                target.name()
-                            )
-                            .into());
-                        }
-                        samples.push(key);
-                    }
-                    work.push(Work {
-                        keys: samples,
-                        scenario: Arc::clone(&scenario),
-                        case_index,
-                        target,
-                        resources: case.resources.clone(),
-                        warmups: case.warmups,
-                    });
-                }
-            }
+            extend_target_work(&scenario, target, options, &mut keys, &mut work)?;
         }
     }
     work.sort_by(|left, right| left.keys.cmp(&right.keys));
     Ok(work)
+}
+
+fn extend_target_work(
+    scenario: &Arc<Scenario>,
+    target: Target,
+    options: &Options,
+    keys: &mut BTreeSet<WorkKey>,
+    work: &mut Vec<Work>,
+) -> Result<(), Error> {
+    for (case_index, case) in scenario.cases.iter().enumerate() {
+        if !case.supports(target) || !selected_class(options.class, case.class) {
+            continue;
+        }
+        work.push(Work {
+            keys: sample_keys(case, target, keys)?,
+            scenario: Arc::clone(scenario),
+            case_index,
+            target,
+            resources: case.resources.clone(),
+            warmups: case.warmups,
+        });
+    }
+    Ok(())
+}
+
+/// Claims one key per repetition, refusing a definition that would run the same case twice.
+fn sample_keys(case: &ScenarioCase, target: Target, keys: &mut BTreeSet<WorkKey>) -> Result<Vec<WorkKey>, Error> {
+    let mut samples = Vec::with_capacity(usize::from(case.repetitions));
+    for sample in 1..=case.repetitions {
+        let key = WorkKey {
+            id: case.id.clone(),
+            target,
+            sample,
+        };
+        if !keys.insert(key.clone()) {
+            return Err(format!(
+                "duplicate scenario case/target/sample key {} {} {sample}",
+                case.id,
+                target.name()
+            )
+            .into());
+        }
+        samples.push(key);
+    }
+    Ok(samples)
 }
 
 fn selected_class(selected: Option<super::definition::Class>, case: super::definition::Class) -> bool {

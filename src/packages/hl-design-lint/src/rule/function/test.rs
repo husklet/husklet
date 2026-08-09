@@ -35,8 +35,9 @@ struct Options {
     #[serde(deserialize_with = "crate::flag")]
     second: bool,
 }
-fn flag(deserializer: u8) -> bool {
-    deserializer == 0
+struct Flags;
+fn flag(flags: Flags) -> bool {
+    matches!(flags, Flags)
 }
 "#,
     );
@@ -56,8 +57,9 @@ struct Options {
     #[serde(rename = "flag")]
     first: bool,
 }
-fn flag(deserializer: u8) -> bool {
-    deserializer == 0
+struct Flags;
+fn flag(flags: Flags) -> bool {
+    matches!(flags, Flags)
 }
 "#,
     );
@@ -71,11 +73,12 @@ fn flag(deserializer: u8) -> bool {
 fn a_local_binding_is_not_related_context() {
     let values = findings(
         r"
-fn flag(value: u8) -> bool {
-    value == 0
+struct Flags;
+fn flag(value: Flags) -> bool {
+    matches!(value, Flags)
 }
 fn read() -> bool {
-    flag(1)
+    flag(Flags)
 }
 fn shadow() -> u8 {
     let flag = 2;
@@ -88,4 +91,51 @@ fn shadow() -> u8 {
     };
     assert_eq!(finding.subject, "flag");
     assert_eq!(finding.related.len(), 1);
+}
+
+#[test]
+fn a_function_over_only_foreign_types_has_no_receiver_to_become() {
+    let values = findings(
+        r"
+fn excerpt(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
+}
+fn ratio(value: u64, reference: u64) -> f64 {
+    value as f64 / reference as f64
+}
+",
+    );
+    assert!(values.is_empty(), "got {values:?}");
+}
+
+#[test]
+fn a_declared_type_in_any_argument_position_keeps_the_candidate() {
+    let values = findings(
+        r"
+pub enum Verdict { Pass }
+fn render(limit: usize, verdict: &Verdict) -> usize {
+    match verdict { Verdict::Pass => limit }
+}
+",
+    );
+    let [finding] = &values[..] else {
+        panic!("one candidate, got {}", values.len());
+    };
+    assert_eq!(finding.subject, "render");
+}
+
+#[test]
+fn a_declared_type_nested_in_a_generic_keeps_the_candidate() {
+    let values = findings(
+        r"
+pub struct Case;
+fn plan(cases: Vec<Case>, limit: usize) -> usize {
+    cases.len() + limit
+}
+",
+    );
+    let [finding] = &values[..] else {
+        panic!("one candidate, got {}", values.len());
+    };
+    assert_eq!(finding.subject, "plan");
 }
