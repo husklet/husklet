@@ -1,5 +1,9 @@
 # Native compatibility corpus baseline at `3debb5997`
 
+**Superseded as the current mark.** The mark a lane should diff against is
+`baseline.tsv` in this directory, which the runner reads via `--baseline`. This
+file is retained for its failure-domain analysis, not for its counts.
+
 This is a read-only execution report, not a claim that the compatibility
 domain is complete.  The source tree was the clean detached commit
 `3debb5997c7839588b2d4a922ca565ef24845dc9`, tree

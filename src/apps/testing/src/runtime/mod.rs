@@ -7,7 +7,12 @@
 //! above the core count is contended and its timeouts are not engine defects. Counts also differ
 //! by host: `!host-excluded` cases are `NOT_RUN` on the hosts they name and active everywhere
 //! else, so quote `pass`/`fail`/`NOT_RUN` beside the host and the `host_load` distribution.
+//!
+//! The last recorded mark is committed at `tests/runtime/baseline.tsv`. Add `--baseline` and the
+//! sweep diffs against it and fails only on a case that moved the wrong way, which answers "did I
+//! regress anything" without re-deriving a full sweep to compare against.
 
+mod baseline;
 #[cfg(test)]
 mod case_tests;
 pub(crate) mod definition;
@@ -87,10 +92,35 @@ pub async fn run(options: Options) -> Result<(), Error> {
     if contended > 0 {
         println!("runtime: SUSPECT {contended} case(s) ran under a saturated host; their elapsed_ms is not comparable");
     }
-    if failed.is_empty() {
+    match &options.baseline {
+        Some(mark) => compare(&workspace()?.join(mark), &workspace()?.join(&options.results)),
+        None if failed.is_empty() => Ok(()),
+        None => Err(failed.join("\n").into()),
+    }
+}
+
+/// Judges the published ledger against a recorded mark: only a row that moved the wrong way fails
+/// the sweep, so a known failing set stays green and a new failure cannot hide inside the count.
+fn compare(mark: &Path, results: &Path) -> Result<(), Error> {
+    let mark = baseline::load(mark)?;
+    println!("runtime: baseline {}", mark.describe());
+    let changes = mark.diff(&baseline::observed(results)?);
+    if changes.is_empty() {
+        println!("runtime: no case moved against the baseline");
+        return Ok(());
+    }
+    for change in &changes {
+        println!("runtime: {}", change.line);
+    }
+    let regressions: Vec<&str> = changes
+        .iter()
+        .filter(|change| change.regression)
+        .map(|change| change.line.as_str())
+        .collect();
+    if regressions.is_empty() {
         Ok(())
     } else {
-        Err(failed.join("\n").into())
+        Err(regressions.join("\n").into())
     }
 }
 
@@ -149,6 +179,7 @@ fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error>
         app: Some(app),
         selection: crate::suite::Selection::exact(case.clone(), target),
         results: PathBuf::from("target/testing/runtime/worker.tsv"),
+        baseline: None,
         engine_profile: profile::Requested::Release,
     };
     let apps = apps(&options)?;
@@ -527,6 +558,14 @@ pub(crate) struct Options {
     /// Relative durable result path beneath the repository workspace.
     #[arg(long, default_value = "target/testing/runtime/results.tsv", value_parser = crate::suite::parse::results)]
     results: PathBuf,
+    /// Diff the sweep against a recorded corpus mark instead of against "everything passes".
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "tests/runtime/baseline.tsv",
+        value_parser = crate::suite::parse::results,
+    )]
+    baseline: Option<PathBuf>,
     /// Engine build profile this sweep is measuring; must match how the runner was built.
     #[arg(long, value_enum, env = "HL_COMPAT_ENGINE_PROFILE", default_value_t = profile::Requested::Release)]
     engine_profile: profile::Requested,
