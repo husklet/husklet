@@ -58,14 +58,19 @@ whole class. Run them in debug or inside `make gate`: under `--release`,
 
 ## Checking whether the box is busy
 
-Use `pgrep -af "/release/testing"`. **`pgrep -cf "target/release/testing"` is
-structurally blind** and will report an idle box while several lanes run: lanes set
-`CARGO_TARGET_DIR` under `/var/tmp`, so their binaries live at
-`/var/tmp/<lane>/release/testing` and never match `target/release/testing`. A
-measured instance reported 2 against a true 11.
+Use `pgrep -cx testing`, which matches the exact process name. Every
+pattern-matching form is wrong in one direction or the other:
 
-`pgrep -f "testing runtime"` additionally matches its own shell wrapper, so it
-over-reports on an empty box. `pgrep -af` and read the rows.
+- `pgrep -cf "target/release/testing"` is **structurally blind**. Lanes set
+  `CARGO_TARGET_DIR` under `/var/tmp`, so their binaries live at
+  `/var/tmp/<lane>/release/testing` and never match. A measured instance reported
+  2 against a true 11. A lane invoking `./target/release/testing` relatively from
+  a worktree defeats it too.
+- `pgrep -f "testing runtime"` and `pgrep -af "/release/testing"` **over-report**:
+  the querying shell's own command line contains the pattern, so they count
+  themselves. Measured 2 against a true 1.
+
+Use `pgrep -ax testing` when you need the rows as well as the count.
 
 Timings taken without this check are not evidence. Counter ratios, code-size
 deltas and categorical pass/timeout results survive contention; minima do not.
