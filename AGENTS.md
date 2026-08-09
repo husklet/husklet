@@ -73,6 +73,21 @@ it is a bin crate, so its tests need `make gate`, `--all-targets`, or an
 explicit `-p testing --bin testing`. Assertions placed there are invisible to
 the command this file tells everyone to run.
 
+### Work in your own worktree, and stage by path
+
+Several lanes edit the shared checkout at once. Two things follow, both of which
+have already cost work today:
+
+- **`git add -A` in the shared tree stages other lanes' uncommitted files.** One
+  lane swept another's `main.c` into its commit and caught it only on the stat.
+  Always `git add <path>`, never `-A`, and read the stat before committing.
+- **A dirty shared tree breaks everyone's build.** A lane found the tree would
+  not compile because of an unrelated in-flight edit, and had to run its gate in
+  a clean detached worktree to get a trustworthy answer. If the tree does not
+  build and your diff cannot explain it, check `git status` before debugging.
+
+Prefer your own worktree. If you must work in the shared tree, leave it clean.
+
 ### Commit before you mutate
 
 Non-vacuity checks work by breaking the fix and confirming the assertion
