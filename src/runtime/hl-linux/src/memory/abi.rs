@@ -5,14 +5,17 @@ use crate::{GuestMarshaller, GuestMemory, MarshalError};
 
 pub(crate) const PAGE: u64 = GuestPageSize::LINUX.bytes();
 const PROTECTION_MASK: u32 = 0x7;
+const MAP_TYPE: u32 = 0xf;
 const MAP_SHARED: u32 = 0x1;
 const MAP_PRIVATE: u32 = 0x2;
+const MAP_SHARED_VALIDATE: u32 = 0x3;
 const MAP_FIXED: u32 = 0x10;
 const MAP_ANONYMOUS: u32 = 0x20;
-const MAP_DENYWRITE: u32 = 0x800;
 const MAP_NORESERVE: u32 = 0x4000;
 const MAP_FIXED_NOREPLACE: u32 = 0x10_0000;
-const MAP_ALLOWED: u32 = 0x1f_f7f3 | MAP_DENYWRITE;
+/// Measured bit by bit on aarch64 6.x: the flags `MAP_SHARED_VALIDATE` accepts.
+/// Everything outside it answers EOPNOTSUPP, where `MAP_SHARED` ignores it.
+const LEGACY_MAP_MASK: u32 = 0x7c07_f93f;
 const MREMAP_MAYMOVE: u32 = 1;
 const MREMAP_FIXED: u32 = 2;
 const MREMAP_DONTUNMAP: u32 = 4;
@@ -21,6 +24,8 @@ const MREMAP_DONTUNMAP: u32 = 4;
 pub enum AbiError {
     Marshal(MarshalError),
     Invalid,
+    /// A flag Linux parses but declines to honour, such as `MAP_SYNC` off DAX.
+    Unsupported,
     Overflow,
     /// A range whose page-rounded end wraps past the top of the address space.
     /// `do_mprotect_pkey` answers ENOMEM for it, ahead of any protection screen.
@@ -172,12 +177,19 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         offset: u64,
         offset_in_pages: bool,
     ) -> Result<MmapPlan, AbiError> {
-        if length == 0 || protection & !PROTECTION_MASK != 0 || flags & !MAP_ALLOWED != 0 {
+        if length == 0 {
             return Err(AbiError::Invalid);
         }
-        let sharing = flags & (MAP_SHARED | MAP_PRIVATE);
-        if sharing != MAP_SHARED && sharing != MAP_PRIVATE {
-            return Err(AbiError::Invalid);
+        // `do_mmap` ignores unknown protection bits (only `mprotect` screens them) and
+        // ignores unknown flag bits for MAP_SHARED/MAP_PRIVATE; MAP_SHARED_VALIDATE is a
+        // shared mapping that rejects them with EOPNOTSUPP instead, and has no anon form.
+        let sharing = flags & MAP_TYPE;
+        match sharing {
+            MAP_SHARED | MAP_PRIVATE => {}
+            MAP_SHARED_VALIDATE if flags & MAP_ANONYMOUS != 0 => return Err(AbiError::Invalid),
+            MAP_SHARED_VALIDATE if flags & !LEGACY_MAP_MASK != 0 => return Err(AbiError::Unsupported),
+            MAP_SHARED_VALIDATE => {}
+            _ => return Err(AbiError::Invalid),
         }
         let offset = if offset_in_pages {
             offset.checked_mul(PAGE).ok_or(AbiError::Overflow)?
@@ -189,7 +201,7 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         }
         let rounded = Self::round_length(length)?;
         let placement = Self::placement(address, flags)?;
-        let shared = sharing == MAP_SHARED;
+        let shared = sharing != MAP_PRIVATE;
         let source = if flags & MAP_ANONYMOUS != 0 {
             MapSource::Anonymous { shared }
         } else {

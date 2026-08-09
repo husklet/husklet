@@ -107,6 +107,111 @@ fn mmap_ignores_denywrite() {
     }
 }
 
+/// Measured on aarch64 6.x with raw `syscall(SYS_mmap)`: `do_mmap` keeps only the
+/// low three protection bits and ignores every other one, anonymous or file-backed.
+/// `prot=0xdeadbee8` produced a `---p` line in /proc/self/maps rather than EINVAL.
+#[test]
+fn mmap_ignores_unknown_protection_bits() {
+    let memory = Memory::new();
+    let abi = MemoryAbi::new(&memory, GuestArchitecture::Aarch64);
+    assert_eq!(
+        abi.mmap(0, 4096, 0xdead_beef, 0x22, -1, 0).unwrap().protection,
+        Protection::READ.union(Protection::WRITE).union(Protection::EXECUTE)
+    );
+    assert_eq!(
+        abi.mmap(0, 4096, 0xdead_bee8, 0x22, -1, 0).unwrap().protection,
+        Protection::NONE
+    );
+    assert_eq!(
+        abi.mmap(0, 4096, 0xffff_ffff, 0x1, 3, 0).unwrap().protection,
+        Protection::READ.union(Protection::WRITE).union(Protection::EXECUTE)
+    );
+}
+
+/// Same sweep over the flag word: `MAP_SHARED` and `MAP_PRIVATE` accepted every
+/// unknown bit measured (6, 7, 9, 10, 19-25, 31), where `MAP_SHARED_VALIDATE` did not.
+#[test]
+fn mmap_ignores_unknown_flag_bits_for_legacy_types() {
+    let memory = Memory::new();
+    let abi = MemoryAbi::new(&memory, GuestArchitecture::Aarch64);
+    for bit in [
+        0x40_u32,
+        0x80,
+        0x200,
+        0x400,
+        0x8_0000,
+        0x10_0000,
+        0x20_0000,
+        0x200_0000,
+        0x8000_0000,
+    ] {
+        assert!(abi.mmap(0, 4096, 3, 0x22 | bit, -1, 0).is_ok(), "private bit {bit:#x}");
+        assert!(abi.mmap(0, 4096, 3, 0x21 | bit, -1, 0).is_ok(), "shared bit {bit:#x}");
+    }
+}
+
+/// `MAP_SHARED_VALIDATE` (`MAP_TYPE == 3`) is a shared mapping — a store through it
+/// was visible through an independent `MAP_SHARED` mapping of the same file — that
+/// answers `EOPNOTSUPP` for any flag outside `LEGACY_MAP_MASK` instead of ignoring it,
+/// and has no anonymous form. `MAP_TYPE` values 4..=15 stay EINVAL.
+#[test]
+fn mmap_shared_validate_maps_shared_and_screens_unknown_flags() {
+    let memory = Memory::new();
+    let abi = MemoryAbi::new(&memory, GuestArchitecture::Aarch64);
+    let plan = abi.mmap(0, 4096, 3, 0x3, 3, 0).unwrap();
+    assert_eq!(
+        plan.source,
+        MapSource::File {
+            descriptor: 3,
+            shared: true
+        }
+    );
+    for legacy in [
+        0x10_u32,
+        0x800,
+        0x1000,
+        0x2000,
+        0x4000,
+        0x8000,
+        0x1_0000,
+        0x2_0000,
+        0x4000_0000,
+    ] {
+        assert!(
+            abi.mmap(0, 4096, 3, 0x3 | legacy, 3, 0).is_ok(),
+            "legacy bit {legacy:#x}"
+        );
+    }
+    // MAP_SYNC off DAX, MAP_FIXED_NOREPLACE, and every reserved bit: EOPNOTSUPP.
+    for rejected in [
+        0x40_u32,
+        0x80,
+        0x200,
+        0x400,
+        0x8_0000,
+        0x10_0000,
+        0x20_0000,
+        0x200_0000,
+        0x8000_0000,
+    ] {
+        assert_eq!(
+            abi.mmap(0, 4096, 3, 0x3 | rejected, 3, 0),
+            Err(MemoryMarshalError::Unsupported),
+            "rejected bit {rejected:#x}"
+        );
+    }
+    assert_eq!(abi.mmap(0, 4096, 3, 0x23, -1, 0), Err(MemoryMarshalError::Invalid));
+    // Type 8 is MAP_DROPPABLE, which the host accepts for anonymous mappings only; we
+    // refuse it rather than pretend to honour its reclaim contract.
+    for kind in (4..16).filter(|kind| *kind != 8) {
+        assert_eq!(
+            abi.mmap(0, 4096, 3, 0x20 | kind, -1, 0),
+            Err(MemoryMarshalError::Invalid),
+            "type {kind}"
+        );
+    }
+}
+
 #[test]
 fn mmap_rejects_overflow() {
     let memory = Memory::new();
@@ -123,7 +228,10 @@ fn range_remap_rules() {
     assert!(MemoryAbi::<Memory>::munmap(0x1000, 0).is_err());
     // Linux screens the start alignment ahead of the zero-length short circuit,
     // so only an aligned start reaches the `return 0`.
-    assert_eq!(MemoryAbi::<Memory>::mprotect(1, 0, u32::MAX), Err(MemoryMarshalError::Invalid));
+    assert_eq!(
+        MemoryAbi::<Memory>::mprotect(1, 0, u32::MAX),
+        Err(MemoryMarshalError::Invalid)
+    );
     // A bad protection loses to the zero-length short circuit, but both grow flags
     // together are screened ahead of it.
     assert_eq!(MemoryAbi::<Memory>::mprotect(0x1000, 0, 8), Ok(None));
