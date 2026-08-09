@@ -243,3 +243,31 @@ fn native_backend_delivers_every_linux_signal_number() {
         );
     }
 }
+
+/// The worker inherits nothing: its `envp` is exactly the vector the launcher builds. The
+/// logging selectors therefore have to be named there, or `HL_LOG` is inert in every engine
+/// process and the worker cannot be asked to account for itself.
+#[test]
+fn logging_selectors_reach_the_worker_and_nothing_else_does() {
+    let mut environment = Vec::new();
+    ProcessLauncher::<Processes>::append_selected(&mut environment, |name| {
+        match name {
+            "HL_LOG" => Some("exec,syscall".to_owned()),
+            "HL_LOG_LEVEL" => Some("debug".to_owned()),
+            // Not a logging selector: it must not ride along.
+            "HL_BLOCK_CACHE_ENTRIES" => Some("4096".to_owned()),
+            _ => None,
+        }
+    });
+    let values = environment.iter().map(|value| value.to_bytes()).collect::<Vec<_>>();
+    assert_eq!(values, vec![b"HL_LOG=exec,syscall".as_slice(), b"HL_LOG_LEVEL=debug"]);
+}
+
+/// A launch with no selectors set adds nothing, so the worker's environment stays the
+/// descriptor handover it was before.
+#[test]
+fn an_unset_selector_adds_no_entry() {
+    let mut environment = Vec::new();
+    ProcessLauncher::<Processes>::append_selected(&mut environment, |_| None);
+    assert!(environment.is_empty());
+}

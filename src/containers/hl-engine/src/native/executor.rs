@@ -2119,7 +2119,22 @@ impl Executor {
         // SAFETY: `config` and the `services` table it points at are live for this call and
         // are copied by the engine, while the callback context stays valid afterwards
         // because it is the heap body of `memory`, which is moved into `Self` unchanged.
-        if unsafe { hl_native_create(&raw const config, &raw mut raw) } != 0 {
+        let status = unsafe { hl_native_create(&raw const config, &raw mut raw) };
+        if status != 0 {
+            // The caller's only signal is `None` from `executor`, after which every probe
+            // declines and the run still reports plausible phase timings. Status 1 is the
+            // arena refusing the flag word, which is how an unrecognised option bit silently
+            // turns native execution off; a verdict is not tag-gated, so it is not possible
+            // to be running without native execution and not be told.
+            hl_log::hl_verdict!(
+                hl_log::tag::EXEC,
+                "native.executor.unavailable",
+                status = status,
+                flags = config.flags,
+                diagnostics = diagnostics_enabled;
+                "native execution unavailable status={status} flags={:#x}: the run continues interpreted",
+                config.flags
+            );
             return Err(());
         }
         Ok(Self {

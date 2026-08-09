@@ -233,7 +233,7 @@ impl NativePool {
         plan: &RuntimeLaunchPlan,
         host_faults: Option<Arc<dyn crate::native::HostFaultOwner>>,
     ) -> Self {
-        Self {
+        let pool = Self {
             enabled: Self::selected(isa, plan),
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
             admission_cache: plan.options.get("HL_NATIVE_ADMISSION_CACHE") == Some("1"),
@@ -263,7 +263,28 @@ impl NativePool {
             counters: NativeCounters::default(),
             host_faults,
             swept: None,
-        }
+        };
+        // Which options the pool actually accepted, named once at construction. Every
+        // `HL_NATIVE_*` option is a silent comparison against `Some("1")`: a misspelled
+        // name, a value of `true`, or an option the plan dropped all read as "off" while
+        // every phase still reports plausible timings. This is the one place that can say
+        // what was believed, so it says all of it rather than only the odd ones.
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "native.pool.configured",
+            enabled = pool.enabled,
+            isa = ?isa,
+            diagnostics = pool.diagnostics,
+            admission_cache = pool.admission_cache,
+            direct_sticky = pool.direct_sticky,
+            direct_sticky_permanent = pool.direct_sticky_permanent,
+            fallback_productivity = pool.fallback_productivity,
+            write_reserve = pool.write_reserve,
+            write_commit = pool.write_commit,
+            runtime_write_reserve = pool.runtime_write_reserve
+        );
+        pool
     }
 
     pub(super) fn production_faults(
@@ -358,9 +379,21 @@ impl NativePool {
         } else {
             (DIRECT_FLIP_LIMIT, DIRECT_HOLD_RUNS)
         };
-        if *flips >= limit {
+        let reached = *flips;
+        if reached >= limit {
             self.direct_modes.remove(&process);
             self.direct_holds.insert(process, hold);
+            // The decision, not the flip: this process is off direct authority, and under
+            // the permanent arm it never comes back. Bounded by the live process set.
+            hl_log::hl_event!(
+                hl_log::tag::EXEC,
+                hl_log::Level::Debug,
+                "native.direct.held",
+                process = process.number(),
+                flips = reached,
+                limit = limit,
+                permanent = hold == DIRECT_HOLD_PERMANENT
+            );
         }
     }
 
@@ -447,6 +480,19 @@ impl NativePool {
                     probation.permanent = true;
                     probation.remaining = 0;
                     self.counters.suppress_permanent += 1;
+                    // The terminal decision for this entry: it will never be entered
+                    // natively again. The teardown counter says how many latched, never
+                    // which entry or when, which is the question a lane actually has.
+                    hl_log::hl_event!(
+                        hl_log::tag::EXEC,
+                        hl_log::Level::Debug,
+                        "native.suppress.permanent",
+                        process = entry.0.number(),
+                        entry = entry.3,
+                        instruction = instruction.3,
+                        executed = executed,
+                        budget = budget
+                    );
                 }
             } else if self.suppressed.len() < NATIVE_SITE_LIMIT {
                 self.suppressed.insert(
@@ -547,6 +593,21 @@ impl NativePool {
     }
 
     pub(super) fn disable(&mut self) {
+        if self.enabled {
+            // Native execution stops for the rest of the process and nothing else says so:
+            // the counters at teardown show probes that never became entries, which reads
+            // identically to a guest that simply never qualified. Not tag-gated, because
+            // the operator who did not open `exec` is exactly the one measuring a run that
+            // is quietly interpreted.
+            hl_log::hl_verdict!(
+                hl_log::tag::EXEC,
+                "native.disabled",
+                reason = "source_table_full",
+                sources = self.sources.len(),
+                executors = self.executors.len();
+                "native execution disabled for the rest of this process: the source table filled"
+            );
+        }
         self.enabled = false;
         self.admitted = None;
         self.executors.clear();
@@ -564,6 +625,18 @@ impl NativePool {
     }
 
     pub(super) fn reset_observed_sources(&mut self, process: hl_task::ProcessId, incarnation: u64) -> Option<()> {
+        // A reset throws away every translation this process owns, so a run that resets
+        // repeatedly rebuilds continuously and reports as merely slow. Debug, tag-gated,
+        // and compiled out of release: this is off unless someone is asking the question.
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Debug,
+            "native.cache.reset",
+            process = process.number(),
+            incarnation = incarnation,
+            sources = self.sources.len(),
+            suppressed = self.suppressed.len()
+        );
         self.admitted = None;
         self.executor(process)?.reset(incarnation).ok()?;
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
