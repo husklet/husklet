@@ -1,6 +1,4 @@
-use super::{
-    Arc, ContainerId, ContainerState, Duration, ExitStatus, JournalId, Result, Service, Signal, now_ms,
-};
+use super::{Arc, ContainerId, ContainerState, Duration, ExitStatus, JournalId, Result, Service, Signal, now_ms};
 
 impl Service {
     pub(crate) async fn reconcile(&self) -> Result<()> {
@@ -258,8 +256,8 @@ impl Service {
 
 #[cfg(test)]
 mod tests {
-    use crate::ExecState;
     use super::*;
+    use crate::ExecState;
 
     #[test]
     fn reconciliation_retains_the_running_exec_process_id() {

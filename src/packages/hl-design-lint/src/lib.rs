@@ -301,14 +301,7 @@ fn unmarked_parses(value: &str) -> Result<usize, String> { Ok(value.len()) }
                 .iter()
                 .map(|finding| finding.subject.as_str())
                 .collect::<Vec<_>>(),
-            [
-                "one",
-                "detached",
-                "gated",
-                "package",
-                "domain",
-                "malformed"
-            ]
+            ["one", "detached", "gated", "package", "domain", "malformed"]
         );
         assert!(
             values

@@ -94,7 +94,8 @@ impl Candidate {
             "free function `{}` takes one declared type, which is the receiver a method would take",
             self.name
         );
-        finding.help = "make it a method on that type or add a temporary #[hl_design::classify(...)] classification".into();
+        finding.help =
+            "make it a method on that type or add a temporary #[hl_design::classify(...)] classification".into();
         finding.related = usages
             .map(|usage| Related {
                 label: usage.context.as_ref().map_or_else(
@@ -212,8 +213,6 @@ fn owned_types(workspace: &Workspace) -> HashMap<String, HashSet<String>> {
     declared
 }
 
-
-
 fn collect_use(tree: &syn::UseTree, root: Option<&str>, values: &mut HashMap<String, String>) {
     match tree {
         syn::UseTree::Path(path) => {
@@ -265,7 +264,11 @@ impl Scope<'_> {
                 _ => first,
             }
         } else {
-            self.imports.0.get(&first).cloned().unwrap_or_else(|| self.package.to_owned())
+            self.imports
+                .0
+                .get(&first)
+                .cloned()
+                .unwrap_or_else(|| self.package.to_owned())
         };
         root == self.package
             && self
