@@ -396,6 +396,10 @@ mod abi {
     pub const SIGKILL: i32 = 9;
     pub const WNOHANG: i32 = 1;
     pub const POSIX_SPAWN_SETPGROUP: i16 = 2;
+    pub const POSIX_SPAWN_SETSIGDEF: i16 = 4;
+    pub const POSIX_SPAWN_SETSIGMASK: i16 = 8;
+    /// A libc `sigset_t`: 128 bytes with 8-byte alignment on every Linux target.
+    pub type SignalSet = [u64; 16];
     pub const AF_UNIX: i32 = 1;
     pub const SOCK_STREAM: i32 = 1;
     pub const SOCK_NONBLOCK: i32 = 0x800;
@@ -487,6 +491,10 @@ mod abi {
         pub fn posix_spawnattr_destroy(attributes: *mut c_void) -> i32;
         pub fn posix_spawnattr_setflags(attributes: *mut c_void, flags: i16) -> i32;
         pub fn posix_spawnattr_setpgroup(attributes: *mut c_void, group: i32) -> i32;
+        pub fn posix_spawnattr_setsigdefault(attributes: *mut c_void, set: *const SignalSet) -> i32;
+        pub fn posix_spawnattr_setsigmask(attributes: *mut c_void, set: *const SignalSet) -> i32;
+        pub fn sigfillset(set: *mut SignalSet) -> i32;
+        pub fn sigemptyset(set: *mut SignalSet) -> i32;
         pub fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
         pub fn kill(pid: i32, signal: i32) -> i32;
         pub fn socketpair(domain: i32, kind: i32, protocol: i32, output: *mut i32) -> i32;
