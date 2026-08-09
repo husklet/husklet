@@ -24,7 +24,6 @@ impl Rule for FreeFunction {
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let owned = owned_types(workspace);
-        let crates = owned_crates(workspace);
         let mut candidates = Vec::new();
         let mut definitions = HashMap::<String, usize>::new();
         let mut references = HashMap::<String, Vec<crate::rule::references::Reference>>::new();
@@ -33,7 +32,6 @@ impl Rule for FreeFunction {
             let mut functions = Functions {
                 path: &source.path,
                 owned: &owned,
-                crates: &crates,
                 imports: Imports::of(source),
                 package: source.package.replace('-', "_"),
                 test_scope: false,
@@ -144,8 +142,7 @@ impl Candidate {
 
 struct Functions<'a> {
     path: &'a std::path::Path,
-    owned: &'a HashSet<String>,
-    crates: &'a HashSet<String>,
+    owned: &'a HashMap<String, HashSet<String>>,
     imports: Imports,
     package: String,
     test_scope: bool,
@@ -192,28 +189,27 @@ impl<'ast> Visit<'ast> for Functions<'_> {
 
 /// Names every type the scanned tree declares, so a free function can be asked whether a receiver
 /// for it exists at all.
-fn owned_types(workspace: &Workspace) -> HashSet<String> {
-    let mut names = HashSet::new();
+fn owned_types(workspace: &Workspace) -> HashMap<String, HashSet<String>> {
+    let mut declared = HashMap::<String, HashSet<String>>::new();
     let mut parsed = HashSet::new();
     for source in workspace.production() {
+        let mut names = HashSet::new();
         let mut declarations = Declarations {
             names: &mut names,
             parsed: &mut parsed,
         };
         declarations.visit_file(&source.syntax);
+        declared
+            .entry(source.package.replace('-', "_"))
+            .or_default()
+            .extend(names);
     }
     // A command-line argument type is the boundary value a composition root is handed, not an entity
     // with behavior, so its entry point is correctly free.
-    names.retain(|name| !parsed.contains(name));
-    names
-}
-
-/// Every crate name in the scanned tree, in the underscored spelling a path segment uses.
-fn owned_crates(workspace: &Workspace) -> HashSet<String> {
-    workspace
-        .production()
-        .map(|source| source.package.replace('-', "_"))
-        .collect()
+    for names in declared.values_mut() {
+        names.retain(|name| !parsed.contains(name));
+    }
+    declared
 }
 
 
@@ -249,22 +245,19 @@ fn collect_use(tree: &syn::UseTree, root: Option<&str>, values: &mut HashMap<Str
 struct Imports(HashMap<String, String>);
 
 struct Scope<'a> {
-    owned: &'a HashSet<String>,
-    crates: &'a HashSet<String>,
+    owned: &'a HashMap<String, HashSet<String>>,
     imports: &'a Imports,
     package: &'a str,
 }
 
 impl Scope<'_> {
-    /// Whether a written type path names a type this tree declares. A leading segment that resolves
-    /// outside the workspace disqualifies it, so `std::path::Path` is not the tree's own `Path`.
+    /// Whether a written type path names a type this package declares. A leading segment resolving
+    /// elsewhere disqualifies it: `std::path::Path` is not the tree's own `Path`, and a sibling
+    /// crate's type cannot take an inherent method from here.
     fn declares(&self, path: &syn::Path) -> bool {
         let Some(last) = path.segments.last() else {
             return false;
         };
-        if !self.owned.contains(&last.ident.to_string()) {
-            return false;
-        }
         let first = path.segments[0].ident.to_string();
         let root = if path.segments.len() > 1 {
             match first.as_str() {
@@ -274,7 +267,11 @@ impl Scope<'_> {
         } else {
             self.imports.0.get(&first).cloned().unwrap_or_else(|| self.package.to_owned())
         };
-        self.crates.contains(&root)
+        root == self.package
+            && self
+                .owned
+                .get(&root)
+                .is_some_and(|names| names.contains(&last.ident.to_string()))
     }
 }
 
@@ -296,7 +293,6 @@ impl Functions<'_> {
     fn scope(&self) -> Scope<'_> {
         Scope {
             owned: self.owned,
-            crates: self.crates,
             imports: &self.imports,
             package: &self.package,
         }

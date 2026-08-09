@@ -179,6 +179,20 @@ fn build_id(path: &std::path::Path) -> bool {
 }
 
 #[test]
+fn a_sibling_crate_s_type_cannot_take_an_inherent_method_from_here() {
+    let values = findings(
+        r"
+pub struct Assembly;
+fn prepare_tasks(assembly: &hl_runtime::Assembly) -> bool {
+    let _ = assembly;
+    true
+}
+",
+    );
+    assert!(values.is_empty(), "got {values:?}");
+}
+
+#[test]
 fn a_command_line_argument_type_is_a_boundary_value_not_an_entity() {
     let values = findings(
         r"
