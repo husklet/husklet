@@ -123,15 +123,12 @@ impl GuestExecutor {
         pool.record_admission(fallback_key, bytes.len(), instruction_epoch, bytes);
         pool.counters.entries += 1;
         let source = [crate::native::NativeSource { guest_first: pc, bytes }];
-        let (executor, allow_direct) = if pool.split_mode_executors {
-            let direct = pool
-                .executor(run.process)?
-                .direct_protection(pc, &source, &projection, allow_direct)
-                .is_some();
-            pool.aarch64_executor(run.process, direct)?
-        } else {
-            (pool.executor(run.process)?, allow_direct)
-        };
+        let direct_protection =
+            crate::native::NativeExecutor::direct_protection(pc, &source, &projection, allow_direct);
+        let (executor, direct) = pool.aarch64_executor(run.process, direct_protection.is_some())?;
+        // Allocation failure selects the resolver sibling, which must not receive a direct
+        // grant even though the entry itself qualified for one.
+        let direct_protection = direct.then_some(direct_protection).flatten();
         let checkpoint = projection.checkpoint_continuation();
         let mapping = projection.request_continuation();
         // A still-current grant extends the run in place at the same instruction
@@ -181,7 +178,7 @@ impl GuestExecutor {
                     &run.interrupt,
                     native_budget,
                     &mut resolve,
-                    allow_direct,
+                    direct_protection,
                     continuation.map(|_| &mut poll as &mut dyn FnMut(u64, u64) -> bool),
                 )
             else {

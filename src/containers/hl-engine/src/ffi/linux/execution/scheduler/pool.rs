@@ -137,8 +137,9 @@ pub(super) struct NativeCounters {
     /// Diagnostic: where direct authority went. `direct_admitted` counts admissions that
     /// entered with it, `direct_held` the ones a process-wide hold refused, `direct_cold`
     /// the ones still spending their warm-up resolver run, and `direct_site` the ones a
-    /// per-site decline refused. `direct_flips` counts observed run-mode changes, each of
-    /// which discards the whole translation cache, `direct_holds` the holds installed, and
+    /// per-site decline refused. `direct_flips` counts observed run-mode changes, which
+    /// discard the shared translation cache when split mode is off; `direct_holds` counts
+    /// the holds installed, and
     /// `direct_executors_created` proves a split run allocated its lazy direct sibling.
     pub(super) direct_admitted: u64,
     pub(super) direct_held: u64,
@@ -397,7 +398,7 @@ impl NativePool {
         .ok()
     }
 
-    fn ensure_executor(&mut self, process: hl_task::ProcessId) -> Option<()> {
+    fn ensure_executor(&mut self, process: hl_task::ProcessId) -> Option<&mut NativeExecutors> {
         if !self.enabled {
             return None;
         }
@@ -412,12 +413,11 @@ impl NativePool {
                 },
             );
         }
-        Some(())
+        self.executors.get_mut(&process)
     }
 
     pub(super) fn executor(&mut self, process: hl_task::ProcessId) -> Option<&crate::native::NativeExecutor> {
-        self.ensure_executor(process)?;
-        self.executors.get(&process).map(|executors| &executors.resolver)
+        Some(&self.ensure_executor(process)?.resolver)
     }
 
     /// Selects the AArch64 cache for the exact mode `run_lease` will use. The
@@ -429,21 +429,36 @@ impl NativePool {
         process: hl_task::ProcessId,
         direct: bool,
     ) -> Option<(&crate::native::NativeExecutor, bool)> {
-        self.ensure_executor(process)?;
-        if !self.split_mode_executors || !direct {
-            return self
-                .executors
-                .get(&process)
-                .map(|executors| (&executors.resolver, direct));
+        if !self.enabled {
+            return None;
         }
-        let create_direct = self
-            .executors
-            .get(&process)
-            .is_some_and(|executors| executors.direct.is_none() && !executors.direct_unavailable);
-        if create_direct {
-            let direct_executor = self.create_executor();
-            let executors = self.executors.get_mut(&process)?;
-            match direct_executor {
+        let diagnostics = self.diagnostics;
+        let write_reserve = self.write_reserve;
+        let write_commit = self.write_commit;
+        let runtime_write_reserve = self.runtime_write_reserve;
+        let dirty_overflow_continue = self.dirty_overflow_continue;
+        let host_faults = self.host_faults.clone();
+        let create_executor = || {
+            crate::native::NativeExecutor::create_with_journal(
+                diagnostics,
+                write_reserve,
+                write_commit,
+                runtime_write_reserve,
+                dirty_overflow_continue,
+                host_faults.clone(),
+            )
+            .ok()
+        };
+        let executors = match self.executors.entry(process) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => entry.insert(NativeExecutors {
+                resolver: create_executor()?,
+                direct: None,
+                direct_unavailable: false,
+            }),
+        };
+        if self.split_mode_executors && direct && executors.direct.is_none() && !executors.direct_unavailable {
+            match create_executor() {
                 Some(executor) => {
                     executors.direct = Some(executor);
                     self.counters.direct_executors_created += 1;
@@ -451,22 +466,21 @@ impl NativePool {
                 None => executors.direct_unavailable = true,
             }
         }
-        let executors = self.executors.get(&process)?;
         Some(match executors.direct.as_ref() {
-            Some(executor) => (executor, true),
-            None => (&executors.resolver, false),
+            Some(executor) if self.split_mode_executors && direct => (executor, true),
+            _ => (&executors.resolver, direct && !self.split_mode_executors),
         })
     }
 
     fn reset_executors(&mut self, process: hl_task::ProcessId, mapping_epoch: u64) -> Option<()> {
-        self.ensure_executor(process)?;
-        let reset = self.executors.get(&process).is_some_and(|executors| {
+        let reset = {
+            let executors = self.ensure_executor(process)?;
             executors.resolver.reset(mapping_epoch).is_ok()
                 && executors
                     .direct
                     .as_ref()
                     .is_none_or(|executor| executor.reset(mapping_epoch).is_ok())
-        });
+        };
         if !reset {
             // Do not retain a half-reset pair: either cache could otherwise certify an
             // instruction generation that its sibling has already discarded.
@@ -482,8 +496,8 @@ impl NativePool {
         ranges: &[(u64, u64)],
         mapping_incarnation: u64,
     ) -> Option<()> {
-        self.ensure_executor(process)?;
-        let invalidated = self.executors.get(&process).is_some_and(|executors| {
+        let invalidated = {
+            let executors = self.ensure_executor(process)?;
             executors
                 .resolver
                 .invalidate_ranges(ranges, mapping_incarnation)
@@ -492,7 +506,7 @@ impl NativePool {
                     .direct
                     .as_ref()
                     .is_none_or(|executor| executor.invalidate_ranges(ranges, mapping_incarnation).is_ok())
-        });
+        };
         if !invalidated {
             self.executors.remove(&process);
             return None;
@@ -560,9 +574,9 @@ impl NativePool {
         admitted && warm && site
     }
 
-    /// Records the run mode this process just used. The cache identity carries the mode, so
-    /// sustained alternation resets every translation twice per cycle; hold direct
-    /// authority off for a bounded run of turns so the resolver mode can keep its cache.
+    /// Records the run mode this process just used. A shared cache carries the mode in its
+    /// identity, so sustained alternation resets every translation twice per cycle; split
+    /// caches retain the logical observation without installing the default hold.
     pub(super) fn observe_direct_mode(&mut self, process: hl_task::ProcessId, direct: bool) {
         if !self.direct_mode_holds_enabled() {
             let flipped = self

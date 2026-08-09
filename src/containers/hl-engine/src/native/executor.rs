@@ -2058,7 +2058,7 @@ impl Executor {
         self.lease_failure.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn direct_scalar_trace(&self, pc: u64, sources: &[BorrowedSource<'_>]) -> Option<Protection> {
+    fn direct_scalar_trace(pc: u64, sources: &[BorrowedSource<'_>]) -> Option<Protection> {
         let mut protection = None;
         // A run chains single-instruction blocks across branches, so the window is
         // not bounded by the entry block's terminator and may not stop at one.
@@ -2084,11 +2084,9 @@ impl Executor {
         protection
     }
 
-    /// Computes the exact direct-authority decision used by `run_lease`. The scheduler
-    /// reuses this only when split-mode executors are enabled, so selecting a cache cannot
-    /// drift from the mode the executor will actually enter.
+    /// Computes the exact direct-authority decision the scheduler passes to `run_lease`,
+    /// so selecting a split cache cannot drift from the mode the executor actually enters.
     pub(crate) fn direct_protection<H: MemoryAccessHost>(
-        &self,
         pc: u64,
         sources: &[BorrowedSource<'_>],
         lease: &ProjectionLease<'_, H>,
@@ -2097,7 +2095,7 @@ impl Executor {
         let range = lease.range();
         allow_direct
             .then(|| {
-                self.direct_scalar_trace(pc, sources)
+                Self::direct_scalar_trace(pc, sources)
                     .or_else(|| {
                         direct_literal_target(pc, sources, range.start().get(), range.end().get())
                             .then_some(Protection::READ)
@@ -2480,7 +2478,7 @@ impl Executor {
         interrupt: &InterruptToken,
         budget: u64,
         resolve: &mut dyn FnMut(u64, &mut [u8]) -> Option<(usize, ExecutableToken)>,
-        allow_direct: bool,
+        direct_protection: Option<Protection>,
         mut poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(RunOutcome, RunStatistics), ()> {
         #[cfg(feature = "alloc-count")]
@@ -2535,8 +2533,8 @@ impl Executor {
         let lease_range = (primary.guest_first, primary.guest_last);
         // The authority identity is cache-wide: a per-entry narrowing of the same window
         // reissues it and resets every translation, so admit the whole lease instead.
-        // Both decodes are pure reads of `sources`, so skip them when the result is discarded.
-        let direct_protection = self.direct_protection(state.pc, sources, &lease, allow_direct);
+        // The scheduler computed this before choosing the resolver or direct executor.
+        // Do not classify again here: a successful direct trace can scan 64 words.
         let mut primary_range = lease_range;
         let mut views = vec![primary];
         const OPERAND_SPAN: u64 = u64::MAX;
@@ -3555,7 +3553,6 @@ mod test {
 
     #[test]
     fn direct_scalar_trace_sees_a_write_past_a_branch_or_a_gap() {
-        let executor = Executor::create().expect("executor");
         // The lock fast path: the authority must admit the load and the store
         // the run reaches after the branch, not just the later one.
         let mut bytes = Vec::new();
@@ -3563,7 +3560,7 @@ mod test {
         bytes.extend_from_slice(&0x3500_0041_u32.to_le_bytes()); // cbnz w1, .+8
         bytes.extend_from_slice(&0xb900_0002_u32.to_le_bytes()); // str w2, [x0]
         assert_eq!(
-            executor.direct_scalar_trace(
+            Executor::direct_scalar_trace(
                 0x1000,
                 &[BorrowedSource {
                     guest_first: 0x1000,
@@ -3574,7 +3571,7 @@ mod test {
         );
         // A hole in the source spans hides no access behind it either.
         assert_eq!(
-            executor.direct_scalar_trace(
+            Executor::direct_scalar_trace(
                 0x1000,
                 &[
                     BorrowedSource {
@@ -3596,7 +3593,7 @@ mod test {
         bytes.extend_from_slice(&0xd65f_03c0_u32.to_le_bytes()); // ret
         bytes.extend_from_slice(&0x3dc0_0027_u32.to_le_bytes()); // ldr q7, [x1]
         assert_eq!(
-            executor.direct_scalar_trace(
+            Executor::direct_scalar_trace(
                 0x1000,
                 &[BorrowedSource {
                     guest_first: 0x1000,
@@ -3887,10 +3884,7 @@ mod test {
             1928
         );
         assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_token), 1936);
-        assert_eq!(
-            std::mem::offset_of!(schema::X86_64Cpu, diagnostic_guard_fast),
-            1944
-        );
+        assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, diagnostic_guard_fast), 1944);
         assert_eq!(
             std::mem::offset_of!(schema::X86_64Cpu, diagnostic_write_cache_miss),
             2000
