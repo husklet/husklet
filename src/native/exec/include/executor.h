@@ -149,6 +149,14 @@ typedef struct hl_native_diagnostics {
     uint64_t ibtc_authenticated_entries;
     uint64_t ibtc_shared_hits;
     uint64_t ibtc_auth_rejections;
+    uint64_t x86_guard_fast;
+    uint64_t x86_guard_full;
+    uint64_t x86_guard_fallback;
+    uint64_t x86_dirty_merged;
+    uint64_t x86_dirty_committed;
+    uint64_t x86_dirty_overflow;
+    uint64_t x86_write_cache_hit;
+    uint64_t x86_write_cache_miss;
 } hl_native_diagnostics;
 
 typedef enum hl_native_change_kind {
@@ -433,7 +441,7 @@ _Static_assert(offsetof(hl_native_diagnostics, x86_public_epochs) == 448,
                "native diagnostics epoch extension drifted");
 _Static_assert(offsetof(hl_native_diagnostics, ibtc_authenticated_entries) == 520,
                "native diagnostics append offset drifted");
-_Static_assert(sizeof(hl_native_diagnostics) == 544, "native diagnostics ABI drifted");
+_Static_assert(sizeof(hl_native_diagnostics) == 608, "native diagnostics ABI drifted");
 _Static_assert(sizeof(hl_native_change) == 40, "native change ABI drifted");
 _Static_assert(sizeof(hl_native_fault) == 40, "native fault ABI drifted");
 _Static_assert(sizeof(hl_native_address) == 24, "native address ABI drifted");

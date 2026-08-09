@@ -157,6 +157,14 @@ typedef struct hl_native_x86_64_cpu {
     uint64_t certificate_write_policy;
     uint64_t certificate_cache_identity;
     uint64_t certificate_token;
+    uint64_t diagnostic_guard_fast;
+    uint64_t diagnostic_guard_full;
+    uint64_t diagnostic_guard_fallback;
+    uint64_t diagnostic_dirty_merged;
+    uint64_t diagnostic_dirty_committed;
+    uint64_t diagnostic_dirty_overflow;
+    uint64_t diagnostic_write_cache_hit;
+    uint64_t diagnostic_write_cache_miss;
 } hl_native_x86_64_cpu;
 
 #define HL_CPU_ASSERT(type, field, expected) \
@@ -314,7 +322,15 @@ HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_view_index, 1912);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_write_policy, 1920);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_cache_identity, 1928);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_token, 1936);
-_Static_assert(sizeof(hl_native_x86_64_cpu) == 1944, "x86_64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_x86_64_cpu, diagnostic_guard_fast, 1944);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, diagnostic_guard_full, 1952);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, diagnostic_guard_fallback, 1960);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, diagnostic_dirty_merged, 1968);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, diagnostic_dirty_committed, 1976);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, diagnostic_dirty_overflow, 1984);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, diagnostic_write_cache_hit, 1992);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, diagnostic_write_cache_miss, 2000);
+_Static_assert(sizeof(hl_native_x86_64_cpu) == 2008, "x86_64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_x86_64_cpu) == 8, "x86_64 native CPU prefix alignment drifted");
 

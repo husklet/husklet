@@ -825,6 +825,20 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         cpu->fault_size = 0;
         uint64_t executed_before = cpu->executed;
         hl_native_x86_64_enter(cpu, code.entry);
+        if (executor->diagnostics) {
+#define X86_DRAIN(counter, field)                                                                  \
+    atomic_fetch_add_explicit(&executor->counter, cpu->field, memory_order_relaxed);               \
+    cpu->field = 0
+            X86_DRAIN(x86_guard_fast, diagnostic_guard_fast);
+            X86_DRAIN(x86_guard_full, diagnostic_guard_full);
+            X86_DRAIN(x86_guard_fallback, diagnostic_guard_fallback);
+            X86_DRAIN(x86_dirty_merged, diagnostic_dirty_merged);
+            X86_DRAIN(x86_dirty_committed, diagnostic_dirty_committed);
+            X86_DRAIN(x86_dirty_overflow, diagnostic_dirty_overflow);
+            X86_DRAIN(x86_write_cache_hit, diagnostic_write_cache_hit);
+            X86_DRAIN(x86_write_cache_miss, diagnostic_write_cache_miss);
+#undef X86_DRAIN
+        }
         uint64_t vector_dirty = cpu->vector_dirty;
         cpu->vector_dirty = 0;
         uint64_t completed = cpu->scratch[0];

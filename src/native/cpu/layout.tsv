@@ -147,3 +147,11 @@ x86_64	certificate_view_index	1912	1	u64
 x86_64	certificate_write_policy	1920	1	u64
 x86_64	certificate_cache_identity	1928	1	u64
 x86_64	certificate_token	1936	1	u64
+x86_64	diagnostic_guard_fast	1944	1	u64
+x86_64	diagnostic_guard_full	1952	1	u64
+x86_64	diagnostic_guard_fallback	1960	1	u64
+x86_64	diagnostic_dirty_merged	1968	1	u64
+x86_64	diagnostic_dirty_committed	1976	1	u64
+x86_64	diagnostic_dirty_overflow	1984	1	u64
+x86_64	diagnostic_write_cache_hit	1992	1	u64
+x86_64	diagnostic_write_cache_miss	2000	1	u64

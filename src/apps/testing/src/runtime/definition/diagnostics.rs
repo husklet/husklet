@@ -15,7 +15,7 @@ const RECORDS: [&str; 4] = ["hl-native:", "hl-native-detail:", "hl-native-entry:
 /// counters carry no information (`ibtc_shared_hits`, `ibtc_authenticated_entries`,
 /// `ibtc_auth_rejections` are constant zero, `ibtc_site_misses`/`ibtc_shared_misses` merely
 /// restate `fills`, and `a64_slim_exits` is a format-string literal with no field behind it).
-const DIGEST: [&str; 22] = [
+const DIGEST: [&str; 32] = [
     "runs",
     "builds",
     "hits",
@@ -38,6 +38,16 @@ const DIGEST: [&str; 22] = [
     "a64_guard_fast",
     "a64_guard_full",
     "a64_dirty_committed",
+    "x86_guard_fast",
+    "x86_guard_full",
+    "x86_dirty_committed",
+    "x86_dirty_merged",
+    "x86_write_cache_hit",
+    "x86_write_cache_miss",
+    "x86_dirty_overflow",
+    "x86_guard_fallback",
+    "a64_dirty_overflow",
+    "a64_guard_fallback",
 ];
 
 /// Per-site histogram lines, kept as `pc:weight` pairs so a row records *which* body translated.

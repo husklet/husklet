@@ -2014,6 +2014,7 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
     if (!hl_x86_request_valid(request, result))
         return request != NULL && hl_x86_a64_unknown_flags(request->flags) != 0u ?
                    HL_X86_A64_UNKNOWN_FLAG : HL_X86_A64_ARGUMENT;
+    hl_x86_set_write_diagnostics((request->flags & HL_X86_A64_DIAGNOSTICS) != 0u);
     decode_block(request, &block);
     if (block.count > request->provenance_capacity) return HL_X86_A64_CAPACITY;
     for (;;) {

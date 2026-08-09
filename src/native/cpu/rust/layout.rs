@@ -154,6 +154,14 @@ pub struct X86_64Cpu {
     pub certificate_write_policy: u64,
     pub certificate_cache_identity: u64,
     pub certificate_token: u64,
+    pub diagnostic_guard_fast: u64,
+    pub diagnostic_guard_full: u64,
+    pub diagnostic_guard_fallback: u64,
+    pub diagnostic_dirty_merged: u64,
+    pub diagnostic_dirty_committed: u64,
+    pub diagnostic_dirty_overflow: u64,
+    pub diagnostic_write_cache_hit: u64,
+    pub diagnostic_write_cache_miss: u64,
 }
 
 const _: () = {
@@ -309,7 +317,16 @@ const _: () = {
     assert!(std::mem::offset_of!(X86_64Cpu, certificate_write_policy) == 1920);
     assert!(std::mem::offset_of!(X86_64Cpu, certificate_cache_identity) == 1928);
     assert!(std::mem::offset_of!(X86_64Cpu, certificate_token) == 1936);
-    assert!(std::mem::size_of::<X86_64Cpu>() == 1944);
+    assert!(std::mem::offset_of!(X86_64Cpu, diagnostic_guard_fast) == 1944);
+    assert!(std::mem::offset_of!(X86_64Cpu, diagnostic_guard_full) == 1952);
+    assert!(std::mem::offset_of!(X86_64Cpu, diagnostic_guard_fallback) == 1960);
+    assert!(std::mem::offset_of!(X86_64Cpu, diagnostic_dirty_merged) == 1968);
+    assert!(std::mem::offset_of!(X86_64Cpu, diagnostic_dirty_committed) == 1976);
+    assert!(std::mem::offset_of!(X86_64Cpu, diagnostic_dirty_overflow) == 1984);
+    assert!(std::mem::offset_of!(X86_64Cpu, diagnostic_write_cache_hit) == 1992);
+    assert!(std::mem::offset_of!(X86_64Cpu, diagnostic_write_cache_miss) == 2000);
+    assert!(std::mem::size_of::<X86_64Cpu>() == 2008);
 
     assert!(std::mem::align_of::<X86_64Cpu>() == 8);
+
 };
