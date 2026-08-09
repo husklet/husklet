@@ -136,8 +136,8 @@ fn unmark(shared: &Reactor, host: u16) {
 const RELAY_CEILING: usize = 256;
 
 fn listen(shared: &Weak<Reactor>, rule: Publication, path: &[u8]) {
-    let Some(listener) = bind(rule) else {
-        // The host port belongs to someone else right now; let a later listen() retry it.
+    let Some(listener) = claim(shared, rule) else {
+        // The host port belongs to someone else; let a later listen() retry it.
         if let Some(shared) = shared.upgrade() {
             unmark(&shared, rule.host);
         }
@@ -200,8 +200,13 @@ fn accept(listener: &TcpListener) -> Accepted {
         revents: 0,
     };
     // SAFETY: one initialized pollfd is passed with a matching count.
-    if unsafe { libc::poll(&raw mut poller, 1, 250) } < 0 {
-        return classify(&std::io::Error::last_os_error());
+    match unsafe { libc::poll(&raw mut poller, 1, 250) } {
+        ready if ready < 0 => return classify(&std::io::Error::last_os_error()),
+        // The wait expired with nothing pending; returning here is what bounds the step. Falling
+        // into accept() would park this thread on a blocking listener and keep the host port bound
+        // long after the container that published it is gone.
+        0 => return Accepted::Idle,
+        _ => {}
     }
     match listener.accept() {
         Ok((stream, _)) => Accepted::Connection(stream),
@@ -229,11 +234,30 @@ fn classify(error: &std::io::Error) -> Accepted {
     Accepted::Idle
 }
 
+/// Takes the host port, waiting out the previous owner. Replacing a container that published the
+/// same port is ordinary: the daemon frees the port the instant the old container leaves the active
+/// set, while its forwarder still needs its current accept step to observe that its session is gone.
+fn claim(shared: &Weak<Reactor>, rule: Publication) -> Option<TcpListener> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        shared.upgrade()?;
+        if let Some(listener) = bind(rule) {
+            return Some(listener);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Binds the published host address with `SO_REUSEADDR`, so the next container to publish the port
 /// is not blocked by connections the previous one left in `TIME_WAIT`.
 fn bind(rule: Publication) -> Option<TcpListener> {
     // SAFETY: socket takes scalar arguments and returns one owned descriptor.
-    let descriptor = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+    // Non-blocking, so a peer that resets between poll() and accept() cannot park the loop either.
+    let descriptor =
+        unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, 0) };
     if descriptor < 0 {
         return None;
     }
@@ -324,7 +348,23 @@ fn relay(host: TcpStream, guest: UnixStream) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Accepted, Publication, classify};
+    use super::{Accepted, Publication, accept, bind, classify};
+
+    #[test]
+    fn an_idle_listener_yields_the_accept_loop_instead_of_parking_it() {
+        let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let host = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let listener = bind(Publication {
+            address: [127, 0, 0, 1],
+            host,
+            guest: 1,
+        })
+        .unwrap();
+        let started = std::time::Instant::now();
+        assert!(matches!(accept(&listener), Accepted::Idle));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "accept did not return");
+    }
 
     #[test]
     fn a_reset_peer_and_resource_pressure_keep_the_listener() {
