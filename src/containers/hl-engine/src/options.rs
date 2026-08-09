@@ -92,6 +92,11 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
+        "HL_NATIVE_DIRECT_STICKY_PERMANENT",
+        "never return direct authority to a process that alternated run mode",
+        Flag
+    ),
+    launch!(
         "HL_NATIVE_FALLBACK_PRODUCTIVITY",
         "credit entry productivity from a long run that ended in a fallback",
         Flag

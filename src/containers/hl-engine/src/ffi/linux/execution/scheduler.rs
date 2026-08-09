@@ -1008,6 +1008,7 @@ mod tests {
     fn sticky_direct_mode_latches_on_a_slow_alternation_and_never_returns() {
         let mut options = crate::options::Options::default();
         options.set("HL_NATIVE_DIRECT_STICKY", "1", true).unwrap();
+        options.set("HL_NATIVE_DIRECT_STICKY_PERMANENT", "1", true).unwrap();
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
         // One flip every sixteen runs pays down to nothing under the decaying score.

@@ -172,6 +172,8 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) admission_cache: bool,
     /// Gates the sticky arm of the direct-authority decision below.
     pub(super) direct_sticky: bool,
+    /// Makes the sticky arm's hold permanent instead of bounded.
+    pub(super) direct_sticky_permanent: bool,
     /// Gates crediting productivity from a run that retired a substantial share of its
     /// budget and *then* fell back. Off by default so the disabled-in-both control runs.
     pub(super) fallback_productivity: bool,
@@ -236,6 +238,7 @@ impl NativePool {
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
             admission_cache: plan.options.get("HL_NATIVE_ADMISSION_CACHE") == Some("1"),
             direct_sticky: plan.options.get("HL_NATIVE_DIRECT_STICKY") == Some("1"),
+            direct_sticky_permanent: plan.options.get("HL_NATIVE_DIRECT_STICKY_PERMANENT") == Some("1"),
             fallback_productivity: plan.options.get("HL_NATIVE_FALLBACK_PRODUCTIVITY") == Some("1"),
             write_reserve: plan.options.get("HL_A64_NO_WRITE_RESERVE") != Some("1"),
             write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
@@ -329,7 +332,8 @@ impl NativePool {
     /// sustained alternation resets every translation twice per cycle; hold direct
     /// authority off for a bounded run of turns so the resolver mode can keep its cache.
     pub(super) fn observe_direct_mode(&mut self, process: hl_task::ProcessId, direct: bool) {
-        let sticky = self.direct_sticky;
+        let sticky = self.direct_sticky || self.direct_sticky_permanent;
+        let permanent = self.direct_sticky_permanent;
         let (previous, flips) = self.direct_modes.entry(process).or_insert((direct, 0));
         if *previous == direct {
             // A steady run pays down the score, so an isolated flip never accumulates.
@@ -343,7 +347,10 @@ impl NativePool {
         *previous = direct;
         *flips += 2;
         let (limit, hold) = if sticky {
-            (DIRECT_STICKY_FLIP_LIMIT, DIRECT_HOLD_PERMANENT)
+            (
+                DIRECT_STICKY_FLIP_LIMIT,
+                if permanent { DIRECT_HOLD_PERMANENT } else { DIRECT_HOLD_RUNS },
+            )
         } else {
             (DIRECT_FLIP_LIMIT, DIRECT_HOLD_RUNS)
         };
