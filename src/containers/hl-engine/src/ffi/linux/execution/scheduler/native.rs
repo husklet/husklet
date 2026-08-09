@@ -398,7 +398,10 @@ impl GuestExecutor {
                 projection,
                 token,
                 native_budget,
-                false,
+                // The x86 CPU has no `interrupt_token`, so this static flag is the only
+                // interrupt the emitted code can see; a pending one must at least be
+                // honoured at entry rather than after a whole budget.
+                run.interrupt.is_set(),
                 &mut resolve,
                 Some(&mut poll),
             ) else {
