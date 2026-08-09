@@ -566,3 +566,25 @@ async fn force_removal_reaps_attached_executions_before_returning() {
     ));
     assert!(runtime.signals.lock().unwrap().contains(&Signal::Kill));
 }
+
+/// A guest that records the stop signal and keeps running is exactly the teardown hang this
+/// bound exists for: without it `remove_force` waits on `WaitCondition::NotRunning` forever.
+#[tokio::test(start_paused = true)]
+async fn force_removal_of_a_guest_that_ignores_the_stop_signal_is_bounded() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(3_600);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("refuses")).await.unwrap();
+    containers.start("refuses").await.unwrap();
+
+    let error = containers.remove_force("refuses").await.unwrap_err();
+
+    // Naming the condition is the point: a widened tolerance that reported any failure would
+    // hide the difference between a refusing guest and an ordinary removal error.
+    assert!(
+        matches!(&error, Error::StopTimeout { seconds, .. } if *seconds == 30),
+        "{error:?}"
+    );
+    assert!(runtime.signals.lock().unwrap().contains(&Signal::Kill));
+}

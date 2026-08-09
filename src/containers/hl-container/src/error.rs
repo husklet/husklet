@@ -49,6 +49,8 @@ pub enum Error {
         actual: ExecState,
         expected: &'static str,
     },
+    #[error("container {id} did not reach a terminal state within {seconds}s of a forced stop")]
+    StopTimeout { id: ContainerId, seconds: u64 },
     #[error("container {0} is already running")]
     AlreadyRunning(ContainerId),
     #[error("process {0} has no terminal")]

@@ -1,6 +1,20 @@
 use super::{Container, Error, ExitStatus, JournalId, Result, Rootfs, Service, Signal, WaitCondition};
 
+/// A forced removal is the last teardown step, so its waits are bounded: a guest that never
+/// publishes a terminal state must surface as a named failure rather than block the caller forever.
+pub(crate) const FORCE_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl Service {
+    async fn bounded<T>(id: &crate::ContainerId, operation: impl Future<Output = Result<T>>) -> Result<T> {
+        match tokio::time::timeout(FORCE_STOP_TIMEOUT, operation).await {
+            Ok(result) => result,
+            Err(_) => Err(Error::StopTimeout {
+                id: id.clone(),
+                seconds: FORCE_STOP_TIMEOUT.as_secs(),
+            }),
+        }
+    }
+
     pub(crate) async fn remove(
         &self,
         reference: &str,
@@ -16,9 +30,9 @@ impl Service {
                 {
                     return Err(error);
                 }
-                self.wait(reference, WaitCondition::NotRunning).await?;
+                Self::bounded(&container.id, self.wait(reference, WaitCondition::NotRunning)).await?;
             }
-            self.stop_and_wait_executions(&container.id).await?;
+            Self::bounded(&container.id, self.stop_and_wait_executions(&container.id)).await?;
         }
         let _guard = self.operations.lock().await;
         let container = self.resolve(reference).await?;

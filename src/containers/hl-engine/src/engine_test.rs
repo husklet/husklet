@@ -211,6 +211,44 @@ fn stop_after_exit_reports_a_terminal_guest_not_busy() {
     assert_eq!(engine.terminate(StopRequest::Signal(15)), Err(EngineError::Exited));
 }
 
+/// `wait` on an engine that was never launched has nothing to observe; reporting `Busy` made it
+/// indistinguishable from a wait that is already in flight.
+#[test]
+fn wait_before_launch_reports_not_started_not_busy() {
+    let (engine, _launcher, _) = Fixture::engine(GuestIsa::Aarch64);
+    assert_eq!(engine.wait(), Err(EngineError::NotStarted));
+    let (engine, _launcher, _) = Fixture::engine(GuestIsa::Aarch64);
+    engine.terminate(StopRequest::Interrupt).unwrap();
+    assert_eq!(engine.wait(), Err(EngineError::NotStarted));
+}
+
+/// `docker start` on an exited container starts it again, so the engine restarts rather than
+/// reporting `Busy`. The previous run's exit must not survive into the new one.
+#[test]
+fn start_after_exit_runs_the_guest_again() {
+    let (engine, launcher, workspaces) = Fixture::engine(GuestIsa::Aarch64);
+    launcher.release_launch();
+    engine.start().unwrap();
+    assert_eq!(engine.wait().unwrap().guest_status, 23);
+    assert_eq!(engine.phase().unwrap(), EnginePhase::Exited);
+    engine.start().unwrap();
+    assert_eq!(engine.phase().unwrap(), EnginePhase::Running);
+    assert_eq!(*workspaces.prepared.lock().unwrap(), 2);
+    engine.wait().unwrap();
+    assert_eq!(launcher.state.lock().unwrap().wait_calls, 2);
+}
+
+/// The trap: `Busy` also means "an operation is in flight", so widening `start` to accept every
+/// phase would let a second start run a guest that is already running.
+#[test]
+fn start_while_running_is_still_busy() {
+    let (engine, launcher, _) = Fixture::engine(GuestIsa::X86_64);
+    launcher.release_launch();
+    engine.start().unwrap();
+    assert_eq!(engine.start(), Err(EngineError::Busy));
+    engine.wait().unwrap();
+}
+
 #[test]
 fn pre_start_stop() {
     let (engine, launcher, _) = Fixture::engine(GuestIsa::Aarch64);
