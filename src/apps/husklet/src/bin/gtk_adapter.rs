@@ -206,21 +206,21 @@ impl ColorPicker {
             Some(&initial),
             gtk::gio::Cancellable::NONE,
             move |result| {
-                Self::apply(result, &active, &color, &label, &swatch);
+                Self::apply(&result, &active, &color, &label, &swatch);
             },
         );
     }
 
     fn apply(
-        result: Result<gtk::gdk::RGBA, gtk::glib::Error>,
+        result: &Result<gtk::gdk::RGBA, gtk::glib::Error>,
         active: &Rc<Cell<bool>>,
         color: &Rc<RefCell<gtk::gdk::RGBA>>,
         label: &gtk::Label,
         swatch: &gtk::DrawingArea,
     ) {
         if let Ok(selected) = result {
-            *color.borrow_mut() = selected;
-            label.set_text(&Self::format(&selected));
+            *color.borrow_mut() = *selected;
+            label.set_text(&Self::format(selected));
             swatch.queue_draw();
         }
         active.set(false);

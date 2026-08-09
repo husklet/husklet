@@ -84,6 +84,27 @@ in package `testing``, silently in a workspace-wide run. Every assertion in
 to run. Adding `--bins` was what first surfaced `hl-syscall-audit`'s
 `checked_outputs_current` as red.
 
+### `--all-targets` does not reach the application
+
+`src/apps/husklet` declares `[[bin]] husklet` with `required-features = ["gui"]`, and its
+`runtime` feature is off by default. Cargo **skips a target whose required features are
+unmet without printing anything**, so `cargo clippy --workspace --all-targets` covers the
+`hl` library's default surface and none of the ~10,800 lines the signed application is
+built from. A lane can rename a shared type, watch the workspace go green, and have broken
+the product. That is the permanently-armed form of the merge hazard above.
+
+Making it visible cost four lines of `flake.nix`: the Linux dev shell now carries `gtk4`,
+`librsvg` and `vte-gtk4` exactly as the Darwin one does, all substitutable (~257 MiB, no
+source builds). `make gate` therefore runs the two feature-gated Clippy commands CI runs,
+and `make gate-app` runs just those two when you only want the application answered.
+
+What this does **not** cover, and no Linux run can: linking and running the GTK app,
+the `#[cfg(target_os = "macos")]` arms in `bin/host/{environment,pty,appearance}.rs` and
+`runtime/process.rs`, the objc2 title-bar and appearance code, and everything in
+`.github/workflows/release.yml` — bundling, code signing, notarization, the DMG. A green
+`make gate` on Linux means the application *type-checks and lints*; it does not mean it
+runs. The macOS arms are still only compiled by CI on `macos-26`.
+
 ### Work in your own worktree, and stage by path
 
 Several lanes edit the shared checkout at once. Two things follow, both of which

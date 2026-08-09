@@ -15,7 +15,7 @@ impl<'a> Slots<'a> {
     }
 
     /// Reuse a pane's saved slot and keep the allocator ahead of numeric restored slots.
-    pub(crate) fn adopt(&self, saved: &Option<String>) -> String {
+    pub(crate) fn adopt(&self, saved: Option<&str>) -> String {
         let tw = self.0;
         let Some(saved) = saved else {
             return self.allocate();
@@ -25,7 +25,7 @@ impl<'a> Slots<'a> {
                 tw.slot_ctr.set(slot + 1);
             }
         }
-        saved.clone()
+        saved.to_owned()
     }
 
     /// Find the layout slot registered for `term` (pruning dead registry entries as it scans).

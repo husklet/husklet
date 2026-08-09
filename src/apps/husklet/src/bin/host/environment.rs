@@ -37,16 +37,11 @@ impl Environment {
     }
 
     fn path() -> String {
-        Self::path_from(std::env::var_os("PATH"), std::env::var_os("HOME"))
+        Self::path_from(std::env::var_os("PATH").as_deref(), std::env::var_os("HOME").as_deref())
     }
 
-    fn path_from(path: Option<std::ffi::OsString>, home: Option<std::ffi::OsString>) -> String {
-        let mut paths: Vec<std::path::PathBuf> = path
-            .as_deref()
-            .map(std::env::split_paths)
-            .into_iter()
-            .flatten()
-            .collect();
+    fn path_from(path: Option<&std::ffi::OsStr>, home: Option<&std::ffi::OsStr>) -> String {
+        let mut paths: Vec<std::path::PathBuf> = path.map(std::env::split_paths).into_iter().flatten().collect();
         if let Some(home) = home {
             paths.push(std::path::PathBuf::from(home).join(".local/bin"));
         }
@@ -69,8 +64,8 @@ mod tests {
     #[test]
     fn inherited_path_precedence_is_preserved_while_defaults_are_deduplicated() {
         let path = Environment::path_from(
-            Some("/custom/first:/usr/bin:/custom/last:/usr/bin".into()),
-            Some("/home/test".into()),
+            Some(std::ffi::OsStr::new("/custom/first:/usr/bin:/custom/last:/usr/bin")),
+            Some(std::ffi::OsStr::new("/home/test")),
         );
         let paths: Vec<_> = std::env::split_paths(&path).collect();
 

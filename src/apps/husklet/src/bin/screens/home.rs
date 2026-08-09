@@ -16,6 +16,7 @@ impl Default for View {
 }
 
 impl View {
+    #[must_use]
     pub fn new() -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
 

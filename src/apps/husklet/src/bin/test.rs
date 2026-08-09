@@ -105,7 +105,7 @@ fn workspace_terminal_preferences_are_isolated() {
 
     let terminal = workspace.terminal_config();
     assert_eq!(terminal.font_family, "Berkeley Mono");
-    assert_eq!(terminal.font_size, 15.0);
+    assert!((terminal.font_size - 15.0).abs() < f64::EPSILON);
     assert_eq!(terminal.foreground, "#fafafa");
     assert_eq!(terminal.background, "#111111");
     assert_eq!(terminal.cursor_shape, CursorShape::Beam);

@@ -38,7 +38,7 @@ pub(crate) fn make_terminal_ex(
     tw: &Rc<TermWin>,
     cwd: Option<String>,
     history: Option<String>,
-    slot: String,
+    slot: &str,
 ) -> (vte4::Terminal, Rc<Cell<i32>>) {
     let term = vte4::Terminal::new();
     let cfg = tw.ws.terminal_config();
@@ -76,7 +76,9 @@ pub(crate) fn make_terminal_ex(
     let pid = Rc::new(Cell::new(0));
     // Register this pane (terminal + its slot + pid) so the window's close handler can freeze it into its
     // own slot, and `save_session` can record which slot each pane owns.
-    tw.panes.borrow_mut().push(PaneRegistration::new(&term, slot.clone()));
+    tw.panes
+        .borrow_mut()
+        .push(PaneRegistration::new(&term, slot.to_owned()));
     let application = application_path().to_string_lossy().into_owned();
     let workspace_key = tw.ws.key();
     // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs hl). The debug-log path is
@@ -91,8 +93,8 @@ pub(crate) fn make_terminal_ex(
         "--worker",
         "launch",
         workspace_key.as_str(),
-        slot.as_str(),
-        dbg.map(String::as_str).unwrap_or(""),
+        slot,
+        dbg.map_or("", String::as_str),
         directory,
     ];
     let argv: Vec<&str> = if let Some(c) = &testcmd {
@@ -104,7 +106,7 @@ pub(crate) fn make_terminal_ex(
     // DYLD_*/GTK/GI library-path vars would poison `hl`'s dynamic loader (and its forked engine),
     // crashing it at startup (SIGSEGV). Pass only what a shell needs.
     let env = AppConfig::get().environment.terminal();
-    let envv: Vec<&str> = env.iter().map(|s| s.as_str()).collect();
+    let envv: Vec<&str> = env.iter().map(std::string::String::as_str).collect();
     // Replay saved scrollback/screen history (freeze/restore persistence) ABOVE the live shell, before
     // spawning, so the user's prior screen is visible the instant the window reopens.
     if let Some(text) = history {

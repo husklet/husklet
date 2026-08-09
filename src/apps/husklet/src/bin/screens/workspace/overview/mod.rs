@@ -24,8 +24,9 @@ impl<'a> Overview<'a> {
     }
 
     pub(crate) fn view(&self) -> gtk::Box {
-        let ws = self.workspace;
         use screens::workspace::Page as WorkspacePage;
+
+        let ws = self.workspace;
 
         // Live panes fed by a background poller over the workspace daemon's Unix socket.
         let data = std::sync::Arc::new(std::sync::Mutex::new(OverviewData::loading()));
@@ -82,7 +83,9 @@ impl<'a> Overview<'a> {
             .map(str::trim)
             .filter(|shell| !shell.is_empty())
             .and_then(|shell| shell.split_whitespace().next())
-            .map(|shell| shell.rsplit('/').next().unwrap_or(shell).to_string())
-            .unwrap_or_else(|| "bash".to_string())
+            .map_or_else(
+                || "bash".to_string(),
+                |shell| shell.rsplit('/').next().unwrap_or(shell).to_string(),
+            )
     }
 }

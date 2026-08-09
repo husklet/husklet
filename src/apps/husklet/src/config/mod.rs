@@ -300,16 +300,16 @@ impl WorkspaceConfig {
     pub fn terminal_config(&self) -> TermConfig {
         let mut config = TermConfig::default();
         if let Some(value) = &self.terminal.font_family {
-            config.font_family = value.clone();
+            config.font_family.clone_from(value);
         }
         if let Some(value) = self.terminal.font_size {
             config.font_size = f64::from(value);
         }
         if let Some(value) = &self.terminal.foreground {
-            config.foreground = value.clone();
+            config.foreground.clone_from(value);
         }
         if let Some(value) = &self.terminal.background {
-            config.background = value.clone();
+            config.background.clone_from(value);
         }
         if let Some(value) = self.terminal.cursor_shape.as_deref().and_then(CursorShape::parse) {
             config.cursor_shape = value;

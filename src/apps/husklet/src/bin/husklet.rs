@@ -9,6 +9,11 @@
 //!
 //! Build + run on macOS: `nix develop . -c cargo run -p husklet --features gui --bin husklet`.
 
+// Every screen module re-exports the toolkit traits its siblings need, so `use crate::*` between
+// them is the composition itself. Enumerating it yields 400-character import lines naming traits
+// the module never writes.
+#![allow(clippy::wildcard_imports)]
+
 use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
@@ -180,7 +185,7 @@ impl Application {
         {
             let app = self.0.clone();
             let refresh = refresh.clone();
-            home.create.connect_clicked(move |_| Form::open(&app, refresh.clone()));
+            home.create.connect_clicked(move |_| Form::open(&app, &refresh));
         }
         refresh();
 
@@ -202,7 +207,7 @@ impl Application {
             }
             Some("newws") => {
                 let noop: Rc<dyn Fn()> = Rc::new(|| {});
-                Form::open(&self.0, noop);
+                Form::open(&self.0, &noop);
             }
             _ => {}
         }
@@ -447,7 +452,7 @@ impl Screenshot {
                     match tex.save_to_png(&path) {
                         Ok(()) => eprintln!("[husklet] wrote screenshot {path} ({w}x{h})"),
                         Err(error) => {
-                            eprintln!("[husklet] screenshot write failed for {path}: {error}")
+                            eprintln!("[husklet] screenshot write failed for {path}: {error}");
                         }
                     }
                 }

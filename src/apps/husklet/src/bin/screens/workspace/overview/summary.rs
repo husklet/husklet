@@ -45,15 +45,13 @@ impl Overview<'_> {
             "CPU cores",
             workspace
                 .cpus
-                .map(|cores| cores.to_string())
-                .unwrap_or_else(|| "unlimited".into()),
+                .map_or_else(|| "unlimited".into(), |cores| cores.to_string()),
         );
         append(
             "Memory",
             workspace
                 .memory_mb
-                .map(|memory| format!("{memory} MB"))
-                .unwrap_or_else(|| "unlimited".into()),
+                .map_or_else(|| "unlimited".into(), |memory| format!("{memory} MB")),
         );
         append(
             "Docker socket",
@@ -68,21 +66,19 @@ impl Overview<'_> {
             workspace
                 .vpn
                 .as_ref()
-                .map(|vpn| vpn.to_spec())
-                .unwrap_or_else(|| "direct".into()),
+                .map_or_else(|| "direct".into(), hl::config::VpnConfig::to_spec),
         );
         append(
             "CUDA device",
-            workspace
-                .cuda
-                .as_ref()
-                .map(|cuda| {
+            workspace.cuda.as_ref().map_or_else(
+                || "none".into(),
+                |cuda| {
                     format!(
                         "{} (cc {}, {} MB) → host Metal",
                         cuda.name, cuda.compute_capability, cuda.vram_mb
                     )
-                })
-                .unwrap_or_else(|| "none".into()),
+                },
+            ),
         );
         if !workspace.env.is_empty() {
             append(

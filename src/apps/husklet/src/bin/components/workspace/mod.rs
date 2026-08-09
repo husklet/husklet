@@ -30,7 +30,9 @@ pub(crate) struct Form {
 }
 
 impl Form {
-    pub(crate) fn open(app: &gtk::Application, on_created: Rc<dyn Fn()>) {
+    pub(crate) fn open(app: &gtk::Application, on_created: &Rc<dyn Fn()>) {
+        use screens::workspace::create::Page as CreatePage;
+
         let window = gtk::ApplicationWindow::builder()
             .application(app)
             .title("New workspace")
@@ -41,7 +43,6 @@ impl Form {
 
         let form = Rc::new(build_form());
         form.add_environment();
-        use screens::workspace::create::Page as CreatePage;
         let view = screens::workspace::create::View::new([
             (CreatePage::General, form.general()),
             (CreatePage::Terminal, form.terminal()),

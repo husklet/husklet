@@ -80,6 +80,9 @@ impl Processes {
 
 #[cfg(unix)]
 mod ffi {
+    // Process and group signalling in this boundary are `unsafe` libc entry points.
+    #![allow(unsafe_code)]
+
     use std::io;
 
     pub(super) struct Signal;

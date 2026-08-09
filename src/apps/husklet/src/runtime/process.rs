@@ -9,9 +9,9 @@ pub(super) struct Peer {
 }
 
 impl Peer {
-    pub(super) fn new(connection: std::os::unix::net::UnixStream) -> io::Result<Self> {
+    pub(super) fn new(connection: &std::os::unix::net::UnixStream) -> io::Result<Self> {
         Ok(Self {
-            process: ffi::process(&connection)?,
+            process: ffi::process(connection)?,
         })
     }
 
@@ -38,7 +38,7 @@ impl Peer {
                 Err(error) => return Err(error),
                 Ok(connection) => connection,
             };
-            let peer = Self::new(connection)?;
+            let peer = Self::new(&connection)?;
             if peer.process != process {
                 return Ok(());
             }
@@ -147,7 +147,7 @@ mod ffi {
                 libc::SOL_LOCAL,
                 libc::LOCAL_PEERPID,
                 std::ptr::addr_of_mut!(process).cast(),
-                &mut length,
+                &raw mut length,
             )
         };
         if status == 0 && length as usize == std::mem::size_of_val(&process) {
@@ -172,7 +172,7 @@ mod ffi {
                 libc::SOL_SOCKET,
                 libc::SO_PEERCRED,
                 std::ptr::addr_of_mut!(credentials).cast(),
-                &mut length,
+                &raw mut length,
             )
         };
         if status == 0 && length as usize == std::mem::size_of_val(&credentials) {
@@ -196,7 +196,7 @@ mod tests {
         let client = std::os::unix::net::UnixStream::connect(socket).unwrap();
         let accepted = server.join().unwrap();
 
-        assert_eq!(Peer::new(client).unwrap().process, std::process::id() as i32);
+        assert_eq!(Peer::new(&client).unwrap().process, std::process::id() as i32);
         drop(accepted);
     }
 }

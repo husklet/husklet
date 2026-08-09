@@ -111,7 +111,7 @@ fn a_live_compatible_domain_is_served_and_never_replaced() {
     assert!(matches!(domain.decide(&workspace).unwrap(), Decision::Serve));
     // The whole start, not just the decision: a healthy domain is neither unlinked nor respawned,
     // even while it holds the lease it holds for its entire life.
-    let _lease = Lease::acquire(domain.directory.join("domain.lock")).unwrap();
+    let _lease = Lease::acquire(&domain.directory.join("domain.lock")).unwrap();
     assert_eq!(domain.ensure(&workspace).unwrap(), domain.socket());
     assert_eq!(inode(&domain.socket()), original);
 }
@@ -171,7 +171,7 @@ fn a_socket_is_never_unlinked_while_a_domain_still_holds_the_lease() {
     // The hazard: the socket is unreachable but its owner is alive and finishing up. This is the
     // shape that produced a bare "no such file" against a domain nobody reported dead.
     drop(listener);
-    let _lease = Lease::acquire(domain.directory.join("domain.lock")).unwrap();
+    let _lease = Lease::acquire(&domain.directory.join("domain.lock")).unwrap();
 
     let error = domain
         .reserve(&workspace, std::time::Duration::from_millis(200))

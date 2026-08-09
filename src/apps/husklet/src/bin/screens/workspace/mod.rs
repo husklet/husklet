@@ -29,6 +29,7 @@ impl Page {
         Self::Settings,
     ];
 
+    #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
@@ -50,6 +51,7 @@ pub struct View {
 }
 
 impl View {
+    #[must_use]
     pub fn new(content: [(Page, gtk::Widget); 7]) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 2);

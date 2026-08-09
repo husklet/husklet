@@ -43,7 +43,7 @@ impl CopyMode {
                 adj.set_value((adj.value() + lines).clamp(adj.lower(), max));
             }
         };
-        let page = t.vadjustment().map(|a| a.page_size()).unwrap_or(20.0);
+        let page = t.vadjustment().map_or(20.0, |a| a.page_size());
         match key {
             gdk::Key::Escape | gdk::Key::q | gdk::Key::Q => self.exit(Some(t.clone())),
             gdk::Key::j | gdk::Key::Down => scroll(1.0),
@@ -269,7 +269,7 @@ pub(crate) struct PaneWorkingDirectory;
 impl PaneWorkingDirectory {
     pub(crate) fn read(terminal: &vte4::Terminal) -> Option<String> {
         let uri = terminal.current_directory_uri()?;
-        session::WorkingDirectory::from_osc7(&uri).map(|path| path.into_string())
+        session::WorkingDirectory::from_osc7(&uri).map(hl_ws_term::WorkingDirectory::into_string)
     }
 }
 

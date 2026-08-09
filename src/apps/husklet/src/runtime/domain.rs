@@ -54,12 +54,14 @@ enum Decision {
 }
 
 impl Domain {
+    #[must_use]
     pub fn new(workspace: &WorkspaceConfig) -> Self {
         Self {
             directory: workspace.storage_dir(&paths::hl_root()).join("runtime"),
         }
     }
 
+    #[must_use]
     pub fn socket(&self) -> PathBuf {
         self.directory.join("domain.sock")
     }
@@ -71,7 +73,10 @@ impl Domain {
     /// Starts the workspace domain process when needed and waits until its API accepts connections.
     pub fn ensure(&self, workspace: &WorkspaceConfig) -> io::Result<PathBuf> {
         std::fs::create_dir_all(&self.directory)?;
-        let _startup = Lease::acquire_wait(self.directory.join("startup.lock"), std::time::Duration::from_secs(180))?;
+        let _startup = Lease::acquire_wait(
+            &self.directory.join("startup.lock"),
+            std::time::Duration::from_secs(180),
+        )?;
         let reason = match self.decide(workspace)? {
             Decision::Serve => return Ok(self.socket()),
             Decision::Replace(peer, reason) => {
@@ -124,7 +129,7 @@ impl Domain {
                 }
                 Publication::Mismatched(published) => {
                     return Ok(Decision::Replace(
-                        Peer::new(connection)?,
+                        Peer::new(&connection)?,
                         format!("domain speaks protocol {published}, this build speaks {PROTOCOL}"),
                     ));
                 }
@@ -137,7 +142,7 @@ impl Domain {
                 }
                 Publication::Unpublished => {
                     return Ok(Decision::Replace(
-                        Peer::new(connection)?,
+                        Peer::new(&connection)?,
                         format!(
                             "domain published no protocol version within {}s of being reachable",
                             SETTLE.as_secs()
@@ -155,7 +160,7 @@ impl Domain {
     /// a live domain with a bare "no such file" and no sign of what went.
     fn reserve(&self, workspace: &WorkspaceConfig, timeout: std::time::Duration) -> io::Result<()> {
         let lock = self.directory.join("domain.lock");
-        Lease::wait_available(lock.clone(), timeout).map_err(|error| {
+        Lease::wait_available(&lock, timeout).map_err(|error| {
             io::Error::new(
                 error.kind(),
                 format!(
@@ -192,7 +197,7 @@ impl Domain {
         };
         match choice {
             Close::Kill => {
-                let peer = Peer::new(connection)?;
+                let peer = Peer::new(&connection)?;
                 Shutdown::request(&self.control(), Disposition::Kill)?;
                 peer.wait(std::time::Duration::from_secs(45), || {
                     std::os::unix::net::UnixStream::connect(self.socket())
@@ -260,7 +265,7 @@ impl Domain {
     pub async fn serve(workspace: &WorkspaceConfig) -> io::Result<()> {
         let owner = Self::new(workspace);
         tokio::fs::create_dir_all(&owner.directory).await?;
-        let _lease = Lease::acquire(owner.directory.join("domain.lock"))?;
+        let _lease = Lease::acquire(&owner.directory.join("domain.lock"))?;
         let (containers, platform) = Runtime::open(workspace).await?;
         let mut failures = Runtime::remove_stale_executions(&containers).await?;
         Runtime::ensure_container(&containers, workspace).await?;
@@ -282,7 +287,9 @@ impl Domain {
         let stopping = containers.clone();
         let stopped_workspace = workspace.clone();
         let served = server
-            .serve_with_shutdown(async move {
+            // The shutdown future carries the whole stop path by value; boxing keeps it off the
+            // serving task's stack frame.
+            .serve_with_shutdown(Box::pin(async move {
                 loop {
                     let stop = shutdown.clone().wait().await;
                     let disposition = stop.disposition;
@@ -302,8 +309,7 @@ impl Domain {
                     let stopped = match disposition {
                         Disposition::Kill => {
                             let docker = docker
-                                .map(|daemon| daemon.close(crate::runtime::resources::Close::Kill))
-                                .unwrap_or(Ok(()));
+                                .map_or(Ok(()), |daemon| daemon.close(crate::runtime::resources::Close::Kill));
                             let workspace =
                                 match crate::runtime::execution::PaneExecution::clear_all(&stopped_workspace) {
                                     Ok(()) => stopping.shutdown(std::time::Duration::from_secs(5)).await,
@@ -322,7 +328,7 @@ impl Domain {
                     Self::record_cleanup(&completed, stopped);
                     break;
                 }
-            })
+            }))
             .await
             .map_err(io::Error::other);
         let stopped = cleanup

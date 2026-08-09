@@ -53,9 +53,9 @@ impl<'a> Configuration<'a> {
         values
     }
 
-    pub(super) fn signature(&self) -> std::io::Result<String> {
-        let runtime = RuntimeIdentity::current(self.0)?;
-        Ok(self.signature_for(runtime.as_str()))
+    pub(super) fn signature(&self) -> String {
+        let runtime = RuntimeIdentity::current(self.0);
+        self.signature_for(runtime.as_str())
     }
 
     pub(super) fn signature_for(&self, runtime: &str) -> String {

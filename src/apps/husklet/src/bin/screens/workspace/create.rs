@@ -24,6 +24,7 @@ impl Page {
         Self::Compute,
     ];
 
+    #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
             Self::General => "General",
@@ -50,6 +51,7 @@ pub struct View {
 }
 
 impl View {
+    #[must_use]
     pub fn new(content: [(Page, gtk::Box); 9]) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let split = gtk::Box::new(gtk::Orientation::Horizontal, 0);
