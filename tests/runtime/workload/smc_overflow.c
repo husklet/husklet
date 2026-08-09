@@ -3,16 +3,26 @@
 // leaving it read-only but UNTRACKED. A later guest rewrite of such a page faults on the write, but
 // smc_on_write() cannot find it, so the fault is not handled -> SIGSEGV / hang. This fills the table past
 // SMC_MAX, then rewrites+re-executes a LATE (overflow) page; a correct engine returns the patched value, a
-// broken one crashes/hangs. x86 machine code -> LinuxX86_64 only; golden-checked.
+// broken one crashes/hangs. The bound was an x86 retained-C table, but 8300 tracked executable pages is a
+// scaling case for either ISA's page-version map, so both run it; golden-checked.
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+// Emit a leaf function `int f(void){ return imm; }` at p.
 static void emit_ret(unsigned char *p, uint32_t v) {
+#if defined(__aarch64__)
+    uint32_t *w = (uint32_t *)p;
+    w[0] = 0x52800000u | ((v & 0xffffu) << 5); // movz w0, #imm
+    w[1] = 0xd65f03c0u;                        // ret
+#elif defined(__x86_64__)
     p[0] = 0xB8; // mov eax, imm32
     memcpy(p + 1, &v, 4);
     p[5] = 0xC3; // ret
+#else
+#error "needs an emitter for this ISA"
+#endif
 }
 typedef int (*fn)(void);
 #define STRIDE 0x4000u // one distinct 16 KB SMC page per function

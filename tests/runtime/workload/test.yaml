@@ -100,7 +100,6 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/allocchurn.out }
   - id: runtime/workload/smc
-    targets: [arm64]
     status: active
     compat: { class: compatibility }
     timeout: 120
@@ -109,7 +108,6 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/smc.out }
   - id: runtime/workload/smcthreads
-    targets: [arm64]
     status: active
     compat: { class: compatibility }
     timeout: 120
@@ -144,7 +142,6 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/smc_mprotect.out }
   - id: runtime/workload/smcremapreuse
-    targets: [amd64]
     status: active
     compat: { class: compatibility }
     timeout: 120
@@ -153,7 +150,6 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/smc_reuse.out }
   - id: runtime/workload/smcmremap
-    targets: [amd64]
     status: active
     compat: { class: compatibility }
     timeout: 120
@@ -162,7 +158,6 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/smc_mremap.out }
   - id: runtime/workload/smctableoverflow
-    targets: [amd64]
     status: active
     compat: { class: compatibility }
     timeout: 120
