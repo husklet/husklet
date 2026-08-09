@@ -193,6 +193,17 @@ pattern-matching form is wrong in one direction or the other:
 
 Use `pgrep -ax testing` when you need the rows as well as the count.
 
+**A single zero does not mean the box is free.** A measuring lane runs a
+*series* of invocations with brief gaps between them, so a point-in-time
+`pgrep` reads zero in every gap while the job is very much alive. Load average
+cannot rescue this either: all three figures read ~0.8 while a run was sixteen
+seconds underway, because they are decaying averages of an eighteen-core box.
+Require **quiet for a sustained interval** — poll every few seconds and only
+declare free after ~120 consecutive seconds at zero. A manager granting a
+window on one sample will hand it out mid-series, and the lane that accepts it
+adds load to someone's minima. `pgrep -ax testing` shows the row's start time,
+which is how you tell "just finished" from "sixteen seconds in".
+
 **Do not poll for your own long job — capture its exit code at the call site.**
 `make lint; echo EXIT=$?` is the whole technique. A waiter built on
 `pgrep -f "make lint"` matches its own command line and blocks forever on
