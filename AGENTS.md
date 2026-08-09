@@ -235,6 +235,20 @@ in isolation both guests measure ~960,000 us. Measure on at least two guests,
 run the full sequence rather than one phase, and report **every** phase: a
 withdrawn table listed six and omitted a 1.37 string regression in its own data.
 
+**`testing` is not the only thing that loads the box, and the others are the
+ones we generate constantly.** A `cargo test -p hl-engine` test binary is named
+`hl_engine-<hash>`, which `-x testing` cannot match and `-cf "release/testing"`
+cannot match either. Engines invoked directly (`hl-aarch64`, `hl-x86_64`) are
+equally invisible. One lane held a clean 120-second window for `testing` while
+a sibling's gate run sat at 99% CPU throughout it. Since every lane runs the
+gate, this is the most common competing load there is.
+
+Check for all of them, and use load average as a second condition rather than
+a substitute — it lags, so it confirms a busy box quickly but cannot prove a
+quiet one:
+
+    pgrep -cx testing; pgrep -c 'hl_engine-|hl-aarch64|hl-x86_64'; pgrep -c cargo
+
 **A renamed binary is invisible to this check.** `pgrep -cx testing` matches
 the exact process name, so a lane that copies the driver to `testing-bin` or
 any other name runs unseen for its entire measurement and every other lane
