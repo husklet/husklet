@@ -392,7 +392,9 @@ impl Transport {
     async fn read_response(&self, response: Response<Incoming>) -> Result<Bytes> {
         let status = response.status();
         let bytes = self.read_bounded(response).await?;
-        if status.is_success() {
+        // Docker answers 304 for start on a running container and stop on a stopped one, and its
+        // own CLI exits 0 on both; `is_success` covers only 2xx, so it would surface as an error.
+        if status.is_success() || status == StatusCode::NOT_MODIFIED {
             Ok(bytes)
         } else {
             hl_log::hl_warn!(hl_log::tag::TRANSPORT, "docker request failed status={status}");

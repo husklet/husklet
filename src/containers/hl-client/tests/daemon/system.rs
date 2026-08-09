@@ -103,12 +103,20 @@ async fn system_contract_is_platform_derived_and_unsupported_routes_are_explicit
     )
     .await;
     assert!(numeric_flag.starts_with("HTTP/1.1 200"), "{numeric_flag}");
-    let invalid_flag = raw_http(
+    // Docker's BoolValue treats only "", 0, no, false and none as false and never rejects a
+    // spelling, so `all=yes` is true rather than a client error. Measured against 29.1.3.
+    let truthy_flag = raw_http(
         &socket,
         b"GET /v1.43/containers/json?all=yes HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
     )
     .await;
-    assert!(invalid_flag.starts_with("HTTP/1.1 400"), "{invalid_flag}");
+    assert!(truthy_flag.starts_with("HTTP/1.1 200"), "{truthy_flag}");
+    let falsey_flag = raw_http(
+        &socket,
+        b"GET /v1.43/containers/json?all=none HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(falsey_flag.starts_with("HTTP/1.1 200"), "{falsey_flag}");
     let info = client.system().info().await.unwrap();
     assert_eq!(info.architecture, "amd64");
     assert_eq!(info.containers, 1);

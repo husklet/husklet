@@ -308,7 +308,10 @@ mod tests {
         let full = started.elapsed();
 
         // Linear would be 8x for 8x the bytes; quadratic would be 64x. Allow 24x for scheduling.
-        assert!(full < base * 24, "digest scaled {full:?} against {base:?} for 8x the input");
+        assert!(
+            full < base * 24,
+            "digest scaled {full:?} against {base:?} for 8x the input"
+        );
     }
 
     #[test]
