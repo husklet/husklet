@@ -159,6 +159,7 @@ pub(in crate::ffi::linux::execution) fn create(
         authority.clone(),
         network_policy,
     );
+    network.publish(plan.options.get_bytes("HL_PUBLISH").unwrap_or_default());
     let event_operations = Arc::new(OperationRegistry::new());
     let event_checkpoint = event_checkpoint::Resources::new(assembly);
     let tasks = assembly.tasks();

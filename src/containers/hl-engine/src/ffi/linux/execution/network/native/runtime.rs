@@ -355,11 +355,11 @@ impl RuntimeNetworkHost for Native {
     fn listen(&self, token: u64, backlog: u32) -> Result<(), RuntimeNetworkError> {
         let descriptor = self.descriptor(token)?;
         // SAFETY: listen mutates only the owned descriptor.
-        if unsafe { libc::listen(descriptor, backlog.min(i32::MAX as u32) as i32) } == 0 {
-            Ok(())
-        } else {
-            Err(Self::runtime_error())
+        if unsafe { libc::listen(descriptor, backlog.min(i32::MAX as u32) as i32) } != 0 {
+            return Err(Self::runtime_error());
         }
+        self.start_publication(token);
+        Ok(())
     }
 
     fn accept(&self, token: u64) -> Result<AcceptedSocket<u64>, RuntimeNetworkError> {

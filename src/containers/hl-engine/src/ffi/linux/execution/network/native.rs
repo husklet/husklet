@@ -15,6 +15,7 @@ mod connect;
 mod icmp;
 mod io;
 mod message;
+pub(super) mod publish;
 mod resolver;
 mod runtime;
 mod socket;
@@ -96,6 +97,9 @@ pub(super) struct Reactor {
     pub(super) sockets: Mutex<BTreeMap<u64, Entry>>,
     pub(super) observers: Mutex<BTreeMap<u64, Weak<dyn ReadinessObserver>>>,
     pub(super) bindings: Mutex<Vec<(SocketAddress, SocketAddress)>>,
+    pub(super) publications: Mutex<Vec<publish::Publication>>,
+    /// Host ports whose forwarder is live, so a re-listen cannot open a second one.
+    pub(super) forwarded: Mutex<Vec<u16>>,
     pub(super) switch_paths: Mutex<BTreeMap<Vec<u8>, Weak<SwitchPath>>>,
     pub(super) wake: i32,
     #[cfg(test)]
@@ -130,6 +134,8 @@ impl Native {
             sockets: Mutex::new(BTreeMap::new()),
             observers: Mutex::new(BTreeMap::new()),
             bindings: Mutex::new(Vec::new()),
+            publications: Mutex::new(Vec::new()),
+            forwarded: Mutex::new(Vec::new()),
             switch_paths: Mutex::new(BTreeMap::new()),
             wake,
             #[cfg(test)]
