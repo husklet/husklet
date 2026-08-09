@@ -1544,6 +1544,7 @@ impl NativeAarch64 {
             ibtc_base: 0,
             execution_identity: 0,
             read_valid_count: 0,
+            reserve_filter: [0; 8],
         })
     }
 
@@ -2072,8 +2073,21 @@ impl Executor {
         Self::create_with_fault_owner(diagnostics_enabled, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn create_with_fault_owner(
         diagnostics_enabled: bool,
+        fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
+    ) -> Result<Self, ()> {
+        Self::create_with_journal(diagnostics_enabled, true, true, false, fault_owner)
+    }
+
+    /// `write_journal` false drops the aarch64 exact dirty journal from every emitted
+    /// store, so each crossing publishes the whole window instead of its exact ranges.
+    pub(crate) fn create_with_journal(
+        diagnostics_enabled: bool,
+        write_reserve: bool,
+        write_commit: bool,
+        runtime_write_reserve: bool,
         fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
     ) -> Result<Self, ()> {
         let mut memory = Box::new(ExecutableMemory::new());
@@ -2093,7 +2107,11 @@ impl Executor {
             size: std::mem::size_of::<Config>() as u32,
             capacity: 64 << 20,
             alignment: 4096,
-            flags: (if cfg!(target_os = "linux") { 2 } else { 0 }) | if diagnostics_enabled { 4 } else { 0 },
+            flags: (if cfg!(target_os = "linux") { 2 } else { 0 })
+                | if diagnostics_enabled { 4 } else { 0 }
+                | if write_reserve { 0 } else { 8 }
+                | if write_commit { 0 } else { 16 }
+                | if runtime_write_reserve { 32 } else { 0 },
             reserved: 0,
             memory: &raw const services,
         };
@@ -3767,7 +3785,8 @@ mod test {
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, ibtc_base), 2384);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, execution_identity), 2392);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, read_valid_count), 2400);
-        assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2408);
+        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, reserve_filter), 2408);
+        assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2472);
         assert_eq!(
             std::mem::offset_of!(schema::X86_64Cpu, certificate_cache_identity),
             1928

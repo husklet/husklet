@@ -11,6 +11,15 @@ typedef struct hl_a64_assembler {
     uint8_t *limit;
     uint32_t failed;
     uint32_t diagnostics;
+    uint32_t write_reserve, write_commit;
+    /* Emit the reservation behind a load of the store site's saturation byte
+     * instead of deciding here. Emission stays a pure function of the pc, so a
+     * discovery changes what the code reads and never what was translated. */
+    uint32_t runtime_write_reserve;
+    /* The dirty_overflow value hl_a64_guard_written reports for the store whose
+     * reservation is currently being emitted. Published by hl_a64_guard_write_begin,
+     * which always precedes it around the same store. */
+    uint64_t site_report;
 } hl_a64_assembler;
 
 int hl_a64_assembler_begin(hl_a64_assembler *, void *, void *, size_t);

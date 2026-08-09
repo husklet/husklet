@@ -85,6 +85,7 @@ aarch64	fault_completed	2376	1	u64
 aarch64	ibtc_base	2384	1	u64
 aarch64	execution_identity	2392	1	u64
 aarch64	read_valid_count	2400	1	u64
+aarch64	reserve_filter	2408	8	u64
 x86_64	registers	0	16	u64
 x86_64	program	128	1	u64
 x86_64	flags	136	1	u64

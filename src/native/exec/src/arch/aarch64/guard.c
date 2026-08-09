@@ -33,6 +33,7 @@
 #define OFFSET_DIRTY_COUNT ((int)offsetof(hl_native_aarch64_cpu, dirty_count))
 #define OFFSET_DIRTY_RECORDS ((int)offsetof(hl_native_aarch64_cpu, dirty_records))
 #define OFFSET_DIRTY_OVERFLOW ((int)offsetof(hl_native_aarch64_cpu, dirty_overflow))
+#define OFFSET_RESERVE_FILTER ((int)offsetof(hl_native_aarch64_cpu, reserve_filter))
 #define OFFSET_BUDGET ((int)offsetof(hl_native_aarch64_cpu, budget))
 #define DIRTY_CAPACITY \
     ((uint32_t)(sizeof(((hl_native_aarch64_cpu *)0)->dirty_records) / \
@@ -43,6 +44,30 @@ _Static_assert(OFFSET_DIRTY_RECORDS < 4096 && OFFSET_READ_VIEWS < 4096 &&
                    OFFSET_READ_VIEW_PUBLICATION < 4096,
                "aarch64 CPU add-immediate base offset exceeds imm12");
 _Static_assert(DIRTY_CAPACITY < 4096, "aarch64 dirty capacity exceeds cmp imm12");
+/* The gate reads its slot with an ldrb whose unsigned immediate is unscaled. */
+_Static_assert(OFFSET_RESERVE_FILTER + (int)HL_NATIVE_A64_SATURATION_SLOTS < 4096,
+               "aarch64 reserve filter exceeds ldrb imm12");
+_Static_assert(HL_NATIVE_A64_SATURATION_SLOTS <=
+                   sizeof(((hl_native_aarch64_cpu *)0)->reserve_filter),
+               "aarch64 reserve filter is narrower than its slot count");
+
+/* A store site's slot. Sites fold by pc, so two can share a slot; the cost of a
+ * collision is a reservation kept at a site that never needed it. */
+static uint32_t site_slot(uint64_t pc) {
+    return (uint32_t)((((pc >> 2) * UINT64_C(0x9E3779B97F4A7C15)) >> 40) %
+                      HL_NATIVE_A64_SATURATION_SLOTS);
+}
+
+/* Saturation is reported through dirty_overflow, which every consumer reads
+ * only as "non-zero, publish the whole window". Under the runtime gate the
+ * value additionally names the store site, so the host can mark its slot; this
+ * costs no instruction because the path already materialises a constant. */
+static uint64_t overflow_report(const hl_a64_assembler *assembler, uint64_t pc) {
+    return assembler->runtime_write_reserve ? site_slot(pc) + 2u : 1u;
+}
+
+static void compare_zero(hl_a64_assembler *assembler, uint32_t *instruction,
+                         const uint8_t *target, int reg);
 
 /* Experiment switch: report journal saturation through dirty_overflow and keep
  * running instead of leaving native execution. Off unless the variable is "1". */
@@ -107,6 +132,14 @@ static void condition(hl_a64_assembler *assembler, uint32_t *instruction,
     int64_t words;
     if (!patch_offset(assembler, instruction, target, 19u, &words)) return;
     *instruction = 0x54000000u | (((uint32_t)words & 0x7ffffu) << 5) | value;
+}
+
+/* cbz shares b.cond's imm19 field, so one patcher serves both. */
+static void compare_zero(hl_a64_assembler *assembler, uint32_t *instruction,
+                         const uint8_t *target, int reg) {
+    int64_t words;
+    if (!patch_offset(assembler, instruction, target, 19u, &words)) return;
+    *instruction = 0x34000000u | (((uint32_t)words & 0x7ffffu) << 5) | (uint32_t)reg;
 }
 
 static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target);
@@ -209,7 +242,7 @@ static void archive_dirty_body(hl_a64_assembler *assembler, uint64_t pc) {
         /* Report through dirty_overflow and keep running, exactly as the inline
          * full-journal path and both flush_dirty siblings already do. */
         diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
-        hl_a64_movconst(assembler, 17, 1);
+        hl_a64_movconst(assembler, 17, overflow_report(assembler, pc));
         hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_OVERFLOW);
         overflow_continue = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, 0);
@@ -262,6 +295,24 @@ static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc, uint8_t **ar
 void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc,
                               hl_a64_guard *guard) {
     uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *safe;
+    uint32_t *gate = NULL;
+    /* The paired hl_a64_guard_written reports saturation against this store's
+     * own slot whether or not the reservation runs, so publish it first. */
+    assembler->site_report = overflow_report(assembler, pc);
+    /* Without the exact journal the reservation has nothing to reserve: the
+     * crossing publishes the whole window, so only the written and
+     * executable-written bits that hl_a64_guard_written sets still matter. */
+    if (!assembler->write_reserve) return;
+    if (assembler->runtime_write_reserve) {
+        /* Skip the reservation until this site has been seen to saturate the
+         * ring. Nothing above the gate is clobbered yet, so the skip is a pure
+         * no-op; ldrb and cbz leave NZCV alone, so it precedes the flag save. */
+        hl_a64_emit32(assembler, 0x39400000u | ((uint32_t)(OFFSET_RESERVE_FILTER +
+                                                           (int)site_slot(pc)) << 10) |
+                                     ((uint32_t)CPU << 5) | 17u);
+        gate = (uint32_t *)assembler->cursor;
+        hl_a64_emit32(assembler, 0);
+    }
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
@@ -322,11 +373,27 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u); /* msr nzcv,x17 */
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
+    if (gate != NULL) compare_zero(assembler, gate, assembler->cursor, 17);
 }
 
 void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *after_merge, *after_range,
         *after_contiguous, *full;
+    /* Journal off: record only what the crossing cannot reconstruct -- that a
+     * write happened, whether it landed in executable memory, and that the
+     * exact intervals are unavailable so the publish must cover the window.
+     * None of movz, ldr, str or orr writes NZCV, and x17/x18 are stolen, so
+     * this needs neither the flag save nor the x9 spill the full form takes. */
+    if (!assembler->write_commit) {
+        hl_a64_movconst(assembler, 17, 1);
+        hl_a64_str(assembler, 17, CPU, OFFSET_WRITTEN);
+        hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_OVERFLOW);
+        hl_a64_ldr(assembler, 17, CPU, OFFSET_PERMISSIONS);
+        hl_a64_ldr(assembler, 18, CPU, OFFSET_EXECUTABLE_WRITTEN);
+        hl_a64_emit32(assembler, 0xAA120231u); /* orr x17,x17,x18 */
+        hl_a64_str(assembler, 17, CPU, OFFSET_EXECUTABLE_WRITTEN);
+        return;
+    }
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
@@ -404,7 +471,7 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     uint32_t *appended = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     uint8_t *full_target = assembler->cursor;
-    hl_a64_movconst(assembler, 17, 1);
+    hl_a64_movconst(assembler, 17, assembler->site_report);
     hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_OVERFLOW);
     uint8_t *set = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;

@@ -168,6 +168,13 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     /// Gates crediting productivity from a run that retired a substantial share of its
     /// budget and *then* fell back. Off by default so the disabled-in-both control runs.
     pub(super) fallback_productivity: bool,
+    /// False drops the aarch64 exact write journal; every crossing then publishes
+    /// its whole window instead of the exact ranges the journal would have carried.
+    write_reserve: bool,
+    write_commit: bool,
+    /// Emits the reservation everywhere but gates it at run time on a per-store-site
+    /// saturation byte, so translation stays a pure function of the pc.
+    runtime_write_reserve: bool,
     pub(super) admitted: Option<Admission>,
     pub(super) executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
     pub(super) suppressed: BTreeMap<NativeSite, Probation>,
@@ -222,6 +229,9 @@ impl NativePool {
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
             admission_cache: plan.options.get("HL_NATIVE_ADMISSION_CACHE") == Some("1"),
             fallback_productivity: plan.options.get("HL_NATIVE_FALLBACK_PRODUCTIVITY") == Some("1"),
+            write_reserve: plan.options.get("HL_A64_NO_WRITE_RESERVE") != Some("1"),
+            write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
+            runtime_write_reserve: plan.options.get("HL_A64_RUNTIME_WRITE_RESERVE") == Some("1"),
             admitted: None,
             executors: BTreeMap::new(),
             suppressed: BTreeMap::new(),
@@ -264,8 +274,14 @@ impl NativePool {
         if !self.executors.contains_key(&process) {
             self.executors.insert(
                 process,
-                crate::native::NativeExecutor::create_with_fault_owner(self.diagnostics, self.host_faults.clone())
-                    .ok()?,
+                crate::native::NativeExecutor::create_with_journal(
+                    self.diagnostics,
+                    self.write_reserve,
+                    self.write_commit,
+                    self.runtime_write_reserve,
+                    self.host_faults.clone(),
+                )
+                .ok()?,
             );
         }
         self.executors.get(&process)
