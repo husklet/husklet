@@ -33,6 +33,7 @@ struct hl_native_executor {
     uint64_t memory_mode;
     uint64_t authority_generation;
     uint32_t diagnostics;
+    uint32_t write_reserve, write_commit;
     uint64_t ibtc_fills, ibtc_site_collisions, ibtc_shared_collisions;
     uint64_t boundary_branch, boundary_syscall, boundary_fallback, boundary_yield, completed;
     _Atomic uint64_t a64_branch_exhaustion, a64_branch_cold_relocation;

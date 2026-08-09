@@ -262,6 +262,10 @@ static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc, uint8_t **ar
 void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc,
                               hl_a64_guard *guard) {
     uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *safe;
+    /* Without the exact journal the reservation has nothing to reserve: the
+     * crossing publishes the whole window, so only the written and
+     * executable-written bits that hl_a64_guard_written sets still matter. */
+    if (!assembler->write_reserve) return;
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
@@ -327,6 +331,21 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
 void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *after_merge, *after_range,
         *after_contiguous, *full;
+    /* Journal off: record only what the crossing cannot reconstruct -- that a
+     * write happened, whether it landed in executable memory, and that the
+     * exact intervals are unavailable so the publish must cover the window.
+     * None of movz, ldr, str or orr writes NZCV, and x17/x18 are stolen, so
+     * this needs neither the flag save nor the x9 spill the full form takes. */
+    if (!assembler->write_commit) {
+        hl_a64_movconst(assembler, 17, 1);
+        hl_a64_str(assembler, 17, CPU, OFFSET_WRITTEN);
+        hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_OVERFLOW);
+        hl_a64_ldr(assembler, 17, CPU, OFFSET_PERMISSIONS);
+        hl_a64_ldr(assembler, 18, CPU, OFFSET_EXECUTABLE_WRITTEN);
+        hl_a64_emit32(assembler, 0xAA120231u); /* orr x17,x17,x18 */
+        hl_a64_str(assembler, 17, CPU, OFFSET_EXECUTABLE_WRITTEN);
+        return;
+    }
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);

@@ -2077,6 +2077,17 @@ impl Executor {
         diagnostics_enabled: bool,
         fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
     ) -> Result<Self, ()> {
+        Self::create_with_journal(diagnostics_enabled, true, true, fault_owner)
+    }
+
+    /// `write_journal` false drops the aarch64 exact dirty journal from every emitted
+    /// store, so each crossing publishes the whole window instead of its exact ranges.
+    pub(crate) fn create_with_journal(
+        diagnostics_enabled: bool,
+        write_reserve: bool,
+        write_commit: bool,
+        fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
+    ) -> Result<Self, ()> {
         let mut memory = Box::new(ExecutableMemory::new());
         let services = MemoryServices {
             abi: ABI,
@@ -2094,7 +2105,10 @@ impl Executor {
             size: std::mem::size_of::<Config>() as u32,
             capacity: 64 << 20,
             alignment: 4096,
-            flags: (if cfg!(target_os = "linux") { 2 } else { 0 }) | if diagnostics_enabled { 4 } else { 0 },
+            flags: (if cfg!(target_os = "linux") { 2 } else { 0 })
+                | if diagnostics_enabled { 4 } else { 0 }
+                | if write_reserve { 0 } else { 8 }
+                | if write_commit { 0 } else { 16 },
             reserved: 0,
             memory: &raw const services,
         };

@@ -37,7 +37,9 @@ hl_native_status hl_native_arena_create(hl_native_arena *arena, const hl_native_
     if (arena == NULL || config == NULL || config->abi != HL_NATIVE_ABI || config->size < sizeof(*config) ||
         config->capacity != HL_NATIVE_ARENA_BYTES || !power_of_two(config->alignment) ||
         config->alignment > HL_NATIVE_ALIGNMENT_MAX || !services_valid(config->memory) ||
-        (config->flags & ~(HL_NATIVE_DUAL_PREFERRED | HL_NATIVE_DUAL_REQUIRED | HL_NATIVE_DIAGNOSTICS)) != 0 ||
+        (config->flags & ~(HL_NATIVE_DUAL_PREFERRED | HL_NATIVE_DUAL_REQUIRED | HL_NATIVE_DIAGNOSTICS |
+                           HL_NATIVE_A64_NO_WRITE_RESERVE |
+                           HL_NATIVE_A64_NO_WRITE_COMMIT)) != 0 ||
         (config->flags & (HL_NATIVE_DUAL_PREFERRED | HL_NATIVE_DUAL_REQUIRED)) ==
             (HL_NATIVE_DUAL_PREFERRED | HL_NATIVE_DUAL_REQUIRED) || config->reserved != 0)
         return HL_NATIVE_ARGUMENT;
