@@ -23,6 +23,24 @@ pub mod allocations {
 
     pub(super) static CROSSINGS: AtomicU64 = AtomicU64::new(0);
     pub(super) static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+    /// How the crossing classified its writes, and what the publish it chose cost.
+    pub(super) static WRITES_NONE: AtomicU64 = AtomicU64::new(0);
+    pub(super) static WRITES_EXACT: AtomicU64 = AtomicU64::new(0);
+    pub(super) static WRITES_FULL: AtomicU64 = AtomicU64::new(0);
+    pub(super) static PUBLISH_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+
+    pub(super) fn count(counter: &AtomicU64) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Attributes to `PUBLISH_ALLOCATIONS` everything the calling thread allocates
+    /// while `body` runs.
+    pub(super) fn in_publish<R>(body: impl FnOnce() -> R) -> R {
+        let before = thread_count();
+        let value = body();
+        PUBLISH_ALLOCATIONS.fetch_add(thread_count().wrapping_sub(before), Ordering::Relaxed);
+        value
+    }
 
     pub(super) fn thread_count() -> u64 {
         THREAD.try_with(Cell::get).unwrap_or(0)
@@ -2591,13 +2609,29 @@ impl Executor {
             }
         }
         match writes {
-            NativeWrites::None => drop(lease),
-            NativeWrites::Exact(ranges) => lease
-                .publish_written_ranges(&ranges)
-                .map_err(|_| self.refuse(LeaseStep::PublishWritten))?,
-            NativeWrites::Full => lease
-                .publish_written()
-                .map_err(|_| self.refuse(LeaseStep::PublishWritten))?,
+            NativeWrites::None => {
+                #[cfg(feature = "alloc-count")]
+                allocations::count(&allocations::WRITES_NONE);
+                drop(lease);
+            }
+            NativeWrites::Exact(ranges) => {
+                #[cfg(feature = "alloc-count")]
+                allocations::count(&allocations::WRITES_EXACT);
+                #[cfg(feature = "alloc-count")]
+                let result = allocations::in_publish(|| lease.publish_written_ranges(&ranges));
+                #[cfg(not(feature = "alloc-count"))]
+                let result = lease.publish_written_ranges(&ranges);
+                result.map_err(|_| self.refuse(LeaseStep::PublishWritten))?;
+            }
+            NativeWrites::Full => {
+                #[cfg(feature = "alloc-count")]
+                allocations::count(&allocations::WRITES_FULL);
+                #[cfg(feature = "alloc-count")]
+                let result = allocations::in_publish(|| lease.publish_written());
+                #[cfg(not(feature = "alloc-count"))]
+                let result = lease.publish_written();
+                result.map_err(|_| self.refuse(LeaseStep::PublishWritten))?;
+            }
         }
         let after = self
             .statistics_snapshot()
@@ -3127,9 +3161,13 @@ impl Drop for Executor {
         // Process-wide totals, so read the last line an executor prints.
         #[cfg(feature = "alloc-count")]
         eprintln!(
-            "hl-native-alloc: crossings={} allocations={}",
+            "hl-native-alloc: crossings={} allocations={} writes_none={} writes_exact={} writes_full={} publish_allocations={}",
             allocations::CROSSINGS.load(std::sync::atomic::Ordering::Relaxed),
             allocations::ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed),
+            allocations::WRITES_NONE.load(std::sync::atomic::Ordering::Relaxed),
+            allocations::WRITES_EXACT.load(std::sync::atomic::Ordering::Relaxed),
+            allocations::WRITES_FULL.load(std::sync::atomic::Ordering::Relaxed),
+            allocations::PUBLISH_ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed),
         );
         if self.diagnostics_enabled
             && let Ok(value) = self.diagnostics()
