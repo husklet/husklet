@@ -56,6 +56,25 @@ whole class. Run them in debug or inside `make gate`: under `--release`,
 `hl-log`'s verbose tests compile out and the daemon tests need
 `HL_ALPINE_ARCHIVE`, so both report spurious failures.
 
+### A commit message is not evidence
+
+Re-run the suite on the tree you are about to merge, not on the tree the lane
+measured. Two claims failed to reproduce on the same day:
+
+- A commit message stated that `alpine_runtime_contracts` passed. Merged with
+  tip, it **failed at exactly the assertion the message said it fixed** — a
+  `poll` timeout fell through into a blocking `accept()`, so the bounded step
+  that the whole design rested on had never been bounded.
+- A `comm` fix was reported complete and was red on its own fixture: the
+  zero-length write was short-circuited at *two* layers and the lane had found
+  one.
+
+Neither lane was careless — both were reporting a state that was true when they
+measured it. Evidence ages: a rebase, a sibling merge, or a second defect behind
+the first is enough. So verification is a separate job from implementation, and
+the verifier re-derives rather than inherits — including non-vacuity, which is
+cheap to redo and is the check most likely to have gone stale.
+
 ## Checking whether the box is busy
 
 Use `pgrep -cx testing`, which matches the exact process name. Every
