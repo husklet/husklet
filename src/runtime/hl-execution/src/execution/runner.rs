@@ -566,12 +566,18 @@ impl ExecutionMachine {
         if !matches!(state.cpu, ExecutionCpuSnapshot::X86_64(_)) {
             return None;
         }
+        // Constructed after the ISA test so an aarch64 slice never books an x86 tally.
+        let mut tally = InterpreterTally {
+            instructions: 0,
+            blocks: 0,
+        };
         let Some(epoch) = memory.instruction_epoch() else {
-            for _ in 0..budget {
+            for index in 0..budget {
                 let outcome = self.run_locked_step(&mut state.cpu, memory, None);
                 if outcome != StepOutcome::Continue {
                     return Some(outcome);
                 }
+                tally.instructions = index + 1;
             }
             return Some(StepOutcome::Yield);
         };
@@ -584,6 +590,7 @@ impl ExecutionMachine {
         while remaining > 0 {
             let current = memory.instruction_epoch()?;
             cache.synchronize(current);
+            tally.blocks += 1;
             let ExecutionCpuSnapshot::X86_64(cpu) = &state.cpu else {
                 unreachable!();
             };
@@ -594,6 +601,7 @@ impl ExecutionMachine {
                 } else {
                     let outcome = self.run_locked_step(&mut state.cpu, memory, None);
                     remaining -= 1;
+                    tally.instructions = budget - remaining;
                     if outcome != StepOutcome::Continue {
                         return Some(outcome);
                     }
@@ -612,6 +620,7 @@ impl ExecutionMachine {
                 let next = instruction.wrapping_add(u64::from(ir.length));
                 let outcome = self.run_locked_step(&mut state.cpu, memory, Some(ir));
                 remaining -= 1;
+                tally.instructions = budget - remaining;
                 if outcome != StepOutcome::Continue {
                     return Some(outcome);
                 }

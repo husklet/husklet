@@ -1257,3 +1257,31 @@ fn instructions_run_at_the_end_of_an_executable_mapping() {
         }
     );
 }
+
+/// The x86 slice must publish its interpreter tally, as the aarch64 slice does. `run_x86_slice`
+/// shipped with no tally at all, so `hl-interp: instructions=` read 0 on every amd64 run and the
+/// native-coverage ratio built from it was unmeasurable. A lower bound: concurrent tests can only
+/// add to these globals, and running this case alone fails deterministically without the tally.
+#[test]
+fn an_x86_slice_publishes_its_interpreted_instruction_tally() {
+    const BUDGET: u64 = 30_000;
+    let mut memory = Memory::new(0x2000);
+    // inc rax; jmp .-5 -- a tight loop that retires exactly `BUDGET` instructions.
+    memory.put(0x1000, &[0x48, 0xff, 0xc0, 0xeb, 0xfb]);
+    let cpu = CpuState {
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
+        ..CpuState::default()
+    };
+    let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(cpu));
+    let before = crate::INTERPRETED_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(machine.run_slice(1, BUDGET, &mut memory), StepOutcome::Yield);
+    let after = crate::INTERPRETED_INSTRUCTIONS.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        after - before >= BUDGET,
+        "x86 slice retired {BUDGET} instructions but published {} to INTERPRETED_INSTRUCTIONS",
+        after - before,
+    );
+}
