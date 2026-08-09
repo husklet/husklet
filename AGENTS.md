@@ -216,6 +216,32 @@ An agent report that cites only tests, manifests, expected output, or summaries
 does not satisfy this requirement. Never edit `../engine` while performing the
 audit.
 
+### The oracle is authoritative about intent, not about the kernel
+
+`../engine` shipped, so what it *does* is strong evidence about what guests
+depend on. It is not evidence about what Linux does, and where a host
+measurement and the C disagree, **the kernel wins**. An oracle comment asserting
+kernel behavior is a claim to test, not a fact to port.
+
+Two lanes found this the same day, in unrelated domains:
+
+- `src/linux_abi/syscall/io.c:1384` states that a comm write "drop[s] one
+  trailing newline" and implements it, and ignores a zero-length write. The host
+  kernel does neither — only NUL terminates, and a zero-length write clears
+  comm. The Rust had faithfully reproduced the wrong comment.
+- `src/linux_abi/container/state.c:596` initializes the capability sets to
+  `HL_CAP_DEFAULT` unconditionally and `HL_UID` never reaches them, so a C
+  `--user` container reports the full container set. Linux clears
+  permitted/effective across a root-to-non-root transition. The Rust is ahead of
+  the oracle here, and following the C would have been a container-escape
+  regression.
+
+So: measure the host first, then read the C to learn what the guest-visible
+contract is meant to be. When you override the oracle, say so and show the
+measurement. A fixture that passes on the bare host kernel as well as in the
+engine validates the assertion; one that only passes in the engine validates
+nothing.
+
 ### Port domains, not failing cases
 
 The retained C engine is the primary implementation oracle. Compatibility cases
