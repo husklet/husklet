@@ -1,16 +1,25 @@
 // Stale-translation after unmap/remap: an executable VA is translated, unmapped, then a DIFFERENT executable
 // page is mapped at the SAME VA (once via plain munmap+MAP_FIXED, once via MAP_FIXED replacing in place). The
 // dispatcher keys cached host code by guest PC, so without invalidation on unmap/MAP_FIXED it re-runs the OLD
-// translation. x86 machine code (mov eax,imm32; ret), LinuxX86_64 only, golden-checked.
+// translation. The mapping lifecycle is ISA-neutral, so both guest ISAs run it; golden-checked.
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include <sys/mman.h>
+// Emit a leaf function `int f(void){ return imm; }` at p.
 static void emit_ret(unsigned char *p, uint32_t v) {
-    p[0] = 0xB8;
+#if defined(__aarch64__)
+    uint32_t *w = (uint32_t *)p;
+    w[0] = 0x52800000u | ((v & 0xffffu) << 5); // movz w0, #imm
+    w[1] = 0xd65f03c0u;                        // ret
+#elif defined(__x86_64__)
+    p[0] = 0xB8; // mov eax, imm32
     memcpy(p + 1, &v, 4);
-    p[5] = 0xC3;
+    p[5] = 0xC3; // ret
+#else
+#error "needs an emitter for this ISA"
+#endif
 }
 typedef int (*fn)(void);
 int main(void) {

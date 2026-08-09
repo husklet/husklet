@@ -1,15 +1,24 @@
 // Stale-translation after mremap(MREMAP_FIXED): a translated executable VA is relocated (its mapping + code
 // moved) and then the freed source VA is re-mapped with DIFFERENT code. Without dropping the source VA's
-// cached translation on mremap, the dispatcher re-runs the OLD code. x86 machine code, LinuxX86_64 only.
+// cached translation on mremap, the dispatcher re-runs the OLD code. ISA-neutral; both guest ISAs run it.
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include <sys/mman.h>
+// Emit a leaf function `int f(void){ return imm; }` at p.
 static void emit_ret(unsigned char *p, uint32_t v) {
-    p[0] = 0xB8;
+#if defined(__aarch64__)
+    uint32_t *w = (uint32_t *)p;
+    w[0] = 0x52800000u | ((v & 0xffffu) << 5); // movz w0, #imm
+    w[1] = 0xd65f03c0u;                        // ret
+#elif defined(__x86_64__)
+    p[0] = 0xB8; // mov eax, imm32
     memcpy(p + 1, &v, 4);
-    p[5] = 0xC3;
+    p[5] = 0xC3; // ret
+#else
+#error "needs an emitter for this ISA"
+#endif
 }
 typedef int (*fn)(void);
 int main(void) {
