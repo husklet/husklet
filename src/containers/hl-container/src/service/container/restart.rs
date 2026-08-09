@@ -209,7 +209,7 @@ impl Service {
             .collect::<Vec<_>>();
         for child in children {
             if let Some(process) = self.exec_live.lock().await.get(&child).cloned() {
-                let _ = process.signal(Signal::Kill).await;
+                let _ = process.signal(Signal::KILL).await;
             }
         }
     }

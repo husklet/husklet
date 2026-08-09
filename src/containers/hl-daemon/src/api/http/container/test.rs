@@ -11,12 +11,83 @@ use std::collections::BTreeMap;
 fn parses_docker_signal_names_and_numbers() {
     assert_eq!(
         Signal::from("SIGTERM".parse::<DockerSignal>().unwrap()),
-        Signal::Terminate
+        Signal::TERMINATE
     );
-    assert_eq!(Signal::from("kill".parse::<DockerSignal>().unwrap()), Signal::Kill);
-    assert_eq!(Signal::from("2".parse::<DockerSignal>().unwrap()), Signal::Interrupt);
-    assert_eq!(Signal::from("SIGQUIT".parse::<DockerSignal>().unwrap()), Signal::Quit);
+    assert_eq!(Signal::from("kill".parse::<DockerSignal>().unwrap()), Signal::KILL);
+    assert_eq!(Signal::from("2".parse::<DockerSignal>().unwrap()), Signal::INTERRUPT);
+    assert_eq!(Signal::from("SIGQUIT".parse::<DockerSignal>().unwrap()), Signal::QUIT);
     assert!("SIGBOGUS".parse::<DockerSignal>().is_err());
+}
+
+/// Measured against Docker 29.1.3 on this host: names are case-insensitive with an optional
+/// `SIG` prefix, numbers are decimal, and 32/33 are unnamed and rejected as unsupported.
+#[test]
+fn accepts_every_docker_signal_form_including_realtime() {
+    let number = |value: &str| Signal::from(value.parse::<DockerSignal>().unwrap()).get();
+    for (value, expected) in [
+        ("SIGABRT", 6),
+        ("abrt", 6),
+        ("IOT", 6),
+        ("SIGSTOP", 19),
+        ("SIGCONT", 18),
+        ("SIGWINCH", 28),
+        ("SIGCHLD", 17),
+        ("CLD", 17),
+        ("SIGPIPE", 13),
+        ("POLL", 29),
+        ("SIGSYS", 31),
+        ("SIGRTMIN", 34),
+        ("rtmin+3", 37),
+        ("SIGRTMIN+15", 49),
+        ("SIGRTMAX-14", 50),
+        ("SIGRTMAX", 64),
+        ("09", 9),
+        ("+9", 9),
+        ("64", 64),
+        ("31", 31),
+    ] {
+        assert_eq!(number(value), expected, "{value}");
+    }
+    for value in [
+        "0",
+        "-1",
+        "65",
+        "2000",
+        "32",
+        "33",
+        "0x9",
+        "SIGRTMIN+16",
+        "SIGRTMIN-1",
+        "SIGRTMIN+0",
+        "SIGRTMAX-0",
+        "SIGRTMAX-15",
+        "TERM ",
+        " SIGKILL ",
+        "SIGBOGUS",
+        "",
+    ] {
+        assert!(value.parse::<DockerSignal>().is_err(), "{value}");
+    }
+}
+
+/// `Config.StopSignal` is rendered from the same table, so every accepted name round-trips.
+#[test]
+fn signal_names_round_trip_through_the_wire_form() {
+    for number in 1..=Signal::MAXIMUM {
+        let Some(signal) = Signal::new(number).filter(|_| !(32..34).contains(&number)) else {
+            continue;
+        };
+        let name = DockerSignal::name(signal);
+        assert_eq!(
+            Signal::from(name.parse::<DockerSignal>().unwrap()),
+            signal,
+            "{number} rendered as {name}"
+        );
+    }
+    assert_eq!(DockerSignal::name(Signal::new(6).unwrap()), "SIGABRT");
+    assert_eq!(DockerSignal::name(Signal::new(37).unwrap()), "SIGRTMIN+3");
+    assert_eq!(DockerSignal::name(Signal::new(63).unwrap()), "SIGRTMAX-1");
+    assert_eq!(DockerSignal::name(Signal::TERMINATE), "SIGTERM");
 }
 
 #[test]

@@ -95,13 +95,13 @@ impl Service {
         let result = tokio::select! {
             result = &mut waiting => result.unwrap_or(ExitStatus::Fault { status: -1, detail: 0, reason: crate::FaultCause::Unknown }),
             () = tokio::time::sleep(check.timeout) => {
-                let _ = process.signal(Signal::Kill).await;
+                let _ = process.signal(Signal::KILL).await;
                 let _ = waiting.await;
                 ExitStatus::Fault { status: -1, detail: 0, reason: crate::FaultCause::Unknown }
             }
             changed = cancel.changed() => {
                 let _ = changed;
-                let _ = process.signal(Signal::Kill).await;
+                let _ = process.signal(Signal::KILL).await;
                 let _ = waiting.await;
                 output.abort();
                 return None;

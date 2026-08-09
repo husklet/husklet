@@ -393,9 +393,7 @@ mod abi {
     pub const ENFILE: i32 = 23;
     pub const ENOTSUP: i32 = 95;
     pub const EPERM: i32 = 1;
-    pub const SIGINT: i32 = 2;
     pub const SIGKILL: i32 = 9;
-    pub const SIGTERM: i32 = 15;
     pub const WNOHANG: i32 = 1;
     pub const POSIX_SPAWN_SETPGROUP: i16 = 2;
     pub const AF_UNIX: i32 = 1;

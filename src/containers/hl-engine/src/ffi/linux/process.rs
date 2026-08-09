@@ -326,11 +326,8 @@ fn send_signal(process: ProcessId, signal: ProcessSignal, group: bool) -> Result
     if group {
         pid = pid.checked_neg().ok_or(HostError::Invalid)?;
     }
-    let native = match signal {
-        ProcessSignal::Interrupt => abi::SIGINT,
-        ProcessSignal::Kill => abi::SIGKILL,
-        ProcessSignal::Terminate => abi::SIGTERM,
-    };
+    // A Linux host numbers signals exactly as the guest ABI does, so no translation applies.
+    let native = signal.linux();
     // SAFETY: kill receives scalar values only, retains nothing, and cannot unwind.
     if unsafe { abi::kill(pid, native) } == 0 {
         Ok(())

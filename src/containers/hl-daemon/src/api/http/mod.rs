@@ -8,6 +8,7 @@ use std::sync::Arc;
 mod build;
 mod console;
 mod container;
+pub(in crate::api) use container::DockerSignal;
 mod error;
 mod event;
 mod exec;

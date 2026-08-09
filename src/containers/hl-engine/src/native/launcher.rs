@@ -378,13 +378,23 @@ impl<S: ProcessSyscalls> Launcher for ProcessLauncher<S> {
         let Child::Process(child) = child else {
             return Err(EngineError::Busy);
         };
-        let signal = match request {
-            StopRequest::Interrupt => ProcessSignal::Interrupt,
-            StopRequest::Force => ProcessSignal::Kill,
-            StopRequest::Signal(15) => ProcessSignal::Terminate,
-            StopRequest::Signal(_) => return Err(EngineError::Unsupported),
-        };
-        child.signal_group(signal).map_err(|_| EngineError::StopFailed)
+        child
+            .signal_group(native_signal(request)?)
+            .map_err(|_| EngineError::StopFailed)
+    }
+}
+
+/// Maps a stop request onto the host signal it delivers. Any Linux number in `1..=64` is
+/// deliverable; the kernel answers `EINVAL` outside that range, so it never reaches the host.
+pub(crate) fn native_signal(request: StopRequest) -> Result<ProcessSignal, EngineError> {
+    match request {
+        StopRequest::Interrupt => Ok(ProcessSignal::Interrupt),
+        StopRequest::Force => Ok(ProcessSignal::Kill),
+        StopRequest::Signal(number) => u8::try_from(number)
+            .ok()
+            .filter(|number| (1..=64).contains(number))
+            .map(ProcessSignal::Number)
+            .ok_or(EngineError::Unsupported),
     }
 }
 

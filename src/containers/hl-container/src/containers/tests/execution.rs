@@ -184,11 +184,11 @@ async fn execution_signal_targets_only_the_exec_process() {
 
     containers
         .executions()
-        .signal(&execution.id, Signal::Hangup)
+        .signal(&execution.id, Signal::HANGUP)
         .await
         .unwrap();
 
-    assert_eq!(*runtime.signals.lock().unwrap(), vec![Signal::Hangup]);
+    assert_eq!(*runtime.signals.lock().unwrap(), vec![Signal::HANGUP]);
     assert!(
         containers
             .inspect("exec-signal-parent")
@@ -241,11 +241,11 @@ async fn killing_an_execution_force_stops_it_without_stopping_the_container() {
 
     containers
         .executions()
-        .signal(&execution.id, Signal::Kill)
+        .signal(&execution.id, Signal::KILL)
         .await
         .unwrap();
 
-    assert_eq!(*runtime.signals.lock().unwrap(), [Signal::Kill]);
+    assert_eq!(*runtime.signals.lock().unwrap(), [Signal::KILL]);
     assert!(containers.inspect("exec-kill-parent").await.unwrap().state.is_active());
     let domains = runtime.domains.lock().unwrap();
     assert_eq!(domains.len(), 2);

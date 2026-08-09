@@ -76,13 +76,9 @@ impl Process {
 
     fn request(signal: Signal) -> hl_engine::engine::StopRequest {
         match signal {
-            Signal::Kill => hl_engine::engine::StopRequest::Force,
-            Signal::Interrupt => hl_engine::engine::StopRequest::Interrupt,
-            Signal::Terminate => hl_engine::engine::StopRequest::Signal(15),
-            Signal::Quit => hl_engine::engine::StopRequest::Signal(3),
-            Signal::Hangup => hl_engine::engine::StopRequest::Signal(1),
-            Signal::User1 => hl_engine::engine::StopRequest::Signal(10),
-            Signal::User2 => hl_engine::engine::StopRequest::Signal(12),
+            Signal::KILL => hl_engine::engine::StopRequest::Force,
+            Signal::INTERRUPT => hl_engine::engine::StopRequest::Interrupt,
+            other => hl_engine::engine::StopRequest::Signal(i32::from(other.get())),
         }
     }
 }
@@ -186,8 +182,23 @@ mod tests {
     /// races the guest's own exit must not report a stop failure.
     #[tokio::test]
     async fn stopping_a_reaped_guest_succeeds() {
-        for signal in [Signal::Terminate, Signal::Kill, Signal::Interrupt] {
+        for signal in [Signal::TERMINATE, Signal::KILL, Signal::INTERRUPT] {
             reaped().signal(signal).await.unwrap();
+        }
+    }
+
+    /// Every signal outside the two terminal shortcuts reaches the engine as its own number.
+    #[test]
+    fn every_signal_number_reaches_the_engine() {
+        use hl_engine::engine::StopRequest;
+        assert_eq!(Process::request(Signal::KILL), StopRequest::Force);
+        assert_eq!(Process::request(Signal::INTERRUPT), StopRequest::Interrupt);
+        for number in 1..=Signal::MAXIMUM {
+            let signal = Signal::new(number).unwrap();
+            if signal == Signal::KILL || signal == Signal::INTERRUPT {
+                continue;
+            }
+            assert_eq!(Process::request(signal), StopRequest::Signal(i32::from(number)));
         }
     }
 

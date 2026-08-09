@@ -40,7 +40,7 @@ mod mount;
 mod size;
 
 use host::HostSettings;
-pub(super) use kill::DockerSignal;
+pub(crate) use kill::DockerSignal;
 use list::NetworkPlan;
 use logs::Flag;
 use mount::{LegacyBind, Target};
