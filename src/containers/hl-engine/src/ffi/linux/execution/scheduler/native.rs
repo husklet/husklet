@@ -232,7 +232,12 @@ impl GuestExecutor {
             pool.counters.runs += 1;
             pool.counters.builds += stats.builds;
             pool.counters.hits += stats.hits;
-            pool.observe_direct_mode(run.process, stats.direct);
+            pool.observe_direct_run(
+                run.process,
+                stats.direct,
+                retired.expect("native statistics must carry the retired count"),
+                native_budget,
+            );
             pool.merge_observed_sources(run.process, lease.generation(), stats.sources, stats.sources_complete)?;
         }
         if fallback {

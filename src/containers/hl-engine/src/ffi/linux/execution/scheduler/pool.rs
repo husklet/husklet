@@ -11,7 +11,8 @@ use crate::activation::GuestIsa;
 use crate::launch_plan::RuntimeLaunchPlan;
 
 /// Leaky flip score that identifies a process whose entries alternate between direct
-/// authority and the operand resolver, and the runs each such finding holds for.
+/// authority and the operand resolver, and the base-budget resolver-run equivalents
+/// each such finding holds for.
 const DIRECT_FLIP_LIMIT: u32 = 32;
 const DIRECT_HOLD_RUNS: u64 = 1 << 16;
 /// Sticky arm: the score does not decay, so a process reaches its configured hold after
@@ -221,7 +222,8 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) direct_sticky: bool,
     /// The sticky arm's flip budget. Invalid or zero experimental values preserve the default.
     pub(super) direct_sticky_limit: u32,
-    /// Resolver admissions a bounded direct hold must serve before authority may warm again.
+    /// Base-budget resolver-run equivalents a bounded direct hold must serve before
+    /// authority may warm again.
     pub(super) direct_hold_runs: u64,
     /// Makes the sticky arm's hold permanent instead of bounded.
     pub(super) direct_sticky_permanent: bool,
@@ -272,7 +274,8 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) instruction_epochs: BTreeMap<hl_task::ProcessId, u64>,
     /// Last run mode and the leaky score of how much that mode has been alternating.
     pub(super) direct_modes: BTreeMap<hl_task::ProcessId, (bool, u32)>,
-    /// Runs still owed before a thrashing process may be offered direct authority again.
+    /// Base-budget resolver-run equivalents still owed before a thrashing process may be
+    /// offered direct authority again.
     pub(super) direct_holds: BTreeMap<hl_task::ProcessId, u64>,
     /// Processes that armed an interval or POSIX timer, whose expiry is only observed
     /// on a scheduler round trip. A merely pending signal is not recorded here: it is
@@ -514,22 +517,10 @@ impl NativePool {
         Some(())
     }
 
-    /// Whether this process may still be offered direct authority. A held process is
-    /// serving out a hold because its run mode was alternating; each call spends one run.
-    pub(super) fn direct_admitted(&mut self, process: hl_task::ProcessId) -> bool {
-        let Some(remaining) = self.direct_holds.get_mut(&process) else {
-            return true;
-        };
-        if *remaining == DIRECT_HOLD_PERMANENT {
-            return false;
-        }
-        *remaining = remaining.saturating_sub(1);
-        if *remaining != 0 {
-            return false;
-        }
-        self.direct_holds.remove(&process);
-        self.direct_modes.remove(&process);
-        true
+    /// Whether this process may still be offered direct authority. Hold debt is paid only
+    /// after a resolver run completes, so an admission that later fails cannot spend it.
+    pub(super) fn direct_admitted(&self, process: hl_task::ProcessId) -> bool {
+        !self.direct_holds.contains_key(&process)
     }
 
     /// Whether this process has earned direct authority. Direct mode carries no operand
@@ -537,10 +528,7 @@ impl NativePool {
     /// entry neither `direct_holds` nor `direct_declined` holds anything that could decline
     /// it, and a short program never gets the second entry the decline would protect. Spend
     /// one resolver run first, which is what `direct_modes` records.
-    pub(super) fn direct_earned(&mut self, process: hl_task::ProcessId) -> bool {
-        // `direct_admitted` spends a hold run, so it must run before the warm-up test:
-        // a held process has no `direct_modes` entry and would otherwise never serve out
-        // its hold.
+    pub(super) fn direct_earned(&self, process: hl_task::ProcessId) -> bool {
         self.direct_admitted(process) && self.direct_modes.contains_key(&process)
     }
 
@@ -619,6 +607,39 @@ impl NativePool {
                 permanent = hold == DIRECT_HOLD_PERMANENT
             );
         }
+    }
+
+    /// Pays bounded hold debt with the resolver work that actually completed, then records
+    /// the mode. A short exit still costs one unit; an activation extended across several
+    /// base grants costs one unit per grant-equivalent, so suppressing an intermediate exit
+    /// cannot make the same hold cover more guest work. The final resolver run warms the
+    /// process for the next admission after retiring the hold.
+    pub(super) fn observe_direct_run(
+        &mut self,
+        process: hl_task::ProcessId,
+        direct: bool,
+        executed: u64,
+        base_budget: u64,
+    ) {
+        if !direct {
+            let work = if base_budget == 0 {
+                1
+            } else {
+                executed.div_ceil(base_budget).max(1)
+            };
+            let expired = self.direct_holds.get_mut(&process).is_some_and(|remaining| {
+                if *remaining == DIRECT_HOLD_PERMANENT {
+                    return false;
+                }
+                *remaining = remaining.saturating_sub(work);
+                *remaining == 0
+            });
+            if expired {
+                self.direct_holds.remove(&process);
+                self.direct_modes.remove(&process);
+            }
+        }
+        self.observe_direct_mode(process, direct);
     }
 
     pub(super) fn bounded_direct_hold_remaining(&self) -> u64 {

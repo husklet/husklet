@@ -636,6 +636,8 @@ mod tests {
         }
         assert_eq!(pool.direct_holds.get(&process), Some(&3));
         assert!(!pool.direct_authority(process, entry));
+        assert_eq!(pool.direct_holds.get(&process), Some(&3));
+        pool.observe_direct_run(process, false, 1, 1);
         assert_eq!(pool.direct_holds.get(&process), Some(&2));
     }
 
@@ -654,6 +656,8 @@ mod tests {
         sticky.observe_direct_mode(process, true);
         assert_eq!(sticky.direct_holds.get(&process), Some(&3));
         assert!(!sticky.direct_authority(process, entry));
+        assert_eq!(sticky.direct_holds.get(&process), Some(&3));
+        sticky.observe_direct_run(process, false, 1, 1);
         assert_eq!(sticky.direct_holds.get(&process), Some(&2));
 
         let mut permanent_options = crate::options::Options::default();
@@ -1266,19 +1270,53 @@ mod tests {
         assert_eq!(pool.bounded_direct_hold_remaining(), 3);
 
         let site = (process, 1, 1, 0x4000);
-        for remaining in [2, 1, 0] {
+        for (executed, remaining) in [(0, 2), (1, 1), (3, 0)] {
             assert!(
                 !pool.direct_authority(process, site),
                 "every configured hold admission must run through the resolver"
             );
+            assert_eq!(pool.bounded_direct_hold_remaining(), remaining + 1);
+            pool.observe_direct_run(process, false, executed, 4);
             assert_eq!(pool.bounded_direct_hold_remaining(), remaining);
-            pool.observe_direct_mode(process, false);
         }
         assert!(!pool.direct_holds.contains_key(&process));
         assert!(
             pool.direct_authority(process, site),
-            "direct authority must return immediately after exactly three paid admissions"
+            "the final resolver run must warm direct authority for the next admission"
         );
+    }
+
+    #[test]
+    fn bounded_direct_hold_debt_is_invariant_to_activation_extension() {
+        const BUDGET: u64 = 8;
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let site = (process, 1, 1, 0x4000);
+        let held = || {
+            let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+            pool.direct_holds.insert(process, 10);
+            pool
+        };
+        let mut short = held();
+        let mut extended = held();
+
+        for _ in 0..6 {
+            assert!(!short.direct_authority(process, site));
+            short.observe_direct_run(process, false, BUDGET, BUDGET);
+        }
+        assert!(!extended.direct_authority(process, site));
+        extended.observe_direct_run(process, false, 6 * BUDGET, BUDGET);
+        assert_eq!(short.bounded_direct_hold_remaining(), 4);
+        assert_eq!(extended.bounded_direct_hold_remaining(), 4);
+
+        for pool in [&mut short, &mut extended] {
+            assert!(!pool.direct_authority(process, site));
+            pool.observe_direct_run(process, false, 3 * BUDGET + 1, BUDGET);
+            assert!(!pool.direct_holds.contains_key(&process));
+            assert!(
+                pool.direct_authority(process, site),
+                "the resolver run that expires the hold must warm the next admission"
+            );
+        }
     }
 
     #[test]
@@ -1325,13 +1363,14 @@ mod tests {
         pool.observe_direct_mode(process, false);
         assert!(pool.direct_earned(process), "a completed run earns direct authority");
 
-        // A hold entered while warm is spent by the same call, so it expires on schedule.
+        // A hold entered while warm is paid only by completed resolver work.
         pool.direct_holds.insert(process, 2);
         pool.direct_modes.remove(&process);
-        assert!(!pool.direct_earned(process));
-        assert!(!pool.direct_earned(process));
+        for _ in 0..2 {
+            assert!(!pool.direct_earned(process));
+            pool.observe_direct_run(process, false, 1, 1);
+        }
         assert!(!pool.direct_holds.contains_key(&process), "the hold must retire");
-        pool.observe_direct_mode(process, false);
         assert!(pool.direct_earned(process));
     }
 
