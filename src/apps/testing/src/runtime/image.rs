@@ -317,10 +317,24 @@ async fn pull(images: &Images, reference: Reference, platform: &Platform) -> Res
                 sleep(delay).await;
                 delay *= 2;
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(provisioning_failure(&reference, &error.to_string())),
         }
     }
     unreachable!("bounded registry retry loop always returns")
+}
+
+/// Names a pull failure as image provisioning rather than engine behaviour, so an empty cache on a
+/// rate-limited or unauthenticated registry is not read as a defect in the engine under test.
+fn provisioning_failure(reference: &Reference, error: &str) -> Error {
+    if error.registry_unavailable() {
+        return format!(
+            "image provisioning failed, not an engine failure: the registry refused to serve \
+             {reference} ({error}). Prefetch the image into the shared cache, or set \
+             HL_SCENARIO_OFFLINE=1 to fail fast on a cache miss."
+        )
+        .into();
+    }
+    format!("pull {reference}: {error}").into()
 }
 
 fn registry_auth() -> Auth {
@@ -341,6 +355,7 @@ fn registry_auth() -> Auth {
 trait FailureText {
     fn store_race(&self) -> bool;
     fn transient_registry_fault(&self) -> bool;
+    fn registry_unavailable(&self) -> bool;
 }
 
 impl FailureText for str {
@@ -362,6 +377,25 @@ impl FailureText for str {
         ]
         .iter()
         .any(|needle| error.contains(needle))
+    }
+
+    /// The registry, not the engine, denied service: rate limiting, authentication, or reachability.
+    fn registry_unavailable(&self) -> bool {
+        let error = self.to_ascii_lowercase();
+        self.transient_registry_fault()
+            || [
+                "toomanyrequests",
+                "too many requests",
+                "unauthorized",
+                "authentication required",
+                "denied",
+                "forbidden",
+                "dns error",
+                "connection refused",
+                "network is unreachable",
+            ]
+            .iter()
+            .any(|needle| error.contains(needle))
     }
 }
 
@@ -409,5 +443,23 @@ mod tests {
         for error in ["unauthorized", "manifest unknown", "invalid digest"] {
             assert!(!error.transient_registry_fault(), "{error}");
         }
+    }
+
+    /// An empty cache behind a rate-limited or unauthenticated registry must not read as an engine
+    /// defect, which is the diagnosis this failure has repeatedly cost.
+    #[test]
+    fn registry_denial_is_reported_as_provisioning_rather_than_engine_failure() {
+        let reference: hl_images::Reference = "docker.io/library/alpine:3.20".parse().unwrap();
+        for error in [
+            "HTTP 429 toomanyrequests: You have reached your pull rate limit",
+            "unauthorized: authentication required",
+            "dns error: failed to lookup registry-1.docker.io",
+        ] {
+            let text = super::provisioning_failure(&reference, error).to_string();
+            assert!(text.contains("not an engine failure"), "{text}");
+            assert!(text.contains("HL_SCENARIO_OFFLINE"), "{text}");
+        }
+        let text = super::provisioning_failure(&reference, "layer DiffID mismatch").to_string();
+        assert!(!text.contains("not an engine failure"), "{text}");
     }
 }
