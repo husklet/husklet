@@ -5,12 +5,16 @@ use crate::rule::Rule;
 use super::Access;
 
 fn findings_in(package_name: &str, source: &str, relative: &str) -> Vec<crate::Finding> {
+    findings_under("src/packages", package_name, source, relative)
+}
+
+fn findings_under(layer: &str, package_name: &str, source: &str, relative: &str) -> Vec<crate::Finding> {
     let nonce = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("clock follows Unix epoch")
         .as_nanos();
     let root = std::env::temp_dir().join(format!("hl-env-rule-{nonce}"));
-    let package = root.join(format!("src/packages/{package_name}"));
+    let package = root.join(format!("{layer}/{package_name}"));
     let path = package.join(relative);
     fs::create_dir_all(path.parent().expect("fixture has a parent")).expect("create fixture");
     fs::write(
@@ -100,6 +104,27 @@ fn structurally_boundaries_permitted() {
             "{relative} is an explicit platform boundary"
         );
     }
+}
+
+#[test]
+fn application_layer_owns_environment_capture() {
+    let capture = "fn paths() { let _ = std::env::var_os(\"HL_HOME\"); }";
+    assert!(
+        findings_under("src/apps", "husklet", capture, "src/paths.rs").is_empty(),
+        "an application composition root captures the environment wherever its modules live"
+    );
+    assert_eq!(
+        findings_under("src/runtime", "hl-execution", capture, "src/paths.rs").len(),
+        1,
+        "a reusable runtime library still may not read ambient process state"
+    );
+}
+
+#[test]
+fn platform_adapter_directories_are_boundaries() {
+    let capture = "fn resolve() { let _ = std::env::var_os(\"PATH\"); }";
+    assert!(findings(capture, "src/unix/spawn.rs").is_empty());
+    assert_eq!(findings(capture, "src/spawn/unix.rs").len(), 1);
 }
 
 #[test]

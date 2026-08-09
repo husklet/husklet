@@ -116,6 +116,18 @@ impl Depth {
         }
     }
 
+    /// Deepens the level without ever standing as the deepest construct itself.
+    ///
+    /// A braced closure body carries the control flow written inside it, so it must raise the
+    /// level for that flow. On its own it branches nothing: `spawn_blocking(move || { .. })`
+    /// and `map(|row| { .. })` are call arguments, and charging them a level made a
+    /// straight-line block illegal wherever it appeared under two real branches.
+    fn enter_carrier(&mut self, visit: impl FnOnce(&mut Self)) {
+        self.current += 1;
+        visit(self);
+        self.current -= 1;
+    }
+
     fn enter(&mut self, construct: &'static str, span: Span, visit: impl FnOnce(&mut Self)) {
         self.current += 1;
         if self.current > self.maximum {
@@ -214,7 +226,7 @@ impl<'ast> Visit<'ast> for Depth {
             syn::visit::visit_expr_closure(self, expression);
             return;
         }
-        self.enter("closure", expression.span(), |visitor| {
+        self.enter_carrier(|visitor| {
             syn::visit::visit_expr_closure(visitor, expression);
         });
     }
@@ -568,6 +580,44 @@ fn summarize(row: &ResultRow) {
     }
     0
 }",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("depth 4"), "{}", findings[0].message);
+    }
+
+    #[test]
+    fn accepts_a_straight_line_braced_closure_under_two_branches() {
+        let findings = findings(
+            r#"fn record(rows: &[u8]) {
+    for row in rows {
+        if row > &0 {
+            rows.iter().for_each(|other| {
+                let label = format!("{other}");
+                println!("{label}");
+            });
+        }
+    }
+}"#,
+        );
+
+        assert!(findings.is_empty(), "{:?}", findings.first().map(|f| &f.message));
+    }
+
+    #[test]
+    fn still_charges_the_closure_that_carries_a_third_branch() {
+        let findings = findings(
+            r#"fn record(rows: &[u8]) {
+    for row in rows {
+        if row > &0 {
+            rows.iter().for_each(|other| {
+                if other > row {
+                    println!("{other}");
+                }
+            });
+        }
+    }
+}"#,
         );
 
         assert_eq!(findings.len(), 1);
