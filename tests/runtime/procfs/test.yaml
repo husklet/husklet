@@ -314,9 +314,10 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/shared/forkself.out }
   - id: runtime/procfs/selfvm
-    status: !unsupported
-      reason: "excluded-macos: synthetic /proc backend gaps on the macOS engine; Linux engine still runs+enforces this."
-      evidence: "tests/runtime/procfs/ORACLE.md"
+    status: !host-excluded
+      hosts: [macos]
+      reason: "synthetic /proc backend gaps on the macOS engine"
+      evidence: "tests/runtime/procfs/ORACLE.md; Linux engine runs and enforces this, re-derived 2026-08-08."
     compat: { class: compatibility }
     build: { source: selfvm.c, inputs: [pf.h], output: selfvm, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfvm }
@@ -351,18 +352,20 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/shared/selfumask.out }
   - id: runtime/procfs/nslinks
-    status: !unsupported
-      reason: "excluded-macos: synthetic /proc backend gaps on the macOS engine; Linux engine still runs+enforces this."
-      evidence: "tests/runtime/procfs/ORACLE.md"
+    status: !host-excluded
+      hosts: [macos]
+      reason: "synthetic /proc backend gaps on the macOS engine"
+      evidence: "tests/runtime/procfs/ORACLE.md; Linux engine runs and enforces this, re-derived 2026-08-08."
     compat: { class: compatibility }
     build: { source: nslinks.c, output: nslinks, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/nslinks }
     run: []
     expect: { exit: 0, stdout: golden/shared/nslinks.out }
   - id: runtime/procfs/peer-identity
-    status: !unsupported
-      reason: "excluded-macos: synthetic /proc backend gaps on the macOS engine; Linux engine still runs+enforces this."
-      evidence: "tests/runtime/procfs/ORACLE.md"
+    status: !host-excluded
+      hosts: [macos]
+      reason: "synthetic /proc backend gaps on the macOS engine"
+      evidence: "tests/runtime/procfs/ORACLE.md; Linux engine runs and enforces this, re-derived 2026-08-08."
     compat: { class: compatibility }
     build: { source: peerid.c, inputs: [pf.h], output: peerid, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/peerid }

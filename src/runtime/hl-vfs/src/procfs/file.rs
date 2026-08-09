@@ -213,19 +213,19 @@ impl OpenFileDescription for CommFile {
     }
 
     fn write_context(&self, input: &[u8], context: hl_descriptor::OperationContext<'_>) -> Result<usize, ObjectError> {
-        if input.is_empty() {
-            return Ok(0);
-        }
         let actor = context.actor.ok_or(ObjectError::PermissionDenied)?;
+        // Linux copies at most 15 bytes and terminates the name at a NUL only: a newline is an
+        // ordinary character, and an empty write clears the name rather than being ignored.
         let limit = input.len().min(15);
-        let end = input[..limit]
-            .iter()
-            .position(|byte| matches!(byte, 0 | b'\n'))
-            .unwrap_or(limit);
+        let end = input[..limit].iter().position(|byte| *byte == 0).unwrap_or(limit);
         self.source
             .write_comm(self.process, self.thread, actor, &input[..end])?;
         *self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = 0;
         Ok(input.len())
+    }
+
+    fn accepts_empty_write(&self) -> bool {
+        true
     }
 
     fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {

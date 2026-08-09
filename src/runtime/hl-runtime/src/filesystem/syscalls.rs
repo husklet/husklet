@@ -222,7 +222,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         if Self::access_rejects(&lease, false) {
             return LinuxResult::Error(Errno::EBADF);
         }
-        if length == 0 {
+        if length == 0 && !lease.accepts_empty_write() {
             return LinuxResult::Value(0);
         }
         if let Some(result) = self.terminal_access(&lease, super::job::TerminalAccess::Write) {

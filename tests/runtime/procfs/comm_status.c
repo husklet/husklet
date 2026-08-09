@@ -64,7 +64,23 @@ int main(void) {
     char got2[64] = {0};
     prctl(PR_GET_NAME, got2, 0, 0, 0);
     if (!same_fd) got2[0] = 0;
-    printf("s=%d g=%d name=%s len=%zu comm=%s nl=%d status=%s w=%zd after=%s\n", s, g, got, strlen(got), comm, nl,
-           sname, w, got2);
+
+    // A newline is an ordinary character in a comm write: Linux terminates the name at a NUL only,
+    // so "ab\ncd" reads back verbatim. A zero-length write clears the name rather than being ignored.
+    char probe[64];
+    int fd2 = open("/proc/self/comm", O_WRONLY);
+    ssize_t nlw = fd2 >= 0 ? write(fd2, "ab\ncd", 5) : -1;
+    if (fd2 >= 0) close(fd2);
+    int n2 = slurp("/proc/self/comm", probe, sizeof probe);
+    int nl_kept = nlw == 5 && n2 == 6 && memcmp(probe, "ab\ncd\n", 6) == 0;
+
+    fd2 = open("/proc/self/comm", O_WRONLY);
+    ssize_t zw = fd2 >= 0 ? write(fd2, "", 0) : -1;
+    if (fd2 >= 0) close(fd2);
+    n2 = slurp("/proc/self/comm", probe, sizeof probe);
+    int cleared = zw == 0 && n2 == 1 && probe[0] == '\n';
+
+    printf("s=%d g=%d name=%s len=%zu comm=%s nl=%d status=%s w=%zd after=%s nl_kept=%d cleared=%d\n", s, g, got,
+           strlen(got), comm, nl, sname, w, got2, nl_kept, cleared);
     return 0;
 }

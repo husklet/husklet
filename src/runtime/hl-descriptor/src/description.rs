@@ -173,6 +173,11 @@ pub trait OpenFileDescription: Debug + Send + Sync + 'static {
             None => self.write(input),
         }
     }
+    /// Reports whether a zero-length write is a meaningful operation on this object rather than the
+    /// no-op the write path returns for everything else; Linux delivers it to `/proc/<pid>/comm`.
+    fn accepts_empty_write(&self) -> bool {
+        false
+    }
     ///
     /// # Errors
     /// Returns an error if the object does not support the operation or the operation fails.
