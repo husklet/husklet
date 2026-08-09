@@ -651,5 +651,5 @@ async fn force_removal_of_a_guest_that_ignores_the_stop_signal_is_bounded() {
         matches!(&error, Error::StopTimeout { seconds, .. } if *seconds == 30),
         "{error:?}"
     );
-    assert!(runtime.signals.lock().unwrap().contains(&Signal::Kill));
+    assert!(runtime.signals.lock().unwrap().contains(&Signal::KILL));
 }
