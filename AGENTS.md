@@ -286,6 +286,17 @@ Announce intent before requesting, so builders can yield:
     # builder, before taking flock -s
     while ! flock -n -x 8>/var/tmp/husklet-box.wanted; do sleep 5; done
 
+**Announce before you request, or the announcement is retroactive.** Take fd 8
+*then* fd 9. A lane that queued its exclusive request first and announced
+afterwards left three and a half minutes in which builders were free to keep
+arriving — which is the whole window the announcement exists to close.
+
+**Count lock holders, not processes named `testing`.** The quiet probe reads
+`pgrep -cx testing` and will happily report zero while eleven holders are live,
+because they are `cargo`, `clippy`, `make lint` and a renamed engine. Walk
+`/proc/*/fd` for the lock file instead: holder count is the occupancy signal,
+and it is immune to every naming blind spot above.
+
 **Signal intent with a second lock, not a plain file.** A `touch`/`rm` marker
 has no crash-safety: if the announcing lane dies, is killed, or has its turn
 reaped, the file survives and stalls **every** builder on the box
