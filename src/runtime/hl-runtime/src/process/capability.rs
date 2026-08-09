@@ -52,14 +52,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Ok(value) => value.credentials,
             Err(error) => return LinuxResult::Error(error),
         };
-        let current = credentials.capabilities;
         let mut requested = requested;
-        requested.ambient = current.ambient & requested.permitted & requested.inheritable;
-        let valid = requested.effective & !requested.permitted == 0
-            && requested.permitted & !current.permitted == 0
-            && requested.inheritable & !(current.inheritable | current.permitted) == 0
-            && (requested.effective | requested.permitted | requested.inheritable) & !CapabilitySets::SUPPORTED == 0;
-        if !valid {
+        requested.ambient = credentials.capabilities.ambient & requested.permitted & requested.inheritable;
+        if !credentials.may_replace_capabilities(requested) {
             return LinuxResult::Error(Errno::EPERM);
         }
         credentials.capabilities = requested;

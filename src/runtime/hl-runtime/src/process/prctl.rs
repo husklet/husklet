@@ -13,7 +13,11 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             PrctlPlan::GetKeepCapabilities => {
                 return Some(LinuxResult::Value(u64::from(credentials.keep_capabilities)));
             }
-            PrctlPlan::SetKeepCapabilities(value) => credentials.keep_capabilities = value,
+            PrctlPlan::SetKeepCapabilities(value) => {
+                if !credentials.set_keep_capabilities(value) {
+                    return Some(LinuxResult::Error(Errno::EPERM));
+                }
+            }
             PrctlPlan::ReadCapability(capability) => {
                 let present = credentials.capability_bounding & (1_u64 << capability) != 0;
                 return Some(LinuxResult::Value(u64::from(present)));
