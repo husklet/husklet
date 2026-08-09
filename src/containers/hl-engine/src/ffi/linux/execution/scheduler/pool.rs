@@ -134,6 +134,17 @@ pub(super) struct NativeCounters {
     pub(super) permanent_high_water_half: u64,
     pub(super) permanent_high_water_quarter: u64,
     pub(super) permanent_high_water_eighth: u64,
+    /// Diagnostic: where direct authority went. `direct_admitted` counts admissions that
+    /// entered with it, `direct_held` the ones a process-wide hold refused, `direct_cold`
+    /// the ones still spending their warm-up resolver run, and `direct_site` the ones a
+    /// per-site decline refused. `direct_flips` counts observed run-mode changes, each of
+    /// which discards the whole translation cache, and `direct_holds` the holds installed.
+    pub(super) direct_admitted: u64,
+    pub(super) direct_held: u64,
+    pub(super) direct_cold: u64,
+    pub(super) direct_site: u64,
+    pub(super) direct_flips: u64,
+    pub(super) direct_holds: u64,
 }
 
 /// Process, image incarnation, executable-range version, entry PC. The ledger
@@ -189,6 +200,10 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) admission_cache: bool,
     /// Gates the sticky arm of the direct-authority decision below.
     pub(super) direct_sticky: bool,
+    /// The sticky arm's flip budget. Invalid or zero experimental values preserve the default.
+    pub(super) direct_sticky_limit: u32,
+    /// Resolver admissions a bounded direct hold must serve before authority may warm again.
+    pub(super) direct_hold_runs: u64,
     /// Makes the sticky arm's hold permanent instead of bounded.
     pub(super) direct_sticky_permanent: bool,
     /// False drops the aarch64 exact write journal; every crossing then publishes
@@ -263,6 +278,19 @@ impl NativePool {
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
             admission_cache: plan.options.get("HL_NATIVE_ADMISSION_CACHE") == Some("1"),
             direct_sticky: plan.options.get("HL_NATIVE_DIRECT_STICKY") == Some("1"),
+            direct_sticky_limit: plan
+                .options
+                .get("HL_NATIVE_DIRECT_STICKY_LIMIT")
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|limit| *limit > 0)
+                .unwrap_or(DIRECT_STICKY_FLIP_LIMIT),
+            direct_hold_runs: plan
+                .options
+                .integer("HL_NATIVE_DIRECT_HOLD_RUNS")
+                .ok()
+                .flatten()
+                .filter(|runs| *runs > 0 && *runs < DIRECT_HOLD_PERMANENT)
+                .unwrap_or(DIRECT_HOLD_RUNS),
             direct_sticky_permanent: plan.options.get("HL_NATIVE_DIRECT_STICKY_PERMANENT") == Some("1"),
             write_reserve: plan.options.get("HL_A64_NO_WRITE_RESERVE") != Some("1"),
             write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
@@ -306,6 +334,8 @@ impl NativePool {
             diagnostics = pool.diagnostics,
             admission_cache = pool.admission_cache,
             direct_sticky = pool.direct_sticky,
+            direct_sticky_limit = pool.direct_sticky_limit,
+            direct_hold_runs = pool.direct_hold_runs,
             direct_sticky_permanent = pool.direct_sticky_permanent,
             write_reserve = pool.write_reserve,
             write_commit = pool.write_commit,
@@ -376,6 +406,27 @@ impl NativePool {
         self.direct_admitted(process) && self.direct_modes.contains_key(&process)
     }
 
+    /// Applies every direct-authority gate and classifies the result when diagnostics are enabled.
+    /// Keeping the non-diagnostic expression intact preserves the timing binary's hot-path shape.
+    pub(super) fn direct_authority(&mut self, process: hl_task::ProcessId, entry: NativeSite) -> bool {
+        if !self.diagnostics {
+            return self.direct_earned(process) && !self.direct_declined.contains(&entry);
+        }
+        let admitted = self.direct_admitted(process);
+        let warm = self.direct_modes.contains_key(&process);
+        let site = !self.direct_declined.contains(&entry);
+        if !admitted {
+            self.counters.direct_held += 1;
+        } else if !warm {
+            self.counters.direct_cold += 1;
+        } else if !site {
+            self.counters.direct_site += 1;
+        } else {
+            self.counters.direct_admitted += 1;
+        }
+        admitted && warm && site
+    }
+
     /// Records the run mode this process just used. The cache identity carries the mode, so
     /// sustained alternation resets every translation twice per cycle; hold direct
     /// authority off for a bounded run of turns so the resolver mode can keep its cache.
@@ -393,23 +444,30 @@ impl NativePool {
             return;
         }
         *previous = direct;
-        *flips += 2;
+        *flips = flips.saturating_add(2);
+        let flips = *flips;
+        let diagnostics = self.diagnostics;
+        if diagnostics {
+            self.counters.direct_flips += 1;
+        }
         let (limit, hold) = if sticky {
             (
-                DIRECT_STICKY_FLIP_LIMIT,
+                self.direct_sticky_limit,
                 if permanent {
                     DIRECT_HOLD_PERMANENT
                 } else {
-                    DIRECT_HOLD_RUNS
+                    self.direct_hold_runs
                 },
             )
         } else {
-            (DIRECT_FLIP_LIMIT, DIRECT_HOLD_RUNS)
+            (DIRECT_FLIP_LIMIT, self.direct_hold_runs)
         };
-        let reached = *flips;
-        if reached >= limit {
+        if flips >= limit {
             self.direct_modes.remove(&process);
             self.direct_holds.insert(process, hold);
+            if diagnostics {
+                self.counters.direct_holds += 1;
+            }
             // The decision, not the flip: this process is off direct authority, and under
             // the permanent arm it never comes back. Bounded by the live process set.
             hl_log::hl_event!(
@@ -417,11 +475,19 @@ impl NativePool {
                 hl_log::Level::Debug,
                 "native.direct.held",
                 process = process.number(),
-                flips = reached,
+                flips = flips,
                 limit = limit,
                 permanent = hold == DIRECT_HOLD_PERMANENT
             );
         }
+    }
+
+    pub(super) fn bounded_direct_hold_remaining(&self) -> u64 {
+        self.direct_holds
+            .values()
+            .copied()
+            .filter(|remaining| *remaining != DIRECT_HOLD_PERMANENT)
+            .fold(0, u64::saturating_add)
     }
 
     /// Records that this entry completed a run retiring a substantial share of its budget,
@@ -1021,6 +1087,29 @@ impl Drop for NativePool {
                 self.counters.permanent_high_water_quarter,
                 self.counters.permanent_high_water_eighth,
                 self.high_water.len(),
+            );
+            let resets: u64 = self
+                .executors
+                .values()
+                .map(crate::native::NativeExecutor::cache_resets)
+                .sum();
+            let hold_remaining = self.bounded_direct_hold_remaining();
+            eprintln!(
+                "hl-native-direct: admitted={} held={} cold={} site_declined={} flips={} holds={} sticky={} sticky_limit={} hold_runs={} modes={} holding={} hold_remaining={} declined_sites={} resets={}",
+                self.counters.direct_admitted,
+                self.counters.direct_held,
+                self.counters.direct_cold,
+                self.counters.direct_site,
+                self.counters.direct_flips,
+                self.counters.direct_holds,
+                self.direct_sticky || self.direct_sticky_permanent,
+                self.direct_sticky_limit,
+                self.direct_hold_runs,
+                self.direct_modes.len(),
+                self.direct_holds.len(),
+                hold_remaining,
+                self.direct_declined.len(),
+                resets,
             );
             let mut fallback: Vec<_> = self.fallback_weight.iter().map(|(pc, n)| (*n, *pc)).collect();
             fallback.sort_unstable_by(|a, b| b.cmp(a));

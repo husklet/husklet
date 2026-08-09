@@ -92,6 +92,16 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
+        "HL_NATIVE_DIRECT_STICKY_LIMIT",
+        "run-mode flip budget the sticky hold is taken at",
+        Text
+    ),
+    launch!(
+        "HL_NATIVE_DIRECT_HOLD_RUNS",
+        "resolver admissions a bounded direct hold must serve",
+        Integer
+    ),
+    launch!(
         "HL_NATIVE_DIRECT_STICKY_PERMANENT",
         "never return direct authority to a process that alternated run mode",
         Flag

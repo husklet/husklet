@@ -81,7 +81,7 @@ impl GuestExecutor {
                 .read_spans(GuestAddress::new(pc), bytes, Protection::EXECUTE)
                 .ok()?;
         }
-        let allow_direct = pool.direct_earned(run.process) && !pool.direct_declined.contains(&fallback_key);
+        let allow_direct = pool.direct_authority(run.process, fallback_key);
         let projection = if let Some((first, last)) =
             crate::native::InstructionWord::read(bytes).and_then(|instruction| instruction.literal_interval(pc))
         {
@@ -482,6 +482,8 @@ impl GuestExecutor {
             }
         });
         if let Some(stats) = statistics {
+            // The x86 lowering has no direct-authority mode, so it deliberately contributes
+            // no direct decision or flip counters to the diagnostics reported by the pool.
             pool.counters.runs += 1;
             pool.counters.builds += stats.builds;
             pool.counters.hits += stats.hits;

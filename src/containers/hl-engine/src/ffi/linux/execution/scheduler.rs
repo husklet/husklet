@@ -1024,6 +1024,138 @@ mod tests {
         assert!(!decaying.direct_holds.contains_key(&process));
     }
 
+    #[test]
+    fn sticky_direct_limit_parses_safely_and_moves_the_hold() {
+        const DEFAULT: u32 = 4;
+        let configured_limit = |value: &str| {
+            let mut options = crate::options::Options::default();
+            options.set("HL_NATIVE_DIRECT_STICKY", "1", true).unwrap();
+            options.set("HL_NATIVE_DIRECT_STICKY_LIMIT", value, true).unwrap();
+            NativePool::new(GuestIsa::Aarch64, &plan(options), None).direct_sticky_limit
+        };
+        let limit_and_hold = |value: Option<&str>| {
+            let mut options = crate::options::Options::default();
+            options.set("HL_NATIVE_DIRECT_STICKY", "1", true).unwrap();
+            if let Some(value) = value {
+                options.set("HL_NATIVE_DIRECT_STICKY_LIMIT", value, true).unwrap();
+            }
+            let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
+            let limit = pool.direct_sticky_limit;
+            let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+            let hold = (0..1024)
+                .position(|index| {
+                    pool.observe_direct_mode(process, index % 2 == 0);
+                    pool.direct_holds.contains_key(&process)
+                })
+                .expect("the hold must land within the test bound");
+            (limit, hold)
+        };
+
+        assert_eq!(limit_and_hold(None), (DEFAULT, 2));
+        assert_eq!(limit_and_hold(Some("4")), (DEFAULT, 2));
+        assert_eq!(limit_and_hold(Some("32")), (32, 16));
+        assert_eq!(limit_and_hold(Some("64")), (64, 32));
+        assert_eq!(limit_and_hold(Some("0")), (DEFAULT, 2));
+        assert_eq!(limit_and_hold(Some("nonsense")), (DEFAULT, 2));
+        assert_eq!(
+            limit_and_hold(Some("4294967296")),
+            (DEFAULT, 2),
+            "a value above u32 must preserve the default"
+        );
+        assert_eq!(configured_limit("4294967295"), u32::MAX);
+
+        let mut options = crate::options::Options::default();
+        options.set("HL_NATIVE_DIRECT_STICKY", "1", true).unwrap();
+        options
+            .set("HL_NATIVE_DIRECT_STICKY_LIMIT", "4294967295", true)
+            .unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        pool.direct_modes.insert(process, (false, u32::MAX - 1));
+        pool.observe_direct_mode(process, true);
+        assert!(
+            pool.direct_holds.contains_key(&process),
+            "the maximum limit must saturate into a hold"
+        );
+    }
+
+    #[test]
+    fn bounded_direct_hold_runs_is_typed_configurable_and_spends_exact_debt() {
+        const DEFAULT: u64 = 1 << 16;
+        let configured = |value: Option<&str>| {
+            let mut options = crate::options::Options::default();
+            if let Some(value) = value {
+                options.set("HL_NATIVE_DIRECT_HOLD_RUNS", value, true).unwrap();
+            }
+            NativePool::new(GuestIsa::Aarch64, &plan(options), None).direct_hold_runs
+        };
+
+        assert_eq!(configured(None), DEFAULT);
+        assert_eq!(configured(Some("1024")), 1024);
+        assert_eq!(configured(Some("0")), DEFAULT);
+        assert_eq!(configured(Some("18446744073709551615")), DEFAULT);
+        assert_eq!(configured(Some("18446744073709551614")), u64::MAX - 1);
+
+        let mut invalid = crate::options::Options::default();
+        assert!(invalid.set("HL_NATIVE_DIRECT_HOLD_RUNS", "-1", true).is_err());
+        assert!(invalid.set("HL_NATIVE_DIRECT_HOLD_RUNS", "nonsense", true).is_err());
+        assert!(
+            invalid
+                .set("HL_NATIVE_DIRECT_HOLD_RUNS", "18446744073709551616", true)
+                .is_err()
+        );
+
+        let mut options = crate::options::Options::default();
+        options.set("HL_NATIVE_DIRECT_STICKY", "1", true).unwrap();
+        options.set("HL_NATIVE_DIRECT_HOLD_RUNS", "3", true).unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        pool.observe_direct_mode(process, false);
+        pool.observe_direct_mode(process, true);
+        pool.observe_direct_mode(process, false);
+        assert_eq!(pool.direct_holds.get(&process), Some(&3));
+        assert_eq!(pool.bounded_direct_hold_remaining(), 3);
+
+        assert!(!pool.direct_admitted(process));
+        assert_eq!(pool.direct_holds.get(&process), Some(&2));
+        assert!(!pool.direct_admitted(process));
+        assert_eq!(pool.direct_holds.get(&process), Some(&1));
+        assert!(pool.direct_admitted(process));
+        assert!(!pool.direct_holds.contains_key(&process));
+        assert_eq!(pool.bounded_direct_hold_remaining(), 0);
+    }
+
+    #[test]
+    fn direct_authority_diagnostics_classify_every_gate() {
+        let mut options = crate::options::Options::default();
+        options.set("HL_NATIVE_DIAGNOSTICS", "1", true).unwrap();
+        options.set("HL_NATIVE_DIRECT_STICKY", "1", true).unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let site = (process, 1, 1, 0x4000);
+
+        assert!(!pool.direct_authority(process, site));
+        pool.observe_direct_mode(process, false);
+        assert!(pool.direct_authority(process, site));
+        pool.direct_declined.insert(site);
+        assert!(!pool.direct_authority(process, site));
+        pool.direct_declined.clear();
+        pool.direct_holds.insert(process, 2);
+        assert!(!pool.direct_authority(process, site));
+
+        assert_eq!(pool.counters.direct_cold, 1);
+        assert_eq!(pool.counters.direct_admitted, 1);
+        assert_eq!(pool.counters.direct_site, 1);
+        assert_eq!(pool.counters.direct_held, 1);
+
+        let alternating = hl_task::ProcessId::from_wire(2, 1).unwrap();
+        pool.observe_direct_mode(alternating, false);
+        pool.observe_direct_mode(alternating, true);
+        pool.observe_direct_mode(alternating, false);
+        assert_eq!(pool.counters.direct_flips, 2);
+        assert_eq!(pool.counters.direct_holds, 1);
+    }
+
     /// Direct authority is earned by a run, never taken on the first entry, and a held
     /// process still serves its hold out rather than waiting on a warm-up it cannot reach.
     #[test]

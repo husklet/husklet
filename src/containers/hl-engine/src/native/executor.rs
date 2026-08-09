@@ -2405,6 +2405,15 @@ impl Executor {
         self.diagnostics_enabled.then(|| self.diagnostics()).transpose()
     }
 
+    /// Translation-cache generations this executor has burned. The generation advances once
+    /// per whole-cache identity reset and is zero when diagnostics are disabled.
+    pub(crate) fn cache_resets(&self) -> u64 {
+        self.statistics_snapshot()
+            .ok()
+            .flatten()
+            .map_or(0, |snapshot| snapshot.cache_generation)
+    }
+
     /// Cross-run hint admission is only observable from Rust, so count it here rather
     /// than in the engine's own diagnostics block.
     fn count_x86_hint(&self, counter: &std::sync::atomic::AtomicU64) {
@@ -3863,6 +3872,16 @@ mod test {
                 expected,
             );
         }
+    }
+
+    #[test]
+    fn cache_reset_observability_follows_diagnostics_policy() {
+        let disabled = Executor::create_diagnostics(false).expect("native executor");
+        assert_eq!(disabled.cache_resets(), 0);
+
+        let enabled = Executor::create_diagnostics(true).expect("native executor");
+        let generation = enabled.diagnostics().expect("native diagnostics").cache_generation;
+        assert_eq!(enabled.cache_resets(), generation);
     }
 
     #[test]
