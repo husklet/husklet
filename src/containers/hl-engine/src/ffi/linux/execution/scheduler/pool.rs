@@ -117,6 +117,20 @@ pub(super) struct NativeCounters {
     pub(super) suppress_rearms: u64,
     /// Latches made permanent because the entry has never once cleared the bar.
     pub(super) suppress_permanent: u64,
+    /// Cumulative insertions into the productive table, and cumulative removals from it by
+    /// any reset, purge or live-process sweep. The table's own length at teardown is a
+    /// live-table reading and cannot tell an empty history from a swept one.
+    pub(super) productive_marks: u64,
+    pub(super) productive_swept: u64,
+    /// Permanent latches whose entry PC had been productive at some earlier point in the
+    /// run, i.e. the ones decided against evidence a sweep had already discarded.
+    pub(super) permanent_after_productive: u64,
+    /// Permanent latches split by the most this entry ever retired in any run, as a share
+    /// of the budget. The rule's premise is that the entry "has now fallen short on every
+    /// run it has ever had"; these three say how often that premise is false.
+    pub(super) permanent_high_water_half: u64,
+    pub(super) permanent_high_water_quarter: u64,
+    pub(super) permanent_high_water_eighth: u64,
 }
 
 /// Process, image incarnation, executable-range version, entry PC. The ledger
@@ -191,6 +205,17 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     /// budget at least once. Only these have shown there is native work here to lose,
     /// so only these earn a second probationary span after a latch.
     pub(super) productive: BTreeSet<NativeSite>,
+    /// Diagnostics-only: every entry PC ever marked productive, never swept. Answers
+    /// whether an empty live table means "no productive history" or "history discarded".
+    pub(super) ever_productive: BTreeSet<u64>,
+    /// The most any single run of this entry has ever retired, recorded on every run
+    /// whatever its exit. The productive table records only clean exits, so this is the
+    /// only record of a long run that ended in a guard fault.
+    pub(super) high_water: BTreeMap<NativeSite, u64>,
+    /// Diagnostics-only, never swept: the per-PC high water and the PCs a permanent latch
+    /// condemned, so the refusal table can be read against what the entry had shown.
+    pub(super) high_water_pc: BTreeMap<u64, u64>,
+    pub(super) permanent_pcs: BTreeSet<u64>,
     /// Set once the productive table has refused an insertion at its cap. From then on no
     /// latch is made permanent, because absence from the table no longer means anything.
     pub(super) productive_saturated: bool,
@@ -247,6 +272,10 @@ impl NativePool {
             executors: BTreeMap::new(),
             suppressed: BTreeMap::new(),
             productive: BTreeSet::new(),
+            ever_productive: BTreeSet::new(),
+            high_water: BTreeMap::new(),
+            high_water_pc: BTreeMap::new(),
+            permanent_pcs: BTreeSet::new(),
             productive_saturated: false,
             direct_declined: BTreeSet::new(),
             fallbacks: BTreeSet::new(),
@@ -400,6 +429,9 @@ impl NativePool {
     /// Records that this entry completed a run retiring a substantial share of its budget,
     /// which is the evidence that a later short run is an anomaly rather than its nature.
     pub(super) fn mark_productive(&mut self, entry: NativeSite, executed: u64, budget: u64) {
+        if self.diagnostics {
+            self.record_high_water(entry, executed);
+        }
         if Self::fallback_suppresses(executed, budget) || self.productive.contains(&entry) {
             return;
         }
@@ -413,6 +445,25 @@ impl NativePool {
             return;
         }
         self.productive.insert(entry);
+        self.counters.productive_marks += 1;
+        if self.diagnostics && self.ever_productive.len() < NATIVE_SITE_LIMIT {
+            self.ever_productive.insert(entry.3);
+        }
+    }
+
+    /// The most this entry has retired in any one run, recorded whatever the exit, and only
+    /// under diagnostics: this is read to say whether the permanence rule's premise held,
+    /// not to decide anything, and `mark_productive` runs on every clean native exit.
+    fn record_high_water(&mut self, entry: NativeSite, executed: u64) {
+        if let Some(reached) = self.high_water.get_mut(&entry) {
+            *reached = (*reached).max(executed);
+        } else if self.high_water.len() < NATIVE_SITE_LIMIT {
+            self.high_water.insert(entry, executed);
+        }
+        if self.diagnostics && self.high_water_pc.len() < NATIVE_SITE_LIMIT {
+            let reached = self.high_water_pc.entry(entry.3).or_default();
+            *reached = (*reached).max(executed);
+        }
     }
 
     /// Spends one refusal of this entry's latch, reporting whether native entry is still
@@ -457,6 +508,9 @@ impl NativePool {
         if self.diagnostics {
             *self.fallback_weight.entry(instruction.3).or_default() += 1;
         }
+        if self.diagnostics {
+            self.record_high_water(entry, executed);
+        }
         if Self::fallback_suppresses(executed, budget) {
             self.counters.suppress_verdicts += 1;
             if direct_guard && !self.direct_declined.contains(&entry) && self.direct_declined.len() < NATIVE_SITE_LIMIT
@@ -480,6 +534,23 @@ impl NativePool {
                     probation.permanent = true;
                     probation.remaining = 0;
                     self.counters.suppress_permanent += 1;
+                    if self.ever_productive.contains(&entry.3) {
+                        self.counters.permanent_after_productive += 1;
+                    }
+                    if self.diagnostics && self.permanent_pcs.len() < NATIVE_SITE_LIMIT {
+                        self.permanent_pcs.insert(entry.3);
+                    }
+                    let reached = self.high_water.get(&entry).copied().unwrap_or_default();
+                    let bar = budget.min(super::SLICE_BUDGET);
+                    if reached * 2 >= bar {
+                        self.counters.permanent_high_water_half += 1;
+                    }
+                    if reached * 4 >= bar {
+                        self.counters.permanent_high_water_quarter += 1;
+                    }
+                    if reached * 8 >= bar {
+                        self.counters.permanent_high_water_eighth += 1;
+                    }
                     // The terminal decision for this entry: it will never be entered
                     // natively again. The teardown counter says how many latched, never
                     // which entry or when, which is the question a lane actually has.
@@ -616,7 +687,9 @@ impl NativePool {
         self.instruction_epochs.clear();
         self.observations.clear();
         self.suppressed.clear();
+        self.counters.productive_swept += self.productive.len() as u64;
         self.productive.clear();
+        self.high_water.clear();
         self.productive_saturated = false;
         self.direct_declined.clear();
         self.fallbacks.clear();
@@ -644,7 +717,10 @@ impl NativePool {
         let held = self.suppressed.len();
         self.suppressed.retain(|(owner, _, _, _), _| *owner != process);
         self.counters.suppress_clears += (held - self.suppressed.len()) as u64;
+        let productive_held = self.productive.len();
         self.productive.retain(|(owner, _, _, _)| *owner != process);
+        self.high_water.retain(|(owner, _, _, _), _| *owner != process);
+        self.counters.productive_swept += (productive_held - self.productive.len()) as u64;
         self.direct_declined.retain(|(owner, _, _, _)| *owner != process);
         self.fallbacks.retain(|(owner, _, _, _)| *owner != process);
         Some(())
@@ -657,7 +733,10 @@ impl NativePool {
         let held = self.suppressed.len();
         self.suppressed.retain(|(owner, _, _, _), _| *owner != process);
         self.counters.suppress_clears += (held - self.suppressed.len()) as u64;
+        let productive_held = self.productive.len();
         self.productive.retain(|(owner, _, _, _)| *owner != process);
+        self.high_water.retain(|(owner, _, _, _), _| *owner != process);
+        self.counters.productive_swept += (productive_held - self.productive.len()) as u64;
         self.direct_declined.retain(|(owner, _, _, _)| *owner != process);
         self.fallbacks.retain(|(owner, _, _, _)| *owner != process);
         self.source_incarnations.remove(&process);
@@ -713,7 +792,10 @@ impl NativePool {
             self.counters.suppress_clears += (held - self.suppressed.len()) as u64;
         }
         if !self.productive.is_empty() {
+            let productive_held = self.productive.len();
             self.productive.retain(|(process, _, _, _)| live.contains(process));
+            self.high_water.retain(|(process, _, _, _), _| live.contains(process));
+            self.counters.productive_swept += (productive_held - self.productive.len()) as u64;
         }
         if !self.direct_declined.is_empty() {
             self.direct_declined.retain(|(process, _, _, _)| live.contains(process));
@@ -927,6 +1009,17 @@ impl Drop for NativePool {
                 self.productive_saturated,
                 self.suppressed.len(),
             );
+            eprintln!(
+                "hl-native-productive: marks={} swept={} ever_pcs={} permanent_after_productive={} permanent_hw_half={} permanent_hw_quarter={} permanent_hw_eighth={} hw_entries={}",
+                self.counters.productive_marks,
+                self.counters.productive_swept,
+                self.ever_productive.len(),
+                self.counters.permanent_after_productive,
+                self.counters.permanent_high_water_half,
+                self.counters.permanent_high_water_quarter,
+                self.counters.permanent_high_water_eighth,
+                self.high_water.len(),
+            );
             let mut fallback: Vec<_> = self.fallback_weight.iter().map(|(pc, n)| (*n, *pc)).collect();
             fallback.sort_unstable_by(|a, b| b.cmp(a));
             for (count, pc) in fallback.iter().take(24) {
@@ -935,7 +1028,11 @@ impl Drop for NativePool {
             let mut refused: Vec<_> = self.suppressed_weight.iter().map(|(pc, n)| (*n, *pc)).collect();
             refused.sort_unstable_by(|a, b| b.cmp(a));
             for (count, pc) in refused.iter().take(24) {
-                eprintln!("hl-native-suppressed-entry: pc={pc:#x} refused={count}");
+                eprintln!(
+                    "hl-native-suppressed-entry: pc={pc:#x} refused={count} high_water={} permanent={}",
+                    self.high_water_pc.get(pc).copied().unwrap_or_default(),
+                    self.permanent_pcs.contains(pc),
+                );
             }
         }
     }
