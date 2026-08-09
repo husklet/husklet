@@ -31,6 +31,8 @@ pub(in crate::procfs) enum Node {
     StatisticsDirectory,
     InterfaceFile(InterfaceAttribute),
     UtsNamespace,
+    Auxv,
+    Pagemap,
     Comm,
     Cmdline,
     Environ,
@@ -122,6 +124,7 @@ impl Node {
 
     pub(in crate::procfs) fn entries(self) -> Option<&'static [(&'static [u8], u8)]> {
         const PROCESS: &[(&[u8], u8)] = &[
+            (b"auxv", 8),
             (b"cmdline", 8),
             (b"comm", 8),
             (b"cwd", 10),
@@ -152,6 +155,7 @@ impl Node {
             (b"net", 4),
         ];
         const THREAD: &[(&[u8], u8)] = &[
+            (b"auxv", 8),
             (b"comm", 8),
             (b"cwd", 10),
             (b"exe", 10),
@@ -357,6 +361,8 @@ impl Node {
         };
         let leaf = match leaf {
             b"ns" | b"ns/" => Self::NamespaceDirectory,
+            b"auxv" => Self::Auxv,
+            b"pagemap" => Self::Pagemap,
             b"comm" => Self::Comm,
             b"cmdline" => Self::Cmdline,
             b"environ" => Self::Environ,

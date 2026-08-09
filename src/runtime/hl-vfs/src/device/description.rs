@@ -160,6 +160,7 @@ impl OpenFileDescription for BuiltinDescription {
             special_device: device.linux_encoded(),
             size: 0,
             blocks_512: 0,
+            block_size: 4096,
             accessed: timestamp,
             modified: timestamp,
             changed: timestamp,

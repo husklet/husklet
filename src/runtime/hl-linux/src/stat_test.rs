@@ -26,6 +26,7 @@ impl StatFixture {
             special_device: DeviceId::new(226, 128).linux_encoded(),
             size: 0x0102_0304_0506_0708,
             blocks_512: 0x1112_1314_1516_1718,
+            block_size: 4096,
             accessed: Self::timestamp(-2, 123_456_789),
             modified: Self::timestamp(3, 987_654_321),
             changed: Self::timestamp(4, 1),
@@ -191,4 +192,26 @@ fn anonymous_link_count() {
         };
         assert_eq!(links, 0);
     }
+}
+
+/// `stx_attributes_mask` names the attribute bits the kernel can report at all;
+/// a zero there tells a caller that no attribute is knowable. Measured on Linux
+/// 7.0.11: `0x203000` on procfs, sysfs and devpts, widened only by the on-disk
+/// filesystems. `stx_blksize` follows the object, not a constant: 1024 on procfs.
+#[test]
+fn statx_reports_attributes_mask_and_object_block_size() {
+    let mut metadata = StatFixture::metadata();
+    metadata.block_size = 1024;
+    let mut output = [0xff; STATX_SIZE];
+    StatEncoder::encode_statx(&metadata, StatxExtensions::default(), &mut output).unwrap();
+    assert_eq!(StatFixture::u64(&output, 56), 0x0020_3000);
+    assert_eq!(StatFixture::u32(&output, 4), 1024);
+    assert_eq!(StatFixture::u64(&output, 8), 0);
+
+    let mut stat = [0xff; 160];
+    StatEncoder::encode_stat(GuestArchitecture::Aarch64, &metadata, &mut stat).unwrap();
+    assert_eq!(StatFixture::u32(&stat, 56), 1024);
+    let mut stat = [0xff; 160];
+    StatEncoder::encode_stat(GuestArchitecture::X86_64, &metadata, &mut stat).unwrap();
+    assert_eq!(StatFixture::u64(&stat, 56), 1024);
 }

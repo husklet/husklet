@@ -77,6 +77,8 @@ impl Procfs {
             | model::Node::MapFile(_, _)
             | model::Node::Smaps
             | model::Node::Limits
+            | model::Node::Auxv
+            | model::Node::Pagemap
             | model::Node::Comm
             | model::Node::Cmdline
             | model::Node::Environ
@@ -229,7 +231,7 @@ impl Procfs {
             } else {
                 0x5000_0002
             };
-            return Ok(Some(model::Node::link_metadata(identity)));
+            return Ok(Some(model::Node::link_metadata(identity, self.context(None)?)));
         }
         let Some((process, thread, node)) = model::Node::parse(path, current) else {
             return Ok(None);
@@ -325,6 +327,10 @@ impl Procfs {
                 .source
                 .comm(process_identity()?, thread_identity.ok_or(Error::NotFound)?)?
                 .len() as u64,
+            model::Node::Auxv | model::Node::Pagemap => {
+                self.source.process(process_identity()?)?;
+                0
+            }
             model::Node::Cmdline => self.source.cmdline(process_identity()?)?.len() as u64,
             model::Node::Environ => self.source.environment(process_identity()?)?.len() as u64,
             model::Node::OomScore | model::Node::OomAdj => 2,
@@ -455,7 +461,7 @@ impl Procfs {
                 }) as u64
             }
         };
-        let mut metadata = node.metadata(process);
+        let mut metadata = node.metadata(process, self.context(identity)?);
         if node == model::Node::UtsNamespace {
             metadata.inode = self.source.uts(process_identity()?)?.namespace;
         } else if node == model::Node::NetworkNamespace {

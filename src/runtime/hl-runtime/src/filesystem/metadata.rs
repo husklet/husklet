@@ -112,6 +112,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             special_device: value.special_device,
             size: value.size,
             blocks_512: value.blocks_512,
+            block_size: value.block_size,
             accessed: FileTimestamp {
                 seconds: value.accessed.seconds,
                 nanoseconds: value.accessed.nanoseconds,

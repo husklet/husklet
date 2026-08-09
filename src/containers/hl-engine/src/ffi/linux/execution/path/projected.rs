@@ -374,6 +374,7 @@ impl OpenFileDescription for File {
             special_device: 0,
             size: stat.size,
             blocks_512: stat.size.div_ceil(512),
+            block_size: 4096,
             accessed: zero,
             modified: zero,
             changed: zero,

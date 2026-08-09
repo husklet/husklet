@@ -44,6 +44,7 @@ impl OpenFileDescription for NamespaceHandle {
             special_device: 0,
             size: 0,
             blocks_512: 0,
+            block_size: 4096,
             accessed: timestamp,
             modified: timestamp,
             changed: timestamp,

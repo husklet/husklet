@@ -38,6 +38,7 @@ impl Descriptor {
             special_device: value.st_rdev,
             size: value.st_size as u64,
             blocks_512: value.st_blocks as u64,
+            block_size: value.st_blksize as u32,
             accessed: Timestamp {
                 seconds: value.st_atime,
                 nanoseconds: value.st_atime_nsec as u32,

@@ -18,6 +18,7 @@ pub struct OfdMetadata {
     pub special_device: u64,
     pub size: u64,
     pub blocks_512: u64,
+    pub block_size: u32,
     pub accessed: OfdTimestamp,
     pub modified: OfdTimestamp,
     pub changed: OfdTimestamp,

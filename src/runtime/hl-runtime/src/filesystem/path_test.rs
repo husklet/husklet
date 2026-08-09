@@ -114,6 +114,7 @@ impl ResolvedPathLease for PathResolution {
             special_device: 0,
             size: 55,
             blocks_512: 8,
+            block_size: 4096,
             accessed: time,
             modified: time,
             changed: time,

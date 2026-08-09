@@ -44,6 +44,7 @@ impl OpenFileDescription for RuntimeMemfd {
             special_device: 0,
             size,
             blocks_512: size.saturating_add(511) / 512,
+            block_size: 4096,
             accessed: timestamp,
             modified: timestamp,
             changed: timestamp,
