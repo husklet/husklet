@@ -1,8 +1,7 @@
 use super::{LinuxHost, abi};
 use crate::native_host::{
-    ChildExit, ClockKind, ForkFrame, HostClock, HostError, HostSyscalls, OwnedMapping, ProcessGroup, ProcessHandle,
-    NativeSignal, NativeSignalMask, ProcessId, ProcessSignal, ProcessSyscalls, Protection, SignalSyscalls,
-    SpawnRequest,
+    ChildExit, ClockKind, ForkFrame, HostClock, HostError, HostSyscalls, NativeSignal, NativeSignalMask, OwnedMapping,
+    ProcessGroup, ProcessHandle, ProcessId, ProcessSignal, ProcessSyscalls, Protection, SignalSyscalls, SpawnRequest,
 };
 use std::ffi::CString;
 use std::path::PathBuf;
@@ -122,11 +121,9 @@ fn spawn_reports_exec() {
 fn arbitrary_signal_numbers_reach_a_host_child() {
     // 28 (WINCH) and 19 (STOP) are omitted: their default actions do not exit the child.
     let numbers = [1_u8, 6, 10, 34, 64];
-    let blocked = numbers
-        .iter()
-        .fold(NativeSignalMask::default(), |mask, number| {
-            mask.with(NativeSignal::new(*number).unwrap())
-        });
+    let blocked = numbers.iter().fold(NativeSignalMask::default(), |mask, number| {
+        mask.with(NativeSignal::new(*number).unwrap())
+    });
     let previous = SignalSyscalls::signal_block(&LinuxHost, blocked).unwrap();
     for number in numbers {
         let host = Arc::new(LinuxHost);

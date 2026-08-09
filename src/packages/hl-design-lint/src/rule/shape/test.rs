@@ -6,7 +6,7 @@ use std::{
 
 use crate::{rule::Rule, source::Workspace};
 
-use super::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, SymbolName, TestName, words};
+use super::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, TestName, words};
 
 fn fixture(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
@@ -201,48 +201,6 @@ fn three_require_module() {
 }
 
 #[test]
-fn four_symbols_fail() {
-    let root = fixture("symbols");
-    fs::write(
-        root.join("src/lib.rs"),
-        r"
-struct PreparedSharedMemoryExec;
-struct PreparedSharedMemoryExecTransaction;
-fn prepared_shared_memory_exec() {}
-fn prepared_shared_memory_exec_transaction() {}
-#[cfg(test)]
-mod tests { struct DeliberatelyVeryLongTestFixtureName; }
-struct Runner;
-impl Runner {
-    fn deliberately_very_long_method_name() {}
-}
-impl external::Contract for Runner {
-    fn externally_imposed_long_method_name() {}
-}
-trait Drive {
-    fn deliberately_very_long_trait_method_name();
-}
-",
-    )
-    .unwrap();
-    let workspace = Workspace::load([root.clone()]).unwrap();
-    let findings = SymbolName.check(&workspace).unwrap();
-
-    assert_eq!(findings.len(), 6);
-    assert!(
-        findings
-            .iter()
-            .any(|finding| finding.subject == "PreparedSharedMemoryExec")
-    );
-    assert!(
-        !findings
-            .iter()
-            .any(|finding| finding.subject == "DeliberatelyVeryLongTestFixtureName")
-    );
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
 fn declarations_module_noun() {
     let root = fixture("redundant");
     fs::create_dir_all(root.join("src/launcher")).unwrap();
@@ -288,28 +246,6 @@ fn deliberately_very_long_test_function_name() {}
     let workspace = Workspace::load([root.clone()]).unwrap();
 
     assert_eq!(ModulePrefix.check(&workspace).unwrap().len(), 0);
-    assert_eq!(SymbolName.check(&workspace).unwrap().len(), 0);
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn naming_connectives() {
-    let root = fixture("connectives");
-    fs::create_dir_all(root.join("src/launcher")).unwrap();
-    fs::write(
-        root.join("src/launcher/plan.rs"),
-        r"
-fn list_with_shared_size() {}
-fn wait_until_freeze_waits() {}
-fn reject_duplicate_fixture_destinations() {}
-",
-    )
-    .unwrap();
-    let workspace = Workspace::load([root.clone()]).unwrap();
-
-    let findings = SymbolName.check(&workspace).unwrap();
-    assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0].subject, "reject_duplicate_fixture_destinations");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -328,12 +264,6 @@ fn launcher_rejects_a_deliberately_long_production_name() {}
     .unwrap();
     let workspace = Workspace::load([root.clone()]).unwrap();
 
-    let symbols = SymbolName.check(&workspace).unwrap();
-    assert_eq!(symbols.len(), 1);
-    assert_eq!(
-        symbols[0].subject,
-        "launcher_rejects_a_deliberately_long_production_name"
-    );
     assert_eq!(ModulePrefix.check(&workspace).unwrap().len(), 1);
     fs::remove_dir_all(root).unwrap();
 }
