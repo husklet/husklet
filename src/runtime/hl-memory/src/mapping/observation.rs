@@ -32,6 +32,10 @@ impl<H: Host> Coordinator<H> {
     /// single cache line, so it supersedes that line's page rather than the whole executable era.
     pub fn publish_instruction_at(&self, address: u64) {
         let Ok(range) = AddressRange::nonempty(hl_isa::GuestAddress::new(address), 1) else {
+            hl_log::hl_warn!(
+                hl_log::tag::MEMORY,
+                "instruction-cache maintenance at {address:#x} is unaddressable; superseding the whole era"
+            );
             self.host.executable.publish_all();
             return;
         };

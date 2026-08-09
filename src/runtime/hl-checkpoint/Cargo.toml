@@ -10,4 +10,5 @@ publish = false
 workspace = true
 
 [dependencies]
+hl-log = { path = "../../packages/hl-log" }
 ring = "0.17.14"

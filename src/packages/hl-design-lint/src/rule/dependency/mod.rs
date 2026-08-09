@@ -351,7 +351,11 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                     | "hl-descriptor"
                     | "hl-terminal"
                     | "hl-execution"
-                    | "hl-linux",
+                    | "hl-linux"
+                    | "hl-memory"
+                    | "hl-task"
+                    | "hl-network"
+                    | "hl-checkpoint",
                 "hl-log"
             )
             | ("hl-container" | "engine" | "testing", "hl-engine")

@@ -36,18 +36,35 @@ impl PortRegistry {
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     entry.insert(owner);
                 }
-                std::collections::btree_map::Entry::Occupied(_) => {
+                std::collections::btree_map::Entry::Occupied(entry) => {
+                    hl_log::hl_debug!(
+                        hl_log::tag::NET,
+                        "port claim refused {key:?}:{requested} owner={owner:?} held_by={:?}",
+                        entry.get()
+                    );
                     return Err(SocketError::AddressInUse);
                 }
             }
+            hl_log::hl_debug!(hl_log::tag::NET, "port claimed {key:?}:{requested} owner={owner:?}");
             return Ok(requested);
         }
         for port in self.first_ephemeral..=self.last_ephemeral {
             if let std::collections::btree_map::Entry::Vacant(entry) = owners.entry((key, port)) {
                 entry.insert(owner);
+                hl_log::hl_debug!(
+                    hl_log::tag::NET,
+                    "ephemeral port claimed {key:?}:{port} owner={owner:?}"
+                );
                 return Ok(port);
             }
         }
+        hl_log::hl_warn!(
+            hl_log::tag::NET,
+            "ephemeral port range {:?} {}..={} exhausted for owner={owner:?}",
+            key,
+            self.first_ephemeral,
+            self.last_ephemeral
+        );
         Err(SocketError::Capacity)
     }
 
