@@ -75,6 +75,18 @@ the first is enough. So verification is a separate job from implementation, and
 the verifier re-derives rather than inherits — including non-vacuity, which is
 cheap to redo and is the check most likely to have gone stale.
 
+### Clippy and rustfmt only work through the pinned shell
+
+`cargo clippy` invoked directly fails on `hl-native`'s build script with
+`error[E0514]: found crate cc compiled by an incompatible version of rustc`. The
+shared `target/` was populated by the flake toolchain, and a host-resolved
+`cargo` is a different rustc reading the same directory. This is not a defect in
+anyone's diff and `cargo clean` is the wrong response — it would discard tens of
+gigabytes other lanes are using.
+
+Use `make lint` and `make fmt`, which route through `$(NIX_DEV)`. Two lanes have
+now reported the E0514 as a mysterious failure of their own change.
+
 ## Checking whether the box is busy
 
 Use `pgrep -cx testing`, which matches the exact process name. Every
