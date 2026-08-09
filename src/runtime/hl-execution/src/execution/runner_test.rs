@@ -13,6 +13,9 @@ struct Memory {
     invalidated: Vec<u64>,
     /// Bytes a peer executor publishes while this executor is inside a block.
     peer_write: Option<(usize, [u8; 4])>,
+    /// End of the executable mapping. Like the engine's `read_spans`, a fetch that would
+    /// cross it yields no bytes at all rather than a short window.
+    executable_end: Option<usize>,
 }
 
 impl Memory {
@@ -24,6 +27,7 @@ impl Memory {
             cacheable: true,
             invalidated: Vec::new(),
             peer_write: None,
+            executable_end: None,
         }
     }
 
@@ -191,6 +195,11 @@ impl ExecutionInstructionMemory for Memory {
     fn fetch(&self, address: u64, bytes: &mut [u8]) -> Result<usize, ()> {
         self.fetches.set(self.fetches.get() + 1);
         let start = usize::try_from(address).map_err(|_| ())?;
+        if let Some(end) = self.executable_end
+            && (start >= end || start + bytes.len() > end)
+        {
+            return Err(());
+        }
         let source = self.bytes.get(start..).ok_or(())?;
         let length = source.len().min(bytes.len());
         bytes[..length].copy_from_slice(&source[..length]);
@@ -1183,4 +1192,68 @@ fn a_store_into_its_own_block_is_observed_before_the_decoded_tail_runs() {
         panic!("AArch64")
     };
     assert_eq!(final_cpu.registers[0], 2);
+}
+
+/// An x86 instruction ending flush with the last byte of an executable mapping runs, because the
+/// fetch asks only for the bytes up to the page edge; one that really reaches past the edge faults.
+/// The aarch64 arm is right by construction — its fetch is exactly the 4 bytes of one instruction.
+#[test]
+fn instructions_run_at_the_end_of_an_executable_mapping() {
+    let mut memory = Memory::new(0x3000);
+    memory.executable_end = Some(0x2000);
+    memory.put(0x1ff9, &[0xb8, 0x2a, 0x00, 0x00, 0x00, 0x0f, 0x05]);
+    let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
+        scalar: ScalarState {
+            rip: 0x1ff9,
+            ..Default::default()
+        },
+        ..CpuState::default()
+    }));
+    assert_eq!(
+        machine.run_slice(1, 16, &mut memory),
+        StepOutcome::Syscall {
+            instruction: 0x1ffe,
+            next: 0x2000
+        }
+    );
+    assert_eq!(
+        machine.handle_syscall(1, |cpu| {
+            let ExecutionCpuSnapshot::X86_64(cpu) = cpu else {
+                panic!("x86-64")
+            };
+            assert_eq!(cpu.registers[0], 42);
+            StepOutcome::Yield
+        }),
+        StepOutcome::Yield
+    );
+
+    memory.put(0x1ffd, &[0xb8, 0x2a, 0x00]);
+    let straddling = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
+        scalar: ScalarState {
+            rip: 0x1ffd,
+            ..Default::default()
+        },
+        ..CpuState::default()
+    }));
+    assert_eq!(
+        straddling.run_slice(1, 16, &mut memory),
+        StepOutcome::Fault(ExecutionFault::Fetch(MemoryFault {
+            instruction: 0x1ffd,
+            address: 0x1ffd,
+            access: AccessKind::Execute,
+        }))
+    );
+
+    memory.put(0x1ffc, &0xd400_0001_u32.to_le_bytes());
+    let aarch64 = Memory::machine(ExecutionCpuSnapshot::Aarch64(Aarch64CpuState {
+        pc: 0x1ffc,
+        ..Aarch64CpuState::default()
+    }));
+    assert_eq!(
+        aarch64.run_slice(1, 16, &mut memory),
+        StepOutcome::Syscall {
+            instruction: 0x1ffc,
+            next: 0x2000
+        }
+    );
 }
