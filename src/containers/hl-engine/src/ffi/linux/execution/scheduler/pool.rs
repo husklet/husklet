@@ -234,6 +234,18 @@ impl NativePool {
         true
     }
 
+    /// Whether this process has earned direct authority. Direct mode carries no operand
+    /// resolver, so an access outside the entry window ends the run; on a process's first
+    /// entry neither `direct_holds` nor `direct_declined` holds anything that could decline
+    /// it, and a short program never gets the second entry the decline would protect. Spend
+    /// one resolver run first, which is what `direct_modes` records.
+    pub(super) fn direct_earned(&mut self, process: hl_task::ProcessId) -> bool {
+        // `direct_admitted` spends a hold run, so it must run before the warm-up test:
+        // a held process has no `direct_modes` entry and would otherwise never serve out
+        // its hold.
+        self.direct_admitted(process) && self.direct_modes.contains_key(&process)
+    }
+
     /// Records the run mode this process just used. The cache identity carries the mode, so
     /// sustained alternation resets every translation twice per cycle; hold direct
     /// authority off for a bounded run of turns so the resolver mode can keep its cache.
