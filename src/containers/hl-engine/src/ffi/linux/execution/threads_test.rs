@@ -1348,3 +1348,103 @@ fn image_generation_replacement_invalidates_scheduler_continuation() {
     assert!(threads.continuation(&run).is_none());
     image.finish();
 }
+
+fn code_exit(status: i32) -> crate::engine::EngineExit {
+    crate::engine::EngineExit {
+        kind: crate::engine::ExitKind::Code,
+        guest_status: status,
+        detail: 0,
+        fault: None,
+    }
+}
+
+/// A pid namespace reports pid 1's status, not the last descendant reaped. Under
+/// a pids limit init fails while its children live on, so without this the
+/// survivors' success would replace init's failure.
+#[test]
+fn init_exit_becomes_the_session_status() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let (child_process, child) = tasks
+        .commit_fork_process(tasks.begin_fork_process(first).unwrap())
+        .unwrap();
+    let threads = ThreadSet::new(2).unwrap();
+    publish(&threads, process, first, 0x1000, space());
+    publish(&threads, child_process, child, 0x2000, space());
+
+    let first_run = threads.claim(first, threads.find(first).unwrap().generation).unwrap();
+    threads.terminate_group(&first_run).unwrap();
+    threads.note_process_exit(first_run.process, code_exit(2));
+    assert!(!threads.is_empty());
+
+    let child_run = threads.claim(child, threads.find(child).unwrap().generation).unwrap();
+    threads.terminate_group(&child_run).unwrap();
+    threads.note_process_exit(child_run.process, code_exit(0));
+    assert!(threads.is_empty());
+    assert_eq!(threads.session_exit(code_exit(0)).guest_status, 2);
+}
+
+/// Only init decides the session status: a child that exits first must not
+/// pre-empt the status init reports afterwards.
+#[test]
+fn child_exit_does_not_become_the_session_status() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let (child_process, child) = tasks
+        .commit_fork_process(tasks.begin_fork_process(first).unwrap())
+        .unwrap();
+    let threads = ThreadSet::new(2).unwrap();
+    publish(&threads, process, first, 0x1000, space());
+    publish(&threads, child_process, child, 0x2000, space());
+
+    let child_run = threads.claim(child, threads.find(child).unwrap().generation).unwrap();
+    threads.terminate_group(&child_run).unwrap();
+    threads.note_process_exit(child_run.process, code_exit(3));
+
+    let first_run = threads.claim(first, threads.find(first).unwrap().generation).unwrap();
+    threads.terminate_group(&first_run).unwrap();
+    threads.note_process_exit(first_run.process, code_exit(0));
+    assert!(threads.is_empty());
+    assert_eq!(threads.session_exit(code_exit(7)).guest_status, 0);
+}
+
+/// A multithreaded init still reports its own status only once its last thread
+/// has left, so an earlier sibling thread's exit cannot claim the session.
+#[test]
+fn init_status_waits_for_its_last_thread() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let sibling = tasks
+        .commit_clone_thread(tasks.begin_clone_thread(first).unwrap())
+        .unwrap();
+    let threads = ThreadSet::new(2).unwrap();
+    publish(&threads, process, first, 0x1000, space());
+    publish(&threads, process, sibling, 0x2000, space());
+
+    let sibling_run = threads
+        .claim(sibling, threads.find(sibling).unwrap().generation)
+        .unwrap();
+    threads.terminate_run(&sibling_run).unwrap();
+    threads.note_process_exit(sibling_run.process, code_exit(5));
+    assert_eq!(threads.session_exit(code_exit(9)).guest_status, 9);
+
+    let first_run = threads.claim(first, threads.find(first).unwrap().generation).unwrap();
+    threads.terminate_run(&first_run).unwrap();
+    threads.note_process_exit(first_run.process, code_exit(4));
+    assert_eq!(threads.session_exit(code_exit(9)).guest_status, 4);
+}

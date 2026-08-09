@@ -25,6 +25,9 @@ struct SetState {
     reserved: usize,
     next_generation: u64,
     cancellation: Option<i32>,
+    /// The first process prepared into this set: the session's init.
+    init: Option<ProcessId>,
+    init_exit: Option<crate::engine::EngineExit>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,6 +178,29 @@ impl ThreadSet {
             .values()
             .map(|run| run.process)
             .collect()
+    }
+
+    /// Records `exit` as the session's status when `process` is init and its last
+    /// thread has just left, mirroring a pid namespace whose status is pid 1's
+    /// rather than whichever descendant happens to be reaped last.
+    pub(super) fn note_process_exit(&self, process: ProcessId, exit: crate::engine::EngineExit) {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.init != Some(process)
+            || state.init_exit.is_some()
+            || state.machines.values().any(|run| run.process == process)
+        {
+            return;
+        }
+        state.init_exit = Some(exit);
+    }
+
+    /// Init's recorded status if it exited, else the draining thread's own.
+    pub(super) fn session_exit(&self, fallback: crate::engine::EngineExit) -> crate::engine::EngineExit {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .init_exit
+            .unwrap_or(fallback)
     }
 
     /// Rebuilds the live process set only when it differs from `cached`. The
@@ -408,6 +434,8 @@ impl ThreadSet {
                 reserved: 0,
                 next_generation: 1,
                 cancellation: None,
+                init: None,
+                init_exit: None,
             })),
         })
     }
@@ -450,6 +478,9 @@ impl ThreadSet {
         }
         if state.machines.len() + state.prepared.len() + state.reserved == self.capacity {
             return Err(RuntimeThreadError::Capacity);
+        }
+        if state.init.is_none() {
+            state.init = Some(process);
         }
         state.prepared.insert(
             thread,
