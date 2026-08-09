@@ -55,7 +55,45 @@ fn excludes_test_module_nested_in_production_module() {
 #[test]
 fn rejects_more_than_limit_production_lines() {
     let (root, source) = fixture("production");
-    fs::write(&source, "pub struct Production;\n".repeat(501)).unwrap();
+    fs::write(&source, "pub fn behavior() {}\n".repeat(501)).unwrap();
+    let workspace = Workspace::load([source]).unwrap();
+    let findings = FileLength.check(&workspace).unwrap();
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0].message.contains("501 lines"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn excludes_declaration_items_sized_by_an_external_enumeration() {
+    use std::fmt::Write;
+
+    let (root, source) = fixture("declarations");
+    let mut enumeration = String::new();
+    for index in 0..600 {
+        writeln!(enumeration, "    Call{index},").unwrap();
+    }
+    fs::write(&source, format!("pub enum Syscall {{\n{enumeration}}}\n")).unwrap();
+    let workspace = Workspace::load([source]).unwrap();
+    assert!(FileLength.check(&workspace).unwrap().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn excludes_a_generated_item_macro_invocation() {
+    let (root, source) = fixture("macro");
+    let rows = "    (0, read),\n".repeat(600);
+    fs::write(&source, format!("hl_syscall_table! {{\n{rows}}}\n")).unwrap();
+    let workspace = Workspace::load([source]).unwrap();
+    assert!(FileLength.check(&workspace).unwrap().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejects_behavior_that_only_declarations_keep_under_the_limit() {
+    let (root, source) = fixture("mixed");
+    let declarations = "pub struct Row;\n".repeat(400);
+    let behavior = "pub fn behavior() {}\n".repeat(501);
+    fs::write(&source, format!("{declarations}{behavior}")).unwrap();
     let workspace = Workspace::load([source]).unwrap();
     let findings = FileLength.check(&workspace).unwrap();
     assert_eq!(findings.len(), 1);

@@ -27,17 +27,14 @@ impl Rule for FileLength {
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         for source in workspace.production() {
-            if source.package == "hl-design-lint" {
-                continue;
-            }
             let physical = source.text.lines().count();
-            let mut test_lines = vec![false; physical.saturating_add(1)];
-            TestLines {
+            let mut excluded = vec![false; physical.saturating_add(1)];
+            ExcludedLines {
                 physical,
-                lines: &mut test_lines,
+                lines: &mut excluded,
             }
             .visit_file(&source.syntax);
-            let lines = (1..=physical).filter(|line| !test_lines[*line]).count();
+            let lines = (1..=physical).filter(|line| !excluded[*line]).count();
             if lines <= 500 {
                 continue;
             }
@@ -70,12 +67,12 @@ impl Rule for FileLength {
     }
 }
 
-struct TestLines<'a> {
+struct ExcludedLines<'a> {
     physical: usize,
     lines: &'a mut [bool],
 }
 
-impl TestLines<'_> {
+impl ExcludedLines<'_> {
     fn mark(&mut self, item: &syn::Item) {
         let span = item.span();
         let start = item_attributes(item)
@@ -89,14 +86,22 @@ impl TestLines<'_> {
     }
 }
 
-impl<'ast> Visit<'ast> for TestLines<'_> {
+impl<'ast> Visit<'ast> for ExcludedLines<'_> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        if test_only(item) {
+        if test_only(item) || declaration(item) {
             self.mark(item);
             return;
         }
         syn::visit::visit_item(self, item);
     }
+}
+
+/// A file whose length tracks an external enumeration is sized by that enumeration, not by mixed
+/// responsibility, so declaration items do not count toward the limit.
+fn declaration(item: &syn::Item) -> bool {
+    use syn::Item;
+
+    matches!(item, Item::Enum(_) | Item::Struct(_) | Item::Const(_) | Item::Macro(_))
 }
 
 fn test_only(item: &syn::Item) -> bool {

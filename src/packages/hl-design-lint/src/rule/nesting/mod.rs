@@ -161,7 +161,7 @@ impl<'ast> Visit<'ast> for Depth {
     fn visit_expr_if(&mut self, expression: &'ast syn::ExprIf) {
         let branch = self.statement();
         self.visit_expr(&expression.cond);
-        if !branch {
+        if !branch || guard_clause(expression) {
             self.visit_block(&expression.then_branch);
             self.visit_else(expression);
             return;
@@ -224,6 +224,47 @@ impl<'ast> Visit<'ast> for Depth {
             syn::visit::visit_expr_async(visitor, expression);
         });
     }
+}
+
+/// Reports whether every path through the branch leaves the enclosing block, which is a guard
+/// clause rather than a level of nesting.
+fn guard_clause(expression: &syn::ExprIf) -> bool {
+    diverging_block(&expression.then_branch)
+        && expression
+            .else_branch
+            .as_ref()
+            .is_none_or(|(_, branch)| diverging(branch))
+}
+
+fn diverging_block(block: &syn::Block) -> bool {
+    match block.stmts.last() {
+        Some(syn::Stmt::Expr(expression, _)) => diverging(expression),
+        Some(syn::Stmt::Macro(statement)) => diverging_macro(&statement.mac),
+        _ => false,
+    }
+}
+
+fn diverging(expression: &Expr) -> bool {
+    match expression {
+        Expr::Return(_) | Expr::Break(_) | Expr::Continue(_) => true,
+        Expr::Block(block) => diverging_block(&block.block),
+        Expr::If(inner) => {
+            diverging_block(&inner.then_branch)
+                && inner.else_branch.as_ref().is_some_and(|(_, branch)| diverging(branch))
+        }
+        Expr::Match(inner) => !inner.arms.is_empty() && inner.arms.iter().all(|arm| diverging(&arm.body)),
+        Expr::Macro(inner) => diverging_macro(&inner.mac),
+        _ => false,
+    }
+}
+
+fn diverging_macro(invocation: &syn::Macro) -> bool {
+    invocation.path.segments.last().is_some_and(|segment| {
+        matches!(
+            segment.ident.to_string().as_str(),
+            "panic" | "unreachable" | "todo" | "unimplemented"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -424,6 +465,113 @@ fn summarize(row: &ResultRow) {
         );
 
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn accepts_a_guard_clause_that_leaves_the_enclosing_block() {
+        let findings = findings(
+            r#"fn resolve(components: &[u8]) -> Result<u8, &'static str> {
+    let mut resolved = vec![];
+    for component in components {
+        match component {
+            0 => {}
+            1 => {
+                if resolved.pop().is_none() {
+                    return Err("escapes the root");
+                }
+            }
+            other => resolved.push(*other),
+        }
+    }
+    Ok(resolved.len() as u8)
+}"#,
+        );
+
+        assert!(findings.is_empty(), "{:?}", findings[0].message);
+    }
+
+    #[test]
+    fn accepts_guards_that_continue_break_or_panic() {
+        for tail in ["continue", "break", "panic!()"] {
+            let findings = findings(&format!(
+                "fn walk(rows: &[u8], other: &[u8]) {{
+    for row in rows {{
+        for column in other {{
+            if row > column {{
+                {tail};
+            }}
+            println!();
+        }}
+    }}
+}}"
+            ));
+
+            assert!(findings.is_empty(), "{tail} was charged a level");
+        }
+    }
+
+    #[test]
+    fn accepts_a_guard_whose_else_also_leaves_the_block() {
+        let findings = findings(
+            r"fn pick(rows: &[u8], other: &[u8]) -> u8 {
+    for row in rows {
+        for column in other {
+            if row > column {
+                return *row;
+            } else {
+                return *column;
+            }
+        }
+    }
+    0
+}",
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn reports_a_branch_that_rejoins_the_enclosing_block() {
+        let findings = findings(
+            r"fn tally(rows: &[u8], other: &[u8]) -> u8 {
+    let mut total = 0;
+    for row in rows {
+        for column in other {
+            if row > column {
+                total += 1;
+            }
+        }
+    }
+    total
+}",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("depth 3"));
+    }
+
+    #[test]
+    fn reports_nesting_inside_a_guard_body() {
+        let findings = findings(
+            r"fn scan(rows: &[u8], other: &[u8]) -> u8 {
+    for row in rows {
+        if row > &0 {
+            for column in other {
+                for cell in other {
+                    if cell > column {
+                        println!();
+                    }
+                }
+            }
+            return *row;
+        }
+    }
+    0
+}",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("depth 4"), "{}", findings[0].message);
     }
 
     #[test]
