@@ -389,25 +389,7 @@ impl SocketHostIo for Native {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&token);
         if let Some(entry) = entry {
-            if let Some(guest) = &entry.guest_local {
-                self.shared
-                    .bindings
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .retain(|(address, _)| address != guest);
-            }
-            if let Some(path) = &entry.switch_path
-                && Arc::strong_count(path) == 1
-            {
-                let mut registry = self
-                    .shared
-                    .switch_paths
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                for owned_path in path.names() {
-                    registry.remove(owned_path);
-                }
-            }
+            self.release_names(&entry);
             // SAFETY: removal transfers the sole descriptor ownership to this call. Dropping the
             // final switch_path lease after close unlinks its rendezvous pathname.
             unsafe {
@@ -415,5 +397,34 @@ impl SocketHostIo for Native {
             }
         }
         self.wake();
+    }
+
+}
+
+impl Native {
+    /// Withdraws every name the removed socket published, before its descriptor is closed.
+    ///
+    /// The rendezvous names go only when this entry held the last lease on the path; another
+    /// socket still sharing it keeps the registry entries it answers from.
+    fn release_names(&self, entry: &super::Entry) {
+        if let Some(guest) = &entry.guest_local {
+            self.shared
+                .bindings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(|(address, _)| address != guest);
+        }
+        if let Some(path) = &entry.switch_path
+            && Arc::strong_count(path) == 1
+        {
+            let mut registry = self
+                .shared
+                .switch_paths
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for owned_path in path.names() {
+                registry.remove(owned_path);
+            }
+        }
     }
 }

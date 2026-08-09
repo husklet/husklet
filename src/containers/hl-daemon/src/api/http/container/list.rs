@@ -285,13 +285,10 @@ impl NetworkPlan {
                     .inspect(DEFAULT_NETWORK)
                     .await
                     .and_then(|network| {
-                        if network.driver == NetworkDriver::Bridge {
-                            Ok(network)
-                        } else {
-                            Err(ContainerError::NetworkConflict(DEFAULT_NETWORK.into()))
-                        }
+                        (network.driver == NetworkDriver::Bridge)
+                            .then_some(())
+                            .ok_or_else(|| ContainerError::NetworkConflict(DEFAULT_NETWORK.into()))
                     })
-                    .map(|_| ())
                     .map_err(ApiError::container),
             ),
             Err(error) => Some(Err(ApiError::container(error))),

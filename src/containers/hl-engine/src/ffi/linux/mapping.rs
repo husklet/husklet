@@ -174,6 +174,18 @@ impl ExitMappingHost for MappingHostAdapter {
     }
 }
 
+impl PreparedMappingExit {
+    /// Returns every reservation this exit staged to the arena, newest first, so a failed commit
+    /// leaves the arena exactly as the exit found it.
+    fn discard_staged_arenas(&self, stages: &mut StageState) {
+        for token in self.reservations.iter().rev() {
+            if let Some(reservation) = stages.reservations.remove(token) {
+                self.arena.rollback(reservation.arena);
+            }
+        }
+    }
+}
+
 impl PreparedHostExit for PreparedMappingExit {
     fn publish(&mut self) -> Result<(), MemoryError> {
         self.published = true;
@@ -196,32 +208,29 @@ impl PreparedHostExit for PreparedMappingExit {
     }
 
     fn finish(&mut self) {
-        if self.published {
-            let mut stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let arena = self
-                .reservations
-                .iter()
-                .filter_map(|token| stages.reservations.get(token).map(|reservation| reservation.arena))
-                .collect::<Vec<_>>();
-            if self.arena.commit(&arena).is_ok() {
-                if let Some(token) = self.reservations.last()
-                    && let Some(reservation) = stages.reservations.get(token)
-                {
-                    self.sparse.publish(reservation.sparse.clone());
-                }
-                for token in &self.reservations {
-                    stages.reservations.remove(token);
-                }
-            } else {
-                for token in self.reservations.iter().rev() {
-                    if let Some(reservation) = stages.reservations.remove(token) {
-                        self.arena.rollback(reservation.arena);
-                    }
-                }
-            }
-            self.reservations.clear();
-            self.published = false;
+        if !self.published {
+            return;
         }
+        let mut stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let arena = self
+            .reservations
+            .iter()
+            .filter_map(|token| stages.reservations.get(token).map(|reservation| reservation.arena))
+            .collect::<Vec<_>>();
+        if self.arena.commit(&arena).is_ok() {
+            if let Some(token) = self.reservations.last()
+                && let Some(reservation) = stages.reservations.get(token)
+            {
+                self.sparse.publish(reservation.sparse.clone());
+            }
+            for token in &self.reservations {
+                stages.reservations.remove(token);
+            }
+        } else {
+            self.discard_staged_arenas(&mut stages);
+        }
+        self.reservations.clear();
+        self.published = false;
     }
 }
 

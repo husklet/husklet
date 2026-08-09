@@ -75,6 +75,72 @@ struct TerminalBridge {
     workers: Vec<JoinHandle<()>>,
 }
 
+/// Copies everything the port produces into the master until either end closes.
+fn pump_port_to_master(
+    port: &dyn TerminalPort,
+    master: &hl_runtime::TerminalDescription,
+    actor: hl_descriptor::OperationActor,
+) {
+    let mut bytes = [0_u8; 16 * 1024];
+    while let Ok(count) = port.read(&mut bytes) {
+        if count == 0 || !write_all_to_master(master, &bytes[..count], actor) {
+            return;
+        }
+    }
+}
+
+/// Copies everything the master produces into the port until either end closes.
+fn pump_master_to_port(master: &hl_runtime::TerminalDescription, port: &dyn TerminalPort) {
+    use hl_descriptor::OpenFileDescription as _;
+
+    let mut bytes = [0_u8; 16 * 1024];
+    loop {
+        let Ok(count) = master.read(&mut bytes) else {
+            return;
+        };
+        if count == 0 || !write_all_to_port(port, &bytes[..count]) {
+            return;
+        }
+    }
+}
+
+/// Writes the whole slice, parking briefly whenever the master accepts nothing, and reports
+/// whether it stayed writable. A partial write leaves the unconsumed suffix for the next round.
+fn write_all_to_master(
+    master: &hl_runtime::TerminalDescription,
+    bytes: &[u8],
+    actor: hl_descriptor::OperationActor,
+) -> bool {
+    use hl_descriptor::OpenFileDescription as _;
+
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let context = hl_descriptor::OperationContext {
+            actor: Some(actor),
+            cancellation: None,
+        };
+        match master.write_context(&bytes[offset..], context) {
+            Ok(0) => std::thread::park_timeout(Duration::from_millis(1)),
+            Ok(written) => offset += written,
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// Writes the whole slice and reports whether the port stayed writable; unlike the master, a port
+/// that accepts nothing is closed rather than busy.
+fn write_all_to_port(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match port.write(&bytes[offset..]) {
+            Ok(0) | Err(_) => return false,
+            Ok(written) => offset += written,
+        }
+    }
+    true
+}
+
 /// One application-owned terminal transport attached to one runtime PTY.
 pub struct Terminal {
     port: Arc<dyn TerminalPort>,
@@ -120,52 +186,13 @@ impl Terminal {
         let input_port = Arc::clone(&self.port);
         let input = std::thread::Builder::new()
             .name("hl-terminal-input".into())
-            .spawn(move || {
-                let mut bytes = [0_u8; 16 * 1024];
-                while let Ok(count) = input_port.read(&mut bytes) {
-                    if count == 0 {
-                        break;
-                    }
-                    let mut offset = 0;
-                    while offset < count {
-                        match input_master.write_context(
-                            &bytes[offset..count],
-                            hl_descriptor::OperationContext {
-                                actor: Some(actor),
-                                cancellation: None,
-                            },
-                        ) {
-                            Ok(0) => std::thread::park_timeout(Duration::from_millis(1)),
-                            Ok(written) => offset += written,
-                            Err(_) => return,
-                        }
-                    }
-                }
-            })
+            .spawn(move || pump_port_to_master(input_port.as_ref(), &input_master, actor))
             .map_err(|_| CompositionError::RuntimeConstruction)?;
         let output_master = Arc::clone(&master);
         let output_port = Arc::clone(&self.port);
         let output = std::thread::Builder::new()
             .name("hl-terminal-output".into())
-            .spawn(move || {
-                let mut bytes = [0_u8; 16 * 1024];
-                loop {
-                    let Ok(count) = output_master.read(&mut bytes) else {
-                        break;
-                    };
-                    if count == 0 {
-                        break;
-                    }
-                    let mut offset = 0;
-                    while offset < count {
-                        match output_port.write(&bytes[offset..count]) {
-                            Ok(0) => return,
-                            Ok(written) => offset += written,
-                            Err(_) => return,
-                        }
-                    }
-                }
-            });
+            .spawn(move || pump_master_to_port(&output_master, output_port.as_ref()));
         let Ok(output) = output else {
             self.port.close();
             master.close();

@@ -210,13 +210,8 @@ impl Disk {
                 return Err(Error::Corrupt(format!("oversized log record in {}", path.display())));
             }
             let mut bytes = vec![0; usize::try_from(length).expect("record limit fits usize")];
-            file.read_exact(&mut bytes).map_err(|error| {
-                if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                    Error::Corrupt(format!("truncated log journal {}", path.display()))
-                } else {
-                    error.into()
-                }
-            })?;
+            file.read_exact(&mut bytes)
+                .map_err(|error| truncated_record(error, path))?;
             entries.push(Entry {
                 sequence,
                 timestamp_ms,
@@ -229,6 +224,15 @@ impl Disk {
     pub(super) fn sync_directory(directory: &Path) -> Result<()> {
         File::open(directory)?.sync_all().map_err(Error::Io)
     }
+}
+
+/// A record whose header promised more bytes than the file holds is corruption, not I/O failure:
+/// the header was written before the payload, so a short tail is a torn append.
+fn truncated_record(error: std::io::Error, path: &Path) -> Error {
+    if error.kind() == std::io::ErrorKind::UnexpectedEof {
+        return Error::Corrupt(format!("truncated log journal {}", path.display()));
+    }
+    error.into()
 }
 
 pub(super) fn initialize(
