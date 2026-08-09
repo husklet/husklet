@@ -73,6 +73,19 @@ it is a bin crate, so its tests need `make gate`, `--all-targets`, or an
 explicit `-p testing --bin testing`. Assertions placed there are invisible to
 the command this file tells everyone to run.
 
+### Commit before you mutate
+
+Non-vacuity checks work by breaking the fix and confirming the assertion
+reddens, so the tree spends time in a deliberately wrong state. Two ways that
+has destroyed work here:
+
+- `git checkout -- <path>` reverts to **HEAD**, not to your pre-mutation state.
+  A lane lost uncommitted fixes mid-sweep this way. Commit the fix first, then
+  mutate, then restore from the commit.
+- `git stash` is **repo-global, not per-worktree**. Two lanes stashing
+  concurrently interleave, and `stash@{0}` is not necessarily yours. Drop by
+  matching the stash message, or avoid stash entirely in favour of a commit.
+
 ### A commit message is not evidence
 
 Re-run the suite on the tree you are about to merge, not on the tree the lane
