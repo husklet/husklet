@@ -384,9 +384,11 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     /* Journal off: record only what the crossing cannot reconstruct -- that a
      * write happened, whether it landed in executable memory, and that the
      * exact intervals are unavailable so the publish must cover the window.
-     * None of movz, ldr, str or orr writes NZCV, and x17/x18 are stolen, so
+     * None of these non-S operations writes NZCV, and x17/x18 are stolen, so
      * this needs neither the flag save nor the x9 spill the full form takes. */
     if (!assembler->write_commit) {
+        hl_a64_ldr(assembler, 17, CPU, OFFSET_DELTA);
+        hl_a64_emit32(assembler, UINT32_C(0xcb110210)); /* recover guest EA */
         hl_a64_movconst(assembler, 17, 1);
         hl_a64_str(assembler, 17, CPU, OFFSET_WRITTEN);
         hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_OVERFLOW);

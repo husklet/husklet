@@ -59,6 +59,10 @@ int main(void) {
     CHECK(hl_a64_pair_emit(&assembler, 0xad0307e0u, 0x4010)); /* stp q0,q1,[sp,#96] */
     size_t vector_load = hl_a64_assembler_size(&assembler);
     CHECK(hl_a64_pair_emit(&assembler, 0xad4307e0u, 0x4014)); /* ldp q0,q1,[sp,#96] */
+    size_t uncommitted_store = hl_a64_assembler_size(&assembler);
+    assembler.write_reserve = 0;
+    assembler.write_commit = 0;
+    CHECK(hl_a64_pair_emit(&assembler, 0xa9bf7bfdu, 0x4018)); /* stp x29,x30,[sp,#-16]! */
     CHECK(mprotect(code, capacity, PROT_READ | PROT_EXEC) == 0);
 
     _Alignas(16) uint8_t stack[256] = {0};
@@ -134,7 +138,32 @@ int main(void) {
     CHECK(cpu.vectors[2] == UINT64_C(0x1021324354657687));
     CHECK(cpu.vectors[3] == UINT64_C(0x98a9bacbdcedfe0f));
 
+    /* Even without an exact write journal, store writeback must publish the
+     * guest address rather than the host address used for the native store. */
+    memset(stack, 0, sizeof(stack));
+    uint64_t guest_first = UINT64_C(0x100000);
+    uint64_t guest_top = guest_first + sizeof(stack);
+    cpu.memory_first = guest_first;
+    cpu.memory_last = guest_top;
+    cpu.memory_delta = (uint64_t)(uintptr_t)stack - guest_first;
+    cpu.memory_permissions = HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE;
+    cpu.stack = guest_top;
+    cpu.registers[29] = UINT64_C(0x2929292929292929);
+    cpu.registers[30] = UINT64_C(0x3030303030303030);
+    cpu.flags = UINT64_C(0xa0000000);
+    cpu.memory_written = 0;
+    cpu.dirty_overflow = 0;
+    execute(&cpu, code + uncommitted_store);
+    CHECK(cpu.reason == HL_NATIVE_EXIT_BRANCH && cpu.program == 0x401c);
+    CHECK(cpu.stack == guest_top - 16);
+    CHECK(*(uint64_t *)(void *)(stack + sizeof(stack) - 16) == UINT64_C(0x2929292929292929));
+    CHECK(*(uint64_t *)(void *)(stack + sizeof(stack) - 8) == UINT64_C(0x3030303030303030));
+    CHECK(cpu.memory_written == 1 && cpu.dirty_overflow == 1);
+    CHECK(cpu.flags == UINT64_C(0xa0000000));
+
     memset(stack + sizeof(stack) - 16, 0x5a, 16);
+    cpu.memory_first = (uint64_t)(uintptr_t)stack;
+    cpu.memory_delta = 0;
     cpu.stack = top;
     cpu.memory_last = top - 8;
     execute(&cpu, code + store);
