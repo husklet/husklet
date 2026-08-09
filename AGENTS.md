@@ -10,6 +10,14 @@ workspaces, terminal, and desktop application. Do not add GPU, graphics translat
 surface, compositor, CUDA, OpenGL, Vulkan, or Wayland implementation back into this
 repository. Never edit `../engine` while studying it.
 
+Sections 13–340 are process rules, and almost every one exists because it cost
+real work. If you are about to **measure** anything, the ones that have voided
+results are "Balance the arm order", "A control that merely seems unaffected is
+not a control", "`bench --results` is a resumable ledger", "Identical source does
+not mean an identical binary", and "Reading a profile". If you are about to
+**commit**, they are "What green means" and its four subsections. Everything from
+"Mission" onward is durable architecture and changes rarely.
+
 ## Reading code: CodeGraph first
 
 This repository is indexed by CodeGraph (`.codegraph/` at the root). Reach for it
