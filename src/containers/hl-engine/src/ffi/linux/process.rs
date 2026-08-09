@@ -241,22 +241,43 @@ impl SpawnActions {
                 return Err(SpawnFailure::translate(result));
             }
         }
+        // SAFETY: attributes buffer has sufficient alignment/capacity and is
+        // uniquely owned until Drop; libc retains nothing and cannot unwind.
+        let result = unsafe { abi::posix_spawnattr_init(state.attributes.as_mut_ptr().cast()) };
+        if result != 0 {
+            return Err(SpawnFailure::translate(result));
+        }
+        state.attributes_initialized = true;
+
+        // An ignored disposition and a blocked mask both survive execve, so without
+        // these the child silently inherits whatever this process happened to be
+        // started with: run husklet under nohup and SIGHUP never reaches a child.
+        let mut defaults: abi::SignalSet = [0; 16];
+        let mut mask: abi::SignalSet = [0; 16];
+        // SAFETY: both sets have libc sigset_t size and alignment, are uniquely
+        // owned and live for the calls; libc retains nothing and cannot unwind.
+        if unsafe { abi::sigfillset(&raw mut defaults) } != 0 || unsafe { abi::sigemptyset(&raw mut mask) } != 0 {
+            return Err(ErrnoMapper::current());
+        }
+        let mut flags = abi::POSIX_SPAWN_SETSIGDEF | abi::POSIX_SPAWN_SETSIGMASK;
+        if request.process_group != ProcessGroup::Inherit {
+            flags |= abi::POSIX_SPAWN_SETPGROUP;
+        }
+        // SAFETY: the initialized attribute object is live and uniquely owned; the
+        // sets outlive the calls, which copy them and retain no pointer.
+        for result in unsafe {
+            [
+                abi::posix_spawnattr_setsigdefault(state.attributes.as_mut_ptr().cast(), &raw const defaults),
+                abi::posix_spawnattr_setsigmask(state.attributes.as_mut_ptr().cast(), &raw const mask),
+                abi::posix_spawnattr_setflags(state.attributes.as_mut_ptr().cast(), flags),
+            ]
+        } {
+            if result != 0 {
+                return Err(SpawnFailure::translate(result));
+            }
+        }
         if request.process_group != ProcessGroup::Inherit {
             let group = Self::process_group(request.process_group)?;
-            // SAFETY: attributes buffer has sufficient alignment/capacity and is
-            // uniquely owned until Drop; libc retains nothing and cannot unwind.
-            let result = unsafe { abi::posix_spawnattr_init(state.attributes.as_mut_ptr().cast()) };
-            if result != 0 {
-                return Err(SpawnFailure::translate(result));
-            }
-            state.attributes_initialized = true;
-            // SAFETY: the initialized attribute object is live and uniquely owned.
-            let result = unsafe {
-                abi::posix_spawnattr_setflags(state.attributes.as_mut_ptr().cast(), abi::POSIX_SPAWN_SETPGROUP)
-            };
-            if result != 0 {
-                return Err(SpawnFailure::translate(result));
-            }
             // SAFETY: the initialized attribute object is live; group is positive
             // and representable, libc retains nothing and cannot unwind.
             let result = unsafe { abi::posix_spawnattr_setpgroup(state.attributes.as_mut_ptr().cast(), group) };
