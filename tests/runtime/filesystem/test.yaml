@@ -419,7 +419,7 @@ cases:
   - id: runtime/filesystem/statx-btime
     status: !host-excluded
       hosts: [macos]
-      reason: "excluded-macos: statx STATX_BTIME mask honesty diverges on the macOS engine. The Linux engine passes: linux_extensions() requests STATX_BTIME|STATX_MNT_ID through host SYS_statx and reports exactly what the host supplies. A red here means the guest rootfs was materialized on a backing filesystem that does not report birth time (a virtiofs/9p-shared checkout answers mask 0x17ff: MNT_ID yes, BTIME no), not an engine gap; point HL_SCENARIO_IMAGE_CACHE at a btime-capable filesystem and both ISAs pass."
+      reason: "excluded-macos: statx STATX_BTIME mask honesty diverges on the macOS engine. The Linux engine passes: linux_extensions() requests STATX_BTIME|STATX_MNT_ID through host SYS_statx and reports exactly what the host supplies. A red here means the guest rootfs was materialized on a backing filesystem that does not report birth time (a virtiofs/9p-shared checkout answers mask 0x17ff: MNT_ID yes, BTIME no), not an engine gap. Point the image cache at a btime-capable filesystem: target/testing/images is per-ISA, so retargeting it fixes both ISAs at once, whereas HL_SCENARIO_IMAGE_CACHE is an exact leaf that overrides the arch component and so serves only the one ISA it names."
       evidence: "tests/runtime/filesystem/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/statx_btime.c, output: statx-btime, flags: [-static, -O2, -std=gnu11] }
