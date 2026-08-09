@@ -47,11 +47,16 @@ pub struct Report {
 
 pub async fn run_case(app: Arc<App>, case_index: usize, target: Target) -> Result<Report, Error> {
     let case = &app.cases[case_index];
-    let timeout = case.soak.as_ref().map_or_else(
+    worker::run(&app.name, &case.id, target, declared_timeout(case), &case.diagnostics).await
+}
+
+/// The single reading of a case's declared bound, used by the supervisor and by the worker's own
+/// backstop so an orphaned worker still terminates at the value the case declared.
+fn declared_timeout(case: &super::definition::RuntimeCase) -> Duration {
+    case.soak.as_ref().map_or_else(
         || Duration::from_secs(case.timeout),
         super::scheduler::Plan::total_duration,
-    );
-    worker::run(&app.name, &case.id, target, timeout, &case.diagnostics).await
+    )
 }
 
 pub(crate) async fn worker(options: WorkerOptions) -> Result<(), Error> {
