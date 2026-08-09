@@ -207,7 +207,12 @@ impl InterruptToken {
 
 impl hl_task::InterruptSink for InterruptToken {
     fn set_interrupted(&self, interrupted: bool) {
-        let _ = self.set(interrupted);
+        if self.set(interrupted).is_err() {
+            hl_log::hl_error!(
+                hl_log::tag::EXEC,
+                "native interrupt flag not published value={interrupted}"
+            );
+        }
     }
 }
 
