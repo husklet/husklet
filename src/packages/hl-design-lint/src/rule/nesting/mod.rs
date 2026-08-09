@@ -47,6 +47,7 @@ impl Functions<'_> {
     #[allow(clippy::needless_pass_by_value)]
     fn inspect(&mut self, name: String, span: Span, block: &syn::Block) {
         let mut depth = Depth::default();
+        depth.statement = true;
         depth.visit_block(block);
         if depth.maximum <= MAXIMUM_NESTING {
             return;
@@ -109,9 +110,11 @@ impl Depth {
     }
 
     /// Visits an else branch, keeping an `else if` chain on the level of the `if` it continues.
-    fn visit_else(&mut self, expression: &syn::ExprIf) {
+    ///
+    /// An `else { .. }` block stands wherever its `if` stands, so it carries the same position.
+    fn visit_else(&mut self, expression: &syn::ExprIf, position: bool) {
         if let Some((_, branch)) = &expression.else_branch {
-            self.statement = false;
+            self.statement = position && !matches!(branch.as_ref(), Expr::If(_));
             <Self as Visit>::visit_expr(self, branch);
         }
     }
@@ -142,15 +145,23 @@ impl Depth {
 
 impl<'ast> Visit<'ast> for Depth {
     fn visit_block(&mut self, block: &'ast syn::Block) {
-        for statement in &block.stmts {
-            if let syn::Stmt::Expr(expression, _) = statement {
-                self.statement = true;
+        // A block stands where its caller put it, and its trailing expression stands there too:
+        // the tail of `let value = match .. { arm => { .. if a { x } else { y } } }` produces the
+        // arm's value exactly as the unbraced form does. Every other statement is a statement.
+        let position = self.statement;
+        let tail = block.stmts.len().saturating_sub(1);
+        for (index, statement) in block.stmts.iter().enumerate() {
+            if let syn::Stmt::Expr(expression, semicolon) = statement {
+                self.statement = semicolon.is_some() || index != tail || position;
                 self.visit_expr(expression);
                 self.statement = false;
             } else {
+                // A `let` initializer, an item, or a macro statement is never a branch position.
+                self.statement = false;
                 self.visit_stmt(statement);
             }
         }
+        self.statement = false;
     }
 
     fn visit_arm(&mut self, arm: &'ast syn::Arm) {
@@ -164,7 +175,7 @@ impl<'ast> Visit<'ast> for Depth {
     }
 
     fn visit_expr(&mut self, expression: &'ast Expr) {
-        if !matches!(expression, Expr::If(_) | Expr::Match(_)) {
+        if !matches!(expression, Expr::If(_) | Expr::Match(_) | Expr::Block(_)) {
             self.statement = false;
         }
         syn::visit::visit_expr(self, expression);
@@ -174,13 +185,15 @@ impl<'ast> Visit<'ast> for Depth {
         let branch = self.statement();
         self.visit_expr(&expression.cond);
         if !branch || guard_clause(expression) {
+            self.statement = branch;
             self.visit_block(&expression.then_branch);
-            self.visit_else(expression);
+            self.visit_else(expression, branch);
             return;
         }
         self.enter("if", expression.if_token.span, |visitor| {
+            visitor.statement = true;
             visitor.visit_block(&expression.then_branch);
-            visitor.visit_else(expression);
+            visitor.visit_else(expression, true);
         });
     }
 
@@ -204,6 +217,7 @@ impl<'ast> Visit<'ast> for Depth {
     fn visit_expr_for_loop(&mut self, expression: &'ast syn::ExprForLoop) {
         self.visit_expr(&expression.expr);
         self.enter("for", expression.for_token.span, |visitor| {
+            visitor.statement = true;
             visitor.visit_block(&expression.body);
         });
     }
@@ -211,12 +225,14 @@ impl<'ast> Visit<'ast> for Depth {
     fn visit_expr_while(&mut self, expression: &'ast syn::ExprWhile) {
         self.visit_expr(&expression.cond);
         self.enter("while", expression.while_token.span, |visitor| {
+            visitor.statement = true;
             visitor.visit_block(&expression.body);
         });
     }
 
     fn visit_expr_loop(&mut self, expression: &'ast syn::ExprLoop) {
         self.enter("loop", expression.loop_token.span, |visitor| {
+            visitor.statement = true;
             syn::visit::visit_expr_loop(visitor, expression);
         });
     }
@@ -227,12 +243,14 @@ impl<'ast> Visit<'ast> for Depth {
             return;
         }
         self.enter_carrier(|visitor| {
+            visitor.statement = true;
             syn::visit::visit_expr_closure(visitor, expression);
         });
     }
 
     fn visit_expr_async(&mut self, expression: &'ast syn::ExprAsync) {
         self.enter("async block", expression.async_token.span, |visitor| {
+            visitor.statement = true;
             syn::visit::visit_expr_async(visitor, expression);
         });
     }
@@ -622,6 +640,79 @@ fn summarize(row: &ResultRow) {
 
         assert_eq!(findings.len(), 1);
         assert!(findings[0].message.contains("depth 4"), "{}", findings[0].message);
+    }
+
+    #[test]
+    fn accepts_a_braced_arm_whose_tail_produces_the_value() {
+        let findings = findings(
+            r"fn width(kind: u8, wide: bool) -> u8 {
+    for _ in 0..2 {
+        let size = match kind {
+            0 => {
+                let doubled = wide;
+                if doubled { 8 } else { 4 }
+            }
+            _ => 1,
+        };
+        if size > 4 {
+            return size;
+        }
+    }
+    0
+}",
+        );
+
+        assert!(findings.is_empty(), "{:?}", findings.first().map(|f| &f.message));
+    }
+
+    #[test]
+    fn accepts_a_braced_else_that_produces_the_value() {
+        let findings = findings(
+            r"fn width(kind: u8, wide: bool) -> u8 {
+    for _ in 0..2 {
+        let size = if kind == 0 {
+            1
+        } else {
+            let doubled = wide;
+            if doubled { 8 } else { 4 }
+        };
+        if size > 4 {
+            return size;
+        }
+    }
+    0
+}",
+        );
+
+        assert!(findings.is_empty(), "{:?}", findings.first().map(|f| &f.message));
+    }
+
+    #[test]
+    fn still_reports_a_statement_before_the_tail_of_a_value_block() {
+        let findings = findings(
+            r"fn width(kind: u8, wide: bool, rows: &[u8]) -> u8 {
+    for _ in 0..2 {
+        let size = match kind {
+            0 => {
+                for row in rows {
+                    if row > &0 {
+                        println!();
+                    }
+                }
+                4
+            }
+            _ => 1,
+        };
+        if size > 4 {
+            return size;
+        }
+    }
+    0
+}",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("depth 3"), "{}", findings[0].message);
     }
 
     #[test]
