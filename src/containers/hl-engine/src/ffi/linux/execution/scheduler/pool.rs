@@ -349,7 +349,11 @@ impl NativePool {
         let (limit, hold) = if sticky {
             (
                 DIRECT_STICKY_FLIP_LIMIT,
-                if permanent { DIRECT_HOLD_PERMANENT } else { DIRECT_HOLD_RUNS },
+                if permanent {
+                    DIRECT_HOLD_PERMANENT
+                } else {
+                    DIRECT_HOLD_RUNS
+                },
             )
         } else {
             (DIRECT_FLIP_LIMIT, DIRECT_HOLD_RUNS)

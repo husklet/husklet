@@ -326,15 +326,17 @@ fn source_boundary(source: &Source, modules: &[String]) -> bool {
         || matches!(parts.as_slice(), ["examples", ..])
         || matches!(parts.as_slice(), ["src", "bin", ..])
         || matches!(parts.as_slice(), ["src", "main.rs"]);
-    let explicit_module = modules
-        .first()
-        .is_some_and(|module| matches!(module.as_str(), "adapter" | "adapters" | "platform" | "host"))
-        || matches!(
-            modules,
-            [surface, platform, ..]
-                if surface == "surface"
-                    && matches!(platform.as_str(), "macos" | "windows" | "linux")
-        );
+    let explicit_module = modules.first().is_some_and(|module| {
+        matches!(
+            module.as_str(),
+            "adapter" | "adapters" | "platform" | "host" | "unix" | "windows" | "macos" | "linux"
+        )
+    }) || matches!(
+        modules,
+        [surface, platform, ..]
+            if surface == "surface"
+                && matches!(platform.as_str(), "macos" | "windows" | "linux")
+    );
     let shim = source.package.contains("-shim-")
         && source
             .path
@@ -349,7 +351,21 @@ fn source_boundary(source: &Source, modules: &[String]) -> bool {
             .path
             .components()
             .any(|component| component.as_os_str().to_str().is_some_and(|part| part == "hl-gpu-wgpu"));
-    executable || explicit_module || shim || concrete_wgpu
+    executable || composition_root(source) || explicit_module || shim || concrete_wgpu
+}
+
+/// Reports whether the source belongs to a composition root, which owns environment capture.
+///
+/// `src/apps/*` is the application layer and `hl-engine` is the engine composition root; both
+/// are named as owners of configuration and environment capture. Nothing depends on them, so
+/// they are not the reusable code this rule protects. Locating the capture in `main.rs` is a
+/// file-layout choice, not the property that makes it legitimate.
+fn composition_root(source: &Source) -> bool {
+    source
+        .path
+        .components()
+        .zip(source.path.components().skip(1))
+        .any(|(layer, package)| layer.as_os_str() == "src" && package.as_os_str() == "apps")
 }
 
 fn package_relative(source: &Source) -> Option<std::path::PathBuf> {
