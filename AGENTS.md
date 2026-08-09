@@ -87,6 +87,22 @@ gigabytes other lanes are using.
 Use `make lint` and `make fmt`, which route through `$(NIX_DEV)`. Two lanes have
 now reported the E0514 as a mysterious failure of their own change.
 
+### A real Docker is reachable — use `sudo -n docker`
+
+Several lanes have reported "no live baseline available" and fallen back to the
+documented API. The socket is `root:docker` and our uid is not in the group, so
+an unprivileged probe genuinely is denied — but **`sudo -n docker` works**, and
+Docker 29.1.3 is running on this box.
+
+That matters because Docker's documentation is thinner than its behavior. Probing
+it directly produced findings no spec would have given: `"TERM "` with trailing
+whitespace is rejected, `SIGRTMIN+16` is refused although signal 50 is valid
+under the name `RTMAX-14`, `09` and `+9` parse but `0x9` does not, and the daemon
+**unpauses before delivering every signal**, not only `SIGCONT`.
+
+Measure the real daemon before writing a conformance assertion. State plainly if
+you could not.
+
 ## Checking whether the box is busy
 
 Use `pgrep -cx testing`, which matches the exact process name. Every
