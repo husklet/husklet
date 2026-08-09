@@ -296,3 +296,46 @@ fn user_address_overflow_is_a_fault() {
     ));
     assert!(matches!(marshaller.c_string(u64::MAX, 2), Err(MarshalError::Fault(_))));
 }
+
+/// A domain conversion may not invent a different errno for a marshalling
+/// failure: `MarshalError` is the sole authority. A domain that wants another
+/// errno must match the `MarshalError` at its call site, before converting.
+#[test]
+fn domain_conversions_preserve_errno() {
+    for error in MarshalError::ALL {
+        let expected = error.errno();
+        assert_eq!(crate::ProcessMarshalError::from(error).errno(), expected, "process {error:?}");
+        assert_eq!(crate::SysvMarshalError::from(error).errno(), expected, "sysv {error:?}");
+        assert_eq!(crate::SignalMarshalError::from(error).errno(), expected, "signal {error:?}");
+        assert_eq!(crate::TimeFutexMarshalError::from(error).errno(), expected, "futex {error:?}");
+    }
+}
+
+/// Linux screens every `iov_len` for a negative `ssize_t` across the whole array
+/// before any `access_ok`, so EINVAL outranks EFAULT regardless of order.
+/// Measured on the host: both orders return EINVAL for readv/writev/preadv/pwritev.
+#[test]
+fn iovec_bad_length_outranks_inaccessible_segment() {
+    let memory = FaultMemory::new(4096);
+    let marshaller = GuestMarshaller::new(&memory, GuestArchitecture::Aarch64);
+    let unreachable = (USER_ADDRESS_LIMIT, 4096);
+    let bad_length = (BASE, i64::MAX as u64 + 1);
+
+    memory.put_vectors(&[unreachable, bad_length]);
+    assert_eq!(
+        marshaller.io_vector_records(BASE, 2, GuestAccess::Read),
+        Err(MarshalError::Invalid)
+    );
+    memory.put_vectors(&[bad_length, unreachable]);
+    assert_eq!(
+        marshaller.io_vector_records(BASE, 2, GuestAccess::Read),
+        Err(MarshalError::Invalid)
+    );
+
+    // An inaccessible segment alone is still EFAULT.
+    memory.put_vectors(&[unreachable, (BASE, 8)]);
+    assert!(matches!(
+        marshaller.io_vector_records(BASE, 2, GuestAccess::Read),
+        Err(MarshalError::Fault(_))
+    ));
+}

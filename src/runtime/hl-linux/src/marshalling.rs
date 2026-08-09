@@ -16,6 +16,29 @@ pub enum MarshalError {
 }
 
 impl MarshalError {
+    /// Every variant, so a conversion into a domain error can be checked
+    /// exhaustively. A new variant cannot compile without an arm in
+    /// [`Self::represented`], whose index must then address this array.
+    pub const ALL: [Self; 4] = [
+        Self::Fault(GuestFault {
+            address: 0,
+            access: GuestAccess::Read,
+        }),
+        Self::Invalid,
+        Self::TooBig,
+        Self::Overflow,
+    ];
+
+    /// Compile-time proof that [`Self::ALL`] names every variant.
+    const fn represented(self) -> usize {
+        match self {
+            Self::Fault(_) => 0,
+            Self::Invalid => 1,
+            Self::TooBig => 2,
+            Self::Overflow => 3,
+        }
+    }
+
     #[must_use]
     pub fn errno(self) -> Errno {
         let errno = match self {
@@ -34,6 +57,14 @@ impl MarshalError {
     }
 }
 
+const _: () = {
+    let mut index = 0;
+    while index < MarshalError::ALL.len() {
+        assert!(MarshalError::ALL[index].represented() == index, "MarshalError::ALL must name every variant once");
+        index += 1;
+    }
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GuestIovec {
     pub base: u64,
@@ -41,10 +72,17 @@ pub struct GuestIovec {
 }
 
 impl GuestIovec {
-    fn validate(&self, access: GuestAccess) -> Result<(), MarshalError> {
+    /// Linux checks every `iov_len` for a negative `ssize_t` across the whole
+    /// array before any `access_ok`, so a bad length outranks an earlier
+    /// inaccessible segment.
+    const fn validate_length(&self) -> Result<(), MarshalError> {
         if self.length > i64::MAX as u64 {
             return Err(MarshalError::Invalid);
         }
+        Ok(())
+    }
+
+    fn validate_address(&self, access: GuestAccess) -> Result<(), MarshalError> {
         if self.length == 0 {
             return Ok(());
         }
@@ -92,10 +130,18 @@ impl IovecPlan {
     }
 
     pub fn validate_io(self, access: GuestAccess) -> Result<Self, MarshalError> {
-        for vector in &self.vectors {
-            vector.validate(access)?;
-        }
+        Self::validate_vectors(&self.vectors, access)?;
         Ok(self)
+    }
+
+    fn validate_vectors(vectors: &[GuestIovec], access: GuestAccess) -> Result<(), MarshalError> {
+        for vector in vectors {
+            vector.validate_length()?;
+        }
+        for vector in vectors {
+            vector.validate_address(access)?;
+        }
+        Ok(())
     }
 }
 
@@ -318,9 +364,7 @@ impl<'a, M: GuestMemory + ?Sized> GuestMarshaller<'a, M> {
     /// fault can expose an earlier accessible prefix through one host call.
     pub fn io_vector_records(&self, source: u64, count: usize, access: GuestAccess) -> Result<IovecPlan, MarshalError> {
         let vectors = self.iovec_records(source, count)?;
-        for vector in &vectors {
-            vector.validate(access)?;
-        }
+        IovecPlan::validate_vectors(&vectors, access)?;
         IovecPlan::bounded(vectors)
     }
 

@@ -8,6 +8,7 @@ pub enum Error {
     Fault,
     Invalid,
     Unsupported,
+    TooBig,
     Overflow,
 }
 
@@ -18,6 +19,7 @@ impl Error {
             Self::Fault => Errno::EFAULT,
             Self::Invalid => Errno::EINVAL,
             Self::Unsupported => Errno::EOPNOTSUPP,
+            Self::TooBig => Errno::E2BIG,
             Self::Overflow => Errno::EOVERFLOW,
         };
         hl_log::hl_debug!(hl_log::tag::SYNC, "futex time abi error mapped error={:?} errno={}", self, errno.raw());
@@ -29,7 +31,8 @@ impl From<MarshalError> for Error {
     fn from(value: MarshalError) -> Self {
         match value {
             MarshalError::Fault(_) => Self::Fault,
-            MarshalError::Invalid | MarshalError::TooBig => Self::Invalid,
+            MarshalError::Invalid => Self::Invalid,
+            MarshalError::TooBig => Self::TooBig,
             MarshalError::Overflow => Self::Overflow,
         }
     }

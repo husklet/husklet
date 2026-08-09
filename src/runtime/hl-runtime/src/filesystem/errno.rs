@@ -1,5 +1,5 @@
 use hl_descriptor::{DescriptorError, ObjectError};
-use hl_linux::{Errno, FilesystemMarshalError, MarshalError};
+use hl_linux::{Errno, FilesystemMarshalError};
 
 pub(crate) struct FileErrno;
 
@@ -25,13 +25,6 @@ impl FileErrno {
             FilesystemMarshalError::TooBig => Errno::E2BIG,
             FilesystemMarshalError::NameTooLong => Errno::ENAMETOOLONG,
             FilesystemMarshalError::Overflow | FilesystemMarshalError::Encoding => Errno::EOVERFLOW,
-        }
-    }
-
-    pub(crate) fn vector(error: MarshalError) -> Errno {
-        match error {
-            MarshalError::Invalid => Errno::EINVAL,
-            MarshalError::Fault(_) | MarshalError::TooBig | MarshalError::Overflow => Errno::EFAULT,
         }
     }
 
