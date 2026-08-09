@@ -10,6 +10,7 @@ impl ErrorMap {
         match error {
             MemoryMarshalError::Marshal(error) => error.errno(),
             MemoryMarshalError::Invalid => Errno::EINVAL,
+            MemoryMarshalError::Unsupported => Errno::EOPNOTSUPP,
             MemoryMarshalError::Overflow => Errno::EOVERFLOW,
             MemoryMarshalError::NoAddressSpace => Errno::ENOMEM,
         }

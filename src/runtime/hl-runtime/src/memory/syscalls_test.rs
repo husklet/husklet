@@ -277,6 +277,30 @@ impl Fixture {
     }
 }
 
+/// Host measurement (aarch64 6.x, raw `syscall`): `mmap` ignores unknown protection
+/// and flag bits for `MAP_PRIVATE`/`MAP_SHARED`, and `MAP_SHARED_VALIDATE` answers
+/// `EOPNOTSUPP` — not `EINVAL` — for a flag outside `LEGACY_MAP_MASK`.
+#[test]
+fn mmap_accepts_unknown_protection_and_flag_bits() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let (mut runtime, _) = fixture.accounted_runtime(architecture, 1 << 20);
+        let mmap = Fixture::operation("mmap");
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 4096, 0xdead_beef, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(
+            runtime.handle(mmap, [0x6000, 4096, 3, 0x8020_0032, u64::MAX, 0]),
+            LinuxResult::Value(0x6000)
+        );
+    }
+    assert_eq!(
+        crate::memory::errno::ErrorMap::marshal(hl_linux::MemoryMarshalError::Unsupported),
+        Errno::EOPNOTSUPP
+    );
+}
+
 #[test]
 fn mmap_limit_noreserve_and_exact_unmap_both_isas() {
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
@@ -1084,7 +1108,10 @@ fn range_screen_precedence_matches_linux() {
     );
     // A wrapping end outranks a bad protection.
     assert_eq!(
-        runtime.handle(Fixture::operation("mprotect"), [0x4000, wrapping, bad_protection, 0, 0, 0]),
+        runtime.handle(
+            Fixture::operation("mprotect"),
+            [0x4000, wrapping, bad_protection, 0, 0, 0]
+        ),
         LinuxResult::Error(Errno::ENOMEM),
     );
     // Both grow flags together are EINVAL on their own.
