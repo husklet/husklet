@@ -53,6 +53,12 @@ impl CheckpointRuntime {
         })
     }
 
+    /// Records the launch's published port rules on the live network host.
+    pub fn publish(&self, records: &[u8]) {
+        self.host
+            .set_publications(super::native::publish::Publication::parse(records));
+    }
+
     pub(super) fn host(&self) -> Arc<Native> {
         Arc::clone(&self.host)
     }
