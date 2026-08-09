@@ -16,13 +16,15 @@ pub enum AbiError {
 
 impl AbiError {
     #[must_use]
-    pub const fn errno(self) -> Errno {
-        match self {
+    pub fn errno(self) -> Errno {
+        let errno = match self {
             Self::Fault => Errno::EFAULT,
             Self::Invalid => Errno::EINVAL,
             Self::TooBig => Errno::E2BIG,
             Self::Overflow => Errno::EOVERFLOW,
-        }
+        };
+        hl_log::hl_debug!(hl_log::tag::IPC, "sysv abi error mapped error={:?} errno={}", self, errno.raw());
+        errno
     }
 }
 

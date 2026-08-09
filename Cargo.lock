@@ -1274,6 +1274,7 @@ dependencies = [
  "hl-descriptor",
  "hl-event",
  "hl-isa",
+ "hl-log",
  "hl-memory",
  "hl-network",
  "hl-sync",

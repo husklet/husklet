@@ -69,16 +69,16 @@ fn gate_respects_tag_mask() {
     let _g = test_lock();
     let sink = TestSink::install();
     reset_state();
-    hl_log::Logging::global().set(tag::GPU);
+    hl_log::Logging::global().set(tag::SYSCALL);
     hl_log::Logging::global().set_level(Level::Trace);
 
-    hl_log::hl_debug!(tag::GPU, "gpu message");
-    hl_log::hl_debug!(tag::VULKAN, "vulkan message"); // disabled tag -> no emit
+    hl_log::hl_debug!(tag::SYSCALL, "syscall message");
+    hl_log::hl_debug!(tag::FS, "fs message"); // disabled tag -> no emit
 
     let lines = sink.lines();
     assert_eq!(lines.len(), 1, "only the enabled tag should emit: {lines:?}");
-    assert!(lines[0].contains("gpu message"));
-    assert!(!lines[0].contains("vulkan"));
+    assert!(lines[0].contains("syscall message"));
+    assert!(!lines[0].contains("fs"));
 }
 
 #[cfg(not(feature = "disabled"))] // needs verbose macros compiled in
@@ -90,11 +90,11 @@ fn gate_respects_level() {
     hl_log::Logging::global().set(tag::ALL);
     hl_log::Logging::global().set_level(Level::Info); // Error/Warn/Info pass; Debug/Trace suppressed
 
-    hl_log::hl_error!(tag::GPU, "err");
-    hl_log::hl_warn!(tag::GPU, "warn");
-    hl_log::hl_info!(tag::GPU, "info");
-    hl_log::hl_debug!(tag::GPU, "debug"); // suppressed
-    hl_log::hl_trace!(tag::GPU, "trace"); // suppressed
+    hl_log::hl_error!(tag::SYSCALL, "err");
+    hl_log::hl_warn!(tag::SYSCALL, "warn");
+    hl_log::hl_info!(tag::SYSCALL, "info");
+    hl_log::hl_debug!(tag::SYSCALL, "debug"); // suppressed
+    hl_log::hl_trace!(tag::SYSCALL, "trace"); // suppressed
 
     let lines = sink.lines();
     let joined = lines.join("");
@@ -120,14 +120,14 @@ fn args_not_evaluated_when_disabled() {
     let _g = test_lock();
     let _sink = TestSink::install();
     reset_state();
-    // GPU tag is OFF (reset_state cleared the mask). The argument expression calls a
+    // SYSCALL tag is OFF (reset_state cleared the mask). The argument expression calls a
     // function that panics if ever evaluated. If the gate is correct it never runs.
-    hl_log::Logging::global().set(tag::VULKAN); // anything but GPU
+    hl_log::Logging::global().set(tag::FS); // anything but syscall
     hl_log::Logging::global().set_level(Level::Trace);
 
     let before = SIDE_EFFECT_CALLS.load(SeqCst);
-    hl_log::hl_debug!(tag::GPU, "value = {}", panics_if_called());
-    hl_log::hl_error!(tag::GPU, "value = {}", panics_if_called());
+    hl_log::hl_debug!(tag::SYSCALL, "value = {}", panics_if_called());
+    hl_log::hl_error!(tag::SYSCALL, "value = {}", panics_if_called());
     let after = SIDE_EFFECT_CALLS.load(SeqCst);
 
     assert_eq!(
@@ -146,12 +146,12 @@ fn typed_configuration() {
     let _sink = TestSink::install();
 
     hl_log::Config {
-        logging: tag::GPU | tag::WGPU | tag::TRANSPORT,
+        logging: tag::SYSCALL | tag::MEMORY | tag::TRANSPORT,
         level: Level::Debug,
         profiling: tag::ALL,
     }
     .apply();
-    assert_eq!(hl_log::Logging::global().tags(), tag::GPU | tag::WGPU | tag::TRANSPORT);
+    assert_eq!(hl_log::Logging::global().tags(), tag::SYSCALL | tag::MEMORY | tag::TRANSPORT);
     assert_eq!(hl_log::Logging::global().level(), Level::Debug);
     assert_eq!(hl_log::Profiling::global().tags(), tag::ALL);
 
@@ -171,19 +171,19 @@ fn typed_configuration() {
 
 #[test]
 fn tag_name_roundtrip() {
-    assert_eq!("gpu".parse::<hl_log::Tag>(), Ok(tag::GPU));
-    assert_eq!("WGPU".parse::<hl_log::Tag>(), Ok(tag::WGPU));
+    assert_eq!("syscall".parse::<hl_log::Tag>(), Ok(tag::SYSCALL));
+    assert_eq!("MEMORY".parse::<hl_log::Tag>(), Ok(tag::MEMORY));
     assert_eq!("container".parse::<hl_log::Tag>(), Ok(tag::CONTAINER));
     assert_eq!("IMAGE".parse::<hl_log::Tag>(), Ok(tag::IMAGE));
     assert_eq!("daemon".parse::<hl_log::Tag>(), Ok(tag::DAEMON));
     assert_eq!("ui".parse::<hl_log::Tag>(), Ok(tag::UI));
     assert!("nope".parse::<hl_log::Tag>().is_err());
-    assert_eq!(tag::VULKAN.name(), "vulkan");
+    assert_eq!(tag::FS.name(), "fs");
     assert_eq!(tag::ALL.to_string(), "all");
-    assert_eq!((tag::GPU | tag::WGPU).to_string(), "gpu|wgpu");
+    assert_eq!((tag::SYSCALL | tag::MEMORY).to_string(), "syscall|memory");
     assert_eq!(
-        "gpu,unknown,wgpu".parse::<hl_log::Tags>().unwrap(),
-        tag::GPU | tag::WGPU
+        "syscall,unknown,memory".parse::<hl_log::Tags>().unwrap(),
+        tag::SYSCALL | tag::MEMORY
     );
 }
 
@@ -197,15 +197,15 @@ fn sink_format() {
     let _g = test_lock();
     let sink = TestSink::install();
     reset_state();
-    hl_log::Logging::global().set(tag::GPU);
+    hl_log::Logging::global().set(tag::SYSCALL);
     hl_log::Logging::global().set_level(Level::Trace);
 
-    hl_log::hl_debug!(tag::GPU, "hello {}", 42);
+    hl_log::hl_debug!(tag::SYSCALL, "hello {}", 42);
     let lines = sink.lines();
     assert_eq!(lines.len(), 1);
     let line = &lines[0];
-    // Shape: [gpu] D +<ms>ms t<id> module:line: hello 42
-    assert!(line.starts_with("[gpu] D "), "got: {line:?}");
+    // Shape: [syscall] D +<ms>ms t<id> module:line: hello 42
+    assert!(line.starts_with("[syscall] D "), "got: {line:?}");
     assert!(line.contains("logging:"), "module path present: {line:?}");
     assert!(line.trim_end().ends_with("hello 42"), "message present: {line:?}");
     assert!(line.ends_with('\n'), "line terminated: {line:?}");
@@ -221,15 +221,15 @@ fn counters_gated_and_snapshot() {
     let _g = test_lock();
     let _sink = TestSink::install();
     reset_state();
-    hl_log::Profiling::global().enable(tag::GPU); // GPU counters on, VULKAN off
+    hl_log::Profiling::global().enable(tag::SYSCALL); // syscall counters on, fs off
 
-    hl_log::hl_count!(tag::GPU, "frames");
-    hl_log::hl_count!(tag::GPU, "frames");
-    hl_log::hl_add!(tag::GPU, "bytes", 100);
-    hl_log::hl_add!(tag::GPU, "bytes", 50);
+    hl_log::hl_count!(tag::SYSCALL, "frames");
+    hl_log::hl_count!(tag::SYSCALL, "frames");
+    hl_log::hl_add!(tag::SYSCALL, "bytes", 100);
+    hl_log::hl_add!(tag::SYSCALL, "bytes", 50);
     // Under a disabled tag: must stay 0.
-    hl_log::hl_count!(tag::VULKAN, "vk_frames");
-    hl_log::hl_add!(tag::VULKAN, "vk_frames", 999);
+    hl_log::hl_count!(tag::FS, "vk_frames");
+    hl_log::hl_add!(tag::FS, "vk_frames", 999);
 
     let snap = hl_log::Counters::global().snapshot();
     // Sorted by name: bytes, frames (vk_frames absent since it never incremented).
@@ -250,15 +250,15 @@ fn timing_records_only_when_enabled() {
     let _g = test_lock();
     let _sink = TestSink::install();
     reset_state();
-    hl_log::Profiling::global().enable(tag::WGPU); // WGPU timing on, GPU off
+    hl_log::Profiling::global().enable(tag::MEMORY); // memory timing on, syscall off
 
     {
-        let span = hl_log::hl_span!(tag::WGPU, "readback");
+        let span = hl_log::hl_span!(tag::MEMORY, "readback");
         std::hint::black_box(&span);
     }
     {
         // Disabled tag: records nothing.
-        let span = hl_log::hl_span!(tag::GPU, "compose");
+        let span = hl_log::hl_span!(tag::SYSCALL, "compose");
         std::hint::black_box(&span);
     }
 
@@ -293,7 +293,7 @@ fn disabled_path_is_cheap() {
     for i in 0..N {
         // Args reference `i` but are never evaluated (tag off). black_box defeats the
         // optimizer from hoisting the whole loop away.
-        hl_log::hl_debug!(tag::GPU, "iter {} {}", i, ACC.load(SeqCst));
+        hl_log::hl_debug!(tag::SYSCALL, "iter {} {}", i, ACC.load(SeqCst));
         std::hint::black_box(i);
     }
     let elapsed = start.elapsed();

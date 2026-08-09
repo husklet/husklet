@@ -14,8 +14,8 @@
 //! One JSON object per line, on the events sink, with provenance first and the caller's fields after:
 //!
 //! ```text
-//! {"event":"command_buffer.refused","tag":"vulkan","level":"error","at":"hl_vulkan::model::device:190",
-//!  "ms":1234,"thread":1,"buffer":21,"reason":"copy between incompatible formats"}
+//! {"event":"path.refused","tag":"fs","level":"error","at":"hl_vfs::overlay::lookup:190",
+//!  "ms":1234,"thread":1,"handle":21,"reason":"resolution left the overlay root"}
 //! ```
 //!
 //! `event`, `tag`, `level`, `at`, `ms` and `thread` are always present and always mean the same thing.
@@ -30,7 +30,7 @@
 //!
 //! ```
 //! # use hl_log::{hl_event, tag, Level};
-//! hl_event!(tag::GPU, Level::Debug, "frame.lowered", draws = 12, scissored = true, target = "swapchain");
+//! hl_event!(tag::SYSCALL, Level::Debug, "call.routed", number = 12, restartable = true, domain = "fs");
 //! ```
 //!
 //! Integers, floats and bools land as JSON numbers and booleans; strings as strings. For a type that is
@@ -39,7 +39,7 @@
 //! ```
 //! # use hl_log::{hl_event, tag, Level};
 //! # let error = "oh no"; let id = 7u32;
-//! hl_event!(tag::GPU, Level::Error, "submit.refused", id = id, reason = %error);
+//! hl_event!(tag::SYSCALL, Level::Error, "call.refused", id = id, reason = %error);
 //! ```
 //!
 //! # What is NOT changed

@@ -50,7 +50,7 @@ fn a_hostile_payload_stays_one_parseable_line() {
     let (lines, sink) = collector();
     crate::sink::Events::global().set(sink);
     emit_event(
-        tag::GPU.into(),
+        tag::SYSCALL.into(),
         Level::Error,
         "submit.refused",
         "m",
@@ -86,14 +86,14 @@ fn every_record_names_where_it_came_from() {
     let _turn = turn();
     let (lines, sink) = collector();
     crate::sink::Events::global().set(sink);
-    emit_event(tag::VULKAN.into(), Level::Warn, "thing.happened", "a::b", 42, &[]);
+    emit_event(tag::FS.into(), Level::Warn, "thing.happened", "a::b", 42, &[]);
     crate::sink::Events::global().reset();
 
     let captured = lines.lock().unwrap();
     let line = &captured[0];
     for required in [
         r#""event":"thing.happened""#,
-        r#""tag":"vulkan""#,
+        r#""tag":"fs""#,
         r#""level":"warn""#,
         r#""at":"a::b:42""#,
     ] {
@@ -112,7 +112,7 @@ fn a_closed_tag_emits_no_event() {
     crate::sink::Events::global().set(sink);
     crate::Logging::global().set(crate::Tags::NONE);
 
-    crate::hl_event!(tag::GPU, crate::Level::Error, "should.not.appear", n = 1);
+    crate::hl_event!(tag::SYSCALL, crate::Level::Error, "should.not.appear", n = 1);
 
     crate::sink::Events::global().reset();
     assert!(lines.lock().unwrap().is_empty(), "a closed tag must not emit a record");
@@ -126,10 +126,10 @@ fn an_open_tag_emits_the_record() {
     let _turn = turn();
     let (lines, sink) = collector();
     crate::sink::Events::global().set(sink);
-    crate::Logging::global().set(tag::GPU);
+    crate::Logging::global().set(tag::SYSCALL);
     crate::Logging::global().set_level(crate::Level::Error);
 
-    crate::hl_event!(tag::GPU, crate::Level::Error, "frame.refused", id = 7u32, why = %"no format");
+    crate::hl_event!(tag::SYSCALL, crate::Level::Error, "frame.refused", id = 7u32, why = %"no format");
 
     crate::sink::Events::global().reset();
     crate::Logging::global().set(crate::Tags::NONE);
@@ -147,7 +147,7 @@ fn an_open_tag_emits_the_record() {
 /// A verdict ignores the tag mask, and that is the whole reason it exists as a separate macro.
 ///
 /// The mask is a subscription: an operator opens a tag to hear a subsystem narrate itself. A refusal is
-/// not narration — the operator who did not know to open `gpu` is exactly the one whose frame was
+/// not narration — the operator who did not know to open `syscall` is exactly the one whose frame was
 /// dropped. Measured: a run reported that its bundle emitted no presentation heartbeat when the
 /// diagnostic was at error level and firing, purely because nobody had opened the tag, and the absence
 /// was read as a property of the subject.
@@ -165,7 +165,7 @@ fn a_verdict_is_not_maskable_and_reaches_both_channels() {
     // Every tag closed, which silences every other macro in this crate.
     crate::Logging::global().set(crate::Tags::NONE);
 
-    crate::hl_verdict!(tag::WGPU, "encoder_op.refused_in_pass", op = %"ClearRect", pass = 3u32);
+    crate::hl_verdict!(tag::MEMORY, "encoder_op.refused_in_pass", op = %"ClearRect", pass = 3u32);
 
     crate::sink::Events::global().reset();
     crate::sink::Output::global().reset();
@@ -205,7 +205,7 @@ fn a_verdict_keeps_its_human_sentence_and_its_fields() {
 
     let buffer = 0x21u64;
     crate::hl_verdict!(
-        tag::VULKAN,
+        tag::FS,
         "command_buffer.refused",
         buffer = buffer,
         reason = %"incompatible formats";
