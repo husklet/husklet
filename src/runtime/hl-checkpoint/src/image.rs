@@ -170,6 +170,13 @@ impl CheckpointWriter {
         {
             return Err(ImageError::DuplicateOrUnorderedSection);
         }
+        hl_log::hl_debug!(
+            hl_log::tag::CHECKPOINT,
+            "section captured kind={} version={} bytes={}",
+            section.kind.get(),
+            section.version,
+            section.bytes.len()
+        );
         self.sections.push(section);
         Ok(())
     }
@@ -181,6 +188,13 @@ impl CheckpointWriter {
     pub fn prepare(&self) -> Result<PreparedImage, ImageError> {
         let bytes = self.encode()?;
         let digest = Self::digest(&bytes);
+        hl_log::hl_info!(
+            hl_log::tag::CHECKPOINT,
+            "image prepared sections={} bytes={} digest={:016x}",
+            self.sections.len(),
+            bytes.len(),
+            u64::from_be_bytes(digest[..8].try_into().unwrap_or_default())
+        );
         Ok(PreparedImage { bytes, digest })
     }
 
@@ -276,7 +290,16 @@ impl CheckpointReader {
         }
         let mut image = vec![0_u8; size];
         Self::read_image(source, &mut image)?;
-        self.decode(&image)
+        let decoded = self.decode(&image);
+        match &decoded {
+            Ok(image) => hl_log::hl_info!(
+                hl_log::tag::CHECKPOINT,
+                "image restored bytes={size} sections={:?}",
+                image.sections().iter().map(|s| s.kind.get()).collect::<Vec<_>>()
+            ),
+            Err(error) => hl_log::hl_error!(hl_log::tag::CHECKPOINT, "image rejected bytes={size}: {error}"),
+        }
+        decoded
     }
 
     fn read_image<S: CheckpointSource>(source: &mut S, image: &mut [u8]) -> Result<(), ImageError> {

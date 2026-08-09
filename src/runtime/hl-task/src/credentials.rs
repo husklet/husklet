@@ -207,6 +207,18 @@ impl ProcessCredentials {
         } else if old_effective != 0 && self.effective_user == 0 {
             self.capabilities.effective = self.capabilities.permitted;
         }
+        hl_log::hl_debug!(
+            hl_log::tag::TASK,
+            "setuid capabilities uid={old_real}/{old_effective}/{old_saved} -> {}/{}/{} keep_caps={} permitted={:#x} effective={:#x} inheritable={:#x} ambient={:#x}",
+            self.real_user,
+            self.effective_user,
+            self.saved_user,
+            self.keep_capabilities,
+            self.capabilities.permitted,
+            self.capabilities.effective,
+            self.capabilities.inheritable,
+            self.capabilities.ambient
+        );
     }
 
     /// Linux `LSM_SETID_FS`: only the filesystem capabilities move, and only within the permitted set.

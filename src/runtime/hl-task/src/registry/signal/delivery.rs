@@ -405,13 +405,24 @@ impl TaskRegistry {
             }
             DeliveryAction::Continue if process_state.lifecycle == ProcessLifecycle::Stopped => {
                 process_state.lifecycle = ProcessLifecycle::Running;
+                hl_log::hl_debug!(hl_log::tag::SIGNAL, "signal {} continues {process:?}", signal.get());
             }
-            DeliveryAction::Terminate { .. } => {
+            DeliveryAction::Terminate { dumped_core } => {
                 process_state.lifecycle = ProcessLifecycle::Exiting;
+                let number = signal.get();
+                hl_log::hl_debug!(
+                    hl_log::tag::SIGNAL,
+                    "signal {number} terminates {process:?} from {previous:?} dumped_core={dumped_core}"
+                );
             }
             _ => {}
         }
         if action == DeliveryAction::Stop && previous != ProcessLifecycle::Stopped {
+            hl_log::hl_debug!(
+                hl_log::tag::SIGNAL,
+                "signal {} stops {process:?} from {previous:?}",
+                signal.get()
+            );
             Self::record_child_transition(state, process, ChildEventKind::Stopped(signal), max_pending)?;
         }
         Ok(Self::process(state, process)?.control_epoch)

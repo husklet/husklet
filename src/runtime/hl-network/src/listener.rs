@@ -73,7 +73,12 @@ impl<H: SocketHostIo> ListenerQueue<H> {
             None
         };
         if let Some(error) = error {
+            let (queued, backlog) = (state.queue.len(), state.backlog);
             drop(state);
+            hl_log::hl_warn!(
+                hl_log::tag::NET,
+                "listener dropped an accepted connection: {error:?} queued={queued} backlog={backlog}"
+            );
             self.host.close(accepted.token);
             return Err(error);
         }
@@ -125,6 +130,11 @@ impl<H: SocketHostIo> ListenerQueue<H> {
             state.canceled = true;
             state.queue.drain(..).map(|accepted| accepted.token).collect::<Vec<_>>()
         };
+        hl_log::hl_debug!(
+            hl_log::tag::NET,
+            "listener cancelled, discarding {} queued connections",
+            tokens.len()
+        );
         for token in tokens {
             self.host.close(token);
         }

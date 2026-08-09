@@ -1039,6 +1039,7 @@ version = "0.1.0"
 name = "hl-checkpoint"
 version = "0.1.0"
 dependencies = [
+ "hl-log",
  "ring",
 ]
 
@@ -1299,6 +1300,7 @@ name = "hl-memory"
 version = "0.1.0"
 dependencies = [
  "hl-isa",
+ "hl-log",
 ]
 
 [[package]]
@@ -1313,6 +1315,7 @@ name = "hl-network"
 version = "0.1.0"
 dependencies = [
  "hl-descriptor",
+ "hl-log",
  "hl-sync",
 ]
 
@@ -1377,6 +1380,9 @@ version = "0.1.0"
 [[package]]
 name = "hl-task"
 version = "0.1.0"
+dependencies = [
+ "hl-log",
+]
 
 [[package]]
 name = "hl-terminal"

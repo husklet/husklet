@@ -60,6 +60,7 @@ impl ExecutableVersions {
     pub(crate) fn rotate(&self) {
         let version = self.sequence.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
         self.era.fetch_max(version, Ordering::AcqRel);
+        hl_log::hl_debug!(hl_log::tag::MEMORY, "executable era rotate version={version}");
     }
 
     pub(crate) fn publish(&self, ranges: impl IntoIterator<Item = AddressRange>) {
@@ -75,6 +76,12 @@ impl ExecutableVersions {
             for page in first..=last {
                 pages.insert(page, version);
             }
+            hl_log::hl_debug!(
+                hl_log::tag::MEMORY,
+                "executable publish version={version} pages={first:#x}..={last:#x} range={:#x}..{:#x}",
+                range.start().get(),
+                range.end().get()
+            );
         }
     }
 
@@ -87,6 +94,11 @@ impl ExecutableVersions {
         // Pages which never took a committed write carry no entry, so the era
         // is what supersedes them.
         self.era.fetch_max(version, Ordering::AcqRel);
+        hl_log::hl_debug!(
+            hl_log::tag::MEMORY,
+            "executable publish-all version={version} tracked_pages={}",
+            pages.len()
+        );
     }
 
     pub(crate) fn generation(&self) -> u64 {

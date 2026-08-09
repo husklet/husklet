@@ -141,6 +141,14 @@ impl NetworkCatalog {
             return Err(NetworkCatalogError::Stale);
         };
         *entry = PortEntry::Published(prepared.port.clone());
+        hl_log::hl_debug!(
+            hl_log::tag::NET,
+            "host bind published {:?}:{} owner={:?} generation={}",
+            prepared.port.family,
+            prepared.port.port,
+            prepared.port.owner,
+            prepared.generation
+        );
         slot.socket = Some(replacement);
         self.advance_generation();
         prepared.finalized = true;
@@ -163,6 +171,14 @@ impl NetworkCatalog {
             return Err(NetworkCatalogError::Stale);
         };
         ports.remove(index);
+        hl_log::hl_debug!(
+            hl_log::tag::NET,
+            "host bind rolled back {:?}:{} owner={:?} generation={}",
+            prepared.port.family,
+            prepared.port.port,
+            prepared.port.owner,
+            prepared.generation
+        );
         drop(slots);
         prepared.finalized = true;
         Ok(())

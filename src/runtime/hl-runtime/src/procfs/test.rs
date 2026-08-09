@@ -1096,9 +1096,7 @@ fn numeric_pid_and_self_report_the_same_zero_sized_stat() {
         .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
         .unwrap();
     let number = process.number();
-    let procfs = hl_vfs::Procfs::new(Arc::new(
-        TaskProcfs::new(tasks).with_stat(Arc::new(StatMetrics)),
-    ));
+    let procfs = hl_vfs::Procfs::new(Arc::new(TaskProcfs::new(tasks).with_stat(Arc::new(StatMetrics))));
     for leaf in ["stat", "status", "limits"] {
         let owned = procfs
             .metadata(format!("/proc/{number}/{leaf}").as_bytes(), number)
