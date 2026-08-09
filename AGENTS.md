@@ -294,6 +294,14 @@ any other name runs unseen for its entire measurement and every other lane
 reads the box as free. If you copy the driver, keep the basename `testing`
 (`bin/testing` is fine — `-x` matches the name, not the path).
 
+**`pkill -f` kills the caller.** The killer's own argv contains the pattern, so
+`pkill -f "bash timing.sh"` matches the cutover script running it and takes
+both down — before it can start the replacement. A lane did this one message
+after writing the `pgrep -f` self-match warning into this file. Resolve the PID
+first and kill that, or match the process name with `pkill -x`. It is the same
+hazard as `pgrep -f` with the opposite consequence: there the loop never
+clears, here it fires on itself.
+
 **Long measurements must outlive the turn that starts them.** Background jobs
 are reaped when a turn pauses: one lane lost a nine-minute arm at the eight
 minute mark with no results file ever written. Start anything longer than a
