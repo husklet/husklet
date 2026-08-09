@@ -1,3 +1,4 @@
+mod cache_stats;
 mod codec;
 mod dispatch;
 mod runner;
