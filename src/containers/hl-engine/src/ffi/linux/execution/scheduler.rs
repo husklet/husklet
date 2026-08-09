@@ -548,15 +548,27 @@ mod tests {
         for (name, miss) in [
             ("self-modifying write", (process, incarnation, version + 1, pc)),
             ("mapping change", (process, incarnation + 1, version, pc)),
-            ("other process", (hl_task::ProcessId::from_wire(8, 1).unwrap(), incarnation, version, pc)),
+            (
+                "other process",
+                (hl_task::ProcessId::from_wire(8, 1).unwrap(), incarnation, version, pc),
+            ),
             ("other entry", (process, incarnation, version, pc + 4)),
         ] {
             assert!(!pool.admitted_bytes(miss, 8, 5, &mut served), "{name} must miss");
         }
-        assert!(!pool.admitted_bytes(site, 8, 6, &mut served), "epoch rotation must miss");
-        assert!(!pool.admitted_bytes(site, 4, 5, &mut served), "a shorter span must miss");
+        assert!(
+            !pool.admitted_bytes(site, 8, 6, &mut served),
+            "epoch rotation must miss"
+        );
+        assert!(
+            !pool.admitted_bytes(site, 4, 5, &mut served),
+            "a shorter span must miss"
+        );
         pool.disable();
-        assert!(!pool.admitted_bytes(site, 8, 5, &mut served), "a disabled pool must miss");
+        assert!(
+            !pool.admitted_bytes(site, 8, 5, &mut served),
+            "a disabled pool must miss"
+        );
     }
 
     #[test]

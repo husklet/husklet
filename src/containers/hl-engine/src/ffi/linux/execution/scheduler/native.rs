@@ -115,17 +115,10 @@ impl GuestExecutor {
                 .ok()?
         };
         if !repeat {
-            pool.prepare_source(
-                run.process,
-                pc,
-                pc + length,
-                token,
-                instruction_epoch,
-                |first, last| {
-                    let range = hl_isa::AddressRange::nonempty(GuestAddress::new(first), last - first).ok()?;
-                    Some(mappings.executable_token(range, lease.generation()))
-                },
-            )?;
+            pool.prepare_source(run.process, pc, pc + length, token, instruction_epoch, |first, last| {
+                let range = hl_isa::AddressRange::nonempty(GuestAddress::new(first), last - first).ok()?;
+                Some(mappings.executable_token(range, lease.generation()))
+            })?;
         }
         pool.record_admission(fallback_key, bytes.len(), instruction_epoch, bytes);
         pool.counters.entries += 1;
