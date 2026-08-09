@@ -648,7 +648,7 @@ mod tests {
         let instruction = (process, 2, 4, 0x40b0c0);
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
         pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, false);
-        assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+        assert_eq!(pool.suppressed.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([entry]));
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
     }
 
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
         // One instruction short of half a slice is not worth the entry, whatever the native budget.
         pool.record_fallback(entry, instruction, SLICE_BUDGET / 2 - 1, NATIVE_SOLO_BUDGET, false);
-        assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+        assert_eq!(pool.suppressed.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([entry]));
     }
 
     /// Direct authority runs without the operand resolver, so a memory fallback under it is
@@ -681,12 +681,36 @@ mod tests {
         assert!(pool.suppressed.is_empty());
         assert_eq!(pool.direct_declined, BTreeSet::from([entry]));
         pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, true);
-        assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+        assert_eq!(pool.suppressed.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([entry]));
         // A run that retired most of its budget still keeps its entry either way.
         let kept = (process, 2, 4, 0x1008b00);
         pool.record_fallback(kept, instruction, SLICE_BUDGET, SLICE_BUDGET, true);
-        assert!(!pool.suppressed.contains(&kept));
+        assert!(!pool.suppressed.contains_key(&kept));
         assert!(!pool.direct_declined.contains(&kept));
+    }
+
+    /// A latch serves a bounded span of refusals and then lets the entry back in. One
+    /// short run must not condemn an entry for the life of the process: under a SIGURG
+    /// storm a signal invalidates the operand projection and the next run guard-faults
+    /// early, which is the storm's verdict on the entry, not the entry's own.
+    #[test]
+    fn a_latched_entry_is_retried_once_its_span_of_refusals_is_spent() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let entry = (process, 2, 4, 0x10182a8);
+        let instruction = (process, 2, 4, 0x10090b8);
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        pool.record_fallback(entry, instruction, 399, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_latches, 1);
+        for spent in 1..=super::pool::SUPPRESSION_SPAN {
+            assert!(pool.refuses(entry), "refusal {spent} of the span must still decline");
+        }
+        assert_eq!(pool.counters.suppress_clears, 1);
+        assert!(!pool.refuses(entry), "the span is spent, so the entry is retried");
+        // A retry that falls short again re-arms to a doubled span rather than to a
+        // permanent latch, so a genuinely bad entry costs O(log refusals) retries.
+        pool.record_fallback(entry, instruction, 399, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_rearms, 1);
+        assert_eq!(pool.suppressed[&entry].span, super::pool::SUPPRESSION_SPAN * 2);
     }
 
     /// The threshold is a share of the budget, so a short-budget run cannot dodge
@@ -741,7 +765,7 @@ mod tests {
         for process in [retired, retained] {
             pool.sources.insert((process, 1, 0x1000, 0x1100), token);
             pool.observations.insert((process, 1, 1, 0x1000), 1);
-            pool.suppressed.insert((process, 1, 1, 0x1000));
+            pool.suppressed.insert((process, 1, 1, 0x1000), super::pool::Probation { remaining: 1, span: 1 });
             pool.direct_declined.insert((process, 1, 1, 0x1000));
             pool.fallbacks.insert((process, 1, 1, 0x1004));
             pool.source_incarnations.insert(process, 1);

@@ -57,7 +57,7 @@ impl GuestExecutor {
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
         let fallback_key = (run.process, lease.generation(), token.version, pc);
-        if pool.suppressed.contains(&fallback_key) {
+        if pool.refuses(fallback_key) {
             if pool.diagnostics {
                 *pool.suppressed_weight.entry(pc).or_default() += 1;
             }
@@ -270,7 +270,7 @@ impl GuestExecutor {
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length as u64).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
         let key = (run.process, lease.generation(), token.version, pc);
-        if pool.suppressed.contains(&key) {
+        if pool.refuses(key) {
             if pool.diagnostics {
                 *pool.suppressed_weight.entry(pc).or_default() += 1;
             }
