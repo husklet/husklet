@@ -57,7 +57,7 @@ impl GuestExecutor {
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
         let fallback_key = (run.process, lease.generation(), token.version, pc);
-        if pool.suppressed.contains(&fallback_key) {
+        if pool.refuses(fallback_key) {
             if pool.diagnostics {
                 *pool.suppressed_weight.entry(pc).or_default() += 1;
             }
@@ -133,6 +133,7 @@ impl GuestExecutor {
         let mut fallback = false;
         let mut fallback_pc = None;
         let mut statistics = None;
+        let mut retired = None;
         let mut resolve = |target: u64, output: &mut [u8]| {
             let region = mappings
                 .ledger()
@@ -184,6 +185,7 @@ impl GuestExecutor {
                 });
             };
             statistics = Some(stats);
+            retired = Some(result.executed);
             match result.exit {
                 crate::native::NativeExit::Branch => StepOutcome::Continue,
                 crate::native::NativeExit::Syscall => {
@@ -232,6 +234,9 @@ impl GuestExecutor {
             }
             Some(run.machine.run_step(1, memory))
         } else {
+            if let Some(executed) = retired {
+                pool.mark_productive(fallback_key, executed, native_budget);
+            }
             Some(outcome)
         }
     }
@@ -270,7 +275,7 @@ impl GuestExecutor {
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length as u64).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
         let key = (run.process, lease.generation(), token.version, pc);
-        if pool.suppressed.contains(&key) {
+        if pool.refuses(key) {
             if pool.diagnostics {
                 *pool.suppressed_weight.entry(pc).or_default() += 1;
             }
@@ -344,6 +349,7 @@ impl GuestExecutor {
         let mut fallback = None;
         let mut statistics = None;
         let mut boundary = None;
+        let mut retired = None;
         let mut stack_projection = Some(stack_projection);
         let checkpoint = stack_projection.as_ref()?.checkpoint_continuation();
         let mapping = stack_projection.as_ref()?.request_continuation();
@@ -392,6 +398,7 @@ impl GuestExecutor {
                 });
             };
             statistics = Some(stats);
+            retired = Some(result.executed);
             boundary = diagnostics.then(|| NativeBoundary {
                 process: run.process,
                 start: pc,
@@ -477,6 +484,9 @@ impl GuestExecutor {
             );
             Some(run.machine.run_step(1, memory))
         } else {
+            if let Some(executed) = retired {
+                pool.mark_productive(key, executed, native_budget);
+            }
             Some(outcome)
         }
     }

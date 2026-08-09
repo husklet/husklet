@@ -648,7 +648,7 @@ mod tests {
         let instruction = (process, 2, 4, 0x40b0c0);
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
         pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, false);
-        assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+        assert_eq!(pool.suppressed.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([entry]));
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
     }
 
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
         // One instruction short of half a slice is not worth the entry, whatever the native budget.
         pool.record_fallback(entry, instruction, SLICE_BUDGET / 2 - 1, NATIVE_SOLO_BUDGET, false);
-        assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+        assert_eq!(pool.suppressed.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([entry]));
     }
 
     /// Direct authority runs without the operand resolver, so a memory fallback under it is
@@ -681,12 +681,91 @@ mod tests {
         assert!(pool.suppressed.is_empty());
         assert_eq!(pool.direct_declined, BTreeSet::from([entry]));
         pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, true);
-        assert_eq!(pool.suppressed, BTreeSet::from([entry]));
+        assert_eq!(pool.suppressed.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([entry]));
         // A run that retired most of its budget still keeps its entry either way.
         let kept = (process, 2, 4, 0x1008b00);
         pool.record_fallback(kept, instruction, SLICE_BUDGET, SLICE_BUDGET, true);
-        assert!(!pool.suppressed.contains(&kept));
+        assert!(!pool.suppressed.contains_key(&kept));
         assert!(!pool.direct_declined.contains(&kept));
+    }
+
+    /// A latch serves a bounded span of refusals and then lets the entry back in. One
+    /// short run must not condemn an entry for the life of the process: under a SIGURG
+    /// storm a signal invalidates the operand projection and the next run guard-faults
+    /// early, which is the storm's verdict on the entry, not the entry's own.
+    #[test]
+    fn a_latched_entry_is_retried_once_its_span_of_refusals_is_spent() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let entry = (process, 2, 4, 0x10182a8);
+        let instruction = (process, 2, 4, 0x10090b8);
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        // The storm target is the guest's hottest loop: it retired full budgets before the
+        // first signal landed, which is what earns it a span to recover in.
+        pool.mark_productive(entry, SLICE_BUDGET, SLICE_BUDGET);
+        pool.record_fallback(entry, instruction, 399, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_latches, 1);
+        for spent in 1..=super::pool::SUPPRESSION_SPAN {
+            assert!(pool.refuses(entry), "refusal {spent} of the span must still decline");
+        }
+        assert_eq!(pool.counters.suppress_clears, 1);
+        assert!(!pool.refuses(entry), "the span is spent, so the entry is retried");
+        // A retry that falls short again re-arms to another span rather than to a
+        // permanent latch, so a productive entry can always recover.
+        pool.record_fallback(entry, instruction, 399, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_rearms, 1);
+        assert_eq!(pool.suppressed[&entry].remaining, super::pool::SUPPRESSION_SPAN);
+        assert!(!pool.suppressed[&entry].permanent);
+    }
+
+    /// The two populations a refusal count cannot separate. An entry that has retired real
+    /// native work before earns another span, because a short run is an anomaly. An entry
+    /// that has fallen short on every run it has ever had latches permanently after its one
+    /// probationary span, so the exit-heavy phases stop paying a re-entry and a rebuild to
+    /// rediscover that there is nothing to recover.
+    #[test]
+    fn only_an_entry_that_has_been_productive_earns_a_second_span() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let instruction = (process, 2, 4, 0x10090b8);
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+
+        // Never productive: one span, then a permanent latch no refusal expires.
+        let barren = (process, 2, 4, 0x1009000);
+        pool.mark_productive(barren, 20, SLICE_BUDGET);
+        assert!(!pool.productive.contains(&barren), "a 20-instruction run is not productive");
+        pool.record_fallback(barren, instruction, 20, SLICE_BUDGET, false);
+        pool.record_fallback(barren, instruction, 20, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_permanent, 1);
+        assert_eq!(pool.counters.suppress_rearms, 0);
+        for _ in 0..super::pool::SUPPRESSION_SPAN * 4 {
+            assert!(pool.refuses(barren), "a permanent latch never expires");
+        }
+
+        // Productive once: the latch keeps expiring, so the entry can recover.
+        let hot = (process, 2, 4, 0x10182a8);
+        pool.mark_productive(hot, SLICE_BUDGET, SLICE_BUDGET);
+        assert!(pool.productive.contains(&hot));
+        pool.record_fallback(hot, instruction, 399, SLICE_BUDGET, false);
+        pool.record_fallback(hot, instruction, 399, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_rearms, 1);
+        assert_eq!(pool.suppressed[&hot].remaining, super::pool::SUPPRESSION_SPAN);
+        assert!(!pool.suppressed[&hot].permanent, "a productive entry never latches permanently");
+    }
+
+    /// Absence from the productive table is only evidence while the table can still record.
+    /// Every other capped set here fails towards not suppressing; this one would fail
+    /// towards a permanent latch, which is why saturation has to disarm permanence.
+    #[test]
+    fn a_saturated_productive_table_stops_making_latches_permanent() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let instruction = (process, 2, 4, 0x10090b8);
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        pool.productive_saturated = true;
+        let entry = (process, 2, 4, 0x1009000);
+        pool.record_fallback(entry, instruction, 20, SLICE_BUDGET, false);
+        pool.record_fallback(entry, instruction, 20, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_permanent, 0, "saturation disarms permanence");
+        assert_eq!(pool.counters.suppress_rearms, 1);
+        assert!(!pool.suppressed[&entry].permanent);
     }
 
     /// The threshold is a share of the budget, so a short-budget run cannot dodge
@@ -741,7 +820,7 @@ mod tests {
         for process in [retired, retained] {
             pool.sources.insert((process, 1, 0x1000, 0x1100), token);
             pool.observations.insert((process, 1, 1, 0x1000), 1);
-            pool.suppressed.insert((process, 1, 1, 0x1000));
+            pool.suppressed.insert((process, 1, 1, 0x1000), super::pool::Probation { remaining: 1, permanent: false });
             pool.direct_declined.insert((process, 1, 1, 0x1000));
             pool.fallbacks.insert((process, 1, 1, 0x1004));
             pool.source_incarnations.insert(process, 1);

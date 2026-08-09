@@ -108,6 +108,10 @@ pub(super) struct NativeCounters {
     pub(super) suppress_latches: u64,
     pub(super) suppress_deferred: u64,
     pub(super) suppress_clears: u64,
+    /// Latched entries whose retry fell short again and re-armed to another span.
+    pub(super) suppress_rearms: u64,
+    /// Latches made permanent because the entry has never once cleared the bar.
+    pub(super) suppress_permanent: u64,
 }
 
 /// Process, image incarnation, executable-range version, entry PC. The ledger
@@ -116,6 +120,26 @@ pub(super) struct NativeCounters {
 /// can change the bytes at this PC.
 pub(super) type NativeSite = (hl_task::ProcessId, u64, u64, u64);
 pub(super) type NativeSource = (hl_task::ProcessId, u64, u64, u64);
+
+/// Refusals a fresh latch serves before it lets the entry back in.
+pub(super) const SUPPRESSION_SPAN: u64 = 64;
+
+/// How much longer one suppressed entry stays refused, and whether any refusal expires
+/// the latch at all.
+///
+/// A refusal count alone cannot tell the two populations apart, which is what sank the
+/// earlier bounded-suppression attempts. On malloc and sqlite the latched entry has a
+/// history of long native runs and the ban is an anomaly worth expiring; on the
+/// exit-heavy phases the run genuinely retires little *every* time, so expiring on a
+/// schedule buys a re-entry that fails, re-latches, and pays a rebuild. What separates
+/// them is not how often the entry has been refused but whether it has ever been
+/// productive, so every entry gets exactly one probationary span and only an entry that
+/// has cleared the bar at least once keeps earning more.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Probation {
+    pub(super) remaining: u64,
+    pub(super) permanent: bool,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SourceChange {
@@ -130,7 +154,14 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     /// memory on the native path; failures are reported through `hl_log` regardless.
     pub(super) diagnostics: bool,
     pub(super) executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
-    pub(super) suppressed: BTreeSet<NativeSite>,
+    pub(super) suppressed: BTreeMap<NativeSite, Probation>,
+    /// Entries that have completed a native run retiring a substantial share of their
+    /// budget at least once. Only these have shown there is native work here to lose,
+    /// so only these earn a second probationary span after a latch.
+    pub(super) productive: BTreeSet<NativeSite>,
+    /// Set once the productive table has refused an insertion at its cap. From then on no
+    /// latch is made permanent, because absence from the table no longer means anything.
+    pub(super) productive_saturated: bool,
     /// Entries whose only failure so far was a memory access under direct authority, which
     /// runs without the operand resolver and so cannot recover an access outside its region.
     pub(super) direct_declined: BTreeSet<NativeSite>,
@@ -174,7 +205,9 @@ impl NativePool {
             enabled: Self::selected(isa, plan),
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
             executors: BTreeMap::new(),
-            suppressed: BTreeSet::new(),
+            suppressed: BTreeMap::new(),
+            productive: BTreeSet::new(),
+            productive_saturated: false,
             direct_declined: BTreeSet::new(),
             fallbacks: BTreeSet::new(),
             observations: BTreeMap::new(),
@@ -264,6 +297,44 @@ impl NativePool {
         }
     }
 
+    /// Records that this entry completed a run retiring a substantial share of its budget,
+    /// which is the evidence that a later short run is an anomaly rather than its nature.
+    pub(super) fn mark_productive(&mut self, entry: NativeSite, executed: u64, budget: u64) {
+        if Self::fallback_suppresses(executed, budget) || self.productive.contains(&entry) {
+            return;
+        }
+        if self.productive.len() >= NATIVE_SITE_LIMIT {
+            // The table is the only evidence that an entry has native work to lose, so a
+            // full table is missing evidence, not evidence of absence. Every other capped
+            // set here fails towards *not* suppressing; this one would fail towards a
+            // permanent latch, so record the saturation and stop making latches permanent
+            // instead of condemning whichever entries lost the insertion race.
+            self.productive_saturated = true;
+            return;
+        }
+        self.productive.insert(entry);
+    }
+
+    /// Spends one refusal of this entry's latch, reporting whether native entry is still
+    /// refused. The refusal that exhausts the span is the last one: the next probe enters
+    /// natively, and only another short fallback re-arms the latch.
+    pub(super) fn refuses(&mut self, entry: NativeSite) -> bool {
+        let Some(probation) = self.suppressed.get_mut(&entry) else {
+            return false;
+        };
+        if probation.permanent {
+            return true;
+        }
+        if probation.remaining == 0 {
+            return false;
+        }
+        probation.remaining -= 1;
+        if probation.remaining == 0 {
+            self.counters.suppress_clears += 1;
+        }
+        true
+    }
+
     /// Suppression is reserved for entries whose run retired too little to be worth
     /// re-entering, so a run that did substantial native work keeps its entry. A first
     /// memory fallback under direct authority buys one retry without it instead, because
@@ -292,7 +363,32 @@ impl NativePool {
             {
                 self.counters.suppress_deferred += 1;
                 self.direct_declined.insert(entry);
-            } else if self.suppressed.len() < NATIVE_SITE_LIMIT && self.suppressed.insert(entry) {
+            } else if let Some(probation) = self.suppressed.get_mut(&entry) {
+                if self.productive.contains(&entry) {
+                    // This entry has retired real native work before, so a short run is an
+                    // anomaly. Doubling bounds it at O(log refusals) retries.
+                    probation.remaining = SUPPRESSION_SPAN;
+                    self.counters.suppress_rearms += 1;
+                } else if self.productive_saturated {
+                    // Absence from a saturated table is not evidence, so keep expiring.
+                    probation.remaining = SUPPRESSION_SPAN;
+                    self.counters.suppress_rearms += 1;
+                } else {
+                    // It has now fallen short on every run it has ever had, including the
+                    // one the probationary span bought it. There is no native work here to
+                    // recover, so stop paying a re-entry and a rebuild to rediscover that.
+                    probation.permanent = true;
+                    probation.remaining = 0;
+                    self.counters.suppress_permanent += 1;
+                }
+            } else if self.suppressed.len() < NATIVE_SITE_LIMIT {
+                self.suppressed.insert(
+                    entry,
+                    Probation {
+                        remaining: SUPPRESSION_SPAN,
+                        permanent: false,
+                    },
+                );
                 self.counters.suppress_latches += 1;
                 if self.diagnostics {
                     // One line per latch rather than per refusal, so the site limit bounds the output.
@@ -314,9 +410,12 @@ impl NativePool {
     /// slice is what a decline actually buys, so a larger native budget cannot raise the
     /// bar the retry has to clear.
     ///
-    /// This weighs one retry against one slice, but the latch never clears, so on sqlite
-    /// 529 latches from 719 verdicts refuse 1,678,898 later probes and buy an interpreter
-    /// slice for every one of them.
+    /// This weighs one retry against one slice from a single observation, which is why the
+    /// latch serves a bounded span rather than the life of the process: one short run is
+    /// not always the entry's fault. Under a SIGURG storm a signal invalidates the operand
+    /// projection and the next run guard-faults after a few hundred instructions, so a
+    /// permanent latch condemned the hottest loop in the guest to the interpreter on the
+    /// strength of one interrupted run.
     pub(super) const fn fallback_suppresses(executed: u64, budget: u64) -> bool {
         executed * 2
             < if budget < super::SLICE_BUDGET {
@@ -351,6 +450,8 @@ impl NativePool {
         self.instruction_epochs.clear();
         self.observations.clear();
         self.suppressed.clear();
+        self.productive.clear();
+        self.productive_saturated = false;
         self.direct_declined.clear();
         self.fallbacks.clear();
         self.direct_modes.clear();
@@ -362,8 +463,9 @@ impl NativePool {
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _), _| *owner != process);
         let held = self.suppressed.len();
-        self.suppressed.retain(|(owner, _, _, _)| *owner != process);
+        self.suppressed.retain(|(owner, _, _, _), _| *owner != process);
         self.counters.suppress_clears += (held - self.suppressed.len()) as u64;
+        self.productive.retain(|(owner, _, _, _)| *owner != process);
         self.direct_declined.retain(|(owner, _, _, _)| *owner != process);
         self.fallbacks.retain(|(owner, _, _, _)| *owner != process);
         Some(())
@@ -373,8 +475,9 @@ impl NativePool {
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _), _| *owner != process);
         let held = self.suppressed.len();
-        self.suppressed.retain(|(owner, _, _, _)| *owner != process);
+        self.suppressed.retain(|(owner, _, _, _), _| *owner != process);
         self.counters.suppress_clears += (held - self.suppressed.len()) as u64;
+        self.productive.retain(|(owner, _, _, _)| *owner != process);
         self.direct_declined.retain(|(owner, _, _, _)| *owner != process);
         self.fallbacks.retain(|(owner, _, _, _)| *owner != process);
         self.source_incarnations.remove(&process);
@@ -397,6 +500,7 @@ impl NativePool {
             || !self.sources.is_empty()
             || !self.observations.is_empty()
             || !self.suppressed.is_empty()
+            || !self.productive.is_empty()
             || !self.direct_declined.is_empty()
             || !self.fallbacks.is_empty()
             || !self.source_incarnations.is_empty()
@@ -425,8 +529,11 @@ impl NativePool {
         }
         if !self.suppressed.is_empty() {
             let held = self.suppressed.len();
-            self.suppressed.retain(|(process, _, _, _)| live.contains(process));
+            self.suppressed.retain(|(process, _, _, _), _| live.contains(process));
             self.counters.suppress_clears += (held - self.suppressed.len()) as u64;
+        }
+        if !self.productive.is_empty() {
+            self.productive.retain(|(process, _, _, _)| live.contains(process));
         }
         if !self.direct_declined.is_empty() {
             self.direct_declined.retain(|(process, _, _, _)| live.contains(process));
@@ -628,11 +735,16 @@ impl Drop for NativePool {
                     .saturating_sub(self.counters.declined_cold),
             );
             eprintln!(
-                "hl-native-suppress: verdicts={} latches={} deferred={} clears={} held={}",
+                "hl-native-suppress: verdicts={} latches={} deferred={} clears={} rearms={} permanent={} productive={}/{} saturated={} held={}",
                 self.counters.suppress_verdicts,
                 self.counters.suppress_latches,
                 self.counters.suppress_deferred,
                 self.counters.suppress_clears,
+                self.counters.suppress_rearms,
+                self.counters.suppress_permanent,
+                self.productive.len(),
+                NATIVE_SITE_LIMIT,
+                self.productive_saturated,
                 self.suppressed.len(),
             );
             let mut fallback: Vec<_> = self.fallback_weight.iter().map(|(pc, n)| (*n, *pc)).collect();
