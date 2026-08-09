@@ -820,6 +820,37 @@ mod tests {
         );
     }
 
+    /// An entry whose runs always end in a guard fault never reaches the clean-exit branch, so
+    /// `mark_productive` is never called for it and it latches permanently on its second short
+    /// run however much native work its other runs retired. `HL_NATIVE_FALLBACK_PRODUCTIVITY`
+    /// credits the long fallback runs at the suppression rule's own bar.
+    #[test]
+    fn a_long_run_that_ends_in_a_fallback_earns_productivity_only_under_the_gate() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let instruction = (process, 2, 4, 0x10090b8);
+        let entry = (process, 2, 4, 0x1009000);
+
+        let mut base = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        base.record_fallback(entry, instruction, SLICE_BUDGET, SLICE_BUDGET, false);
+        assert!(
+            !base.productive.contains(&entry),
+            "a full-budget run ending in a fallback is uncredited today"
+        );
+        base.record_fallback(entry, instruction, 20, SLICE_BUDGET, false);
+        base.record_fallback(entry, instruction, 20, SLICE_BUDGET, false);
+        assert_eq!(base.counters.suppress_permanent, 1);
+
+        let mut options = crate::options::Options::default();
+        options.set("HL_NATIVE_FALLBACK_PRODUCTIVITY", "1", true).unwrap();
+        let mut candidate = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
+        candidate.record_fallback(entry, instruction, SLICE_BUDGET, SLICE_BUDGET, false);
+        assert!(candidate.productive.contains(&entry));
+        candidate.record_fallback(entry, instruction, 20, SLICE_BUDGET, false);
+        candidate.record_fallback(entry, instruction, 20, SLICE_BUDGET, false);
+        assert_eq!(candidate.counters.suppress_permanent, 0);
+        assert_eq!(candidate.counters.suppress_rearms, 1);
+    }
+
     /// Absence from the productive table is only evidence while the table can still record.
     /// Every other capped set here fails towards not suppressing; this one would fail
     /// towards a permanent latch, which is why saturation has to disarm permanence.
