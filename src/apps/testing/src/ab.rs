@@ -66,6 +66,21 @@ struct Arm {
     options: Vec<String>,
 }
 
+/// One phase's own null-arm reading: how far it drifted from parity for no reason at all. The
+/// aggregate verdict is set by the worst phase, so a single stably-noisy phase voids every other
+/// one; the floor a lane can actually use is the floor of the phase it is measuring.
+struct PhaseFloor {
+    name: String,
+    floor: f64,
+    resolved: bool,
+}
+
+/// A floor inherited from a prior null-arm run, with the per-phase readings it published.
+struct Floor {
+    citation: String,
+    phases: Vec<PhaseFloor>,
+}
+
 pub fn run(options: Options) -> Result<(), Error> {
     if options.results.exists() {
         return Err(format!("results path {} already exists", options.results.display()).into());
@@ -111,7 +126,7 @@ pub fn run(options: Options) -> Result<(), Error> {
     header.push_str(&format!("# rounds\t{}\n", options.rounds));
     header.push_str(&format!("# null-arm\t{null_arm}\n"));
     if let Some(floor) = &floor {
-        header.push_str(&format!("# floor\t{floor}\n"));
+        header.push_str(&format!("# floor\t{}\n", floor.citation));
     }
     print!("{header}");
 
@@ -144,7 +159,7 @@ pub fn run(options: Options) -> Result<(), Error> {
 
     let mut body = String::from("phase\tbase_us\tcandidate_us\tratio\n");
     let names: BTreeSet<_> = samples.keys().map(|(name, _)| name.clone()).collect();
-    let mut worst: Option<(f64, String)> = None;
+    let mut ratios: Vec<(String, f64)> = Vec::new();
     for name in &names {
         let (Some(base_us), Some(candidate_us)) = (
             samples.get(&(name.clone(), "base")).and_then(|s| s.iter().min()),
@@ -154,12 +169,7 @@ pub fn run(options: Options) -> Result<(), Error> {
         };
         let ratio = *candidate_us as f64 / *base_us as f64;
         body.push_str(&format!("{name}\t{base_us}\t{candidate_us}\t{ratio:.4}\n"));
-        if worst
-            .as_ref()
-            .is_none_or(|(held, _)| (ratio - 1.0).abs() > (held - 1.0).abs())
-        {
-            worst = Some((ratio, name.clone()));
-        }
+        ratios.push((name.clone(), ratio));
     }
     print!("{body}");
 
@@ -172,9 +182,9 @@ pub fn run(options: Options) -> Result<(), Error> {
             notes.push_str(&format!("# DISAGREEMENT\t{name}\t{observed:?}\n"));
         }
     }
-    notes.push_str(&null_arm_verdict(null_arm, worst.as_ref(), floor.as_deref()));
+    notes.push_str(&null_arm_verdict(null_arm, &ratios, floor.as_ref()));
     if let Some(floor) = &floor {
-        notes.push_str(&format!("# floor\t{floor}\n"));
+        notes.push_str(&format!("# floor\t{}\n", floor.citation));
     }
     notes.push_str(&format!("# identity\tguest\t{guest_identity}\n"));
     notes.push_str(&format!("# identity\tbase\t{base_identity}\n"));
@@ -198,7 +208,7 @@ pub fn run(options: Options) -> Result<(), Error> {
 /// a reader to assume a floor was established.
 /// Reads a prior null-arm results file and returns the floor it established. A run comparing two
 /// binaries is refused outright unless this succeeds: no table, non-zero exit.
-fn admit_floor(path: Option<&Path>, guest_identity: &str) -> Result<String, Error> {
+fn admit_floor(path: Option<&Path>, guest_identity: &str) -> Result<Floor, Error> {
     let Some(path) = path else {
         return Err(
             "the two arms do not share an engine binary, so this comparison carries a binary \
@@ -212,11 +222,21 @@ fn admit_floor(path: Option<&Path>, guest_identity: &str) -> Result<String, Erro
     let mut null_arm = false;
     let mut resolved = false;
     let mut guest = None;
+    let mut phases: Vec<PhaseFloor> = Vec::new();
     for line in text.lines() {
         let fields: Vec<_> = line.split('\t').collect();
         match fields.as_slice() {
             ["# null-arm", "true"] => null_arm = true,
             ["# null-arm", "RESOLVED", ..] => resolved = true,
+            ["# null-arm-phase", state, name, _, floor] => {
+                if let Some(value) = floor.strip_prefix("floor=").and_then(|value| value.parse().ok()) {
+                    phases.push(PhaseFloor {
+                        name: (*name).to_owned(),
+                        floor: value,
+                        resolved: *state == "RESOLVED",
+                    });
+                }
+            }
             ["# identity", "guest", identity] => guest = Some((*identity).to_owned()),
             _ => {}
         }
@@ -224,16 +244,22 @@ fn admit_floor(path: Option<&Path>, guest_identity: &str) -> Result<String, Erro
     if !null_arm {
         return Err(format!("{} is not a null-arm run", path.display()).into());
     }
-    if !resolved {
+    // A single stably-noisy phase makes every null arm on a full guest read UNRESOLVED, so the
+    // aggregate alone cannot gate admission: what admits is at least one phase this box resolved.
+    // The comparison then prints those per-phase floors, and a phase with no floor has none.
+    if !resolved && !phases.iter().any(|phase| phase.resolved) {
         return Err(format!(
-            "{} did not resolve: its own arms differed by more than the tolerance, so this box \
-             cannot resolve the candidate either",
+            "{} resolved no phase: its own arms differed by more than the tolerance everywhere, so \
+             this box cannot resolve the candidate either",
             path.display()
         )
         .into());
     }
     match guest {
-        Some(identity) if identity == guest_identity => Ok(format!("{}\t{identity}", path.display())),
+        Some(identity) if identity == guest_identity => Ok(Floor {
+            citation: format!("{}\t{identity}", path.display()),
+            phases,
+        }),
         Some(identity) => Err(format!(
             "{} established a floor for guest {identity}, not for the guest this run executes \
              ({guest_identity})",
@@ -244,30 +270,76 @@ fn admit_floor(path: Option<&Path>, guest_identity: &str) -> Result<String, Erro
     }
 }
 
-fn null_arm_verdict(null_arm: bool, worst: Option<&(f64, String)>, floor: Option<&str>) -> String {
-    let Some((ratio, name)) = worst else {
+/// Emits the aggregate verdict *and* one verdict per phase. The aggregate is kept because a run in
+/// which every phase drifted is genuinely broken and must say so loudly, but it is set by the worst
+/// phase alone, and a phase that only reads a clock has voided effects two orders of magnitude
+/// above their own phase's floor. So the per-phase lines carry the number a lane can use.
+fn null_arm_verdict(null_arm: bool, ratios: &[(String, f64)], floor: Option<&Floor>) -> String {
+    if ratios.is_empty() {
         return "# null-arm\tNO-PHASES\n".to_owned();
-    };
+    }
     if !null_arm {
-        return match floor {
-            Some(floor) => format!(
-                "# null-arm\tNOT-RUN-HERE\tfloor established by {floor}\n\
-                 # null-arm\tDisbelieve any ratio in this table that is inside that floor's spread.\n"
-            ),
-            None => "# null-arm\tNOT-RUN\tthis run compared two arms; the floor is unknown here.\n\
-                     # null-arm\tRe-run with neither --candidate nor --candidate-engine-option to establish it,\n\
-                     # null-arm\tand disbelieve any ratio in this table that is inside that spread.\n"
-                .to_owned(),
+        let Some(floor) = floor else {
+            return "# null-arm\tNOT-RUN\tthis run compared two arms; the floor is unknown here.\n\
+                    # null-arm\tRe-run with neither --candidate nor --candidate-engine-option to establish it,\n\
+                    # null-arm\tand disbelieve any ratio in this table that is inside that spread.\n"
+                .to_owned();
         };
+        let mut lines = format!(
+            "# null-arm\tNOT-RUN-HERE\tfloor established by {}\n\
+             # null-arm\tDisbelieve any ratio in this table that is inside its own phase's floor below.\n",
+            floor.citation
+        );
+        for phase in &floor.phases {
+            let verdict = verdict_of(phase.resolved);
+            lines.push_str(&format!(
+                "# null-arm-floor\t{verdict}\t{}\tfloor={:.4}\n",
+                phase.name, phase.floor
+            ));
+        }
+        if floor.phases.is_empty() {
+            lines.push_str(
+                "# null-arm-floor\tthat null arm published no per-phase floor; only its aggregate verdict carries.\n",
+            );
+        }
+        return lines;
     }
-    let resolved = (ratio - 1.0).abs() <= NULL_ARM_TOLERANCE;
-    let verdict = if resolved { "RESOLVED" } else { "UNRESOLVED" };
-    let mut line = format!("# null-arm\t{verdict}\tworst={name}\tratio={ratio:.4}\ttolerance={NULL_ARM_TOLERANCE}\n");
-    if !resolved {
-        line.push_str("# null-arm\tThis box cannot resolve an effect smaller than the spread above. No\n");
-        line.push_str("# null-arm\tcandidate ratio inside it is evidence, however clean the other controls read.\n");
+
+    let mut per_phase = String::new();
+    let mut resolved_phases = 0;
+    let mut worst: Option<(&str, f64)> = None;
+    for (name, ratio) in ratios {
+        let drift = (ratio - 1.0).abs();
+        let resolved = drift <= NULL_ARM_TOLERANCE;
+        resolved_phases += usize::from(resolved);
+        if worst.is_none_or(|(_, held)| drift > (held - 1.0).abs()) {
+            worst = Some((name, *ratio));
+        }
+        per_phase.push_str(&format!(
+            "# null-arm-phase\t{}\t{name}\tratio={ratio:.4}\tfloor={drift:.4}\n",
+            verdict_of(resolved)
+        ));
     }
-    line
+    let (worst_name, worst_ratio) = worst.expect("ratios is not empty");
+    let total = ratios.len();
+    let mut lines = format!(
+        "# null-arm\t{}\tworst={worst_name}\tratio={worst_ratio:.4}\ttolerance={NULL_ARM_TOLERANCE}\tresolved={resolved_phases}/{total}\n",
+        verdict_of(resolved_phases == total)
+    );
+    if resolved_phases == 0 {
+        lines.push_str("# null-arm\tEVERY phase drifted past the tolerance: this box resolved nothing at all,\n");
+        lines.push_str("# null-arm\tand no ratio measured here is evidence however clean the other controls read.\n");
+    } else if resolved_phases < total {
+        lines.push_str("# null-arm\tThe aggregate above is set by the worst phase alone. Read the per-phase floor\n");
+        lines.push_str("# null-arm\tfor the phase you are measuring; an effect inside that phase's own floor is not\n");
+        lines.push_str("# null-arm\tevidence, and an effect above it is unaffected by another phase's noise.\n");
+    }
+    lines.push_str(&per_phase);
+    lines
+}
+
+fn verdict_of(resolved: bool) -> &'static str {
+    if resolved { "RESOLVED" } else { "UNRESOLVED" }
 }
 
 fn execute(arm: &Arm, options: &Options) -> Result<Vec<Phase>, Error> {
@@ -397,26 +469,137 @@ mod tests {
         std::fs::remove_dir_all(&directory).ok();
     }
 
+    fn ratios(rows: &[(&str, f64)]) -> Vec<(String, f64)> {
+        rows.iter().map(|(name, ratio)| ((*name).to_owned(), *ratio)).collect()
+    }
+
     #[test]
     fn every_run_ends_with_a_null_arm_line() {
-        let worst = (1.0004_f64, "compute".to_owned());
-        let resolved = null_arm_verdict(true, Some(&worst), None);
+        let clean = ratios(&[("compute", 1.0004)]);
+        let resolved = null_arm_verdict(true, &clean, None);
         assert!(resolved.contains("RESOLVED"), "{resolved}");
         assert!(!resolved.contains("UNRESOLVED"), "{resolved}");
 
-        let drifted = (1.017_f64, "syscall".to_owned());
-        let unresolved = null_arm_verdict(true, Some(&drifted), None);
+        let drifted = ratios(&[("syscall", 1.017)]);
+        let unresolved = null_arm_verdict(true, &drifted, None);
         assert!(unresolved.contains("UNRESOLVED"), "{unresolved}");
 
         // A comparison run must still say, in its own output, that no floor was established.
-        let compared = null_arm_verdict(false, Some(&worst), None);
+        let compared = null_arm_verdict(false, &clean, None);
         assert!(compared.contains("NOT-RUN"), "{compared}");
         // A run handed a floor must cite it rather than claim the floor is unknown.
-        let carried = null_arm_verdict(false, Some(&worst), Some("null.tsv\tabc123"));
+        let floor = Floor {
+            citation: "null.tsv\tabc123".to_owned(),
+            phases: vec![PhaseFloor {
+                name: "string".to_owned(),
+                floor: 0.0004,
+                resolved: true,
+            }],
+        };
+        let carried = null_arm_verdict(false, &clean, Some(&floor));
         assert!(carried.contains("NOT-RUN-HERE"), "{carried}");
         assert!(carried.contains("null.tsv"), "{carried}");
         assert!(!carried.contains("the floor is unknown here"), "{carried}");
-        assert!(null_arm_verdict(false, None, None).contains("NO-PHASES"));
+        // The inherited floor must be readable per phase, not only cited as a path.
+        assert!(
+            carried.contains("# null-arm-floor\tRESOLVED\tstring\tfloor=0.0004\n"),
+            "{carried}"
+        );
+        assert!(null_arm_verdict(false, &[], None).contains("NO-PHASES"));
+    }
+
+    #[test]
+    fn one_noisy_phase_does_not_void_the_phases_that_resolved() {
+        // The observed defect: `timebase` reads 0.9484 on a base-versus-base arm while every other
+        // phase sits on a 0.04% floor, and the single aggregate line called the whole run
+        // UNRESOLVED. A lane measuring `string` needs `string`'s floor, not `timebase`'s.
+        let observed = ratios(&[
+            ("atomics", 0.9998),
+            ("malloc", 1.0092),
+            ("mmap", 0.9989),
+            ("string", 0.9996),
+            ("timebase", 0.9484),
+        ]);
+        let verdict = null_arm_verdict(true, &observed, None);
+
+        // The aggregate survives, still set by the worst phase, and now says how many resolved.
+        assert!(
+            verdict.contains("# null-arm\tUNRESOLVED\tworst=timebase\tratio=0.9484"),
+            "{verdict}"
+        );
+        assert!(verdict.contains("resolved=3/5"), "{verdict}");
+
+        // Every phase carries its own verdict and its own floor, with no arithmetic left to do.
+        assert!(
+            verdict.contains("# null-arm-phase\tRESOLVED\tstring\tratio=0.9996\tfloor=0.0004\n"),
+            "{verdict}"
+        );
+        assert!(
+            verdict.contains("# null-arm-phase\tRESOLVED\tatomics\tratio=0.9998\tfloor=0.0002\n"),
+            "{verdict}"
+        );
+        assert!(
+            verdict.contains("# null-arm-phase\tUNRESOLVED\tmalloc\tratio=1.0092\tfloor=0.0092\n"),
+            "{verdict}"
+        );
+        assert!(
+            verdict.contains("# null-arm-phase\tUNRESOLVED\ttimebase\tratio=0.9484\tfloor=0.0516\n"),
+            "{verdict}"
+        );
+
+        // A run in which nothing resolved is genuinely broken and must still say so loudly.
+        let broken = null_arm_verdict(true, &ratios(&[("string", 1.04), ("timebase", 0.94)]), None);
+        assert!(broken.contains("resolved=0/2"), "{broken}");
+        assert!(broken.contains("EVERY phase drifted"), "{broken}");
+        assert!(!verdict.contains("EVERY phase drifted"), "{verdict}");
+    }
+
+    #[test]
+    fn a_partly_resolved_null_arm_carries_its_per_phase_floors_into_a_comparison() {
+        let guest = "abc123";
+        let directory = std::env::temp_dir().join(format!("hl-ab-phase-floor-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("create");
+        let path = directory.join("null.tsv");
+        std::fs::write(
+            &path,
+            "# null-arm\ttrue\n\
+             # null-arm\tUNRESOLVED\tworst=timebase\tratio=0.9484\ttolerance=0.005\tresolved=1/2\n\
+             # null-arm-phase\tRESOLVED\tstring\tratio=0.9996\tfloor=0.0004\n\
+             # null-arm-phase\tUNRESOLVED\ttimebase\tratio=0.9484\tfloor=0.0516\n\
+             # identity\tguest\tabc123\n",
+        )
+        .expect("write");
+
+        // A stably-noisy phase must not refuse every comparison on the box: one resolved phase is a
+        // floor for that phase, and the comparison prints it so the reader can find their own.
+        let floor = admit_floor(Some(&path), guest).expect("a phase resolved, so a floor exists");
+        assert_eq!(floor.phases.len(), 2);
+        let carried = null_arm_verdict(false, &ratios(&[("string", 0.84)]), Some(&floor));
+        assert!(
+            carried.contains("# null-arm-floor\tRESOLVED\tstring\tfloor=0.0004\n"),
+            "{carried}"
+        );
+        assert!(
+            carried.contains("# null-arm-floor\tUNRESOLVED\ttimebase\tfloor=0.0516\n"),
+            "{carried}"
+        );
+
+        // Nothing resolved anywhere is still a refusal.
+        let nothing = directory.join("nothing.tsv");
+        std::fs::write(
+            &nothing,
+            "# null-arm\ttrue\n\
+             # null-arm\tUNRESOLVED\tworst=timebase\tratio=0.9484\ttolerance=0.005\tresolved=0/2\n\
+             # null-arm-phase\tUNRESOLVED\tstring\tratio=1.0400\tfloor=0.0400\n\
+             # null-arm-phase\tUNRESOLVED\ttimebase\tratio=0.9484\tfloor=0.0516\n\
+             # identity\tguest\tabc123\n",
+        )
+        .expect("write");
+        assert!(
+            admit_floor(Some(&nothing), guest).is_err(),
+            "a run that resolved no phase is not a floor"
+        );
+        std::fs::remove_dir_all(&directory).ok();
     }
 
     #[test]
