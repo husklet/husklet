@@ -231,6 +231,71 @@ async fn pause_and_unpause_are_persisted_runtime_transitions() {
     containers.remove_force("pausable").await.unwrap();
 }
 
+/// Docker 29.1.3 resumes a paused container before delivering *any* signal, so `State.Paused`
+/// is false afterwards. Measured for USR1, CONT, TERM, KILL, STOP and WINCH on this host.
+#[tokio::test]
+async fn signalling_a_paused_container_resumes_it_first_like_docker() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    let events = Arc::new(Recorded::default());
+    containers.observe(events.clone());
+    containers.create(spec("signalled")).await.unwrap();
+    containers.start("signalled").await.unwrap();
+
+    // A running container is signalled directly: no suspension transition may be fabricated.
+    containers.signal("signalled", Signal::USER1).await.unwrap();
+    assert!(runtime.suspensions.lock().unwrap().is_empty());
+
+    containers.pause("signalled").await.unwrap();
+    let continue_signal = Signal::new(18).unwrap();
+    containers.signal("signalled", continue_signal).await.unwrap();
+    assert!(matches!(
+        containers.inspect("signalled").await.unwrap().state,
+        ContainerState::Running { .. }
+    ));
+    assert_eq!(*runtime.suspensions.lock().unwrap(), vec![true, false]);
+    assert_eq!(*runtime.signals.lock().unwrap(), vec![Signal::USER1, continue_signal]);
+    assert_eq!(
+        *events.0.lock().unwrap(),
+        [
+            LifecycleAction::Create,
+            LifecycleAction::Start,
+            LifecycleAction::Pause,
+            LifecycleAction::Unpause,
+        ]
+    );
+
+    containers.remove_force("signalled").await.unwrap();
+}
+
+/// A guest stopped by SIGSTOP is still `running` to the daemon, exactly as Docker reports it,
+/// and `stop` must still reach the KILL fallback rather than hanging on the graceful signal.
+#[tokio::test]
+async fn a_stop_signalled_container_stays_running_and_still_tears_down() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(30);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("stop-signalled")).await.unwrap();
+    containers.start("stop-signalled").await.unwrap();
+
+    let stop_signal = Signal::new(19).unwrap();
+    containers.signal("stop-signalled", stop_signal).await.unwrap();
+    let container = containers.inspect("stop-signalled").await.unwrap();
+    assert!(matches!(container.state, ContainerState::Running { .. }));
+    assert!(!container.state.is_paused());
+    assert!(runtime.suspensions.lock().unwrap().is_empty());
+
+    containers.remove_force("stop-signalled").await.unwrap();
+    assert_eq!(
+        *runtime.signals.lock().unwrap(),
+        vec![stop_signal, Signal::KILL],
+        "teardown must escalate to KILL for a guest that is stopped rather than exiting"
+    );
+}
+
 #[tokio::test]
 async fn checkpoint_is_durable_and_start_restores_while_arming_the_next_capture() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
