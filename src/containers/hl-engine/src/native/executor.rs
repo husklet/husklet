@@ -2181,7 +2181,7 @@ impl Executor {
                 status = status,
                 flags = config.flags,
                 diagnostics = diagnostics_enabled;
-                "native execution unavailable status={status} flags={:#x}: the run continues interpreted",
+                "native executor unavailable status={status} flags={:#x}: the caller selects its fallback execution mode",
                 config.flags
             );
             return Err(());

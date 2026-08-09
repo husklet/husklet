@@ -1243,7 +1243,7 @@ impl Drop for NativePool {
             let resets: u64 = self.executors.values().map(NativeExecutors::cache_resets).sum();
             let hold_remaining = self.bounded_direct_hold_remaining();
             eprintln!(
-                "hl-native-direct: admitted={} held={} cold={} site_declined={} flips={} holds={} direct_executors_created={} sticky={} sticky_limit={} hold_runs={} modes={} holding={} hold_remaining={} declined_sites={} resets={}",
+                "hl-native-direct: admitted={} held={} cold={} site_declined={} flips={} holds={} direct_executors_created={} sticky={} sticky_limit={} hold_runs={} mode_holds={} modes={} holding={} hold_remaining={} declined_sites={} resets={}",
                 self.counters.direct_admitted,
                 self.counters.direct_held,
                 self.counters.direct_cold,
@@ -1254,6 +1254,7 @@ impl Drop for NativePool {
                 self.direct_sticky || self.direct_sticky_permanent,
                 self.direct_sticky_limit,
                 self.direct_hold_runs,
+                self.direct_mode_holds_enabled(),
                 self.direct_modes.len(),
                 self.direct_holds.len(),
                 hold_remaining,
