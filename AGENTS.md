@@ -704,8 +704,12 @@ sqlite suppression story: on every one of them `declined_suppressed=0`, `latches
   `native_slice` computes `allow_direct` from tables that are empty on the first
   probe, so the first run of every arm64 process cannot recover a memory access
   outside its projected window and exits at ~8 instructions with
-  `a64_fallback_guard_write=1`. `native_x86` passes `allow_direct` as a literal
-  `false` and therefore never has this failure mode. Forcing `allow_direct=false`
+  `a64_fallback_guard_write=1`. x86 never has this failure mode because direct
+  authority does not exist there at all: `run_x86_lease` has no `allow_direct`
+  parameter, `run_x86_inner` always passes an operand resolver, and the x86
+  `RunStatistics` hardcode `direct: false` and `direct_guard: false`. The literal
+  `false` at the `run_x86_lease` call site is the **`interrupt`** argument, not
+  `allow_direct` — do not read it as evidence about direct authority. Forcing `allow_direct=false`
   on the arm64 path moves gettid from `builds=1 fallbacks=1 completed=8` to
   `builds=36 fallbacks=0 completed=258`.
 - **The run then exits on a cold branch target instead of building it.** With
