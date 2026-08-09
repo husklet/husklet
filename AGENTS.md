@@ -136,6 +136,15 @@ pattern-matching form is wrong in one direction or the other:
 
 Use `pgrep -ax testing` when you need the rows as well as the count.
 
+**Do not poll for your own long job — capture its exit code at the call site.**
+`make lint; echo EXIT=$?` is the whole technique. A waiter built on
+`pgrep -f "make lint"` matches its own command line and blocks forever on
+itself: one lane reported lint as still running for nine minutes after it had
+finished, then read a `sleep && tail` wrapper's exit code as lint's verdict and
+reported a green it had not observed. `-cx` cannot rescue this, because a `make`
+target has no distinct process name. The self-match hazard is generic to
+`pgrep -f`, not specific to `testing`.
+
 Timings taken without this check are not evidence. Counter ratios, code-size
 deltas and categorical pass/timeout results survive contention; minima do not.
 
