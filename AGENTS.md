@@ -248,9 +248,31 @@ its run, and anything that loads the box takes it shared:
 
 `flock` blocks until it can acquire, so a gate started mid-measurement waits
 instead of contending, and a measurement started mid-gate waits instead of
-reading a poisoned floor. Use `-w <seconds>` if you would rather fail than
-wait. This is advisory: it only works because every lane honours it, and a lane
-that skips it is invisible in exactly the way the `pgrep` checks already are.
+reading a poisoned floor.
+
+Most measuring runs have a cheap phase and an expensive one — controls are
+contention-insensitive, candidate arms are not — and the `-c` wrapper would
+hold the box exclusively through both. Take the lock around the expensive phase
+with the descriptor form instead:
+
+    exec 9>/var/tmp/husklet-box.lock   # once, NOT in a subshell or pipeline
+    flock -x 9
+    ... candidate arms ...
+    flock -u 9
+
+`flock` is per-descriptor, so `exec 9>` inside a `$(...)` or a pipeline locks
+nothing and the run merely *appears* protected — the same shape as the
+`pgrep -f` self-match, where the mechanism looks like it is working.
+
+**Bound the wait.** An unbounded `flock -x` plus an unbounded quiet loop hangs
+forever, and adoption of an advisory lock is never complete. Cap it, then
+proceed and **record the load you actually ran at**: a run reporting "ran at
+load 9, stated" is worth more than one that blocks silently.
+
+This is advisory in the strict sense — it converts a contention problem into a
+compliance problem. A builder that forgets the lock is indistinguishable from
+one that holds it, so **a granted lock is not proof the box is quiet.** Keep
+the name-matched check *behind* the lock, not instead of it.
 
 **`testing` is not the only thing that loads the box, and the others are the
 ones we generate constantly.** A `cargo test -p hl-engine` test binary is named
