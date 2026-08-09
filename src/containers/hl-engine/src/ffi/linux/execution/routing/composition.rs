@@ -525,9 +525,9 @@ mod tests {
         assert_eq!(launch_identity(&plan, "HL_GID", 20), Ok(0));
     }
 
-    /// Docker measured on this host: `docker run alpine` reports CapPrm/CapEff/CapBnd
-    /// 00000000a80425fb, while `docker run --user 1000 alpine` reports CapPrm/CapEff/CapInh/CapAmb 0
-    /// with CapBnd unchanged.
+    /// Docker measured on this host: `docker run alpine` reports `CapPrm`/`CapEff`/`CapBnd`
+    /// 00000000a80425fb, while `docker run --user 1000 alpine` reports
+    /// `CapPrm`/`CapEff`/`CapInh`/`CapAmb` 0 with `CapBnd` unchanged.
     #[test]
     fn a_non_root_launch_user_holds_no_capabilities_but_keeps_the_bounding_set() {
         let container = hl_task::CapabilitySets::CONTAINER;
