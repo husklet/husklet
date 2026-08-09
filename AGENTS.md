@@ -271,6 +271,26 @@ process and its ten workers, surviving SIGTERM and needing SIGKILL on all of
 them. This is the same property that makes the lock crash-safe — release is
 tied to descriptors, not to the script.
 
+**`flock` has no fairness, so a waiting exclusive starves.** On Linux a pending
+exclusive does **not** block new shared acquirers, so while builders keep
+arriving faster than they drain, the measurement never gets its turn: one lane
+sat on `flock -x` for minutes against 21 shared holders. This is the mirror of
+the problem above — there a long exclusive job starved short ones, here the
+short ones starve the long one — and the lock answers neither.
+
+Announce intent before requesting, so builders can yield:
+
+    : > /var/tmp/husklet-box.wanted    # measuring lane, before flock -x
+    ...                                # take the lock, run, release
+    rm -f /var/tmp/husklet-box.wanted
+
+    # builder, before taking flock -s
+    while [ -e /var/tmp/husklet-box.wanted ]; do sleep 5; done
+
+Advisory again, and it inherits every weakness of the lock: a builder that
+skips the check is invisible. But it converts starvation into a deliberate
+choice rather than an emergent one.
+
 **The lock prevents contention; it does not schedule.** It is strictly
 first-come, so it cannot express "the long restartable job yields to the short
 irreplaceable one". A 3250-row sweep acquired instantly while a measuring lane
