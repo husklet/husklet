@@ -937,6 +937,17 @@ hl_native_status hl_native_executor_rollover(hl_native_executor *executor, uint6
  * the guard never accepts would otherwise spin without consuming budget. */
 #define HL_A64_OPERAND_RETRY_LIMIT 8u
 
+/* Widening this cache is not worth its CPU-layout cost, measured rather than
+ * argued. A 64-slot shadow LRU run beside the real one on sqlite never filled
+ * and never covered a fault deeper than position 6, so the working set does
+ * converge -- at 7 slots, for a ceiling of 38.5% of the 1,593,713 operand
+ * callbacks. But the whole callback population, timed around the boundary
+ * crossing, is 168 ms of a 48.65 s phase: 0.35%. So the widest possible run-view
+ * cache buys 0.13% of sqlite, while the extra linear scan it imposes on
+ * a64_guard_full's 73,085,374 executions costs more than that outright.
+ * sqlite's remaining cost is not the boundary: 1,308,459,882 of its
+ * 1,567,153,182 instructions are interpreted, so native covers only 16.5%. */
+
 static int run_view_contains(const hl_a64_view *view, uint64_t address,
                              uint64_t size, uint32_t required) {
     return view != NULL && size != 0 && address <= UINT64_MAX - size &&
