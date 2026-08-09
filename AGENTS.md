@@ -311,6 +311,16 @@ supervisor's ambient environment does not configure the guest engine and must
 never be cited as native-mode evidence. Before a long run, prove the selected
 mode with one fast row and require the corresponding native diagnostics.
 
+The same trap applies to a **direct** `hl-x86_64` / `hl-aarch64` invocation, and
+there it is worse because nothing looks wrong. The engine takes options only via
+`--engine-option HL_NATIVE_EXECUTION=1`; the ambient variable does nothing, the
+run completes, and it prints a perfectly plausible `PHASE … us=… ok=…` with
+native entirely off. A lane produced an interpreter number wearing a native label
+this way and caught it only by checking `probes` in the diagnostics.
+
+So: pass engine options as `--engine-option`, and confirm the mode from a counter
+(`probes`, `entries`) rather than from the command you believe you ran.
+
 A commit may be called stable or buildable only after verification from that exact
 committed tree. A passing build in a dirty shared worktree is not evidence for
 `HEAD`: uncommitted companion schema, match, generated, test, or composition edits
