@@ -645,20 +645,21 @@ fn summarize(row: &ResultRow) {
     #[test]
     fn accepts_a_braced_arm_whose_tail_produces_the_value() {
         let findings = findings(
-            r"fn width(kind: u8, wide: bool) -> u8 {
-    for _ in 0..2 {
-        let size = match kind {
-            0 => {
-                let doubled = wide;
-                if doubled { 8 } else { 4 }
-            }
-            _ => 1,
-        };
-        if size > 4 {
-            return size;
+            r"fn shift(kind: u8, wide: bool) -> u64 {
+    let mut total = 0;
+    for half in 0..2 {
+        for offset in 0..4 {
+            let size = match kind {
+                0 => {
+                    let doubled = wide;
+                    if doubled { 8 } else { 4 }
+                }
+                _ => 1,
+            };
+            total += size + half + offset;
         }
     }
-    0
+    total
 }",
         );
 
@@ -668,19 +669,20 @@ fn summarize(row: &ResultRow) {
     #[test]
     fn accepts_a_braced_else_that_produces_the_value() {
         let findings = findings(
-            r"fn width(kind: u8, wide: bool) -> u8 {
-    for _ in 0..2 {
-        let size = if kind == 0 {
-            1
-        } else {
-            let doubled = wide;
-            if doubled { 8 } else { 4 }
-        };
-        if size > 4 {
-            return size;
+            r"fn shift(kind: u8, wide: bool) -> u64 {
+    let mut total = 0;
+    for half in 0..2 {
+        for offset in 0..4 {
+            let size = if kind == 0 {
+                1
+            } else {
+                let doubled = wide;
+                if doubled { 8 } else { 4 }
+            };
+            total += size + half + offset;
         }
     }
-    0
+    total
 }",
         );
 
@@ -690,24 +692,23 @@ fn summarize(row: &ResultRow) {
     #[test]
     fn still_reports_a_statement_before_the_tail_of_a_value_block() {
         let findings = findings(
-            r"fn width(kind: u8, wide: bool, rows: &[u8]) -> u8 {
-    for _ in 0..2 {
-        let size = match kind {
-            0 => {
-                for row in rows {
-                    if row > &0 {
-                        println!();
+            r"fn shift(kind: u8, wide: bool) -> u64 {
+    let mut total = 0;
+    for half in 0..2 {
+        for offset in 0..4 {
+            let size = match kind {
+                0 => {
+                    if wide {
+                        total += 1;
                     }
+                    4
                 }
-                4
-            }
-            _ => 1,
-        };
-        if size > 4 {
-            return size;
+                _ => 1,
+            };
+            total += size + half + offset;
         }
     }
-    0
+    total
 }",
         );
 
