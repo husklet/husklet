@@ -30,24 +30,11 @@ impl AttachQuery {
     }
 
     fn flag(value: Option<&str>) -> bool {
-        !matches!(
-            value.unwrap_or_default().trim().to_ascii_lowercase().as_str(),
-            "" | "0" | "no" | "false" | "none"
-        )
+        crate::api::http::query::parse_flag(value.unwrap_or_default())
     }
 
     fn content_type(uri: &axum::http::Uri, terminal: bool) -> &'static str {
-        let supports_multiplexed_type = uri
-            .path()
-            .strip_prefix("/v1.")
-            .and_then(|path| path.split('/').next())
-            .and_then(|minor| minor.parse::<u16>().ok())
-            .is_none_or(|minor| minor >= 42);
-        if supports_multiplexed_type && !terminal {
-            "application/vnd.docker.multiplexed-stream"
-        } else {
-            "application/vnd.docker.raw-stream"
-        }
+        crate::api::http::query::stream_content_type(uri, terminal)
     }
 }
 

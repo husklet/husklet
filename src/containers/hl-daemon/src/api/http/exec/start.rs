@@ -71,17 +71,7 @@ pub(in crate::api::http) async fn start(
 
 impl ExecStart {
     fn content_type(&self, uri: &axum::http::Uri) -> &'static str {
-        let supports_multiplexed_type = uri
-            .path()
-            .strip_prefix("/v1.")
-            .and_then(|path| path.split('/').next())
-            .and_then(|minor| minor.parse::<u16>().ok())
-            .is_none_or(|minor| minor >= 42);
-        if supports_multiplexed_type && !self.tty {
-            "application/vnd.docker.multiplexed-stream"
-        } else {
-            "application/vnd.docker.raw-stream"
-        }
+        crate::api::http::query::stream_content_type(uri, self.tty)
     }
 }
 

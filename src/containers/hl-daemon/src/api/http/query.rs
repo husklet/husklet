@@ -30,6 +30,22 @@ pub(super) fn parse_flag(value: &str) -> bool {
     )
 }
 
+/// Docker advertises the multiplexed frame media type from v1.42, and the raw type for a TTY.
+#[hl_design::classify(domain = "docker")]
+pub(super) fn stream_content_type(uri: &axum::http::Uri, terminal: bool) -> &'static str {
+    let supports_multiplexed_type = uri
+        .path()
+        .strip_prefix("/v1.")
+        .and_then(|path| path.split('/').next())
+        .and_then(|minor| minor.parse::<u16>().ok())
+        .is_none_or(|minor| minor >= 42);
+    if supports_multiplexed_type && !terminal {
+        "application/vnd.docker.multiplexed-stream"
+    } else {
+        "application/vnd.docker.raw-stream"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -42,5 +58,33 @@ mod tests {
         ] {
             assert!(super::parse_flag(raw), "{raw:?}");
         }
+    }
+
+    /// Docker 29.1.3 answered `multiplexed-stream` on a non-TTY `GET /v1.44/containers/x/logs`
+    /// and `raw-stream` on a TTY container, matching its attach and exec framing.
+    #[test]
+    fn stream_media_type_follows_the_tty_and_the_negotiated_version() {
+        for path in [
+            "/containers/id/logs",
+            "/v1.42/containers/id/logs",
+            "/v1.44/exec/id/start",
+        ] {
+            let uri = path.parse().unwrap();
+            assert_eq!(
+                super::stream_content_type(&uri, false),
+                "application/vnd.docker.multiplexed-stream",
+                "{path}"
+            );
+            assert_eq!(
+                super::stream_content_type(&uri, true),
+                "application/vnd.docker.raw-stream",
+                "{path}"
+            );
+        }
+        let legacy = "/v1.41/containers/id/logs".parse().unwrap();
+        assert_eq!(
+            super::stream_content_type(&legacy, false),
+            "application/vnd.docker.raw-stream"
+        );
     }
 }

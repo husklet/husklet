@@ -1,4 +1,5 @@
 use super::*;
+use axum::extract::OriginalUri;
 
 #[derive(Default, Deserialize)]
 pub(in super::super) struct LogsQuery {
@@ -18,6 +19,7 @@ pub(in super::super) async fn logs(
     State(state): State<DockerState>,
     Path(id): Path<String>,
     Query(query): Query<LogsQuery>,
+    OriginalUri(uri): OriginalUri,
 ) -> ApiResult<Response> {
     let options = LogOptions::try_from(query)?;
     if !options.streams.stdout && !options.streams.stderr {
@@ -38,11 +40,8 @@ pub(in super::super) async fn logs(
             .await
             .map(|bytes| (Ok::<_, std::convert::Infallible>(bytes), receiver))
     }));
-    Ok((
-        [(axum::http::header::CONTENT_TYPE, "application/vnd.docker.raw-stream")],
-        body,
-    )
-        .into_response())
+    let content_type = crate::api::http::query::stream_content_type(&uri, terminal);
+    Ok(([(axum::http::header::CONTENT_TYPE, content_type)], body).into_response())
 }
 
 async fn stream_logs(
