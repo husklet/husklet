@@ -91,6 +91,24 @@ have already cost work today:
 
 Prefer your own worktree. If you must work in the shared tree, leave it clean.
 
+### Copy a built binary in its own command, then run it once
+
+A lane copied `release/hl-x86_64` inside the same script as its `cargo build`,
+immediately after the build returned. The copy was corrupt — and **corrupt
+deterministically**, identical sha256 twice, which is what made it credible. A
+wrong answer that reproduces looks exactly like a right one.
+
+It then failed as `Engine(Load(Inspect { role: Main, error: WrongArchitecture }))`
+— pointing at the guest, not at the copy — and was reported as a tip-wide break
+that stopped an amd64 guest loading. Rebuilding from the same commit produced a
+working binary; all six commits in the suspected range ran cleanly.
+
+So: copy in a separate command after the build has settled, **run the binary once
+before you use it for anything**, and quote its sha256 beside your numbers. The
+same lane earlier got 15 phantom `E0560` errors in an untouched file by rebasing
+a worktree while clippy was reading it. An artifact taken from a tree or a
+directory that is still moving presents as a defect somewhere else entirely.
+
 ### Commit before you mutate
 
 Non-vacuity checks work by breaking the fix and confirming the assertion
