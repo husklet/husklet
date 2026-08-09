@@ -13,6 +13,7 @@
 )]
 #![forbid(unsafe_code)]
 
+mod ab;
 mod bench;
 mod benchmark;
 mod journal;
@@ -50,6 +51,8 @@ enum Command {
     ScenarioCachePreflight(scenario::CachePreflightOptions),
     /// Run repository benchmark definitions.
     Bench(bench::Options),
+    /// Compare two engine arms over one guest binary, serialized and order-balanced.
+    Ab(ab::Options),
     /// Run or report a direct provider benchmark.
     Benchmark {
         #[command(subcommand)]
@@ -87,6 +90,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::ScenarioProvenance(options) => scenario::provenance(options),
         Command::ScenarioCachePreflight(options) => scenario::cache_preflight(options),
         Command::Bench(options) => bench::run(options).await,
+        Command::Ab(options) => ab::run(options),
         Command::Benchmark { command } => benchmark::Application::new(std::env::var_os("PATH"))
             .execute(command)
             .map_err(Into::into),
@@ -109,6 +113,7 @@ mod cli_tests {
             "scenario-inventory",
             "scenario-provenance",
             "scenario-cache-preflight",
+            "ab",
             "bench",
             "benchmark",
             "nested",

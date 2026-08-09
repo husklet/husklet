@@ -37,7 +37,7 @@ fn expected() -> i32 {
     i32::try_from((accumulator >> 24) & 0xff).expect("byte fits")
 }
 
-fn image(code: &[u8], machine: u16) -> Vec<u8> {
+fn image(code: &[u8], machine: u16, text_flags: u32) -> Vec<u8> {
     let mut bytes = vec![0_u8; 8192];
     bytes[..4].copy_from_slice(b"\x7fELF");
     bytes[4] = 2;
@@ -52,7 +52,7 @@ fn image(code: &[u8], machine: u16) -> Vec<u8> {
     bytes[54..56].copy_from_slice(&56_u16.to_le_bytes());
     bytes[56..58].copy_from_slice(&2_u16.to_le_bytes());
     // An executable text page and a separate writable page the loop spills its accumulator through.
-    for (header, flags, offset) in [(64_usize, 5_u32, 0_u64), (120, 6, 4096)] {
+    for (header, flags, offset) in [(64_usize, text_flags, 0_u64), (120, 6_u32, 4096)] {
         bytes[header..header + 4].copy_from_slice(&1_u32.to_le_bytes());
         bytes[header + 4..header + 8].copy_from_slice(&flags.to_le_bytes());
         bytes[header + 8..header + 16].copy_from_slice(&offset.to_le_bytes());
@@ -67,13 +67,27 @@ fn image(code: &[u8], machine: u16) -> Vec<u8> {
 }
 
 fn run(program: &str, code: &[u8], machine: u16, native: bool) -> Result<EngineExit, ProgramError> {
+    run_with(program, code, machine, &[][..], native)
+}
+
+fn run_with(
+    program: &str,
+    code: &[u8],
+    machine: u16,
+    options: &[&str],
+    native: bool,
+) -> Result<EngineExit, ProgramError> {
     let identity = NEXT.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("hl-gate-{program}-{}-{identity}", std::process::id()));
-    std::fs::write(&path, image(code, machine)).expect("write guest image");
+    std::fs::write(&path, image(code, machine, 5)).expect("write guest image");
     let mut arguments = vec![program.to_owned()];
     if native {
         arguments.push("--engine-option".to_owned());
         arguments.push("HL_NATIVE_EXECUTION=1".to_owned());
+    }
+    for option in options {
+        arguments.push("--engine-option".to_owned());
+        arguments.push((*option).to_owned());
     }
     arguments.push(path.to_string_lossy().into_owned());
     let result = Program::run(arguments);
@@ -101,4 +115,56 @@ fn compiled_guests_agree_across_isas_and_modes() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert_eq!(ran, 4, "every ISA and mode must have run");
+}
+
+/// `aarch64-linux-gnu-as` output for: call `value_block` (`mov x0, #2; ret`) 64 times with a
+/// `getpid` between calls so the block is translated and its admission is cached, `mprotect` the
+/// text page writable, overwrite that `mov` with `mov x0, #17`, restore the page, then call the
+/// block once more and exit with what it returned.
+const ARM_SMC_CODE: &[u8] = &[
+    0x13, 0x08, 0x80, 0xd2, 0x16, 0x00, 0x00, 0x94, 0x88, 0x15, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4, 0x73, 0x06, 0x00,
+    0xf1, 0x81, 0xff, 0xff, 0x54, 0x00, 0x08, 0xa0, 0xd2, 0x01, 0x00, 0x82, 0xd2, 0xe2, 0x00, 0x80, 0xd2, 0x48, 0x1c,
+    0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4, 0x81, 0x01, 0x00, 0x10, 0x02, 0x44, 0x80, 0x52, 0x02, 0x50, 0xba, 0x72, 0x22,
+    0x00, 0x00, 0xb9, 0x00, 0x08, 0xa0, 0xd2, 0x01, 0x00, 0x82, 0xd2, 0xa2, 0x00, 0x80, 0xd2, 0x48, 0x1c, 0x80, 0xd2,
+    0x01, 0x00, 0x00, 0xd4, 0x03, 0x00, 0x00, 0x94, 0xa8, 0x0b, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4, 0x40, 0x00, 0x80,
+    0xd2, 0xc0, 0x03, 0x5f, 0xd6,
+];
+
+/// `x86_64-linux-gnu-as` output for the same program: `value_block` is `mov $2, %eax; ret` and the
+/// rewrite stores the byte 17 over that immediate.
+const X86_SMC_CODE: &[u8] = &[
+    0xbb, 0x40, 0x00, 0x00, 0x00, 0xe8, 0x50, 0x00, 0x00, 0x00, 0xb8, 0x27, 0x00, 0x00, 0x00, 0x0f, 0x05, 0xff, 0xcb,
+    0x75, 0xf0, 0xbf, 0x00, 0x00, 0x40, 0x00, 0xbe, 0x00, 0x10, 0x00, 0x00, 0xba, 0x07, 0x00, 0x00, 0x00, 0xb8, 0x0a,
+    0x00, 0x00, 0x00, 0x0f, 0x05, 0x48, 0x8d, 0x3d, 0x28, 0x00, 0x00, 0x00, 0xc6, 0x47, 0x01, 0x11, 0xbf, 0x00, 0x00,
+    0x40, 0x00, 0xbe, 0x00, 0x10, 0x00, 0x00, 0xba, 0x05, 0x00, 0x00, 0x00, 0xb8, 0x0a, 0x00, 0x00, 0x00, 0x0f, 0x05,
+    0xe8, 0x09, 0x00, 0x00, 0x00, 0x89, 0xc7, 0xb8, 0x3c, 0x00, 0x00, 0x00, 0x0f, 0x05, 0xb8, 0x02, 0x00, 0x00, 0x00,
+    0xc3,
+];
+
+/// A guest that rewrites a block it has already translated must observe the new code. The admission
+/// cache serves a previous admission's code bytes, so this pins that a rewrite is still seen with
+/// the cache on; returning 2 here is the shape of the stale-translation defect it must not
+/// reintroduce. Both ISAs and both cache settings are separate cases because the x86 arm is
+/// maintained by hand beside the aarch64 arm.
+#[test]
+fn a_rewritten_block_runs_its_new_code_with_and_without_the_admission_cache() {
+    let mut failures = Vec::new();
+    let mut ran = 0_usize;
+    for (program, code, machine) in [
+        ("hl-x86_64", X86_SMC_CODE, 62_u16),
+        ("hl-aarch64", ARM_SMC_CODE, 183_u16),
+    ] {
+        for options in [&[][..], &["HL_NATIVE_ADMISSION_CACHE=1"][..]] {
+            for native in [false, true] {
+                let label = format!("{program} native={native} options={options:?}");
+                match run_with(program, code, machine, options, native) {
+                    Ok(exit) if exit.kind == ExitKind::Code && exit.guest_status == 17 => ran += 1,
+                    Ok(exit) => failures.push(format!("{label}: expected code 17, got {exit:?}")),
+                    Err(error) => failures.push(format!("{label}: {error:?}")),
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_eq!(ran, 8, "every ISA, cache setting and mode must have run");
 }
