@@ -29,6 +29,26 @@ static void zero_test(uint32_t *instruction, uint32_t *target, unsigned source) 
  * window base displaced, and branches past the caller's bounds guard. */
 #define HL_X86_WRITE_CACHE_HIT_WORDS (HL_X86_WRITE_CACHE_WORDS + 4u)
 
+/* Diagnostic counters for the write path. x17 is scratch at every site below and
+ * the sequence is absent entirely when diagnostics are off, so a production block
+ * is word-for-word what it was. Sizing reads the same flag. */
+static _Thread_local int write_diagnostics;
+
+void hl_x86_set_write_diagnostics(int enabled) { write_diagnostics = enabled != 0; }
+
+static void diagnostic_increment(uint32_t *words, uint32_t *cursor, size_t field) {
+    if (!write_diagnostics) return;
+    words[(*cursor)++] = load_word(17, field);
+    words[(*cursor)++] = UINT32_C(0x91000631); /* add x17,x17,#1 */
+    words[(*cursor)++] = store_word(17, field);
+}
+
+/* Five counted sites inside the cache; a hit exit adds a sixth, and its absence
+ * adds the bypass branch instead. */
+static uint32_t cache_diagnostic_words(int hit) {
+    return write_diagnostics ? (hit ? 18u : 16u) : 0u;
+}
+
 /* The empty-journal sentinel is UINT64_MAX.  emit_constant reaches it with a
  * movz and three movk; MOVN writes the same all-ones pattern in one word. */
 static uint32_t ones_word(unsigned destination) {
@@ -243,6 +263,7 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width, 
     uint32_t *keep_last = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9000e74); /* str current last,[x19,#24] */
     uint32_t *merged = &words[*cursor];
+    diagnostic_increment(words, cursor, offsetof(hl_native_x86_64_cpu, diagnostic_dirty_merged));
     words[(*cursor)++] = ones_word(20);
     words[(*cursor)++] = pair_store(20, 31, HL_X86_WINDOW_BASE,
                                     window_word(offsetof(hl_native_x86_64_cpu, dirty_first)));
@@ -252,6 +273,7 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width, 
     words[(*cursor)++] = UINT32_C(0xd10006b5); /* sub remaining,remaining,#1 */
     uint32_t *scan_again = &words[(*cursor)++];
     uint32_t *append_target = &words[*cursor];
+    diagnostic_increment(words, cursor, offsetof(hl_native_x86_64_cpu, diagnostic_dirty_committed));
     words[(*cursor)++] = window_load(17, offsetof(hl_native_x86_64_cpu, dirty_count));
     words[(*cursor)++] = UINT32_C(0xf100423f); /* cmp count,#16 */
     uint32_t *full = &words[(*cursor)++];
@@ -283,19 +305,32 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width, 
     words[(*cursor)++] = pair_load(20, 21, 22, 2); /* view delta,permissions */
     words[(*cursor)++] = pair_store(20, 21, HL_X86_WINDOW_BASE,
                                     window_word(offsetof(hl_native_x86_64_cpu, memory_delta)));
+    diagnostic_increment(words, cursor, offsetof(hl_native_x86_64_cpu, diagnostic_write_cache_hit));
     if (hit != NULL) {
         words[(*cursor)++] = UINT32_C(0xa9415bf5);
         words[(*cursor)++] = UINT32_C(0xa8c253f3);
+        diagnostic_increment(words, cursor, offsetof(hl_native_x86_64_cpu, diagnostic_guard_fast));
         words[(*cursor)++] = UINT32_C(0x91000000) | width << 10 | 16u << 5 | 18u; /* add x18,x16,#width */
         *hit = &words[(*cursor)++];
     }
+    /* With no hit exit the selected-view path falls through to the shared
+     * epilogue, so it must step over the miss stubs. */
+    uint32_t *bypass = NULL;
+    if (hit == NULL && write_diagnostics) bypass = &words[(*cursor)++];
+    /* A full journal is a cache miss as well; both stubs collapse onto `active`
+     * when diagnostics are off. */
+    uint32_t *full_target = &words[*cursor];
+    diagnostic_increment(words, cursor, offsetof(hl_native_x86_64_cpu, diagnostic_dirty_overflow));
+    uint32_t *miss_target = &words[*cursor];
+    diagnostic_increment(words, cursor, offsetof(hl_native_x86_64_cpu, diagnostic_write_cache_miss));
     uint32_t *active = &words[*cursor];
     words[(*cursor)++] = UINT32_C(0xa9415bf5);
     words[(*cursor)++] = UINT32_C(0xa8c253f3);
 
-    branch(overflow, active, 3u);
+    if (bypass != NULL) jump(bypass, active);
+    branch(overflow, miss_target, 3u);
     *none = UINT32_C(0xb4000000) |
-            ((uint32_t)(active - none) & UINT32_C(0x7ffff)) << 5 | 22u;
+            ((uint32_t)(miss_target - none) & UINT32_C(0x7ffff)) << 5 | 22u;
     branch(below, next, 3u);
     branch(above, next, 8u);
     test(denied, next, 1u);
@@ -315,7 +350,7 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width, 
     branch(keep_last, merged, 9u);
     jump(merged_install, install);
     jump(scan_again, scan);
-    branch(full, active, 2u);
+    branch(full, full_target, 2u);
 }
 
 void hl_x86_emit_dirty(uint32_t *words, uint32_t *cursor) {
@@ -339,7 +374,7 @@ uint32_t hl_x86_load_words(const instruction *item) {
                      item->memory_write +
                      constant_words(access_width) + constant_words(item->pc);
     if (item->memory_write == 0u) words += hl_x86_read_cache_words(access_width);
-    else words += HL_X86_WRITE_CACHE_WORDS;
+    else words += HL_X86_WRITE_CACHE_WORDS + cache_diagnostic_words(0);
 
     if (item->load_width != 0u && item->signed_extend != 0u && item->width <= 2u) ++words;
 
@@ -439,7 +474,8 @@ void hl_x86_emit_load(uint32_t *words, uint32_t *cursor, const instruction *item
 
 uint32_t hl_x86_store_words(const instruction *item) {
     return hl_x86_address_words(item) - 1u + (item->source_high == 8u ? 1u : 0u) +
-           41u + HL_X86_WRITE_CACHE_HIT_WORDS + (item->live_chain != 0u ? 19u : 0u) + constant_words(item->pc) +
+           41u + HL_X86_WRITE_CACHE_HIT_WORDS + cache_diagnostic_words(1) +
+           (write_diagnostics ? 6u : 0u) + (item->live_chain != 0u ? 19u : 0u) + constant_words(item->pc) +
            (item->has_immediate != 0u ? constant_words(item->operand_immediate) : 0u);
 }
 
@@ -465,6 +501,7 @@ void hl_x86_emit_store(uint32_t *words, uint32_t *cursor, const instruction *ite
         source = 20u;
     }
     emit_write_cache(words, cursor, item->width, &cache_hit);
+    diagnostic_increment(words, cursor, offsetof(hl_native_x86_64_cpu, diagnostic_guard_full));
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
     words[(*cursor)++] = UINT32_C(0xeb11021f);
     below = &words[(*cursor)++];
@@ -497,6 +534,7 @@ void hl_x86_emit_store(uint32_t *words, uint32_t *cursor, const instruction *ite
     branch(overflow, miss, 2u);
     branch(above, miss, 8u);
     test(permission, miss, 1u);
+    diagnostic_increment(words, cursor, offsetof(hl_native_x86_64_cpu, diagnostic_guard_fallback));
     words[(*cursor)++] = store_word(16, offsetof(hl_native_x86_64_cpu, fault_address));
     words[(*cursor)++] = UINT32_C(0xd2800051);
     words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, fault_access));
@@ -518,7 +556,8 @@ void hl_x86_emit_store(uint32_t *words, uint32_t *cursor, const instruction *ite
  * SWPAL, and publication follows it, so neither fallback nor a guest fault can
  * expose a partial architectural mutation. */
 uint32_t hl_x86_xchg_words(const instruction *item) {
-    return hl_x86_address_words(item) - 1u + HL_X86_WRITE_CACHE_WORDS + 60u + constant_words(item->width) +
+    return hl_x86_address_words(item) - 1u + HL_X86_WRITE_CACHE_WORDS + cache_diagnostic_words(0) +
+           60u + constant_words(item->width) +
            2u * constant_words(item->pc) + (item->source_high == 8u ? 1u : 0u) +
            (item->live_chain != 0u ? 38u : 0u);
 }
@@ -1042,7 +1081,7 @@ uint32_t hl_x86_vector_words(const instruction *item) {
                        6u + constant_words(item->pc) + (item->live_chain != 0u ? 19u : 0u);
     if (item->memory_operand == 0u) return operation;
     uint32_t words = hl_x86_address_words(item) - 1u +
-           (item->memory_write != 0u ? 42u + HL_X86_WRITE_CACHE_WORDS : 24u) +
+           (item->memory_write != 0u ? 42u + HL_X86_WRITE_CACHE_WORDS + cache_diagnostic_words(0) : 24u) +
            (item->memory_write == 0u ? hl_x86_read_cache_words(width) : 0u) +
            (item->live_chain != 0u ? 19u : 0u) +
            constant_words(item->pc) +

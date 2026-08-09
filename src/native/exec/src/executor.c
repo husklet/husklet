@@ -735,6 +735,18 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
         output->x86_cold_builds = atomic_load_explicit(&executor->x86_cold_builds, memory_order_relaxed);
         output->x86_cold_quota_exits = atomic_load_explicit(&executor->x86_cold_quota_exits, memory_order_relaxed);
     }
+    /* The x86 write-path group is the tail of the record, so its gate is the
+     * whole size rather than the offset of a following field. */
+    if (output->size >= sizeof(hl_native_diagnostics)) {
+        output->x86_guard_fast = atomic_load_explicit(&executor->x86_guard_fast, memory_order_relaxed);
+        output->x86_guard_full = atomic_load_explicit(&executor->x86_guard_full, memory_order_relaxed);
+        output->x86_guard_fallback = atomic_load_explicit(&executor->x86_guard_fallback, memory_order_relaxed);
+        output->x86_dirty_merged = atomic_load_explicit(&executor->x86_dirty_merged, memory_order_relaxed);
+        output->x86_dirty_committed = atomic_load_explicit(&executor->x86_dirty_committed, memory_order_relaxed);
+        output->x86_dirty_overflow = atomic_load_explicit(&executor->x86_dirty_overflow, memory_order_relaxed);
+        output->x86_write_cache_hit = atomic_load_explicit(&executor->x86_write_cache_hit, memory_order_relaxed);
+        output->x86_write_cache_miss = atomic_load_explicit(&executor->x86_write_cache_miss, memory_order_relaxed);
+    }
     if (output->size >= offsetof(hl_native_diagnostics, a64_fallback_guard_read)) {
         output->relocation_cold_targets = atomic_load_explicit(&executor->relocation_cold_targets, memory_order_relaxed);
         output->relocation_cycles = atomic_load_explicit(&executor->relocation_cycles, memory_order_relaxed);

@@ -426,6 +426,14 @@ struct Diagnostics {
     ibtc_authenticated_entries: u64,
     ibtc_shared_hits: u64,
     ibtc_auth_rejections: u64,
+    x86_guard_fast: u64,
+    x86_guard_full: u64,
+    x86_guard_fallback: u64,
+    x86_dirty_merged: u64,
+    x86_dirty_committed: u64,
+    x86_dirty_overflow: u64,
+    x86_write_cache_hit: u64,
+    x86_write_cache_miss: u64,
 }
 
 #[cfg(test)]
@@ -1753,6 +1761,14 @@ impl NativeX86 {
             certificate_write_policy: 0,
             certificate_cache_identity: 0,
             certificate_token: 0,
+            diagnostic_guard_fast: 0,
+            diagnostic_guard_full: 0,
+            diagnostic_guard_fallback: 0,
+            diagnostic_dirty_merged: 0,
+            diagnostic_dirty_committed: 0,
+            diagnostic_dirty_overflow: 0,
+            diagnostic_write_cache_hit: 0,
+            diagnostic_write_cache_miss: 0,
         })
     }
 
@@ -2369,6 +2385,14 @@ impl Executor {
             ibtc_authenticated_entries: 0,
             ibtc_shared_hits: 0,
             ibtc_auth_rejections: 0,
+            x86_guard_fast: 0,
+            x86_guard_full: 0,
+            x86_guard_fallback: 0,
+            x86_dirty_merged: 0,
+            x86_dirty_committed: 0,
+            x86_dirty_overflow: 0,
+            x86_write_cache_hit: 0,
+            x86_write_cache_miss: 0,
         };
         // SAFETY: `&self` keeps the handle alive and `output` is a fully initialized local
         // the engine only overwrites; it is not retained past the call.
@@ -3206,7 +3230,7 @@ impl Drop for Executor {
             && let Ok(value) = self.diagnostics()
         {
             eprintln!(
-                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_fallback_guard_read={} a64_fallback_guard_write={} a64_fallback_simd_fp={} a64_fallback_memory={} a64_fallback_control={} a64_fallback_other={} a64_fallback_entry_rejection={} a64_fallback_generated={} a64_fallback_call={} a64_fallback_return={} a64_fallback_indirect={} a64_fallback_system={} a64_fallback_form_memory={} a64_fallback_form_other={} ibtc_authenticated_entries={} ibtc_shared_hits={} ibtc_auth_rejections={} a64_slim_exits=0 a64_branch_exhaustion={} a64_branch_cold_relocation={} a64_branch_nonrelocatable={} a64_branch_unidentified={} a64_branch_sample_pc={:#x} a64_branch_sample_source_first={:#x} a64_branch_sample_source_last={:#x} a64_branch_sample_form={} x86_hints_in={} x86_hints_accepted={} x86_hints_overlap_rejected={} x86_hints_subsuming_rejected={} x86_hints_unprojectable={}",
+                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_fallback_guard_read={} a64_fallback_guard_write={} a64_fallback_simd_fp={} a64_fallback_memory={} a64_fallback_control={} a64_fallback_other={} a64_fallback_entry_rejection={} a64_fallback_generated={} a64_fallback_call={} a64_fallback_return={} a64_fallback_indirect={} a64_fallback_system={} a64_fallback_form_memory={} a64_fallback_form_other={} ibtc_authenticated_entries={} ibtc_shared_hits={} ibtc_auth_rejections={} a64_slim_exits=0 a64_branch_exhaustion={} a64_branch_cold_relocation={} a64_branch_nonrelocatable={} a64_branch_unidentified={} a64_branch_sample_pc={:#x} a64_branch_sample_source_first={:#x} a64_branch_sample_source_last={:#x} a64_branch_sample_form={} x86_hints_in={} x86_hints_accepted={} x86_hints_overlap_rejected={} x86_hints_subsuming_rejected={} x86_hints_unprojectable={} x86_guard_fast={} x86_guard_full={} x86_guard_fallback={} x86_dirty_merged={} x86_dirty_committed={} x86_dirty_overflow={} x86_write_cache_hit={} x86_write_cache_miss={}",
                 value.ibtc_fills,
                 value.ibtc_site_collisions,
                 value.ibtc_shared_collisions,
@@ -3268,6 +3292,14 @@ impl Drop for Executor {
                 self.x86_hints_subsuming_rejected
                     .load(std::sync::atomic::Ordering::Relaxed),
                 self.x86_hints_unprojectable.load(std::sync::atomic::Ordering::Relaxed),
+                value.x86_guard_fast,
+                value.x86_guard_full,
+                value.x86_guard_fallback,
+                value.x86_dirty_merged,
+                value.x86_dirty_committed,
+                value.x86_dirty_overflow,
+                value.x86_write_cache_hit,
+                value.x86_write_cache_miss,
             );
         }
         // SAFETY: construction transfers unique ownership of the live handle;
@@ -3330,7 +3362,7 @@ const _: () = {
     assert!(std::mem::size_of::<RunExit>() == 48);
     assert!(std::mem::size_of::<Change>() == 40);
     assert!(std::mem::offset_of!(Diagnostics, ibtc_authenticated_entries) == 520);
-    assert!(std::mem::size_of::<Diagnostics>() == 544);
+    assert!(std::mem::size_of::<Diagnostics>() == 608);
 };
 
 #[cfg(test)]
@@ -3807,7 +3839,15 @@ mod test {
             1928
         );
         assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_token), 1936);
-        assert_eq!(std::mem::size_of::<schema::X86_64Cpu>(), 1944);
+        assert_eq!(
+            std::mem::offset_of!(schema::X86_64Cpu, diagnostic_guard_fast),
+            1944
+        );
+        assert_eq!(
+            std::mem::offset_of!(schema::X86_64Cpu, diagnostic_write_cache_miss),
+            2000
+        );
+        assert_eq!(std::mem::size_of::<schema::X86_64Cpu>(), 2008);
         assert_eq!(std::mem::size_of::<RunCertificate>(), 112);
         assert_eq!(std::mem::offset_of!(RunRequest, certificate), 160);
     }

@@ -97,6 +97,8 @@ uint32_t hl_x86_cmov_words(const instruction *item);
 void hl_x86_emit_cmov(uint32_t *words, uint32_t *cursor, const instruction *item, unsigned source);
 uint32_t hl_x86_set_words(const instruction *item);
 void hl_x86_emit_set(uint32_t *words, uint32_t *cursor, const instruction *item);
+/* Sizing and emission both read this; translate publishes it before either. */
+void hl_x86_set_write_diagnostics(int enabled);
 uint32_t hl_x86_store_words(const instruction *item);
 void hl_x86_emit_dirty(uint32_t *words, uint32_t *cursor);
 void hl_x86_emit_store(uint32_t *words, uint32_t *cursor, const instruction *item);
