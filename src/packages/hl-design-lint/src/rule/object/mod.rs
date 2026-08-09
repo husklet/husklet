@@ -37,7 +37,7 @@ impl Rule for GodObject {
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut types = definitions(workspace);
         collect_methods(workspace, &mut types);
-        Ok(types.into_values().filter_map(finding).collect())
+        Ok(types.into_values().filter_map(TypeFacts::finding).collect())
     }
 }
 
@@ -48,6 +48,73 @@ struct TypeFacts {
     origins: BTreeMap<String, String>,
     methods: Vec<Method>,
     excluded: bool,
+}
+
+impl TypeFacts {
+    /// The god-object finding this type's shape warrants, if any.
+    fn finding(self) -> Option<Finding> {
+        if self.excluded || self.methods.len() <= METHOD_THRESHOLD || self.fields.len() < 3 {
+            return None;
+        }
+        let clusters = clusters(&self.methods, &self.origins);
+        if clusters.len() < CLUSTER_THRESHOLD {
+            return None;
+        }
+        let crossing = self.methods.iter().enumerate().find(|(_, method)| {
+            let origins = method
+                .calls
+                .iter()
+                .filter_map(|field| self.origins.get(field))
+                .collect::<BTreeSet<_>>();
+            method.workflow && origins.len() >= 2
+        })?;
+
+        let descriptions = clusters
+            .iter()
+            .map(|cluster| describe_cluster(cluster, &self.methods))
+            .collect::<Vec<_>>();
+        let mut finding = Finding::warning("god-object-growth", self.name.clone(), self.location);
+        finding.message = format!(
+            "`{}` owns {} inherent methods across {} distinct field capabilities; `{}` coordinates unrelated groups",
+            self.name,
+            self.methods.len(),
+            clusters.len(),
+            crossing.1.name,
+        );
+        finding.help = "extract the field-owned capabilities and their workflows; keep the root responsible only for construction and declarative cross-capability wiring".into();
+        finding.related = clusters
+            .iter()
+            .map(|cluster| {
+                let representative = cluster.methods[0];
+                Related {
+                    label: describe_cluster(cluster, &self.methods),
+                    location: self.methods[representative].location.clone(),
+                }
+            })
+            .chain(std::iter::once(Related {
+                label: format!("cross-capability workflow `{}`", crossing.1.name),
+                location: crossing.1.location.clone(),
+            }))
+            .collect();
+        let mut review = Review::error();
+        review
+            .metadata
+            .push(("Inherent methods".into(), self.methods.len().to_string()));
+        review
+            .metadata
+            .push(("Capability clusters".into(), descriptions.join("; ")));
+        review
+            .metadata
+            .push(("Cross-capability method".into(), crossing.1.name.clone()));
+        review
+            .questions
+            .push("Do these field groups have separate invariants, lifecycles, or domain vocabularies?".into());
+        review
+            .questions
+            .push("Can each group become a cohesive capability while this type retains only composition?".into());
+        finding.review = Some(review);
+        Some(finding)
+    }
 }
 
 struct Method {
@@ -218,70 +285,6 @@ fn has_receiver(method: &ImplItemFn) -> bool {
         .inputs
         .first()
         .is_some_and(|input| matches!(input, syn::FnArg::Receiver(_)))
-}
-
-fn finding(facts: TypeFacts) -> Option<Finding> {
-    if facts.excluded || facts.methods.len() <= METHOD_THRESHOLD || facts.fields.len() < 3 {
-        return None;
-    }
-    let clusters = clusters(&facts.methods, &facts.origins);
-    if clusters.len() < CLUSTER_THRESHOLD {
-        return None;
-    }
-    let crossing = facts.methods.iter().enumerate().find(|(_, method)| {
-        let origins = method
-            .calls
-            .iter()
-            .filter_map(|field| facts.origins.get(field))
-            .collect::<BTreeSet<_>>();
-        method.workflow && origins.len() >= 2
-    })?;
-
-    let descriptions = clusters
-        .iter()
-        .map(|cluster| describe_cluster(cluster, &facts.methods))
-        .collect::<Vec<_>>();
-    let mut finding = Finding::warning("god-object-growth", facts.name.clone(), facts.location);
-    finding.message = format!(
-        "`{}` owns {} inherent methods across {} distinct field capabilities; `{}` coordinates unrelated groups",
-        facts.name,
-        facts.methods.len(),
-        clusters.len(),
-        crossing.1.name,
-    );
-    finding.help = "extract the field-owned capabilities and their workflows; keep the root responsible only for construction and declarative cross-capability wiring".into();
-    finding.related = clusters
-        .iter()
-        .map(|cluster| {
-            let representative = cluster.methods[0];
-            Related {
-                label: describe_cluster(cluster, &facts.methods),
-                location: facts.methods[representative].location.clone(),
-            }
-        })
-        .chain(std::iter::once(Related {
-            label: format!("cross-capability workflow `{}`", crossing.1.name),
-            location: crossing.1.location.clone(),
-        }))
-        .collect();
-    let mut review = Review::error();
-    review
-        .metadata
-        .push(("Inherent methods".into(), facts.methods.len().to_string()));
-    review
-        .metadata
-        .push(("Capability clusters".into(), descriptions.join("; ")));
-    review
-        .metadata
-        .push(("Cross-capability method".into(), crossing.1.name.clone()));
-    review
-        .questions
-        .push("Do these field groups have separate invariants, lifecycles, or domain vocabularies?".into());
-    review
-        .questions
-        .push("Can each group become a cohesive capability while this type retains only composition?".into());
-    finding.review = Some(review);
-    Some(finding)
 }
 
 fn clusters(methods: &[Method], origins: &BTreeMap<String, String>) -> Vec<Cluster> {

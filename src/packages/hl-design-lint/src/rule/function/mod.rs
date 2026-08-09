@@ -34,7 +34,7 @@ impl Rule for FreeFunction {
                 path: &source.path,
                 owned: &owned,
                 crates: &crates,
-                imports: imports(source),
+                imports: Imports::of(source),
                 package: source.package.replace('-', "_"),
                 test_scope: false,
                 nesting: Vec::new(),
@@ -146,7 +146,7 @@ struct Functions<'a> {
     path: &'a std::path::Path,
     owned: &'a HashSet<String>,
     crates: &'a HashSet<String>,
-    imports: HashMap<String, String>,
+    imports: Imports,
     package: String,
     test_scope: bool,
     nesting: Vec<String>,
@@ -216,17 +216,7 @@ fn owned_crates(workspace: &Workspace) -> HashSet<String> {
         .collect()
 }
 
-/// What a source file's `use` items bind each name to, keyed by the bound name and valued by the
-/// crate the path starts at. Without this a bare `Path` cannot be told from `std::path::Path`.
-fn imports(source: &crate::source::Source) -> HashMap<String, String> {
-    let mut values = HashMap::new();
-    for item in &source.syntax.items {
-        if let syn::Item::Use(item) = item {
-            collect_use(&item.tree, None, &mut values);
-        }
-    }
-    values
-}
+
 
 fn collect_use(tree: &syn::UseTree, root: Option<&str>, values: &mut HashMap<String, String>) {
     match tree {
@@ -255,10 +245,13 @@ fn collect_use(tree: &syn::UseTree, root: Option<&str>, values: &mut HashMap<Str
 }
 
 /// Resolves the argument types of one function against the scanned tree.
+/// The crate each name a source file imports is bound to.
+struct Imports(HashMap<String, String>);
+
 struct Scope<'a> {
     owned: &'a HashSet<String>,
     crates: &'a HashSet<String>,
-    imports: &'a HashMap<String, String>,
+    imports: &'a Imports,
     package: &'a str,
 }
 
@@ -279,9 +272,23 @@ impl Scope<'_> {
                 _ => first,
             }
         } else {
-            self.imports.get(&first).cloned().unwrap_or_else(|| self.package.to_owned())
+            self.imports.0.get(&first).cloned().unwrap_or_else(|| self.package.to_owned())
         };
         self.crates.contains(&root)
+    }
+}
+
+impl Imports {
+    /// What a source file's `use` items bind each name to, keyed by the bound name and valued by the
+    /// crate the path starts at. Without this a bare `Path` cannot be told from `std::path::Path`.
+    fn of(source: &crate::source::Source) -> Self {
+        let mut values = HashMap::new();
+        for item in &source.syntax.items {
+            if let syn::Item::Use(item) = item {
+                collect_use(&item.tree, None, &mut values);
+            }
+        }
+        Self(values)
     }
 }
 
