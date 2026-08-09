@@ -264,6 +264,22 @@ with the descriptor form instead:
 nothing and the run merely *appears* protected — the same shape as the
 `pgrep -f` self-match, where the mechanism looks like it is working.
 
+**The descriptor is inherited, so killing the script does not release the
+lock.** Every child gets fd 9, and the lock lives until the last inheritor
+dies: one lane killed its sweep script and the lock stayed held by the sweep
+process and its ten workers, surviving SIGTERM and needing SIGKILL on all of
+them. This is the same property that makes the lock crash-safe — release is
+tied to descriptors, not to the script.
+
+**The lock prevents contention; it does not schedule.** It is strictly
+first-come, so it cannot express "the long restartable job yields to the short
+irreplaceable one". A 3250-row sweep acquired instantly while a measuring lane
+sat in a cheap phase holding nothing, and would have starved minima behind it
+for hours. Express priority outside the lock: wait for sustained quiet
+*before requesting it*, so the request only forms once the other lane is
+genuinely finished. And prefer yielding — restartable work should release for
+work that must be re-taken from scratch.
+
 **Bound the wait.** An unbounded `flock -x` plus an unbounded quiet loop hangs
 forever, and adoption of an advisory lock is never complete. Cap it, then
 proceed and **record the load you actually ran at**: a run reporting "ran at
