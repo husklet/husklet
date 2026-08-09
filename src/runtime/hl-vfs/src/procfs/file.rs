@@ -198,9 +198,8 @@ impl fmt::Debug for CommFile {
 
 impl OpenFileDescription for CommFile {
     fn metadata(&self) -> Result<OfdMetadata, ObjectError> {
-        let mut metadata = self.metadata.clone();
-        metadata.size = self.bytes()?.len() as u64;
-        Ok(metadata)
+        self.bytes()?;
+        Ok(self.metadata.clone())
     }
 
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
