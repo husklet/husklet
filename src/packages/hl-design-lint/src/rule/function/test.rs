@@ -4,6 +4,32 @@ use crate::rule::Rule;
 
 use super::FreeFunction;
 
+/// Writes a second package declaring `Assembly`, so a cross-crate argument has a real owner.
+fn findings_beside_sibling(source: &str, sibling: &str) -> Vec<crate::Finding> {
+    let nonce = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("clock follows Unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("hl-function-rule-pair-{nonce}"));
+    let mut paths = Vec::new();
+    for (name, text) in [("fixture", source), ("hl_runtime", sibling)] {
+        let package = root.join("src/packages").join(name);
+        let path = package.join("src/lib.rs");
+        fs::create_dir_all(path.parent().expect("fixture has a parent")).expect("create fixture");
+        fs::write(
+            package.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n"),
+        )
+        .expect("write manifest");
+        fs::write(&path, text).expect("write fixture");
+        paths.push(path);
+    }
+    let workspace = crate::source::Workspace::load(paths).expect("parse fixture");
+    let values = FreeFunction.check(&workspace).expect("run rule");
+    fs::remove_dir_all(root).expect("remove fixture");
+    values
+}
+
 fn findings(source: &str) -> Vec<crate::Finding> {
     let nonce = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -180,14 +206,14 @@ fn build_id(path: &std::path::Path) -> bool {
 
 #[test]
 fn a_sibling_crate_s_type_cannot_take_an_inherent_method_from_here() {
-    let values = findings(
+    let values = findings_beside_sibling(
         r"
-pub struct Assembly;
 fn prepare_tasks(assembly: &hl_runtime::Assembly) -> bool {
     let _ = assembly;
     true
 }
 ",
+        "pub struct Assembly;",
     );
     assert!(values.is_empty(), "got {values:?}");
 }
