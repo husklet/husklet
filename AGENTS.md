@@ -258,6 +258,33 @@ Include at least one phase the change provably cannot affect, and check it reads
 1.000. If it does not, the harness is lying and nothing else in the table is
 evidence.
 
+## `bench --results` is a resumable ledger; never reuse a path
+
+`bench` keys a resumable ledger on `--results`. Point two runs at the same path
+and the second **replays the cached rows instead of measuring**, then prints a
+clean `PASS`. There is no warning and the table looks perfect.
+
+So give every run a unique results path. A lane reusing one across arms would
+produce a plausible A/B table in which one arm was never executed.
+
+Two related harness facts worth knowing before you build your own repeat loop:
+each case already runs `repetitions: 3` and reports `min_us`/`median`/`p90` per
+phase, so take `min_us` and minimise across your rounds on top of it. And the
+guest is built by the harness per arm from the same `main.c`, so both arms share
+a source but not necessarily a binary — see below.
+
+## Identical source does not mean an identical binary
+
+Two builds of **byte-identical source**, same tip, same toolchain, worktree paths
+of equal length, differed by **152 bytes and a different sha256**. A candidate
+build differed from base by 3,520.
+
+That is why a base-versus-base null arm is not ceremony: it measures how much
+ratio a phase can show for no reason at all. If the null arm's spread covers the
+candidate's effect, the candidate is not evidence however clean the other
+controls read. Phases with small absolute times are where this bites — a few
+hundred microseconds of drift is percent-level on a 2.6 ms phase.
+
 ## A control that merely seems unaffected is not a control
 
 Disable the code path in both binaries and measure that. Anything weaker is a
