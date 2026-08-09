@@ -14,11 +14,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 return Some(LinuxResult::Value(u64::from(credentials.keep_capabilities)));
             }
             PrctlPlan::SetKeepCapabilities(value) => {
-                // `cap_task_prctl`: SECBIT_KEEP_CAPS_LOCKED refuses both directions, measured on the host.
-                if credentials.secure_bits & Self::SECURE_KEEP_CAPS_LOCKED != 0 {
+                if !credentials.set_keep_capabilities(value) {
                     return Some(LinuxResult::Error(Errno::EPERM));
                 }
-                credentials.keep_capabilities = value;
             }
             PrctlPlan::ReadCapability(capability) => {
                 let present = credentials.capability_bounding & (1_u64 << capability) != 0;

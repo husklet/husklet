@@ -114,6 +114,7 @@ impl ProcessCredentials {
     /// `SECBIT_KEEP_CAPS` and `SECBIT_NO_SETUID_FIXUP` as `prctl(PR_SET_SECUREBITS)` encodes them.
     const SECURE_NO_SETUID_FIXUP: u32 = 1 << 2;
     const SECURE_KEEP_CAPS: u32 = 1 << 4;
+    const SECURE_KEEP_CAPS_LOCKED: u32 = 1 << 5;
     /// `CAP_FS_MASK`: the chown, DAC, owner, set-id, immutable, mknod and MAC capabilities that
     /// `setfsuid` moves.
     const FILESYSTEM_MASK: u64 = 0b1_1111 | (1 << 9) | (1 << 27) | (1 << 32) | (1 << 33);
@@ -126,6 +127,30 @@ impl ProcessCredentials {
     #[must_use]
     pub const fn has_capability(&self, capability: u64) -> bool {
         self.capabilities.effective & capability != 0
+    }
+
+    /// Linux `cap_task_prctl`: `PR_SET_KEEPCAPS` is refused in both directions, measured on the
+    /// host, once `SECBIT_KEEP_CAPS_LOCKED` is set. Returns whether the request was honoured.
+    pub fn set_keep_capabilities(&mut self, value: bool) -> bool {
+        if self.secure_bits & Self::SECURE_KEEP_CAPS_LOCKED != 0 {
+            return false;
+        }
+        self.keep_capabilities = value;
+        true
+    }
+
+    /// Linux `cap_capset`: effective and permitted are bounded by the current permitted set, and a
+    /// new inheritable capability must also lie in the bounding set. The bounding clause is
+    /// unconditional in the kernel, so `PR_CAPBSET_DROP` of a still-permitted capability makes it
+    /// bite even for a holder of `CAP_SETPCAP` (measured on the host).
+    #[must_use]
+    pub const fn may_replace_capabilities(&self, requested: CapabilitySets) -> bool {
+        let current = self.capabilities;
+        requested.effective & !requested.permitted == 0
+            && requested.permitted & !current.permitted == 0
+            && requested.inheritable & !(current.inheritable | current.permitted) == 0
+            && requested.inheritable & !(current.inheritable | self.capability_bounding) == 0
+            && (requested.effective | requested.permitted | requested.inheritable) & !CapabilitySets::SUPPORTED == 0
     }
 
     #[must_use]
@@ -278,6 +303,48 @@ mod credential_test {
         credentials.apply_setuid_capabilities([0, 0, 0]);
         assert_eq!(credentials.capabilities.permitted, CapabilitySets::CONTAINER);
         assert_eq!(credentials.capabilities.effective, 0);
+    }
+
+    #[test]
+    fn keep_caps_lock_refuses_both_directions() {
+        let mut credentials = ProcessCredentials::new(0, 0, &[], 8).unwrap();
+        assert!(credentials.set_keep_capabilities(true));
+        credentials.secure_bits = 1 << 5;
+        assert!(!credentials.set_keep_capabilities(false));
+        assert!(credentials.keep_capabilities);
+        assert!(!credentials.set_keep_capabilities(true));
+        credentials.secure_bits = 0;
+        assert!(credentials.set_keep_capabilities(false));
+        assert!(!credentials.keep_capabilities);
+    }
+
+    #[test]
+    fn capset_refuses_inheritable_outside_the_bounding_set() {
+        let mut credentials = ProcessCredentials::new(0, 0, &[], 8).unwrap();
+        let net_raw = 1_u64 << 13;
+        let mut requested = credentials.capabilities;
+        requested.inheritable = net_raw;
+        assert!(credentials.may_replace_capabilities(requested));
+        // `PR_CAPBSET_DROP` leaves the capability permitted, which is how the two sets diverge.
+        credentials.capability_bounding &= !net_raw;
+        assert!(credentials.capabilities.permitted & net_raw != 0);
+        assert!(!credentials.may_replace_capabilities(requested));
+        requested.inheritable = 0;
+        assert!(credentials.may_replace_capabilities(requested));
+    }
+
+    #[test]
+    fn capset_refuses_permitted_growth() {
+        let mut credentials = ProcessCredentials::new(0, 0, &[], 8).unwrap();
+        credentials.capabilities.permitted = 0;
+        credentials.capabilities.effective = 0;
+        let requested = CapabilitySets {
+            effective: 0,
+            permitted: CapabilitySets::SET_USER,
+            inheritable: 0,
+            ambient: 0,
+        };
+        assert!(!credentials.may_replace_capabilities(requested));
     }
 
     #[test]
