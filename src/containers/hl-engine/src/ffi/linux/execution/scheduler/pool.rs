@@ -4,6 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use super::{NATIVE_BOUNDARY_CAPACITY, NATIVE_SITE_LIMIT, NATIVE_SOURCE_LIMIT};
+
+/// Above this many observed sources, re-reading each one costs more than dropping the whole set.
+const SOURCE_RESCAN_LIMIT: usize = 1024;
 use crate::activation::GuestIsa;
 use crate::launch_plan::RuntimeLaunchPlan;
 
@@ -729,6 +732,60 @@ impl NativePool {
         SourceChange::Stable
     }
 
+    /// Re-reads every source this incarnation observed and invalidates the ranges whose backing
+    /// token moved, because a new instruction epoch may have remapped code underneath them.
+    ///
+    /// Three situations collapse to the same conservative answer — drop everything observed and
+    /// start again: a population too large to walk, a source the caller can no longer resolve,
+    /// and a source that now belongs to a different incarnation.
+    fn rescan_sources<F>(&mut self, process: hl_task::ProcessId, incarnation: u64, current_token: &mut F) -> Option<()>
+    where
+        F: FnMut(u64, u64) -> Option<hl_memory::ExecutableToken>,
+    {
+        let observed: Vec<_> = self
+            .sources
+            .iter()
+            .filter(|((owner, source_incarnation, _, _), _)| *owner == process && *source_incarnation == incarnation)
+            .map(|(key @ (_, _, first, last), previous)| (*key, *previous, *first, *last))
+            .collect();
+        if observed.len() > SOURCE_RESCAN_LIMIT {
+            return self.reset_observed_sources(process, incarnation);
+        }
+        let mut changed = Vec::new();
+        let mut refreshed = Vec::new();
+        let mut gap = false;
+        for (key, previous, source_first, source_last) in observed {
+            let Some(current) = current_token(source_first, source_last) else {
+                gap = true;
+                break;
+            };
+            if current.incarnation != incarnation {
+                gap = true;
+                break;
+            }
+            if current != previous {
+                changed.push((source_first, source_last));
+            }
+            refreshed.push((key, current));
+        }
+        if gap {
+            return self.reset_observed_sources(process, incarnation);
+        }
+        if !changed.is_empty()
+            && self
+                .executor(process)?
+                .invalidate_ranges(&changed, incarnation)
+                .is_err()
+        {
+            self.reset_observed_sources(process, incarnation)?;
+            refreshed.clear();
+        }
+        for (key, current) in refreshed {
+            self.sources.insert(key, current);
+        }
+        Some(())
+    }
+
     pub(super) fn prepare_source<F>(
         &mut self,
         process: hl_task::ProcessId,
@@ -743,49 +800,7 @@ impl NativePool {
     {
         let published = self.instruction_epochs.get(&process).copied();
         if published.is_some_and(|previous| previous != instruction_epoch) {
-            let observed: Vec<_> = self
-                .sources
-                .iter()
-                .filter(|((owner, incarnation, _, _), _)| *owner == process && *incarnation == token.incarnation)
-                .map(|(key @ (_, _, first, last), previous)| (*key, *previous, *first, *last))
-                .collect();
-            if observed.len() > 1024 {
-                self.reset_observed_sources(process, token.incarnation)?;
-            } else {
-                let mut changed = Vec::new();
-                let mut refreshed = Vec::new();
-                let mut gap = false;
-                for (key, previous, source_first, source_last) in observed {
-                    let Some(current) = current_token(source_first, source_last) else {
-                        gap = true;
-                        break;
-                    };
-                    if current.incarnation != token.incarnation {
-                        gap = true;
-                        break;
-                    }
-                    if current != previous {
-                        changed.push((source_first, source_last));
-                    }
-                    refreshed.push((key, current));
-                }
-                if gap {
-                    self.reset_observed_sources(process, token.incarnation)?;
-                } else {
-                    if !changed.is_empty()
-                        && self
-                            .executor(process)?
-                            .invalidate_ranges(&changed, token.incarnation)
-                            .is_err()
-                    {
-                        self.reset_observed_sources(process, token.incarnation)?;
-                        refreshed.clear();
-                    }
-                    for (key, current) in refreshed {
-                        self.sources.insert(key, current);
-                    }
-                }
-            }
+            self.rescan_sources(process, token.incarnation, &mut current_token)?;
         }
         self.instruction_epochs.insert(process, instruction_epoch);
         let change = self.track_source(process, first, last, token, NATIVE_SOURCE_LIMIT);

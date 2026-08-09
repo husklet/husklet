@@ -259,22 +259,29 @@ fn format_passed(mut passed: execution::Success) -> String {
     lines.join("\n")
 }
 
+/// One unit of work per case of a benchmark, all against the same target.
+fn cases_for_target(benchmark: &Arc<Benchmark>, target: Target) -> impl Iterator<Item = PlannedWork> {
+    benchmark
+        .cases
+        .iter()
+        .enumerate()
+        .map(move |(case_index, case)| PlannedWork {
+            key: WorkKey {
+                id: format!("bench/{}/{}", benchmark.name, case.id),
+                target,
+                provenance: String::new(),
+            },
+            benchmark: Arc::clone(benchmark),
+            case_index,
+        })
+}
+
 fn plan(benchmarks: Vec<Benchmark>, options: &Options) -> Vec<PlannedWork> {
     let mut work = Vec::new();
     for benchmark in benchmarks {
         let benchmark = Arc::new(benchmark);
         for target in options.targets() {
-            for (case_index, case) in benchmark.cases.iter().enumerate() {
-                work.push(PlannedWork {
-                    key: WorkKey {
-                        id: format!("bench/{}/{}", benchmark.name, case.id),
-                        target,
-                        provenance: String::new(),
-                    },
-                    benchmark: Arc::clone(&benchmark),
-                    case_index,
-                });
-            }
+            work.extend(cases_for_target(&benchmark, target));
         }
     }
     work.sort_by(|left, right| left.key.cmp(&right.key));
