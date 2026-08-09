@@ -541,6 +541,141 @@ mod tests {
     }
 
     #[test]
+    fn split_mode_executors_are_default_off_and_aarch64_only() {
+        let default = plan(crate::options::Options::default());
+        assert!(!NativePool::new(GuestIsa::Aarch64, &default, None).split_mode_executors);
+
+        let mut options = crate::options::Options::default();
+        options.set("HL_NATIVE_SPLIT_MODE_EXECUTORS", "1", true).unwrap();
+        let configured = plan(options);
+        assert!(NativePool::new(GuestIsa::Aarch64, &configured, None).split_mode_executors);
+        assert!(!NativePool::new(GuestIsa::X86_64, &configured, None).split_mode_executors);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn split_mode_executor_pair_is_lazy_and_default_keeps_one_handle() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let mut default_options = crate::options::Options::default();
+        default_options.set("HL_NATIVE_EXECUTION", "1", true).unwrap();
+        let mut default_pool = NativePool::new(GuestIsa::Aarch64, &plan(default_options), None);
+        let resolver = default_pool.executor(process).unwrap() as *const _;
+        let (selected, direct) = default_pool.aarch64_executor(process, true).unwrap();
+        assert!(direct);
+        assert_eq!(selected as *const _, resolver);
+        assert!(default_pool.executors.get(&process).unwrap().direct.is_none());
+        assert_eq!(default_pool.counters.direct_executors_created, 0);
+
+        let mut split_options = crate::options::Options::default();
+        split_options.set("HL_NATIVE_EXECUTION", "1", true).unwrap();
+        split_options.set("HL_NATIVE_SPLIT_MODE_EXECUTORS", "1", true).unwrap();
+        let mut split_pool = NativePool::new(GuestIsa::Aarch64, &plan(split_options), None);
+        let resolver = split_pool.executor(process).unwrap() as *const _;
+        assert!(split_pool.executors.get(&process).unwrap().direct.is_none());
+        let (selected, direct) = split_pool.aarch64_executor(process, false).unwrap();
+        assert!(!direct);
+        assert_eq!(selected as *const _, resolver);
+        assert!(split_pool.executors.get(&process).unwrap().direct.is_none());
+        assert_eq!(split_pool.counters.direct_executors_created, 0);
+
+        let (selected, direct) = split_pool.aarch64_executor(process, true).unwrap();
+        assert!(direct);
+        assert_ne!(selected as *const _, resolver);
+        let direct_executor = selected as *const _;
+        assert_eq!(split_pool.counters.direct_executors_created, 1);
+        let (selected_again, direct_again) = split_pool.aarch64_executor(process, true).unwrap();
+        assert!(direct_again);
+        assert_eq!(selected_again as *const _, direct_executor);
+        assert_eq!(split_pool.counters.direct_executors_created, 1);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn split_mode_reset_and_invalidation_reach_both_handles() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let mut options = crate::options::Options::default();
+        options.set("HL_NATIVE_EXECUTION", "1", true).unwrap();
+        options.set("HL_NATIVE_DIAGNOSTICS", "1", true).unwrap();
+        options.set("HL_NATIVE_SPLIT_MODE_EXECUTORS", "1", true).unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
+        assert!(pool.aarch64_executor(process, true).unwrap().1);
+        let pair = pool.executors.get(&process).unwrap();
+        assert_eq!(pair.resolver.change_calls(), 0);
+        assert_eq!(pair.direct.as_ref().unwrap().change_calls(), 0);
+
+        pool.reset_process(process).unwrap();
+        let pair = pool.executors.get(&process).unwrap();
+        assert_eq!(pair.resolver.change_calls(), 1);
+        assert_eq!(pair.direct.as_ref().unwrap().change_calls(), 1);
+        assert_eq!(
+            pair.cache_resets(),
+            pair.resolver
+                .cache_resets()
+                .saturating_add(pair.direct.as_ref().unwrap().cache_resets())
+        );
+
+        pool.invalidate_executors(process, &[(0x1000, 0x1004)], 0).unwrap();
+        let pair = pool.executors.get(&process).unwrap();
+        assert_eq!(pair.resolver.change_calls(), 2);
+        assert_eq!(pair.direct.as_ref().unwrap().change_calls(), 2);
+    }
+
+    #[test]
+    fn split_mode_preserves_direct_warmup_without_mode_holds() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let entry = (process, 1, 1, 0x1000);
+        let mut options = crate::options::Options::default();
+        options.set("HL_NATIVE_SPLIT_MODE_EXECUTORS", "1", true).unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
+        assert!(!pool.direct_mode_holds_enabled());
+        assert!(!pool.direct_authority(process, entry));
+        pool.observe_direct_mode(process, false);
+        assert!(pool.direct_authority(process, entry));
+        for index in 0..128 {
+            pool.observe_direct_mode(process, index % 2 == 0);
+        }
+        assert!(pool.direct_holds.is_empty());
+        assert!(pool.direct_authority(process, entry));
+    }
+
+    #[test]
+    fn split_mode_honors_explicit_sticky_and_permanent_holds() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let entry = (process, 1, 1, 0x1000);
+
+        let mut sticky_options = crate::options::Options::default();
+        sticky_options.set("HL_NATIVE_SPLIT_MODE_EXECUTORS", "1", true).unwrap();
+        sticky_options.set("HL_NATIVE_DIRECT_STICKY", "1", true).unwrap();
+        sticky_options.set("HL_NATIVE_DIRECT_STICKY_LIMIT", "2", true).unwrap();
+        sticky_options.set("HL_NATIVE_DIRECT_HOLD_RUNS", "3", true).unwrap();
+        let mut sticky = NativePool::new(GuestIsa::Aarch64, &plan(sticky_options), None);
+        assert!(sticky.direct_mode_holds_enabled());
+        sticky.observe_direct_mode(process, false);
+        sticky.observe_direct_mode(process, true);
+        assert_eq!(sticky.direct_holds.get(&process), Some(&3));
+        assert!(!sticky.direct_authority(process, entry));
+        assert_eq!(sticky.direct_holds.get(&process), Some(&2));
+
+        let mut permanent_options = crate::options::Options::default();
+        permanent_options
+            .set("HL_NATIVE_SPLIT_MODE_EXECUTORS", "1", true)
+            .unwrap();
+        permanent_options
+            .set("HL_NATIVE_DIRECT_STICKY_PERMANENT", "1", true)
+            .unwrap();
+        permanent_options
+            .set("HL_NATIVE_DIRECT_STICKY_LIMIT", "2", true)
+            .unwrap();
+        let mut permanent = NativePool::new(GuestIsa::Aarch64, &plan(permanent_options), None);
+        assert!(permanent.direct_mode_holds_enabled());
+        permanent.observe_direct_mode(process, false);
+        permanent.observe_direct_mode(process, true);
+        assert_eq!(permanent.direct_holds.get(&process), Some(&u64::MAX));
+        assert!(!permanent.direct_authority(process, entry));
+        assert_eq!(permanent.direct_holds.get(&process), Some(&u64::MAX));
+    }
+
+    #[test]
     fn the_admission_cache_serves_only_an_identical_site_length_and_epoch() {
         let mut options = crate::options::Options::default();
         options.set("HL_NATIVE_ADMISSION_CACHE", "1", true).unwrap();

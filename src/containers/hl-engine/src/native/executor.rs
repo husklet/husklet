@@ -1830,6 +1830,8 @@ pub(crate) struct Executor {
     #[cfg(test)]
     diagnostic_calls: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
+    change_calls: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
     boundary_capture: std::sync::Mutex<BoundaryCaptureState>,
     #[cfg(test)]
     config_flags: u32,
@@ -2082,6 +2084,30 @@ impl Executor {
         protection
     }
 
+    /// Computes the exact direct-authority decision used by `run_lease`. The scheduler
+    /// reuses this only when split-mode executors are enabled, so selecting a cache cannot
+    /// drift from the mode the executor will actually enter.
+    pub(crate) fn direct_protection<H: MemoryAccessHost>(
+        &self,
+        pc: u64,
+        sources: &[BorrowedSource<'_>],
+        lease: &ProjectionLease<'_, H>,
+        allow_direct: bool,
+    ) -> Option<Protection> {
+        let range = lease.range();
+        allow_direct
+            .then(|| {
+                self.direct_scalar_trace(pc, sources)
+                    .or_else(|| {
+                        direct_literal_target(pc, sources, range.start().get(), range.end().get())
+                            .then_some(Protection::READ)
+                    })
+                    .filter(|required| lease.allows(*required))
+            })
+            .flatten()
+            .map(|_| lease.authority())
+    }
+
     #[cfg(test)]
     pub(crate) fn create() -> Result<Self, ()> {
         Self::create_diagnostics(false)
@@ -2178,6 +2204,8 @@ impl Executor {
             test_epoch: std::sync::Mutex::new(None),
             #[cfg(test)]
             diagnostic_calls: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            change_calls: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             boundary_capture: std::sync::Mutex::new(BoundaryCaptureState::default()),
             #[cfg(test)]
@@ -2288,6 +2316,8 @@ impl Executor {
             last: 0,
             mapping_epoch,
         };
+        #[cfg(test)]
+        self.change_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // SAFETY: `&self` keeps the handle alive and `change` is one live local matching
         // the count of 1; the engine reads it during the call and retains no pointer.
         (unsafe { hl_native_changed(self.handle.as_ptr(), &raw const change, 1) } == 0)
@@ -2295,6 +2325,7 @@ impl Executor {
             .ok_or(())
     }
 
+    #[cfg(test)]
     pub(crate) fn invalidate(&self, first: u64, last: u64, mapping_incarnation: u64) -> Result<(), ()> {
         self.invalidate_ranges(&[(first, last)], mapping_incarnation)
     }
@@ -2315,11 +2346,18 @@ impl Executor {
                 mapping_epoch: mapping_incarnation,
             })
             .collect();
+        #[cfg(test)]
+        self.change_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // SAFETY: `&self` keeps the handle alive and `changes` outlives the call, supplying
         // exactly `len` initialized entries that the engine reads without retaining.
         (unsafe { hl_native_changed(self.handle.as_ptr(), changes.as_ptr(), changes.len()) } == 0)
             .then_some(())
             .ok_or(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn change_calls(&self) -> usize {
+        self.change_calls.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn diagnostics(&self) -> Result<Diagnostics, ()> {
@@ -2498,17 +2536,7 @@ impl Executor {
         // The authority identity is cache-wide: a per-entry narrowing of the same window
         // reissues it and resets every translation, so admit the whole lease instead.
         // Both decodes are pure reads of `sources`, so skip them when the result is discarded.
-        let direct_protection = allow_direct
-            .then(|| {
-                self.direct_scalar_trace(state.pc, sources)
-                    .or_else(|| {
-                        direct_literal_target(state.pc, sources, lease_range.0, lease_range.1)
-                            .then_some(Protection::READ)
-                    })
-                    .filter(|required| lease.allows(*required))
-            })
-            .flatten()
-            .map(|_| lease.authority());
+        let direct_protection = self.direct_protection(state.pc, sources, &lease, allow_direct);
         let mut primary_range = lease_range;
         let mut views = vec![primary];
         const OPERAND_SPAN: u64 = u64::MAX;

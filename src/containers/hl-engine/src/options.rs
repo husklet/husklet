@@ -88,7 +88,7 @@ pub const DEFINITIONS: &[Definition] = &[
     ),
     launch!(
         "HL_NATIVE_DIRECT_STICKY",
-        "hold direct authority off permanently once a process alternates run mode",
+        "use sticky run-mode flip scoring before a bounded direct hold",
         Flag
     ),
     launch!(
@@ -104,6 +104,11 @@ pub const DEFINITIONS: &[Definition] = &[
     launch!(
         "HL_NATIVE_DIRECT_STICKY_PERMANENT",
         "never return direct authority to a process that alternated run mode",
+        Flag
+    ),
+    launch!(
+        "HL_NATIVE_SPLIT_MODE_EXECUTORS",
+        "use separate lazy aarch64 native executors for resolver and direct modes",
         Flag
     ),
     launch!(
@@ -298,6 +303,21 @@ mod tests {
         let definition = DEFINITIONS
             .iter()
             .find(|definition| definition.name == "HL_A64_DIRTY_OVERFLOW_CONTINUE")
+            .unwrap();
+        assert_eq!(definition.ownership, Ownership::LaunchInput);
+        assert_eq!(definition.shape, Shape::Flag);
+
+        let mut options = Options::default();
+        assert_eq!(options.get(definition.name), None);
+        options.set(definition.name, "1", true).unwrap();
+        assert_eq!(options.get(definition.name), Some("1"));
+    }
+
+    #[test]
+    fn split_mode_executors_is_an_explicit_launch_option() {
+        let definition = DEFINITIONS
+            .iter()
+            .find(|definition| definition.name == "HL_NATIVE_SPLIT_MODE_EXECUTORS")
             .unwrap();
         assert_eq!(definition.ownership, Ownership::LaunchInput);
         assert_eq!(definition.shape, Shape::Flag);

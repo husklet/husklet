@@ -138,13 +138,15 @@ pub(super) struct NativeCounters {
     /// entered with it, `direct_held` the ones a process-wide hold refused, `direct_cold`
     /// the ones still spending their warm-up resolver run, and `direct_site` the ones a
     /// per-site decline refused. `direct_flips` counts observed run-mode changes, each of
-    /// which discards the whole translation cache, and `direct_holds` the holds installed.
+    /// which discards the whole translation cache, `direct_holds` the holds installed, and
+    /// `direct_executors_created` proves a split run allocated its lazy direct sibling.
     pub(super) direct_admitted: u64,
     pub(super) direct_held: u64,
     pub(super) direct_cold: u64,
     pub(super) direct_site: u64,
     pub(super) direct_flips: u64,
     pub(super) direct_holds: u64,
+    pub(super) direct_executors_created: u64,
 }
 
 /// Process, image incarnation, executable-range version, entry PC. The ledger
@@ -191,6 +193,22 @@ pub(super) enum SourceChange {
     Disabled,
 }
 
+pub(super) struct NativeExecutors {
+    pub(super) resolver: crate::native::NativeExecutor,
+    pub(super) direct: Option<crate::native::NativeExecutor>,
+    direct_unavailable: bool,
+}
+
+impl NativeExecutors {
+    pub(super) fn cache_resets(&self) -> u64 {
+        self.resolver.cache_resets().saturating_add(
+            self.direct
+                .as_ref()
+                .map_or(0, crate::native::NativeExecutor::cache_resets),
+        )
+    }
+}
+
 pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) enabled: bool,
     /// Gates the opt-in profiling tables and the boundary ring, whose recording costs
@@ -215,8 +233,11 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     runtime_write_reserve: bool,
     /// Keeps `AArch64` native execution running after the exact dirty journal fills.
     pub(super) dirty_overflow_continue: bool,
+    /// Keeps resolver and direct translations in separate AArch64 caches. The direct
+    /// executor is allocated only after the process earns and can use direct authority.
+    pub(super) split_mode_executors: bool,
     pub(super) admitted: Option<Admission>,
-    pub(super) executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
+    pub(super) executors: BTreeMap<hl_task::ProcessId, NativeExecutors>,
     pub(super) suppressed: BTreeMap<NativeSite, Probation>,
     /// Entries that have completed a native run retiring a substantial share of their
     /// budget at least once. Only these have shown there is native work here to lose,
@@ -298,6 +319,8 @@ impl NativePool {
             write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
             runtime_write_reserve: plan.options.get("HL_A64_RUNTIME_WRITE_RESERVE") == Some("1"),
             dirty_overflow_continue: plan.options.get("HL_A64_DIRTY_OVERFLOW_CONTINUE") == Some("1"),
+            split_mode_executors: isa == GuestIsa::Aarch64
+                && plan.options.get("HL_NATIVE_SPLIT_MODE_EXECUTORS") == Some("1"),
             admitted: None,
             executors: BTreeMap::new(),
             suppressed: BTreeMap::new(),
@@ -340,10 +363,12 @@ impl NativePool {
             direct_sticky_limit = pool.direct_sticky_limit,
             direct_hold_runs = pool.direct_hold_runs,
             direct_sticky_permanent = pool.direct_sticky_permanent,
+            direct_mode_holds = pool.direct_mode_holds_enabled(),
             write_reserve = pool.write_reserve,
             write_commit = pool.write_commit,
             runtime_write_reserve = pool.runtime_write_reserve,
-            dirty_overflow_continue = pool.dirty_overflow_continue
+            dirty_overflow_continue = pool.dirty_overflow_continue,
+            split_mode_executors = pool.split_mode_executors
         );
         pool
     }
@@ -360,30 +385,127 @@ impl NativePool {
         None
     }
 
-    pub(super) fn executor(&mut self, process: hl_task::ProcessId) -> Option<&crate::native::NativeExecutor> {
+    fn create_executor(&self) -> Option<crate::native::NativeExecutor> {
+        crate::native::NativeExecutor::create_with_journal(
+            self.diagnostics,
+            self.write_reserve,
+            self.write_commit,
+            self.runtime_write_reserve,
+            self.dirty_overflow_continue,
+            self.host_faults.clone(),
+        )
+        .ok()
+    }
+
+    fn ensure_executor(&mut self, process: hl_task::ProcessId) -> Option<()> {
         if !self.enabled {
             return None;
         }
         if !self.executors.contains_key(&process) {
+            let resolver = self.create_executor()?;
             self.executors.insert(
                 process,
-                crate::native::NativeExecutor::create_with_journal(
-                    self.diagnostics,
-                    self.write_reserve,
-                    self.write_commit,
-                    self.runtime_write_reserve,
-                    self.dirty_overflow_continue,
-                    self.host_faults.clone(),
-                )
-                .ok()?,
+                NativeExecutors {
+                    resolver,
+                    direct: None,
+                    direct_unavailable: false,
+                },
             );
         }
-        self.executors.get(&process)
+        Some(())
+    }
+
+    pub(super) fn executor(&mut self, process: hl_task::ProcessId) -> Option<&crate::native::NativeExecutor> {
+        self.ensure_executor(process)?;
+        self.executors.get(&process).map(|executors| &executors.resolver)
+    }
+
+    /// Selects the AArch64 cache for the exact mode `run_lease` will use. The
+    /// default and resolver paths retain the original single executor; only the
+    /// opt-in direct path creates a sibling, and allocation failure safely falls
+    /// back to resolver mode for the process.
+    pub(super) fn aarch64_executor(
+        &mut self,
+        process: hl_task::ProcessId,
+        direct: bool,
+    ) -> Option<(&crate::native::NativeExecutor, bool)> {
+        self.ensure_executor(process)?;
+        if !self.split_mode_executors || !direct {
+            return self
+                .executors
+                .get(&process)
+                .map(|executors| (&executors.resolver, direct));
+        }
+        let create_direct = self
+            .executors
+            .get(&process)
+            .is_some_and(|executors| executors.direct.is_none() && !executors.direct_unavailable);
+        if create_direct {
+            let direct_executor = self.create_executor();
+            let executors = self.executors.get_mut(&process)?;
+            match direct_executor {
+                Some(executor) => {
+                    executors.direct = Some(executor);
+                    self.counters.direct_executors_created += 1;
+                }
+                None => executors.direct_unavailable = true,
+            }
+        }
+        let executors = self.executors.get(&process)?;
+        Some(match executors.direct.as_ref() {
+            Some(executor) => (executor, true),
+            None => (&executors.resolver, false),
+        })
+    }
+
+    fn reset_executors(&mut self, process: hl_task::ProcessId, mapping_epoch: u64) -> Option<()> {
+        self.ensure_executor(process)?;
+        let reset = self.executors.get(&process).is_some_and(|executors| {
+            executors.resolver.reset(mapping_epoch).is_ok()
+                && executors
+                    .direct
+                    .as_ref()
+                    .is_none_or(|executor| executor.reset(mapping_epoch).is_ok())
+        });
+        if !reset {
+            // Do not retain a half-reset pair: either cache could otherwise certify an
+            // instruction generation that its sibling has already discarded.
+            self.executors.remove(&process);
+            return None;
+        }
+        Some(())
+    }
+
+    pub(super) fn invalidate_executors(
+        &mut self,
+        process: hl_task::ProcessId,
+        ranges: &[(u64, u64)],
+        mapping_incarnation: u64,
+    ) -> Option<()> {
+        self.ensure_executor(process)?;
+        let invalidated = self.executors.get(&process).is_some_and(|executors| {
+            executors
+                .resolver
+                .invalidate_ranges(ranges, mapping_incarnation)
+                .is_ok()
+                && executors
+                    .direct
+                    .as_ref()
+                    .is_none_or(|executor| executor.invalidate_ranges(ranges, mapping_incarnation).is_ok())
+        });
+        if !invalidated {
+            self.executors.remove(&process);
+            return None;
+        }
+        Some(())
     }
 
     /// Whether this process may still be offered direct authority. A held process is
     /// serving out a hold because its run mode was alternating; each call spends one run.
     pub(super) fn direct_admitted(&mut self, process: hl_task::ProcessId) -> bool {
+        if !self.direct_mode_holds_enabled() {
+            return true;
+        }
         let Some(remaining) = self.direct_holds.get_mut(&process) else {
             return true;
         };
@@ -411,6 +533,12 @@ impl NativePool {
         self.direct_admitted(process) && self.direct_modes.contains_key(&process)
     }
 
+    /// Split caches remove the reason for the default anti-flip hold, but an explicit
+    /// sticky policy remains an operator decision and must not be silently overridden.
+    pub(super) const fn direct_mode_holds_enabled(&self) -> bool {
+        !self.split_mode_executors || self.direct_sticky || self.direct_sticky_permanent
+    }
+
     /// Applies every direct-authority gate and classifies the result when diagnostics are enabled.
     /// Keeping the non-diagnostic expression intact preserves the timing binary's hot-path shape.
     pub(super) fn direct_authority(&mut self, process: hl_task::ProcessId, entry: NativeSite) -> bool {
@@ -436,6 +564,16 @@ impl NativePool {
     /// sustained alternation resets every translation twice per cycle; hold direct
     /// authority off for a bounded run of turns so the resolver mode can keep its cache.
     pub(super) fn observe_direct_mode(&mut self, process: hl_task::ProcessId, direct: bool) {
+        if !self.direct_mode_holds_enabled() {
+            let flipped = self
+                .direct_modes
+                .insert(process, (direct, 0))
+                .is_some_and(|(previous, _)| previous != direct);
+            if self.diagnostics && flipped {
+                self.counters.direct_flips += 1;
+            }
+            return;
+        }
         let sticky = self.direct_sticky || self.direct_sticky_permanent;
         let permanent = self.direct_sticky_permanent;
         let (previous, flips) = self.direct_modes.entry(process).or_insert((direct, 0));
@@ -772,7 +910,7 @@ impl NativePool {
             suppressed = self.suppressed.len()
         );
         self.admitted = None;
-        self.executor(process)?.reset(incarnation).ok()?;
+        self.reset_executors(process, incarnation)?;
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _), _| *owner != process);
         let held = self.suppressed.len();
@@ -808,7 +946,7 @@ impl NativePool {
     }
 
     pub(super) fn reset_process(&mut self, process: hl_task::ProcessId) -> Option<()> {
-        self.executor(process)?.reset(0).ok()?;
+        self.reset_executors(process, 0)?;
         self.purge_process_metadata(process);
         Some(())
     }
@@ -984,12 +1122,7 @@ impl NativePool {
         if gap {
             return self.reset_observed_sources(process, incarnation);
         }
-        if !changed.is_empty()
-            && self
-                .executor(process)?
-                .invalidate_ranges(&changed, incarnation)
-                .is_err()
-        {
+        if !changed.is_empty() && self.invalidate_executors(process, &changed, incarnation).is_none() {
             self.reset_observed_sources(process, incarnation)?;
             refreshed.clear();
         }
@@ -1020,9 +1153,9 @@ impl NativePool {
         if change == SourceChange::Disabled {
             return None;
         }
-        let executor = self.executor(process)?;
+        self.executor(process)?;
         if change == SourceChange::Changed {
-            executor.invalidate(first, last, token.incarnation).ok()?;
+            self.invalidate_executors(process, &[(first, last)], token.incarnation)?;
         }
         Some(())
     }
@@ -1093,20 +1226,17 @@ impl Drop for NativePool {
                 self.counters.permanent_high_water_eighth,
                 self.high_water.len(),
             );
-            let resets: u64 = self
-                .executors
-                .values()
-                .map(crate::native::NativeExecutor::cache_resets)
-                .sum();
+            let resets: u64 = self.executors.values().map(NativeExecutors::cache_resets).sum();
             let hold_remaining = self.bounded_direct_hold_remaining();
             eprintln!(
-                "hl-native-direct: admitted={} held={} cold={} site_declined={} flips={} holds={} sticky={} sticky_limit={} hold_runs={} modes={} holding={} hold_remaining={} declined_sites={} resets={}",
+                "hl-native-direct: admitted={} held={} cold={} site_declined={} flips={} holds={} direct_executors_created={} sticky={} sticky_limit={} hold_runs={} modes={} holding={} hold_remaining={} declined_sites={} resets={}",
                 self.counters.direct_admitted,
                 self.counters.direct_held,
                 self.counters.direct_cold,
                 self.counters.direct_site,
                 self.counters.direct_flips,
                 self.counters.direct_holds,
+                self.counters.direct_executors_created,
                 self.direct_sticky || self.direct_sticky_permanent,
                 self.direct_sticky_limit,
                 self.direct_hold_runs,

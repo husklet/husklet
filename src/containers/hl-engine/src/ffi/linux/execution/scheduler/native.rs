@@ -122,8 +122,16 @@ impl GuestExecutor {
         }
         pool.record_admission(fallback_key, bytes.len(), instruction_epoch, bytes);
         pool.counters.entries += 1;
-        let executor = pool.executor(run.process)?;
         let source = [crate::native::NativeSource { guest_first: pc, bytes }];
+        let (executor, allow_direct) = if pool.split_mode_executors {
+            let direct = pool
+                .executor(run.process)?
+                .direct_protection(pc, &source, &projection, allow_direct)
+                .is_some();
+            pool.aarch64_executor(run.process, direct)?
+        } else {
+            (pool.executor(run.process)?, allow_direct)
+        };
         let checkpoint = projection.checkpoint_continuation();
         let mapping = projection.request_continuation();
         // A still-current grant extends the run in place at the same instruction
