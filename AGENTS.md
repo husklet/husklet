@@ -147,6 +147,26 @@ arms, not by reading the surrounding prose — one of the above was found only
 because a lane listed which `NativeExit` variants reach a call and compared the
 two functions side by side.
 
+## Balance the arm order, or measure a 4% lie
+
+Running base first and candidate second in every round puts a uniform **+4% on
+the candidate** on this box. It was caught because the inflation appeared on
+`compute`, `branch`, `intdiv` and `atomics` — phases the change under test could
+not touch. Alternating (base/cand then cand/base) collapsed those four to 1.003,
+0.998, 0.997 and 1.000.
+
+Interleaving alone is not enough; the *order within each pair* must alternate.
+A fixed order survives every other precaution — pinning, minima, per-arm `ok=`
+verification — and none of them detect it.
+
+The damage is not uniform, so it can invent or hide a specific verdict: `file`
+read 1.039 under fixed order and 1.006 balanced, which is the difference between
+a disqualifying regression and parity.
+
+Include at least one phase the change provably cannot affect, and check it reads
+1.000. If it does not, the harness is lying and nothing else in the table is
+evidence.
+
 ## Reading a profile
 
 High self-time and removable cost are independent properties, and this engine has
