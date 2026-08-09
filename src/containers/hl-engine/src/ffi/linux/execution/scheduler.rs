@@ -648,7 +648,10 @@ mod tests {
         let instruction = (process, 2, 4, 0x40b0c0);
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
         pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, false);
-        assert_eq!(pool.suppressed.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([entry]));
+        assert_eq!(
+            pool.suppressed.keys().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([entry])
+        );
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
     }
 
@@ -665,7 +668,10 @@ mod tests {
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
         // One instruction short of half a slice is not worth the entry, whatever the native budget.
         pool.record_fallback(entry, instruction, SLICE_BUDGET / 2 - 1, NATIVE_SOLO_BUDGET, false);
-        assert_eq!(pool.suppressed.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([entry]));
+        assert_eq!(
+            pool.suppressed.keys().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([entry])
+        );
     }
 
     /// Direct authority runs without the operand resolver, so a memory fallback under it is
@@ -681,7 +687,10 @@ mod tests {
         assert!(pool.suppressed.is_empty());
         assert_eq!(pool.direct_declined, BTreeSet::from([entry]));
         pool.record_fallback(entry, instruction, 0, SLICE_BUDGET, true);
-        assert_eq!(pool.suppressed.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([entry]));
+        assert_eq!(
+            pool.suppressed.keys().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([entry])
+        );
         // A run that retired most of its budget still keeps its entry either way.
         let kept = (process, 2, 4, 0x1008b00);
         pool.record_fallback(kept, instruction, SLICE_BUDGET, SLICE_BUDGET, true);
@@ -731,7 +740,10 @@ mod tests {
         // Never productive: one span, then a permanent latch no refusal expires.
         let barren = (process, 2, 4, 0x1009000);
         pool.mark_productive(barren, 20, SLICE_BUDGET);
-        assert!(!pool.productive.contains(&barren), "a 20-instruction run is not productive");
+        assert!(
+            !pool.productive.contains(&barren),
+            "a 20-instruction run is not productive"
+        );
         pool.record_fallback(barren, instruction, 20, SLICE_BUDGET, false);
         pool.record_fallback(barren, instruction, 20, SLICE_BUDGET, false);
         assert_eq!(pool.counters.suppress_permanent, 1);
@@ -748,7 +760,10 @@ mod tests {
         pool.record_fallback(hot, instruction, 399, SLICE_BUDGET, false);
         assert_eq!(pool.counters.suppress_rearms, 1);
         assert_eq!(pool.suppressed[&hot].remaining, super::pool::SUPPRESSION_SPAN);
-        assert!(!pool.suppressed[&hot].permanent, "a productive entry never latches permanently");
+        assert!(
+            !pool.suppressed[&hot].permanent,
+            "a productive entry never latches permanently"
+        );
     }
 
     /// Absence from the productive table is only evidence while the table can still record.
@@ -820,7 +835,13 @@ mod tests {
         for process in [retired, retained] {
             pool.sources.insert((process, 1, 0x1000, 0x1100), token);
             pool.observations.insert((process, 1, 1, 0x1000), 1);
-            pool.suppressed.insert((process, 1, 1, 0x1000), super::pool::Probation { remaining: 1, permanent: false });
+            pool.suppressed.insert(
+                (process, 1, 1, 0x1000),
+                super::pool::Probation {
+                    remaining: 1,
+                    permanent: false,
+                },
+            );
             pool.direct_declined.insert((process, 1, 1, 0x1000));
             pool.fallbacks.insert((process, 1, 1, 0x1004));
             pool.source_incarnations.insert(process, 1);
