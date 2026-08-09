@@ -223,6 +223,11 @@ impl OperationLease {
         self.description.object.write_context(input, context)
     }
 
+    #[must_use]
+    pub fn accepts_empty_write(&self) -> bool {
+        self.description.object.accepts_empty_write()
+    }
+
     ///
     /// # Errors
     /// Returns an error reported by the leased open-file description.

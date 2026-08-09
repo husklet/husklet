@@ -224,6 +224,10 @@ impl OpenFileDescription for CommFile {
         Ok(input.len())
     }
 
+    fn accepts_empty_write(&self) -> bool {
+        true
+    }
+
     fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
         let length = self.bytes()?.len();
         let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
