@@ -234,7 +234,7 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     runtime_write_reserve: bool,
     /// Keeps `AArch64` native execution running after the exact dirty journal fills.
     pub(super) dirty_overflow_continue: bool,
-    /// Keeps resolver and direct translations in separate AArch64 caches. The direct
+    /// Keeps resolver and direct translations in separate `AArch64` caches. The direct
     /// executor is allocated only after the process earns and can use direct authority.
     pub(super) split_mode_executors: bool,
     pub(super) admitted: Option<Admission>,
@@ -420,7 +420,7 @@ impl NativePool {
         Some(&self.ensure_executor(process)?.resolver)
     }
 
-    /// Selects the AArch64 cache for the exact mode `run_lease` will use. The
+    /// Selects the `AArch64` cache for the exact mode `run_lease` will use. The
     /// default and resolver paths retain the original single executor; only the
     /// opt-in direct path creates a sibling, and allocation failure safely falls
     /// back to resolver mode for the process.
@@ -1225,7 +1225,7 @@ impl Drop for NativePool {
             let resets: u64 = self.executors.values().map(NativeExecutors::cache_resets).sum();
             let hold_remaining = self.bounded_direct_hold_remaining();
             eprintln!(
-                "hl-native-direct: admitted={} held={} cold={} site_declined={} flips={} holds={} direct_executors_created={} sticky={} sticky_limit={} hold_runs={} mode_holds={} modes={} holding={} hold_remaining={} declined_sites={} resets={}",
+                "hl-native-direct: admitted={} held={} cold={} site_declined={} flips={} holds={} direct_executors_created={} sticky={} sticky_limit={} hold_runs={} mode_holds=true modes={} holding={} hold_remaining={} declined_sites={} resets={}",
                 self.counters.direct_admitted,
                 self.counters.direct_held,
                 self.counters.direct_cold,
@@ -1236,7 +1236,6 @@ impl Drop for NativePool {
                 self.direct_sticky || self.direct_sticky_permanent,
                 self.direct_sticky_limit,
                 self.direct_hold_runs,
-                true,
                 self.direct_modes.len(),
                 self.direct_holds.len(),
                 hold_remaining,

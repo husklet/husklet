@@ -559,10 +559,10 @@ mod tests {
         let mut default_options = crate::options::Options::default();
         default_options.set("HL_NATIVE_EXECUTION", "1", true).unwrap();
         let mut default_pool = NativePool::new(GuestIsa::Aarch64, &plan(default_options), None);
-        let resolver = default_pool.executor(process).unwrap() as *const _;
+        let resolver = std::ptr::from_ref(default_pool.executor(process).unwrap());
         let (selected, direct) = default_pool.aarch64_executor(process, true).unwrap();
         assert!(direct);
-        assert_eq!(selected as *const _, resolver);
+        assert_eq!(std::ptr::from_ref(selected), resolver);
         assert!(default_pool.executors.get(&process).unwrap().direct.is_none());
         assert_eq!(default_pool.counters.direct_executors_created, 0);
 
@@ -570,22 +570,22 @@ mod tests {
         split_options.set("HL_NATIVE_EXECUTION", "1", true).unwrap();
         split_options.set("HL_NATIVE_SPLIT_MODE_EXECUTORS", "1", true).unwrap();
         let mut split_pool = NativePool::new(GuestIsa::Aarch64, &plan(split_options), None);
-        let resolver = split_pool.executor(process).unwrap() as *const _;
+        let resolver = std::ptr::from_ref(split_pool.executor(process).unwrap());
         assert!(split_pool.executors.get(&process).unwrap().direct.is_none());
         let (selected, direct) = split_pool.aarch64_executor(process, false).unwrap();
         assert!(!direct);
-        assert_eq!(selected as *const _, resolver);
+        assert_eq!(std::ptr::from_ref(selected), resolver);
         assert!(split_pool.executors.get(&process).unwrap().direct.is_none());
         assert_eq!(split_pool.counters.direct_executors_created, 0);
 
         let (selected, direct) = split_pool.aarch64_executor(process, true).unwrap();
         assert!(direct);
-        assert_ne!(selected as *const _, resolver);
-        let direct_executor = selected as *const _;
+        assert_ne!(std::ptr::from_ref(selected), resolver);
+        let direct_executor = std::ptr::from_ref(selected);
         assert_eq!(split_pool.counters.direct_executors_created, 1);
         let (selected_again, direct_again) = split_pool.aarch64_executor(process, true).unwrap();
         assert!(direct_again);
-        assert_eq!(selected_again as *const _, direct_executor);
+        assert_eq!(std::ptr::from_ref(selected_again), direct_executor);
         assert_eq!(split_pool.counters.direct_executors_created, 1);
     }
 
