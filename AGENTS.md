@@ -804,45 +804,59 @@ forbidden.
 
 ### Why arm64 translates far less than amd64
 
-Across the paired corpus 454 of 1073 rows build more than 10x the blocks on amd64,
-and 22 rows share one arm64 signature: `builds=1 hits=2 sites=1 entries=1
-completed=8`. Measured per case with `HL_NATIVE_DIAGNOSTICS=1`, this is **not** the
-sqlite suppression story: on every one of them `declined_suppressed=0`, `latches=0`,
-`clears=0`. Three arm64-only limiters compose instead, each measured on
-`runtime/syscalls/gettid` (amd64: `interp instructions=0`, `builds=86`,
-`completed=25558`; arm64: `interp instructions=97220`, `completed=8`):
+arm64 still retires far less translated code than amd64 on short programs, but the
+figures this section used to carry are stale and one of its three limiters has been
+fixed. Re-measured at 4d2fe7777 in release, runner sha256 `05ad308c…`, one case per
+invocation with `--jobs 1` (`testing runtime --case <id> --isa <isa> --jobs 1`); the
+suite already sets `diagnostics: true`, so the counters below come from that build
+alone and are not comparable with any other.
 
-- **The first entry always takes direct authority, which has no operand resolver.**
-  `native_slice` computes `allow_direct` from tables that are empty on the first
-  probe, so the first run of every arm64 process cannot recover a memory access
-  outside its projected window and exits at ~8 instructions with
-  `a64_fallback_guard_write=1`. x86 never has this failure mode because direct
-  authority does not exist there at all: `run_x86_lease` has no `allow_direct`
-  parameter, `run_x86_inner` always passes an operand resolver, and the x86
-  `RunStatistics` hardcode `direct: false` and `direct_guard: false`. The literal
-  `false` at the `run_x86_lease` call site is the **`interrupt`** argument, not
-  `allow_direct` — do not read it as evidence about direct authority. Forcing `allow_direct=false`
-  on the arm64 path moves gettid from `builds=1 fallbacks=1 completed=8` to
-  `builds=36 fallbacks=0 completed=258`.
-- **The run then exits on a cold branch target instead of building it.** With
-  direct authority off the arm64 run ends at `a64_branch_exhaustion=1`,
-  `a64_branch_cold_relocation=27`. amd64 builds through the same targets
-  (`x86_cold_builds=86`, `relocation_cold_targets=138`) inside one lease.
-- **Re-entry then never happens.** `observe(key) < 2` requires the same
-  `(process, generation, version, pc)` to be probed twice, but native is probed at
-  most once per 4096-instruction interpreter slice; gettid gets 39 probes over 38
-  slices and 38 are `declined_cold`. amd64 escapes this only because, once in, it
-  does not come back out.
+`runtime/syscalls/gettid`:
 
-Fixing the first limiter alone does not make a short program run translated: it
-buys ~259 instructions of one slice out of ~17,000. `signals/folded-fault-registers`
-and `signals/implicit-null-pc` therefore still fault interpreted, so they do not
-test the mechanism their sources claim. Making them honest requires changing the
-arm64 warm-up gate, which is an admission change and carries the full guard.
+- arm64: `interp instructions=96982`, `runs=1 builds=36 hits=82 fallbacks=0`,
+  `probes=39 entries=1 declined_cold=38`, `completed=258`.
+- amd64: `interp instructions=107996`, `builds=86`, `completed=25558`,
+  `x86_cold_builds=86`, `relocation_cold_targets=138`.
 
-`process/sysinfo` is the 22nd member of that arm64 set, not a separate weak row: its
-amd64 side reports `interp instructions=0`, so `builds=22 completed=79` is complete
-native coverage of a short program, and its floor is honest.
+Two limiters remain, and the third is gone:
+
+- **The first entry no longer takes direct authority; it earns it.** The old reading
+  was correct for its tree: `native_slice` derived `allow_direct` from `direct_holds`
+  and `direct_declined`, both empty on a process's first probe, so the first arm64 run
+  took direct mode, which carries no operand resolver, and ended at ~8 instructions on
+  `a64_fallback_guard_write=1`. `direct_earned` (`scheduler/pool.rs`) now also requires
+  a `direct_modes` entry, which only a completed run creates, so the first run spends
+  the resolver. That is what moved the 22-row signature `builds=1 hits=2 sites=1
+  entries=1 completed=8` to `builds=36 … completed=258`: commit 271a6e86e, not drift.
+  `scheduler.rs::direct_authority_is_earned_by_a_completed_run` pins it. x86 still has
+  no direct authority at all — `run_x86_lease` takes no `allow_direct`, `run_x86_inner`
+  always passes an operand resolver, and the x86 `RunStatistics` hardcode
+  `direct: false` and `direct_guard: false`. Its sixth positional argument is
+  `interrupt`, once a literal `false` and now `run.interrupt.is_set()`; it was read as
+  `allow_direct` more than once, so read the signature, not the call site.
+- **The run still exits on a cold branch target instead of building it.** The surviving
+  arm64 gettid run ends at `a64_branch_exhaustion=1`, `a64_branch_cold_relocation=27`.
+  amd64 builds through the same targets inside one lease.
+- **Re-entry still never happens.** `observe(key) < 2` requires the same
+  `(process, generation, version, pc)` to be probed twice, but native is probed at most
+  once per 4096-instruction interpreter slice; gettid gets 39 probes over 38 slices and
+  38 are `declined_cold`. amd64 escapes this only because, once in, it does not come
+  back out.
+
+So fixing the first limiter bought one resolver run per process — ~259 instructions of
+one slice out of ~97,000 — and did not make a short program run translated.
+`signals/folded-fault-registers` and `signals/implicit-null-pc` still fault interpreted
+and do not test the mechanism their sources claim. Making them honest requires changing
+the arm64 warm-up gate, which is an admission change and carries the full guard.
+
+`process/sysinfo` is a member of that same arm64 set (arm64 `builds=37 completed=259`,
+`interp instructions=16989`), not a separate weak row. The claim that its amd64 side was
+complete native coverage was an artefact of a broken counter: `run_x86_slice` built no
+`InterpreterTally`, so `hl-interp: instructions=` printed 0 on every amd64 run and amd64
+coverage read as a flat 100%. Fixed in 1cb4a1287. sysinfo amd64 now reads
+`builds=22 completed=79` against `interp instructions=23818`, so its native share is
+under 1%, and gettid amd64 is 25558 native against 107996 interpreted. Never quote an
+amd64 `interp instructions=0` from before 1cb4a1287.
 
 Do not read `a64_fallback_form_memory` as a form classification. It is incremented
 both by the word classifier and, unconditionally, by the guard-fault path, so it is
