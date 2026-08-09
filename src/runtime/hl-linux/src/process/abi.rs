@@ -32,7 +32,12 @@ impl Error {
             Self::TooBig => Errno::E2BIG,
             Self::Overflow => Errno::EOVERFLOW,
         };
-        hl_log::hl_debug!(hl_log::tag::TASK, "process abi error mapped error={:?} errno={}", self, errno.raw());
+        hl_log::hl_debug!(
+            hl_log::tag::TASK,
+            "process abi error mapped error={:?} errno={}",
+            self,
+            errno.raw()
+        );
         errno
     }
 }

@@ -151,7 +151,10 @@ fn typed_configuration() {
         profiling: tag::ALL,
     }
     .apply();
-    assert_eq!(hl_log::Logging::global().tags(), tag::SYSCALL | tag::MEMORY | tag::TRANSPORT);
+    assert_eq!(
+        hl_log::Logging::global().tags(),
+        tag::SYSCALL | tag::MEMORY | tag::TRANSPORT
+    );
     assert_eq!(hl_log::Logging::global().level(), Level::Debug);
     assert_eq!(hl_log::Profiling::global().tags(), tag::ALL);
 

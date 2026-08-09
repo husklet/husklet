@@ -304,10 +304,22 @@ fn user_address_overflow_is_a_fault() {
 fn domain_conversions_preserve_errno() {
     for error in MarshalError::ALL {
         let expected = error.errno();
-        assert_eq!(crate::ProcessMarshalError::from(error).errno(), expected, "process {error:?}");
+        assert_eq!(
+            crate::ProcessMarshalError::from(error).errno(),
+            expected,
+            "process {error:?}"
+        );
         assert_eq!(crate::SysvMarshalError::from(error).errno(), expected, "sysv {error:?}");
-        assert_eq!(crate::SignalMarshalError::from(error).errno(), expected, "signal {error:?}");
-        assert_eq!(crate::TimeFutexMarshalError::from(error).errno(), expected, "futex {error:?}");
+        assert_eq!(
+            crate::SignalMarshalError::from(error).errno(),
+            expected,
+            "signal {error:?}"
+        );
+        assert_eq!(
+            crate::TimeFutexMarshalError::from(error).errno(),
+            expected,
+            "futex {error:?}"
+        );
     }
 }
 

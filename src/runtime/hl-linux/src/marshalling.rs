@@ -60,7 +60,10 @@ impl MarshalError {
 const _: () = {
     let mut index = 0;
     while index < MarshalError::ALL.len() {
-        assert!(MarshalError::ALL[index].represented() == index, "MarshalError::ALL must name every variant once");
+        assert!(
+            MarshalError::ALL[index].represented() == index,
+            "MarshalError::ALL must name every variant once"
+        );
         index += 1;
     }
 };

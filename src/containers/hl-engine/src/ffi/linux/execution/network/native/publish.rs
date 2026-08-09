@@ -256,8 +256,13 @@ fn claim(shared: &Weak<Reactor>, rule: Publication) -> Option<TcpListener> {
 fn bind(rule: Publication) -> Option<TcpListener> {
     // SAFETY: socket takes scalar arguments and returns one owned descriptor.
     // Non-blocking, so a peer that resets between poll() and accept() cannot park the loop either.
-    let descriptor =
-        unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, 0) };
+    let descriptor = unsafe {
+        libc::socket(
+            libc::AF_INET,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            0,
+        )
+    };
     if descriptor < 0 {
         return None;
     }
@@ -363,7 +368,10 @@ mod tests {
         .unwrap();
         let started = std::time::Instant::now();
         assert!(matches!(accept(&listener), Accepted::Idle));
-        assert!(started.elapsed() < std::time::Duration::from_secs(5), "accept did not return");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "accept did not return"
+        );
     }
 
     #[test]

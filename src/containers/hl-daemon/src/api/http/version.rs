@@ -68,7 +68,12 @@ pub(super) fn page_not_found() -> impl IntoResponse {
 #[hl_design::adapter]
 pub(super) async fn fallback(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
     let answer = unrouted(uri.path());
-    (answer.status, Json(DockerError { message: answer.message }))
+    (
+        answer.status,
+        Json(DockerError {
+            message: answer.message,
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -77,7 +82,14 @@ mod tests {
 
     #[test]
     fn unversioned_and_supported_paths_report_docker_page_not_found() {
-        for path in ["/nonsense", "/v1.43/nonsense", "/v1.24/nonsense", "/vlatest/x", "/v1./x", "/v.1/x"] {
+        for path in [
+            "/nonsense",
+            "/v1.43/nonsense",
+            "/v1.24/nonsense",
+            "/vlatest/x",
+            "/v1./x",
+            "/v.1/x",
+        ] {
             let answer = super::unrouted(path);
             assert_eq!(answer.status, StatusCode::NOT_FOUND, "{path}");
             assert_eq!(answer.message, "page not found", "{path}");
@@ -89,7 +101,13 @@ mod tests {
         for path in ["/v1.44/containers/json", "/v2.0/info"] {
             let answer = super::unrouted(path);
             assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{path}");
-            assert!(answer.message.ends_with("is too new. Maximum supported API version is 1.43"), "{}", answer.message);
+            assert!(
+                answer
+                    .message
+                    .ends_with("is too new. Maximum supported API version is 1.43"),
+                "{}",
+                answer.message
+            );
         }
         assert_eq!(
             super::unrouted("/v1.44/containers/json").message,
