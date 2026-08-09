@@ -1978,6 +1978,28 @@ fn remapping_the_same_address_supersedes_it_for_every_transition_kind() {
     assert_ne!(coordinator.executable_token(range, 1), before);
 }
 
+/// A guest `ic ivau` names an address whose bytes this address space may never have written:
+/// a peer address space can rewrite a shared executable object, and only the executing space's
+/// own maintenance supersedes its translations. It must supersede that page and no other.
+#[test]
+fn addressed_instruction_publication_supersedes_only_the_named_page() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    let mut executable = request();
+    executable.placement = Placement::Fixed(GuestAddress::new(0x3000));
+    executable.length = 0x2000;
+    executable.protection = Protection::READ.union(Protection::EXECUTE);
+    coordinator.map(executable).unwrap();
+    let named = AddressRange::nonempty(GuestAddress::new(0x3000), 16).unwrap();
+    let other = AddressRange::nonempty(GuestAddress::new(0x4000), 16).unwrap();
+    let named_before = coordinator.executable_token(named, 1);
+    let other_before = coordinator.executable_token(other, 1);
+
+    coordinator.publish_instruction_at(0x3040);
+
+    assert_ne!(coordinator.executable_token(named, 1), named_before);
+    assert_eq!(coordinator.executable_token(other, 1), other_before);
+}
+
 #[test]
 fn instruction_publication_supersedes_pages_which_never_took_a_write() {
     let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
