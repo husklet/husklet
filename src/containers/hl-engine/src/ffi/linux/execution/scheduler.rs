@@ -699,6 +699,9 @@ mod tests {
         let entry = (process, 2, 4, 0x10182a8);
         let instruction = (process, 2, 4, 0x10090b8);
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        // The storm target is the guest's hottest loop: it retired full budgets before the
+        // first signal landed, which is what earns it a span to recover in.
+        pool.mark_productive(entry, SLICE_BUDGET, SLICE_BUDGET);
         pool.record_fallback(entry, instruction, 399, SLICE_BUDGET, false);
         assert_eq!(pool.counters.suppress_latches, 1);
         for spent in 1..=super::pool::SUPPRESSION_SPAN {
@@ -711,6 +714,57 @@ mod tests {
         pool.record_fallback(entry, instruction, 399, SLICE_BUDGET, false);
         assert_eq!(pool.counters.suppress_rearms, 1);
         assert_eq!(pool.suppressed[&entry].span, super::pool::SUPPRESSION_SPAN * 2);
+    }
+
+    /// The two populations a refusal count cannot separate. An entry that has retired real
+    /// native work before gets its span doubled, because a short run is an anomaly. An entry
+    /// that has fallen short on every run it has ever had latches permanently after its one
+    /// probationary span, so the exit-heavy phases stop paying a re-entry and a rebuild to
+    /// rediscover that there is nothing to recover.
+    #[test]
+    fn only_an_entry_that_has_been_productive_earns_a_second_span() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let instruction = (process, 2, 4, 0x10090b8);
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+
+        // Never productive: one span, then a permanent latch no refusal expires.
+        let barren = (process, 2, 4, 0x1009000);
+        pool.mark_productive(barren, 20, SLICE_BUDGET);
+        assert!(!pool.productive.contains(&barren), "a 20-instruction run is not productive");
+        pool.record_fallback(barren, instruction, 20, SLICE_BUDGET, false);
+        pool.record_fallback(barren, instruction, 20, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_permanent, 1);
+        assert_eq!(pool.counters.suppress_rearms, 0);
+        for _ in 0..super::pool::SUPPRESSION_SPAN * 4 {
+            assert!(pool.refuses(barren), "a permanent latch never expires");
+        }
+
+        // Productive once: the latch keeps expiring, so the entry can recover.
+        let hot = (process, 2, 4, 0x10182a8);
+        pool.mark_productive(hot, SLICE_BUDGET, SLICE_BUDGET);
+        assert!(pool.productive.contains(&hot));
+        pool.record_fallback(hot, instruction, 399, SLICE_BUDGET, false);
+        pool.record_fallback(hot, instruction, 399, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_rearms, 1);
+        assert_eq!(pool.suppressed[&hot].span, super::pool::SUPPRESSION_SPAN * 2);
+        assert_ne!(pool.suppressed[&hot].span, 0, "a productive entry never latches permanently");
+    }
+
+    /// Absence from the productive table is only evidence while the table can still record.
+    /// Every other capped set here fails towards not suppressing; this one would fail
+    /// towards a permanent latch, which is why saturation has to disarm permanence.
+    #[test]
+    fn a_saturated_productive_table_stops_making_latches_permanent() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let instruction = (process, 2, 4, 0x10090b8);
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        pool.productive_saturated = true;
+        let entry = (process, 2, 4, 0x1009000);
+        pool.record_fallback(entry, instruction, 20, SLICE_BUDGET, false);
+        pool.record_fallback(entry, instruction, 20, SLICE_BUDGET, false);
+        assert_eq!(pool.counters.suppress_permanent, 0, "saturation disarms permanence");
+        assert_eq!(pool.counters.suppress_rearms, 1);
+        assert_ne!(pool.suppressed[&entry].span, 0);
     }
 
     /// The threshold is a share of the budget, so a short-budget run cannot dodge
