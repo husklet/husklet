@@ -250,10 +250,7 @@ fn diverging(expression: &Expr) -> bool {
         Expr::Block(block) => diverging_block(&block.block),
         Expr::If(inner) => {
             diverging_block(&inner.then_branch)
-                && inner
-                    .else_branch
-                    .as_ref()
-                    .is_some_and(|(_, branch)| diverging(branch))
+                && inner.else_branch.as_ref().is_some_and(|(_, branch)| diverging(branch))
         }
         Expr::Match(inner) => !inner.arms.is_empty() && inner.arms.iter().all(|arm| diverging(&arm.body)),
         Expr::Macro(inner) => diverging_macro(&inner.mac),
