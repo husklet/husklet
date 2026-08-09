@@ -635,6 +635,17 @@ impl ExecutionMachine {
         Some(StepOutcome::Yield)
     }
 
+    /// Classifies the second decode of one instruction, the one made with the full 15-byte window.
+    ///
+    /// Truncation there is no longer ambiguous: the window is as wide as any instruction can be, so
+    /// the missing bytes are absent from guest memory rather than badly encoded.
+    fn retry_failure(error: &ScalarIrError) -> X86FetchFailure {
+        match error {
+            ScalarIrError::Structural(DecodeError::Truncated) => X86FetchFailure::Fetch,
+            _ => X86FetchFailure::Decode,
+        }
+    }
+
     /// Asks only for the bytes up to the end of the instruction's page, because a mapping ends on a
     /// page boundary and demanding a whole 15-byte window there refuses code the hardware would run.
     /// An instruction that genuinely needs more asks again, and faults if those bytes are absent.
@@ -650,13 +661,7 @@ impl ExecutionMachine {
         match X86ScalarDecoder::decode(&bytes[..length], address) {
             Err(ScalarIrError::Structural(DecodeError::Truncated)) if length < X86_MAXIMUM_INSTRUCTION => {
                 let length = read(&mut bytes)?;
-                X86ScalarDecoder::decode(&bytes[..length], address).map_err(|error| {
-                    if matches!(error, ScalarIrError::Structural(DecodeError::Truncated)) {
-                        X86FetchFailure::Fetch
-                    } else {
-                        X86FetchFailure::Decode
-                    }
-                })
+                X86ScalarDecoder::decode(&bytes[..length], address).map_err(|error| Self::retry_failure(&error))
             }
             result => result.map_err(|_| X86FetchFailure::Decode),
         }

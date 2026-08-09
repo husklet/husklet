@@ -75,23 +75,28 @@ fn histograms(stderr: &[u8]) -> Vec<String> {
             let entries: Vec<String> = text
                 .lines()
                 .filter_map(|line| line.trim_start().strip_prefix(record))
-                .filter_map(|fields| {
-                    let mut pc = None;
-                    let mut weight = None;
-                    for (name, value) in fields.split_whitespace().filter_map(|field| field.split_once('=')) {
-                        match name {
-                            "pc" => pc = Some(value),
-                            "count" | "refused" => weight = Some(value),
-                            _ => {}
-                        }
-                    }
-                    Some(format!("{}:{}", pc?, weight?))
-                })
+                .filter_map(histogram_entry)
                 .take(HISTOGRAM_WIDTH)
                 .collect();
             (!entries.is_empty()).then(|| format!("{label}={}", entries.join(",")))
         })
         .collect()
+}
+
+/// The `pc:weight` pair a histogram record carries, or nothing when the record names neither.
+///
+/// `count` and `refused` are the two spellings the engine uses for the same weight.
+fn histogram_entry(fields: &str) -> Option<String> {
+    let mut pc = None;
+    let mut weight = None;
+    for (name, value) in fields.split_whitespace().filter_map(|field| field.split_once('=')) {
+        match name {
+            "pc" => pc = Some(value),
+            "count" | "refused" => weight = Some(value),
+            _ => {}
+        }
+    }
+    Some(format!("{}:{}", pc?, weight?))
 }
 
 /// One counter comparison from a case `expect.diagnostics` list.

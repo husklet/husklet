@@ -8,6 +8,28 @@ use hl_task::ProcessId;
 
 use super::{RunOwnership, SetState, ThreadRun, ThreadSet};
 
+/// Lifts the stop gate off every thread the process still holds gated.
+///
+/// A waiter lane still owes a completion for a syscall-parked run, and `resume_run` is the only
+/// transition that may unpark it, so a parked run keeps its park here rather than losing it.
+fn release_gated_threads(state: &mut SetState, process: hl_task::ProcessId) {
+    let release = state
+        .gated
+        .iter()
+        .filter_map(|(thread, (owner, generation, _))| (*owner == process).then_some((*thread, *generation)))
+        .collect::<Vec<_>>();
+    for (thread, generation) in release {
+        state.gated.remove(&thread);
+        let owned = state
+            .machines
+            .get(&thread)
+            .is_some_and(|run| run.process == process && run.generation == generation);
+        if owned && !state.syscall_parked.contains(&thread) {
+            state.parked.remove(&thread);
+        }
+    }
+}
+
 impl ThreadSet {
     pub(in crate::ffi::linux::execution) fn interrupt_signals(&self) {
         let Some(tasks) = &self.tasks else {
@@ -196,24 +218,7 @@ impl ThreadSet {
             .is_some_and(|stop| event.control_epoch > *stop)
         {
             state.stop_gates.remove(&process);
-            let release = state
-                .gated
-                .iter()
-                .filter_map(|(thread, (owner, generation, _))| (*owner == process).then_some((*thread, *generation)))
-                .collect::<Vec<_>>();
-            for (thread, generation) in release {
-                state.gated.remove(&thread);
-                // A waiter lane still owes a completion for a syscall-parked run, and `resume_run`
-                // is the only transition that may unpark it; clearing the park here strands it.
-                if state
-                    .machines
-                    .get(&thread)
-                    .is_some_and(|run| run.process == process && run.generation == generation)
-                    && !state.syscall_parked.contains(&thread)
-                {
-                    state.parked.remove(&thread);
-                }
-            }
+            release_gated_threads(&mut state, process);
         }
         drop(state);
         if let Some(cancellation) = wake {

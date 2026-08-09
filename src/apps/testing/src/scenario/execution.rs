@@ -281,6 +281,38 @@ fn specification(
         .isolation(super::isolation::for_case(case)))
 }
 
+/// Runs the case's startup command, then polls its probe until the service answers.
+///
+/// The probe is what decides readiness, so a failing startup is reported as its own failure
+/// rather than as a timeout, and an exhausted poll quotes the service's own logs.
+async fn await_readiness(
+    containers: &hl_container::Containers,
+    case: &ScenarioCase,
+    runtime: &RuntimeConfig,
+    rootfs: &std::path::Path,
+    name: &str,
+    readiness: &super::definition::Readiness,
+) -> Result<(), Error> {
+    let startup = super::definition::ScenarioAction::Shell(readiness.startup.clone());
+    let startup = run_exec(containers, case, runtime, rootfs, name, &startup).await?;
+    require_success("readiness startup", startup.0, &startup.1, &startup.2)?;
+    let probe = super::definition::ScenarioAction::Shell(readiness.probe.clone());
+    for attempt in 1..=readiness.attempts {
+        if run_exec(containers, case, runtime, rootfs, name, &probe).await?.0 == ExitStatus::Code(0) {
+            return Ok(());
+        }
+        if attempt < readiness.attempts {
+            tokio::time::sleep(Duration::from_millis(readiness.delay_ms)).await;
+        }
+    }
+    Err(format!(
+        "readiness failed after {} attempts; service logs: {}",
+        readiness.attempts,
+        readiness_logs(rootfs, &readiness.logs)
+    )
+    .into())
+}
+
 async fn execute_actions(
     containers: &hl_container::Containers,
     case: &ScenarioCase,
@@ -303,43 +335,7 @@ async fn execute_actions(
         });
     }
     if let Some(readiness) = &case.readiness {
-        let startup = run_exec(
-            containers,
-            case,
-            runtime,
-            rootfs,
-            name,
-            &super::definition::ScenarioAction::Shell(readiness.startup.clone()),
-        )
-        .await?;
-        require_success("readiness startup", startup.0, &startup.1, &startup.2)?;
-        let mut ready = false;
-        for attempt in 1..=readiness.attempts {
-            let probe = run_exec(
-                containers,
-                case,
-                runtime,
-                rootfs,
-                name,
-                &super::definition::ScenarioAction::Shell(readiness.probe.clone()),
-            )
-            .await?;
-            if probe.0 == ExitStatus::Code(0) {
-                ready = true;
-                break;
-            }
-            if attempt < readiness.attempts {
-                tokio::time::sleep(Duration::from_millis(readiness.delay_ms)).await;
-            }
-        }
-        if !ready {
-            return Err(format!(
-                "readiness failed after {} attempts; service logs: {}",
-                readiness.attempts,
-                readiness_logs(rootfs, &readiness.logs)
-            )
-            .into());
-        }
+        await_readiness(containers, case, runtime, rootfs, name, readiness).await?;
     }
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();

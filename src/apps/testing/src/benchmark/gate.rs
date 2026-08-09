@@ -521,6 +521,20 @@ type Series = BTreeMap<(String, String), Vec<u64>>;
 /// Work done per `(phase, provider)`: the summed `ok=` checksum and the rows it came from.
 type Totals = BTreeMap<(String, String), (u64, usize)>;
 
+/// Pins each provider to the one `guest/engine` pair its first row was measured with.
+///
+/// A ratio between rows from two different trees is not a measurement of anything, so the second
+/// identity a provider presents is refused rather than averaged in.
+fn record_build_identity(builds: &mut BTreeMap<String, String>, provider: &str, identity: &str) -> Result<(), String> {
+    let recorded = builds.entry(provider.to_owned()).or_insert_with(|| identity.to_owned());
+    if recorded == identity {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing to compare rows from different trees: {provider} measured {recorded} and {identity}"
+    ))
+}
+
 fn collect(paths: &[PathBuf]) -> Result<Series, String> {
     let mut series: Series = BTreeMap::new();
     let mut totals: Totals = BTreeMap::new();
@@ -550,18 +564,7 @@ fn collect(paths: &[PathBuf]) -> Result<Series, String> {
             };
             let value = field(us)?.parse().map_err(|_| "invalid benchmark time".to_owned())?;
             let identity = format!("{}/{}", field(guest)?, field(engine)?);
-            match builds
-                .entry(field(provider)?.to_owned())
-                .or_insert_with(|| identity.clone())
-            {
-                recorded if *recorded == identity => {}
-                recorded => {
-                    return Err(format!(
-                        "refusing to compare rows from different trees: {} measured {recorded} and {identity}",
-                        field(provider)?
-                    ));
-                }
-            }
+            record_build_identity(&mut builds, field(provider)?, &identity)?;
             let checksum: u64 = field(ok)?
                 .parse()
                 .map_err(|_| "invalid benchmark checksum".to_owned())?;

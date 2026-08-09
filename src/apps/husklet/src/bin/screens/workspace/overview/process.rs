@@ -56,6 +56,20 @@ impl HostProcess {
     }
 }
 
+/// Adds every process whose parent is already kept, and reports whether that added anything.
+///
+/// `ps` output is in no particular order, so a child can precede its parent; repeating this until
+/// it adds nothing is what closes the tree rather than one pass over the rows.
+fn adopt_children(procs: &[HostProcess], keep: &mut std::collections::HashSet<String>) -> bool {
+    let adopted: Vec<String> = procs
+        .iter()
+        .filter(|process| !keep.contains(&process.pid) && keep.contains(&process.ppid))
+        .map(|process| process.pid.clone())
+        .collect();
+    keep.extend(adopted.iter().cloned());
+    !adopted.is_empty()
+}
+
 /// Pure core of [`WorkspaceProcesses`] (unit-tested against a captured `ps` dump): given `ps -axo
 /// pid=,ppid=,etime=,command=` output, return `[pid, ppid, name]` rows for the workspace's launcher
 /// shells and everything under them. A launcher is a process whose command contains
@@ -96,18 +110,7 @@ pub(crate) fn filter_workspace_procs(ps_text: &str, ws_name: &str, shell: &str) 
         .map(|p| p.pid.clone())
         .collect();
     // Transitively add descendants (guest forks are host children of a launcher).
-    loop {
-        let mut added = false;
-        for p in &procs {
-            if !keep.contains(&p.pid) && keep.contains(&p.ppid) {
-                keep.insert(p.pid.clone());
-                added = true;
-            }
-        }
-        if !added {
-            break;
-        }
-    }
+    while adopt_children(&procs, &mut keep) {}
 
     procs
         .iter()

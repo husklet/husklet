@@ -41,14 +41,10 @@ impl Containers {
             let mut archive = tempfile::tempfile()?;
             filesystem.archive("/", &mut archive)?;
             archive.rewind()?;
-            let mut rootfs = 0_u64;
-            for entry in tar::Archive::new(archive).entries()? {
-                let entry = entry?;
-                if entry.header().entry_type().is_file() {
-                    rootfs = rootfs.saturating_add(entry.size());
-                }
-            }
-            Ok(FilesystemUsage { writable, rootfs })
+            Ok(FilesystemUsage {
+                writable,
+                rootfs: archived_file_bytes(archive)?,
+            })
         })
         .await
         .map_err(|error| crate::Error::Io(std::io::Error::other(error)))?
@@ -62,4 +58,19 @@ impl Containers {
     pub async fn changes(&self, reference: &str) -> Result<crate::Changes> {
         self.service.changes(reference).await
     }
+}
+
+/// Sums the regular-file sizes in a rootfs archive, which is the container's logical size.
+///
+/// Directories, symlinks, and device nodes carry no payload, and hard links carry theirs once at
+/// the entry that holds the content, so counting only regular files avoids double accounting.
+fn archived_file_bytes(archive: std::fs::File) -> Result<u64> {
+    let mut total = 0_u64;
+    for entry in tar::Archive::new(archive).entries()? {
+        let entry = entry?;
+        if entry.header().entry_type().is_file() {
+            total = total.saturating_add(entry.size());
+        }
+    }
+    Ok(total)
 }
