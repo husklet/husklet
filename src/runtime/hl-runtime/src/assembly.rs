@@ -1,18 +1,18 @@
 //! Instance-owned construction of the runtime domains available today.
 
 use crate::{
-    CheckpointError, CheckpointIpcCatalog, CheckpointTaskRegistry, Control, ControlError, ExitParticipant,
+    CheckpointError, CheckpointIpcCatalog, CheckpointTaskRegistry, Control, ExitParticipant,
     RuntimeCheckpointCoordinator, RuntimeDescriptorTable, RuntimeExecPort, RuntimeForkPort, SeccompControl,
 };
-use hl_event::{EventCatalog, EventCatalogError};
+use hl_event::EventCatalog;
 use hl_ipc::{
     IpcCatalog, MessageLimits, MessageQueueNamespace, SemaphoreLimits, SemaphoreNamespace, SharedMemoryLimits,
     SharedMemoryNamespace,
 };
 use hl_memory::SharedObjectStore;
 use hl_network::NetworkCatalog;
-use hl_provider::{HandleNamespace, NamespaceError};
-use hl_task::{TaskError, TaskRegistry};
+use hl_provider::HandleNamespace;
+use hl_task::TaskRegistry;
 use hl_vfs::AdvisoryLockCoordinator;
 use std::sync::{Arc, Mutex};
 
@@ -75,6 +75,18 @@ pub enum RuntimeDomain {
 pub enum RuntimeAssemblyError {
     Construction(RuntimeDomain),
     Unsupported(RuntimeDomain),
+}
+
+impl RuntimeAssemblyError {
+    /// Records the typed cause a domain-only `Construction` cannot carry. Assembly runs
+    /// once per boot, so the formatting cost is irrelevant and the failure is unrepeatable.
+    pub(crate) fn construction<E: core::fmt::Debug>(domain: RuntimeDomain, cause: &E) -> Self {
+        hl_log::hl_error!(
+            hl_log::tag::RUNTIME,
+            "runtime assembly failed domain={domain:?} cause={cause:?}"
+        );
+        Self::Construction(domain)
+    }
 }
 
 #[derive(Debug)]
@@ -184,17 +196,17 @@ impl RuntimeAssembly {
         let shared_limits = SharedMemoryLimits::default();
         let shared = Arc::new(
             SharedMemoryNamespace::new(objects, shared_limits)
-                .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::Ipc))?,
+                .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::Ipc, &cause))?,
         );
         let message_limits = MessageLimits::default();
         let messages = Arc::new(
             MessageQueueNamespace::new(message_limits)
-                .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::Ipc))?,
+                .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::Ipc, &cause))?,
         );
         let semaphore_limits = SemaphoreLimits::default();
         let semaphores = Arc::new(
             SemaphoreNamespace::new(semaphore_limits)
-                .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::Ipc))?,
+                .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::Ipc, &cause))?,
         );
         let mut current = self.ipc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.is_some() {
@@ -417,30 +429,6 @@ impl RuntimeAssembly {
 impl Drop for RuntimeAssembly {
     fn drop(&mut self) {
         let _ = self.release();
-    }
-}
-
-impl From<TaskError> for RuntimeAssemblyError {
-    fn from(_: TaskError) -> Self {
-        Self::Construction(RuntimeDomain::Task)
-    }
-}
-
-impl From<ControlError> for RuntimeAssemblyError {
-    fn from(_: ControlError) -> Self {
-        Self::Construction(RuntimeDomain::DescriptorEvent)
-    }
-}
-
-impl From<EventCatalogError> for RuntimeAssemblyError {
-    fn from(_: EventCatalogError) -> Self {
-        Self::Construction(RuntimeDomain::EventCatalog)
-    }
-}
-
-impl From<NamespaceError> for RuntimeAssemblyError {
-    fn from(_: NamespaceError) -> Self {
-        Self::Construction(RuntimeDomain::Provider)
     }
 }
 
