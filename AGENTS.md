@@ -18,6 +18,21 @@ not mean an identical binary", and "Reading a profile". If you are about to
 **commit**, they are "What green means" and its four subsections. Everything from
 "Mission" onward is durable architecture and changes rarely.
 
+**A counter governed by the policy cannot decide the policy.** A lane proposed
+replacing a flip budget with a threshold on `direct_declined`, and the counters
+appeared to confirm it: the plain guest finished at 1 declined site at every
+budget, sqlite at 4 to 26. But `malloc` **alone** declines 17 sites on the
+plain guest. It reads 1 in the whole sequence only because the budget's hold
+has already fired and suppressed direct mode — and suppressed direct mode
+cannot guard-fault, which is the sole entrance to the set. The evidence for
+the replacement was produced by the thing being replaced.
+
+Implementing it settled what the counter could not: `admitted` fell 255,303 to
+1,228, the sqlite phase regressed 1.74x, and both guests latched inside
+`malloc` and lost direct authority for the rest of the process. Before keying
+a decision on a counter, ask what writes to it and whether the current policy
+gates that write.
+
 ## Reading code: CodeGraph first
 
 This repository is indexed by CodeGraph (`.codegraph/` at the root). Reach for it
