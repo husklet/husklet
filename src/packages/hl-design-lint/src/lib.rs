@@ -187,14 +187,15 @@ struct Changed;
 struct Image { id: u64, name: String, path: String }
 struct DiscoveredImage { id: u64, name: String, path: String, score: u8 }
 
-fn unclassified(value: &str) -> usize { value.len() }
+struct Subject;
+fn unclassified(value: &Subject) -> usize { let _ = value; 1 }
 #[hl_design::classify(pkg)]
-fn classified(value: &str) -> usize { value.len() }
+fn classified(value: &Subject) -> usize { let _ = value; 1 }
 fn once(value: usize) -> usize { value + 1 }
 
 fn caller() {
-    let _ = unclassified("x");
-    let _ = classified("x");
+    let _ = unclassified(&Subject);
+    let _ = classified(&Subject);
     let _ = once(1);
     let _ = std::env::var_os("HL_TEST");
     if true { if true { if true {} } }
@@ -239,10 +240,11 @@ fn caller() {
         let source = write(
             &root,
             r#"
-fn missing(value: &str) -> usize { value.len() }
+struct Subject;
+fn missing(value: &Subject) -> usize { let _ = value; 1 }
 #[hl_design::classify(domain = "surface")]
-fn reviewed(value: &str) -> usize { value.len() }
-fn caller() { let _ = missing("x"); let _ = reviewed("x"); }
+fn reviewed(value: &Subject) -> usize { let _ = value; 1 }
+fn caller() { let _ = missing(&Subject); let _ = reviewed(&Subject); }
 "#,
         );
         let queues = root.join("lint");
@@ -275,22 +277,24 @@ fn caller() { let _ = missing("x"); let _ = reviewed("x"); }
     fn free_classification_contracts() {
         let values = findings(
             r#"
+struct AppState;
+type Payload = usize;
 fn zero() {}
-fn one(value: usize) { let _ = value; }
-fn two(left: usize, right: usize) { let _ = (left, right); }
-fn three(a: usize, b: usize, c: usize) { let _ = (a, b, c); }
-extern "C" fn ffi(value: usize) { let _ = value; }
+fn one(value: Payload) { let _ = value; }
+fn two(left: Payload, right: usize) { let _ = (left, right); }
+fn three(a: Payload, b: usize, c: usize) { let _ = (a, b, c); }
+extern "C" fn ffi(value: Payload) { let _ = value; }
 #[hl_design::adapter] async fn handler(State(state): State<AppState>) { let _ = state; }
 async fn unreviewed_handler(State(state): State<AppState>) { let _ = state; }
 fn detached(state: AppState) { let _ = state; }
 #[hl_design::adapter] fn parses(value: &str) -> Result<usize, String> { Ok(value.len()) }
 fn unmarked_parses(value: &str) -> Result<usize, String> { Ok(value.len()) }
-#[cfg(unix)] fn gated(value: usize) { let _ = value; }
-#[cfg(windows)] fn gated(value: usize) { let _ = value; }
-#[cfg(test)] fn test_only(value: usize) { let _ = value; }
-#[hl_design::classify(pkg)] fn package(value: usize) { let _ = value; }
-#[hl_design::classify(domain = "gpu")] fn domain(value: usize) { let _ = value; }
-#[hl_design::classify(domain = "")] fn malformed(value: usize) { let _ = value; }
+#[cfg(unix)] fn gated(value: Payload) { let _ = value; }
+#[cfg(windows)] fn gated(value: Payload) { let _ = value; }
+#[cfg(test)] fn test_only(value: Payload) { let _ = value; }
+#[hl_design::classify(pkg)] fn package(value: Payload) { let _ = value; }
+#[hl_design::classify(domain = "gpu")] fn domain(value: Payload) { let _ = value; }
+#[hl_design::classify(domain = "")] fn malformed(value: Payload) { let _ = value; }
 "#,
             "unclassified-free-function",
         );
@@ -304,7 +308,6 @@ fn unmarked_parses(value: &str) -> Result<usize, String> { Ok(value.len()) }
                 "two",
                 "unreviewed_handler",
                 "detached",
-                "unmarked_parses",
                 "gated",
                 "package",
                 "domain",
@@ -612,7 +615,7 @@ const PROSE: &str = "mod misc {}";
         let root = temporary("reporters");
         let source = write(
             &root,
-            "#[hl_design::classify(pkg)] fn reviewed(value: usize) { let _ = value; }\nfn missing(value: usize) { reviewed(value); }",
+            "struct Payload;\n#[hl_design::classify(pkg)] fn reviewed(value: Payload) { let _ = value; }\nfn missing(value: Payload) { reviewed(value); }",
         );
         let mut diagnostic = Diagnostic::new(Vec::new());
         Linter::standard().run([source.clone()], &mut diagnostic).unwrap();

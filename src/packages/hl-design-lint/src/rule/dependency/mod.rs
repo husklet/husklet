@@ -224,7 +224,10 @@ impl Graph {
                 finding.help = match (layer_violation, &package.layer) {
                     (Some(_), Layer::Package) => "move engine policy into `src/runtime`, retain only the transferable mechanism, or invert the edge through a runtime-owned port".into(),
                     (Some(_), _) => "keep concrete composition in `src/app/hl-engine`; expose the required capability from its owning runtime package".into(),
-                    (None, _) => "remove the edge, invert it through a consumer-owned port, or update the reviewed package graph before adding the dependency".into(),
+                    (None, _) => format!(
+                        "remove the edge, invert it through a consumer-owned port, or record the reviewed edge as `(\"{}\", \"{}\")` in `allowed_edge` at src/packages/hl-design-lint/src/rule/dependency/mod.rs",
+                        package.name, target.name
+                    ),
                 };
                 finding.related.push(Related {
                     label: format!("dependency target in {} layer", target.layer.label()),

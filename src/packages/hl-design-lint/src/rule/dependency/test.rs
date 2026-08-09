@@ -649,3 +649,30 @@ fn local() {
     assert!(values.iter().any(|finding| finding.subject == "model -> adapters"));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn an_unreviewed_peer_edge_names_the_allow_list_entry_and_its_file() {
+    let root = fixture("unreviewed");
+    package(&root, "runtime", "hl-sessions", "");
+    package(
+        &root,
+        "runtime",
+        "hl-state",
+        "\n[dependencies]\nhl-sessions = { path = \"../hl-sessions\" }\n",
+    );
+    let values = findings(&root);
+    let [finding] = &values[..] else {
+        panic!("one finding, got {}", values.len());
+    };
+    assert!(
+        finding.help.contains("(\"hl-state\", \"hl-sessions\")"),
+        "help must spell the entry: {}",
+        finding.help
+    );
+    assert!(
+        finding.help.contains("rule/dependency/mod.rs"),
+        "help must name the file: {}",
+        finding.help
+    );
+    fs::remove_dir_all(root).unwrap();
+}
