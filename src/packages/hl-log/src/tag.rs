@@ -227,19 +227,10 @@ impl FromStr for Tags {
     }
 }
 
-pub const GPU: Tag = Tag::new(1 << 0, "gpu");
-pub const WGPU: Tag = Tag::new(1 << 1, "wgpu");
-pub const VULKAN: Tag = Tag::new(1 << 2, "vulkan");
-pub const GL: Tag = Tag::new(1 << 3, "gl");
-pub const CUDA: Tag = Tag::new(1 << 4, "cuda");
-pub const COMPOSITOR: Tag = Tag::new(1 << 5, "compositor");
 pub const TRANSPORT: Tag = Tag::new(1 << 6, "transport");
-pub const PRESENT: Tag = Tag::new(1 << 8, "present");
 pub const EXEC: Tag = Tag::new(1 << 9, "exec");
 pub const RUNTIME: Tag = Tag::new(1 << 11, "runtime");
 pub const CPU: Tag = Tag::new(1 << 12, "cpu");
-pub const EGL: Tag = Tag::new(1 << 13, "egl");
-pub const WAYLAND: Tag = Tag::new(1 << 14, "wayland");
 pub const CONTAINER: Tag = Tag::new(1 << 15, "container");
 pub const IMAGE: Tag = Tag::new(1 << 16, "image");
 pub const DAEMON: Tag = Tag::new(1 << 17, "daemon");
@@ -273,8 +264,8 @@ pub const NONE: Tags = Tags::NONE;
 /// A new tag is a `Tag::new(1 << <next free bit>, "<name>")` const listed here; parsing,
 /// display, and every macro then pick it up automatically.
 pub const TAGS: &[Tag] = &[
-    GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, PRESENT, EXEC, RUNTIME, CPU, EGL, WAYLAND, CONTAINER, IMAGE,
-    DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK, SIGNAL, SYNC, IPC, CHECKPOINT,
+    TRANSPORT, EXEC, RUNTIME, CPU, CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK, SIGNAL, SYNC, IPC,
+    CHECKPOINT,
 ];
 
 #[cfg(test)]
@@ -293,14 +284,14 @@ mod env_value_tests {
         assert_eq!(Tags::from_str("warn").unwrap(), Tags::NONE);
     }
 
-    /// The replacement value actually opens the tags a GL context loss is reported under.
+    /// A list of real tag names opens exactly those tags and no others.
     #[test]
-    fn the_gl_diff_tag_list_opens_its_tags() {
-        let tags = Tags::from_str("gl,egl,present").unwrap();
-        assert!(tags.intersects(Tags::from(GL)));
-        assert!(tags.intersects(Tags::from(EGL)));
-        assert!(tags.intersects(Tags::from(PRESENT)));
-        assert!(!tags.intersects(Tags::from(CUDA)));
+    fn a_tag_list_opens_its_tags() {
+        let tags = Tags::from_str("syscall,fs,memory").unwrap();
+        assert!(tags.intersects(Tags::from(SYSCALL)));
+        assert!(tags.intersects(Tags::from(FS)));
+        assert!(tags.intersects(Tags::from(MEMORY)));
+        assert!(!tags.intersects(Tags::from(NET)));
     }
 }
 
@@ -311,12 +302,12 @@ mod unrecognised_tests {
     #[test]
     fn a_level_name_is_reported_as_unrecognised() {
         assert_eq!(TagList::from("debug").unrecognised(), &["debug"]);
-        assert_eq!(TagList::from("gl,debug,present").unrecognised(), &["debug"]);
+        assert_eq!(TagList::from("fs,debug,memory").unrecognised(), &["debug"]);
     }
 
     #[test]
     fn a_valid_list_and_the_meanings_report_nothing() {
-        assert!(TagList::from("gl,egl,present").unrecognised().is_empty());
+        assert!(TagList::from("syscall,fs,memory").unrecognised().is_empty());
         assert!(TagList::from("all").unrecognised().is_empty());
         assert!(TagList::from("off").unrecognised().is_empty());
         assert!(TagList::from("").unrecognised().is_empty());

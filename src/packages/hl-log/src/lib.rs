@@ -20,15 +20,15 @@
 //! ```
 //! use hl_log::tag;
 //! hl_log::Config {
-//!     logging: tag::GPU | tag::WGPU,
+//!     logging: tag::SYSCALL | tag::FS,
 //!     level: hl_log::Level::Debug,
-//!     profiling: tag::GPU.into(),
+//!     profiling: tag::SYSCALL.into(),
 //! }.apply();
 //!
 //! let (id, n) = (7u32, 4096usize);
-//! hl_log::hl_info!(tag::GPU, "submit frame {} ({} bytes)", id, n);
-//! hl_log::hl_count!(tag::GPU, "frames");
-//! { let _s = hl_log::hl_span!(tag::WGPU, "readback"); /* timed work */ }
+//! hl_log::hl_info!(tag::SYSCALL, "dispatch {} ({} bytes)", id, n);
+//! hl_log::hl_count!(tag::SYSCALL, "calls");
+//! { let _s = hl_log::hl_span!(tag::FS, "resolve"); /* timed work */ }
 //! ```
 //!
 //! Environment and CLI translation belongs to the application composition root.

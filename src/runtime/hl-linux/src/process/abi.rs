@@ -24,14 +24,16 @@ pub enum Error {
 
 impl Error {
     #[must_use]
-    pub const fn errno(self) -> Errno {
-        match self {
+    pub fn errno(self) -> Errno {
+        let errno = match self {
             Self::Fault => Errno::EFAULT,
             Self::Invalid => Errno::EINVAL,
             Self::NameTooLong => Errno::ENAMETOOLONG,
             Self::TooBig => Errno::E2BIG,
             Self::Overflow => Errno::EOVERFLOW,
-        }
+        };
+        hl_log::hl_debug!(hl_log::tag::TASK, "process abi error mapped error={:?} errno={}", self, errno.raw());
+        errno
     }
 }
 

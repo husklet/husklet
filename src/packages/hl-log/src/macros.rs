@@ -199,7 +199,7 @@ macro_rules! hl_add {
     }};
 }
 
-/// Open a timing span. Bind the result: `let _s = hl_span!(tag::WGPU, "readback");`.
+/// Open a timing span. Bind the result: `let _s = hl_span!(tag::FS, "resolve");`.
 /// Records elapsed time on drop when profiling includes the tag; otherwise the
 /// returned guard is inert. In release (without `release-verbose`) it is always inert.
 #[cfg(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose")))]
@@ -271,7 +271,7 @@ macro_rules! __hl_fields {
 /// ```
 /// # use hl_log::{hl_event, tag, Level};
 /// # let (id, bytes) = (7u32, 4096usize);
-/// hl_event!(tag::GPU, Level::Debug, "frame.submitted", id = id, bytes = bytes);
+/// hl_event!(tag::SYSCALL, Level::Debug, "frame.submitted", id = id, bytes = bytes);
 /// ```
 ///
 /// Gated exactly like every other macro — the same tag mask, the same level — and subject to the same
@@ -317,7 +317,7 @@ macro_rules! hl_event {
 /// A verdict is not narration and is deliberately **not subject to the tag mask**. Every other macro in
 /// this crate is a subscription — an operator opens a tag to hear a subsystem talk about itself, and a
 /// closed tag means "I am not listening to this". That is the right default for chatter and the wrong
-/// one for a refusal, because the operator who did not know to open `wgpu` is exactly the person whose
+/// one for a refusal, because the operator who did not know to open `memory` is exactly the person whose
 /// frame was dropped. Measured: a run reported its bundle emitted no presentation heartbeat when the
 /// diagnostic was at error level and firing — the tag was simply never opened, and the absence read as
 /// a property of the subject.
@@ -333,7 +333,7 @@ macro_rules! hl_event {
 /// ```
 /// # use hl_log::{hl_verdict, tag};
 /// # let (id, reason) = (7u32, "no matching format");
-/// hl_verdict!(tag::WGPU, "frame.refused", id = id, reason = %reason);
+/// hl_verdict!(tag::MEMORY, "frame.refused", id = id, reason = %reason);
 /// ```
 ///
 /// Emits twice on purpose: the human sentence to the normal log at error level, so a person reading

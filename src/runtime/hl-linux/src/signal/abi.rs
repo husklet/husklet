@@ -19,13 +19,20 @@ pub enum AbiError {
 
 impl AbiError {
     #[must_use]
-    pub const fn errno(self) -> Errno {
-        match self {
+    pub fn errno(self) -> Errno {
+        let errno = match self {
             Self::Fault => Errno::EFAULT,
             Self::Invalid => Errno::EINVAL,
             Self::NoMemory => Errno::ENOMEM,
             Self::Overflow => Errno::EOVERFLOW,
-        }
+        };
+        hl_log::hl_debug!(
+            hl_log::tag::SIGNAL,
+            "signal abi error mapped error={:?} errno={}",
+            self,
+            errno.raw()
+        );
+        errno
     }
 }
 
