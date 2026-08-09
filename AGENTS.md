@@ -235,6 +235,23 @@ in isolation both guests measure ~960,000 us. Measure on at least two guests,
 run the full sequence rather than one phase, and report **every** phase: a
 withdrawn table listed six and omitted a 1.37 string regression in its own data.
 
+**Sampling cannot hold a window; take the lock.** A 120-second all-clear says
+nothing about minute three, and a lane lost a measurement to a sibling's gate
+that started after its window opened. Widening what the sample sees does not
+change that. So a measuring lane takes an exclusive lock for the *duration* of
+its run, and anything that loads the box takes it shared:
+
+    # measuring — exclusive, held for the whole run
+    flock /var/tmp/husklet-box.lock -c './timing.sh'
+    # building or gating — shared, waits for a measurement to finish
+    flock -s /var/tmp/husklet-box.lock -c 'cargo test --workspace --lib --bins'
+
+`flock` blocks until it can acquire, so a gate started mid-measurement waits
+instead of contending, and a measurement started mid-gate waits instead of
+reading a poisoned floor. Use `-w <seconds>` if you would rather fail than
+wait. This is advisory: it only works because every lane honours it, and a lane
+that skips it is invisible in exactly the way the `pgrep` checks already are.
+
 **`testing` is not the only thing that loads the box, and the others are the
 ones we generate constantly.** A `cargo test -p hl-engine` test binary is named
 `hl_engine-<hash>`, which `-x testing` cannot match and `-cf "release/testing"`
