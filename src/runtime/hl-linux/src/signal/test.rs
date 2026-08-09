@@ -228,7 +228,10 @@ fn futex_decodes_precedence() {
         abi.futex(BASE + 1, 127, 0, 0, 0, 0),
         Err(TimeFutexMarshalError::UnknownOperation),
     );
-    assert_eq!(abi.futex(BASE + 1, 0, 1, u64::MAX, 0, 0), Err(TimeFutexMarshalError::Fault));
+    assert_eq!(
+        abi.futex(BASE + 1, 0, 1, u64::MAX, 0, 0),
+        Err(TimeFutexMarshalError::Fault)
+    );
     assert_eq!(abi.futex(BASE + 1, 1, 1, 0, 0, 0), Err(TimeFutexMarshalError::Invalid));
     assert_eq!(abi.futex(BASE, 1, 1, 0, 0, 0).unwrap().address, BASE);
     assert_eq!(
