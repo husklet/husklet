@@ -269,6 +269,20 @@ forever, and adoption of an advisory lock is never complete. Cap it, then
 proceed and **record the load you actually ran at**: a run reporting "ran at
 load 9, stated" is worth more than one that blocks silently.
 
+**A crashed lane cannot wedge the box, and the lockfile is never cleaned up by
+hand.** The lock lives on the file descriptor, so the kernel drops it when the
+holder dies — SIGKILL and a reaped turn included; verified behaviourally.
+There is no stale-lock state and no `rm /var/tmp/husklet-box.lock` recovery
+step. **Deleting the path is the one thing that does break it**: it does not
+release anything, and the next lane creates a fresh inode and acquires
+immediately while the real holder is still measuring.
+
+**Do not tell a lane to idle for a window the lock already governs.** A builder
+under `flock -s` blocks only for the exact interval a measurement holds
+exclusive, automatically, with no coordination between them — that is the whole
+advantage over a granted window. Layering "wait until I say so" on top of it
+brings back the serialization cost and keeps the lock's overhead.
+
 This is advisory in the strict sense — it converts a contention problem into a
 compliance problem. A builder that forgets the lock is indistinguishable from
 one that holds it, so **a granted lock is not proof the box is quiet.** Keep
