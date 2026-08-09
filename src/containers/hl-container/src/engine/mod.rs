@@ -315,7 +315,6 @@ impl Runtime for Engine {
         Ok(Arc::new(Process {
             id: Process::next_id(),
             child: StdMutex::new(Some(engine)),
-            exit: StdMutex::new(None),
             logs: StdMutex::new(Some(receiver)),
             domain: spec.domain,
             checkpointable,
