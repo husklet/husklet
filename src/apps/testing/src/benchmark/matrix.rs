@@ -90,6 +90,7 @@ impl Matrix {
     }
 
     pub(super) fn validate(mut self) -> Result<Self, String> {
+        super::reject_engine_only_environment(&self.environment)?;
         let host_matches = matches!(
             (std::env::consts::ARCH, self.isa),
             ("aarch64", Isa::Aarch64) | ("x86_64", Isa::X86)
@@ -411,6 +412,29 @@ fn elf_build_id_bytes(bytes: &[u8]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a64_engine_settings_are_rejected_from_guest_environment() {
+        let mut matrix = Matrix::gated(
+            Isa::X86,
+            "/guest".into(),
+            "/c-engine".into(),
+            "/c-runner".into(),
+            "tree".into(),
+            "build".into(),
+            "/rust-engine".into(),
+            "/results".into(),
+            1,
+            Duration::from_secs(1),
+            Vec::new(),
+            true,
+        );
+        matrix.environment = vec![("HL_A64_DIRTY_OVERFLOW_CONTINUE".into(), "1".into())];
+        assert_eq!(
+            matrix.validate().unwrap_err(),
+            "HL_A64_DIRTY_OVERFLOW_CONTINUE is honoured only as --engine-option, not --env"
+        );
+    }
 
     #[test]
     fn rust_row_is_always_native_verified() {

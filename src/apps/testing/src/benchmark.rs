@@ -195,6 +195,16 @@ fn parse_assignment(value: &str) -> Result<(String, String), String> {
     }
 }
 
+fn reject_engine_only_environment(environment: &[(String, String)]) -> Result<(), String> {
+    if let Some((name, _)) = environment
+        .iter()
+        .find(|(name, _)| name.starts_with("HL_NATIVE_") || name.starts_with("HL_A64_"))
+    {
+        return Err(format!("{name} is honoured only as --engine-option, not --env"));
+    }
+    Ok(())
+}
+
 /// Consolidated direct-benchmark command surface and its host process adapter.
 pub struct Application {
     process: adapter::Process,
@@ -293,9 +303,7 @@ impl Run {
         }
         // The engine reads these only from --engine-option, so accepting them as
         // guest environment would apply nothing while looking like it did.
-        if let Some((name, _)) = self.environment.iter().find(|(name, _)| name.starts_with("HL_NATIVE_")) {
-            return Err(format!("{name} is honoured only as --engine-option, not --env"));
-        }
+        reject_engine_only_environment(&self.environment)?;
         Ok(self)
     }
 
@@ -699,13 +707,15 @@ mod test {
     }
 
     #[test]
-    fn native_settings_are_rejected_where_they_would_not_apply() {
-        let mut run = command_run(Provider::Rust, "/bin/sh".into(), Some("/bin/sh".into()));
-        run.environment = vec![("HL_NATIVE_EXECUTION".into(), "1".into())];
-        assert_eq!(
-            run.validate().unwrap_err(),
-            "HL_NATIVE_EXECUTION is honoured only as --engine-option, not --env"
-        );
+    fn engine_settings_are_rejected_where_they_would_not_apply() {
+        for name in ["HL_NATIVE_EXECUTION", "HL_A64_DIRTY_OVERFLOW_CONTINUE"] {
+            let mut run = command_run(Provider::Rust, "/bin/sh".into(), Some("/bin/sh".into()));
+            run.environment = vec![(name.into(), "1".into())];
+            assert_eq!(
+                run.validate().unwrap_err(),
+                format!("{name} is honoured only as --engine-option, not --env")
+            );
+        }
     }
 
     #[test]
