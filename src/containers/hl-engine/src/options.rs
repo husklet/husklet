@@ -87,6 +87,11 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
+        "HL_NATIVE_FALLBACK_PRODUCTIVITY",
+        "credit entry productivity from a long run that ended in a fallback",
+        Flag
+    ),
+    launch!(
         "HL_NATIVE_DIAGNOSTICS",
         "report native execution counters at launch exit",
         Flag
