@@ -246,6 +246,7 @@ impl<S: ProcessSyscalls> ProcessLauncher<S> {
             Self::append_stream_action(&mut file_actions, descriptor, target)?;
         }
         let mut environment = Vec::new();
+        Self::append_diagnostics(&mut environment);
         let authority = self.authority(material, &mut file_actions, &mut environment)?;
         if let Some(channel) = material.activation_channel {
             let descriptor = HostDescriptor::new(channel.get()).map_err(|_| EngineError::LaunchFailed)?;
@@ -267,6 +268,25 @@ impl<S: ProcessSyscalls> ProcessLauncher<S> {
             },
             authority,
         ))
+    }
+
+    /// The child receives the exact `envp` built here and inherits nothing, so the logging
+    /// selectors have to be named to reach the worker at all. Only the three `hl-log` controls
+    /// travel: they change what the worker says, never what it does. Performance and output-path
+    /// variables stay out deliberately — those belong in the reviewed launch options, where they
+    /// are typed and per-launch rather than ambient and shared by every worker at once.
+    fn append_diagnostics(environment: &mut Vec<CString>) {
+        Self::append_selected(environment, |name| std::env::var(name).ok());
+    }
+
+    fn append_selected(environment: &mut Vec<CString>, lookup: impl Fn(&str) -> Option<String>) {
+        for name in [hl_log::LOG_TAGS, hl_log::LOG_LEVEL, hl_log::PROFILE_TAGS] {
+            let Some(value) = lookup(name) else { continue };
+            let Ok(entry) = CString::new(format!("{name}={value}")) else {
+                continue;
+            };
+            environment.push(entry);
+        }
     }
 
     fn cstring(path: &Path) -> Result<CString, EngineError> {
