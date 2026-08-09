@@ -108,8 +108,8 @@ impl RuntimeAssembly {
             let mut pending = self.checkpoint_pending.lock().map_err(|_| Self::checkpoint_error())?;
             std::mem::take(&mut *pending)
         };
-        let coordinator =
-            RuntimeCheckpointCoordinator::new(participants.clone(), limits).map_err(|_| Self::checkpoint_error());
+        let coordinator = RuntimeCheckpointCoordinator::new(participants.clone(), limits)
+            .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::Checkpoint, &cause));
         match coordinator {
             Ok(coordinator) => self.install_checkpoint(Arc::new(coordinator)),
             Err(error) => {

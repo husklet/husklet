@@ -670,3 +670,90 @@ fn memory_requires_task() {
     );
     assert!(assembly.checkpoint().is_none());
 }
+
+struct Collector(Arc<Mutex<Vec<String>>>);
+
+impl hl_log::Sink for Collector {
+    fn write_line(&self, line: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(line.to_owned());
+    }
+}
+
+/// A boot failure names its typed cause, not only the domain that failed.
+#[test]
+fn assembly_failure_records_the_typed_cause() {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    hl_log::sink::Output::global().set(Box::new(Collector(Arc::clone(&lines))));
+    hl_log::Config {
+        logging: hl_log::tag::RUNTIME.into(),
+        level: hl_log::Level::Error,
+        profiling: hl_log::tag::NONE,
+    }
+    .apply();
+
+    let cases = [
+        (
+            RuntimeDomain::Task,
+            RuntimeAssemblyConfig {
+                maximum_processes: 0,
+                ..RuntimeAssemblyConfig::default()
+            },
+            "InvalidCapacity",
+        ),
+        (
+            RuntimeDomain::DescriptorEvent,
+            RuntimeAssemblyConfig {
+                descriptor_limit: -1,
+                ..RuntimeAssemblyConfig::default()
+            },
+            "Descriptor(InvalidArgument)",
+        ),
+        (
+            RuntimeDomain::EventCatalog,
+            RuntimeAssemblyConfig {
+                event_capacity: 0,
+                ..RuntimeAssemblyConfig::default()
+            },
+            "InvalidCapacity",
+        ),
+        (
+            RuntimeDomain::Provider,
+            RuntimeAssemblyConfig {
+                provider_capacity: 0,
+                ..RuntimeAssemblyConfig::default()
+            },
+            "InvalidCapacity",
+        ),
+        (
+            RuntimeDomain::Seccomp,
+            RuntimeAssemblyConfig {
+                maximum_seccomp_threads: 0,
+                ..RuntimeAssemblyConfig::default()
+            },
+            "Capacity",
+        ),
+    ];
+
+    let mut observed = Vec::new();
+    for (domain, config, cause) in cases {
+        assert_eq!(
+            RuntimeAssembly::new(config).err(),
+            Some(RuntimeAssemblyError::Construction(domain))
+        );
+        observed.push(format!("domain={domain:?} cause={cause}"));
+    }
+
+    hl_log::Config::default().apply();
+    hl_log::sink::Output::global().reset();
+
+    let captured = lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).join("");
+    for expected in observed {
+        assert!(
+            captured.contains(&expected),
+            "assembly cause unobservable: wanted {expected} in {captured}"
+        );
+    }
+}

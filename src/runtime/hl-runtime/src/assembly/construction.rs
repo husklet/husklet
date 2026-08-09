@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 
 impl RuntimeAssembly {
     pub fn new(config: HostCapacityPlan) -> Result<Self, RuntimeAssemblyError> {
-        let topology = CpuTopology::new(1).map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::Task))?;
+        let topology =
+            CpuTopology::new(1).map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::Task, &cause))?;
         Self::with_topology(config, topology)
     }
 
@@ -44,10 +45,10 @@ impl RuntimeAssembly {
                 max_pending_signals: config.maximum_pending_signals,
                 online_cpus: topology.online(),
             })
-            .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::Task))?,
+            .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::Task, &cause))?,
         ))));
         let (epoll, descriptors) = Control::new(config.descriptor_limit, config.epoll_graph_limit)
-            .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::DescriptorEvent))?;
+            .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::DescriptorEvent, &cause))?;
         assembly.epoll = Some(Arc::new(epoll));
         let descriptors = Arc::new(descriptors);
         assembly.checkpoint_descriptors = Some(Arc::new(crate::CheckpointDescriptorTable::from_slot(
@@ -56,7 +57,7 @@ impl RuntimeAssembly {
         assembly.descriptors = Some(descriptors);
         let events = Arc::new(
             EventCatalog::new(config.event_capacity)
-                .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::EventCatalog))?,
+                .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::EventCatalog, &cause))?,
         );
         assembly.events = Some(Arc::new(crate::CheckpointEventCatalog::new(events)));
         let resources = Arc::new(crate::EventResourceRegistry::new());
@@ -67,19 +68,19 @@ impl RuntimeAssembly {
         assembly.event_resources = Some(resources);
         let network = Arc::new(NetworkCatalog::new(
             NetworkConfiguration::new(Vec::new(), Vec::new(), Vec::new())
-                .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::Network))?,
+                .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::Network, &cause))?,
         ));
         assembly.network = Some(Arc::new(crate::CheckpointNetworkCatalog::new(network)));
         let providers = Arc::new(
             NamespaceLimits::new(config.provider_capacity)
                 .and_then(HandleNamespace::with_limits)
-                .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::Provider))?,
+                .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::Provider, &cause))?,
         );
         assembly.providers = Some(Arc::new(crate::CheckpointProviderNamespace::new(providers)));
         assembly.provider_registry = Some(Arc::new(crate::ProviderRegistry::new()));
         assembly.seccomp = Some(Arc::new(
             SeccompControl::new(config.maximum_seccomp_threads)
-                .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::Seccomp))?,
+                .map_err(|cause| RuntimeAssemblyError::construction(RuntimeDomain::Seccomp, &cause))?,
         ));
         Ok(assembly)
     }
