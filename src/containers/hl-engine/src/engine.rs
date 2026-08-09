@@ -83,6 +83,8 @@ pub enum EngineError {
     Busy,
     /// The guest already reached a terminal state, so the operation had nothing to act on.
     Exited,
+    /// No guest has been launched yet, so the operation has nothing to observe.
+    NotStarted,
     Destroyed,
     LaunchFailed,
     Construction(crate::composition::ConstructionError),
@@ -235,16 +237,31 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
     }
 
     pub fn start(&self) -> Result<(), EngineError> {
-        {
+        let stale = {
             let mut lifecycle = self.lock()?;
             match lifecycle.phase {
                 EnginePhase::Created | EnginePhase::Stopping if lifecycle.process.is_none() => {
                     lifecycle.phase = EnginePhase::Starting;
                     lifecycle.start_in_progress = true;
+                    None
+                }
+                // `docker start` on an exited container runs it again, so a terminal engine is
+                // restartable once the previous run's process, exit and workspace are released.
+                EnginePhase::Exited => {
+                    lifecycle.phase = EnginePhase::Starting;
+                    lifecycle.start_in_progress = true;
+                    lifecycle.process = None;
+                    lifecycle.exit = None;
+                    lifecycle.terminal_error = None;
+                    lifecycle.pending_stop = None;
+                    lifecycle.workspace.take()
                 }
                 EnginePhase::Destroyed => return Err(EngineError::Destroyed),
                 _ => return Err(EngineError::Busy),
             }
+        };
+        if let Some(workspace) = stale {
+            let _ = self.shared.workspaces.cleanup(workspace);
         }
 
         let Ok(workspace) = self.material.as_ref().map_or_else(
@@ -345,7 +362,7 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             if lifecycle.phase == EnginePhase::Destroyed {
                 return Err(EngineError::Destroyed);
             }
-            let process = lifecycle.process.ok_or(EngineError::Busy)?;
+            let process = lifecycle.process.ok_or(EngineError::NotStarted)?;
             lifecycle.wait_in_progress = true;
             process
         };

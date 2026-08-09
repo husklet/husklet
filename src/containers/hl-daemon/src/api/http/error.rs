@@ -88,6 +88,7 @@ impl ApiError {
             ContainerError::ReadOnly(_) => StatusCode::FORBIDDEN,
             ContainerError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
             ContainerError::Runtime(_)
+            | ContainerError::StopTimeout { .. }
             | ContainerError::Corrupt(_)
             | ContainerError::TranslationCache(_)
             | ContainerError::Io(_)
