@@ -172,6 +172,9 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     /// its whole window instead of the exact ranges the journal would have carried.
     write_reserve: bool,
     write_commit: bool,
+    /// Emits the reservation everywhere but gates it at run time on a per-store-site
+    /// saturation byte, so translation stays a pure function of the pc.
+    runtime_write_reserve: bool,
     pub(super) admitted: Option<Admission>,
     pub(super) executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
     pub(super) suppressed: BTreeMap<NativeSite, Probation>,
@@ -228,6 +231,7 @@ impl NativePool {
             fallback_productivity: plan.options.get("HL_NATIVE_FALLBACK_PRODUCTIVITY") == Some("1"),
             write_reserve: plan.options.get("HL_A64_NO_WRITE_RESERVE") != Some("1"),
             write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
+            runtime_write_reserve: plan.options.get("HL_A64_RUNTIME_WRITE_RESERVE") == Some("1"),
             admitted: None,
             executors: BTreeMap::new(),
             suppressed: BTreeMap::new(),
@@ -274,9 +278,10 @@ impl NativePool {
                     self.diagnostics,
                     self.write_reserve,
                     self.write_commit,
+                    self.runtime_write_reserve,
                     self.host_faults.clone(),
                 )
-                    .ok()?,
+                .ok()?,
             );
         }
         self.executors.get(&process)

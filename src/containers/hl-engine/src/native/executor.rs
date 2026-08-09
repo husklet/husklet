@@ -2073,11 +2073,12 @@ impl Executor {
         Self::create_with_fault_owner(diagnostics_enabled, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn create_with_fault_owner(
         diagnostics_enabled: bool,
         fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
     ) -> Result<Self, ()> {
-        Self::create_with_journal(diagnostics_enabled, true, true, fault_owner)
+        Self::create_with_journal(diagnostics_enabled, true, true, false, fault_owner)
     }
 
     /// `write_journal` false drops the aarch64 exact dirty journal from every emitted
@@ -2086,6 +2087,7 @@ impl Executor {
         diagnostics_enabled: bool,
         write_reserve: bool,
         write_commit: bool,
+        runtime_write_reserve: bool,
         fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
     ) -> Result<Self, ()> {
         let mut memory = Box::new(ExecutableMemory::new());
@@ -2108,7 +2110,8 @@ impl Executor {
             flags: (if cfg!(target_os = "linux") { 2 } else { 0 })
                 | if diagnostics_enabled { 4 } else { 0 }
                 | if write_reserve { 0 } else { 8 }
-                | if write_commit { 0 } else { 16 },
+                | if write_commit { 0 } else { 16 }
+                | if runtime_write_reserve { 32 } else { 0 },
             reserved: 0,
             memory: &raw const services,
         };

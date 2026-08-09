@@ -102,6 +102,11 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
+        "HL_A64_RUNTIME_WRITE_RESERVE",
+        "run the aarch64 pre-store dirty-journal reservation only at store sites observed to saturate the ring",
+        Flag
+    ),
+    launch!(
         "HL_NATIVE_DIAGNOSTICS",
         "report native execution counters at launch exit",
         Flag

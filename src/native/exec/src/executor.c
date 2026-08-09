@@ -548,6 +548,8 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     executor->diagnostics = (config->flags & HL_NATIVE_DIAGNOSTICS) != 0;
     executor->write_reserve = (config->flags & HL_NATIVE_A64_NO_WRITE_RESERVE) == 0;
     executor->write_commit = (config->flags & HL_NATIVE_A64_NO_WRITE_COMMIT) == 0;
+    executor->runtime_write_reserve = (config->flags & HL_NATIVE_A64_RUNTIME_WRITE_RESERVE) != 0;
+    memset(executor->a64_reserve_filter, 0, sizeof(executor->a64_reserve_filter));
     atomic_init(&executor->a64_guard_fast, 0);
     atomic_init(&executor->a64_guard_full, 0);
     atomic_init(&executor->a64_guard_fallback, 0);
@@ -1087,6 +1089,11 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     hl_native_direct_authority direct_authority = {0};
     cpu->read_token = 0;
     cpu->read_count = 0;
+    /* Executor-owned and set-only, so the run may read a discovery another run
+     * has already made and can only fail to see one made concurrently. */
+    if (executor->runtime_write_reserve)
+        memcpy(cpu->reserve_filter, executor->a64_reserve_filter,
+               sizeof(executor->a64_reserve_filter));
     memset(cpu->read_views, 0, sizeof(cpu->read_views));
     memset(cpu->read_view_publication, 0, sizeof(cpu->read_view_publication));
     cpu->memory_write_policy = 0;
@@ -1363,6 +1370,15 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         cpu->diagnostic_dirty_reserved = cpu->diagnostic_dirty_overflow = cpu->diagnostic_dirty_committed = 0;
         cpu->diagnostic_dirty_merged = 0;
         hl_native_aarch64_enter(cpu, code.entry);
+        /* dirty_overflow names the store site that saturated the ring, so that
+         * site reserves from here on. The gate reads the CPU copy, so marking
+         * both makes the discovery effective within this run as well as the next. */
+        if (executor->runtime_write_reserve && cpu->dirty_overflow >= 2 &&
+            cpu->dirty_overflow < HL_NATIVE_A64_SATURATION_SLOTS + 2) {
+            uint32_t slot = (uint32_t)cpu->dirty_overflow - 2u;
+            executor->a64_reserve_filter[slot] = 1u;
+            ((uint8_t *)cpu->reserve_filter)[slot] = 1u;
+        }
         if (fault_unpublish != NULL) fault_unpublish(fault_context, &fault_scope);
         cpu->active_authority = 0;
         active_view_clear(cpu);

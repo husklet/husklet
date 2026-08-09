@@ -34,6 +34,11 @@ struct hl_native_executor {
     uint64_t authority_generation;
     uint32_t diagnostics;
     uint32_t write_reserve, write_commit;
+    /* Emission is unconditional under the runtime gate; the emitted load reads
+     * this filter out of the CPU record, which run_aarch64 seeds from here and
+     * folds back. Set-only, so a concurrent seed can only lose a discovery. */
+    uint32_t runtime_write_reserve;
+    uint8_t a64_reserve_filter[HL_NATIVE_A64_SATURATION_SLOTS];
     uint64_t ibtc_fills, ibtc_site_collisions, ibtc_shared_collisions;
     uint64_t boundary_branch, boundary_syscall, boundary_fallback, boundary_yield, completed;
     _Atomic uint64_t a64_branch_exhaustion, a64_branch_cold_relocation;
