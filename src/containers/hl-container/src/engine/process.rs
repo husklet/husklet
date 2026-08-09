@@ -54,6 +54,26 @@ impl Process {
             .ok_or_else(|| Error::Runtime("process result was already consumed".into()))
     }
 
+    /// `None` once the guest has been reaped, which callers that tolerate a terminal guest use
+    /// to stay a no-op instead of reporting a stop failure.
+    fn live(&self) -> Result<Option<Arc<hl_engine::runtime::Engine>>> {
+        Ok(self
+            .child
+            .lock()
+            .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))?
+            .as_ref()
+            .cloned())
+    }
+
+    /// A guest that already reached a terminal state is the outcome a stop asked for, so it
+    /// succeeds; every other engine failure, including a live guest that refused, is reported.
+    fn stopped(result: std::result::Result<(), hl_engine::engine::EngineError>) -> Result<()> {
+        match result {
+            Ok(()) | Err(hl_engine::engine::EngineError::Exited) => Ok(()),
+            Err(error) => Err(Error::Runtime(format!("engine stop: {error:?}"))),
+        }
+    }
+
     fn request(signal: Signal) -> hl_engine::engine::StopRequest {
         match signal {
             Signal::Kill => hl_engine::engine::StopRequest::Force,
@@ -95,9 +115,8 @@ impl Running for Process {
     }
 
     async fn signal(&self, signal: Signal) -> Result<()> {
-        self.engine()?
-            .stop(Self::request(signal))
-            .map_err(|error| Error::Runtime(format!("engine stop: {error:?}")))
+        let Some(engine) = self.live()? else { return Ok(()) };
+        Self::stopped(engine.stop(Self::request(signal)))
     }
 
     async fn pause(&self) -> Result<()> {
@@ -149,7 +168,53 @@ impl Running for Process {
 #[cfg(test)]
 mod tests {
     use super::Process;
-    use crate::{ExitStatus, FaultCause};
+    use crate::service::Running as _;
+    use crate::{ExitStatus, FaultCause, Signal};
+    use std::sync::{Arc, Mutex};
+
+    fn reaped() -> Arc<Process> {
+        Arc::new(Process {
+            id: 1,
+            child: Mutex::new(None),
+            logs: Mutex::new(None),
+            domain: hl_engine::Domain::new().unwrap(),
+            checkpointable: false,
+        })
+    }
+
+    /// Docker answers `stop` on an exited container with 304, not an error, so a teardown that
+    /// races the guest's own exit must not report a stop failure.
+    #[tokio::test]
+    async fn stopping_a_reaped_guest_succeeds() {
+        for signal in [Signal::Terminate, Signal::Kill, Signal::Interrupt] {
+            reaped().signal(signal).await.unwrap();
+        }
+    }
+
+    /// A stop that cannot reach a live guest still has to fail; only the terminal answer is
+    /// absorbed.
+    #[test]
+    fn only_a_terminal_guest_makes_a_stop_a_no_op() {
+        use hl_engine::engine::EngineError;
+        Process::stopped(Err(EngineError::Exited)).unwrap();
+        Process::stopped(Ok(())).unwrap();
+        for error in [
+            EngineError::Busy,
+            EngineError::StopFailed,
+            EngineError::Destroyed,
+            EngineError::Synchronization,
+        ] {
+            assert!(Process::stopped(Err(error)).is_err(), "{error:?} must not be absorbed");
+        }
+    }
+
+    /// `pause` and `unpause` on a container that is not running are conflicts in Docker, so the
+    /// terminal-state tolerance must not spread beyond stop.
+    #[tokio::test]
+    async fn pausing_a_reaped_guest_still_fails() {
+        assert!(reaped().pause().await.is_err());
+        assert!(reaped().resume().await.is_err());
+    }
 
     fn exit(reason: hl_engine::engine::FaultReason) -> hl_engine::engine::EngineExit {
         hl_engine::engine::EngineExit {
