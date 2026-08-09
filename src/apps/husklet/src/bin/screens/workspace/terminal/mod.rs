@@ -192,7 +192,7 @@ impl TerminalWindow {
             closing: Cell::new(false),
             overview_page,
         });
-        tw.search.wire(&tw);
+        Search::wire(&tw);
 
         let keys = gtk::EventControllerKey::new();
         // CAPTURE phase so ⌘-shortcuts are handled by the window BEFORE the focused VTE swallows them
@@ -347,7 +347,7 @@ impl<'a> Terminal<'a> {
     /// The terminal's current directory, decoded from OSC 7's `file://` URI.
     pub(crate) fn working_directory(&self) -> Option<String> {
         let uri = self.0.current_directory_uri()?;
-        session::WorkingDirectory::from_osc7(&uri).map(|path| path.into_string())
+        session::WorkingDirectory::from_osc7(&uri).map(hl_ws_term::WorkingDirectory::into_string)
     }
 
     /// Extract the whole scrollback and visible screen as plain text.

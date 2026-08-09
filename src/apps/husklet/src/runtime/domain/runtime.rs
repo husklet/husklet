@@ -75,7 +75,7 @@ impl Runtime {
     }
 
     pub(super) async fn ensure_container(containers: &Containers, workspace: &WorkspaceConfig) -> io::Result<()> {
-        let signature = Configuration::new(workspace).signature()?;
+        let signature = Configuration::new(workspace).signature();
         match containers.inspect(CONTAINER).await {
             Ok(container) => {
                 let stored = container.spec.labels.get(SIGNATURE);

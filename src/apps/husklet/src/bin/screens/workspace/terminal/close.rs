@@ -29,7 +29,7 @@ impl CloseRequest {
                     };
                     if let Err(error) = preparation {
                         terminal.closing.set(false);
-                        Self::failure(&parent, error);
+                        Self::failure(&parent, &error);
                         return;
                     }
 
@@ -58,7 +58,7 @@ impl CloseRequest {
                             Ok(()) => parent.close(),
                             Err(error) => {
                                 terminal.closing.set(false);
-                                Self::failure(&parent, error);
+                                Self::failure(&parent, &error);
                             }
                         }
                         glib::ControlFlow::Break
@@ -69,7 +69,7 @@ impl CloseRequest {
         });
     }
 
-    fn failure(parent: &gtk::ApplicationWindow, error: std::io::Error) {
+    fn failure(parent: &gtk::ApplicationWindow, error: &std::io::Error) {
         let failure = hl_gui::Dialog::new("Could not close workspace")
             .detail(error.to_string())
             .action(hl_gui::Action::new(hl_gui::EventId::new("dismiss"), "Dismiss"));

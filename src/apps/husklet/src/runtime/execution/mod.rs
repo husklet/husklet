@@ -134,17 +134,16 @@ pub fn launch(
     let mut restore_failure = None;
     let previous = pane.as_ref().map(PaneExecution::id).transpose()?.flatten();
     let restoring = previous.is_some();
-    let mut execution = match previous {
-        Some(id) => id,
-        None => {
-            let created = runtime
-                .block_on(client.executions().create("workspace", &config))
-                .map_err(LauncherError::io)?;
-            if let Some(pane) = &pane {
-                pane.save(&created.id)?;
-            }
-            created.id
+    let mut execution = if let Some(id) = previous {
+        id
+    } else {
+        let created = runtime
+            .block_on(client.executions().create("workspace", &config))
+            .map_err(LauncherError::io)?;
+        if let Some(pane) = &pane {
+            pane.save(&created.id)?;
         }
+        created.id
     };
     let session = match runtime.block_on(client.executions().start(&execution, &start)) {
         Ok(session) => session,

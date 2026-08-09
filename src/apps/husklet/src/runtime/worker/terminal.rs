@@ -89,7 +89,7 @@ mod ffi {
             // SAFETY: `duration` is an initialized integer aggregate borrowed for this call.
             // `nanosleep` retains no pointer, accesses no aliased mutable Rust storage, invokes no
             // callback, and cannot unwind across the ABI. Interruption remains intentionally ignored.
-            unsafe { libc::nanosleep(&duration, std::ptr::null_mut()) };
+            unsafe { libc::nanosleep(&raw const duration, std::ptr::null_mut()) };
         }
     }
 
@@ -100,7 +100,7 @@ mod ffi {
             // retains no pointer, invokes no callback, and cannot unwind across the ABI.
             let (status, limit) = unsafe {
                 let mut limit: libc::rlimit = std::mem::zeroed();
-                let status = libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit);
+                let status = libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit);
                 (status, limit)
             };
             if status == 0 {
@@ -204,7 +204,7 @@ impl<'a> TerminalSession<'a> {
             revents: 0,
         };
         // SAFETY: `descriptor` is a live, fully initialised `pollfd` owned by this frame.
-        let result = unsafe { libc::poll(&mut descriptor, 1, 10) };
+        let result = unsafe { libc::poll(&raw mut descriptor, 1, 10) };
         if result < 0 {
             let error = std::io::Error::last_os_error();
             if error.raw_os_error() != Some(libc::EINTR) {
@@ -216,13 +216,7 @@ impl<'a> TerminalSession<'a> {
             return Ok(());
         }
         // SAFETY: the destination is this frame's buffer and the length is its own capacity.
-        let count = unsafe {
-            libc::read(
-                libc::STDIN_FILENO,
-                self.buffer.as_mut_ptr() as *mut _,
-                self.buffer.len(),
-            )
-        };
+        let count = unsafe { libc::read(libc::STDIN_FILENO, self.buffer.as_mut_ptr().cast(), self.buffer.len()) };
         if count > 0 {
             self.pty.write(&self.buffer[..count as usize])?;
             return Ok(());
@@ -276,7 +270,7 @@ pub(super) fn contract() -> String {
     };
     // SAFETY: `rlimit` is plain data, and the pointer names this frame's live value.
     let mut nofile: libc::rlimit = unsafe { std::mem::zeroed() };
-    let _ = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut nofile) };
+    let _ = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut nofile) };
     let mut environment: Vec<_> = std::env::vars().collect();
     environment.sort_by(|left, right| left.0.cmp(&right.0));
     format!(
@@ -285,9 +279,7 @@ pub(super) fn contract() -> String {
         unsafe { libc::getpgrp() },
         unsafe { libc::tcgetpgrp(descriptor) },
         size(),
-        std::env::current_dir()
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| "?".to_owned()),
+        std::env::current_dir().map_or_else(|_| "?".to_owned(), |path| path.to_string_lossy().into_owned()),
         nofile.rlim_cur,
         nofile.rlim_max,
         Descriptors::open().join(", "),
@@ -309,8 +301,7 @@ impl Descriptors {
                 // SAFETY: `fcntl(F_GETFD)` only reads the flags of a descriptor number.
                 let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
                 let target = std::fs::read_link(entry.path())
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| "?".to_owned());
+                    .map_or_else(|_| "?".to_owned(), |path| path.to_string_lossy().into_owned());
                 Some((descriptor, format!("{descriptor}:{flags:#x}:{target}")))
             })
             .collect();

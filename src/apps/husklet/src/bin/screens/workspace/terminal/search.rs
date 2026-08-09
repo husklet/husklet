@@ -23,7 +23,7 @@ impl Search {
         }
     }
 
-    pub(crate) fn wire(&self, tw: &Rc<TermWin>) {
+    pub(crate) fn wire(tw: &Rc<TermWin>) {
         {
             let tw = tw.clone();
             tw.search

@@ -18,15 +18,15 @@ impl RawMode {
         // pointer, alias no Rust storage, invoke no callback, and cannot unwind across the ABI.
         unsafe {
             let mut attributes: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(descriptor, &mut attributes) != 0 {
+            if libc::tcgetattr(descriptor, &raw mut attributes) != 0 {
                 return Self {
                     descriptor,
                     saved: None,
                 };
             }
             let saved = attributes;
-            libc::cfmakeraw(&mut attributes);
-            libc::tcsetattr(descriptor, libc::TCSANOW, &attributes);
+            libc::cfmakeraw(&raw mut attributes);
+            libc::tcsetattr(descriptor, libc::TCSANOW, &raw const attributes);
             Self {
                 descriptor,
                 saved: Some(saved),
@@ -44,7 +44,7 @@ impl Drop for RawMode {
         // the complete call. The kernel retains no pointer, accesses no aliased mutable Rust
         // storage, invokes no callback, and cannot unwind across the ABI.
         unsafe {
-            libc::tcsetattr(self.descriptor, libc::TCSANOW, &saved);
+            libc::tcsetattr(self.descriptor, libc::TCSANOW, &raw const saved);
         }
     }
 }

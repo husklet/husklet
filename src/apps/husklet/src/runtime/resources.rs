@@ -22,6 +22,7 @@ pub enum Close {
 }
 
 impl Daemon {
+    #[must_use]
     pub fn new(workspace: &WorkspaceConfig) -> Self {
         let root = workspace.storage_dir(&paths::hl_root());
         Self {
@@ -35,6 +36,7 @@ impl Daemon {
         }
     }
 
+    #[must_use]
     pub fn socket(&self) -> PathBuf {
         self.socket.clone()
     }
@@ -101,17 +103,17 @@ impl Daemon {
         };
         let failure = self.directory.join("shutdown.error");
         match choice {
-            Close::Kill => crate::runtime::process::Peer::new(connection)?.stop(
+            Close::Kill => crate::runtime::process::Peer::new(&connection)?.stop(
                 libc::SIGTERM,
                 std::time::Duration::from_secs(45),
                 || std::os::unix::net::UnixStream::connect(self.socket()),
             ),
-            Close::Checkpoint => self.checkpoint(connection, &failure),
+            Close::Checkpoint => self.checkpoint(&connection, &failure),
         }
     }
 
     /// Signals the checkpoint and waits for the service to go offline without reporting a failure.
-    fn checkpoint(&self, connection: std::os::unix::net::UnixStream, failure: &Path) -> std::io::Result<()> {
+    fn checkpoint(&self, connection: &std::os::unix::net::UnixStream, failure: &Path) -> std::io::Result<()> {
         match std::fs::remove_file(failure) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

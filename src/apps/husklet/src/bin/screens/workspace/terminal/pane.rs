@@ -27,8 +27,8 @@ impl PaneWidget {
                         }
                     });
                 // Reuse the pane's saved layout slot (fresh one if the session predates slots).
-                let slot = Slots::new(tw).adopt(&pane.slot);
-                let (term, pid) = make_terminal_ex(tw, pane.cwd.clone(), history, slot);
+                let slot = Slots::new(tw).adopt(pane.slot.as_deref());
+                let (term, pid) = make_terminal_ex(tw, pane.cwd.clone(), history, &slot);
                 pids.push(pid);
                 (term.clone().upcast(), Some(term))
             }
@@ -152,7 +152,7 @@ impl<'a> Tabs<'a> {
             .borrow()
             .as_ref()
             .and_then(|terminal| Terminal::new(terminal).working_directory());
-        let (term, pid) = make_terminal_ex(tw, cwd, None, Slots::new(tw).allocate());
+        let (term, pid) = make_terminal_ex(tw, cwd, None, &Slots::new(tw).allocate());
         paneroot.append(&term);
         let name = self.add(&format!("shell {n}"), None, &paneroot, true);
         tw.pids.borrow_mut().entry(name).or_default().push(pid);
@@ -248,7 +248,7 @@ impl<'a> Page<'a> {
     }
 }
 
-/// Find the first VTE terminal in `w`'s subtree (used by the HL_TERM_SPLIT screenshot hook).
+/// Find the first VTE terminal in `w`'s subtree (used by the `HL_TERM_SPLIT` screenshot hook).
 pub(crate) struct TerminalPane<'a> {
     window: &'a Rc<TermWin>,
     terminal: vte4::Terminal,
@@ -295,8 +295,8 @@ impl<'a> TerminalPane<'a> {
         // OSC-7: split panes inherit the source pane's cwd. A fresh split gets a fresh slot; never restores.
         let split_cwd = old
             .current_directory_uri()
-            .and_then(|u| session::WorkingDirectory::from_osc7(&u).map(|path| path.into_string()));
-        let (new, pid) = make_terminal_ex(tw, split_cwd, None, Slots::new(tw).allocate());
+            .and_then(|u| session::WorkingDirectory::from_osc7(&u).map(hl_ws_term::WorkingDirectory::into_string));
+        let (new, pid) = make_terminal_ex(tw, split_cwd, None, &Slots::new(tw).allocate());
         if let Some(name) = &page {
             tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         }

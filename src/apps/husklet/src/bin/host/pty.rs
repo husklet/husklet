@@ -8,6 +8,13 @@ pub(crate) struct PtyProcess;
 impl PtyProcess {
     pub(crate) fn spawn(term: &vte4::Terminal, argv: &[&str], env: &[&str]) -> std::io::Result<(i32, vte4::Pty)> {
         use std::ffi::{CStr, CString};
+        use std::os::fd::FromRawFd as _;
+        // Darwin and glibc assign different values to the non-portable SETSID extension. Resetting the
+        // mask/dispositions keeps GTK's process-wide signal policy out of the isolated worker.
+        #[cfg(target_os = "macos")]
+        const POSIX_SPAWN_FLAGS: libc::c_short = 0x0400 | 0x4000 | 0x0004 | 0x0008;
+        #[cfg(target_os = "linux")]
+        const POSIX_SPAWN_FLAGS: libc::c_short = 0x0080 | 0x0004 | 0x0008;
         let c_argv = Self::strings(argv, "argument")?;
         if c_argv.is_empty() {
             return Err(std::io::Error::new(
@@ -16,12 +23,6 @@ impl PtyProcess {
             ));
         }
         let c_env = Self::strings(env, "environment value")?;
-        // Darwin and glibc assign different values to the non-portable SETSID extension. Resetting the
-        // mask/dispositions keeps GTK's process-wide signal policy out of the isolated worker.
-        #[cfg(target_os = "macos")]
-        const POSIX_SPAWN_FLAGS: libc::c_short = 0x0400 | 0x4000 | 0x0004 | 0x0008;
-        #[cfg(target_os = "linux")]
-        const POSIX_SPAWN_FLAGS: libc::c_short = 0x0080 | 0x0004 | 0x0008;
         // SAFETY: every pointer handed to the pty and spawn calls names storage owned by this frame and outliving the call.
         unsafe {
             let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
@@ -49,50 +50,56 @@ impl PtyProcess {
             let slave = CString::from(CStr::from_ptr(sname));
 
             let mut fa: libc::posix_spawn_file_actions_t = std::mem::zeroed();
-            libc::posix_spawn_file_actions_init(&mut fa);
+            libc::posix_spawn_file_actions_init(&raw mut fa);
             // Open the slave as the child's stdin (no O_NOCTTY → becomes controlling tty for the session
             // leader), then dup to stdout/stderr; close the master in the child.
-            libc::posix_spawn_file_actions_addopen(&mut fa, 0, slave.as_ptr(), libc::O_RDWR, 0);
-            libc::posix_spawn_file_actions_adddup2(&mut fa, 0, 1);
-            libc::posix_spawn_file_actions_adddup2(&mut fa, 0, 2);
-            libc::posix_spawn_file_actions_addclose(&mut fa, master);
+            libc::posix_spawn_file_actions_addopen(&raw mut fa, 0, slave.as_ptr(), libc::O_RDWR, 0);
+            libc::posix_spawn_file_actions_adddup2(&raw mut fa, 0, 1);
+            libc::posix_spawn_file_actions_adddup2(&raw mut fa, 0, 2);
+            libc::posix_spawn_file_actions_addclose(&raw mut fa, master);
 
             let mut attr: libc::posix_spawnattr_t = std::mem::zeroed();
-            libc::posix_spawnattr_init(&mut attr);
+            libc::posix_spawnattr_init(&raw mut attr);
             let mut mask: libc::sigset_t = std::mem::zeroed();
-            libc::sigemptyset(&mut mask);
-            libc::posix_spawnattr_setsigmask(&mut attr, &mask);
+            libc::sigemptyset(&raw mut mask);
+            libc::posix_spawnattr_setsigmask(&raw mut attr, &raw const mask);
             let mut defaults: libc::sigset_t = std::mem::zeroed();
-            libc::sigemptyset(&mut defaults);
+            libc::sigemptyset(&raw mut defaults);
             // Signals 1..31 are the portable POSIX/BSD set that a GUI runtime may alter. Real-time
             // signals are platform-specific and remain untouched.
             for signal in 1..=31 {
                 if signal != libc::SIGKILL && signal != libc::SIGSTOP {
-                    libc::sigaddset(&mut defaults, signal);
+                    libc::sigaddset(&raw mut defaults, signal);
                 }
             }
-            libc::posix_spawnattr_setsigdefault(&mut attr, &defaults);
+            libc::posix_spawnattr_setsigdefault(&raw mut attr, &raw const defaults);
             // macOS GUI libraries keep internal descriptors without FD_CLOEXEC. The Darwin
             // CLOEXEC_DEFAULT extension (0x4000) closes every descriptor not mentioned by these file
             // actions, preventing GTK event pipes/sockets from leaking into the engine worker.
-            libc::posix_spawnattr_setflags(&mut attr, POSIX_SPAWN_FLAGS);
+            libc::posix_spawnattr_setflags(&raw mut attr, POSIX_SPAWN_FLAGS);
 
-            let mut p_argv: Vec<*mut libc::c_char> = c_argv.iter().map(|c| c.as_ptr() as *mut _).collect();
+            let mut p_argv: Vec<*mut libc::c_char> = c_argv.iter().map(|c| c.as_ptr().cast_mut()).collect();
             p_argv.push(std::ptr::null_mut());
-            let mut p_env: Vec<*mut libc::c_char> = c_env.iter().map(|c| c.as_ptr() as *mut _).collect();
+            let mut p_env: Vec<*mut libc::c_char> = c_env.iter().map(|c| c.as_ptr().cast_mut()).collect();
             p_env.push(std::ptr::null_mut());
 
             let mut pid: libc::pid_t = 0;
-            let rc = libc::posix_spawn(&mut pid, p_argv[0], &fa, &attr, p_argv.as_ptr(), p_env.as_ptr());
-            libc::posix_spawn_file_actions_destroy(&mut fa);
-            libc::posix_spawnattr_destroy(&mut attr);
+            let rc = libc::posix_spawn(
+                &raw mut pid,
+                p_argv[0],
+                &raw const fa,
+                &raw const attr,
+                p_argv.as_ptr(),
+                p_env.as_ptr(),
+            );
+            libc::posix_spawn_file_actions_destroy(&raw mut fa);
+            libc::posix_spawnattr_destroy(&raw mut attr);
             if rc != 0 {
                 libc::close(master);
                 return Err(std::io::Error::from_raw_os_error(rc));
             }
 
             // Give the master to VTE (it takes ownership and drives the grid + resizes the tty).
-            use std::os::fd::FromRawFd;
             let owned = std::os::fd::OwnedFd::from_raw_fd(master);
             let pty = vte4::Pty::foreign_sync(owned, gio::Cancellable::NONE)
                 .map_err(|error| std::io::Error::other(error.to_string()))?;

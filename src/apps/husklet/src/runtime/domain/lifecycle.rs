@@ -143,8 +143,8 @@ pub(super) struct Lease {
 }
 
 impl Lease {
-    pub(super) fn acquire(path: PathBuf) -> io::Result<Self> {
-        match ffi::FileLock::try_acquire(&path)? {
+    pub(super) fn acquire(path: &Path) -> io::Result<Self> {
+        match ffi::FileLock::try_acquire(path)? {
             Some(lock) => Ok(Self { _lock: lock }),
             None => Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -153,10 +153,10 @@ impl Lease {
         }
     }
 
-    pub(super) fn acquire_wait(path: PathBuf, timeout: std::time::Duration) -> io::Result<Self> {
+    pub(super) fn acquire_wait(path: &Path, timeout: std::time::Duration) -> io::Result<Self> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            match Self::acquire(path.clone()) {
+            match Self::acquire(path) {
                 Ok(lease) => return Ok(lease),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
@@ -171,7 +171,7 @@ impl Lease {
         }
     }
 
-    pub(super) fn wait_available(path: PathBuf, timeout: std::time::Duration) -> io::Result<()> {
+    pub(super) fn wait_available(path: &Path, timeout: std::time::Duration) -> io::Result<()> {
         drop(Self::acquire_wait(path, timeout)?);
         Ok(())
     }
@@ -267,14 +267,14 @@ mod tests {
     fn lease_waits_for_the_previous_owner_to_finish_cleanup() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("domain.lock");
-        let lease = Lease::acquire(path.clone()).unwrap();
+        let lease = Lease::acquire(&path).unwrap();
         let release = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(60));
             drop(lease);
         });
         let started = std::time::Instant::now();
 
-        Lease::wait_available(path, std::time::Duration::from_secs(1)).unwrap();
+        Lease::wait_available(&path, std::time::Duration::from_secs(1)).unwrap();
 
         assert!(started.elapsed() >= std::time::Duration::from_millis(40));
         release.join().unwrap();

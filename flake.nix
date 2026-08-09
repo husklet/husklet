@@ -414,6 +414,20 @@
             // lib.optionalAttrs pkgs.stdenv.isLinux {
               HL_SCENARIO_TARGET = alpine.target;
               HL_ALPINE_ARCHIVE = alpine.archive;
+              # The signed application is macOS-only, but its GTK4/VTE sources are the largest body of
+              # code in the tree and `required-features = ["gui"]` makes cargo skip them in silence when
+              # the toolkit is absent. Carrying the same libraries on Linux is what lets `make gate-gui`
+              # type-check them here, so an engine refactor cannot redden the app behind a green gate.
+              nativeBuildInputs = [
+                pkgs.gobject-introspection
+                pkgs.glib
+                pkgs.gdk-pixbuf
+              ];
+              buildInputs = [
+                pkgs.gtk4
+                pkgs.librsvg
+                pkgs.vte-gtk4
+              ];
             }
             // lib.optionalAttrs pkgs.stdenv.isDarwin {
               nativeBuildInputs = [
