@@ -257,9 +257,12 @@ impl GuestExecutor {
         let lease = super::super::operand::ImageMemory::lease(memory);
         let mappings = lease.mappings();
         let snapshot = mappings.snapshot();
-        let executable = snapshot.regions.iter().copied().find(|region| {
+        let Some(executable) = snapshot.regions.iter().copied().find(|region| {
             region.range().contains(GuestAddress::new(pc)) && region.protection().contains(Protection::EXECUTE)
-        })?;
+        }) else {
+            pool.counters.declined_executable += 1;
+            return None;
+        };
         let length = usize::try_from(executable.range().end().get().saturating_sub(pc).min(256)).ok()?;
         if length == 0 {
             return None;
@@ -271,9 +274,11 @@ impl GuestExecutor {
             if pool.diagnostics {
                 *pool.suppressed_weight.entry(pc).or_default() += 1;
             }
+            pool.counters.declined_suppressed += 1;
             return None;
         }
         if pool.observe(key) < 2 {
+            pool.counters.declined_cold += 1;
             return None;
         }
         let mut bytes = vec![0_u8; length];
@@ -307,6 +312,7 @@ impl GuestExecutor {
                 Some(mappings.executable_token(range, lease.generation()))
             },
         )?;
+        pool.counters.entries += 1;
         let diagnostics = pool.boundaries.is_some();
         let executor = pool.executor(run.process)?;
         let source = [crate::native::NativeSource {
@@ -353,6 +359,12 @@ impl GuestExecutor {
             };
             let original = cpu.clone();
             let Some(projection) = stack_projection.take() else {
+                hl_log::hl_error!(
+                    hl_log::tag::EXEC,
+                    "native stack projection missing isa=x86_64 pc={pc:#x} rip={:#x} rsp={:#x}",
+                    cpu.rip,
+                    cpu.registers[4],
+                );
                 return StepOutcome::Fault(hl_execution::ExecutionFault::NativeFatal {
                     code: 100 + crate::native::NativeLeaseStep::X86StackProjection as u64,
                 });
@@ -367,6 +379,13 @@ impl GuestExecutor {
                 &mut resolve,
                 Some(&mut poll),
             ) else {
+                hl_log::hl_error!(
+                    hl_log::tag::EXEC,
+                    "native run refused isa=x86_64 pc={pc:#x} rip={:#x} step={} provenance={:#x}",
+                    original.rip,
+                    executor.last_lease_failure(),
+                    token.version,
+                );
                 *cpu = original;
                 return StepOutcome::Fault(hl_execution::ExecutionFault::NativeFatal {
                     code: 100 + u64::from(executor.last_lease_failure()),

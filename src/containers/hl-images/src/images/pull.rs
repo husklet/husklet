@@ -24,7 +24,12 @@ impl Images {
         platform: &Platform,
     ) -> Result<Image> {
         let _span = hl_log::hl_span!(hl_log::tag::IMAGE, "pull");
-        hl_log::hl_info!(hl_log::tag::IMAGE, "pull begin reference={reference}");
+        hl_log::hl_info!(
+            hl_log::tag::IMAGE,
+            "pull begin reference={reference} platform={platform}"
+        );
+        // Retained because the success path moves `reference` into the published image.
+        let requested = reference.clone();
         let lease = self.leases.create(BTreeMap::from([("kind".into(), "pull".into())]))?;
         let result = match self.pull_under_lease(source, &reference, platform, lease.id()).await {
             Ok(target) => (|| {
@@ -42,10 +47,21 @@ impl Images {
         let release = self.leases.delete(lease.id());
         match (result, release) {
             (Ok(image), Ok(_)) => {
-                hl_log::hl_info!(hl_log::tag::IMAGE, "pull complete name={}", image.name);
+                hl_log::hl_info!(
+                    hl_log::tag::IMAGE,
+                    "pull complete name={} digest={} platform={platform}",
+                    image.name,
+                    image.target.digest()
+                );
                 Ok(image)
             }
-            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+            (Err(error), _) | (Ok(_), Err(error)) => {
+                hl_log::hl_error!(
+                    hl_log::tag::IMAGE,
+                    "pull failed reference={requested} platform={platform} error={error}"
+                );
+                Err(error)
+            }
         }
     }
 

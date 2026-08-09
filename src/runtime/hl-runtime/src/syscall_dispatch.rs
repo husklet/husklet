@@ -19,6 +19,21 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
             return RuntimeTrapOutcome::Fault;
         };
         let route = SyscallDispatcher::route(architecture, frame.raw_number);
+        // Fires only for a number the table refuses, so it never narrates a working guest.
+        match route.disposition {
+            SyscallDisposition::Operation(_) => {}
+            SyscallDisposition::Unsupported { canonical_number, name } => hl_log::hl_debug!(
+                hl_log::tag::SYSCALL,
+                "unsupported name={name} number={} canonical={canonical_number} pc={pc:#x} arguments={:#x?}",
+                frame.raw_number,
+                frame.arguments,
+            ),
+            SyscallDisposition::Reserved { canonical_number } => hl_log::hl_debug!(
+                hl_log::tag::SYSCALL,
+                "reserved number={} canonical={canonical_number} pc={pc:#x}",
+                frame.raw_number,
+            ),
+        }
         hl_log::hl_trace!(
             hl_log::tag::SYSCALL,
             "enter name={} number={} pc={pc:#x} arguments={:#x?}",
