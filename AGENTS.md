@@ -56,6 +56,23 @@ whole class. Run them in debug or inside `make gate`: under `--release`,
 `hl-log`'s verbose tests compile out and the daemon tests need
 `HL_ALPINE_ARCHIVE`, so both report spurious failures.
 
+### Two green branches can merge to a red tip
+
+`cargo test --workspace --lib` on each branch proves nothing about the merge.
+One lane turned `Signal` from a seven-variant enum into a `1..=64` value type
+while another added a test spelling `Signal::Kill`; both were green alone and
+the tip did not compile. Git reported no conflict, because there was none —
+the conflict was semantic.
+
+So run the gate **after** merging, not only before, and run it on the tip you
+are about to push. A `cargo check --workspace --all-targets` is a minute and
+catches this whole class.
+
+`cargo test --workspace --lib` also does **not** run `testing`'s unit tests —
+it is a bin crate, so its tests need `make gate`, `--all-targets`, or an
+explicit `-p testing --bin testing`. Assertions placed there are invisible to
+the command this file tells everyone to run.
+
 ### A commit message is not evidence
 
 Re-run the suite on the tree you are about to merge, not on the tree the lane
