@@ -280,12 +280,19 @@ short ones starve the long one — and the lock answers neither.
 
 Announce intent before requesting, so builders can yield:
 
-    : > /var/tmp/husklet-box.wanted    # measuring lane, before flock -x
-    ...                                # take the lock, run, release
-    rm -f /var/tmp/husklet-box.wanted
+    exec 8>/var/tmp/husklet-box.wanted  # measuring lane, before flock -x
+    flock -x 8                          # ... then take fd 9 and run
 
     # builder, before taking flock -s
-    while [ -e /var/tmp/husklet-box.wanted ]; do sleep 5; done
+    while ! flock -n -x 8>/var/tmp/husklet-box.wanted; do sleep 5; done
+
+**Signal intent with a second lock, not a plain file.** A `touch`/`rm` marker
+has no crash-safety: if the announcing lane dies, is killed, or has its turn
+reaped, the file survives and stalls **every** builder on the box
+indefinitely — and unlike the lock, nothing releases it. A lane that used the
+`touch` form had to arm a detached watchdog polling its own pid to remove it,
+which is a workaround for the wrong primitive. Held on a descriptor the marker
+inherits the kernel's release-on-death, exactly as the box lock does.
 
 Advisory again, and it inherits every weakness of the lock: a builder that
 skips the check is invisible. But it converts starvation into a deliberate
