@@ -621,21 +621,22 @@ mod tests {
     }
 
     #[test]
-    fn split_mode_preserves_direct_warmup_without_mode_holds() {
+    fn split_mode_preserves_default_warmup_and_mode_holds() {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
         let entry = (process, 1, 1, 0x1000);
         let mut options = crate::options::Options::default();
         options.set("HL_NATIVE_SPLIT_MODE_EXECUTORS", "1", true).unwrap();
+        options.set("HL_NATIVE_DIRECT_HOLD_RUNS", "3", true).unwrap();
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
-        assert!(!pool.direct_mode_holds_enabled());
         assert!(!pool.direct_authority(process, entry));
         pool.observe_direct_mode(process, false);
         assert!(pool.direct_authority(process, entry));
-        for index in 0..128 {
+        for index in 0..16 {
             pool.observe_direct_mode(process, index % 2 == 0);
         }
-        assert!(pool.direct_holds.is_empty());
-        assert!(pool.direct_authority(process, entry));
+        assert_eq!(pool.direct_holds.get(&process), Some(&3));
+        assert!(!pool.direct_authority(process, entry));
+        assert_eq!(pool.direct_holds.get(&process), Some(&2));
     }
 
     #[test]
@@ -649,7 +650,6 @@ mod tests {
         sticky_options.set("HL_NATIVE_DIRECT_STICKY_LIMIT", "2", true).unwrap();
         sticky_options.set("HL_NATIVE_DIRECT_HOLD_RUNS", "3", true).unwrap();
         let mut sticky = NativePool::new(GuestIsa::Aarch64, &plan(sticky_options), None);
-        assert!(sticky.direct_mode_holds_enabled());
         sticky.observe_direct_mode(process, false);
         sticky.observe_direct_mode(process, true);
         assert_eq!(sticky.direct_holds.get(&process), Some(&3));
@@ -667,7 +667,6 @@ mod tests {
             .set("HL_NATIVE_DIRECT_STICKY_LIMIT", "2", true)
             .unwrap();
         let mut permanent = NativePool::new(GuestIsa::Aarch64, &plan(permanent_options), None);
-        assert!(permanent.direct_mode_holds_enabled());
         permanent.observe_direct_mode(process, false);
         permanent.observe_direct_mode(process, true);
         assert_eq!(permanent.direct_holds.get(&process), Some(&u64::MAX));

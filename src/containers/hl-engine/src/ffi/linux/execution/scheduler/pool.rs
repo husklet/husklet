@@ -14,9 +14,9 @@ use crate::launch_plan::RuntimeLaunchPlan;
 /// authority and the operand resolver, and the runs each such finding holds for.
 const DIRECT_FLIP_LIMIT: u32 = 32;
 const DIRECT_HOLD_RUNS: u64 = 1 << 16;
-/// Sticky arm: a flip discards the whole translation cache, so the score does not decay
-/// and the hold that follows never expires. Two flips are tolerated because the warm-up
-/// run is a resolver run by construction and entering direct mode after it is one flip.
+/// Sticky arm: the score does not decay, so a process reaches its configured hold after
+/// sustained alternation. Two flips are tolerated because the warm-up run is a resolver
+/// run by construction and entering direct mode after it is one flip.
 const DIRECT_STICKY_FLIP_LIMIT: u32 = 4;
 const DIRECT_HOLD_PERMANENT: u64 = u64::MAX;
 
@@ -364,7 +364,7 @@ impl NativePool {
             direct_sticky_limit = pool.direct_sticky_limit,
             direct_hold_runs = pool.direct_hold_runs,
             direct_sticky_permanent = pool.direct_sticky_permanent,
-            direct_mode_holds = pool.direct_mode_holds_enabled(),
+            direct_mode_holds = true,
             write_reserve = pool.write_reserve,
             write_commit = pool.write_commit,
             runtime_write_reserve = pool.runtime_write_reserve,
@@ -517,9 +517,6 @@ impl NativePool {
     /// Whether this process may still be offered direct authority. A held process is
     /// serving out a hold because its run mode was alternating; each call spends one run.
     pub(super) fn direct_admitted(&mut self, process: hl_task::ProcessId) -> bool {
-        if !self.direct_mode_holds_enabled() {
-            return true;
-        }
         let Some(remaining) = self.direct_holds.get_mut(&process) else {
             return true;
         };
@@ -547,12 +544,6 @@ impl NativePool {
         self.direct_admitted(process) && self.direct_modes.contains_key(&process)
     }
 
-    /// Split caches remove the reason for the default anti-flip hold, but an explicit
-    /// sticky policy remains an operator decision and must not be silently overridden.
-    pub(super) const fn direct_mode_holds_enabled(&self) -> bool {
-        !self.split_mode_executors || self.direct_sticky || self.direct_sticky_permanent
-    }
-
     /// Applies every direct-authority gate and classifies the result when diagnostics are enabled.
     /// Keeping the non-diagnostic expression intact preserves the timing binary's hot-path shape.
     pub(super) fn direct_authority(&mut self, process: hl_task::ProcessId, entry: NativeSite) -> bool {
@@ -575,19 +566,10 @@ impl NativePool {
     }
 
     /// Records the run mode this process just used. A shared cache carries the mode in its
-    /// identity, so sustained alternation resets every translation twice per cycle; split
-    /// caches retain the logical observation without installing the default hold.
+    /// identity, so sustained alternation resets every translation twice per cycle. Split
+    /// caches retain the same admission policy here so cache topology can be measured
+    /// independently from how often direct execution is selected.
     pub(super) fn observe_direct_mode(&mut self, process: hl_task::ProcessId, direct: bool) {
-        if !self.direct_mode_holds_enabled() {
-            let flipped = self
-                .direct_modes
-                .insert(process, (direct, 0))
-                .is_some_and(|(previous, _)| previous != direct);
-            if self.diagnostics && flipped {
-                self.counters.direct_flips += 1;
-            }
-            return;
-        }
         let sticky = self.direct_sticky || self.direct_sticky_permanent;
         let permanent = self.direct_sticky_permanent;
         let (previous, flips) = self.direct_modes.entry(process).or_insert((direct, 0));
@@ -1254,7 +1236,7 @@ impl Drop for NativePool {
                 self.direct_sticky || self.direct_sticky_permanent,
                 self.direct_sticky_limit,
                 self.direct_hold_runs,
-                self.direct_mode_holds_enabled(),
+                true,
                 self.direct_modes.len(),
                 self.direct_holds.len(),
                 hold_remaining,
