@@ -14,6 +14,7 @@ pub enum AbiError {
     Fault,
     Invalid,
     NoMemory,
+    TooBig,
     Overflow,
 }
 
@@ -24,6 +25,7 @@ impl AbiError {
             Self::Fault => Errno::EFAULT,
             Self::Invalid => Errno::EINVAL,
             Self::NoMemory => Errno::ENOMEM,
+            Self::TooBig => Errno::E2BIG,
             Self::Overflow => Errno::EOVERFLOW,
         };
         hl_log::hl_debug!(
@@ -40,8 +42,9 @@ impl From<MarshalError> for AbiError {
     fn from(value: MarshalError) -> Self {
         match value {
             MarshalError::Fault(_) => Self::Fault,
-            MarshalError::Overflow | MarshalError::TooBig => Self::Overflow,
             MarshalError::Invalid => Self::Invalid,
+            MarshalError::TooBig => Self::TooBig,
+            MarshalError::Overflow => Self::Overflow,
         }
     }
 }

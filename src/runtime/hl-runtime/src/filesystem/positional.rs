@@ -106,10 +106,12 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         let plan = match marshaller.io_vector_records(address, count, access) {
             Ok(plan) => plan,
             Err(error) => {
-                if matches!(error, hl_linux::MarshalError::Fault(_)) && Self::access_rejects(&lease, reading) {
+                // Linux resolves the descriptor and its access mode before importing the
+                // vector, so EBADF outranks every marshalling errno, not just EFAULT.
+                if Self::access_rejects(&lease, reading) {
                     return LinuxResult::Error(Errno::EBADF);
                 }
-                return LinuxResult::Error(FileErrno::vector(error));
+                return LinuxResult::Error(error.errno());
             }
         };
         let position = if shared {
