@@ -87,6 +87,16 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
+        "HL_A64_NO_WRITE_COMMIT",
+        "drop the aarch64 post-store dirty-journal commit and publish the whole window per crossing",
+        Flag
+    ),
+    launch!(
+        "HL_A64_NO_WRITE_RESERVE",
+        "drop the aarch64 pre-store dirty-journal reservation",
+        Flag
+    ),
+    launch!(
         "HL_NATIVE_DIAGNOSTICS",
         "report native execution counters at launch exit",
         Flag

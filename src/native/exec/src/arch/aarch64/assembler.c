@@ -12,6 +12,8 @@ int hl_a64_assembler_begin(hl_a64_assembler *state, void *writable, void *execut
     state->limit = state->cursor + capacity;
     state->failed = 0;
     state->diagnostics = 0;
+    state->write_reserve = 1;
+    state->write_commit = 1;
     return 1;
 }
 

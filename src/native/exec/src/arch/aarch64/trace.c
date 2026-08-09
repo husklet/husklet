@@ -541,7 +541,8 @@ int hl_a64_trace_certificate_check(const hl_native_aarch64_cpu *cpu, uint64_t ba
 static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, void *buffer,
                        size_t capacity, hl_a64_trace_result *output, void *ibtc,
                        const hl_native_direct_authority *authority, uint64_t expected_authority,
-                       hl_a64_trace_density *density_output, uint32_t diagnostics) {
+                       hl_a64_trace_density *density_output, uint32_t diagnostics,
+                       uint32_t write_reserve, uint32_t write_commit) {
     uint32_t planned_words[HL_A64_TRACE_MAX_WORDS] = {0};
     uint64_t planned_pcs[HL_A64_TRACE_MAX_WORDS] = {0};
     hl_a64_assembler assembler;
@@ -622,6 +623,8 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
      * immutable for its lifetime, so this bit is part of that cache's
      * translation identity. Ordinary builders always leave emission unchanged. */
     assembler.diagnostics = diagnostics != 0;
+    assembler.write_reserve = write_reserve != 0;
+    assembler.write_commit = write_commit != 0;
     hl_a64_stub_prologue(&assembler);
     output->body_offset = hl_a64_assembler_size(&assembler);
     hl_a64_stub_budget_begin(&assembler, pc, &budget_guard);
@@ -836,7 +839,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
 int hl_a64_trace_build(const hl_a64_source *source, uint64_t pc, size_t count, void *buffer,
                        size_t capacity, hl_a64_trace_result *output) {
     return trace_build(source, pc, count, buffer, capacity, output, NULL, NULL,
-                       source == NULL ? 0 : source->mapping_incarnation, NULL, 0);
+                       source == NULL ? 0 : source->mapping_incarnation, NULL, 0, 1, 1);
 }
 
 int hl_a64_trace_build_density(const hl_a64_source *source, uint64_t pc, size_t count,
@@ -845,7 +848,7 @@ int hl_a64_trace_build_density(const hl_a64_source *source, uint64_t pc, size_t 
     if (density == NULL) return 0;
     memset(density, 0, sizeof(*density));
     return trace_build(source, pc, count, buffer, capacity, output, NULL, NULL,
-                       source == NULL ? 0 : source->mapping_incarnation, density, 0);
+                       source == NULL ? 0 : source->mapping_incarnation, density, 0, 1, 1);
 }
 
 int hl_a64_trace_build_direct(const hl_a64_source *source, uint64_t pc, size_t count, void *buffer,
@@ -853,7 +856,7 @@ int hl_a64_trace_build_direct(const hl_a64_source *source, uint64_t pc, size_t c
                               uint64_t expected_authority,
                               hl_a64_trace_result *output) {
     return trace_build(source, pc, count, buffer, capacity, output, NULL, authority,
-                       expected_authority, NULL, 0);
+                       expected_authority, NULL, 0, 1, 1);
 }
 
 hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const hl_a64_source *source, uint64_t pc,
@@ -906,7 +909,9 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
     *hit = 0;
     size_t admitted = count;
     while (!trace_build(source, pc, admitted, buffer, capacity, &trace, executor->ibtc, authority,
-                        expected_authority, NULL, executor->diagnostics)) {
+                        expected_authority, NULL, executor->diagnostics,
+                        executor->write_reserve,
+                        executor->write_commit)) {
         if (admitted == 1) {
             hl_a64_fetch_result head;
             if (hl_a64_source_fetch(source, pc, 1, &head))

@@ -165,6 +165,10 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) diagnostics: bool,
     /// Gates the repeat-admission cache below.
     pub(super) admission_cache: bool,
+    /// False drops the aarch64 exact write journal; every crossing then publishes
+    /// its whole window instead of the exact ranges the journal would have carried.
+    write_reserve: bool,
+    write_commit: bool,
     pub(super) admitted: Option<Admission>,
     pub(super) executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
     pub(super) suppressed: BTreeMap<NativeSite, Probation>,
@@ -218,6 +222,8 @@ impl NativePool {
             enabled: Self::selected(isa, plan),
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
             admission_cache: plan.options.get("HL_NATIVE_ADMISSION_CACHE") == Some("1"),
+            write_reserve: plan.options.get("HL_A64_NO_WRITE_RESERVE") != Some("1"),
+            write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
             admitted: None,
             executors: BTreeMap::new(),
             suppressed: BTreeMap::new(),
@@ -260,7 +266,12 @@ impl NativePool {
         if !self.executors.contains_key(&process) {
             self.executors.insert(
                 process,
-                crate::native::NativeExecutor::create_with_fault_owner(self.diagnostics, self.host_faults.clone())
+                crate::native::NativeExecutor::create_with_journal(
+                    self.diagnostics,
+                    self.write_reserve,
+                    self.write_commit,
+                    self.host_faults.clone(),
+                )
                     .ok()?,
             );
         }

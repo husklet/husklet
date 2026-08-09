@@ -546,6 +546,8 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     atomic_init(&executor->activation_generation, 0);
     atomic_init(&executor->next_certificate_cache_identity, 0);
     executor->diagnostics = (config->flags & HL_NATIVE_DIAGNOSTICS) != 0;
+    executor->write_reserve = (config->flags & HL_NATIVE_A64_NO_WRITE_RESERVE) == 0;
+    executor->write_commit = (config->flags & HL_NATIVE_A64_NO_WRITE_COMMIT) == 0;
     atomic_init(&executor->a64_guard_fast, 0);
     atomic_init(&executor->a64_guard_full, 0);
     atomic_init(&executor->a64_guard_fallback, 0);
