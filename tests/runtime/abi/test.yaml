@@ -613,9 +613,10 @@ cases:
     build: { source: ucontext_swap.c, output: ucontext_swap, flags: [-static, -O2, -std=gnu11, -pthread] }
     artifact: { destination: /opt/husklet/abi/ucontext_swap }
     run: []
-    status: !broken
-      reason: macOS host exclusion retained
-      evidence: macOS Mach-O engine SIGILLs on first makecontext activation through swapcontext; Linux engine and native pass.
+    status: !host-excluded
+      hosts: [macos]
+      reason: "macOS Mach-O engine SIGILLs on first makecontext activation through swapcontext"
+      evidence: "Linux engine and native pass; re-derived 2026-08-08 on both ISAs."
     compat: { class: compatibility }
     expect: { exit: 0, stdout: golden/ucontext_swap.out }
   - id: runtime/abi-mmapanon

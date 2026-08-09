@@ -220,9 +220,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/rlimit_nofile.out }
   - id: runtime/syscall-edges/sc-efault-syscalls
-    status: !unsupported
-      reason: "Legacy contract requires PROT_NONE page-straddle enforcement unavailable in the retained macOS oracle"
-      evidence: "tests/runtime/syscall-edges/ORACLE.md"
+    status: !oracle-excluded
+      reason: "the retained macOS oracle maps guarded guest pages host-readable, so it cannot re-derive the page-straddle golden"
+      evidence: "tests/runtime/syscall-edges/ORACLE.md; the golden is uniformly EFAULT(14), reproduced on the bare host kernel 2026-08-08."
     compat: { class: compatibility }
     build: { source: source/efault_syscalls.c, output: efault-syscalls, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
     artifact: { destination: /opt/husklet/syscall-edges-efault-syscalls }

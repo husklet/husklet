@@ -73,8 +73,13 @@ The retained descriptor arena corresponds to Rust descriptor snapshots and
 resource catalogs; retained registration tables correspond to task/resource
 publication; retained renderers correspond to `Procfs::open`, `read_link`,
 `kind`, `metadata`, and the typed model renderers. Known gaps remain explicit:
-`peer-fd` lacks shared cross-process path identity; `thread-self` and
-`self-comm` diverge from Linux live task/name semantics. `fork-self`,
+`peer-fd` lacks shared cross-process path identity; `thread-self` diverges from
+Linux live task/name semantics. The recorded `self-comm` divergence was
+re-derived on the host kernel 2026-08-08 and does not hold: exec names a task by
+the basename of the path given to `execve` truncated to 15 bytes, which is what
+`ExecPlan::comm_from_path` computes. The real divergence was in the comm *write*
+path, which terminated the name at a newline and ignored a zero-length write;
+`comm-status` now pins both. `fork-self`,
 `self-vm`, `nslinks`, and `peer-identity` are unsupported on the macOS backend
 but remain enforceable on Linux.
 
