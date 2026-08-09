@@ -39,6 +39,13 @@ impl Context {
             return Err(AioError::Closing);
         }
         if state.events.len() + state.reserved == self.capacity {
+            hl_log::hl_debug!(
+                hl_log::tag::AIO,
+                "aio submission refused at capacity={} completed={} in-flight={}",
+                self.capacity,
+                state.events.len(),
+                state.reserved
+            );
             return Err(AioError::ResourceLimit);
         }
         state.admitted += 1;
@@ -71,10 +78,20 @@ impl Context {
             let (next, timed_out) = self.wait_until(state, deadline);
             state = next;
             if timed_out {
+                hl_log::hl_debug!(
+                    hl_log::tag::AIO,
+                    "aio staging deadline expired with {} of {minimum} required events",
+                    state.events.len()
+                );
                 break;
             }
         }
         if interrupted() && state.events.len() < minimum {
+            hl_log::hl_debug!(
+                hl_log::tag::AIO,
+                "aio staging interrupted with {} of {minimum} required events",
+                state.events.len()
+            );
             return Err(AioError::Interrupted);
         }
         let count = maximum.min(state.events.len());

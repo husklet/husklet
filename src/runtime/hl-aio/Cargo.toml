@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[dependencies]
+hl-log = { path = "../../packages/hl-log" }
+
 [lints]
 workspace = true
 

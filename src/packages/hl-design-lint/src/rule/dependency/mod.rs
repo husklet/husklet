@@ -355,7 +355,9 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                     | "hl-memory"
                     | "hl-task"
                     | "hl-network"
-                    | "hl-checkpoint",
+                    | "hl-checkpoint"
+                    | "hl-event"
+                    | "hl-aio",
                 "hl-log"
             )
             | ("hl-container" | "engine" | "testing", "hl-engine")

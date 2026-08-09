@@ -44,6 +44,10 @@ impl TimerFd {
             .cancel_generation
             .is_some_and(|generation| generation != self.inner.source.realtime_generation())
         {
+            hl_log::hl_debug!(
+                hl_log::tag::EVENT,
+                "timerfd canceled by a realtime clock set: reads report ECANCELED until rearmed"
+            );
             state.canceled = true;
             state.deadline = None;
             state.interval = 0;

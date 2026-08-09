@@ -253,6 +253,10 @@ pub const SYNC: Tag = Tag::new(1 << 25, "sync");
 pub const IPC: Tag = Tag::new(1 << 26, "ipc");
 /// Whole-runtime checkpoint and restore: participant freeze, capture, staging, and commit.
 pub const CHECKPOINT: Tag = Tag::new(1 << 27, "checkpoint");
+/// Guest readiness notification: epoll registration and wait, eventfd, signalfd, inotify, and timerfd.
+pub const EVENT: Tag = Tag::new(1 << 28, "event");
+/// Guest asynchronous submission and completion: context admission, staging, and reaping.
+pub const AIO: Tag = Tag::new(1 << 29, "aio");
 
 /// Every tag enabled.
 pub const ALL: Tags = Tags::ALL;
@@ -265,7 +269,7 @@ pub const NONE: Tags = Tags::NONE;
 /// display, and every macro then pick it up automatically.
 pub const TAGS: &[Tag] = &[
     TRANSPORT, EXEC, RUNTIME, CPU, CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK, SIGNAL, SYNC, IPC,
-    CHECKPOINT,
+    CHECKPOINT, EVENT, AIO,
 ];
 
 #[cfg(test)]
@@ -282,6 +286,18 @@ mod env_value_tests {
     fn a_level_name_in_the_tag_list_opens_nothing() {
         assert_eq!(Tags::from_str("debug").unwrap(), Tags::NONE);
         assert_eq!(Tags::from_str("warn").unwrap(), Tags::NONE);
+    }
+
+    /// Every registered tag owns a distinct bit, so adding one never re-points an existing `HL_LOG` value.
+    #[test]
+    fn every_registered_tag_owns_a_distinct_bit() {
+        let mut seen = 0_u64;
+        for tag in TAGS {
+            assert_eq!(tag.bits().count_ones(), 1, "{tag} is not a single bit");
+            assert_eq!(seen & tag.bits(), 0, "{tag} reuses a bit");
+            seen |= tag.bits();
+            assert_eq!(Tags::from(tag.name().parse::<Tag>().unwrap()), Tags::from(*tag));
+        }
     }
 
     /// A list of real tag names opens exactly those tags and no others.

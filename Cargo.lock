@@ -1034,6 +1034,9 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "hl-aio"
 version = "0.1.0"
+dependencies = [
+ "hl-log",
+]
 
 [[package]]
 name = "hl-checkpoint"
@@ -1187,6 +1190,7 @@ name = "hl-event"
 version = "0.1.0"
 dependencies = [
  "hl-descriptor",
+ "hl-log",
  "hl-time",
 ]
 

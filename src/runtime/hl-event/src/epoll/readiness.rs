@@ -18,6 +18,10 @@ impl Epoll {
                 return;
             }
             let Some(watch) = state.token_index.get(&token).map(|index| &state.watches[*index]) else {
+                hl_log::hl_debug!(
+                    hl_log::tag::EVENT,
+                    "epoll dropped a readiness notification for unknown token={token}"
+                );
                 return;
             };
             (watch.target.clone(), watch.interests, watch.observed, watch.disabled)
@@ -52,6 +56,10 @@ impl Epoll {
             return;
         };
         if state.watches[index].disabled {
+            hl_log::hl_debug!(
+                hl_log::tag::EVENT,
+                "epoll suppressed a signal for oneshot-disabled token={token}"
+            );
             return;
         }
         state.watches[index].readiness_sequence = state.watches[index].readiness_sequence.wrapping_add(1).max(1);

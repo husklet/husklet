@@ -114,9 +114,21 @@ impl Epoll {
                 .get(&selection.token)
                 .map(|index| &state.watches[*index])
             else {
+                hl_log::hl_debug!(
+                    hl_log::tag::EVENT,
+                    "epoll batch discarded: watch token={} was deleted while sampling",
+                    selection.token
+                );
                 return Ok(false);
             };
             if watch.revision != selection.revision {
+                hl_log::hl_debug!(
+                    hl_log::tag::EVENT,
+                    "epoll batch discarded: watch token={} revision {}->{} while sampling",
+                    selection.token,
+                    selection.revision,
+                    watch.revision
+                );
                 return Ok(false);
             }
         }
@@ -226,9 +238,17 @@ impl Epoll {
                 continue;
             }
             if cancellation.interrupted() {
+                hl_log::hl_debug!(
+                    hl_log::tag::EVENT,
+                    "epoll wait interrupted before parking: no readiness delivered"
+                );
                 return Err(EpollError::Interrupted);
             }
             if self.wait_for_change(state, deadline)? == WaitOutcome::TimedOut {
+                hl_log::hl_debug!(
+                    hl_log::tag::EVENT,
+                    "epoll wait timed out with zero ready events timeout={timeout:?}"
+                );
                 return Ok(batch);
             }
         }
@@ -264,6 +284,10 @@ impl Epoll {
                 continue;
             }
             if self.wait_for_change(state, deadline)? == WaitOutcome::TimedOut {
+                hl_log::hl_debug!(
+                    hl_log::tag::EVENT,
+                    "epoll wait timed out with zero ready events timeout={timeout:?}"
+                );
                 return Ok(batch);
             }
         }

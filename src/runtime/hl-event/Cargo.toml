@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 hl-descriptor = { path = "../hl-descriptor" }
+hl-log = { path = "../../packages/hl-log" }
 hl-time = { path = "../hl-time" }
 
 [lints]
