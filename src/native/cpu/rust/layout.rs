@@ -88,6 +88,7 @@ pub struct Aarch64Cpu {
     pub ibtc_base: u64,
     pub execution_identity: u64,
     pub read_valid_count: u64,
+    pub reserve_filter: [u64; 8],
 }
 
 #[repr(C)]
@@ -242,7 +243,8 @@ const _: () = {
     assert!(std::mem::offset_of!(Aarch64Cpu, ibtc_base) == 2384);
     assert!(std::mem::offset_of!(Aarch64Cpu, execution_identity) == 2392);
     assert!(std::mem::offset_of!(Aarch64Cpu, read_valid_count) == 2400);
-    assert!(std::mem::size_of::<Aarch64Cpu>() == 2408);
+    assert!(std::mem::offset_of!(Aarch64Cpu, reserve_filter) == 2408);
+    assert!(std::mem::size_of::<Aarch64Cpu>() == 2472);
 
     assert!(std::mem::align_of::<Aarch64Cpu>() == 8);
 
@@ -310,4 +312,5 @@ const _: () = {
     assert!(std::mem::size_of::<X86_64Cpu>() == 1944);
 
     assert!(std::mem::align_of::<X86_64Cpu>() == 8);
+
 };

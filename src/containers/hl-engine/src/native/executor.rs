@@ -1544,6 +1544,7 @@ impl NativeAarch64 {
             ibtc_base: 0,
             execution_identity: 0,
             read_valid_count: 0,
+            reserve_filter: [0; 8],
         })
     }
 
@@ -3767,7 +3768,8 @@ mod test {
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, ibtc_base), 2384);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, execution_identity), 2392);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, read_valid_count), 2400);
-        assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2408);
+        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, reserve_filter), 2408);
+        assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2472);
         assert_eq!(
             std::mem::offset_of!(schema::X86_64Cpu, certificate_cache_identity),
             1928
