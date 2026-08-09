@@ -56,6 +56,20 @@ whole class. Run them in debug or inside `make gate`: under `--release`,
 `hl-log`'s verbose tests compile out and the daemon tests need
 `HL_ALPINE_ARCHIVE`, so both report spurious failures.
 
+## Checking whether the box is busy
+
+Use `pgrep -af "/release/testing"`. **`pgrep -cf "target/release/testing"` is
+structurally blind** and will report an idle box while several lanes run: lanes set
+`CARGO_TARGET_DIR` under `/var/tmp`, so their binaries live at
+`/var/tmp/<lane>/release/testing` and never match `target/release/testing`. A
+measured instance reported 2 against a true 11.
+
+`pgrep -f "testing runtime"` additionally matches its own shell wrapper, so it
+over-reports on an empty box. `pgrep -af` and read the rows.
+
+Timings taken without this check are not evidence. Counter ratios, code-size
+deltas and categorical pass/timeout results survive contention; minima do not.
+
 ## Reading a profile
 
 High self-time and removable cost are independent properties, and this engine has
