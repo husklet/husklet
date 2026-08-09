@@ -151,16 +151,26 @@ impl ProcessCall {
     }
 }
 
+/// Linux and BSD disagree on the numbering of signals 1..=31; every higher number,
+/// including the real-time range, is unnumbered on macOS and passes through.
+const fn linux_to_host(signal: i32) -> i32 {
+    const TABLE: [u8; 32] = [
+        0, 1, 2, 3, 4, 5, 6, 10, 8, 9, 30, 11, 31, 13, 14, 15, 16, 20, 19, 17, 18, 21, 22, 16, 24, 25, 26, 27, 28, 23,
+        30, 12,
+    ];
+    if signal >= 1 && signal <= 31 {
+        TABLE[signal as usize] as i32
+    } else {
+        signal
+    }
+}
+
 fn send_signal(process: ProcessId, signal: ProcessSignal, group: bool) -> Result<(), HostError> {
     let mut pid = i32::try_from(process.get()).map_err(|_| HostError::Invalid)?;
     if group {
         pid = pid.checked_neg().ok_or(HostError::Invalid)?;
     }
-    let signal = match signal {
-        ProcessSignal::Terminate => libc::SIGTERM,
-        ProcessSignal::Kill => libc::SIGKILL,
-        ProcessSignal::Interrupt => libc::SIGINT,
-    };
+    let signal = linux_to_host(signal.linux());
     // SAFETY: scalar arguments only.
     (unsafe { libc::kill(pid, signal) } == 0)
         .then_some(())

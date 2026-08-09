@@ -133,8 +133,8 @@ pub(super) async fn signal(
     let exec_id = id
         .parse()
         .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, format!("no such exec: {id}")))?;
-    let signal = query
-        .signal
+    let requested = if query.signal.is_empty() { "KILL" } else { &query.signal };
+    let signal = requested
         .parse::<super::container::DockerSignal>()
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, format!("unsupported signal {}", query.signal)))?
         .into();

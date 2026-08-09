@@ -326,7 +326,7 @@ mod stop_timeout_tests {
                 seconds: None,
                 signal: signal.map(str::to_owned),
             };
-            query.validate_signal(Signal::Terminate).unwrap();
+            query.validate_signal(Signal::TERMINATE).unwrap();
         }
 
         let malformed = TimeoutQuery {
@@ -334,7 +334,7 @@ mod stop_timeout_tests {
             signal: Some("SIGBOGUS".into()),
         };
         assert_eq!(
-            malformed.validate_signal(Signal::Terminate).unwrap_err().status,
+            malformed.validate_signal(Signal::TERMINATE).unwrap_err().status,
             StatusCode::BAD_REQUEST
         );
 
@@ -343,7 +343,7 @@ mod stop_timeout_tests {
             signal: Some("KILL".into()),
         };
         assert_eq!(
-            unsupported.validate_signal(Signal::Terminate).unwrap_err().status,
+            unsupported.validate_signal(Signal::TERMINATE).unwrap_err().status,
             StatusCode::NOT_IMPLEMENTED
         );
     }
@@ -393,7 +393,10 @@ mod stop_timeout_tests {
 
     #[test]
     fn stop_admission_reports_not_modified_for_inactive_containers() {
-        assert_eq!(super::stop_admission(&ContainerState::Created), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            super::stop_admission(&ContainerState::Created),
+            StatusCode::NOT_MODIFIED
+        );
         assert_eq!(super::stop_admission(&exited()), StatusCode::NOT_MODIFIED);
         assert_eq!(
             super::stop_admission(&ContainerState::Running {

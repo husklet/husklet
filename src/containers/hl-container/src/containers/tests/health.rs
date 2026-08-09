@@ -111,7 +111,7 @@ async fn start_interval_drives_grace_probes_and_stop_cancels_an_inflight_probe()
             .lock()
             .unwrap()
             .iter()
-            .filter(|signal| **signal == Signal::Kill)
+            .filter(|signal| **signal == Signal::KILL)
             .count()
             >= 2
     );
@@ -194,7 +194,7 @@ async fn health_grace_threshold_timeout_and_pause_are_generation_safe() {
             .iter()
             .all(|probe| matches!(probe.result, ExitStatus::Fault { status: -1, .. }))
     );
-    assert!(runtime.signals.lock().unwrap().contains(&Signal::Kill));
+    assert!(runtime.signals.lock().unwrap().contains(&Signal::KILL));
     containers.pause("unhealthy").await.unwrap();
     let count = containers
         .inspect("unhealthy")

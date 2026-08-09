@@ -181,12 +181,12 @@ async fn raw_signal_while_running_does_not_suppress_automatic_restart() {
         .await
         .unwrap();
     containers.start("raw-signal").await.unwrap();
-    containers.signal("raw-signal", Signal::User1).await.unwrap();
+    containers.signal("raw-signal", Signal::USER1).await.unwrap();
     assert_eq!(containers.wait("raw-signal").await.unwrap(), ExitStatus::Code(1));
     let container = containers.inspect("raw-signal").await.unwrap();
     assert!(!container.restart.manually_stopped);
     assert_eq!(container.generation, 2);
-    assert_eq!(*runtime.signals.lock().unwrap(), [Signal::User1]);
+    assert_eq!(*runtime.signals.lock().unwrap(), [Signal::USER1]);
     assert_eq!(runtime.mounts.lock().unwrap().len(), 2);
 }
 
@@ -396,7 +396,7 @@ async fn rename_wait_removed_stop_and_force_remove_follow_owned_lifecycle() {
     containers.start("new").await.unwrap();
     let exit = containers.stop("new", Duration::ZERO).await.unwrap();
     assert_eq!(exit, ExitStatus::Code(0));
-    assert_eq!(*runtime.signals.lock().unwrap(), vec![Signal::Terminate, Signal::Kill]);
+    assert_eq!(*runtime.signals.lock().unwrap(), vec![Signal::TERMINATE, Signal::KILL]);
 
     let removed = {
         let containers = containers.clone();
@@ -536,7 +536,7 @@ async fn shutdown_stops_every_active_container_and_preserves_inactive_records() 
         containers.inspect("inactive").await.unwrap().state,
         ContainerState::Created
     );
-    assert_eq!(*runtime.signals.lock().unwrap(), [Signal::Terminate, Signal::Kill]);
+    assert_eq!(*runtime.signals.lock().unwrap(), [Signal::TERMINATE, Signal::KILL]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -564,5 +564,5 @@ async fn force_removal_reaps_attached_executions_before_returning() {
         containers.executions().inspect(&execution.id).await,
         Err(Error::ExecNotFound(_))
     ));
-    assert!(runtime.signals.lock().unwrap().contains(&Signal::Kill));
+    assert!(runtime.signals.lock().unwrap().contains(&Signal::KILL));
 }

@@ -11,7 +11,7 @@ impl Service {
         if force {
             let container = self.resolve(reference).await?;
             if container.state.is_active() {
-                if let Err(error) = self.stop_signal(reference, Signal::Kill).await
+                if let Err(error) = self.stop_signal(reference, Signal::KILL).await
                     && !matches!(&error, Error::InvalidState { .. })
                 {
                     return Err(error);
@@ -107,7 +107,7 @@ impl Service {
         for id in &executions {
             let process = self.exec_live.lock().await.get(id).cloned();
             let result = match process {
-                Some(process) => process.signal(Signal::Kill).await,
+                Some(process) => process.signal(Signal::KILL).await,
                 None => Err(Error::Runtime(format!("running exec {id} has no runtime process"))),
             };
             if let Err(error) = result {

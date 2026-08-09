@@ -92,7 +92,7 @@ impl Service {
         };
         container.health = container.spec.healthcheck.as_ref().map(|_| crate::Health::starting());
         if let Err(error) = self.containers.replace(&container).await {
-            if let Err(cleanup) = process.signal(Signal::Kill).await {
+            if let Err(cleanup) = process.signal(Signal::KILL).await {
                 return Err(Error::Runtime(format!(
                     "failed to persist start ({error}); process cleanup also failed ({cleanup})"
                 )));

@@ -112,6 +112,34 @@ fn spawn_reports_exec() {
     assert_eq!(exit, Some(ChildExit::Signal(15)));
 }
 
+/// A Linux host numbers signals as the guest ABI does, so an arbitrary number — including a
+/// real-time one — reaches the child unchanged. Measured against this box's kernel.
+#[test]
+fn arbitrary_signal_numbers_reach_a_host_child() {
+    // 28 (WINCH) and 19 (STOP) are omitted: their default actions do not exit the child.
+    for number in [1_u8, 6, 10, 34, 64] {
+        let host = Arc::new(LinuxHost);
+        let sleep = SpawnRequest {
+            program: CString::new("/bin/sleep").unwrap(),
+            arguments: vec![CString::new("30").unwrap()],
+            environment: Vec::new(),
+            process_group: ProcessGroup::New,
+            file_actions: Vec::new(),
+        };
+        let process = ProcessHandle::spawn(host, &sleep).unwrap();
+        process.signal_group(ProcessSignal::Number(number)).unwrap();
+        let mut exit = None;
+        for _ in 0..1_000_000 {
+            exit = process.wait().unwrap();
+            if exit.is_some() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(exit, Some(ChildExit::Signal(number)), "signal {number}");
+    }
+}
+
 #[test]
 fn missing_signal_target() {
     let host = LinuxHost;

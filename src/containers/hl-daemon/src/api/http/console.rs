@@ -35,7 +35,7 @@ struct Disconnect {
 
 impl Disconnect {
     async fn cleanup(self) {
-        if let Err(error) = self.executions.signal(&self.id, Signal::Kill).await {
+        if let Err(error) = self.executions.signal(&self.id, Signal::KILL).await {
             hl_log::hl_warn!(
                 hl_log::tag::DAEMON,
                 "disconnected exec signal failed id={} error={error}",

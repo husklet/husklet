@@ -28,6 +28,21 @@ pub enum ProcessSignal {
     Terminate,
     Kill,
     Interrupt,
+    /// Any other Linux signal number, in `1..=64`.
+    Number(u8),
+}
+
+impl ProcessSignal {
+    /// Linux number this signal carries, in the guest ABI's numbering.
+    #[must_use]
+    pub const fn linux(self) -> i32 {
+        match self {
+            Self::Terminate => 15,
+            Self::Kill => 9,
+            Self::Interrupt => 2,
+            Self::Number(number) => number as i32,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

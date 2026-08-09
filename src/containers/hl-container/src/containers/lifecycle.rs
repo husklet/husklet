@@ -182,7 +182,7 @@ impl Containers {
                     Ok(()) => self.checkpoint(container.id.as_str(), timeout).await.map(|_| ()),
                     Err(error) => Err(error),
                 },
-                crate::ContainerState::Restarting { .. } => self.signal(container.id.as_str(), Signal::Terminate).await,
+                crate::ContainerState::Restarting { .. } => self.signal(container.id.as_str(), Signal::TERMINATE).await,
                 crate::ContainerState::Created | crate::ContainerState::Exited { .. } => Ok(()),
             };
             let error = match result {

@@ -26,7 +26,7 @@ async fn hangup_reaches_the_guest_signal_handler() -> Result<(), Error> {
         fixture.containers.create(fixture.spec(name, process)).await?;
         fixture.containers.start(name).await?;
         fixture.wait_for_output(name, b"READY").await?;
-        fixture.containers.signal(name, Signal::Hangup).await?;
+        fixture.containers.signal(name, Signal::HANGUP).await?;
         let status = fixture.containers.wait(name).await?;
         let logs = fixture.containers.logs(name).await?;
         require(status == ExitStatus::Code(0), "HUP handler exit status mismatch")?;
@@ -48,7 +48,7 @@ async fn configured_quit_reaches_the_guest_signal_handler() -> Result<(), Error>
         ]);
         fixture
             .containers
-            .create(fixture.spec(name, process).stop_signal(Signal::Quit))
+            .create(fixture.spec(name, process).stop_signal(Signal::QUIT))
             .await?;
         fixture.containers.start(name).await?;
         fixture.wait_for_output(name, b"READY").await?;

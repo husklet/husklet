@@ -220,3 +220,26 @@ fn channel_inheritance() {
             .any(|value| value.starts_with(b"HL_AUTHORITY_FRAME_LIMIT="))
     );
 }
+
+/// A native-backend container must be able to receive any signal `kill(2)` accepts, not the
+/// three the stop path once shortcut to.
+#[test]
+fn native_backend_delivers_every_linux_signal_number() {
+    use super::native_signal;
+    assert_eq!(native_signal(StopRequest::Force).unwrap(), ProcessSignal::Kill);
+    assert_eq!(native_signal(StopRequest::Interrupt).unwrap(), ProcessSignal::Interrupt);
+    for number in [1, 3, 6, 10, 12, 15, 18, 19, 28, 31, 34, 37, 64] {
+        assert_eq!(
+            native_signal(StopRequest::Signal(number)).unwrap().linux(),
+            number,
+            "{number}"
+        );
+    }
+    for number in [0, -1, 65, 2000] {
+        assert_eq!(
+            native_signal(StopRequest::Signal(number)),
+            Err(EngineError::Unsupported),
+            "{number}"
+        );
+    }
+}

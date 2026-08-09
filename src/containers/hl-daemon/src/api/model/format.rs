@@ -29,15 +29,7 @@ impl From<hl_container::Signal> for Signal {
 
 impl fmt::Display for Signal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self.0 {
-            hl_container::Signal::Terminate => "SIGTERM",
-            hl_container::Signal::Kill => "SIGKILL",
-            hl_container::Signal::Interrupt => "SIGINT",
-            hl_container::Signal::Quit => "SIGQUIT",
-            hl_container::Signal::Hangup => "SIGHUP",
-            hl_container::Signal::User1 => "SIGUSR1",
-            hl_container::Signal::User2 => "SIGUSR2",
-        })
+        formatter.write_str(&crate::api::http::DockerSignal::name(self.0))
     }
 }
 
@@ -173,8 +165,8 @@ mod tests {
 
     #[test]
     fn docker_signal_and_image_names_preserve_wire_text_and_rootfs_fallback() {
-        assert_eq!(Signal::from(hl_container::Signal::Terminate).to_string(), "SIGTERM");
-        assert_eq!(Signal::from(hl_container::Signal::User2).to_string(), "SIGUSR2");
+        assert_eq!(Signal::from(hl_container::Signal::TERMINATE).to_string(), "SIGTERM");
+        assert_eq!(Signal::from(hl_container::Signal::USER2).to_string(), "SIGUSR2");
 
         let spec = hl_container::ContainerSpec::from_directory(
             "/var/lib/husklet/rootfs",

@@ -284,7 +284,7 @@ impl Service {
         if let Ok(result) = tokio::time::timeout(timeout, self.wait(reference, WaitCondition::NotRunning)).await {
             result?.ok_or_else(|| Error::NotFound(reference.into()))
         } else {
-            if let Err(error) = self.stop_signal(reference, Signal::Kill).await
+            if let Err(error) = self.stop_signal(reference, Signal::KILL).await
                 && !matches!(&error, Error::InvalidState { .. })
             {
                 return Err(error);
