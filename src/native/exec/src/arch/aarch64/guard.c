@@ -4,6 +4,7 @@
 #include "stub.h"
 
 #include <stddef.h>
+#include <stdlib.h>
 
 #define CPU 28
 #define OFFSET_FIRST ((int)offsetof(hl_native_aarch64_cpu, memory_first))
@@ -42,6 +43,17 @@ _Static_assert(OFFSET_DIRTY_RECORDS < 4096 && OFFSET_READ_VIEWS < 4096 &&
                    OFFSET_READ_VIEW_PUBLICATION < 4096,
                "aarch64 CPU add-immediate base offset exceeds imm12");
 _Static_assert(DIRTY_CAPACITY < 4096, "aarch64 dirty capacity exceeds cmp imm12");
+
+/* Experiment switch: report journal saturation through dirty_overflow and keep
+ * running instead of leaving native execution. Off unless the variable is "1". */
+static int hl_a64_dirty_overflow_continues(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *value = getenv("HL_A64_DIRTY_OVERFLOW_CONTINUE");
+        cached = (value != NULL && value[0] == '1' && value[1] == '\0') ? 1 : 0;
+    }
+    return cached;
+}
 
 /* x30 carries the remaining budget across the whole native run.  The view scans
  * and the archive subroutine borrow it, so they publish it first and recover it
@@ -192,13 +204,24 @@ static void archive_dirty_body(hl_a64_assembler *assembler, uint64_t pc) {
     hl_a64_emit32(assembler, 0);
 
     uint8_t *overflow_target = assembler->cursor;
-    budget_recover(assembler);
-    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
-    hl_a64_ldr(assembler, 16, CPU, OFFSET_FAULT_ADDRESS);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
-    hl_a64_emit32(assembler, UINT32_C(0xd51b4211));
-    hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-    hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_EPOCH, pc);
+    uint32_t *overflow_continue = NULL;
+    if (hl_a64_dirty_overflow_continues()) {
+        /* Report through dirty_overflow and keep running, exactly as the inline
+         * full-journal path and both flush_dirty siblings already do. */
+        diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
+        hl_a64_movconst(assembler, 17, 1);
+        hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_OVERFLOW);
+        overflow_continue = (uint32_t *)assembler->cursor;
+        hl_a64_emit32(assembler, 0);
+    } else {
+        budget_recover(assembler);
+        diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
+        hl_a64_ldr(assembler, 16, CPU, OFFSET_FAULT_ADDRESS);
+        hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
+        hl_a64_emit32(assembler, UINT32_C(0xd51b4211));
+        hl_a64_ldr(assembler, 9, CPU, 9 * 8);
+        hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_EPOCH, pc);
+    }
     uint8_t *resume = assembler->cursor;
     hl_a64_ret(assembler);
     if (!hl_a64_assembler_ok(assembler)) return;
@@ -214,6 +237,7 @@ static void archive_dirty_body(hl_a64_assembler *assembler, uint64_t pc) {
     branch(assembler, again, scan);
     condition(assembler, overflow, overflow_target, 2u);
     branch(assembler, success, resume);
+    if (overflow_continue != NULL) branch(assembler, overflow_continue, done);
 }
 
 /* Both archive sites of one guarded store share its pc, so the body is emitted
