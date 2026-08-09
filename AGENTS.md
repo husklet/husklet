@@ -93,6 +93,29 @@ directory, so a shell that has wandered into a worktree gets structure from
 somewhere else. Worktrees carry their own `.codegraph/`; if yours does not, run
 `codegraph init -i` there rather than trusting the parent's index.
 
+## The x86 arm of the scheduler lags the arm64 arm
+
+`native_aarch64` and `native_x86` are maintained in parallel by hand and the x86
+side is repeatedly the one missing a piece. Two independent lanes found this on
+the same day, both in `scheduler/native.rs`:
+
+- `native_x86` never called `mark_productive`, so the entry-productivity set was
+  permanently empty on amd64 and every suppressed entry latched forever — an
+  ISA-wide regression invisible to any arm64 benchmark.
+- `native_x86` never bumped `entries`, `declined_suppressed`, `declined_cold` or
+  `declined_executable`, so `hl-native-entry:` printed all zeros on every amd64
+  run and dumped the whole probe population into `declined_other`. Every amd64
+  admission reading ever taken from that line was meaningless.
+
+Neither would fail a test. Both would ship green, because the gates and the
+benchmarks lanes reach for are arm64.
+
+So: when you touch either arm, **enumerate what the other one does** and say
+which of the two you checked. Confirm by enumerating the call sites or match
+arms, not by reading the surrounding prose — one of the above was found only
+because a lane listed which `NativeExit` variants reach a call and compared the
+two functions side by side.
+
 ## Reading a profile
 
 High self-time and removable cost are independent properties, and this engine has
