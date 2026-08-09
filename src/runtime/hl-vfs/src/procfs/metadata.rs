@@ -3,15 +3,70 @@ use hl_descriptor::{OfdMetadata, OfdTimestamp};
 use super::model::Node;
 
 impl Node {
+    /// Nodes projected from sysfs or cgroup2 rather than from `/proc`.
+    fn sysfs(self) -> bool {
+        matches!(
+            self,
+            Self::CgroupRoot
+                | Self::Cgroup(_)
+                | Self::InterfaceRoot
+                | Self::InterfaceDirectory
+                | Self::StatisticsDirectory
+                | Self::InterfaceFile(_)
+                | Self::CpuDirectory
+                | Self::CpuLeaf(_)
+                | Self::CpuTopology(_)
+                | Self::CpuRange
+                | Self::CpuCoreId(_)
+                | Self::CpuPackageId(_)
+                | Self::CpuClusterId(_)
+                | Self::CpuThreadMask(_)
+                | Self::CpuThreadList(_)
+                | Self::CpuCoreMask(_)
+                | Self::CpuCoreList(_)
+                | Self::CpuPackageMask(_)
+                | Self::CpuPackageList(_)
+                | Self::CpuClusterMask(_)
+                | Self::CpuClusterList(_)
+                | Self::BlockDirectory
+        )
+    }
+
+    /// `/proc/<pid>/fd` and `map_files` are owner-only and `ns` is search-only.
+    fn directory_permissions(self) -> u16 {
+        match self {
+            Self::Fd | Self::MapFiles => 0o500,
+            Self::NamespaceDirectory => 0o511,
+            _ => 0o555,
+        }
+    }
+
+    /// A directory with no projected subdirectory has exactly two links; the
+    /// remaining directories keep one, which Linux never reports but which no
+    /// consumer may treat as a subdirectory count.
+    fn link_count(self) -> u64 {
+        match self {
+            Self::Fd
+            | Self::FdInfo
+            | Self::NamespaceDirectory
+            | Self::MapFiles
+            | Self::StatisticsDirectory
+            | Self::CpuTopology(_)
+            | Self::InterfaceRoot
+            | Self::BlockDirectory => 2,
+            _ => 1,
+        }
+    }
+
     pub(super) fn link_metadata(inode: u64) -> OfdMetadata {
-        let mut metadata = Self::ProcRoot.metadata(0, 0);
+        let mut metadata = Self::ProcRoot.metadata(0);
         metadata.inode = inode;
         metadata.kind = 10;
         metadata.permissions = 0o777;
         metadata
     }
 
-    pub(super) fn metadata(self, process: u32, size: u64) -> OfdMetadata {
+    pub(super) fn metadata(self, process: u32) -> OfdMetadata {
         let identity = match self {
             Self::CgroupRoot => 0x6000_0000,
             Self::Cgroup(name) => 0x6100_0000 + name as u64,
@@ -131,14 +186,24 @@ impl Node {
                 | Self::FdLink(_)
                 | Self::MapFile(_, _)
         );
+        let sysfs = self.sysfs();
         let (kind, permissions) = if directory {
-            (4, 0o555)
+            (4, if sysfs { 0o755 } else { self.directory_permissions() })
         } else if link {
             (10, 0o777)
         } else if matches!(self, Self::Comm | Self::OomScoreAdj | Self::Hostname | Self::Domainname) {
             (8, 0o644)
+        } else if matches!(self, Self::Environ | Self::Io) {
+            (8, 0o400)
         } else {
             (8, 0o444)
+        };
+        // Linux reports a zero `st_size` for every procfs and cgroup2 file, a
+        // page for every sysfs attribute, and 64 for a `/proc/<pid>/fd` link.
+        let size = match self {
+            Self::FdLink(_) => 64,
+            _ if sysfs && kind == 8 => 4096,
+            _ => 0,
         };
         let zero = OfdTimestamp {
             seconds: 0,
@@ -149,12 +214,12 @@ impl Node {
             inode: (u64::from(process) << 32) | identity,
             kind,
             permissions,
-            links: 1,
+            links: self.link_count(),
             user: 0,
             group: 0,
             special_device: 0,
             size,
-            blocks_512: size.div_ceil(512),
+            blocks_512: 0,
             accessed: zero,
             modified: zero,
             changed: zero,

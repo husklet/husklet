@@ -674,7 +674,7 @@ fn environment_snapshot_preserves_nul_records() {
     let mut bytes = [0; 64];
     let count = file.read(&mut bytes).unwrap();
     assert_eq!(&bytes[..count], b"HOME=/root\0TERM=xterm\0");
-    assert_eq!(file.metadata().unwrap().size, count as u64);
+    assert_eq!(file.metadata().unwrap().size, 0);
 }
 
 #[test]
@@ -767,7 +767,7 @@ fn unix_network_snapshot_folds_and_preserves_path_bytes() {
         let mut bytes = [0; 256];
         let count = file.read(&mut bytes).unwrap();
         assert_eq!(&bytes[..count], expected);
-        assert_eq!(file.metadata().unwrap().size, expected.len() as u64);
+        assert_eq!(file.metadata().unwrap().size, 0);
     }
     assert_eq!(procfs.kind(b"/proc/net", 7).unwrap(), Some(super::NodeKind::Directory));
     assert_eq!(
@@ -1139,15 +1139,12 @@ fn mountinfo_projection() {
         )
         .as_bytes(),
     );
-    assert_eq!(file.metadata().unwrap().size, count as u64);
+    assert_eq!(file.metadata().unwrap().size, 0);
     assert_eq!(
         procfs.kind(b"/proc/7/mountinfo", 7).unwrap(),
         Some(super::NodeKind::Regular)
     );
-    assert_eq!(
-        procfs.metadata(b"/proc/7/mountinfo", 7).unwrap().unwrap().size,
-        count as u64
-    );
+    assert_eq!(procfs.metadata(b"/proc/7/mountinfo", 7).unwrap().unwrap().size, 0);
     assert_eq!(procfs.kind(b"/proc/8/mountinfo", 7), Err(Error::NotFound));
 }
 
@@ -1170,7 +1167,7 @@ fn mounts_projection_uses_same_namespace() {
         let mut bytes = [0; 2048];
         let count = file.read(&mut bytes).unwrap();
         assert_eq!(&bytes[..count], expected);
-        assert_eq!(file.metadata().unwrap().size, count as u64);
+        assert_eq!(file.metadata().unwrap().size, 0);
     }
     // Linux spells /proc/mounts as a relative symlink to the caller's own table.
     assert_eq!(procfs.kind(b"/proc/mounts", 7), Ok(Some(super::NodeKind::Link)));
@@ -1228,7 +1225,9 @@ fn descriptor_snapshots() {
         .unwrap();
     let fd_metadata = directory.metadata().unwrap();
     assert_eq!(fd_metadata.kind, 4);
-    assert_eq!(fd_metadata.permissions, 0o555);
+    assert_eq!(fd_metadata.permissions, 0o500);
+    assert_eq!(fd_metadata.links, 2);
+    assert_eq!(fd_metadata.size, 0);
     let batch = directory.read_directory(8).unwrap();
     assert_eq!(batch.entries[0].name, b".");
     assert_eq!(batch.entries[1].name, b"..");
@@ -1433,4 +1432,77 @@ fn task_leaf_folding() {
         procfs.read_link(b"/proc/7/task/9/cwd", 7).unwrap(),
         Some(b"/sandbox/work".to_vec()),
     );
+}
+
+/// Field-by-field record of `lstat`/`statx` on Linux 7.0.11: procfs and cgroup2
+/// report a zero size, sysfs attributes report one page, and an `fd` link 64.
+#[test]
+fn stat_shape_matches_linux() {
+    let procfs = procfs();
+    for (path, kind, permissions, size, links) in [
+        (b"/proc".as_slice(), 4, 0o555, 0, 1),
+        (b"/proc/7", 4, 0o555, 0, 1),
+        (b"/proc/7/status", 8, 0o444, 0, 1),
+        (b"/proc/7/maps", 8, 0o444, 0, 1),
+        (b"/proc/7/mountinfo", 8, 0o444, 0, 1),
+        (b"/proc/7/limits", 8, 0o444, 0, 1),
+        (b"/proc/7/environ", 8, 0o400, 0, 1),
+        (b"/proc/7/io", 8, 0o400, 0, 1),
+        (b"/proc/7/oom_score", 8, 0o444, 0, 1),
+        (b"/proc/7/oom_score_adj", 8, 0o644, 0, 1),
+        (b"/proc/7/cgroup", 8, 0o444, 0, 1),
+        (b"/proc/7/cwd", 10, 0o777, 0, 1),
+        (b"/proc/7/root", 10, 0o777, 0, 1),
+        (b"/proc/7/fd", 4, 0o500, 0, 2),
+        (b"/proc/7/fd/4", 10, 0o777, 64, 1),
+        (b"/proc/7/fdinfo", 4, 0o555, 0, 2),
+        (b"/proc/7/fdinfo/4", 8, 0o444, 0, 1),
+        (b"/proc/7/ns", 4, 0o511, 0, 2),
+        (b"/proc/7/map_files", 4, 0o500, 0, 2),
+        (b"/proc/7/task", 4, 0o555, 0, 1),
+        (b"/proc/7/task/9", 4, 0o555, 0, 1),
+        (b"/proc/cpuinfo", 8, 0o444, 0, 1),
+        (b"/proc/meminfo", 8, 0o444, 0, 1),
+        (b"/proc/uptime", 8, 0o444, 0, 1),
+        (b"/proc/sys/kernel/pid_max", 8, 0o444, 0, 1),
+        (b"/sys/fs/cgroup", 4, 0o755, 0, 1),
+        (b"/sys/devices/system/cpu", 4, 0o755, 0, 1),
+        (b"/sys/devices/system/cpu/online", 8, 0o444, 4096, 1),
+        (b"/sys/devices/system/cpu/cpu0", 4, 0o755, 0, 1),
+        (b"/sys/devices/system/cpu/cpu0/topology", 4, 0o755, 0, 2),
+        (b"/sys/devices/system/cpu/cpu0/topology/core_id", 8, 0o444, 4096, 1),
+        (b"/sys/class/net", 4, 0o755, 0, 2),
+    ] {
+        let spelling = String::from_utf8_lossy(path).into_owned();
+        let metadata = procfs
+            .metadata(path, 7)
+            .unwrap_or_else(|error| panic!("{spelling}: {error:?}"))
+            .unwrap_or_else(|| panic!("{spelling} is not projected"));
+        assert_eq!((&spelling, metadata.kind), (&spelling, kind));
+        assert_eq!((&spelling, metadata.permissions), (&spelling, permissions));
+        assert_eq!((&spelling, metadata.size), (&spelling, size));
+        assert_eq!((&spelling, metadata.links), (&spelling, links));
+        assert_eq!((&spelling, metadata.blocks_512), (&spelling, 0));
+    }
+}
+
+/// An open procfs description reports the same zero size as the path walk, which
+/// is what Linux reports through `fstat`.
+#[test]
+fn open_description_reports_zero_size() {
+    let procfs = procfs();
+    for path in [
+        b"/proc/self/status".as_slice(),
+        b"/proc/self/maps",
+        b"/proc/self/limits",
+        b"/proc/self/environ",
+        b"/proc/7/mountinfo",
+    ] {
+        let file = procfs.open(path, 7, OpenIntent::from_bits(0)).unwrap().unwrap();
+        let metadata = file.metadata().unwrap();
+        let mut bytes = [0; 4096];
+        assert!(file.read(&mut bytes).unwrap() > 0);
+        assert_eq!(metadata.size, 0, "{}", String::from_utf8_lossy(path));
+        assert_eq!(metadata.blocks_512, 0);
+    }
 }

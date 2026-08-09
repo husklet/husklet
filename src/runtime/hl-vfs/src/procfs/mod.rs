@@ -236,7 +236,7 @@ impl Procfs {
         node: model::Node,
         identity: model::ProcessIdentity,
     ) -> Result<OfdMetadata, Error> {
-        let mut metadata = node.metadata(process, 0);
+        let mut metadata = node.metadata(process);
         if node == model::Node::UtsNamespace {
             metadata.inode = self.source.uts(identity)?.namespace;
         } else if node == model::Node::NetworkNamespace {

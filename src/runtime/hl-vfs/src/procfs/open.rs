@@ -56,7 +56,7 @@ impl Procfs {
                 self.source.cgroup()?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::names(
                     cgroup::ROOT_NAMES.iter().map(|name| name.to_vec()),
-                    leaf.metadata(0, 0),
+                    leaf.metadata(0),
                 ))))
             }
             model::Node::Cgroup(name) => self.snapshot_file(0, leaf, self.source.cgroup()?.render(name)),
@@ -90,7 +90,7 @@ impl Procfs {
                 );
                 Ok(Some(Arc::new(file::SnapshotDirectory::entries(
                     entries,
-                    leaf.metadata(0, 0),
+                    leaf.metadata(0),
                 ))))
             }
             model::Node::ProcessDirectory | model::Node::ThreadDirectory => {
@@ -100,7 +100,7 @@ impl Procfs {
                         .into_iter()
                         .flatten()
                         .map(|(name, kind)| (name.to_vec(), *kind)),
-                    leaf.metadata(process, 0),
+                    leaf.metadata(process),
                 ))))
             }
             model::Node::TaskDirectory => Ok(Some(Arc::new(file::SnapshotDirectory::names(
@@ -108,7 +108,7 @@ impl Procfs {
                     .threads(identity.ok_or(Error::NotFound)?)?
                     .into_iter()
                     .map(|thread| thread.to_string().into_bytes()),
-                leaf.metadata(process, 0),
+                leaf.metadata(process),
             )))),
             model::Node::NamespaceDirectory => {
                 self.source.uts(identity.ok_or(Error::NotFound)?)?;
@@ -117,14 +117,14 @@ impl Procfs {
                     ["uts", "net", "cgroup", "ipc", "mnt", "pid", "time", "user"]
                         .into_iter()
                         .map(|name| (name.as_bytes().to_vec(), 10)),
-                    leaf.metadata(process, 0),
+                    leaf.metadata(process),
                 ))))
             }
             model::Node::NetworkDirectory => {
                 let network = self.source.network(identity.ok_or(Error::NotFound)?)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::entries(
                     network.entries().map(|(name, kind)| (name.to_vec(), kind)),
-                    leaf.metadata(process, 0),
+                    leaf.metadata(process),
                 ))))
             }
             model::Node::NetworkFile(name) => {
@@ -135,7 +135,7 @@ impl Procfs {
                 let network = self.source.network(identity.ok_or(Error::NotFound)?)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::names(
                     network.interfaces.into_iter().map(|interface| interface.name),
-                    leaf.metadata(process, 0),
+                    leaf.metadata(process),
                 ))))
             }
             model::Node::InterfaceDirectory => {
@@ -154,7 +154,7 @@ impl Procfs {
                         (b"statistics".to_vec(), 4),
                         (b"type".to_vec(), 8),
                     ],
-                    leaf.metadata(process, 0),
+                    leaf.metadata(process),
                 ))))
             }
             model::Node::StatisticsDirectory => {
@@ -165,7 +165,7 @@ impl Procfs {
                     .ok_or(Error::NotFound)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::names(
                     [b"rx_bytes".to_vec(), b"tx_packets".to_vec()],
-                    leaf.metadata(process, 0),
+                    leaf.metadata(process),
                 ))))
             }
             model::Node::InterfaceFile(attribute) => {
@@ -176,7 +176,7 @@ impl Procfs {
             }
             model::Node::Status => {
                 let bytes = self.source.process(identity.ok_or(Error::NotFound)?)?.status();
-                let metadata = leaf.metadata(process, bytes.len() as u64);
+                let metadata = leaf.metadata(process);
                 Ok(Some(Arc::new(file::SnapshotFile::new(bytes, metadata))))
             }
             model::Node::ProcessStat => self.snapshot_file(
@@ -215,7 +215,7 @@ impl Procfs {
                     .map(|region| (format!("{:x}-{:x}", region.start, region.end).into_bytes(), 10));
                 Ok(Some(Arc::new(file::SnapshotDirectory::entries(
                     entries,
-                    leaf.metadata(process, 0),
+                    leaf.metadata(process),
                 ))))
             }
             model::Node::MapFile(_, _) => Ok(None),
@@ -227,12 +227,12 @@ impl Procfs {
             model::Node::Comm => {
                 let identity = identity.ok_or(Error::NotFound)?;
                 let thread_identity = thread_identity.ok_or(Error::NotFound)?;
-                let bytes = self.source.comm(identity, thread_identity)?;
+                self.source.comm(identity, thread_identity)?;
                 Ok(Some(Arc::new(file::CommFile::new(
                     Arc::clone(&self.source),
                     identity,
                     thread_identity,
-                    leaf.metadata(process, bytes.len() as u64),
+                    leaf.metadata(process),
                 ))))
             }
             model::Node::Cmdline => {
@@ -253,12 +253,12 @@ impl Procfs {
                     identity,
                     thread_identity,
                     length,
-                    leaf.metadata(process, length as u64),
+                    leaf.metadata(process),
                 ))))
             }
             model::Node::Limits => {
                 let bytes = self.source.process(identity.ok_or(Error::NotFound)?)?.limits();
-                let metadata = leaf.metadata(process, bytes.len() as u64);
+                let metadata = leaf.metadata(process);
                 Ok(Some(Arc::new(file::SnapshotFile::new(bytes, metadata))))
             }
             model::Node::Mounts => self.snapshot_file(
@@ -296,13 +296,13 @@ impl Procfs {
                 Ok(Some(self.source.descriptor_directory(
                     identity.ok_or(Error::NotFound)?,
                     file_type,
-                    leaf.metadata(process, 0),
+                    leaf.metadata(process),
                 )?))
             }
             model::Node::FdInfoFile(number) => {
                 let descriptor = self.source.descriptor(identity.ok_or(Error::NotFound)?, number)?;
                 let bytes = descriptor.info();
-                let metadata = leaf.metadata(process, bytes.len() as u64);
+                let metadata = leaf.metadata(process);
                 Ok(Some(Arc::new(file::SnapshotFile::new(bytes, metadata))))
             }
             model::Node::FdLink(_) => Ok(None),
@@ -313,7 +313,7 @@ impl Procfs {
                 let cpu = self.source.cpu()?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::names(
                     (0..cpu.online()).map(|number| format!("cpu{number}").into_bytes()),
-                    leaf.metadata(0, 0),
+                    leaf.metadata(0),
                 ))))
             }
             model::Node::CpuLeaf(number) => {
@@ -323,7 +323,7 @@ impl Procfs {
                 }
                 Ok(Some(Arc::new(file::SnapshotDirectory::names(
                     std::iter::empty::<Vec<u8>>(),
-                    leaf.metadata(0, 0),
+                    leaf.metadata(0),
                 ))))
             }
             model::Node::CpuTopology(number) => {
@@ -344,7 +344,7 @@ impl Procfs {
                         b"package_cpus".to_vec(),
                         b"package_cpus_list".to_vec(),
                     ],
-                    leaf.metadata(0, 0),
+                    leaf.metadata(0),
                 ))))
             }
             model::Node::CpuCoreId(number) => {
@@ -381,11 +381,11 @@ impl Procfs {
             }
             model::Node::BlockDirectory => Ok(Some(Arc::new(file::SnapshotDirectory::names(
                 std::iter::empty::<Vec<u8>>(),
-                leaf.metadata(0, 0),
+                leaf.metadata(0),
             )))),
             model::Node::TtyDirectory => Ok(Some(Arc::new(file::SnapshotDirectory::names(
                 [b"drivers".to_vec(), b"ldiscs".to_vec()],
-                leaf.metadata(0, 0),
+                leaf.metadata(0),
             )))),
             model::Node::TtyDrivers => self.snapshot_file(0, leaf, TTY_DRIVERS.to_vec()),
             model::Node::TtyDisciplines => self.snapshot_file(0, leaf, Vec::new()),
@@ -415,7 +415,7 @@ impl Procfs {
                     Arc::clone(&self.source),
                     uts.namespace,
                     leaf == model::Node::Domainname,
-                    leaf.metadata(current, 0),
+                    leaf.metadata(current),
                 ))))
             }
         }
@@ -428,7 +428,7 @@ impl Procfs {
         node: model::Node,
         bytes: Vec<u8>,
     ) -> Result<Option<Arc<dyn OpenFileDescription>>, Error> {
-        let metadata = node.metadata(process, bytes.len() as u64);
+        let metadata = node.metadata(process);
         Ok(Some(Arc::new(file::SnapshotFile::new(bytes, metadata))))
     }
 

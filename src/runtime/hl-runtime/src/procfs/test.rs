@@ -829,7 +829,7 @@ fn task_oom_reuse_preserves_metadata_seek_and_orders_data_errors() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(old.metadata().unwrap().size, 2);
+    assert_eq!(old.metadata().unwrap().size, 0);
     let process_file = procfs
         .open(
             format!("/proc/{}/oom_score_adj", child.number()).as_bytes(),
@@ -858,7 +858,7 @@ fn task_oom_reuse_preserves_metadata_seek_and_orders_data_errors() {
         .unwrap();
     assert_eq!(replacement.number(), child.number());
     assert_eq!(replacement_thread.number(), child_thread.number());
-    assert_eq!(old.metadata().unwrap().size, 2);
+    assert_eq!(old.metadata().unwrap().size, 0);
     assert_eq!(old.seek(hl_descriptor::SeekPosition::Start(1)), Ok(1));
     assert_eq!(old.seek(hl_descriptor::SeekPosition::Current(1)), Ok(2));
     assert_eq!(old.seek(hl_descriptor::SeekPosition::End(-1)), Ok(1));
@@ -1085,4 +1085,44 @@ fn mount_oracle() {
 29 25 0:30 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw\n\
 30 25 0:31 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k\n"
     );
+}
+
+/// `/proc/<pid>/<leaf>` and `/proc/self/<leaf>` are the same inode with the same
+/// zero size, which is what Linux reports for every procfs file.
+#[test]
+fn numeric_pid_and_self_report_the_same_zero_sized_stat() {
+    let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let (process, _) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let number = process.number();
+    let procfs = hl_vfs::Procfs::new(Arc::new(
+        TaskProcfs::new(tasks).with_stat(Arc::new(StatMetrics)),
+    ));
+    for leaf in ["stat", "status", "limits"] {
+        let owned = procfs
+            .metadata(format!("/proc/{number}/{leaf}").as_bytes(), number)
+            .unwrap()
+            .unwrap_or_else(|| panic!("/proc/{number}/{leaf} is not projected"));
+        let personal = procfs
+            .metadata(format!("/proc/self/{leaf}").as_bytes(), number)
+            .unwrap()
+            .unwrap();
+        assert_eq!(owned.inode, personal.inode, "{leaf}");
+        assert_eq!(owned.kind, 8, "{leaf}");
+        assert_eq!(owned.permissions, 0o444, "{leaf}");
+        assert_eq!(owned.size, 0, "{leaf}");
+        assert_eq!(owned.blocks_512, 0, "{leaf}");
+        let opened = procfs
+            .open(
+                format!("/proc/{number}/{leaf}").as_bytes(),
+                number,
+                hl_vfs::OpenIntent::from_bits(0),
+            )
+            .unwrap()
+            .unwrap();
+        let mut bytes = [0; 4096];
+        assert!(opened.read(&mut bytes).unwrap() > 0, "{leaf}");
+        assert_eq!(opened.metadata().unwrap().size, 0, "{leaf}");
+    }
 }

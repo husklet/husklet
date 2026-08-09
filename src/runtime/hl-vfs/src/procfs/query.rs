@@ -244,7 +244,9 @@ impl Procfs {
             _ => None,
         };
         let process_identity = || identity.ok_or(Error::NotFound);
-        let size = match node {
+        // Linux derives no procfs or sysfs size from content, so this match runs
+        // only for the source-backed existence checks its arms perform.
+        let _: u64 = match node {
             model::Node::CgroupRoot => {
                 self.source.cgroup()?;
                 0
@@ -453,7 +455,7 @@ impl Procfs {
                 }) as u64
             }
         };
-        let mut metadata = node.metadata(process, size);
+        let mut metadata = node.metadata(process);
         if node == model::Node::UtsNamespace {
             metadata.inode = self.source.uts(process_identity()?)?.namespace;
         } else if node == model::Node::NetworkNamespace {
