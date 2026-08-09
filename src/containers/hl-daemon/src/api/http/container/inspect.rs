@@ -10,7 +10,7 @@ pub(in super::super) async fn inspect(
     Path(id): Path<String>,
     Query(query): Query<InspectQuery>,
 ) -> ApiResult<Json<InspectContainer>> {
-    let include_size = bool::from(query.size.as_deref().unwrap_or_default().parse::<Flag>()?);
+    let include_size = flag(query.size.as_deref());
     let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
     let container_id = container.id.clone();
     let network_mode = container.spec.network_mode;

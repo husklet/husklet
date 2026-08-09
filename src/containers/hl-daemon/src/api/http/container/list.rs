@@ -25,15 +25,17 @@ impl ListQuery {
             .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "container limit exceeds host range"))
     }
 
-    fn include_size(&self) -> ApiResult<bool> {
-        self.size.as_deref().unwrap_or_default().parse::<Flag>().map(bool::from)
+    fn include_size(&self) -> bool {
+        flag(self.size.as_deref())
     }
 
     fn select(&self, mut values: Vec<hl_container::Container>) -> ApiResult<Vec<hl_container::Container>> {
         let limit = self.limit()?;
         let selection = crate::api::List::parse(self.all || limit.is_some(), self.filters.as_deref())
             .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, message))?;
-        let selection = selection.prepare(&values);
+        let selection = selection
+            .prepare(&values)
+            .map_err(|missing| ApiError::new(StatusCode::NOT_FOUND, format!("No such container: {}", missing.0)))?;
         values.sort_by(|left, right| {
             right
                 .created_at_ms
@@ -303,7 +305,7 @@ pub(in super::super) async fn list(
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<Container>>> {
     let values = state.containers.list().await.map_err(ApiError::container)?;
-    let include_size = query.include_size()?;
+    let include_size = query.include_size();
     let selected = query.select(values)?;
     Ok(Json(
         super::size::summaries(&state.containers, selected, include_size).await?,
@@ -423,20 +425,62 @@ mod tests {
         assert!(values.is_empty());
     }
 
+    /// Docker 29.1.3 answers `404 No such container: nosuch` for an unresolvable
+    /// `before`/`since` rather than an empty list, but leaves `ancestor` a silent no-match.
     #[test]
-    fn size_flag() {
-        for (value, expected) in [(None, false), (Some("0"), false), (Some("true"), true)] {
+    fn unresolvable_temporal_reference_is_not_found() {
+        for key in ["before", "since"] {
+            let query = ListQuery {
+                all: true,
+                filters: Some(format!(r#"{{"{key}":["nosuch"]}}"#)),
+                limit: None,
+                size: None,
+            };
+            let error = query.select(vec![container("present", 10)]).unwrap_err();
+            assert_eq!(error.status, StatusCode::NOT_FOUND, "{key}");
+            assert!(format!("{error:?}").contains("No such container: nosuch"), "{key}");
+        }
+        let ancestor = ListQuery {
+            all: true,
+            filters: Some(r#"{"ancestor":["nosuch"]}"#.into()),
+            limit: None,
+            size: None,
+        };
+        assert!(ancestor.select(vec![container("present", 10)]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unknown_status_filter_is_rejected_rather_than_silently_empty() {
+        let query = ListQuery {
+            all: true,
+            filters: Some(r#"{"status":["bogus"]}"#.into()),
+            limit: None,
+            size: None,
+        };
+        assert_eq!(
+            query.select(vec![container("present", 10)]).unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn size_flag_coerces_like_docker_and_never_rejects() {
+        for (value, expected) in [
+            (None, false),
+            (Some("0"), false),
+            (Some("no"), false),
+            (Some("none"), false),
+            (Some(" 0 "), false),
+            (Some("true"), true),
+            (Some("maybe"), true),
+            (Some("2"), true),
+        ] {
             let query = ListQuery {
                 size: value.map(str::to_owned),
                 ..ListQuery::default()
             };
-            assert_eq!(query.include_size().unwrap(), expected);
+            assert_eq!(query.include_size(), expected, "{value:?}");
         }
-        let query = ListQuery {
-            size: Some("maybe".into()),
-            ..ListQuery::default()
-        };
-        assert_eq!(query.include_size().unwrap_err().status, StatusCode::BAD_REQUEST);
     }
 }
 

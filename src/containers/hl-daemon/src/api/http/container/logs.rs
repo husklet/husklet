@@ -92,7 +92,7 @@ impl TryFrom<LogsQuery> for LogOptions {
                 format!("unsupported logs option {name:?}"),
             ));
         }
-        if bool::from(query.details.as_deref().unwrap_or_default().parse::<Flag>()?) {
+        if flag(query.details.as_deref()) {
             return Err(ApiError::new(
                 StatusCode::NOT_IMPLEMENTED,
                 "log details require container attribute logging",
@@ -110,10 +110,10 @@ impl TryFrom<LogsQuery> for LogOptions {
             },
         };
         Ok(Self {
-            follow: bool::from(query.follow.as_deref().unwrap_or_default().parse::<Flag>()?),
+            follow: flag(query.follow.as_deref()),
             streams: LogStreams {
-                stdout: bool::from(query.stdout.as_deref().unwrap_or_default().parse::<Flag>()?),
-                stderr: bool::from(query.stderr.as_deref().unwrap_or_default().parse::<Flag>()?),
+                stdout: flag(query.stdout.as_deref()),
+                stderr: flag(query.stderr.as_deref()),
             },
             since_ms: query
                 .since
@@ -127,7 +127,7 @@ impl TryFrom<LogsQuery> for LogOptions {
                 .map(str::parse::<LogTime>)
                 .transpose()?
                 .map(u64::from),
-            timestamps: bool::from(query.timestamps.as_deref().unwrap_or_default().parse::<Flag>()?),
+            timestamps: flag(query.timestamps.as_deref()),
             tail,
         })
     }
@@ -189,21 +189,6 @@ fn now_ms() -> u64 {
     .unwrap_or(u64::MAX)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct Flag(bool);
-
-impl FromStr for Flag {
-    type Err = ApiError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        crate::api::http::query::parse_flag(value)
-            .map(Self)
-            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid boolean {value:?}")))
-    }
-}
-
-impl From<Flag> for bool {
-    fn from(value: Flag) -> Self {
-        value.0
-    }
+pub(super) fn flag(value: Option<&str>) -> bool {
+    crate::api::http::query::parse_flag(value.unwrap_or_default())
 }

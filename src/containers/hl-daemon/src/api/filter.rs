@@ -153,10 +153,15 @@ pub struct List {
     filters: BTreeMap<String, Vec<String>>,
 }
 
+/// A `before`/`since` value that names no container.
+#[cfg(feature = "runtime")]
+#[derive(Debug)]
+pub(crate) struct MissingReference(pub(crate) String);
+
 #[cfg(feature = "runtime")]
 pub(crate) struct PreparedList {
     selection: List,
-    temporal: BTreeMap<String, Vec<Option<(u64, hl_container::ContainerId)>>>,
+    temporal: BTreeMap<String, Vec<(u64, hl_container::ContainerId)>>,
     ids: Option<std::collections::BTreeSet<hl_container::ContainerId>>,
 }
 
@@ -267,6 +272,21 @@ impl List {
         {
             Self::exposed_port(value)?;
         }
+        for value in list.filters.get("status").into_iter().flatten() {
+            if !matches!(
+                value.as_str(),
+                "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead"
+            ) {
+                return Err(format!(
+                    "invalid filter 'status={value}': invalid value for state ({value}): must be one of created, running, paused, restarting, removing, exited, dead"
+                ));
+            }
+        }
+        for value in list.filters.get("exited").into_iter().flatten() {
+            value
+                .parse::<i32>()
+                .map_err(|_| format!("invalid filter 'exited={value}': {value:?} is not an exit code"))?;
+        }
         for value in list.filters.get("health").into_iter().flatten() {
             if !matches!(value.as_str(), "starting" | "healthy" | "unhealthy" | "none") {
                 return Err(format!("invalid health filter {value:?}"));
@@ -283,7 +303,8 @@ impl List {
         Ok(list)
     }
 
-    pub(crate) fn prepare(self, containers: &[hl_container::Container]) -> PreparedList {
+    /// Docker resolves `before`/`since` eagerly and answers 404 for a reference it cannot find.
+    pub(crate) fn prepare(self, containers: &[hl_container::Container]) -> Result<PreparedList, MissingReference> {
         let mut temporal = BTreeMap::new();
         for key in ["before", "since"] {
             let Some(values) = self.filters.get(key) else {
@@ -291,8 +312,12 @@ impl List {
             };
             let ordering = values
                 .iter()
-                .map(|value| Self::reference(containers, value).map(Self::ordering_key))
-                .collect();
+                .map(|value| {
+                    Self::reference(containers, value)
+                        .map(Self::ordering_key)
+                        .ok_or_else(|| MissingReference(value.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             temporal.insert(key.into(), ordering);
         }
         let ids = self
@@ -312,11 +337,11 @@ impl List {
                     })
                     .collect()
             });
-        PreparedList {
+        Ok(PreparedList {
             selection: self,
             temporal,
             ids,
-        }
+        })
     }
 
     fn reference<'a>(containers: &'a [hl_container::Container], value: &str) -> Option<&'a hl_container::Container> {
@@ -456,14 +481,12 @@ impl PreparedList {
                 values.is_empty()
                     || self.temporal[key]
                         .iter()
-                        .flatten()
                         .any(|reference| &List::ordering_key(container) < reference)
             }
             "since" => {
                 values.is_empty()
                     || self.temporal[key]
                         .iter()
-                        .flatten()
                         .any(|reference| &List::ordering_key(container) > reference)
             }
             "id" => self.ids.as_ref().is_none_or(|ids| ids.contains(&container.id)),
@@ -507,7 +530,7 @@ mod tests {
     }
 
     fn matches(selection: List, container: &Container, containers: &[Container]) -> bool {
-        selection.prepare(containers).matches(container)
+        selection.prepare(containers).unwrap().matches(container)
     }
 
     #[test]
@@ -557,6 +580,38 @@ mod tests {
         for filters in [r#"{"health":["bogus"]}"#, r#"{"health!":["healthy"]}"#] {
             assert!(List::parse(false, Some(filters)).is_err(), "accepted {filters}");
         }
+    }
+
+    /// Docker 29.1.3 answers 400 for an unknown `status`, and accepts `removing`/`dead`
+    /// even though this daemon never reports them.
+    #[test]
+    fn parser_validates_status_values_against_dockers_state_vocabulary() {
+        for value in [
+            "created",
+            "running",
+            "paused",
+            "restarting",
+            "removing",
+            "exited",
+            "dead",
+        ] {
+            let filters = format!(r#"{{"status":["{value}"]}}"#);
+            assert!(List::parse(true, Some(&filters)).is_ok(), "rejected {value}");
+        }
+        for value in ["bogus", "Running", "", "up"] {
+            let filters = format!(r#"{{"status":["{value}"]}}"#);
+            let error = List::parse(true, Some(&filters)).unwrap_err();
+            assert!(error.contains("invalid value for state"), "accepted {value}: {error}");
+        }
+        // A conforming value alongside a bad one still fails, as Docker's does.
+        assert!(List::parse(true, Some(r#"{"status":["running","bogus"]}"#)).is_err());
+    }
+
+    #[test]
+    fn parser_validates_exited_filter_as_an_exit_code() {
+        assert!(List::parse(true, Some(r#"{"exited":["0"]}"#)).is_ok());
+        assert!(List::parse(true, Some(r#"{"exited":["-1"]}"#)).is_ok());
+        assert!(List::parse(true, Some(r#"{"exited":["abc"]}"#)).is_err());
     }
 
     #[test]
@@ -895,6 +950,7 @@ mod tests {
             List::parse(true, Some(r#"{"before":["/second"]}"#))
                 .unwrap()
                 .prepare(&containers)
+                .unwrap()
                 .matches(&first)
         );
         assert!(
@@ -904,12 +960,14 @@ mod tests {
             )
             .unwrap()
             .prepare(&containers)
+            .unwrap()
             .matches(&containers[2])
         );
         assert!(
             List::parse(true, Some(r#"{"since":["67ea8f51"]}"#))
                 .unwrap()
                 .prepare(&containers)
+                .unwrap()
                 .matches(&second)
         );
         let mut between = first.clone();
@@ -918,13 +976,17 @@ mod tests {
             !List::parse(true, Some(r#"{"before":["89abcdef"]}"#))
                 .unwrap()
                 .prepare(&containers)
+                .unwrap()
                 .matches(&between)
         );
-        assert!(
-            !List::parse(true, Some(r#"{"before":["missing"]}"#))
+        assert_eq!(
+            List::parse(true, Some(r#"{"before":["missing"]}"#))
                 .unwrap()
                 .prepare(&containers)
-                .matches(&first)
+                .err()
+                .map(|missing| missing.0)
+                .as_deref(),
+            Some("missing")
         );
     }
 
@@ -950,13 +1012,15 @@ mod tests {
 
         let before_selection = List::parse(true, Some(r#"{"before":["boundary"]}"#))
             .unwrap()
-            .prepare(&containers);
+            .prepare(&containers)
+            .unwrap();
         assert!(before_selection.matches(&before));
         assert!(!before_selection.matches(&since));
 
         let since_selection = List::parse(true, Some(r#"{"since":["boundary"]}"#))
             .unwrap()
-            .prepare(&containers);
+            .prepare(&containers)
+            .unwrap();
         assert!(since_selection.matches(&since));
         assert!(!since_selection.matches(&before));
     }

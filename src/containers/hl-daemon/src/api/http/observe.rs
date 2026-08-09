@@ -284,12 +284,7 @@ fn supports_one_shot(uri: &axum::http::Uri) -> bool {
 
 #[hl_design::classify(domain = "docker")]
 fn docker_bool(value: Option<&str>, default: bool) -> bool {
-    value.map_or(default, |value| {
-        !matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "" | "0" | "no" | "false" | "none"
-        )
-    })
+    value.map_or(default, crate::api::http::query::parse_flag)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -70,7 +70,8 @@ async fn container_inspect_size_accounts_executed_rootfs_writes() {
     .await;
     assert!(sized_wire.contains("\"SizeRw\":"));
     assert!(sized_wire.contains("\"SizeRootFs\":"));
-    let invalid = raw_http(
+    // Docker 29.1.3 coerces any non-falsey boolean query value instead of rejecting it.
+    let coerced = raw_http(
         &socket,
         format!(
             "GET /v1.43/containers/{}/json?size=maybe HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
@@ -79,7 +80,19 @@ async fn container_inspect_size_accounts_executed_rootfs_writes() {
         .as_bytes(),
     )
     .await;
-    assert!(invalid.starts_with("HTTP/1.1 400"));
+    assert!(coerced.starts_with("HTTP/1.1 200"), "{coerced}");
+    assert!(coerced.contains("\"SizeRootFs\":"));
+    let falsey = raw_http(
+        &socket,
+        format!(
+            "GET /v1.43/containers/{}/json?size=none HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            created.id
+        )
+        .as_bytes(),
+    )
+    .await;
+    assert!(falsey.starts_with("HTTP/1.1 200"), "{falsey}");
+    assert!(!falsey.contains("\"SizeRootFs\":"));
 
     client.containers().remove(&created.id, false, false).await.unwrap();
     stop.send(()).unwrap();

@@ -42,7 +42,7 @@ mod size;
 use host::HostSettings;
 pub(crate) use kill::DockerSignal;
 use list::NetworkPlan;
-use logs::Flag;
+use logs::flag;
 use mount::{LegacyBind, Target};
 
 pub(super) use archive::{archive, extract, stat};

@@ -90,8 +90,13 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(sized[0]["SizeRw"], 0);
     assert!(sized[0]["SizeRootFs"].as_u64().is_some_and(|size| size > 0));
 
-    let invalid = exchange(&socket, "/v1.43/containers/json?all=true&size=maybe").await?;
-    assert!(invalid.starts_with("HTTP/1.1 400"));
+    // Docker 29.1.3 coerces any non-falsey boolean query value instead of rejecting it.
+    let coerced = request(&socket, "/v1.43/containers/json?all=true&size=maybe&limit=1").await?;
+    let coerced = coerced.as_array().ok_or("coerced list was not an array")?;
+    assert_eq!(coerced.len(), 1);
+    assert!(coerced[0]["SizeRootFs"].as_u64().is_some_and(|size| size > 0));
+    let falsey = request(&socket, "/v1.43/containers/json?all=true&size=none&limit=1").await?;
+    assert!(falsey[0].get("SizeRootFs").is_none_or(serde_json::Value::is_null));
 
     let disk = request(&socket, "/v1.43/system/df").await?;
     let disk_containers = disk["Containers"]
