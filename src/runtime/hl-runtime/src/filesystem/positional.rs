@@ -13,6 +13,11 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         offset: u64,
         reading: bool,
     ) -> LinuxResult {
+        // `ksys_pread64` rejects a negative offset before `fdget`, so EINVAL outranks
+        // the descriptor's EBADF and the pipe's ESPIPE.
+        if (offset as i64) < 0 {
+            return LinuxResult::Error(Errno::EINVAL);
+        }
         if length > i32::MAX as u64 {
             return LinuxResult::Error(Errno::EINVAL);
         }
@@ -25,9 +30,6 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         }
         if lease.object().kind() == hl_descriptor::ObjectKind::Pipe {
             return LinuxResult::Error(Errno::ESPIPE);
-        }
-        if (offset as i64) < 0 {
-            return LinuxResult::Error(Errno::EINVAL);
         }
         let marshaller = GuestMarshaller::new(&self.memory, self.architecture);
         let mut length = length as usize;
@@ -86,11 +88,16 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         reading: bool,
         flags: Option<u64>,
     ) -> LinuxResult {
+        let shared = flags.is_some() && offset == u64::MAX;
+        // `do_preadv`/`do_pwritev` reject a negative position before `fdget`, so EINVAL
+        // outranks EBADF, ESPIPE, and every vector-import errno.
+        if !shared && (offset as i64) < 0 {
+            return LinuxResult::Error(Errno::EINVAL);
+        }
         let lease = match self.descriptors.pin(descriptor) {
             Ok(lease) => lease,
             Err(error) => return LinuxResult::Error(FileErrno::descriptor(error)),
         };
-        let shared = flags.is_some() && offset == u64::MAX;
         if matches!(
             lease.object().kind(),
             hl_descriptor::ObjectKind::Pipe | hl_descriptor::ObjectKind::Socket
@@ -114,13 +121,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 return LinuxResult::Error(error.errno());
             }
         };
-        let position = if shared {
-            None
-        } else if (offset as i64) < 0 {
-            return LinuxResult::Error(Errno::EINVAL);
-        } else {
-            Some(offset)
-        };
+        let position = if shared { None } else { Some(offset) };
         self.execute_vector(
             &lease,
             &marshaller,

@@ -1834,6 +1834,87 @@ fn positional_mode_precedes_buffer() {
     );
 }
 
+/// Measured on the host kernel (aarch64 7.0.11), every row with two bad arguments:
+/// `pread(-1,buf,8,-1)`, `pread(wofd,buf,8,-1)`, `pread(pipe,buf,8,-1)`,
+/// `pread(rofd,BAD,8,-1)`, `pwrite(-1,..,-1)` and the whole
+/// `preadv`/`pwritev`/`preadv2` family with position -2 all answer EINVAL, because
+/// `ksys_pread64` and `do_preadv` reject a negative position before `fdget`.
+/// The single-argument cases are EBADF/ESPIPE/EFAULT respectively.
+#[test]
+fn negative_position_outranks_descriptor_and_pipe() {
+    let descriptors = Arc::new(DescriptorTable::new(4).unwrap());
+    let readonly = descriptors
+        .commit(
+            descriptors.reserve(0).unwrap(),
+            Arc::new(RegularFile),
+            StatusFlags::default(),
+            DescriptorFlags::default(),
+        )
+        .unwrap();
+    let adapter = RuntimeFilesystemSyscalls::new(
+        Arc::clone(&descriptors),
+        Memory {
+            bytes: Mutex::new(vec![0; 64]),
+            fail_write: false,
+        },
+        GuestArchitecture::Aarch64,
+    );
+    assert_eq!(adapter.pipe2(0, 0), LinuxResult::Value(0));
+    let (pipe_read, closed) = (1, 3);
+    let negative = u64::MAX;
+
+    // A closed descriptor alone is EBADF; with a negative offset Linux answers EINVAL.
+    assert_eq!(
+        adapter.positional_io(closed, 0, 1, 0, true),
+        LinuxResult::Error(Errno::EBADF)
+    );
+    assert_eq!(
+        adapter.positional_io(closed, 0, 1, negative, true),
+        LinuxResult::Error(Errno::EINVAL)
+    );
+    // A wrong-mode descriptor alone is EBADF; with a negative offset, EINVAL.
+    assert_eq!(
+        adapter.positional_io(readonly, 0, 1, 0, false),
+        LinuxResult::Error(Errno::EBADF)
+    );
+    assert_eq!(
+        adapter.positional_io(readonly, 0, 1, negative, false),
+        LinuxResult::Error(Errno::EINVAL)
+    );
+    // A pipe alone is ESPIPE; with a negative offset, EINVAL.
+    assert_eq!(
+        adapter.positional_io(pipe_read, 0, 1, 0, true),
+        LinuxResult::Error(Errno::ESPIPE)
+    );
+    assert_eq!(
+        adapter.positional_io(pipe_read, 0, 1, negative, true),
+        LinuxResult::Error(Errno::EINVAL)
+    );
+
+    // The vector forms follow the same precedence.
+    assert_eq!(
+        adapter.positional_vector(closed, 0, 1, 0, true, None),
+        LinuxResult::Error(Errno::EBADF)
+    );
+    assert_eq!(
+        adapter.positional_vector(closed, 0, 1, negative, true, None),
+        LinuxResult::Error(Errno::EINVAL)
+    );
+    assert_eq!(
+        adapter.positional_vector(pipe_read, 0, 1, 0, true, None),
+        LinuxResult::Error(Errno::ESPIPE)
+    );
+    assert_eq!(
+        adapter.positional_vector(pipe_read, 0, 1, negative, true, None),
+        LinuxResult::Error(Errno::EINVAL)
+    );
+    // preadv2 with position -1 selects the shared offset and stays a pipe read.
+    assert_eq!(
+        adapter.positional_vector(pipe_read, 0, 0, u64::MAX, true, Some(0)),
+        LinuxResult::Value(0)
+    );
+}
+
 #[test]
 fn pipe_unsafe_shrink() {
     let descriptors = Arc::new(DescriptorTable::new(2).unwrap());
