@@ -196,14 +196,23 @@ Use `pgrep -ax testing` when you need the rows as well as the count.
 **One guest is not enough for anything keyed on a guest address.** With the
 native write-reservation gate off entirely — same engine binary, same options,
 same source — base malloc measured 1,008,823 us on the sqlite guest and
-7,031,876 us on the sqlite-free one. 7x, on guest binary layout alone. The
-cause is that `site_slot()` folds the guest pc into 62 slots, so which store
-sites collide, and therefore which are ever marked, is a property of the guest.
-A change measured that way read as a 10% malloc win on one guest and a 7x
-regression on another, and no null arm or control detects it because both arms
-see the same guest. Measure on at least two guests before believing a change
-keyed on guest pc, and report **every** phase: the withdrawn table listed six
-and omitted a 1.37 string regression sitting in the same data.
+7,031,876 us on the sqlite-free one, reproduced by a second lane at 7.32x with
+every other phase between 0.98 and 1.02.
+
+The cause is not the guest binary as such. `allow_direct` is computed per
+admission, and whether an entry pc qualifies for direct authority is a property
+of the guest's code layout. When admissions alternate, `memory_mode` alternates
+with them, and because `hl_native_cache_epoch_matches` folds `memory_mode` into
+a **cache-wide** identity, every alternation discards the whole translation
+cache: 1,642 epoch and 1,652 direct resets on the slow guest against 38 and 37
+on the fast one, all with `mapping`, `instr` and `identity` unchanged. Removing
+the flip takes that phase from 441,906 us to 61,710 us.
+
+So a guest can put the engine into a pathological state that has nothing to do
+with the phase's own work, and running the phase alone hides it completely —
+in isolation both guests measure ~960,000 us. Measure on at least two guests,
+run the full sequence rather than one phase, and report **every** phase: a
+withdrawn table listed six and omitted a 1.37 string regression in its own data.
 
 **A renamed binary is invisible to this check.** `pgrep -cx testing` matches
 the exact process name, so a lane that copies the driver to `testing-bin` or
