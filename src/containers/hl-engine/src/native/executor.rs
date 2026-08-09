@@ -2333,13 +2333,19 @@ impl Executor {
             retained.entries.clone()
         };
         let lease_range = (primary.guest_first, primary.guest_last);
-        let direct_literal = direct_literal_target(state.pc, sources, lease_range.0, lease_range.1);
         // The authority identity is cache-wide: a per-entry narrowing of the same window
         // reissues it and resets every translation, so admit the whole lease instead.
-        let direct_protection = self
-            .direct_scalar_trace(state.pc, sources)
-            .or_else(|| direct_literal.then_some(Protection::READ))
-            .filter(|required| allow_direct && lease.allows(*required))
+        // Both decodes are pure reads of `sources`, so skip them when the result is discarded.
+        let direct_protection = allow_direct
+            .then(|| {
+                self.direct_scalar_trace(state.pc, sources)
+                    .or_else(|| {
+                        direct_literal_target(state.pc, sources, lease_range.0, lease_range.1)
+                            .then_some(Protection::READ)
+                    })
+                    .filter(|required| lease.allows(*required))
+            })
+            .flatten()
             .map(|_| lease.authority());
         let mut primary_range = lease_range;
         let mut views = vec![primary];
