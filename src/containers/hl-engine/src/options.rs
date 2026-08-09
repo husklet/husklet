@@ -97,11 +97,6 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
-        "HL_NATIVE_FALLBACK_PRODUCTIVITY",
-        "credit entry productivity from a long run that ended in a fallback",
-        Flag
-    ),
-    launch!(
         "HL_A64_NO_WRITE_COMMIT",
         "drop the aarch64 post-store dirty-journal commit and publish the whole window per crossing",
         Flag
