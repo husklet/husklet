@@ -307,10 +307,10 @@ pub(super) async fn named_distribution(
     request: Request,
 ) -> Response {
     if request.method() != Method::GET {
-        return StatusCode::NOT_FOUND.into_response();
+        return super::version::page_not_found().into_response();
     }
     let Some(name) = path.strip_suffix("/json").filter(|name| !name.is_empty()) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return super::version::page_not_found().into_response();
     };
     registry::distribution(State(state), Path(name.to_owned()))
         .await
@@ -366,7 +366,7 @@ pub(super) async fn named(State(state): State<DockerState>, Path(path): Path<Str
         }
         _ => {}
     }
-    StatusCode::NOT_FOUND.into_response()
+    super::version::page_not_found().into_response()
 }
 
 #[cfg(test)]

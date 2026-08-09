@@ -17,6 +17,7 @@ mod observe;
 mod push;
 mod query;
 mod system;
+mod version;
 mod volume;
 
 use crate::daemon::Release;
@@ -127,5 +128,5 @@ pub(crate) fn router(
     for minor in 42..=43 {
         router = router.nest(&format!("/v1.{minor}"), current_api.clone());
     }
-    router.with_state(state)
+    router.fallback(version::fallback).with_state(state)
 }
