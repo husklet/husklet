@@ -11,6 +11,11 @@ use crate::launch_plan::RuntimeLaunchPlan;
 /// authority and the operand resolver, and the runs each such finding holds for.
 const DIRECT_FLIP_LIMIT: u32 = 32;
 const DIRECT_HOLD_RUNS: u64 = 1 << 16;
+/// Sticky arm: a flip discards the whole translation cache, so the score does not decay
+/// and the hold that follows never expires. Two flips are tolerated because the warm-up
+/// run is a resolver run by construction and entering direct mode after it is one flip.
+const DIRECT_STICKY_FLIP_LIMIT: u32 = 4;
+const DIRECT_HOLD_PERMANENT: u64 = u64::MAX;
 
 #[derive(Clone, Copy)]
 pub(super) struct NativeBoundary {
@@ -165,6 +170,10 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) diagnostics: bool,
     /// Gates the repeat-admission cache below.
     pub(super) admission_cache: bool,
+    /// Gates the sticky arm of the direct-authority decision below.
+    pub(super) direct_sticky: bool,
+    /// Makes the sticky arm's hold permanent instead of bounded.
+    pub(super) direct_sticky_permanent: bool,
     /// Gates crediting productivity from a run that retired a substantial share of its
     /// budget and *then* fell back. Off by default so the disabled-in-both control runs.
     pub(super) fallback_productivity: bool,
@@ -228,6 +237,8 @@ impl NativePool {
             enabled: Self::selected(isa, plan),
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
             admission_cache: plan.options.get("HL_NATIVE_ADMISSION_CACHE") == Some("1"),
+            direct_sticky: plan.options.get("HL_NATIVE_DIRECT_STICKY") == Some("1"),
+            direct_sticky_permanent: plan.options.get("HL_NATIVE_DIRECT_STICKY_PERMANENT") == Some("1"),
             fallback_productivity: plan.options.get("HL_NATIVE_FALLBACK_PRODUCTIVITY") == Some("1"),
             write_reserve: plan.options.get("HL_A64_NO_WRITE_RESERVE") != Some("1"),
             write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
@@ -293,6 +304,9 @@ impl NativePool {
         let Some(remaining) = self.direct_holds.get_mut(&process) else {
             return true;
         };
+        if *remaining == DIRECT_HOLD_PERMANENT {
+            return false;
+        }
         *remaining = remaining.saturating_sub(1);
         if *remaining != 0 {
             return false;
@@ -318,17 +332,31 @@ impl NativePool {
     /// sustained alternation resets every translation twice per cycle; hold direct
     /// authority off for a bounded run of turns so the resolver mode can keep its cache.
     pub(super) fn observe_direct_mode(&mut self, process: hl_task::ProcessId, direct: bool) {
+        let sticky = self.direct_sticky || self.direct_sticky_permanent;
+        let permanent = self.direct_sticky_permanent;
         let (previous, flips) = self.direct_modes.entry(process).or_insert((direct, 0));
         if *previous == direct {
             // A steady run pays down the score, so an isolated flip never accumulates.
-            *flips = flips.saturating_sub(1);
+            // The sticky arm keeps the score, because a steady run is worth far less than
+            // a flip costs and a slow alternation otherwise never reaches the limit.
+            if !sticky {
+                *flips = flips.saturating_sub(1);
+            }
             return;
         }
         *previous = direct;
         *flips += 2;
-        if *flips >= DIRECT_FLIP_LIMIT {
+        let (limit, hold) = if sticky {
+            (
+                DIRECT_STICKY_FLIP_LIMIT,
+                if permanent { DIRECT_HOLD_PERMANENT } else { DIRECT_HOLD_RUNS },
+            )
+        } else {
+            (DIRECT_FLIP_LIMIT, DIRECT_HOLD_RUNS)
+        };
+        if *flips >= limit {
             self.direct_modes.remove(&process);
-            self.direct_holds.insert(process, DIRECT_HOLD_RUNS);
+            self.direct_holds.insert(process, hold);
         }
     }
 

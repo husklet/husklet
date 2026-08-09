@@ -1002,6 +1002,33 @@ mod tests {
         assert!(pool.direct_admitted(steady));
     }
 
+    /// The sticky arm keeps the flip score, so an alternation too slow to trip the decaying
+    /// limit still latches, and the latch it takes never expires.
+    #[test]
+    fn sticky_direct_mode_latches_on_a_slow_alternation_and_never_returns() {
+        let mut options = crate::options::Options::default();
+        options.set("HL_NATIVE_DIRECT_STICKY", "1", true).unwrap();
+        options.set("HL_NATIVE_DIRECT_STICKY_PERMANENT", "1", true).unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(options), None);
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        // One flip every sixteen runs pays down to nothing under the decaying score.
+        for index in 0..1024 {
+            pool.observe_direct_mode(process, index % 16 == 0);
+        }
+        assert_eq!(pool.direct_holds.get(&process), Some(&u64::MAX));
+        for _ in 0..4 {
+            assert!(!pool.direct_earned(process), "a permanent hold is never spent");
+        }
+        assert_eq!(pool.direct_holds.get(&process), Some(&u64::MAX));
+
+        // The same sequence under the default arm decays and never latches.
+        let mut decaying = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        for index in 0..1024 {
+            decaying.observe_direct_mode(process, index % 16 == 0);
+        }
+        assert!(!decaying.direct_holds.contains_key(&process));
+    }
+
     /// Direct authority is earned by a run, never taken on the first entry, and a held
     /// process still serves its hold out rather than waiting on a warm-up it cannot reach.
     #[test]
