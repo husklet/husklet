@@ -11,6 +11,8 @@ struct Memory {
     fetches: std::cell::Cell<u64>,
     cacheable: bool,
     invalidated: Vec<u64>,
+    /// Bytes a peer executor publishes while this executor is inside a block.
+    peer_write: Option<(usize, [u8; 4])>,
 }
 
 impl Memory {
@@ -21,6 +23,7 @@ impl Memory {
             fetches: std::cell::Cell::new(0),
             cacheable: true,
             invalidated: Vec::new(),
+            peer_write: None,
         }
     }
 
@@ -204,6 +207,9 @@ impl ExecutionInstructionMemory for Memory {
 
     fn invalidate_instruction(&mut self, address: u64) {
         self.invalidated.push(address);
+        if let Some((target, word)) = self.peer_write.take() {
+            self.put(target, &word);
+        }
     }
 }
 
@@ -299,10 +305,10 @@ fn blocks_retain_decode() {
     assert_eq!(cpu.pc, 0x100c);
 }
 
-/// Three mechanisms independently keep `AArch64` self-modifying code correct, and in the guest
-/// corpus each one masks the others: the store path publishes the written executable range, a
-/// guest `ic ivau` publishes it again, and `ic ivau` also drops the affected line locally. These
-/// two tests pin the first and second so that removing either is visible on its own.
+/// Two publications keep `AArch64` self-modifying code correct and mask each other in the guest
+/// corpus: the store path publishes the written executable range, and a guest `ic ivau` publishes
+/// the named line, which is the only signal when the bytes were rewritten from another address
+/// space. These tests pin each so that removing either is visible on its own.
 #[test]
 fn a_published_write_epoch_discards_translations_without_cache_maintenance() {
     let mut memory = Memory::new(0x2000);
@@ -341,6 +347,35 @@ fn guest_instruction_cache_maintenance_reaches_the_memory_port() {
         memory.invalidated,
         vec![0x1400],
         "maintenance must publish to peer executors, not only this cache"
+    );
+}
+
+/// A peer executor's publication that lands after this executor's loop-top epoch check must not
+/// be swallowed by the `ic ivau` line discard, which adopts the epoch it samples afterwards.
+#[test]
+fn a_line_discard_must_not_adopt_a_peer_publication_it_did_not_apply() {
+    let mut memory = Memory::new(0x3000);
+    memory.put(0x1000, &0xd50b_7520_u32.to_le_bytes()); // ic ivau, x0
+    memory.put(0x1004, &0x1400_03ff_u32.to_le_bytes()); // b 0x2000
+    memory.put(0x2000, &0x9100_0400_u32.to_le_bytes()); // add x0,x0,#1
+    memory.put(0x2004, &0x17ff_fbff_u32.to_le_bytes()); // b 0x1000
+    // The peer rewrites the already-translated block at 0x2000 while the `ic ivau` block runs.
+    memory.peer_write = Some((0x2000, 0x9100_4000_u32.to_le_bytes())); // add x0,x0,#16
+    let mut cpu = Aarch64CpuState {
+        pc: 0x2000,
+        ..Aarch64CpuState::default()
+    };
+    cpu.registers[0] = 0;
+    cpu.registers[1] = 0x1400;
+    let machine = Memory::machine(ExecutionCpuSnapshot::Aarch64(cpu));
+    assert_eq!(machine.run_slice(1, 5, &mut memory), StepOutcome::Yield);
+    machine.freeze().unwrap();
+    let ExecutionCpuSnapshot::Aarch64(cpu) = machine.snapshot().unwrap().cpu else {
+        panic!("AArch64")
+    };
+    assert_eq!(
+        cpu.registers[0], 17,
+        "the second pass must run the peer's published bytes"
     );
 }
 

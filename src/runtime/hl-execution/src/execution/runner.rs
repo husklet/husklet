@@ -106,24 +106,6 @@ impl Aarch64BlockCache {
         }
     }
 
-    fn invalidate_line(&mut self, address: u64, epoch: InstructionEpoch) {
-        let line_start = address & !63;
-        let line_end = line_start.saturating_add(64);
-        for slot in &mut self.blocks {
-            let Some((start, block)) = slot else { continue };
-            let end = start.saturating_add(
-                u64::try_from(block.instructions.len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(4),
-            );
-            if *start < line_end && end > line_start {
-                *slot = None;
-            }
-        }
-        self.epoch = Some(epoch);
-        self.generation = self.generation.wrapping_add(1).max(1);
-    }
-
     fn insert(&mut self, address: u64, block: Aarch64Block) {
         let index = Self::index(address);
         self.blocks[index] = Some((address, block));
@@ -132,23 +114,6 @@ impl Aarch64BlockCache {
     fn get(&self, address: u64) -> Option<&Aarch64Block> {
         let (stored, block) = self.blocks[Self::index(address)].as_ref()?;
         (*stored == address).then_some(block)
-    }
-
-    /// The mechanism-only lookup the native cache reports. The interpreter reaches
-    /// `get` directly because `synchronize` has already settled the epoch for it.
-    #[cfg(test)]
-    fn observe(&self, address: u64, epoch: InstructionEpoch) -> crate::CacheObservation {
-        use crate::{BlockIdentity, CacheObservation};
-        if self.epoch != Some(epoch) {
-            return CacheObservation::MappingEpochMismatch;
-        }
-        let Some(block) = self.get(address) else {
-            return CacheObservation::Missing;
-        };
-        let bytes = u64::try_from(block.instructions.len())
-            .unwrap_or(u64::MAX)
-            .saturating_mul(4);
-        CacheObservation::Available(BlockIdentity::new(bytes, self.generation).expect("nonempty cached block"))
     }
 
     fn index(address: u64) -> usize {
@@ -160,8 +125,10 @@ impl Aarch64BlockCache {
 mod cache_test {
     use super::*;
 
+    /// `ic ivau` ends the block and publishes through the memory port; the publication it
+    /// causes is what discards translations, wholesale, on this executor and on every peer.
     #[test]
-    fn instruction_flush_is_terminal_and_discards_only_its_line() {
+    fn instruction_flush_is_terminal_and_a_publication_discards_every_block() {
         let initial = InstructionEpoch {
             incarnation: 1,
             mappings: 2,
@@ -184,13 +151,10 @@ mod cache_test {
             );
         }
 
-        cache.invalidate_line(0x103f, published);
+        cache.synchronize(published);
 
         assert!(cache.get(0x1000).is_none());
-        assert!(matches!(
-            cache.observe(0x2000, published),
-            crate::CacheObservation::Available(_)
-        ));
+        assert!(cache.get(0x2000).is_none());
     }
 }
 pub trait InstructionMemory: GuestOperandMemory + ExclusiveMemory {
@@ -712,7 +676,6 @@ impl ExecutionMachine {
             let instructions = &block.instructions;
             let mut stores = block.stores;
             let maximum = instructions.len().min(usize::try_from(remaining).unwrap_or(usize::MAX));
-            let mut invalidated = None;
             for ir in &instructions[..maximum] {
                 let store = stores & 1 == 1;
                 stores >>= 1;
@@ -724,7 +687,6 @@ impl ExecutionMachine {
                         Aarch64Interpreter::execute_runtime_ir(cpu, memory, &mut system, &IdentityCoordinates, ir);
                     if let Some(address) = system.invalidated {
                         memory.invalidate_instruction(address);
-                        invalidated = Some(address);
                     }
                     exit
                 };
@@ -741,11 +703,6 @@ impl ExecutionMachine {
                 if store && memory.instruction_epoch() != Some(current_epoch) {
                     break;
                 }
-            }
-            if let Some(address) = invalidated
-                && let Some(epoch) = memory.instruction_epoch()
-            {
-                cache.invalidate_line(address, epoch);
             }
         }
         StepOutcome::Yield
