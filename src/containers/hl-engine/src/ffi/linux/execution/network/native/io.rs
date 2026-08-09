@@ -398,7 +398,6 @@ impl SocketHostIo for Native {
         }
         self.wake();
     }
-
 }
 
 impl Native {

@@ -366,15 +366,14 @@ fn quote(value: &std::ffi::OsStr) -> std::io::Result<Vec<u16>> {
     for character in value {
         if character == slash {
             slashes += 1;
-        } else {
-            if character == quote {
-                result.extend(std::iter::repeat_n(slash, slashes * 2 + 1));
-            } else {
-                result.extend(std::iter::repeat_n(slash, slashes));
-            }
-            slashes = 0;
-            result.push(character);
+            continue;
         }
+        // A run of backslashes is literal unless a quote follows it, where the run is doubled and
+        // one more escapes the quote itself.
+        let escapes = if character == quote { slashes * 2 + 1 } else { slashes };
+        result.extend(std::iter::repeat_n(slash, escapes));
+        slashes = 0;
+        result.push(character);
     }
     result.extend(std::iter::repeat_n(slash, slashes * 2));
     result.push(quote);

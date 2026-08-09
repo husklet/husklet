@@ -46,8 +46,12 @@ impl Functions<'_> {
     // The finding owns the subject it reports.
     #[allow(clippy::needless_pass_by_value)]
     fn inspect(&mut self, name: String, span: Span, block: &syn::Block) {
-        let mut depth = Depth::default();
-        depth.statement = true;
+        // The body's own level is statement position: nothing encloses it that could be producing
+        // a value from it.
+        let mut depth = Depth {
+            statement: true,
+            ..Depth::default()
+        };
         depth.visit_block(block);
         if depth.maximum <= MAXIMUM_NESTING {
             return;

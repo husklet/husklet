@@ -525,11 +525,7 @@ type Totals = BTreeMap<(String, String), (u64, usize)>;
 ///
 /// A ratio between rows from two different trees is not a measurement of anything, so the second
 /// identity a provider presents is refused rather than averaged in.
-fn record_build_identity(
-    builds: &mut BTreeMap<String, String>,
-    provider: &str,
-    identity: &str,
-) -> Result<(), String> {
+fn record_build_identity(builds: &mut BTreeMap<String, String>, provider: &str, identity: &str) -> Result<(), String> {
     let recorded = builds.entry(provider.to_owned()).or_insert_with(|| identity.to_owned());
     if recorded == identity {
         return Ok(());

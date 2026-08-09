@@ -82,21 +82,23 @@ impl Environment {
     }
 
     fn replace_exact(records: &mut Vec<EnvironmentRecord>, name: &[u8], value: &[u8]) {
-        if let Some(index) = records.iter().position(|record| record.name == name) {
-            records[index].value = value.to_vec();
-            let mut candidate = index + 1;
-            while candidate < records.len() {
-                if records[candidate].name == name {
-                    records.remove(candidate);
-                } else {
-                    candidate += 1;
-                }
-            }
-        } else {
+        let Some(index) = records.iter().position(|record| record.name == name) else {
             records.push(EnvironmentRecord {
                 name: name.to_vec(),
                 value: value.to_vec(),
             });
+            return;
+        };
+        // The first occurrence takes the new value and every later one goes, so the result holds
+        // the name exactly once, in the position it already had.
+        records[index].value = value.to_vec();
+        let mut candidate = index + 1;
+        while candidate < records.len() {
+            if records[candidate].name == name {
+                records.remove(candidate);
+                continue;
+            }
+            candidate += 1;
         }
     }
 

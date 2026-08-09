@@ -19,6 +19,25 @@ impl Resolver {
         )
     }
 
+    /// The distinct addresses of the family the question asked for, bounded by `ANSWER_LIMIT`.
+    ///
+    /// A host resolves to both families at once, so an A question must drop the AAAA answers and
+    /// the reverse; duplicates arrive whenever the same address is reachable by several protocols.
+    fn answer_addresses(found: impl Iterator<Item = std::net::SocketAddr>, kind: u16) -> Vec<std::net::IpAddr> {
+        let wanted =
+            move |address: &std::net::IpAddr| (kind == 1 && address.is_ipv4()) || (kind == 28 && address.is_ipv6());
+        let mut addresses: Vec<std::net::IpAddr> = Vec::new();
+        for address in found.map(|address| address.ip()).filter(wanted) {
+            if !addresses.contains(&address) {
+                addresses.push(address);
+            }
+            if addresses.len() == ANSWER_LIMIT {
+                break;
+            }
+        }
+        addresses
+    }
+
     pub(super) fn answer(query: &[u8]) -> Option<Vec<u8>> {
         if query.len() < HEADER || query.len() > MESSAGE_LIMIT || u16::from_be_bytes([query[4], query[5]]) == 0 {
             return None;
@@ -35,17 +54,7 @@ impl Resolver {
             && matches!(kind, 1 | 28)
             && let Ok(found) = (name.as_str(), 0).to_socket_addrs()
         {
-            for address in found {
-                let address = address.ip();
-                if ((kind == 1 && address.is_ipv4()) || (kind == 28 && address.is_ipv6()))
-                    && !addresses.contains(&address)
-                {
-                    addresses.push(address);
-                    if addresses.len() == ANSWER_LIMIT {
-                        break;
-                    }
-                }
-            }
+            addresses = Self::answer_addresses(found, kind);
         }
         let mut output = Vec::with_capacity(question_end + addresses.len() * 28);
         output.extend_from_slice(&query[..2]);

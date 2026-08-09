@@ -445,21 +445,19 @@ impl GuestExecutor {
             }
             TurnAction::Dispatch => match Self::trace_start(&run, false) {
                 Err(error) => return Self::apply_error(threads, run, error),
-                Ok(boundary) => match boundary {
-                    TraceBoundary::Park => {
-                        if let Err(error) = threads.park(run.thread) {
-                            return Self::apply_error(threads, run, Self::thread_error(error));
-                        }
-                        return Ok(None);
+                Ok(TraceBoundary::Park) => {
+                    if let Err(error) = threads.park(run.thread) {
+                        return Self::apply_error(threads, run, Self::thread_error(error));
                     }
-                    TraceBoundary::Kill => {
-                        return Self::finish(plan, threads, run, ThreadTerminal::Thread(Self::signal(9)));
-                    }
-                    TraceBoundary::Continue | TraceBoundary::Dispatch => {
-                        return Self::dispatch_ready(isa, plan, threads, waiters, run, native);
-                    }
-                    TraceBoundary::Signal(_) => return Self::apply_error(threads, run, EngineError::WaitFailed),
-                },
+                    return Ok(None);
+                }
+                Ok(TraceBoundary::Kill) => {
+                    return Self::finish(plan, threads, run, ThreadTerminal::Thread(Self::signal(9)));
+                }
+                Ok(TraceBoundary::Continue | TraceBoundary::Dispatch) => {
+                    return Self::dispatch_ready(isa, plan, threads, waiters, run, native);
+                }
+                Ok(TraceBoundary::Signal(_)) => return Self::apply_error(threads, run, EngineError::WaitFailed),
             },
             TurnAction::Terminal(terminal) => {
                 return Self::finish(plan, threads, run, terminal);
