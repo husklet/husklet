@@ -70,14 +70,16 @@ static hl_native_status publish(fixture *fixture, uint64_t guest, uint64_t epoch
     return status;
 }
 
-static hl_native_status publish_admitted(fixture *fixture, uint64_t guest, uint64_t epoch,
-                                         uint32_t instruction_count, uint64_t admitted_offset) {
+static hl_native_status publish_admitted_key(fixture *fixture, uint64_t guest, uint64_t epoch,
+                                             uint64_t memory_mode, uint64_t authority_generation,
+                                             uint32_t instruction_count, uint64_t admitted_offset) {
     hl_native_block block = {0};
     const hl_native_provenance provenance = {
         .code_size = 96, .guest = guest, .access = HL_NATIVE_ACCESS_UNKNOWN};
     hl_native_status status = hl_native_arena_begin(&fixture->arena);
     if (status != HL_NATIVE_OK) return status;
-    status = hl_native_cache_reserve(fixture->cache, guest, epoch, guest, guest + 4, 96, &block);
+    status = hl_native_cache_reserve_key(fixture->cache, guest, epoch, 0, memory_mode, authority_generation,
+                                         guest, guest + 4, 96, NULL, &block);
     if (status == HL_NATIVE_OK) {
         uint32_t *words = (uint32_t *)(fixture->arena.writable + block.code_offset);
         for (uint32_t index = 0; index < 96 / sizeof(*words); index++)
@@ -90,6 +92,11 @@ static hl_native_status publish_admitted(fixture *fixture, uint64_t guest, uint6
     if (hl_native_arena_end(&fixture->arena) != HL_NATIVE_OK && status == HL_NATIVE_OK)
         return HL_NATIVE_PLATFORM;
     return status;
+}
+
+static hl_native_status publish_admitted(fixture *fixture, uint64_t guest, uint64_t epoch,
+                                         uint32_t instruction_count, uint64_t admitted_offset) {
+    return publish_admitted_key(fixture, guest, epoch, 0, 0, instruction_count, admitted_offset);
 }
 
 static int reuse(void) {
@@ -417,8 +424,65 @@ static int relocation_span(void) {
     return 0;
 }
 
+/* The relocation ledger resolves both endpoints with the cache-wide current
+ * identity. That is sound only because a memory-mode change resets the cache:
+ * the generation bump retires every entry and empties both ledgers, so no row
+ * survives to be swept against a mode it was not built under, and admission
+ * refuses any entry whose mode is not the cache's. Pin both halves — a future
+ * change that lets a mode flip preserve translations leaves a patched hot edge
+ * behind a source the sweep can no longer find, and reddens here. */
+static int relocation_mode_identity(void) {
+    fixture fixture;
+    observed_events events = {0};
+    hl_native_cache_observer observer = {&events, observe};
+    hl_native_block block = {0};
+    hl_native_code code;
+    uint32_t *source_words;
+    const uint32_t nop = UINT32_C(0xd503201f);
+    const hl_native_relocation admitted = {
+        .code_offset = 0,
+        .target_guest = 0xb000,
+        .span = {.word_count = HL_NATIVE_RELOCATION_SPAN_WORDS,
+                 .cold = {nop, nop, nop, nop, nop, nop, nop, nop,
+                          nop, nop, nop, nop, nop, nop, nop, nop}},
+    };
+    CHECK(fixture_create_observed(&fixture, 8, 5, &observer) == 0);
+    CHECK(publish_admitted(&fixture, 0xa000, 5, 7, 0) == HL_NATIVE_OK);
+    CHECK(publish_admitted(&fixture, 0xb000, 5, 23, 20) == HL_NATIVE_OK);
+    source_words = writable_entry(&fixture, 0xa000);
+    CHECK(source_words != NULL);
+    CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_relocate(fixture.cache, 0xa000, 0, &admitted, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_end(fixture.cache) == HL_NATIVE_OK);
+    CHECK(source_words[10] != nop);
+
+    CHECK(hl_native_cache_reset_identity(fixture.cache, 5, 0, 1, 40) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_lookup_key(fixture.cache, 0xa000, 5, 0, 0, 0, &code) == HL_NATIVE_EPOCH);
+    CHECK(hl_native_cache_lookup_key(fixture.cache, 0xa000, 5, 0, 1, 40, &code) == HL_NATIVE_MISS);
+
+    /* Both ledgers are empty, so no endpoint is ever looked up under a mode
+     * other than its own. Ask the fork-preserve restore first: it is the one
+     * caller that fails closed on an unfindable source, so a retained row would
+     * poison the cache here rather than be swept away in silence below. */
+    CHECK(hl_native_cache_relocations_restore(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_available(fixture.cache));
+    CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_relocations_invalidate(fixture.cache, 0xb000, 0xb004) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_end(fixture.cache) == HL_NATIVE_OK);
+    CHECK(events.counts[HL_NATIVE_CACHE_RELOCATION_INVALIDATION] == 0);
+    CHECK(hl_native_cache_resolve(fixture.cache, 0xb000, 0) == HL_NATIVE_STATE);
+
+    CHECK(hl_native_arena_begin(&fixture.arena) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_reserve_key(fixture.cache, 0xa000, 5, 0, 0, 0, 0xa000, 0xa004, 96, NULL,
+                                      &block) == HL_NATIVE_ARGUMENT);
+    CHECK(hl_native_arena_end(&fixture.arena) == HL_NATIVE_OK);
+    CHECK(publish_admitted_key(&fixture, 0xa000, 5, 1, 40, 7, 0) == HL_NATIVE_OK);
+    fixture_destroy(&fixture);
+    return 0;
+}
+
 int main(void) {
-    if (reuse() != 0 || invalidation() != 0 || epoch() != 0 || capacity() != 0 || isolation() != 0 ||
+    if (relocation_mode_identity() != 0 || reuse() != 0 || invalidation() != 0 || epoch() != 0 || capacity() != 0 || isolation() != 0 ||
         instruction_epoch() != 0 || probe_accounting() != 0 || execution_identity() != 0 || authority_identity() != 0 ||
         relocation_observer() != 0 || relocation_span() != 0) return 1;
     return 0;
