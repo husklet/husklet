@@ -661,6 +661,7 @@ fn parse_phases(stdout: &[u8]) -> std::result::Result<Vec<(String, u128, u64)>, 
             if checksum == 0 {
                 return Err(format!("PHASE {name} completed no work (ok=0)").into());
             }
+            crate::benchmark::timebase_verdict(name, u64::try_from(time).unwrap_or(u64::MAX), checksum)?;
             Ok((name.to_owned(), time, checksum))
         })
         .collect()
@@ -686,6 +687,23 @@ mod tests {
         let phases = parse_phases(b"noise\nPHASE compute us=42 ok=7\n").unwrap();
         assert_eq!(phases, vec![("compute".to_owned(), 42, 7)]);
         assert!(parse_phases(b"PHASE compute ms=42 ok=7\n").is_err());
+    }
+
+    /// A forged timebase leaves every work-counting checksum identical, so only the
+    /// timebase row can refuse it. Measured on the host: declaring cntfrq=1e9 against a
+    /// 24MHz counter reported ok=21 and us=2615 for a 100ms sleep, with all seventeen
+    /// other checksums byte-identical to the correct binary's.
+    #[test]
+    fn a_forged_timebase_is_refused_although_every_other_checksum_matches() {
+        let honest = b"PHASE timebase us=101848 ok=1\nPHASE compute us=117 ok=441094035400083178\n";
+        assert_eq!(parse_phases(honest).unwrap().len(), 2);
+        let forged = b"PHASE timebase us=2615 ok=21\nPHASE compute us=2 ok=441094035400083178\n";
+        let error = parse_phases(forged).unwrap_err().to_string();
+        assert!(error.contains("divergent guest timebase"), "{error}");
+        // A guest whose clocks are wrong together still agrees with itself, so only the
+        // duration of its own sleep can refuse it.
+        let uniform = b"PHASE timebase us=2440 ok=1\n";
+        assert!(parse_phases(uniform).unwrap_err().to_string().contains("100ms sleep"));
     }
 
     #[test]

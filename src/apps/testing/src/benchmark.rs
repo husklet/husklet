@@ -18,6 +18,35 @@ use matrix::Matrix;
 
 const LIMIT: usize = 128;
 
+/// The one phase whose `ok=` is an assertion rather than a work count. Every other
+/// checksum counts iterations, so it is identical whatever the guest clock reports and
+/// only `us=` moves; this phase reports 1 exactly when the guest's architectural timer
+/// and `CLOCK_MONOTONIC` both honoured a 100ms sleep and agreed on its length.
+pub(crate) const TIMEBASE_PHASE: &str = "timebase";
+const TIMEBASE_FLOOR_US: u64 = 50_000;
+const TIMEBASE_CEILING_US: u64 = 5_000_000;
+
+/// Refuses a `timebase` row whose verdict is not 1, or whose own reported duration puts
+/// the guest clock outside 2x of the sleep it just performed. The second bound is the
+/// only check that survives a guest whose clocks are all wrong together, because it is
+/// measured against the sleep the kernel actually served.
+pub(crate) fn timebase_verdict(name: &str, us: u64, checksum: u64) -> Result<(), String> {
+    if name != TIMEBASE_PHASE {
+        return Ok(());
+    }
+    if checksum != 1 {
+        return Err(format!(
+            "phase {name} reported a divergent guest timebase (ok={checksum}); every us= on this arm is unsound"
+        ));
+    }
+    if !(TIMEBASE_FLOOR_US..=TIMEBASE_CEILING_US).contains(&us) {
+        return Err(format!(
+            "phase {name} timed its own 100ms sleep as {us}us, outside {TIMEBASE_FLOOR_US}..={TIMEBASE_CEILING_US}"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum Isa {
     #[value(name = "arm64", alias = "aarch64")]
@@ -552,6 +581,7 @@ impl Phase {
         if checksum == 0 {
             return Err(format!("phase {name} completed no work (ok=0)"));
         }
+        timebase_verdict(name, time, checksum)?;
         Ok(Some((name.into(), Self { time, checksum })))
     }
 }
@@ -600,6 +630,17 @@ mod test {
             Ok(Some((name, Phase { time: 42, checksum: 7 }))) if name == "compute"
         ));
         assert!(Phase::parse("PHASE file us=100 ok=0").is_err());
+    }
+
+    #[test]
+    fn the_timebase_verdict_refuses_only_a_clock_no_correct_engine_could_report() {
+        assert!(super::timebase_verdict("timebase", 101_848, 1).is_ok());
+        // A busy box only lengthens the sleep, so slow arms stay admitted.
+        assert!(super::timebase_verdict("timebase", 4_000_000, 1).is_ok());
+        assert!(super::timebase_verdict("timebase", 2615, 21).is_err());
+        assert!(super::timebase_verdict("timebase", 2440, 1).is_err());
+        // Work-counting phases keep their own contract; this one owns no opinion of them.
+        assert!(super::timebase_verdict("compute", 2, 441_094_035_400_083_178).is_ok());
     }
 
     #[test]
