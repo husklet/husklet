@@ -135,21 +135,19 @@ impl GuestExecutor {
         let exit = match terminal {
             ThreadTerminal::Thread(exit) => {
                 threads.terminate_run(&run).map_err(Self::thread_error)?;
-                if !threads.is_empty() {
-                    return Ok(None);
-                }
                 exit
             }
             ThreadTerminal::Group(exit) => {
                 threads.terminate_group(&run).map_err(Self::thread_error)?;
-                if !threads.is_empty() {
-                    return Ok(None);
-                }
                 exit
             }
         };
+        threads.note_process_exit(run.process, exit);
+        if !threads.is_empty() {
+            return Ok(None);
+        }
         diagnostics::TraceReport::new(plan, &run.router).write()?;
-        Ok(Some(exit))
+        Ok(Some(threads.session_exit(exit)))
     }
 
     #[cfg(test)]
