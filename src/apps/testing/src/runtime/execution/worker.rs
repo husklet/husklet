@@ -20,6 +20,10 @@ const CAPTURE_LIMIT: u64 = 1024 * 1024;
 const DIAGNOSTIC_CAPTURE_LIMIT: u64 = 8 * 1024 * 1024;
 const RESULT_LIMIT: u64 = 1024 * 1024;
 const SETUP_ALLOWANCE: Duration = Duration::from_secs(30);
+/// Later than the supervisor's own bound, so a supervised row still reports through its
+/// supervisor and only an unsupervised one is ended here.
+const BACKSTOP_ALLOWANCE: Duration = Duration::from_secs(60);
+const BACKSTOP_EXIT: i32 = 70;
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -44,6 +48,10 @@ struct Outcome {
 pub(crate) async fn execute(options: Options) -> Result<(), Error> {
     validate_token(&options.token)?;
     let work = runtime::worker_work(options.app, options.case, options.target)?;
+    // A worker outlives its supervisor whenever the sweep is killed, and the deadline inside
+    // `CaseExecution::wait` covers neither the build, the image materialization, nor a container
+    // removal whose guest refuses to stop. This bound owns the whole worker and needs nobody alive.
+    backstop(super::declared_timeout(&work.app.cases[work.case_index]).saturating_add(BACKSTOP_ALLOWANCE))?;
     let result = super::run_case_inner(work.app, work.case_index, work.target)
         .await
         .map_err(|error| error.to_string());
@@ -75,6 +83,21 @@ pub(super) async fn run(
     let result = interrupted(task, &guard.0, interrupts).await;
     drop(guard);
     result?.map_err(Into::into)
+}
+
+/// Ends this process once `bound` elapses, whatever it is doing and whoever is still watching.
+fn backstop(bound: Duration) -> Result<(), Error> {
+    std::thread::Builder::new()
+        .name("runtime-worker-backstop".to_owned())
+        .spawn(move || {
+            std::thread::sleep(bound);
+            let _ = std::io::stderr()
+                .lock()
+                .write_all(format!("runtime worker exceeded its own {} second bound\n", bound.as_secs()).as_bytes());
+            std::process::exit(BACKSTOP_EXIT);
+        })
+        .map_err(|error| format!("arm runtime worker backstop: {error}"))?;
+    Ok(())
 }
 
 struct Cancellation(Arc<AtomicBool>);
