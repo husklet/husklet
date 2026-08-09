@@ -193,6 +193,18 @@ pattern-matching form is wrong in one direction or the other:
 
 Use `pgrep -ax testing` when you need the rows as well as the count.
 
+**One guest is not enough for anything keyed on a guest address.** With the
+native write-reservation gate off entirely — same engine binary, same options,
+same source — base malloc measured 1,008,823 us on the sqlite guest and
+7,031,876 us on the sqlite-free one. 7x, on guest binary layout alone. The
+cause is that `site_slot()` folds the guest pc into 62 slots, so which store
+sites collide, and therefore which are ever marked, is a property of the guest.
+A change measured that way read as a 10% malloc win on one guest and a 7x
+regression on another, and no null arm or control detects it because both arms
+see the same guest. Measure on at least two guests before believing a change
+keyed on guest pc, and report **every** phase: the withdrawn table listed six
+and omitted a 1.37 string regression sitting in the same data.
+
 **A renamed binary is invisible to this check.** `pgrep -cx testing` matches
 the exact process name, so a lane that copies the driver to `testing-bin` or
 any other name runs unseen for its entire measurement and every other lane
