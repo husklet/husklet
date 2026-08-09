@@ -1000,3 +1000,115 @@ mod mincore_tests;
 
 #[path = "brk_test.rs"]
 mod brk_tests;
+
+/// Measured on the host kernel (aarch64 7.0.11) with two bad arguments per row.
+/// `mmap`: a misaligned byte offset beats a closed descriptor
+/// (`mmap(NULL,4096,R,SHARED,bad,1)` -> EINVAL), a closed descriptor beats a zero
+/// length (`mmap(NULL,0,R,SHARED,bad,0)` -> EBADF), and each argument alone gives
+/// EINVAL / EBADF / EINVAL respectively.
+#[test]
+fn mmap_offset_outranks_descriptor_outranks_length() {
+    let fixture = Fixture::new();
+    let descriptor = fixture
+        .descriptors
+        .prepare_open(0, Arc::new(File), StatusFlags::default(), DescriptorFlags::default())
+        .unwrap()
+        .publish();
+    fixture.descriptors.close(descriptor).unwrap();
+    let mut runtime = fixture.runtime(GuestArchitecture::Aarch64);
+    let closed = descriptor as u64;
+    // Single-argument rows.
+    assert_eq!(
+        runtime.handle(Fixture::operation("mmap"), [0, 4096, 1, 0x1, closed, 0]),
+        LinuxResult::Error(Errno::EBADF),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("mmap"), [0, 0, 1, 0x1, closed, 0]),
+        LinuxResult::Error(Errno::EBADF),
+    );
+    // A misaligned offset outranks the closed descriptor.
+    assert_eq!(
+        runtime.handle(Fixture::operation("mmap"), [0, 4096, 1, 0x1, closed, 1]),
+        LinuxResult::Error(Errno::EINVAL),
+    );
+    // `mmap2` takes the offset in pages and therefore has no misalignment screen,
+    // so the descriptor still wins there.
+    assert_eq!(
+        runtime.handle(Fixture::operation("mmap2"), [0, 4096, 1, 0x1, closed, 1]),
+        LinuxResult::Error(Errno::EBADF),
+    );
+}
+
+/// Measured on the host kernel (aarch64 7.0.11). `do_mprotect_pkey` screens the
+/// start alignment before the zero-length short circuit and screens the wrapping
+/// end before the protection bits, so `mprotect(m+1,0,PROT_READ)` is EINVAL where
+/// `mprotect(m,0,badprot)` succeeds, and `mprotect(m,-4096,badprot)` is ENOMEM.
+/// `madvise` instead screens the advice first and reports a wrapping end as EINVAL.
+#[test]
+fn range_screen_precedence_matches_linux() {
+    let fixture = Fixture::new();
+    let mut runtime = fixture.runtime(GuestArchitecture::Aarch64);
+    assert_eq!(
+        runtime.handle(Fixture::operation("mmap"), [0x4000, 4096, 3, 0x22, u64::MAX, 0]),
+        LinuxResult::Value(0x4000),
+    );
+    let bad_protection = 0xdead_beef;
+    let wrapping = u64::MAX - 4095;
+
+    // Single-argument rows.
+    assert_eq!(
+        runtime.handle(Fixture::operation("mprotect"), [0x4001, 4096, 1, 0, 0, 0]),
+        LinuxResult::Error(Errno::EINVAL),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("mprotect"), [0x4000, 4096, bad_protection, 0, 0, 0]),
+        LinuxResult::Error(Errno::EINVAL),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("mprotect"), [0x4000, 0, 1, 0, 0, 0]),
+        LinuxResult::Value(0),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("mprotect"), [0x4000, wrapping, 1, 0, 0, 0]),
+        LinuxResult::Error(Errno::ENOMEM),
+    );
+    // A misaligned start outranks the zero-length short circuit.
+    assert_eq!(
+        runtime.handle(Fixture::operation("mprotect"), [0x4001, 0, 1, 0, 0, 0]),
+        LinuxResult::Error(Errno::EINVAL),
+    );
+    // A zero length outranks a bad protection.
+    assert_eq!(
+        runtime.handle(Fixture::operation("mprotect"), [0x4000, 0, bad_protection, 0, 0, 0]),
+        LinuxResult::Value(0),
+    );
+    // A wrapping end outranks a bad protection.
+    assert_eq!(
+        runtime.handle(Fixture::operation("mprotect"), [0x4000, wrapping, bad_protection, 0, 0, 0]),
+        LinuxResult::Error(Errno::ENOMEM),
+    );
+    // Both grow flags together are EINVAL on their own.
+    assert_eq!(
+        runtime.handle(Fixture::operation("mprotect"), [0x4000, 4096, 0x0300_0000, 0, 0, 0]),
+        LinuxResult::Error(Errno::EINVAL),
+    );
+
+    // madvise: a bad advice outranks a zero length and a wrapping end, and a
+    // wrapping end alone is EINVAL rather than EOVERFLOW.
+    assert_eq!(
+        runtime.handle(Fixture::operation("madvise"), [0x4000, 0, 0, 0, 0, 0]),
+        LinuxResult::Value(0),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("madvise"), [0x4000, 0, 12345, 0, 0, 0]),
+        LinuxResult::Error(Errno::EINVAL),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("madvise"), [0x4000, wrapping, 0, 0, 0, 0]),
+        LinuxResult::Error(Errno::EINVAL),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("madvise"), [0x4001, 0, 0, 0, 0, 0]),
+        LinuxResult::Error(Errno::EINVAL),
+    );
+}

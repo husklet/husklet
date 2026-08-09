@@ -8,6 +8,9 @@ pub enum Error {
     Fault,
     Invalid,
     Unsupported,
+    /// An operation code `futex_op_to_flags` does not recognize. Linux answers
+    /// ENOSYS for it, ahead of every argument screen.
+    UnknownOperation,
     TooBig,
     Overflow,
 }
@@ -19,6 +22,7 @@ impl Error {
             Self::Fault => Errno::EFAULT,
             Self::Invalid => Errno::EINVAL,
             Self::Unsupported => Errno::EOPNOTSUPP,
+            Self::UnknownOperation => Errno::ENOSYS,
             Self::TooBig => Errno::E2BIG,
             Self::Overflow => Errno::EOVERFLOW,
         };

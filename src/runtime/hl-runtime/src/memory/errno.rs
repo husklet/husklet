@@ -11,6 +11,7 @@ impl ErrorMap {
             MemoryMarshalError::Marshal(error) => error.errno(),
             MemoryMarshalError::Invalid => Errno::EINVAL,
             MemoryMarshalError::Overflow => Errno::EOVERFLOW,
+            MemoryMarshalError::NoAddressSpace => Errno::ENOMEM,
         }
     }
 

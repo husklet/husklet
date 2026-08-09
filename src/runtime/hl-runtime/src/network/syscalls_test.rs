@@ -1327,3 +1327,56 @@ mod fork {
 mod connect_tests;
 #[path = "message_test.rs"]
 mod message_tests;
+
+/// Measured on the host kernel (aarch64 7.0.11), two bad arguments per row.
+/// `__sys_sendmsg`/`__sys_recvmsg` call `sockfd_lookup_light` before
+/// `copy_msghdr_from_user`, so `sendmsg(-1,BADPTR,0)` and `sendmsg(-1,{iov_len=-1},0)`
+/// are EBADF and `sendmsg(regfile,BADPTR,0)` is ENOTSOCK, even though each bad
+/// argument alone gives EFAULT or EINVAL. `recvmsg` behaves identically.
+#[test]
+fn message_descriptor_outranks_header() {
+    let fixture = Fixture::new();
+    let mut runtime = fixture.runtime(GuestArchitecture::Aarch64);
+    assert_eq!(
+        runtime.handle(Fixture::operation("socketpair"), [1, 1, 0, 32, 0, 0]),
+        LinuxResult::Value(0),
+    );
+    let faulting = u64::MAX - 64;
+    let closed = 7;
+    // A faulting msghdr alone is EFAULT on a live socket.
+    assert_eq!(
+        runtime.handle(Fixture::operation("sendmsg"), [0, faulting, 0, 0, 0, 0]),
+        LinuxResult::Error(Errno::EFAULT),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("recvmsg"), [0, faulting, 0, 0, 0, 0]),
+        LinuxResult::Error(Errno::EFAULT),
+    );
+    // A closed descriptor alone is EBADF.
+    fixture.memory.put(200, &Fixture::iovec(250, 3));
+    fixture.memory.put(128, &Fixture::message_header(200, 0, 0));
+    assert_eq!(
+        runtime.handle(Fixture::operation("sendmsg"), [closed, 128, 0, 0, 0, 0]),
+        LinuxResult::Error(Errno::EBADF),
+    );
+    // Together, the descriptor wins.
+    assert_eq!(
+        runtime.handle(Fixture::operation("sendmsg"), [closed, faulting, 0, 0, 0, 0]),
+        LinuxResult::Error(Errno::EBADF),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("recvmsg"), [closed, faulting, 0, 0, 0, 0]),
+        LinuxResult::Error(Errno::EBADF),
+    );
+    // A negative `iov_len` alone is EINVAL, and also loses to the descriptor.
+    fixture.memory.put(300, &Fixture::iovec(250, u64::MAX));
+    fixture.memory.put(160, &Fixture::message_header(300, 0, 0));
+    assert_eq!(
+        runtime.handle(Fixture::operation("sendmsg"), [0, 160, 0, 0, 0, 0]),
+        LinuxResult::Error(Errno::EINVAL),
+    );
+    assert_eq!(
+        runtime.handle(Fixture::operation("sendmsg"), [closed, 160, 0, 0, 0, 0]),
+        LinuxResult::Error(Errno::EBADF),
+    );
+}

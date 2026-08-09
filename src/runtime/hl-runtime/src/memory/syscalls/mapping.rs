@@ -28,10 +28,13 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
     }
 
     fn mmap_result(&self, arguments: [u64; 6], pages: bool) -> LinuxResult {
-        // Linux acquires a file reference before validating the mapping
-        // length. Preserve that observable ordering: a stale descriptor on a
-        // file-backed zero-length request is EBADF, not EINVAL. Anonymous
+        // `ksys_mmap_pgoff` rejects a misaligned byte offset before `fget`, and acquires
+        // the file reference before validating the mapping length. So a misaligned
+        // offset outranks EBADF, and EBADF outranks a zero-length request. Anonymous
         // mappings deliberately ignore the descriptor argument.
+        if !pages && arguments[5] & (hl_isa::GuestPageSize::LINUX.bytes() - 1) != 0 {
+            return LinuxResult::Error(Errno::EINVAL);
+        }
         if arguments[3] as u32 & 0x20 == 0 && self.descriptors.pin(arguments[4] as i32).is_err() {
             return LinuxResult::Error(Errno::EBADF);
         }

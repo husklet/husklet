@@ -454,3 +454,33 @@ fn shm_lock_unlock_public_matrix() {
         );
     }
 }
+
+/// Measured on the host kernel (aarch64 7.0.11) with two bad arguments per row.
+/// `ksys_msgsnd` copies `mtype` from the message before validating the queue id, so
+/// `msgsnd(-1, BADPTR, 8, 0)` is EFAULT; `ksys_msgrcv` resolves the queue first, so
+/// `msgrcv(-1, BADPTR, 8, 0, 0)` is EINVAL. `semop(-1, BADPTR, 1)` is EFAULT for the
+/// same reason as `msgsnd`, while `semop(-1, BADPTR, 0)` is EINVAL because the
+/// `nsops` screen precedes both.
+#[test]
+fn sysv_copy_and_identifier_precedence() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let faulting = u64::MAX - 64;
+        assert_eq!(
+            fixture.call(architecture, "msgsnd", [u64::MAX, faulting, 8, 0, 0, 0]),
+            LinuxResult::Error(Errno::EFAULT),
+        );
+        assert_eq!(
+            fixture.call(architecture, "msgrcv", [u64::MAX, faulting, 8, 0, 0, 0]),
+            LinuxResult::Error(Errno::EINVAL),
+        );
+        assert_eq!(
+            fixture.call(architecture, "semop", [u64::MAX, faulting, 1, 0, 0, 0]),
+            LinuxResult::Error(Errno::EFAULT),
+        );
+        assert_eq!(
+            fixture.call(architecture, "semop", [u64::MAX, faulting, 0, 0, 0, 0]),
+            LinuxResult::Error(Errno::EINVAL),
+        );
+    }
+}

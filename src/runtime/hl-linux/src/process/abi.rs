@@ -184,7 +184,13 @@ impl<'a, M: GuestMemory + ?Sized> Abi<'a, M> {
     }
 
     pub fn clone3(&self, address: u64, size: usize) -> Result<ClonePlan, Error> {
-        if !(CLONE_ARGS_MINIMUM..=CLONE_ARGS_MAXIMUM).contains(&size) {
+        // `copy_clone_args_from_user` answers E2BIG above one page and EINVAL below
+        // `CLONE_ARGS_SIZE_VER0`; both screens precede the copy, so an undersized or
+        // oversized `size` outranks a faulting pointer.
+        if size > CLONE_ARGS_MAXIMUM {
+            return Err(Error::TooBig);
+        }
+        if size < CLONE_ARGS_MINIMUM {
             return Err(Error::Invalid);
         }
         let copied = size.min(CLONE_ARGS_CURRENT);

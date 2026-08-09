@@ -111,6 +111,20 @@ fn clone3_rejects_extensions() {
     assert_eq!(abi.clone3(BASE, 89), Err(ProcessMarshalError::TooBig));
 }
 
+/// Measured on the host kernel (aarch64 7.0.11): `clone3(BADPTR,88)` is EFAULT,
+/// `clone3(BADPTR,1)` is EINVAL and `clone3(BADPTR,100000)` is E2BIG, because
+/// `copy_clone_args_from_user` screens the size above a page and below
+/// `CLONE_ARGS_SIZE_VER0` before ever copying.
+#[test]
+fn clone3_size_outranks_faulting_pointer() {
+    let memory = Memory::new();
+    let abi = ProcessAbi::new(&memory, GuestArchitecture::Aarch64);
+    assert_eq!(abi.clone3(u64::MAX, 88), Err(ProcessMarshalError::Fault));
+    assert_eq!(abi.clone3(u64::MAX, 1), Err(ProcessMarshalError::Invalid));
+    assert_eq!(abi.clone3(u64::MAX, 100_000), Err(ProcessMarshalError::TooBig));
+    assert_eq!(abi.clone3(BASE, 100_000), Err(ProcessMarshalError::TooBig));
+}
+
 #[test]
 fn legacy_clone_order() {
     let memory = Memory::new();
