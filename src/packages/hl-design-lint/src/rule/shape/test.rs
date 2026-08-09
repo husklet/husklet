@@ -39,10 +39,14 @@ fn filename_conventions_independent() {
     fs::write(root.join("src/message_queue.rs"), "").unwrap();
     fs::write(root.join("src/message_queue_test.rs"), "").unwrap();
     fs::write(root.join("src/message_queue_tests.rs"), "").unwrap();
+    fs::write(root.join("src/shared_message_queue.rs"), "").unwrap();
     fs::write(root.join("src/mod.rs"), "").unwrap();
     let workspace = Workspace::load([root.clone()]).unwrap();
 
-    assert_eq!(FileName.check(&workspace).unwrap().len(), 2);
+    // The `_test` companion suffix `singular-test-file` requires is not a semantic word.
+    let findings = FileName.check(&workspace).unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].subject, "shared_message_queue");
     assert_eq!(TestName.check(&workspace).unwrap().len(), 1);
     fs::remove_dir_all(root).unwrap();
 }
@@ -125,24 +129,39 @@ fn c_source_diagnostic_names_source_and_extension() {
 }
 
 #[test]
-fn repository_test_sources_are_checked() {
+fn repository_test_sources_are_exempt() {
     let root = fixture("repository-test-sources");
-    let tests = root.join("tests/runtime");
-    fs::create_dir_all(&tests).unwrap();
-    fs::write(tests.join("invalid-c-source.c"), "").unwrap();
-    fs::write(tests.join("invalid-rust-source.rs"), "").unwrap();
-    let workspace = Workspace::load([root.join("tests")]).unwrap();
+    for directory in ["tests/runtime", "src/exec/test"] {
+        fs::create_dir_all(root.join(directory)).unwrap();
+        fs::write(root.join(directory).join("aarch64_dirty_bound.c"), "").unwrap();
+        fs::write(root.join(directory).join("invalid-rust-source.rs"), "").unwrap();
+    }
+    fs::write(root.join("src/invalid-c-source.c"), "").unwrap();
+    let workspace = Workspace::load([root.clone()]).unwrap();
     let findings = FileName.check(&workspace).unwrap();
 
-    assert_eq!(findings.len(), 2);
-    assert!(findings.iter().any(|finding| {
-        finding.location.path.ends_with("tests/runtime/invalid-c-source.c")
-            && finding.message.starts_with("C source filename stem")
-    }));
-    assert!(findings.iter().any(|finding| {
-        finding.location.path.ends_with("tests/runtime/invalid-rust-source.rs")
-            && finding.message.starts_with("Rust source filename stem")
-    }));
+    // A test filename names the assertion it makes; a production filename names an API.
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0].location.path.ends_with("src/invalid-c-source.c"));
+    assert!(findings[0].message.starts_with("C source filename stem"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn prefix_directory_ignores_companion_tests() {
+    let root = fixture("prefix-companions");
+    fs::create_dir_all(root.join("src/store")).unwrap();
+    for name in ["atomic_access.rs", "atomic_access_test.rs", "atomic_batch.rs"] {
+        fs::write(root.join("src/store").join(name), "").unwrap();
+    }
+    let workspace = Workspace::load([root.clone()]).unwrap();
+    assert!(PrefixDirectory.check(&workspace).unwrap().is_empty());
+
+    fs::write(root.join("src/store/atomic_publish.rs"), "").unwrap();
+    let workspace = Workspace::load([root.clone()]).unwrap();
+    let findings = PrefixDirectory.check(&workspace).unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].subject, "atomic");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -245,8 +264,11 @@ mod tests { struct LauncherFixture; }
     let workspace = Workspace::load([root.clone()]).unwrap();
     let findings = ModulePrefix.check(&workspace).unwrap();
 
-    assert_eq!(findings.len(), 4);
+    // An `impl` item is namespaced by its type, not by the parent directory.
+    assert_eq!(findings.len(), 3);
     assert!(!findings.iter().any(|finding| finding.subject == "LauncherFixture"));
+    assert!(!findings.iter().any(|finding| finding.subject == "launcher_prepare"));
+    assert!(findings.iter().any(|finding| finding.subject == "launcher_publish"));
     fs::remove_dir_all(root).unwrap();
 }
 

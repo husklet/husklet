@@ -21,8 +21,8 @@ pub use rule::{
     DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun,
     FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting,
     ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry,
-    RepositoryEscape, Rule, SingleFileDirectory, SingleUse, StructNaming, SuffixRole, SymbolName, TestDependency,
-    TestDirectory, TestName, UnsafeBoundary,
+    RepositoryEscape, Rule, SingleFileDirectory, StructNaming, SuffixRole, SymbolName, TestDependency, TestDirectory,
+    TestName, UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 
@@ -61,7 +61,6 @@ impl Linter {
                 .register(rule::GodObject)
                 .register(rule::AccessorBloat)
                 .register(rule::ModelDuplication)
-                .register(rule::SingleUse)
                 .register(rule::MaximumNesting)
                 .register(rule::FileLength)
                 .register(rule::FileName)
@@ -170,7 +169,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 37);
+        assert_eq!(summaries.len(), 36);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "maximum-nesting");
@@ -205,7 +204,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 37);
+        assert_eq!(summaries.len(), 36);
         assert!(
             reporter
                 .0
@@ -226,7 +225,6 @@ fn caller() {
             "duplicate-entity-base",
             "struct-noun-naming",
             "environment-variable-access",
-            "single-use-free-function",
             "maximum-nesting",
         ] {
             assert!(reporter.0.iter().any(|finding| finding.rule == rule), "missing {rule}");
@@ -372,29 +370,6 @@ fn reads() {
         assert_eq!(values.len(), 4);
         assert!(values.iter().all(Finding::is_violation));
         assert!(values.iter().all(|finding| !finding.related.is_empty()));
-    }
-
-    #[test]
-    fn single_supported_boundaries() {
-        let values = findings(
-            r#"
-fn main() { once(); visual(); public(); ffi(); twice(); twice(); gated(); }
-fn once() {}
-#[cfg(unix)] fn gated() {}
-#[cfg(windows)] fn gated() {}
-pub fn public() {}
-extern "C" fn ffi() {}
-// hl-lint: visual-section
-fn visual() {}
-fn twice() {}
-#[test] fn test_only() {}
-#[cfg(test)] mod tests { fn fixture() {} }
-"#,
-            "single-use-free-function",
-        );
-        assert_eq!(values.len(), 1);
-        assert_eq!(values[0].subject, "once");
-        assert_eq!(values[0].related.len(), 1);
     }
 
     #[test]

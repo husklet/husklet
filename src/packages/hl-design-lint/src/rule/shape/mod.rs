@@ -10,7 +10,7 @@ use crate::{
     Result,
     model::{Finding, Location, Review, Severity},
     rule::Rule,
-    source::{Source, Workspace, requires_test},
+    source::{Source, Workspace, requires_test, test_source},
 };
 
 #[cfg(test)]
@@ -36,6 +36,10 @@ impl Rule for FileName {
             .source_files()?
             .into_iter()
             .filter_map(|path| {
+                // Test filenames name the assertion they make, so density does not apply.
+                if test_source(&path) {
+                    return None;
+                }
                 let stem = path.file_stem()?.to_str()?;
                 let extension = path.extension()?.to_str()?;
                 let source_kind = match extension {
@@ -138,7 +142,7 @@ impl Rule for PrefixDirectory {
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut groups: BTreeMap<(PathBuf, String), Vec<&Source>> = BTreeMap::new();
-        for source in workspace.sources() {
+        for source in workspace.production() {
             let Some(parent) = source.path.parent() else {
                 continue;
             };
@@ -279,7 +283,6 @@ impl Rule for ModulePrefix {
                 rule: self.id(),
                 source,
                 noun,
-                trait_impl: false,
                 test_scope: false,
                 findings: &mut findings,
             };
@@ -367,7 +370,6 @@ struct Prefixes<'a> {
     rule: &'static str,
     source: &'a Source,
     noun: String,
-    trait_impl: bool,
     test_scope: bool,
     findings: &'a mut Vec<Finding>,
 }
@@ -399,12 +401,9 @@ impl<'ast> Visit<'ast> for Prefixes<'_> {
         self.test_scope = previous;
     }
 
-    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
-        let previous = self.trait_impl;
-        self.trait_impl = item.trait_.is_some();
-        syn::visit::visit_item_impl(self, item);
-        self.trait_impl = previous;
-    }
+    // An `impl` item is namespaced by its type at every call site, never by the parent
+    // directory; `receiver-name-repetition` owns that namespace.
+    fn visit_item_impl(&mut self, _: &'ast syn::ItemImpl) {}
 
     fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
         self.inspect(&item.ident, item.span());
@@ -426,13 +425,6 @@ impl<'ast> Visit<'ast> for Prefixes<'_> {
             self.inspect(&item.sig.ident, item.span());
         }
         syn::visit::visit_item_fn(self, item);
-    }
-
-    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
-        if !self.trait_impl {
-            self.inspect(&item.sig.ident, item.span());
-        }
-        syn::visit::visit_impl_item_fn(self, item);
     }
 
     fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
