@@ -610,7 +610,7 @@ impl Measurements {
             .phases
             .entry(name.to_owned())
             .or_insert_with(|| (checksum, Vec::new()));
-        if name != "syscall" && phase.0 != checksum {
+        if phase.0 != checksum {
             return Err(format!("PHASE {name} checksum changed across samples").into());
         }
         phase.1.push(time);

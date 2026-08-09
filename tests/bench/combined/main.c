@@ -134,8 +134,13 @@ static uint64_t phase_float_simd(unsigned iters) {
         for (int i = 0; i < N; ++i) {
             c[i] = a[i] * b[i] + bias;
         }
-        /* Truncate to integer so the checksum is bit-stable across backends. */
-        for (int i = 0; i < N; i += 512) acc += (uint64_t)c[i];
+        /* Fold the raw bits: the same binary on the same arch must be bit-exact,
+         * and truncating to integer discarded every mantissa difference. */
+        for (int i = 0; i < N; i += 512) {
+            uint32_t bits;
+            memcpy(&bits, &c[i], sizeof(bits));
+            acc += (uint64_t)bits;
+        }
     }
     return acc;
 }
@@ -386,8 +391,10 @@ static uint64_t phase_tlb(unsigned iters) {
  * work on both Linux and Darwin:
  *   Linux : gettid (via SYS_gettid; the raw syscall the engine must translate).
  *   Darwin: pthread_threadid_np (SYS_gettid is deprecated/unsupported there).
- * The ok= checksum is thread-id-based and so legitimately differs across OSes;
- * the summary excludes the syscall phase from checksum-divergence checks. */
+ * The ok= checksum is a tid-derived invariant rather than the tid itself -- the
+ * count of reads that matched the first one, plus nonzero-ness -- so it is
+ * comparable across arms and OSes while still failing if the engine ever returns
+ * a varying or zero thread id. */
 static uint64_t read_thread_id(void) {
 #if defined(__APPLE__)
     uint64_t tid = 0;
@@ -401,10 +408,10 @@ static uint64_t read_thread_id(void) {
 }
 
 static uint64_t phase_syscall(unsigned iters) {
-    uint64_t checksum = 0;
-    for (unsigned i = 0; i < iters; ++i)
-        checksum += read_thread_id();
-    return checksum;
+    uint64_t first = read_thread_id();
+    uint64_t matched = 0;
+    for (unsigned i = 0; i < iters; ++i) matched += read_thread_id() == first ? 1 : 0;
+    return first == 0 ? 0 : matched * 2 + 1;
 }
 
 /* ---------------- phase: signal delivery (SIGALRM handler count) ------------ *
@@ -413,9 +420,10 @@ static uint64_t phase_syscall(unsigned iters) {
  * signal-frame build/restore path -- a real engine cost surface.
  */
 static volatile sig_atomic_t g_sig_count;
+static volatile sig_atomic_t g_sig_other;
 static void on_sigalrm(int signo) {
-    (void)signo;
     g_sig_count++;
+    if (signo != SIGALRM) g_sig_other++;
 }
 
 static uint64_t phase_signal(unsigned iters) {
@@ -425,25 +433,40 @@ static uint64_t phase_signal(unsigned iters) {
     sigemptyset(&sa.sa_mask);
     if (sigaction(SIGALRM, &sa, NULL) != 0) return 0;
     g_sig_count = 0;
-    for (unsigned i = 0; i < iters; ++i) raise(SIGALRM);
-    return (uint64_t)g_sig_count;
+    g_sig_other = 0;
+    /* POSIX requires raise() to deliver before it returns, so the handler must
+     * have run exactly once by then; a deferred or misnumbered delivery is a
+     * divergence the old iteration count could not see. */
+    uint64_t deferred = 0;
+    for (unsigned i = 0; i < iters; ++i) {
+        raise(SIGALRM);
+        if ((uint64_t)g_sig_count != (uint64_t)i + 1) deferred++;
+    }
+    if (g_sig_other != 0 || deferred != 0) return 0;
+    return (uint64_t)g_sig_count * 2 + 1;
 }
 
 /* ---------------- phase: mmap (map / touch / mprotect / unmap) ---------------- */
 
 static uint64_t phase_mmap(unsigned iters) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
-    uint64_t ok = 0;
+    uint64_t acc = 0, ok = 0;
     for (unsigned i = 0; i < iters; ++i) {
         unsigned char *p = mmap(NULL, page, PROT_READ | PROT_WRITE,
                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (p == MAP_FAILED) return ok;
-        p[i % page] = (unsigned char)i;
-        if (mprotect(p, page, PROT_READ) == 0 && p[i % page] == (unsigned char)i &&
-            munmap(p, page) == 0)
-            ok++;
+        if (p == MAP_FAILED) break;
+        size_t at = i % page;
+        /* Fold the fresh page's byte (MAP_ANONYMOUS must be zero-filled) and the
+         * byte read back through the read-only mapping, not just the iteration
+         * count: a recycled dirty page kept the old ok= identical. */
+        acc = acc * 31 + (uint64_t)p[at];
+        p[at] = (unsigned char)(i * 7U + 1U);
+        if (mprotect(p, page, PROT_READ) != 0) break;
+        acc = acc * 31 + (uint64_t)p[at];
+        if (munmap(p, page) != 0) break;
+        ok++;
     }
-    return ok;
+    return ok == 0 ? 0 : (acc | 1);
 }
 
 /* ---------------- phase: file (pwrite / pread loop) ---------------- */
@@ -459,16 +482,22 @@ static uint64_t phase_file(unsigned iters) {
     if (fd < 0) return 0;
     (void)unlink(path);
     memset(block, 0x5a, sizeof(block));
-    uint64_t ok = 0;
+    uint64_t acc = 0, ok = 0;
     for (unsigned i = 0; i < iters; ++i) {
         off_t offset = (off_t)(i % 256U) * (off_t)sizeof(block);
+        size_t at = (size_t)(i * 37U) % sizeof(block);
+        block[at] = (unsigned char)(i * 11U + 3U);
         if (!full_ok_write(fd, block, sizeof(block), offset)) break;
-        if (pread(fd, block, sizeof(block), offset) == (ssize_t)sizeof(block) &&
-            block[0] == 0x5a)
-            ok++;
+        block[at] = 0;
+        if (pread(fd, block, sizeof(block), offset) != (ssize_t)sizeof(block)) break;
+        /* Fold a byte read back from a varying offset: checking block[0] alone
+         * accepted 4095 wrong bytes, and the count checksum saw none of them. */
+        acc = acc * 31 + (uint64_t)block[at];
+        block[at] = 0x5a;
+        ok++;
     }
     (void)close(fd);
-    return ok;
+    return ok == 0 ? 0 : (acc | 1);
 }
 
 /* ---------------- phase: pipe (write/read round-trip) ---------------- */

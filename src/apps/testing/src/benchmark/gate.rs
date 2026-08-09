@@ -521,10 +521,6 @@ type Series = BTreeMap<(String, String), Vec<u64>>;
 /// Work done per `(phase, provider)`: the summed `ok=` checksum and the rows it came from.
 type Totals = BTreeMap<(String, String), (u64, usize)>;
 
-/// The syscall checksum is a sum of thread ids, so it legitimately differs between
-/// providers; every other phase counts iterations and must agree across arms.
-const UNCOMPARABLE: [&str; 1] = ["syscall"];
-
 fn collect(paths: &[PathBuf]) -> Result<Series, String> {
     let mut series: Series = BTreeMap::new();
     let mut totals: Totals = BTreeMap::new();
@@ -606,9 +602,6 @@ fn identical_work(totals: &Totals) -> Result<(), String> {
                 "refusing the verdict: phase {phase} has unequal sample counts across arms ({}); an arm stopped early",
                 describe(&measured, |(_, rows)| format!("n={rows}"))
             ));
-        }
-        if UNCOMPARABLE.contains(&phase.as_str()) {
-            continue;
         }
         if measured.values().map(|(ok, _)| *ok).collect::<BTreeSet<_>>().len() > 1 {
             return Err(format!(
@@ -798,15 +791,31 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let full: &[(&str, u64)] = &[("compute", 40), ("file", 400), ("syscall", 11)];
         let mut paths = cycle(directory.path(), "c1", &[("c-engine", full), ("rust-engine", full)]);
-        // The syscall checksum is thread-id derived, so a divergent one must not refuse.
-        let second: &[(&str, u64)] = &[("compute", 40), ("file", 400), ("syscall", 99)];
         paths.extend(cycle(
             directory.path(),
             "c2",
-            &[("c-engine", full), ("rust-engine", second)],
+            &[("c-engine", full), ("rust-engine", full)],
         ));
         let series = collect(&paths).unwrap();
         assert_eq!(series[&("compute".to_owned(), "rust-engine".to_owned())].len(), 2);
+    }
+
+    /// The syscall phase used to be excluded from comparison because its checksum was a
+    /// sum of thread ids. It now reports a tid-derived invariant, so a divergence there is
+    /// a real disagreement and must be refused like any other phase.
+    #[test]
+    fn a_divergent_syscall_checksum_is_no_longer_waved_through() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = cycle(
+            directory.path(),
+            "c1",
+            &[
+                ("c-engine", &[("compute", 40), ("syscall", 21)]),
+                ("rust-engine", &[("compute", 40), ("syscall", 99)]),
+            ],
+        );
+        let error = collect(&paths).unwrap_err();
+        assert!(error.contains("phase syscall did unequal work"), "{error}");
     }
 
     /// The checksum-parity gate is structurally blind to a timebase divergence: the work

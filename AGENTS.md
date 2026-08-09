@@ -50,7 +50,7 @@ the C program suite (`src/native/tests/exec_c.rs`); the corpus reaches neither.
 Eleven stale assertions once survived because every lane ran the corpus and a
 targeted `cargo test -p <pkg>` and nobody ran the workspace.
 
-Before committing, run `cargo test --workspace --lib` and
+Before committing, run `cargo test --workspace --lib --bins` and
 `cargo test -p hl-native --test exec_c` — about a minute, and it catches that
 whole class. Run them in debug or inside `make gate`: under `--release`,
 `hl-log`'s verbose tests compile out and the daemon tests need
@@ -58,7 +58,7 @@ whole class. Run them in debug or inside `make gate`: under `--release`,
 
 ### Two green branches can merge to a red tip
 
-`cargo test --workspace --lib` on each branch proves nothing about the merge.
+`cargo test --workspace --lib --bins` on each branch proves nothing about the merge.
 One lane turned `Signal` from a seven-variant enum into a `1..=64` value type
 while another added a test spelling `Signal::Kill`; both were green alone and
 the tip did not compile. Git reported no conflict, because there was none —
@@ -68,10 +68,13 @@ So run the gate **after** merging, not only before, and run it on the tip you
 are about to push. A `cargo check --workspace --all-targets` is a minute and
 catches this whole class.
 
-`cargo test --workspace --lib` also does **not** run `testing`'s unit tests —
-it is a bin crate, so its tests need `make gate`, `--all-targets`, or an
-explicit `-p testing --bin testing`. Assertions placed there are invisible to
-the command this file tells everyone to run.
+`--bins` is not optional. `cargo test --workspace --lib` alone runs **no** test
+in a crate that has no library target, and `testing` and `hl-syscall-audit` are
+both bin-only: `cargo test -p testing --lib` answers `no library targets found
+in package `testing``, silently in a workspace-wide run. Every assertion in
+`testing`'s benchmark gate was invisible to the command this file told everyone
+to run. Adding `--bins` was what first surfaced `hl-syscall-audit`'s
+`checked_outputs_current` as red.
 
 ### Work in your own worktree, and stage by path
 
