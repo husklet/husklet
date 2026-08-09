@@ -1116,13 +1116,20 @@ mod tests {
         assert_eq!(pool.direct_holds.get(&process), Some(&3));
         assert_eq!(pool.bounded_direct_hold_remaining(), 3);
 
-        assert!(!pool.direct_admitted(process));
-        assert_eq!(pool.direct_holds.get(&process), Some(&2));
-        assert!(!pool.direct_admitted(process));
-        assert_eq!(pool.direct_holds.get(&process), Some(&1));
-        assert!(pool.direct_admitted(process));
+        let site = (process, 1, 1, 0x4000);
+        for remaining in [2, 1, 0] {
+            assert!(
+                !pool.direct_authority(process, site),
+                "every configured hold admission must run through the resolver"
+            );
+            assert_eq!(pool.bounded_direct_hold_remaining(), remaining);
+            pool.observe_direct_mode(process, false);
+        }
         assert!(!pool.direct_holds.contains_key(&process));
-        assert_eq!(pool.bounded_direct_hold_remaining(), 0);
+        assert!(
+            pool.direct_authority(process, site),
+            "direct authority must return immediately after exactly three paid admissions"
+        );
     }
 
     #[test]
