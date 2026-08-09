@@ -74,6 +74,16 @@ produced both failure modes:
 So a profile row justifies investigating a symbol. Only a mutation justifies
 believing the cost can be recovered.
 
+Time the mechanism before sizing a fix for it. The native/host operand round trip
+was assumed to cost about a microsecond and to dominate sqlite; measured, it is
+105ns and 0.35% of the phase, so an entire direction was worth a tenth of a
+percent. A count is not a cost until you have multiplied it by a measured one.
+
+Counters are comparable within a build and not across builds. Adding
+instrumentation changes inlining, which changes translation admission: two builds
+of the same source reported 892,141 and 1,593,713 for the same counter. Compare a
+counter only against itself in the same binary.
+
 ## Time-to-evidence and agent utilization
 
 Elapsed time to authoritative compatibility evidence is the primary operational
