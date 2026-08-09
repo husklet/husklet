@@ -261,13 +261,13 @@ impl GuestExecutor {
         let (pc, stack) = coordinates?;
         let lease = super::super::operand::ImageMemory::lease(memory);
         let mappings = lease.mappings();
-        let snapshot = mappings.snapshot();
-        let Some(executable) = snapshot.regions.iter().copied().find(|region| {
-            region.range().contains(GuestAddress::new(pc)) && region.protection().contains(Protection::EXECUTE)
-        }) else {
+        // A point resolve, as the aarch64 arm does: a snapshot here clones every mapped
+        // region on every probe, and this path is probed once per guest syscall.
+        let Some(executable) = mappings.ledger().resolve(GuestAddress::new(pc), Protection::EXECUTE) else {
             pool.counters.declined_executable += 1;
             return None;
         };
+        let executable = executable.region;
         let length = usize::try_from(executable.range().end().get().saturating_sub(pc).min(256)).ok()?;
         if length == 0 {
             return None;
@@ -286,14 +286,18 @@ impl GuestExecutor {
             pool.counters.declined_cold += 1;
             return None;
         }
-        let mut bytes = vec![0_u8; length];
+        let mut bytes = [0_u8; 256];
+        let bytes = &mut bytes[..length];
         mappings
-            .read_spans(GuestAddress::new(pc), &mut bytes, Protection::EXECUTE)
+            .read_spans(GuestAddress::new(pc), bytes, Protection::EXECUTE)
             .ok()?;
-        let stack_region = snapshot.regions.iter().copied().find(|region| {
-            region.range().contains(GuestAddress::new(stack.saturating_sub(1)))
-                && region.protection().contains(Protection::READ.union(Protection::WRITE))
-        })?;
+        let stack_region = mappings
+            .ledger()
+            .resolve(
+                GuestAddress::new(stack.saturating_sub(1)),
+                Protection::READ.union(Protection::WRITE),
+            )?
+            .region;
         let stack_first = stack.saturating_sub(8 << 10).max(stack_region.range().start().get()) & !4095;
         let stack_last = stack_first
             .saturating_add(16 << 10)
@@ -320,14 +324,12 @@ impl GuestExecutor {
         pool.counters.entries += 1;
         let diagnostics = pool.boundaries.is_some();
         let executor = pool.executor(run.process)?;
-        let source = [crate::native::NativeSource {
-            guest_first: pc,
-            bytes: &bytes,
-        }];
+        let source = [crate::native::NativeSource { guest_first: pc, bytes }];
         let mut resolve = |target: u64, output: &mut [u8]| {
-            let region = snapshot.regions.iter().copied().find(|region| {
-                region.range().contains(GuestAddress::new(target)) && region.protection().contains(Protection::EXECUTE)
-            })?;
+            let region = mappings
+                .ledger()
+                .resolve(GuestAddress::new(target), Protection::EXECUTE)?
+                .region;
             let length = usize::try_from(
                 region
                     .range()
