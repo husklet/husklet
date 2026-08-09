@@ -288,6 +288,12 @@ impl DescriptorTable {
         let descriptor = state.entries.remove(&number).ok_or(DescriptorError::BadDescriptor)?;
         state.advance_generation(number);
         drop(state);
+        hl_log::hl_debug!(
+            hl_log::tag::SYSCALL,
+            "descriptor close fd={number} identity={} generation={}",
+            descriptor.description.identity,
+            descriptor.generation
+        );
         descriptor.description.release_descriptor();
         drop(descriptor);
         Ok(())
@@ -313,6 +319,11 @@ impl DescriptorTable {
         let destination = state.lowest_free_below(minimum, admission_limit)?;
         let generation = state.advance_generation(destination);
         description.retain_descriptor();
+        hl_log::hl_debug!(
+            hl_log::tag::SYSCALL,
+            "descriptor duplicate to fd={destination} identity={} generation={generation}",
+            description.identity
+        );
         state.entries.insert(
             destination,
             Descriptor::transferred(description, flags, generation, transfer_dependencies),

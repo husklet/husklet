@@ -283,13 +283,31 @@ impl Pair {
         }
         let mut state = self.lock();
         state.slave_references = state.slave_references.saturating_sub(1);
+        hl_log::hl_debug!(
+            hl_log::tag::FS,
+            "pty slave close pair={:?} slave_references={} pending_output={}",
+            self.id(),
+            state.slave_references,
+            state.output.len()
+        );
         drop(state);
         self.changed.notify_all();
         self.registry(Endpoint::Master).notify();
     }
 
     pub fn retire(&self) {
-        self.lock().retired = true;
+        let mut state = self.lock();
+        state.retired = true;
+        // Bytes still queued at retire are dropped, never drained: report the loss.
+        hl_log::hl_debug!(
+            hl_log::tag::FS,
+            "pty retire pair={:?} undrained_output={} undrained_input={} undrained_editing={}",
+            self.id(),
+            state.output.len(),
+            state.input.len(),
+            state.editing.len()
+        );
+        drop(state);
         self.changed.notify_all();
         for registry in &self.readiness {
             registry.notify();

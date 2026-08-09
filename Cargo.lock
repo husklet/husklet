@@ -1127,6 +1127,9 @@ dependencies = [
 [[package]]
 name = "hl-descriptor"
 version = "0.1.0"
+dependencies = [
+ "hl-log",
+]
 
 [[package]]
 name = "hl-design"
@@ -1191,6 +1194,7 @@ name = "hl-execution"
 version = "0.1.0"
 dependencies = [
  "hl-isa",
+ "hl-log",
  "hl-softfloat",
 ]
 
@@ -1253,6 +1257,7 @@ name = "hl-ipc"
 version = "0.1.0"
 dependencies = [
  "hl-descriptor",
+ "hl-log",
  "hl-memory",
  "hl-sync",
  "hl-time",
@@ -1360,6 +1365,7 @@ version = "0.1.0"
 name = "hl-sync"
 version = "0.1.0"
 dependencies = [
+ "hl-log",
  "hl-time",
 ]
 
@@ -1376,6 +1382,7 @@ name = "hl-terminal"
 version = "0.1.0"
 dependencies = [
  "hl-descriptor",
+ "hl-log",
 ]
 
 [[package]]
@@ -1387,6 +1394,7 @@ name = "hl-vfs"
 version = "0.1.0"
 dependencies = [
  "hl-descriptor",
+ "hl-log",
 ]
 
 [[package]]

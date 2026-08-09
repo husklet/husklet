@@ -823,7 +823,10 @@ mod tests {
     fn direct_authority_is_earned_by_a_completed_run() {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
-        assert!(!pool.direct_earned(process), "first entry must run the operand resolver");
+        assert!(
+            !pool.direct_earned(process),
+            "first entry must run the operand resolver"
+        );
         pool.observe_direct_mode(process, false);
         assert!(pool.direct_earned(process), "a completed run earns direct authority");
 

@@ -10,5 +10,6 @@ publish = false
 workspace = true
 
 [dependencies]
+hl-log = { path = "../../packages/hl-log" }
 hl-isa = { path = "../hl-isa" }
 hl-softfloat = { path = "../../packages/hl-softfloat" }

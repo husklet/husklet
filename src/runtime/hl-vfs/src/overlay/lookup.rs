@@ -53,6 +53,11 @@ impl<H: OverlayHost> Overlay<H> {
             }
             if opaque {
                 allowed = allowed.min(position + 1);
+                hl_log::hl_debug!(
+                    hl_log::tag::FS,
+                    "overlay opaque directory clamps lower layers path={} position={position} allowed={allowed}",
+                    ancestor.as_bytes().escape_ascii()
+                );
             }
         }
         Ok(allowed)

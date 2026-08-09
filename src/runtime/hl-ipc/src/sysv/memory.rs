@@ -81,7 +81,15 @@ impl SharedMemoryNamespace {
                 return Err(SharedMemoryError::NotFound);
             }
         }
-        self.create_segment(&mut state, request)
+        let created = self.create_segment(&mut state, request);
+        hl_log::hl_debug!(
+            hl_log::tag::IPC,
+            "shmget key={:?} size={} create={} outcome={created:?}",
+            request.key,
+            request.size,
+            request.create
+        );
+        created
     }
 
     pub fn shmat_plan(
@@ -136,12 +144,19 @@ impl SharedMemoryNamespace {
         segment.metadata.attaches += 1;
         segment.metadata.last_pid = pid;
         segment.metadata.attached_at = Some(now);
+        let attaches = segment.metadata.attaches;
         state.attachments.insert(
             token,
             Attachment {
                 segment: plan.segment,
                 pid,
             },
+        );
+        hl_log::hl_debug!(
+            hl_log::tag::IPC,
+            "shmat commit segment={:?} pid={pid} token={token} attaches={attaches} read_only={}",
+            plan.segment,
+            plan.read_only
         );
         Ok(token)
     }
@@ -170,9 +185,15 @@ impl SharedMemoryNamespace {
         segment.metadata.marked_for_removal = true;
         segment.metadata.last_pid = pid;
         segment.metadata.changed_at = now;
-        if segment.metadata.attaches == 0 {
+        let attaches = segment.metadata.attaches;
+        if attaches == 0 {
             self.destroy(&mut state, id)?;
         }
+        hl_log::hl_debug!(
+            hl_log::tag::IPC,
+            "shmctl rmid segment={id:?} pid={pid} attaches={attaches} destroyed={}",
+            attaches == 0
+        );
         Ok(())
     }
 

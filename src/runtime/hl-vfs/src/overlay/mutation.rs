@@ -21,6 +21,12 @@ impl<H: OverlayHost> Overlay<H> {
             OverlayNodeKind::Symlink => CopyContent::Symlink,
             OverlayNodeKind::Directory | OverlayNodeKind::Other => CopyContent::None,
         };
+        hl_log::hl_debug!(
+            hl_log::tag::FS,
+            "overlay copy_up plan path={} source={layer:?} kind={kind:?} size={}",
+            normalized.as_bytes().escape_ascii(),
+            metadata.size
+        );
         Ok(CopyUpPlan {
             path: normalized,
             source: layer,
@@ -91,6 +97,11 @@ struct Mutation<'host, H: OverlayHost> {
 impl<'host, H: OverlayHost> Mutation<'host, H> {
     fn begin(host: &'host H, path: &GuestPathBytes) -> Result<Self, OverlayError> {
         let handle = host.begin_mutation(path).map_err(OverlayError::Host)?;
+        hl_log::hl_debug!(
+            hl_log::tag::FS,
+            "overlay mutation begin handle={handle:?} path={}",
+            path.as_bytes().escape_ascii()
+        );
         Ok(Self {
             host,
             handle,
@@ -114,6 +125,7 @@ impl<'host, H: OverlayHost> Mutation<'host, H> {
 
     fn commit(mut self) -> Result<(), OverlayError> {
         self.host.commit_mutation(self.handle).map_err(OverlayError::Host)?;
+        hl_log::hl_debug!(hl_log::tag::FS, "overlay mutation commit handle={:?}", self.handle);
         self.active = false;
         Ok(())
     }
@@ -122,6 +134,7 @@ impl<'host, H: OverlayHost> Mutation<'host, H> {
 impl<H: OverlayHost> Drop for Mutation<'_, H> {
     fn drop(&mut self) {
         if self.active {
+            hl_log::hl_warn!(hl_log::tag::FS, "overlay mutation rollback handle={:?}", self.handle);
             self.host.rollback_mutation(self.handle);
         }
     }

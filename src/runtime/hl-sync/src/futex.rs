@@ -171,6 +171,11 @@ impl FutexTable {
             .wait(0, interruption, deadline, clock)
             .map_err(|_| FutexError::ClockFailed)?;
         self.remove_waiter(waiter.identifier, true);
+        hl_log::hl_debug!(
+            hl_log::tag::SYNC,
+            "futex wait key={key:?} expected={expected} bitset={bitset:#x} waiter={} outcome={outcome:?}",
+            waiter.identifier
+        );
         Ok(match outcome {
             WaitOutcome::Notified => FutexWaitOutcome::Woken,
             WaitOutcome::Interrupted => FutexWaitOutcome::Interrupted,
@@ -196,6 +201,11 @@ impl FutexTable {
         for waiter in &selected {
             waiter.queue.notify_one();
         }
+        hl_log::hl_debug!(
+            hl_log::tag::SYNC,
+            "futex wake key={key:?} requested={count} bitset={bitset:#x} woken={}",
+            selected.len()
+        );
         Ok(selected.len())
     }
 
@@ -220,11 +230,22 @@ impl FutexTable {
                 result = Some(self.requeue_unchecked(source, target, wake_count, requeue_count)?);
                 Ok(())
             };
-            self.memory
-                .compare_and_apply(source, expected, FutexError::CompareMismatch, &mut apply)?;
+            let compared = self
+                .memory
+                .compare_and_apply(source, expected, FutexError::CompareMismatch, &mut apply);
+            hl_log::hl_debug!(
+                hl_log::tag::SYNC,
+                "futex requeue source={source:?} target={target:?} expected={expected} wake={wake_count} requeue={requeue_count} woken={result:?} compare={compared:?}"
+            );
+            compared?;
             return result.ok_or(FutexError::Fault);
         }
-        self.requeue_unchecked(source, target, wake_count, requeue_count)
+        let woken = self.requeue_unchecked(source, target, wake_count, requeue_count);
+        hl_log::hl_debug!(
+            hl_log::tag::SYNC,
+            "futex requeue source={source:?} target={target:?} wake={wake_count} requeue={requeue_count} woken={woken:?}"
+        );
+        woken
     }
 
     fn requeue_unchecked(
