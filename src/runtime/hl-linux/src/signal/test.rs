@@ -216,10 +216,21 @@ fn sleep_clock_admission_isas() {
 fn futex_decodes_precedence() {
     let memory = Memory::new();
     let abi = TimeFutexAbi::new(&memory, GuestArchitecture::X86_64);
+    // Measured on the host kernel (aarch64 7.0.11) with two bad arguments per row:
+    // `futex(&w+1, 0x7f, ..)` is ENOSYS and `futex(&w+1, WAIT, 1, BADPTR)` is EFAULT,
+    // although a misaligned word alone is EINVAL. An unknown operation outranks
+    // everything; the timeout outranks the futex word.
     assert_eq!(
         abi.futex(BASE + 1, 511, 0, u64::MAX, 0, 0),
-        Err(TimeFutexMarshalError::Invalid),
+        Err(TimeFutexMarshalError::UnknownOperation),
     );
+    assert_eq!(
+        abi.futex(BASE + 1, 127, 0, 0, 0, 0),
+        Err(TimeFutexMarshalError::UnknownOperation),
+    );
+    assert_eq!(abi.futex(BASE + 1, 0, 1, u64::MAX, 0, 0), Err(TimeFutexMarshalError::Fault));
+    assert_eq!(abi.futex(BASE + 1, 1, 1, 0, 0, 0), Err(TimeFutexMarshalError::Invalid));
+    assert_eq!(abi.futex(BASE, 1, 1, 0, 0, 0).unwrap().address, BASE);
     assert_eq!(
         abi.futex(BASE, 1 | 256, 0, u64::MAX, 0, 0),
         Err(TimeFutexMarshalError::Invalid),

@@ -22,6 +22,9 @@ pub enum AbiError {
     Marshal(MarshalError),
     Invalid,
     Overflow,
+    /// A range whose page-rounded end wraps past the top of the address space.
+    /// `do_mprotect_pkey` answers ENOMEM for it, ahead of any protection screen.
+    NoAddressSpace,
 }
 
 impl From<MarshalError> for AbiError {
@@ -236,15 +239,26 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         })
     }
 
+    /// Measured screen order in `do_mprotect_pkey`: both grow flags, then start
+    /// alignment, then a zero length, then a wrapping end, and only then the
+    /// protection bits — so a bad protection loses to every one of them.
     pub fn mprotect(address: u64, length: u64, protection: u32) -> Result<Option<RangePlan>, AbiError> {
+        const GROWSDOWN: u32 = 0x0100_0000;
+        const GROWSUP: u32 = 0x0200_0000;
+        if protection & (GROWSDOWN | GROWSUP) == GROWSDOWN | GROWSUP
+            || !GuestAddress::new(address).is_page_aligned(GuestPageSize::LINUX)
+        {
+            return Err(AbiError::Invalid);
+        }
         if length == 0 {
             return Ok(None);
         }
-        if protection & !(PROTECTION_MASK | 0x0100_0000 | 0x0200_0000) != 0 {
+        let range = Self::range(address, length, true).map_err(|_| AbiError::NoAddressSpace)?;
+        if protection & !(PROTECTION_MASK | GROWSDOWN | GROWSUP) != 0 {
             return Err(AbiError::Invalid);
         }
         Ok(Some(RangePlan {
-            range: Self::range(address, length, true)?,
+            range,
             protection: Some(Self::protection(protection)),
         }))
     }
@@ -322,8 +336,9 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
             19 => Advice::KeepOnFork,
             _ => Advice::Noop,
         };
+        // `madvise` reports a wrapping end as EINVAL, not EOVERFLOW.
         Ok(AdvicePlan::Apply {
-            range: Self::range(address, length, true)?,
+            range: Self::range(address, length, true).map_err(|_| AbiError::Invalid)?,
             advice,
         })
     }

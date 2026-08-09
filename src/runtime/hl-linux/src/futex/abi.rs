@@ -60,7 +60,6 @@ impl<M: GuestMemory> TimeFutexAbi<'_, M> {
         secondary_address: u64,
         secondary_value: u32,
     ) -> Result<Plan, FutexMarshalError> {
-        Self::aligned(address)?;
         let private = encoded_operation & 128 != 0;
         let realtime = encoded_operation & 256 != 0;
         let operation = Self::decode_operation(encoded_operation & 127, secondary_value)?;
@@ -84,9 +83,6 @@ impl<M: GuestMemory> TimeFutexAbi<'_, M> {
                 | Operation::WaitRequeuePriorityInheritance
                 | Operation::CompareRequeuePriorityInheritance
         );
-        if uses_secondary && secondary_address != 0 {
-            Self::aligned(secondary_address)?;
-        }
         let timed = matches!(
             operation,
             Operation::Wait
@@ -108,6 +104,13 @@ impl<M: GuestMemory> TimeFutexAbi<'_, M> {
         } else {
             None
         };
+        // `get_futex_key` runs inside `do_futex`, after the operation decode and after
+        // the timeout copy, so an unknown operation (ENOSYS) and a bad timeout
+        // (EINVAL/EFAULT) both outrank a misaligned futex word.
+        Self::aligned(address)?;
+        if uses_secondary && secondary_address != 0 {
+            Self::aligned(secondary_address)?;
+        }
         Ok(Plan {
             operation,
             address,
@@ -182,7 +185,7 @@ impl<M: GuestMemory> TimeFutexAbi<'_, M> {
             11 => Ok(Operation::WaitRequeuePriorityInheritance),
             12 => Ok(Operation::CompareRequeuePriorityInheritance),
             13 => Ok(Operation::LockPriorityInheritance2),
-            _ => Err(FutexMarshalError::Invalid),
+            _ => Err(FutexMarshalError::UnknownOperation),
         }
     }
 
@@ -316,9 +319,11 @@ mod tests {
             let wake = abi.futex(BASE, 1, 1, 0, BASE + 1, 0).unwrap();
             assert_eq!(wake.operation, Operation::Wake);
             assert_eq!(wake.secondary_address, BASE + 1);
+            // Measured on the host kernel: the timeout copy precedes `get_futex_key`,
+            // so a faulting timeout outranks a misaligned `uaddr2`.
             assert_eq!(
                 abi.futex(BASE, 11, 0, u64::MAX, BASE + 1, 0),
-                Err(FutexMarshalError::Invalid),
+                Err(FutexMarshalError::Fault),
             );
         }
     }

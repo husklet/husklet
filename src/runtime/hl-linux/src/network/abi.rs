@@ -268,6 +268,11 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
             return Err(Error::TooManyVectors);
         }
         let vectors = self.marshaller.iovecs(header.iovecs, header.iovec_count)?;
+        // `import_iovec` rejects every negative `iov_len` before touching any payload
+        // address, so a negative length outranks a faulting buffer.
+        if vectors.vectors.iter().any(|vector| vector.length > i64::MAX as u64) {
+            return Err(Error::InvalidLength);
+        }
         for vector in &vectors.vectors {
             self.marshaller.probe(
                 vector.base,

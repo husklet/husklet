@@ -34,6 +34,12 @@ enum BatchReceiveEntry {
 
 impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     pub(crate) fn sendmsg(&self, descriptor: i32, header: u64, flags: u32) -> LinuxResult {
+        // Linux resolves the descriptor in `__sys_sendmsg` before `copy_msghdr_from_user`,
+        // so EBADF/ENOTSOCK outrank a faulting msghdr or a negative `iov_len`.
+        let socket = match self.lookup(descriptor) {
+            Ok(value) => value,
+            Err(error) => return LinuxResult::Error(error),
+        };
         let abi = NetworkAbi::new(&self.memory, self.architecture);
         let imported = match abi.import_message(header, flags) {
             Ok(value) => value,
@@ -54,10 +60,6 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 return LinuxResult::Error(Errno::EFAULT);
             }
         }
-        let socket = match self.lookup(descriptor) {
-            Ok(value) => value,
-            Err(error) => return LinuxResult::Error(error),
-        };
         if socket.netlink_socket().is_some() {
             return match socket.write_with(&payload, true) {
                 Ok(count) => LinuxResult::Value(count as u64),
@@ -128,14 +130,16 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     }
 
     fn receive_message(&self, descriptor: i32, header: u64, flags: u32, blocking: bool) -> LinuxResult {
+        // `__sys_recvmsg` pins the descriptor before reading the msghdr, so a closed or
+        // non-socket descriptor outranks a faulting header.
+        let socket = match self.lookup(descriptor) {
+            Ok(value) => value,
+            Err(error) => return LinuxResult::Error(error),
+        };
         let abi = NetworkAbi::new(&self.memory, self.architecture);
         let imported = match abi.import_receive_message(header, flags) {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(SocketErrno::marshal(error)),
-        };
-        let socket = match self.lookup(descriptor) {
-            Ok(value) => value,
-            Err(error) => return LinuxResult::Error(error),
         };
         if let Some(netlink) = socket.netlink_socket() {
             let mut payload = vec![0; imported.vectors.total_length as usize];

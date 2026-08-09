@@ -10,6 +10,12 @@ use super::syscalls::RuntimeIpcSyscalls;
 
 impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
     pub(super) fn msgrcv(&self, arguments: [u64; 6]) -> LinuxResult {
+        // `ksys_msgrcv` resolves the queue before touching the output buffer, unlike
+        // `msgsnd`, which copies the message type first. Measured: `msgrcv(-1,BAD,8,0,0)`
+        // is EINVAL where `msgsnd(-1,BAD,8,0)` is EFAULT.
+        let Some(id) = MessageQueueId::from_linux_id(arguments[0] as i32) else {
+            return LinuxResult::Error(Errno::EINVAL);
+        };
         let abi = SysvAbi::new(&self.memory, self.architecture);
         let plan = match abi.msgrcv(
             arguments[0],
@@ -20,9 +26,6 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
         ) {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error.errno()),
-        };
-        let Some(id) = MessageQueueId::from_linux_id(plan.identifier.0) else {
-            return LinuxResult::Error(Errno::EINVAL);
         };
         let (actor, pid, now) = match self.context() {
             Ok(value) => value,

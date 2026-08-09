@@ -121,7 +121,16 @@ fn mmap_rejects_overflow() {
 fn range_remap_rules() {
     assert!(MemoryAbi::<Memory>::munmap(0x1001, 4096).is_err());
     assert!(MemoryAbi::<Memory>::munmap(0x1000, 0).is_err());
-    assert_eq!(MemoryAbi::<Memory>::mprotect(1, 0, u32::MAX), Ok(None));
+    // Linux screens the start alignment ahead of the zero-length short circuit,
+    // so only an aligned start reaches the `return 0`.
+    assert_eq!(MemoryAbi::<Memory>::mprotect(1, 0, u32::MAX), Err(MemoryMarshalError::Invalid));
+    // A bad protection loses to the zero-length short circuit, but both grow flags
+    // together are screened ahead of it.
+    assert_eq!(MemoryAbi::<Memory>::mprotect(0x1000, 0, 8), Ok(None));
+    assert_eq!(
+        MemoryAbi::<Memory>::mprotect(0x1000, 0, 0x0300_0000),
+        Err(MemoryMarshalError::Invalid)
+    );
     let writable_executable = MemoryAbi::<Memory>::mprotect(0x1000, 4096, 6).unwrap().unwrap();
     assert_eq!(
         writable_executable.protection,
