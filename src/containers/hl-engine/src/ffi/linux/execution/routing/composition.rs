@@ -118,6 +118,17 @@ impl<'a> LaunchPolicy<'a> {
     }
 }
 
+/// Docker grants the container capability set to a root container and nothing to a `--user` one,
+/// since runc changes user before raising capabilities; the bounding set is the container set either
+/// way, because runc narrows bounding while still root.
+fn launch_credentials(uid: u32, gid: u32) -> ProcessCredentials {
+    // Docker seeds the supplementary set with the primary group, so `id` reports a `groups=` field.
+    let mut credentials = ProcessCredentials::new(uid, gid, &[gid], 32).expect("valid launch credentials");
+    credentials.capabilities = hl_task::CapabilitySets::initial(uid);
+    credentials.capability_bounding = hl_task::CapabilitySets::CONTAINER;
+    credentials
+}
+
 pub(in crate::ffi::linux::execution) fn create(
     arena: Arc<VirtualMemory>,
     mappings: Arc<MappingCoordinator<MappingHostAdapter>>,
@@ -163,12 +174,7 @@ pub(in crate::ffi::linux::execution) fn create(
     let event_checkpoint = event_checkpoint::Resources::new(assembly);
     let tasks = assembly.tasks();
     let seccomp = assembly.seccomp();
-    // Docker seeds the supplementary set with the primary group, so `id` reports a `groups=` field.
-    let mut launch_credentials = ProcessCredentials::new(uid, gid, &[gid], 32).expect("valid launch credentials");
-    // Docker grants the container set to a root container and nothing to a `--user` one, since runc
-    // changes user before raising capabilities. The bounding set is the container set either way.
-    launch_credentials.capabilities = hl_task::CapabilitySets::initial(uid);
-    launch_credentials.capability_bounding = hl_task::CapabilitySets::CONTAINER;
+    let launch_credentials = launch_credentials(uid, gid);
     let (launch_limits, limit_overrides) = policy.limits()?;
     let source = match tasks.snapshot().init {
         Some(init) => {
@@ -516,6 +522,31 @@ mod tests {
         let plan = plan(options);
         assert_eq!(launch_identity(&plan, "HL_UID", 501), Ok(0));
         assert_eq!(launch_identity(&plan, "HL_GID", 20), Ok(0));
+    }
+
+    /// Docker measured on this host: `docker run alpine` reports CapPrm/CapEff/CapBnd
+    /// 00000000a80425fb, while `docker run --user 1000 alpine` reports CapPrm/CapEff/CapInh/CapAmb 0
+    /// with CapBnd unchanged.
+    #[test]
+    fn a_non_root_launch_user_holds_no_capabilities_but_keeps_the_bounding_set() {
+        let container = hl_task::CapabilitySets::CONTAINER;
+        let root = launch_credentials(0, 0);
+        assert_eq!(root.capabilities.permitted, container);
+        assert_eq!(root.capabilities.effective, container);
+        assert_eq!(root.capability_bounding, container);
+
+        for uid in [1_u32, 1000, 65_534] {
+            let user = launch_credentials(uid, uid);
+            let empty = hl_task::CapabilitySets {
+                effective: 0,
+                permitted: 0,
+                inheritable: 0,
+                ambient: 0,
+            };
+            assert_eq!(user.capabilities, empty);
+            assert_eq!(user.capability_bounding, container);
+            assert!(!user.may_setid());
+        }
     }
 
     #[test]
