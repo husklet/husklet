@@ -817,6 +817,26 @@ mod tests {
         assert!(pool.direct_admitted(steady));
     }
 
+    /// Direct authority is earned by a run, never taken on the first entry, and a held
+    /// process still serves its hold out rather than waiting on a warm-up it cannot reach.
+    #[test]
+    fn direct_authority_is_earned_by_a_completed_run() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        assert!(!pool.direct_earned(process), "first entry must run the operand resolver");
+        pool.observe_direct_mode(process, false);
+        assert!(pool.direct_earned(process), "a completed run earns direct authority");
+
+        // A hold entered while warm is spent by the same call, so it expires on schedule.
+        pool.direct_holds.insert(process, 2);
+        pool.direct_modes.remove(&process);
+        assert!(!pool.direct_earned(process));
+        assert!(!pool.direct_earned(process));
+        assert!(!pool.direct_holds.contains_key(&process), "the hold must retire");
+        pool.observe_direct_mode(process, false);
+        assert!(pool.direct_earned(process));
+    }
+
     #[test]
     fn source_tracking_prunes_incarnations_and_disables_at_live_limit() {
         let first = hl_task::ProcessId::from_wire(1, 1).unwrap();

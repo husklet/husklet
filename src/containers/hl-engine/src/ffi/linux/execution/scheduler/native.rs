@@ -68,7 +68,7 @@ impl GuestExecutor {
             pool.counters.declined_cold += 1;
             return None;
         }
-        let allow_direct = pool.direct_admitted(run.process) && !pool.direct_declined.contains(&fallback_key);
+        let allow_direct = pool.direct_earned(run.process) && !pool.direct_declined.contains(&fallback_key);
         let mut bytes = [0_u8; 256];
         let bytes = &mut bytes[..usize::try_from(length).ok()?];
         mappings
