@@ -94,7 +94,12 @@ impl Service {
         self.waiters.lock().await.contains_key(id)
     }
 
-    pub(crate) async fn signal(&self, reference: &str, signal: Signal) -> Result<()> {
+    pub(crate) async fn signal(self: &Arc<Self>, reference: &str, signal: Signal) -> Result<()> {
+        // Docker resumes a paused container before delivering any signal, so the guest acts on it
+        // instead of leaving it queued behind a suspension the daemon still reports as `paused`.
+        if self.resolve(reference).await?.state.is_paused() {
+            self.unpause(reference).await?;
+        }
         let _guard = self.operations.lock().await;
         let container = self.resolve(reference).await?;
         if !container.state.is_active() {
