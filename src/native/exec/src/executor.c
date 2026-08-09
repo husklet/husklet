@@ -1461,6 +1461,9 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             cpu->budget += refund;
             if (executor->diagnostics) executor->completed -= refund;
             budget = cpu->budget;
+            /* This can only hit on an entry `hl_a64_run_view_publish` rejected: the
+             * generated guard already searched the published cache with this same
+             * predicate, so reaching here is its proof that no entry covers. */
             if (HL_A64_RUN_VIEW_CACHE && run_view_resolve(&operand_views, cpu, cpu->fault_address,
                                                          cpu->fault_size, (uint32_t)cpu->fault_access)) {
                 if (executor->diagnostics) executor->operand_cache_hits++;
