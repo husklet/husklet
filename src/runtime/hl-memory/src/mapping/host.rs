@@ -3,7 +3,7 @@ mod access;
 
 pub use access::{WriteSpanTransaction, WriteTransaction};
 
-use super::plan::{Batch, PlannedOperation, planned_range};
+use super::plan::{Batch, PlannedOperation};
 use super::port::Host;
 use super::transition::{NoopObserver, TransitionObserver};
 use crate::{
@@ -304,7 +304,7 @@ impl<H: Host> Coordinator<H> {
                 self.rollback(&reservations);
                 return Err(error);
             }
-            touched = plan.iter().filter_map(planned_range).collect();
+            touched = plan.iter().filter_map(PlannedOperation::range).collect();
             self.publish_pins(regions, pins);
             Ok(())
         });

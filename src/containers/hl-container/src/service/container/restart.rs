@@ -1,5 +1,5 @@
 use super::{
-    Arc, ContainerId, ContainerState, Duration, ExecState, ExitStatus, JournalId, Result, Service, Signal, now_ms,
+    Arc, ContainerId, ContainerState, Duration, ExitStatus, JournalId, Result, Service, Signal, now_ms,
 };
 
 impl Service {
@@ -10,7 +10,7 @@ impl Service {
         }
         for mut exec in self.execs.list().await? {
             if exec.state.is_active() && exec.checkpoint.is_none() {
-                interrupt_exec(&mut exec);
+                exec.interrupt();
                 self.execs.replace(&exec).await?;
             }
         }
@@ -256,24 +256,9 @@ impl Service {
     }
 }
 
-fn interrupt_exec(exec: &mut crate::Exec) {
-    let process_id = match exec.state {
-        ExecState::Running { process_id, .. } => Some(process_id),
-        ExecState::Created | ExecState::Exited { .. } => None,
-    };
-    exec.state = ExecState::Exited {
-        result: ExitStatus::Fault {
-            status: -1,
-            detail: 0,
-            reason: crate::FaultCause::Unknown,
-        },
-        finished_at_ms: now_ms(),
-        process_id,
-    };
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::ExecState;
     use super::*;
 
     #[test]
@@ -284,7 +269,7 @@ mod tests {
             started_at_ms: 100,
         };
 
-        interrupt_exec(&mut exec);
+        exec.interrupt();
 
         assert!(matches!(
             exec.state,

@@ -21,11 +21,13 @@ pub(crate) enum PlannedOperation {
     Protect(AddressRange, Protection),
 }
 
-/// The guest range a planned operation changes the meaning of.
-pub(crate) fn planned_range(operation: &PlannedOperation) -> Option<AddressRange> {
-    match operation {
-        PlannedOperation::Map(address, request) => AddressRange::nonempty(*address, request.length).ok(),
-        PlannedOperation::Unmap(range) | PlannedOperation::Protect(range, _) => Some(*range),
+impl PlannedOperation {
+    /// The guest range this operation changes the meaning of.
+    pub(crate) fn range(&self) -> Option<AddressRange> {
+        match self {
+            Self::Map(address, request) => AddressRange::nonempty(*address, request.length).ok(),
+            Self::Unmap(range) | Self::Protect(range, _) => Some(*range),
+        }
     }
 }
 
