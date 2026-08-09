@@ -177,9 +177,6 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     pub(super) direct_sticky: bool,
     /// Makes the sticky arm's hold permanent instead of bounded.
     pub(super) direct_sticky_permanent: bool,
-    /// Gates crediting productivity from a run that retired a substantial share of its
-    /// budget and *then* fell back. Off by default so the disabled-in-both control runs.
-    pub(super) fallback_productivity: bool,
     /// False drops the aarch64 exact write journal; every crossing then publishes
     /// its whole window instead of the exact ranges the journal would have carried.
     write_reserve: bool,
@@ -242,7 +239,6 @@ impl NativePool {
             admission_cache: plan.options.get("HL_NATIVE_ADMISSION_CACHE") == Some("1"),
             direct_sticky: plan.options.get("HL_NATIVE_DIRECT_STICKY") == Some("1"),
             direct_sticky_permanent: plan.options.get("HL_NATIVE_DIRECT_STICKY_PERMANENT") == Some("1"),
-            fallback_productivity: plan.options.get("HL_NATIVE_FALLBACK_PRODUCTIVITY") == Some("1"),
             write_reserve: plan.options.get("HL_A64_NO_WRITE_RESERVE") != Some("1"),
             write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
             runtime_write_reserve: plan.options.get("HL_A64_RUNTIME_WRITE_RESERVE") == Some("1"),
@@ -282,7 +278,6 @@ impl NativePool {
             admission_cache = pool.admission_cache,
             direct_sticky = pool.direct_sticky,
             direct_sticky_permanent = pool.direct_sticky_permanent,
-            fallback_productivity = pool.fallback_productivity,
             write_reserve = pool.write_reserve,
             write_commit = pool.write_commit,
             runtime_write_reserve = pool.runtime_write_reserve
@@ -514,14 +509,6 @@ impl NativePool {
                     );
                 }
             }
-        } else if self.fallback_productivity {
-            // `mark_productive` is otherwise reachable only from the clean-exit branch, so an
-            // entry whose runs always end in a guard fault can never be credited however much
-            // it retires. On sqlite that is nearly every run, so its entries reach the second
-            // short run with an empty productivity record and latch permanently. The bar here
-            // is the suppression rule's own, so this credits exactly the runs it declines to
-            // suppress.
-            self.mark_productive(entry, executed, budget);
         }
         if self.fallbacks.len() < NATIVE_SITE_LIMIT {
             self.fallbacks.insert(instruction);
