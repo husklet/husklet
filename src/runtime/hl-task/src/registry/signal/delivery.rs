@@ -47,11 +47,9 @@ impl TaskRegistry {
             // path so SIGCONT advances the control generation and wakes the
             // scheduler; exit and setpgid cannot fail after their task-state
             // transition merely because a standard signal coalesced.
-            let _ = self.enqueue_signal(PendingTarget::Process(process), SignalInfo::bare(hangup));
-            let _ = self.enqueue_signal(
-                PendingTarget::Process(process),
-                SignalInfo::bare(SignalNumber::CONTINUE),
-            );
+            let target = PendingTarget::Process(process);
+            self.enqueue_best_effort(target, SignalInfo::bare(hangup), "orphan SIGHUP");
+            self.enqueue_best_effort(target, SignalInfo::bare(SignalNumber::CONTINUE), "orphan SIGCONT");
         }
     }
 

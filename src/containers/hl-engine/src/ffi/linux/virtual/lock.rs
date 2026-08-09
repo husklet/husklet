@@ -271,11 +271,22 @@ impl super::virtual_memory::Memory {
 
     pub(super) fn install_all_locks(&self, candidate: Locks) {
         let mut locks = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // mlockall has no rollback path here: a failed wire is reported, not surfaced to the guest.
         for range in locks.added(&candidate) {
-            let _ = self.unwire(range);
+            if let Err(error) = self.unwire(range) {
+                hl_log::hl_debug!(
+                    hl_log::tag::MEMORY,
+                    "mlockall unwire failed range={range:?} reason={error:?}"
+                );
+            }
         }
         for range in candidate.added(&locks) {
-            let _ = self.wire(range);
+            if let Err(error) = self.wire(range) {
+                hl_log::hl_debug!(
+                    hl_log::tag::MEMORY,
+                    "mlockall wire failed range={range:?} reason={error:?}"
+                );
+            }
         }
         *locks = candidate;
     }
@@ -284,7 +295,12 @@ impl super::virtual_memory::Memory {
         let mut locks = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let empty = Locks::default();
         for range in locks.added(&empty) {
-            let _ = self.unwire(range);
+            if let Err(error) = self.unwire(range) {
+                hl_log::hl_debug!(
+                    hl_log::tag::MEMORY,
+                    "munlockall unwire failed range={range:?} reason={error:?}"
+                );
+            }
         }
         locks.clear();
     }

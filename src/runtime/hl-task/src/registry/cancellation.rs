@@ -32,8 +32,11 @@ impl TaskRegistry {
         drop(state);
         if pending {
             self.publish_interrupt(thread, true);
-        } else {
-            let _ = self.acknowledge_interrupt(thread);
+        } else if let Err(error) = self.acknowledge_interrupt(thread) {
+            hl_log::hl_debug!(
+                hl_log::tag::TASK,
+                "signal-pending clear could not acknowledge {thread:?}: {error:?}"
+            );
         }
         Ok(SignalPendingEvent::new(thread, pending))
     }

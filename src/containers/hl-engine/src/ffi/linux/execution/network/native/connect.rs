@@ -92,7 +92,12 @@ impl Native {
         self.switch_socket(token, libc::SOCK_STREAM).ok()?;
         let outcome = self.attempt_connect(token, &SocketAddress::Unix(path), nonblocking, false);
         if matches!(outcome.0, SocketConnectStatus::Failed(_)) {
-            let _ = self.restore_inet_socket(token, libc::SOCK_STREAM);
+            if let Err(error) = self.restore_inet_socket(token, libc::SOCK_STREAM) {
+                hl_log::hl_error!(
+                    hl_log::tag::NET,
+                    "loopback retry left socket switched token={token} reason={error:?}"
+                );
+            }
             return None;
         }
         let mut sockets = self

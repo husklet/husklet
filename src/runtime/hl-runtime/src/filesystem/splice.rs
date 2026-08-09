@@ -287,8 +287,15 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         if prepared.commit(count).is_err() {
             return LinuxResult::Value(count as u64);
         }
-        let _ = self.splice_copyout_offset(plan.input, count);
-        let _ = self.splice_copyout_offset(plan.output, count);
+        // Linux reports a failed offset writeback as EFAULT; this path keeps the transfer count.
+        for (name, offset) in [("off_in", plan.input), ("off_out", plan.output)] {
+            if let Err(errno) = self.splice_copyout_offset(offset, count) {
+                hl_log::hl_debug!(
+                    hl_log::tag::FS,
+                    "splice {name} writeback faulted count={count} errno={errno:?}"
+                );
+            }
+        }
         LinuxResult::Value(count as u64)
     }
 

@@ -265,7 +265,10 @@ fn wait_pid(pid: libc::pid_t, flags: i32) -> std::io::Result<Option<std::process
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         if !self.reaped || self.group_exists() {
-            let _ = self.terminate();
+            // terminate() already escalates to SIGKILL; Drop has no channel to report on.
+            match self.terminate() {
+                Ok(()) | Err(_) => {}
+            }
         }
     }
 }

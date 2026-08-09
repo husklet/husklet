@@ -50,15 +50,33 @@ impl TaskRegistry {
         // Publish the completed queue mutation before invoking them.
         drop(state);
         if queued {
-            for thread in interrupts {
-                let _ = self.acknowledge_interrupt(thread);
-            }
+            self.interrupt_queued(interrupts);
             self.child_ready.notify_all();
             self.signals
                 .activity
                 .notify(Self::activity_kind(process, info.signal), control_epoch);
         }
         Ok(queued)
+    }
+
+    /// Wakes the threads a freshly queued signal is visible to. A thread that has
+    /// exited between the queue mutation and this wake has nothing to acknowledge.
+    fn interrupt_queued(&self, threads: Vec<crate::ThreadId>) {
+        for thread in threads {
+            if let Err(error) = self.acknowledge_interrupt(thread) {
+                hl_log::hl_debug!(
+                    hl_log::tag::SIGNAL,
+                    "queued signal could not interrupt {thread:?}: {error:?}"
+                );
+            }
+        }
+    }
+
+    /// Enqueues an internally generated signal whose target may already be gone.
+    pub(crate) fn enqueue_best_effort(&self, target: PendingTarget, info: SignalInfo, reason: &str) {
+        if let Err(error) = self.enqueue_signal(target, info) {
+            hl_log::hl_debug!(hl_log::tag::SIGNAL, "{reason} not queued for {target:?}: {error:?}");
+        }
     }
 
     /// Queues at most one pending instance for an engine-owned source.
@@ -112,9 +130,7 @@ impl TaskRegistry {
         }
         drop(state);
         if queued {
-            for thread in interrupts {
-                let _ = self.acknowledge_interrupt(thread);
-            }
+            self.interrupt_queued(interrupts);
             self.child_ready.notify_all();
             self.signals
                 .activity

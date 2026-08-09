@@ -255,7 +255,7 @@ impl TaskRegistry {
         drop(state);
         let signal = SignalNumber::new(28).map_err(|_| TaskError::InvalidLifecycle)?;
         for process in &members {
-            let _ = self.enqueue_signal(PendingTarget::Process(*process), SignalInfo::bare(signal));
+            self.enqueue_best_effort(PendingTarget::Process(*process), SignalInfo::bare(signal), "SIGWINCH");
         }
         Ok(TerminalTransitionEffects {
             session,

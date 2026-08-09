@@ -111,7 +111,7 @@ pub async fn prepare(
     let image_identity = TestImage::resolve_identity(&benchmark.image, &target.platform()).await?;
     setup.insert("provenance_image_identity".into(), elapsed_us(started));
     let started = Instant::now();
-    let runner = std::env::current_exe()?;
+    let runner = crate::runtime::profile::runner()?;
     let runner_identity = crate::record::FramedIdentity::of_file(&runner)?;
     let definition = tokio::fs::read(benchmark.directory.join("test.yaml")).await?;
     let source = match artifact.as_ref() {

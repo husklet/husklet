@@ -279,7 +279,7 @@ impl Matrix {
         identity_field(&mut digest, file_identity(&guest)?.as_bytes());
         identity_field(
             &mut digest,
-            file_identity(&std::env::current_exe().map_err(|error| format!("runner executable: {error}"))?)?.as_bytes(),
+            file_identity(&crate::runtime::profile::runner().map_err(|error| error.to_string())?)?.as_bytes(),
         );
         for value in [
             self.isa.public(),

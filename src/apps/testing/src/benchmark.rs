@@ -356,8 +356,8 @@ impl Run {
             .map(file_identity)
             .transpose()?
             .unwrap_or_else(|| "native".into());
-        let runner_identity = std::env::current_exe()
-            .map_err(|error| format!("runner executable: {error}"))
+        let runner_identity = crate::runtime::profile::runner()
+            .map_err(|error| error.to_string())
             .and_then(|path| file_identity(&path))?;
         let options_identity = self.options_identity();
         if let Some(probe) = self.diagnostics_probe() {

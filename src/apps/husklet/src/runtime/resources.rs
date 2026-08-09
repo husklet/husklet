@@ -168,9 +168,6 @@ impl Daemon {
 
 /// Resolve the dockerd binary: `HL_DOCKERD_BIN`, else the installed bundle path.
 fn daemon_bin() -> PathBuf {
-    if let Some(p) = std::env::var_os("HL_DOCKERD_BIN") {
-        return PathBuf::from(p);
-    }
     paths::daemon_bin()
 }
 

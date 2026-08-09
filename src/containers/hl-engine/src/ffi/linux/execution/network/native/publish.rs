@@ -340,11 +340,15 @@ fn relay(host: TcpStream, guest: UnixStream) {
         return;
     };
     let inbound = std::thread::Builder::new().name("hl-publish-in".into()).spawn(move || {
-        let _ = copy(&mut host_reader, &mut guest_writer);
+        if let Err(error) = copy(&mut host_reader, &mut guest_writer) {
+            hl_log::hl_debug!(hl_log::tag::NET, "published relay inbound ended early: {error}");
+        }
         let _ = guest_writer.shutdown(Shutdown::Write);
     });
     let (mut guest_reader, mut host_writer) = (guest, host);
-    let _ = copy(&mut guest_reader, &mut host_writer);
+    if let Err(error) = copy(&mut guest_reader, &mut host_writer) {
+        hl_log::hl_debug!(hl_log::tag::NET, "published relay outbound ended early: {error}");
+    }
     let _ = host_writer.shutdown(Shutdown::Write);
     if let Ok(inbound) = inbound {
         let _ = inbound.join();

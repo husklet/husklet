@@ -321,9 +321,11 @@ fn source_boundary(source: &Source, modules: &[String]) -> bool {
         .flat_map(|path| path.components())
         .filter_map(|component| component.as_os_str().to_str())
         .collect::<Vec<_>>();
+    // `src/main.rs` is the composition root this rule's own message exempts.
     let executable = matches!(parts.as_slice(), ["build.rs"])
         || matches!(parts.as_slice(), ["examples", ..])
-        || matches!(parts.as_slice(), ["src", "bin", ..]);
+        || matches!(parts.as_slice(), ["src", "bin", ..])
+        || matches!(parts.as_slice(), ["src", "main.rs"]);
     let explicit_module = modules
         .first()
         .is_some_and(|module| matches!(module.as_str(), "adapter" | "adapters" | "platform" | "host"))
