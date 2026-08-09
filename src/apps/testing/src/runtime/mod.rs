@@ -109,7 +109,9 @@ fn compare(mark: &Path, results: &Path) -> Result<(), Error> {
         println!("runtime: no case moved against the baseline");
         return Ok(());
     }
-    for change in &changes {
+    // A regressing row is printed by the error below, so printing it here too double-counts it: a
+    // lane read one regression as two on first pass. The summary carries only what the error omits.
+    for change in changes.iter().filter(|change| !change.regression) {
         println!("runtime: {}", change.line);
     }
     let regressions: Vec<&str> = changes
