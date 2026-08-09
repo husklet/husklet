@@ -113,7 +113,12 @@ pub const DEFINITIONS: &[Definition] = &[
     ),
     launch!(
         "HL_A64_DIRTY_OVERFLOW_CONTINUE",
-        "continue aarch64 native execution after exact dirty-journal saturation and publish the whole window",
+        "compatibility request to continue aarch64 native execution after dirty-journal saturation",
+        Flag
+    ),
+    launch!(
+        "HL_A64_DIRTY_OVERFLOW_EXIT",
+        "use the legacy aarch64 native exit after exact dirty-journal saturation",
         Flag
     ),
     launch!(
@@ -299,18 +304,16 @@ mod tests {
     }
 
     #[test]
-    fn dirty_overflow_continue_is_an_explicit_launch_option() {
-        let definition = DEFINITIONS
-            .iter()
-            .find(|definition| definition.name == "HL_A64_DIRTY_OVERFLOW_CONTINUE")
-            .unwrap();
-        assert_eq!(definition.ownership, Ownership::LaunchInput);
-        assert_eq!(definition.shape, Shape::Flag);
-
+    fn dirty_overflow_policies_are_explicit_launch_options() {
         let mut options = Options::default();
-        assert_eq!(options.get(definition.name), None);
-        options.set(definition.name, "1", true).unwrap();
-        assert_eq!(options.get(definition.name), Some("1"));
+        for name in ["HL_A64_DIRTY_OVERFLOW_CONTINUE", "HL_A64_DIRTY_OVERFLOW_EXIT"] {
+            let definition = DEFINITIONS.iter().find(|definition| definition.name == name).unwrap();
+            assert_eq!(definition.ownership, Ownership::LaunchInput);
+            assert_eq!(definition.shape, Shape::Flag);
+            assert_eq!(options.get(name), None);
+            options.set(name, "1", true).unwrap();
+            assert_eq!(options.get(name), Some("1"));
+        }
     }
 
     #[test]

@@ -81,7 +81,8 @@ int main(void) {
 
     /* Exact-journal capacity is checked before the host store. The existing
      * interval and sixteen retained records leave no exact slot for a
-     * disjoint byte, so the instruction must return EPOCH without mutation. */
+     * disjoint byte, so the default conservatively reports overflow and keeps
+     * executing the ordered store. */
     uint8_t bounded[32] = {0};
     memset(&cpu, 0, sizeof(cpu));
     cpu.memory_first = (uint64_t)(uintptr_t)bounded;
@@ -95,9 +96,10 @@ int main(void) {
     cpu.registers[1] = cpu.memory_first + 8;
     cpu.registers[2] = 0xff;
     execute(&cpu, code + offsets[0]);
-    CHECK(cpu.reason == HL_NATIVE_EXIT_EPOCH);
-    CHECK(bounded[8] == 0);
-    CHECK(cpu.dirty_count == 16 && cpu.dirty_first == cpu.memory_first);
+    CHECK(cpu.reason == HL_NATIVE_EXIT_BRANCH);
+    CHECK(bounded[8] == 0xff);
+    CHECK(cpu.dirty_count == 16 && cpu.dirty_overflow == 1);
+    CHECK(cpu.dirty_first == cpu.memory_first + 8 && cpu.dirty_last == cpu.memory_first + 9);
     CHECK(munmap(code, capacity) == 0);
     return 0;
 #endif

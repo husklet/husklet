@@ -235,6 +235,7 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     /// saturation byte, so translation stays a pure function of the pc.
     runtime_write_reserve: bool,
     /// Keeps `AArch64` native execution running after the exact dirty journal fills.
+    /// This is the default; the launch option can retain the legacy exit as a control.
     pub(super) dirty_overflow_continue: bool,
     /// Keeps resolver and direct translations in separate `AArch64` caches. The direct
     /// executor is allocated only after the process earns and can use direct authority.
@@ -322,7 +323,7 @@ impl NativePool {
             write_reserve: plan.options.get("HL_A64_NO_WRITE_RESERVE") != Some("1"),
             write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
             runtime_write_reserve: plan.options.get("HL_A64_RUNTIME_WRITE_RESERVE") == Some("1"),
-            dirty_overflow_continue: plan.options.get("HL_A64_DIRTY_OVERFLOW_CONTINUE") == Some("1"),
+            dirty_overflow_continue: plan.options.get("HL_A64_DIRTY_OVERFLOW_EXIT") != Some("1"),
             split_mode_executors: isa == GuestIsa::Aarch64
                 && plan.options.get("HL_NATIVE_SPLIT_MODE_EXECUTORS") == Some("1"),
             admitted: None,
@@ -372,6 +373,7 @@ impl NativePool {
             write_commit = pool.write_commit,
             runtime_write_reserve = pool.runtime_write_reserve,
             dirty_overflow_continue = pool.dirty_overflow_continue,
+            dirty_overflow_legacy_exit = !pool.dirty_overflow_continue,
             split_mode_executors = pool.split_mode_executors
         );
         pool

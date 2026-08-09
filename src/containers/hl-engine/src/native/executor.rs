@@ -97,6 +97,7 @@ const WRITE_EXACT: u16 = 1;
 const AARCH64: u32 = 1;
 const X86_64: u32 = 2;
 const A64_DIRTY_OVERFLOW_CONTINUE: u32 = 64;
+const A64_DIRTY_OVERFLOW_EXIT: u32 = 128;
 
 fn projection_permissions(authority: Protection, mapped: Protection) -> Protection {
     authority.union(if mapped.contains(Protection::EXECUTE) {
@@ -2121,11 +2122,12 @@ impl Executor {
         diagnostics_enabled: bool,
         fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
     ) -> Result<Self, ()> {
-        Self::create_with_journal(diagnostics_enabled, true, true, false, false, fault_owner)
+        Self::create_with_journal(diagnostics_enabled, true, true, false, true, fault_owner)
     }
 
     /// The write-reservation switches select the `AArch64` exact dirty-journal policy;
-    /// overflow continuation is an independent, default-off launch experiment.
+    /// overflow continuation is the conservative default and the legacy exit remains
+    /// independently selectable as a launch control.
     pub(crate) fn create_with_journal(
         diagnostics_enabled: bool,
         write_reserve: bool,
@@ -2159,7 +2161,7 @@ impl Executor {
                 | if dirty_overflow_continue {
                     A64_DIRTY_OVERFLOW_CONTINUE
                 } else {
-                    0
+                    A64_DIRTY_OVERFLOW_EXIT
                 },
             reserved: 0,
             memory: &raw const services,
@@ -4305,18 +4307,25 @@ mod test {
     }
 
     #[test]
-    fn dirty_overflow_continue_sets_only_its_config_bit() {
-        let default =
-            Executor::create_with_journal(false, true, true, false, false, None).expect("default native executor");
-        let enabled = Executor::create_with_journal(false, true, true, false, true, None)
-            .expect("dirty-overflow continuation executor");
+    fn dirty_overflow_policy_sets_exactly_one_config_bit() {
+        let default = Executor::create_with_fault_owner(false, None).expect("default native executor");
+        let legacy_exit =
+            Executor::create_with_journal(false, true, true, false, false, None).expect("legacy-exit executor");
 
-        assert_eq!(default.config_flags & A64_DIRTY_OVERFLOW_CONTINUE, 0);
         assert_eq!(
-            enabled.config_flags & A64_DIRTY_OVERFLOW_CONTINUE,
+            default.config_flags & A64_DIRTY_OVERFLOW_CONTINUE,
             A64_DIRTY_OVERFLOW_CONTINUE
         );
-        assert_eq!(default.config_flags ^ enabled.config_flags, A64_DIRTY_OVERFLOW_CONTINUE);
+        assert_eq!(default.config_flags & A64_DIRTY_OVERFLOW_EXIT, 0);
+        assert_eq!(legacy_exit.config_flags & A64_DIRTY_OVERFLOW_CONTINUE, 0);
+        assert_eq!(
+            legacy_exit.config_flags & A64_DIRTY_OVERFLOW_EXIT,
+            A64_DIRTY_OVERFLOW_EXIT
+        );
+        assert_eq!(
+            default.config_flags ^ legacy_exit.config_flags,
+            A64_DIRTY_OVERFLOW_CONTINUE | A64_DIRTY_OVERFLOW_EXIT
+        );
     }
 
     #[cfg(target_arch = "aarch64")]

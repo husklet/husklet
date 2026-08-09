@@ -166,10 +166,12 @@ int main(void) {
     cpu.registers[30] = UINT64_C(0xbbbbbbbbbbbbbbbb);
     cpu.flags = UINT64_C(0xa0000000);
     execute(&cpu, code + offsets[0]);
-    CHECK(cpu.reason == HL_NATIVE_EXIT_EPOCH && cpu.program == 0x4000);
+    CHECK(cpu.reason == HL_NATIVE_EXIT_BRANCH && cpu.program == 0x4004);
+    CHECK(cpu.dirty_count == 16 && cpu.dirty_overflow == 1);
+    CHECK(cpu.dirty_first == base + 8 && cpu.dirty_last == base + 16);
     CHECK(cpu.registers[9] == UINT64_C(0x0909090909090909));
     CHECK(cpu.flags == UINT64_C(0xa0000000));
-    CHECK(*(uint64_t *)(uintptr_t)(base + 8) == UINT64_C(0xaaaaaaaaaaaaaaaa));
+    CHECK(*(uint64_t *)(uintptr_t)(base + 8) == UINT64_C(0xbbbbbbbbbbbbbbbb));
 
     memset(stack + 64, 0x5a, 16);
     cpu.stack = base;

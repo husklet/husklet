@@ -549,7 +549,11 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     executor->write_reserve = (config->flags & HL_NATIVE_A64_NO_WRITE_RESERVE) == 0;
     executor->write_commit = (config->flags & HL_NATIVE_A64_NO_WRITE_COMMIT) == 0;
     executor->runtime_write_reserve = (config->flags & HL_NATIVE_A64_RUNTIME_WRITE_RESERVE) != 0;
-    executor->dirty_overflow_continue = (config->flags & HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE) != 0;
+    /* Losing exact journal precision already publishes the whole writable
+     * projection. Continue by default; the exit flag retains the old round trip
+     * as an explicit control. The positive flag remains accepted for callers
+     * that selected continuation before it became the default. */
+    executor->dirty_overflow_continue = (config->flags & HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT) == 0;
     memset(executor->a64_reserve_filter, 0, sizeof(executor->a64_reserve_filter));
     atomic_init(&executor->a64_guard_fast, 0);
     atomic_init(&executor->a64_guard_full, 0);

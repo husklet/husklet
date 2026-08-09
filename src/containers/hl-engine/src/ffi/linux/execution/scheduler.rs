@@ -526,17 +526,30 @@ mod tests {
     }
 
     #[test]
-    fn dirty_overflow_continuation_is_default_off_and_launch_scoped() {
+    fn dirty_overflow_continuation_is_default_on_with_a_launch_scoped_legacy_exit() {
         let default = plan(crate::options::Options::default());
-        assert!(!NativePool::new(GuestIsa::Aarch64, &default, None).dirty_overflow_continue);
+        assert!(NativePool::new(GuestIsa::Aarch64, &default, None).dirty_overflow_continue);
 
         let mut options = crate::options::Options::default();
         options.set("HL_A64_DIRTY_OVERFLOW_CONTINUE", "1", true).unwrap();
         let configured = plan(options);
         assert!(NativePool::new(GuestIsa::Aarch64, &configured, None).dirty_overflow_continue);
+
+        let mut options = crate::options::Options::default();
+        options.set("HL_A64_DIRTY_OVERFLOW_EXIT", "1", true).unwrap();
+        let legacy = plan(options);
+        assert!(!NativePool::new(GuestIsa::Aarch64, &legacy, None).dirty_overflow_continue);
         assert!(
-            NativePool::new(GuestIsa::X86_64, &configured, None).dirty_overflow_continue,
+            !NativePool::new(GuestIsa::X86_64, &legacy, None).dirty_overflow_continue,
             "the common executor accepts the bit; x86 lowering must remain inert",
+        );
+
+        let mut options = crate::options::Options::default();
+        options.set("HL_A64_DIRTY_OVERFLOW_CONTINUE", "1", true).unwrap();
+        options.set("HL_A64_DIRTY_OVERFLOW_EXIT", "1", true).unwrap();
+        assert!(
+            !NativePool::new(GuestIsa::Aarch64, &plan(options), None).dirty_overflow_continue,
+            "the explicit legacy control wins over the compatibility request",
         );
     }
 

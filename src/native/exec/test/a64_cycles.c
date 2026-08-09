@@ -94,12 +94,20 @@ static hl_native_executor *create(executable_memory *host) {
 static int dirty_overflow_continue_configuration(void) {
     executable_memory host = {0};
     hl_native_executor *executor = create_flags(&host, 0);
-    CHECK(executor != NULL && executor->dirty_overflow_continue == 0);
+    CHECK(executor != NULL && executor->dirty_overflow_continue == 1);
     CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
 
     executor = create_flags(&host, HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE);
     CHECK(executor != NULL && executor->dirty_overflow_continue == 1);
     CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
+
+    executor = create_flags(&host, HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT);
+    CHECK(executor != NULL && executor->dirty_overflow_continue == 0);
+    CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
+
+    executor = create_flags(&host, HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE |
+                                   HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT);
+    CHECK(executor == NULL && host.address == NULL);
     return 0;
 }
 

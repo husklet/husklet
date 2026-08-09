@@ -75,7 +75,7 @@ int main(void) {
     CHECK(code != MAP_FAILED);
     hl_a64_assembler assembler;
     CHECK(hl_a64_assembler_begin(&assembler, code, code, capacity));
-    CHECK(assembler.dirty_overflow_continue == 0);
+    CHECK(assembler.dirty_overflow_continue == 1);
     size_t written_offset = hl_a64_assembler_size(&assembler);
     /* x16 is stolen, so the prologue does not load it; the guard sequence
      * normally leaves the projected address there. */
@@ -84,8 +84,8 @@ int main(void) {
     hl_a64_guard_written(&assembler, 8);
     hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_BRANCH, 0x4000);
     size_t default_offset = emit_archive(&assembler, 0x5000, UINT64_C(0xdedefa17dedefa17));
-    assembler.dirty_overflow_continue = 1;
-    size_t enabled_offset = emit_archive(&assembler, 0x6000, UINT64_C(0x5eed5eed5eed5eed));
+    assembler.dirty_overflow_continue = 0;
+    size_t legacy_offset = emit_archive(&assembler, 0x6000, UINT64_C(0x5eed5eed5eed5eed));
     CHECK(hl_a64_assembler_ok(&assembler));
     CHECK(mprotect(code, capacity, PROT_READ | PROT_EXEC) == 0);
 
@@ -110,16 +110,16 @@ int main(void) {
 
     seed_overflow(&cpu, data, stack);
     execute(&cpu, code + default_offset);
-    CHECK(cpu.reason == HL_NATIVE_EXIT_EPOCH && cpu.program == 0x5000);
-    CHECK(cpu.dirty_count == CAPACITY && cpu.dirty_overflow == 0);
-    CHECK(cpu.read_token == UINT64_C(0x5ec0de5ec0de5ec0));
-
-    seed_overflow(&cpu, data, stack);
-    execute(&cpu, code + enabled_offset);
-    CHECK(cpu.reason == HL_NATIVE_EXIT_BRANCH && cpu.program == 0x6004);
+    CHECK(cpu.reason == HL_NATIVE_EXIT_BRANCH && cpu.program == 0x5004);
     CHECK(cpu.dirty_count == CAPACITY && cpu.dirty_overflow == 1);
     CHECK(cpu.dirty_first == UINT64_MAX && cpu.dirty_last == 0);
-    CHECK(cpu.read_token == UINT64_C(0x5eed5eed5eed5eed));
+    CHECK(cpu.read_token == UINT64_C(0xdedefa17dedefa17));
+
+    seed_overflow(&cpu, data, stack);
+    execute(&cpu, code + legacy_offset);
+    CHECK(cpu.reason == HL_NATIVE_EXIT_EPOCH && cpu.program == 0x6000);
+    CHECK(cpu.dirty_count == CAPACITY && cpu.dirty_overflow == 0);
+    CHECK(cpu.read_token == UINT64_C(0x5ec0de5ec0de5ec0));
     CHECK(munmap(code, capacity) == 0);
     return 0;
 #endif
