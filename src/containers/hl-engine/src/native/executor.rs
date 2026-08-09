@@ -2100,7 +2100,7 @@ impl Executor {
         Self::create_with_journal(diagnostics_enabled, true, true, false, false, fault_owner)
     }
 
-    /// The write-reservation switches select the AArch64 exact dirty-journal policy;
+    /// The write-reservation switches select the `AArch64` exact dirty-journal policy;
     /// overflow continuation is an independent, default-off launch experiment.
     pub(crate) fn create_with_journal(
         diagnostics_enabled: bool,

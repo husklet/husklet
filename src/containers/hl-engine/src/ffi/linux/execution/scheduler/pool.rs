@@ -213,7 +213,7 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     /// Emits the reservation everywhere but gates it at run time on a per-store-site
     /// saturation byte, so translation stays a pure function of the pc.
     runtime_write_reserve: bool,
-    /// Keeps AArch64 native execution running after the exact dirty journal fills.
+    /// Keeps `AArch64` native execution running after the exact dirty journal fills.
     pub(super) dirty_overflow_continue: bool,
     pub(super) admitted: Option<Admission>,
     pub(super) executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
