@@ -21,8 +21,8 @@ pub use rule::{
     DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun,
     FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting,
     ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry,
-    RepositoryEscape, Rule, SingleFileDirectory, StructNaming, SuffixRole, SymbolName, TestDependency, TestDirectory,
-    TestName, UnsafeBoundary,
+    RepositoryEscape, Rule, SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory, TestName,
+    UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 
@@ -72,7 +72,6 @@ impl Linter {
                 .register(rule::TestDependency)
                 .register(rule::IntegrationCandidate)
                 .register(rule::FolderNoun)
-                .register(rule::SymbolName)
                 .register(rule::ModulePrefix)
                 .register(rule::FiniteStateString)
                 .register(rule::CatchAllModule)
@@ -169,7 +168,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 36);
+        assert_eq!(summaries.len(), 35);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "maximum-nesting");
@@ -204,7 +203,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 36);
+        assert_eq!(summaries.len(), 35);
         assert!(
             reporter
                 .0

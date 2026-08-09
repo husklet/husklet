@@ -4,7 +4,7 @@ use std::{
 };
 
 use proc_macro2::Span;
-use syn::{ImplItemFn, ItemEnum, ItemFn, ItemStruct, ItemTrait, TraitItemFn, spanned::Spanned, visit::Visit};
+use syn::{ItemEnum, ItemFn, ItemStruct, ItemTrait, TraitItemFn, spanned::Spanned, visit::Visit};
 
 use crate::{
     Result,
@@ -233,34 +233,6 @@ impl Rule for FolderNoun {
     }
 }
 
-/// Rejects declarations whose names contain four or more semantic words.
-pub struct SymbolName;
-
-impl Rule for SymbolName {
-    fn id(&self) -> &'static str {
-        "symbol-name-density"
-    }
-
-    fn severity(&self) -> Severity {
-        Severity::Error
-    }
-
-    fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
-        let mut findings = Vec::new();
-        for source in workspace.production() {
-            let mut visitor = Symbols {
-                rule: self.id(),
-                source,
-                trait_impl: false,
-                test_scope: false,
-                findings: &mut findings,
-            };
-            visitor.visit_file(&source.syntax);
-        }
-        Ok(findings)
-    }
-}
-
 /// Rejects declarations that repeat the noun already supplied by their module.
 pub struct ModulePrefix;
 
@@ -289,80 +261,6 @@ impl Rule for ModulePrefix {
             visitor.visit_file(&source.syntax);
         }
         Ok(findings)
-    }
-}
-
-struct Symbols<'a> {
-    rule: &'static str,
-    source: &'a Source,
-    trait_impl: bool,
-    test_scope: bool,
-    findings: &'a mut Vec<Finding>,
-}
-
-impl Symbols<'_> {
-    fn inspect(&mut self, ident: &syn::Ident, span: Span) {
-        if self.test_scope {
-            return;
-        }
-        let count = semantic_words(&ident.to_string()).len();
-        if count < 4 {
-            return;
-        }
-        let mut finding = Finding::error(self.rule, ident.to_string(), self.source.location(span));
-        finding.message = format!("`{ident}` contains {count} semantic words; the maximum is three");
-        finding.help = "reconsider the owning domain and module boundary, then name the declaration only for the concept not already supplied by that context".into();
-        self.findings.push(finding);
-    }
-}
-
-impl<'ast> Visit<'ast> for Symbols<'_> {
-    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        let previous = self.test_scope;
-        self.test_scope |= requires_test(&item.attrs);
-        syn::visit::visit_item_mod(self, item);
-        self.test_scope = previous;
-    }
-
-    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
-        let previous = self.trait_impl;
-        self.trait_impl = item.trait_.is_some();
-        syn::visit::visit_item_impl(self, item);
-        self.trait_impl = previous;
-    }
-
-    fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
-        self.inspect(&item.ident, item.span());
-        syn::visit::visit_item_struct(self, item);
-    }
-
-    fn visit_item_enum(&mut self, item: &'ast ItemEnum) {
-        self.inspect(&item.ident, item.span());
-        syn::visit::visit_item_enum(self, item);
-    }
-
-    fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
-        self.inspect(&item.ident, item.span());
-        syn::visit::visit_item_trait(self, item);
-    }
-
-    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        if !test_function(&item.attrs) {
-            self.inspect(&item.sig.ident, item.span());
-        }
-        syn::visit::visit_item_fn(self, item);
-    }
-
-    fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
-        if !self.trait_impl {
-            self.inspect(&item.sig.ident, item.span());
-        }
-        syn::visit::visit_impl_item_fn(self, item);
-    }
-
-    fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
-        self.inspect(&item.sig.ident, item.span());
-        syn::visit::visit_trait_item_fn(self, item);
     }
 }
 
@@ -501,40 +399,6 @@ fn file_location(path: &Path) -> Location {
         column: 1,
         source: String::new(),
     }
-}
-
-/// Grammatical connectives join concepts instead of naming one, so density ignores them.
-fn connective(word: &str) -> bool {
-    matches!(
-        word,
-        "a" | "an"
-            | "the"
-            | "and"
-            | "or"
-            | "of"
-            | "for"
-            | "with"
-            | "without"
-            | "to"
-            | "from"
-            | "in"
-            | "into"
-            | "on"
-            | "at"
-            | "by"
-            | "as"
-            | "after"
-            | "before"
-            | "until"
-            | "when"
-            | "is"
-            | "are"
-            | "be"
-    )
-}
-
-fn semantic_words(value: &str) -> Vec<String> {
-    words(value).into_iter().filter(|word| !connective(word)).collect()
 }
 
 fn words(value: &str) -> Vec<String> {

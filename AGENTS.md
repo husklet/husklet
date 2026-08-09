@@ -1060,6 +1060,12 @@ reasoning, not only the final code.
 - Avoid `Manager`, `Helper`, `Util`, `Impl`, vague abbreviations, and repeated
   module prefixes.
 - A trait or type is already a namespace; method names do not repeat it.
+- Every word in a name must earn its place: drop any word the module, type, or
+  trait already supplies. There is no word budget, because a name that spells an
+  external mechanism — `oom_score_adj`, `write_life_hint`, `unix_socket_path` —
+  spends its words on one concept, and that spelling is worth more than brevity.
+  Never shorten or paraphrase a name that maps to a kernel, ABI, wire, or vendor
+  spelling; the exact match is the documentation.
 - Prefer standard conversion, parsing, formatting, and iterator traits when they
   express the complete contract.
 - Keep the happy path shallow.

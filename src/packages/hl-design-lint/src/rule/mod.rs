@@ -63,7 +63,7 @@ pub use receiver::Repetition as ReceiverRepetition;
 pub use result::IgnoredResult;
 pub use role::Suffix as SuffixRole;
 pub use safety::Boundary as UnsafeBoundary;
-pub use shape::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, SymbolName, TestName};
+pub use shape::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, TestName};
 pub use state::FiniteStateString;
 pub use suite::{Dependency as TestDependency, Directory as TestDirectory};
 pub use toolkit::GuiToolkitLeakage;
