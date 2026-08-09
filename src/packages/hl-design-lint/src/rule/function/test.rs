@@ -135,6 +135,10 @@ fn count(cases: &[Case]) -> usize {
 fn first(case: Option<Case>) -> bool {
     case.is_some()
 }
+pub type Result<T> = std::result::Result<T, String>;
+fn outcome(case: Result<Case>) -> bool {
+    case.is_ok()
+}
 ",
     );
     assert!(values.is_empty(), "got {values:?}");
