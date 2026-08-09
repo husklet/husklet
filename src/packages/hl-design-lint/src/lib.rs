@@ -303,8 +303,6 @@ fn unmarked_parses(value: &str) -> Result<usize, String> { Ok(value.len()) }
                 .collect::<Vec<_>>(),
             [
                 "one",
-                "two",
-                "unreviewed_handler",
                 "detached",
                 "gated",
                 "package",
@@ -595,7 +593,7 @@ const PROSE: &str = "mod misc {}";
         let mut diagnostic = Diagnostic::new(Vec::new());
         Linter::standard().run([source.clone()], &mut diagnostic).unwrap();
         let diagnostic = String::from_utf8(diagnostic.into_inner()).unwrap();
-        assert!(diagnostic.contains("unclassified free function `missing`"));
+        assert!(diagnostic.contains("free function `missing` takes one declared type"));
         assert!(!diagnostic.contains("unclassified free function `reviewed`"));
 
         let mut markdown = Markdown::new(Vec::new());
