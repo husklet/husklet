@@ -108,7 +108,7 @@ pub(super) struct NativeCounters {
     pub(super) suppress_latches: u64,
     pub(super) suppress_deferred: u64,
     pub(super) suppress_clears: u64,
-    /// Latched entries whose retry fell short again and re-armed to a doubled span.
+    /// Latched entries whose retry fell short again and re-armed to another span.
     pub(super) suppress_rearms: u64,
     /// Latches made permanent because the entry has never once cleared the bar.
     pub(super) suppress_permanent: u64,
@@ -121,14 +121,11 @@ pub(super) struct NativeCounters {
 pub(super) type NativeSite = (hl_task::ProcessId, u64, u64, u64);
 pub(super) type NativeSource = (hl_task::ProcessId, u64, u64, u64);
 
-/// Refusals a fresh latch serves before it lets the entry back in, and the ceiling
-/// the span doubles toward on each re-latch.
+/// Refusals a fresh latch serves before it lets the entry back in.
 pub(super) const SUPPRESSION_SPAN: u64 = 64;
-pub(super) const SUPPRESSION_SPAN_LIMIT: u64 = 65_536;
 
-/// How much longer one suppressed entry stays refused, and the span it re-arms to if
-/// the retry falls back again. A `span` of zero is a permanent latch that no refusal
-/// expires.
+/// How much longer one suppressed entry stays refused, and whether any refusal expires
+/// the latch at all.
 ///
 /// A refusal count alone cannot tell the two populations apart, which is what sank the
 /// earlier bounded-suppression attempts. On malloc and sqlite the latched entry has a
@@ -141,7 +138,7 @@ pub(super) const SUPPRESSION_SPAN_LIMIT: u64 = 65_536;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Probation {
     pub(super) remaining: u64,
-    pub(super) span: u64,
+    pub(super) permanent: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -325,7 +322,7 @@ impl NativePool {
         let Some(probation) = self.suppressed.get_mut(&entry) else {
             return false;
         };
-        if probation.span == 0 {
+        if probation.permanent {
             return true;
         }
         if probation.remaining == 0 {
@@ -370,19 +367,17 @@ impl NativePool {
                 if self.productive.contains(&entry) {
                     // This entry has retired real native work before, so a short run is an
                     // anomaly. Doubling bounds it at O(log refusals) retries.
-                    probation.span = probation.span.saturating_mul(2).min(SUPPRESSION_SPAN_LIMIT);
-                    probation.remaining = probation.span;
+                    probation.remaining = SUPPRESSION_SPAN;
                     self.counters.suppress_rearms += 1;
                 } else if self.productive_saturated {
                     // Absence from a saturated table is not evidence, so keep expiring.
-                    probation.span = probation.span.saturating_mul(2).min(SUPPRESSION_SPAN_LIMIT);
-                    probation.remaining = probation.span;
+                    probation.remaining = SUPPRESSION_SPAN;
                     self.counters.suppress_rearms += 1;
                 } else {
                     // It has now fallen short on every run it has ever had, including the
                     // one the probationary span bought it. There is no native work here to
                     // recover, so stop paying a re-entry and a rebuild to rediscover that.
-                    probation.span = 0;
+                    probation.permanent = true;
                     probation.remaining = 0;
                     self.counters.suppress_permanent += 1;
                 }
@@ -391,7 +386,7 @@ impl NativePool {
                     entry,
                     Probation {
                         remaining: SUPPRESSION_SPAN,
-                        span: SUPPRESSION_SPAN,
+                        permanent: false,
                     },
                 );
                 self.counters.suppress_latches += 1;

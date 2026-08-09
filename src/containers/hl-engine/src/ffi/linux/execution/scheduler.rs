@@ -709,15 +709,16 @@ mod tests {
         }
         assert_eq!(pool.counters.suppress_clears, 1);
         assert!(!pool.refuses(entry), "the span is spent, so the entry is retried");
-        // A retry that falls short again re-arms to a doubled span rather than to a
-        // permanent latch, so a genuinely bad entry costs O(log refusals) retries.
+        // A retry that falls short again re-arms to another span rather than to a
+        // permanent latch, so a productive entry can always recover.
         pool.record_fallback(entry, instruction, 399, SLICE_BUDGET, false);
         assert_eq!(pool.counters.suppress_rearms, 1);
-        assert_eq!(pool.suppressed[&entry].span, super::pool::SUPPRESSION_SPAN * 2);
+        assert_eq!(pool.suppressed[&entry].remaining, super::pool::SUPPRESSION_SPAN);
+        assert!(!pool.suppressed[&entry].permanent);
     }
 
     /// The two populations a refusal count cannot separate. An entry that has retired real
-    /// native work before gets its span doubled, because a short run is an anomaly. An entry
+    /// native work before earns another span, because a short run is an anomaly. An entry
     /// that has fallen short on every run it has ever had latches permanently after its one
     /// probationary span, so the exit-heavy phases stop paying a re-entry and a rebuild to
     /// rediscover that there is nothing to recover.
@@ -746,8 +747,8 @@ mod tests {
         pool.record_fallback(hot, instruction, 399, SLICE_BUDGET, false);
         pool.record_fallback(hot, instruction, 399, SLICE_BUDGET, false);
         assert_eq!(pool.counters.suppress_rearms, 1);
-        assert_eq!(pool.suppressed[&hot].span, super::pool::SUPPRESSION_SPAN * 2);
-        assert_ne!(pool.suppressed[&hot].span, 0, "a productive entry never latches permanently");
+        assert_eq!(pool.suppressed[&hot].remaining, super::pool::SUPPRESSION_SPAN);
+        assert!(!pool.suppressed[&hot].permanent, "a productive entry never latches permanently");
     }
 
     /// Absence from the productive table is only evidence while the table can still record.
@@ -764,7 +765,7 @@ mod tests {
         pool.record_fallback(entry, instruction, 20, SLICE_BUDGET, false);
         assert_eq!(pool.counters.suppress_permanent, 0, "saturation disarms permanence");
         assert_eq!(pool.counters.suppress_rearms, 1);
-        assert_ne!(pool.suppressed[&entry].span, 0);
+        assert!(!pool.suppressed[&entry].permanent);
     }
 
     /// The threshold is a share of the budget, so a short-budget run cannot dodge
@@ -819,7 +820,7 @@ mod tests {
         for process in [retired, retained] {
             pool.sources.insert((process, 1, 0x1000, 0x1100), token);
             pool.observations.insert((process, 1, 1, 0x1000), 1);
-            pool.suppressed.insert((process, 1, 1, 0x1000), super::pool::Probation { remaining: 1, span: 1 });
+            pool.suppressed.insert((process, 1, 1, 0x1000), super::pool::Probation { remaining: 1, permanent: false });
             pool.direct_declined.insert((process, 1, 1, 0x1000));
             pool.fallbacks.insert((process, 1, 1, 0x1004));
             pool.source_incarnations.insert(process, 1);
