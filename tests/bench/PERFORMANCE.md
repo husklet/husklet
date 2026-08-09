@@ -351,12 +351,15 @@ rootfs — including guest `/tmp` — lives on the cache filesystem.
 
 ### Not measured, and why
 
-* **`interp-python` with `diagnostics: true` aborts** with
-  `*** stack smashing detected ***` (exit 134). This is a **real latent bug and
-  currently unowned.** Its practical effect on this page is that the `hl-native:`
-  counter route is **unavailable for every container row**, which is why the
-  container table carries timings only. Fixing it would let the container rows be
-  attributed the way the `combined` rows are.
+* ~~**`interp-python` with `diagnostics: true` aborts**~~ — **fixed.** The abort
+  was the aarch64 captured-cursor patch sites writing past the translation
+  buffer, bounded later the same day. With `diagnostics: true` all six
+  `interp-python` rows now pass (`bench: 6 passed; 0 failed`), and reverting one
+  of those bounds — the `hl_a64_assembler_wrote` guard in `conditional.c`'s
+  `patch()` — reproduces `*** stack smashing detected ***`, exit 134, on
+  `interp-python --isa arm64`. The `hl-native:` counter route is therefore
+  available for container rows; the tables above remain timings only because they
+  were taken with diagnostics off, which is what their timings require.
 * **`malloc`, amd64** — still not attempted; the gate's 600-second internal
   deadline fires before the phase completes under the x86 interpreter at
   `--divisor 1`. **Restated, not resolved**, for the fourth map running.
