@@ -1,8 +1,49 @@
 use super::*;
+use hl_container::ContainerState;
+
+/// Docker decides a start request from the container's current state before it
+/// reaches the runtime: paused is a conflict and already-running is 304.
+#[derive(Debug, PartialEq, Eq)]
+pub(in super::super) enum StartAdmission {
+    Launch,
+    AlreadyStarted,
+    Paused,
+}
+
+#[hl_design::classify(domain = "docker")]
+pub(in super::super) fn start_admission(state: &ContainerState) -> StartAdmission {
+    if state.is_paused() {
+        StartAdmission::Paused
+    } else if state.is_active() {
+        StartAdmission::AlreadyStarted
+    } else {
+        StartAdmission::Launch
+    }
+}
+
+/// Docker answers 304 when stop finds the container already inactive.
+#[hl_design::classify(domain = "docker")]
+pub(in super::super) fn stop_admission(state: &ContainerState) -> StatusCode {
+    if state.is_active() {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_MODIFIED
+    }
+}
 
 #[hl_design::adapter]
 pub(in super::super) async fn start(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
+    match start_admission(&container.state) {
+        StartAdmission::AlreadyStarted => return Ok(StatusCode::NOT_MODIFIED),
+        StartAdmission::Paused => {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "cannot start a paused container, try unpause instead",
+            ));
+        }
+        StartAdmission::Launch => {}
+    }
     state.containers.start(&id).await.map_err(ApiError::container)?;
     state.events.volumes("mount", &container);
     Ok(StatusCode::NO_CONTENT)
@@ -100,7 +141,7 @@ pub(in super::super) async fn stop(
 ) -> ApiResult<StatusCode> {
     let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
     if !container.state.is_active() {
-        return Ok(StatusCode::NO_CONTENT);
+        return Ok(stop_admission(&container.state));
     }
     query.validate_signal(container.spec.stop_signal)?;
     match state
@@ -312,5 +353,54 @@ mod stop_timeout_tests {
         let uri = "/v1.41/containers/id/stop?t=7&signal=KILL".parse().unwrap();
         let Query(query) = Query::<LegacyTimeoutQuery>::try_from_uri(&uri).unwrap();
         assert_eq!(query.seconds, Some(7));
+    }
+
+    fn exited() -> ContainerState {
+        ContainerState::Exited {
+            result: ExitStatus::Code(0),
+            finished_at_ms: 1,
+        }
+    }
+
+    #[test]
+    fn start_admission_follows_docker_state_precedence() {
+        assert_eq!(super::start_admission(&ContainerState::Created), StartAdmission::Launch);
+        assert_eq!(super::start_admission(&exited()), StartAdmission::Launch);
+        assert_eq!(
+            super::start_admission(&ContainerState::Running {
+                process_id: 3,
+                started_at_ms: 1,
+            }),
+            StartAdmission::AlreadyStarted
+        );
+        assert_eq!(
+            super::start_admission(&ContainerState::Restarting {
+                result: ExitStatus::Code(0),
+                finished_at_ms: 1,
+                ready_at_ms: 2,
+            }),
+            StartAdmission::AlreadyStarted
+        );
+        assert_eq!(
+            super::start_admission(&ContainerState::Paused {
+                process_id: 3,
+                started_at_ms: 1,
+                paused_at_ms: 2,
+            }),
+            StartAdmission::Paused
+        );
+    }
+
+    #[test]
+    fn stop_admission_reports_not_modified_for_inactive_containers() {
+        assert_eq!(super::stop_admission(&ContainerState::Created), StatusCode::NOT_MODIFIED);
+        assert_eq!(super::stop_admission(&exited()), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            super::stop_admission(&ContainerState::Running {
+                process_id: 3,
+                started_at_ms: 1,
+            }),
+            StatusCode::NO_CONTENT
+        );
     }
 }

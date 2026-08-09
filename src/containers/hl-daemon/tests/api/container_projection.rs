@@ -94,7 +94,7 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     )
     .await?;
     require(
-        legacy_stop.0.starts_with("HTTP/1.1 204"),
+        legacy_stop.0.starts_with("HTTP/1.1 304"),
         "legacy container stop did not ignore the newer signal query",
     )?;
     let malformed_stop = exchange(
@@ -105,7 +105,7 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     )
     .await?;
     require(
-        malformed_stop.0.starts_with("HTTP/1.1 204"),
+        malformed_stop.0.starts_with("HTTP/1.1 304"),
         "inactive container stop validated an unused malformed signal",
     )?;
     let unsupported_stop = exchange(
@@ -116,7 +116,7 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     )
     .await?;
     require(
-        unsupported_stop.0.starts_with("HTTP/1.1 204"),
+        unsupported_stop.0.starts_with("HTTP/1.1 304"),
         "inactive container stop validated an unused signal override",
     )?;
     for target in [
@@ -126,7 +126,7 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     ] {
         let response = exchange(socket, "POST", &target, None).await?;
         require(
-            response.0.starts_with("HTTP/1.1 204"),
+            response.0.starts_with("HTTP/1.1 304"),
             "inactive container stop rejected a Docker timeout form",
         )?;
     }
@@ -188,7 +188,7 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     }
     let empty_stop = exchange(socket, "POST", &format!("/v1.42/containers/{id}/stop?signal="), None).await?;
     require(
-        empty_stop.0.starts_with("HTTP/1.1 204"),
+        empty_stop.0.starts_with("HTTP/1.1 304"),
         "container stop rejected an empty signal query",
     )?;
     let configured_stop = exchange(
@@ -199,7 +199,7 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     )
     .await?;
     require(
-        configured_stop.0.starts_with("HTTP/1.1 204"),
+        configured_stop.0.starts_with("HTTP/1.1 304"),
         "container stop rejected its configured signal",
     )?;
 
