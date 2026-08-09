@@ -82,6 +82,11 @@ pub const DEFINITIONS: &[Definition] = &[
     launch!("HL_NET_ISOLATE", "disable guest external networking", Flag),
     launch!("HL_NET_HOST", "use the host network stack directly", Flag),
     launch!(
+        "HL_NATIVE_ADMISSION_CACHE",
+        "reuse the previous native admission across consecutive inline services",
+        Flag
+    ),
+    launch!(
         "HL_NATIVE_DIAGNOSTICS",
         "report native execution counters at launch exit",
         Flag

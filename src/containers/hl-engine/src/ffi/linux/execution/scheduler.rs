@@ -528,6 +528,48 @@ mod tests {
     }
 
     #[test]
+    fn the_admission_cache_serves_only_an_identical_site_length_and_epoch() {
+        let mut options = crate::options::Options::default();
+        options.set("HL_NATIVE_ADMISSION_CACHE", "1", true).unwrap();
+        let mut pool = NativePool::new(GuestIsa::X86_64, &plan(options), None);
+        let process = hl_task::ProcessId::from_wire(7, 1).unwrap();
+        let site = (process, 3, 11, 0x1000);
+        let code = [0xcc_u8; 8];
+        pool.record_admission(site, code.len(), 5, &code);
+
+        let mut served = [0_u8; 8];
+        assert!(pool.admitted_bytes(site, 8, 5, &mut served), "a repeat must hit");
+        assert_eq!(served, code);
+
+        // Every invalidation the key must catch: a peer rewriting the code moves
+        // `token.version`, a mapping change moves the incarnation, an instruction
+        // epoch rotation moves the epoch, and a different entry moves the PC.
+        let (_, incarnation, version, pc) = site;
+        for (name, miss) in [
+            ("self-modifying write", (process, incarnation, version + 1, pc)),
+            ("mapping change", (process, incarnation + 1, version, pc)),
+            ("other process", (hl_task::ProcessId::from_wire(8, 1).unwrap(), incarnation, version, pc)),
+            ("other entry", (process, incarnation, version, pc + 4)),
+        ] {
+            assert!(!pool.admitted_bytes(miss, 8, 5, &mut served), "{name} must miss");
+        }
+        assert!(!pool.admitted_bytes(site, 8, 6, &mut served), "epoch rotation must miss");
+        assert!(!pool.admitted_bytes(site, 4, 5, &mut served), "a shorter span must miss");
+        pool.disable();
+        assert!(!pool.admitted_bytes(site, 8, 5, &mut served), "a disabled pool must miss");
+    }
+
+    #[test]
+    fn the_admission_cache_is_off_unless_its_option_is_set() {
+        let mut pool = NativePool::new(GuestIsa::X86_64, &plan(crate::options::Options::default()), None);
+        assert!(!pool.admission_cache);
+        let site = (hl_task::ProcessId::from_wire(7, 1).unwrap(), 3, 11, 0x1000);
+        pool.record_admission(site, 8, 5, &[0xcc_u8; 8]);
+        assert!(pool.admitted.is_none());
+        assert!(!pool.admitted_bytes(site, 8, 5, &mut [0_u8; 8]));
+    }
+
+    #[test]
     fn a_compute_bound_activation_stops_extending_and_returns_to_the_scheduler() {
         // The C run loop admits one solo grant per accepted extension, so the
         // chain a spinning guest thread can build must terminate.

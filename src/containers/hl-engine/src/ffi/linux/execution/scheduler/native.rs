@@ -57,23 +57,31 @@ impl GuestExecutor {
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
         let fallback_key = (run.process, lease.generation(), token.version, pc);
-        if pool.refuses(fallback_key) {
-            if pool.diagnostics {
-                *pool.suppressed_weight.entry(pc).or_default() += 1;
-            }
-            pool.counters.declined_suppressed += 1;
-            return None;
-        }
-        if pool.observe(fallback_key) < 2 {
-            pool.counters.declined_cold += 1;
-            return None;
-        }
-        let allow_direct = pool.direct_earned(run.process) && !pool.direct_declined.contains(&fallback_key);
+        let instruction_epoch = super::super::operand::ImageMemory::epoch(memory).writes;
         let mut bytes = [0_u8; 256];
         let bytes = &mut bytes[..usize::try_from(length).ok()?];
-        mappings
-            .read_spans(GuestAddress::new(pc), bytes, Protection::EXECUTE)
-            .ok()?;
+        // A repeat of the previous admission under an unchanged site, length and
+        // instruction epoch: the gates have already admitted it, the code cannot have
+        // changed, and `prepare_source` would take no action.
+        let repeat = continuation.is_some_and(threads::SchedulerContinuation::is_current)
+            && pool.admitted_bytes(fallback_key, bytes.len(), instruction_epoch, bytes);
+        if !repeat {
+            if pool.refuses(fallback_key) {
+                if pool.diagnostics {
+                    *pool.suppressed_weight.entry(pc).or_default() += 1;
+                }
+                pool.counters.declined_suppressed += 1;
+                return None;
+            }
+            if pool.observe(fallback_key) < 2 {
+                pool.counters.declined_cold += 1;
+                return None;
+            }
+            mappings
+                .read_spans(GuestAddress::new(pc), bytes, Protection::EXECUTE)
+                .ok()?;
+        }
+        let allow_direct = pool.direct_earned(run.process) && !pool.direct_declined.contains(&fallback_key);
         let projection = if let Some((first, last)) =
             crate::native::InstructionWord::read(bytes).and_then(|instruction| instruction.literal_interval(pc))
         {
@@ -106,17 +114,20 @@ impl GuestExecutor {
                 )
                 .ok()?
         };
-        pool.prepare_source(
-            run.process,
-            pc,
-            pc + length,
-            token,
-            super::super::operand::ImageMemory::epoch(memory).writes,
-            |first, last| {
-                let range = hl_isa::AddressRange::nonempty(GuestAddress::new(first), last - first).ok()?;
-                Some(mappings.executable_token(range, lease.generation()))
-            },
-        )?;
+        if !repeat {
+            pool.prepare_source(
+                run.process,
+                pc,
+                pc + length,
+                token,
+                instruction_epoch,
+                |first, last| {
+                    let range = hl_isa::AddressRange::nonempty(GuestAddress::new(first), last - first).ok()?;
+                    Some(mappings.executable_token(range, lease.generation()))
+                },
+            )?;
+        }
+        pool.record_admission(fallback_key, bytes.len(), instruction_epoch, bytes);
         pool.counters.entries += 1;
         let executor = pool.executor(run.process)?;
         let source = [crate::native::NativeSource { guest_first: pc, bytes }];
@@ -275,22 +286,30 @@ impl GuestExecutor {
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length as u64).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
         let key = (run.process, lease.generation(), token.version, pc);
-        if pool.refuses(key) {
-            if pool.diagnostics {
-                *pool.suppressed_weight.entry(pc).or_default() += 1;
-            }
-            pool.counters.declined_suppressed += 1;
-            return None;
-        }
-        if pool.observe(key) < 2 {
-            pool.counters.declined_cold += 1;
-            return None;
-        }
+        let instruction_epoch = super::super::operand::ImageMemory::epoch(memory).writes;
         let mut bytes = [0_u8; 256];
         let bytes = &mut bytes[..length];
-        mappings
-            .read_spans(GuestAddress::new(pc), bytes, Protection::EXECUTE)
-            .ok()?;
+        // A repeat of the previous admission under an unchanged site, length and
+        // instruction epoch: the gates have already admitted it, the code cannot have
+        // changed, and `prepare_source` would take no action.
+        let repeat = continuation.is_some_and(threads::SchedulerContinuation::is_current)
+            && pool.admitted_bytes(key, length, instruction_epoch, bytes);
+        if !repeat {
+            if pool.refuses(key) {
+                if pool.diagnostics {
+                    *pool.suppressed_weight.entry(pc).or_default() += 1;
+                }
+                pool.counters.declined_suppressed += 1;
+                return None;
+            }
+            if pool.observe(key) < 2 {
+                pool.counters.declined_cold += 1;
+                return None;
+            }
+            mappings
+                .read_spans(GuestAddress::new(pc), bytes, Protection::EXECUTE)
+                .ok()?;
+        }
         let stack_region = mappings
             .ledger()
             .resolve(
@@ -310,17 +329,20 @@ impl GuestExecutor {
                 lease.generation(),
             )
             .ok()?;
-        pool.prepare_source(
-            run.process,
-            pc,
-            pc + length as u64,
-            token,
-            super::super::operand::ImageMemory::epoch(memory).writes,
-            |first, last| {
-                let range = hl_isa::AddressRange::nonempty(GuestAddress::new(first), last - first).ok()?;
-                Some(mappings.executable_token(range, lease.generation()))
-            },
-        )?;
+        if !repeat {
+            pool.prepare_source(
+                run.process,
+                pc,
+                pc + length as u64,
+                token,
+                instruction_epoch,
+                |first, last| {
+                    let range = hl_isa::AddressRange::nonempty(GuestAddress::new(first), last - first).ok()?;
+                    Some(mappings.executable_token(range, lease.generation()))
+                },
+            )?;
+        }
+        pool.record_admission(key, length, instruction_epoch, bytes);
         pool.counters.entries += 1;
         let diagnostics = pool.boundaries.is_some();
         let executor = pool.executor(run.process)?;

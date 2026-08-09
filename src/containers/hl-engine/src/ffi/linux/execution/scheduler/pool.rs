@@ -141,6 +141,16 @@ pub(super) struct Probation {
     pub(super) permanent: bool,
 }
 
+/// The previous admission of this pool, reused when the next one repeats it exactly.
+/// `version` is the executable-range token version, so a peer rewriting the code moves
+/// the key and the cached bytes are never served for code that has changed.
+pub(super) struct Admission {
+    pub(super) site: NativeSite,
+    pub(super) length: usize,
+    pub(super) epoch: u64,
+    pub(super) bytes: [u8; 256],
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SourceChange {
     Stable,
@@ -153,6 +163,9 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     /// Gates the opt-in profiling tables and the boundary ring, whose recording costs
     /// memory on the native path; failures are reported through `hl_log` regardless.
     pub(super) diagnostics: bool,
+    /// Gates the repeat-admission cache below.
+    pub(super) admission_cache: bool,
+    pub(super) admitted: Option<Admission>,
     pub(super) executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
     pub(super) suppressed: BTreeMap<NativeSite, Probation>,
     /// Entries that have completed a native run retiring a substantial share of their
@@ -204,6 +217,8 @@ impl NativePool {
         Self {
             enabled: Self::selected(isa, plan),
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
+            admission_cache: plan.options.get("HL_NATIVE_ADMISSION_CACHE") == Some("1"),
+            admitted: None,
             executors: BTreeMap::new(),
             suppressed: BTreeMap::new(),
             productive: BTreeSet::new(),
@@ -442,8 +457,38 @@ impl NativePool {
         *observations
     }
 
+    /// Copies the previous admission's code bytes when this admission repeats it exactly:
+    /// same process, image incarnation, executable-range version, entry PC, length and
+    /// instruction epoch. Under that key the warm-up gates have already admitted, the
+    /// guest code cannot have changed, and `prepare_source` would take no action, so the
+    /// caller may skip all three. The projection is deliberately not cached.
+    pub(super) fn admitted_bytes(&self, site: NativeSite, length: usize, epoch: u64, into: &mut [u8]) -> bool {
+        self.admission_cache
+            && self.admitted.as_ref().is_some_and(|admitted| {
+                admitted.site == site && admitted.length == length && admitted.epoch == epoch && {
+                    into.copy_from_slice(&admitted.bytes[..length]);
+                    true
+                }
+            })
+    }
+
+    pub(super) fn record_admission(&mut self, site: NativeSite, length: usize, epoch: u64, bytes: &[u8]) {
+        if !self.admission_cache || length > 256 {
+            return;
+        }
+        let mut held = [0_u8; 256];
+        held[..length].copy_from_slice(bytes);
+        self.admitted = Some(Admission {
+            site,
+            length,
+            epoch,
+            bytes: held,
+        });
+    }
+
     pub(super) fn disable(&mut self) {
         self.enabled = false;
+        self.admitted = None;
         self.executors.clear();
         self.sources.clear();
         self.source_incarnations.clear();
@@ -459,6 +504,7 @@ impl NativePool {
     }
 
     pub(super) fn reset_observed_sources(&mut self, process: hl_task::ProcessId, incarnation: u64) -> Option<()> {
+        self.admitted = None;
         self.executor(process)?.reset(incarnation).ok()?;
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _), _| *owner != process);
@@ -472,6 +518,7 @@ impl NativePool {
     }
 
     pub(super) fn purge_process_metadata(&mut self, process: hl_task::ProcessId) {
+        self.admitted = None;
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _), _| *owner != process);
         let held = self.suppressed.len();
