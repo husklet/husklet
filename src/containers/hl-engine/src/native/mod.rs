@@ -43,6 +43,8 @@ pub use event::{
 };
 #[cfg(target_os = "linux")]
 pub(crate) use executor::NativeFaultOwner;
+#[cfg(feature = "alloc-count")]
+pub use executor::allocations;
 pub(crate) use executor::state_invariant;
 #[allow(unused_imports)]
 pub(crate) use executor::{

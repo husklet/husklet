@@ -29,3 +29,6 @@ path = "src/bin/aarch64.rs"
 [[bin]]
 name = "hl-x86_64"
 path = "src/bin/x86.rs"
+
+[features]
+alloc-count = ["hl-engine/alloc-count"]

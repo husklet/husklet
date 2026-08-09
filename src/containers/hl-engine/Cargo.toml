@@ -40,3 +40,7 @@ libc = "0.2"
 [lib]
 name = "hl_engine"
 path = "src/lib.rs"
+
+[features]
+# Counts host heap allocations per native crossing; see `native::allocations`.
+alloc-count = []
