@@ -75,6 +75,24 @@ Use `pgrep -ax testing` when you need the rows as well as the count.
 Timings taken without this check are not evidence. Counter ratios, code-size
 deltas and categorical pass/timeout results survive contention; minima do not.
 
+## Know which tree you are standing in
+
+`cd` persists across shell calls. A single `cd` into a worktree silently
+relocates every later `git`, `grep` and `cargo` until something changes it back,
+and the output looks identical either way. This has produced a merge and a push
+against the wrong tree, and a "this symbol no longer exists" conclusion drawn
+from a lane's worktree and nearly recorded as a fact about the shared branch.
+
+Prefer `git -C <path>` and absolute paths over `cd`. When a finding depends on
+which tree it came from — a grep that found nothing, a test that passed, a file
+that is missing — re-run it from the shared tree before recording it, and say
+which tree the evidence came from.
+
+CodeGraph resolves against the tree its index was built in, not your current
+directory, so a shell that has wandered into a worktree gets structure from
+somewhere else. Worktrees carry their own `.codegraph/`; if yours does not, run
+`codegraph init -i` there rather than trusting the parent's index.
+
 ## Reading a profile
 
 High self-time and removable cost are independent properties, and this engine has
