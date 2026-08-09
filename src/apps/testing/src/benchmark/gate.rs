@@ -569,6 +569,8 @@ fn collect(paths: &[PathBuf]) -> Result<Series, String> {
             let checksum: u64 = field(ok)?
                 .parse()
                 .map_err(|_| "invalid benchmark checksum".to_owned())?;
+            let arm = field(provider)?;
+            super::timebase_verdict(field(phase)?, value, checksum).map_err(|error| format!("{arm}: {error}"))?;
             let key = (field(phase)?.to_owned(), field(provider)?.to_owned());
             let done = totals.entry(key.clone()).or_insert((0, 0));
             *done = (done.0.saturating_add(checksum), done.1 + 1);
@@ -805,6 +807,32 @@ mod tests {
         ));
         let series = collect(&paths).unwrap();
         assert_eq!(series[&("compute".to_owned(), "rust-engine".to_owned())].len(), 2);
+    }
+
+    /// The checksum-parity gate is structurally blind to a timebase divergence: the work
+    /// counts are equal by construction and only `us=` moves, which is the number the
+    /// verdict is made of. The timebase row is the arm that is not blind.
+    #[test]
+    fn an_arm_whose_clock_forged_its_own_speedup_is_refused_by_the_timebase_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("forged.csv");
+        std::fs::write(
+            &path,
+            format!("{HEADER}\nrust-engine,arm64,timebase,2615,21,g,e\nrust-engine,arm64,compute,2,40,g,e\n"),
+        )
+        .unwrap();
+        let error = collect(std::slice::from_ref(&path)).unwrap_err();
+        assert!(
+            error.contains("rust-engine") && error.contains("divergent guest timebase"),
+            "{error}"
+        );
+
+        std::fs::write(
+            &path,
+            format!("{HEADER}\nrust-engine,arm64,timebase,101848,1,g,e\nrust-engine,arm64,compute,2,40,g,e\n"),
+        )
+        .unwrap();
+        assert!(collect(&[path]).is_ok());
     }
 
     #[test]

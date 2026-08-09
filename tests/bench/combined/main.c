@@ -34,6 +34,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -70,7 +71,6 @@ static inline uint64_t timer_freq(void) {
     return v;
 }
 #else
-#include <time.h>
 static inline uint64_t timer_count(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -500,17 +500,22 @@ static int full_read(int fd, void *buffer, size_t size) {
 static uint64_t phase_pipe(unsigned iters) {
     int fds[2];
     uint64_t value = UINT64_C(0x123456789abcdef0);
-    uint64_t ok = 0;
+    uint64_t acc = 0, ok = 0;
     if (pipe(fds) != 0) return 0;
     for (unsigned i = 0; i < iters; ++i) {
-        if (full_write(fds[1], &value, sizeof(value)) != 0 ||
+        uint64_t sent = value * UINT64_C(6364136223846793005) + i;
+        value = 0;
+        if (full_write(fds[1], &sent, sizeof(sent)) != 0 ||
             full_read(fds[0], &value, sizeof(value)) != 0)
             break;
+        /* Fold the bytes that came back, not just the count: a pipe that
+         * delivered the wrong payload kept the old count checksum identical. */
+        acc = acc * 31 + value;
         ok++;
     }
     (void)close(fds[0]);
     (void)close(fds[1]);
-    return ok;
+    return ok == 0 ? 0 : (acc | 1);
 }
 
 /* ---------------- phase: memory (memcpy + memcmp bandwidth) ---------------- */
@@ -571,6 +576,36 @@ static uint64_t phase_sqlite(unsigned iters) {
     return acc;
 }
 #endif
+
+/* ---------------- phase: timebase (clock agreement assertion) --------------- *
+ * Every other phase's ok= is a work count, which is identical whatever the
+ * engine's clock does; only us= moves, and nothing checks us=. This phase's ok=
+ * is therefore an assertion, not a count: 1 when the architectural timer used
+ * for every us= above and CLOCK_MONOTONIC (a different engine owner and a
+ * different code path) both honoured a kernel sleep and agreed on its length.
+ * Each violated invariant sets its own bit instead, so a divergent timebase
+ * changes a checksum. Bounds are one-sided and 2x-loose: contention only ever
+ * lengthens the sleep, and both readings are wall clocks taken back to back, so
+ * a correct engine cannot fail this on a busy box. */
+static uint64_t phase_timebase(unsigned iters) {
+    (void)iters;
+    struct timespec request = {0, 100 * 1000 * 1000}, before, after;
+    if (clock_gettime(CLOCK_MONOTONIC, &before) != 0) return 2;
+    uint64_t started = timer_count();
+    while (nanosleep(&request, &request) != 0 && errno == EINTR) {}
+    uint64_t stopped = timer_count();
+    if (clock_gettime(CLOCK_MONOTONIC, &after) != 0) return 2;
+    uint64_t timer_us = ticks_to_us(stopped - started);
+    uint64_t clock_us = ((uint64_t)(after.tv_sec - before.tv_sec) * UINT64_C(1000000000) +
+                         (uint64_t)after.tv_nsec - (uint64_t)before.tv_nsec) / 1000;
+    uint64_t verdict = 1;
+    if (timer_us < 90000) verdict |= 4;   /* the timer ran too slow to cover the sleep */
+    if (clock_us < 90000) verdict |= 8;   /* CLOCK_MONOTONIC did too */
+    uint64_t low = timer_us < clock_us ? timer_us : clock_us;
+    uint64_t high = timer_us < clock_us ? clock_us : timer_us;
+    if (high > 2 * low) verdict |= 16;    /* the two clocks disagree on one interval */
+    return verdict;
+}
 
 /* ---------------- driver ---------------- */
 
@@ -643,6 +678,8 @@ int main(int argc, char **argv) {
     } while (0)
 
     /* compute appears twice to expose cold-translation vs warm delta. */
+    /* Asserted first: every later us= is only as good as this clock. */
+    RUN_PHASE("timebase", phase_timebase, 1, 0);
     RUN_PHASE("compute_cold", phase_compute, 40000000, 0);
     RUN_PHASE("compute", phase_compute, 40000000, 1);
     /* Iteration counts are sized so every phase runs long enough (~150-500ms
