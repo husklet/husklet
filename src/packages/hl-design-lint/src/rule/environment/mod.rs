@@ -331,13 +331,12 @@ fn source_boundary(source: &Source, modules: &[String]) -> bool {
             module.as_str(),
             "adapter" | "adapters" | "platform" | "host" | "unix" | "windows" | "macos" | "linux"
         )
-    })
-        || matches!(
-            modules,
-            [surface, platform, ..]
-                if surface == "surface"
-                    && matches!(platform.as_str(), "macos" | "windows" | "linux")
-        );
+    }) || matches!(
+        modules,
+        [surface, platform, ..]
+            if surface == "surface"
+                && matches!(platform.as_str(), "macos" | "windows" | "linux")
+    );
     let shim = source.package.contains("-shim-")
         && source
             .path
@@ -366,9 +365,7 @@ fn composition_root(source: &Source) -> bool {
         .path
         .components()
         .zip(source.path.components().skip(1))
-        .any(|(layer, package)| {
-            layer.as_os_str() == "src" && package.as_os_str() == "apps"
-        })
+        .any(|(layer, package)| layer.as_os_str() == "src" && package.as_os_str() == "apps")
 }
 
 fn package_relative(source: &Source) -> Option<std::path::PathBuf> {
