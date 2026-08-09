@@ -36,7 +36,7 @@ impl Source {
         Ok(Self {
             package: package(&path).unwrap_or_else(|| "unknown-package".to_owned()),
             domain: domain(&path),
-            test: is_test(&path),
+            test: test_source(&path),
             path,
             text,
             syntax,
@@ -444,7 +444,9 @@ fn explicit_linter(path: &Path) -> bool {
         && path.join("Cargo.toml").is_file()
 }
 
-fn is_test(path: &Path) -> bool {
+/// Reports whether a path is a test source: a companion `_test` file, or any file
+/// below a test, bench, or support directory.
+pub(crate) fn test_source(path: &Path) -> bool {
     path.file_stem().is_some_and(|stem| {
         stem == "test"
             || stem == "tests"
@@ -454,7 +456,7 @@ fn is_test(path: &Path) -> bool {
     }) || path.components().any(|component| {
         matches!(
             component.as_os_str().to_str(),
-            Some("tests" | "test_support" | "benches")
+            Some("test" | "tests" | "test_support" | "benches")
         )
     })
 }

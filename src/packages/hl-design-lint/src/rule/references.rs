@@ -14,8 +14,6 @@ use crate::{
 pub struct Context {
     pub name: String,
     pub source: String,
-    /// The enclosing item is an inherent or trait method, so it is not a free function.
-    pub associated: bool,
 }
 
 #[derive(Clone)]
@@ -23,8 +21,6 @@ pub struct Reference {
     pub name: String,
     pub location: Location,
     pub context: Option<Rc<Context>>,
-    /// The reference lives in an attribute body rather than ordinary code.
-    pub attribute: bool,
     /// Module named immediately before the reference, when it was written with one.
     pub module: Option<String>,
 }
@@ -70,11 +66,10 @@ impl<'a> References<'a> {
         self.test_scope = previous;
     }
 
-    fn context(&self, name: String, span: proc_macro2::Span, associated: bool) -> Rc<Context> {
+    fn context(&self, name: String, span: proc_macro2::Span) -> Rc<Context> {
         Rc::new(Context {
             name,
             source: self.source.excerpt(span),
-            associated,
         })
     }
 
@@ -86,7 +81,6 @@ impl<'a> References<'a> {
             name,
             location: self.source.location(span),
             context: self.context.clone(),
-            attribute: self.attribute,
             module,
         });
     }
@@ -163,7 +157,7 @@ impl<'ast> Visit<'ast> for References<'_> {
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
         let previous = self
             .context
-            .replace(self.context(function.sig.ident.to_string(), function.span(), false));
+            .replace(self.context(function.sig.ident.to_string(), function.span()));
         let parameters = signature(&function.sig);
         self.scoped(&function.attrs, |visitor| {
             visitor.bound(parameters, |visitor| {
@@ -176,7 +170,7 @@ impl<'ast> Visit<'ast> for References<'_> {
     fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
         let previous = self
             .context
-            .replace(self.context(function.sig.ident.to_string(), function.span(), true));
+            .replace(self.context(function.sig.ident.to_string(), function.span()));
         let parameters = signature(&function.sig);
         self.scoped(&function.attrs, |visitor| {
             visitor.bound(parameters, |visitor| {
