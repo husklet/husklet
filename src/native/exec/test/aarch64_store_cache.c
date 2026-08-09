@@ -250,10 +250,9 @@ int main(void) {
     if (measure(0, &distinct) != 0 || measure(1, &shared) != 0 || measure(2, &denied) != 0)
         return 1;
     if (measure_adjacent() != 0) return 1;
-    /* a64_guard_fast counts read-cache and write-cache resolutions alike, so the
-     * write-side claim below is the total less this fixed read-side baseline: the
-     * two loads are resolved by the read cache once per round in every mode. */
-    const unsigned reads = 2 * rounds;
+    /* a64_guard_fast counts read-cache and write-cache resolutions alike. The
+     * first view is already latched, so only the load from B scans the cache. */
+    const unsigned reads = rounds;
     /* Three buffers: every store misses the single latched window, and the
      * write cache resolves all of them without a dispatcher exit. */
     CHECK(distinct.guards == 4 * rounds);
@@ -261,11 +260,11 @@ int main(void) {
     CHECK(distinct.fallbacks == 0 && distinct.write_faults == 0);
     /* One buffer: the store reuses the already-active view and never scans. */
     CHECK(shared.guards == 4 * rounds);
-    CHECK(shared.fast_guards == reads + 0);
+    CHECK(shared.fast_guards == 0);
     CHECK(shared.fallbacks == 0 && shared.write_faults == 0);
     /* A denied store is never resolved by the cache; only the two loads reach
      * resume, and every store leaves as a write-permission fallback. */
-    CHECK(denied.fast_guards == reads + 0);
+    CHECK(denied.fast_guards == reads);
     CHECK(denied.guards == 2 * rounds);
     CHECK(denied.fallbacks == rounds && denied.write_faults == rounds);
     return 0;

@@ -729,12 +729,9 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
 
 void hl_a64_guard_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t required,
                         hl_a64_guard *guard) {
-    uint32_t *cache_hit = NULL;
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u);
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
-    if (required == HL_A64_PERMISSION_READ) read_cache(assembler, bytes, &cache_hit);
-    if (!hl_a64_assembler_ok(assembler)) return;
     hl_a64_ldr(assembler, 9, CPU, OFFSET_FIRST);
     hl_a64_emit32(assembler, 0xEB09021Fu);
     guard->below = (uint32_t *)assembler->cursor;
@@ -755,7 +752,6 @@ void hl_a64_guard_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t re
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-    if (required == HL_A64_PERMISSION_READ) branch(assembler, cache_hit, assembler->cursor);
     guard->resume = assembler->cursor;
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_full));
     guard->required = required;
@@ -791,7 +787,6 @@ void hl_a64_guard_direct_begin(hl_a64_assembler *assembler, uint64_t bytes, uint
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_full));
     guard->required = required;
     guard->bytes = bytes;
-    guard->direct = 1;
 }
 
 void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard) {
@@ -824,9 +819,10 @@ void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard)
     if (guard->required == HL_A64_PERMISSION_WRITE) {
         uint8_t *archive = guard->archive;
         write_cache(assembler, guard->bytes, guard->pc, guard->resume, &archive);
-    } else if (guard->required == HL_A64_PERMISSION_READ && guard->direct) {
-        /* Mirror write_cache: a direct read outside the window is recoverable
-         * from the same bounded cache instead of leaving to the dispatcher. */
+    } else if (guard->required == HL_A64_PERMISSION_READ) {
+        /* Reads try the latched window first. A miss is recoverable from the
+         * same bounded cache, which installs the selected view before retrying
+         * at the already-projected load. */
         uint32_t *hit = NULL;
         read_cache(assembler, guard->bytes, &hit);
         if (!hl_a64_assembler_ok(assembler)) return;

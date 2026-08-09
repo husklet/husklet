@@ -281,16 +281,23 @@ int main(void) {
     if (writeback() != 0) return 1;
     if (measure(0, &distinct) != 0 || measure(1, &shared) != 0 || measure(2, &denied) != 0)
         return 1;
-    /* Three owners in one entry: the cache resolves every load itself, so none
-     * of them reaches the dispatcher. */
+    /* Three owners in one entry: the latched window and cache together resolve
+     * every load, so none of them reaches the dispatcher. */
     CHECK(distinct.guards == 3 * rounds);
+    /* The stack primes owner A as the latched window. Only the transitions to
+     * B and C need the bounded cache; each hit then latches its selected view. */
+    CHECK(distinct.cache_hits == 2 * rounds);
     CHECK(distinct.fallbacks == 0 && distinct.read_faults == 0);
-    /* One owner: the same three loads, still all resolved. */
+    /* One owner: the entry's latched window resolves all three reads without
+     * scanning the secondary view table. */
     CHECK(shared.guards == 3 * rounds);
+    CHECK(shared.cache_hits == 0);
     CHECK(shared.fallbacks == 0 && shared.read_faults == 0);
     /* The write-only owner is never selected: only the two permitted loads
-     * reach resume, and the third leaves as a read-permission fallback. */
+     * reach resume, B is the only cache hit, and the third leaves as a
+     * read-permission fallback. */
     CHECK(denied.guards == 2 * rounds);
+    CHECK(denied.cache_hits == rounds);
     CHECK(denied.fallbacks == rounds && denied.read_faults == rounds);
     return 0;
 }
