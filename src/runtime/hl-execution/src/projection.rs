@@ -51,9 +51,14 @@ where
             }
         }
         if generation < seen {
+            hl_log::hl_debug!(
+                hl_log::tag::CPU,
+                "projection observation dropped as stale generation={generation} seen={seen} active={active}"
+            );
             return;
         }
         if active && !self.active.swap(true, Ordering::AcqRel) {
+            hl_log::hl_debug!(hl_log::tag::CPU, "projection activated generation={generation}");
             self.control.activate();
         }
     }

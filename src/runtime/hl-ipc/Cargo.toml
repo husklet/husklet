@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+hl-log = { path = "../../packages/hl-log" }
 hl-descriptor = { path = "../hl-descriptor" }
 hl-memory = { path = "../hl-memory" }
 hl-sync = { path = "../hl-sync" }

@@ -341,7 +341,13 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                     | "engine"
                     | "testing"
                     | "hl-runtime"
-                    | "hl-engine",
+                    | "hl-engine"
+                    | "hl-vfs"
+                    | "hl-sync"
+                    | "hl-ipc"
+                    | "hl-descriptor"
+                    | "hl-terminal"
+                    | "hl-execution",
                 "hl-log"
             )
             | ("hl-container" | "engine" | "testing", "hl-engine")

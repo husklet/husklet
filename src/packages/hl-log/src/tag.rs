@@ -234,10 +234,8 @@ pub const GL: Tag = Tag::new(1 << 3, "gl");
 pub const CUDA: Tag = Tag::new(1 << 4, "cuda");
 pub const COMPOSITOR: Tag = Tag::new(1 << 5, "compositor");
 pub const TRANSPORT: Tag = Tag::new(1 << 6, "transport");
-pub const WIRE: Tag = Tag::new(1 << 7, "wire");
 pub const PRESENT: Tag = Tag::new(1 << 8, "present");
 pub const EXEC: Tag = Tag::new(1 << 9, "exec");
-pub const SHIM: Tag = Tag::new(1 << 10, "shim");
 pub const RUNTIME: Tag = Tag::new(1 << 11, "runtime");
 pub const CPU: Tag = Tag::new(1 << 12, "cpu");
 pub const EGL: Tag = Tag::new(1 << 13, "egl");
@@ -275,8 +273,8 @@ pub const NONE: Tags = Tags::NONE;
 /// A new tag is a `Tag::new(1 << <next free bit>, "<name>")` const listed here; parsing,
 /// display, and every macro then pick it up automatically.
 pub const TAGS: &[Tag] = &[
-    GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU, EGL, WAYLAND,
-    CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK, SIGNAL, SYNC, IPC, CHECKPOINT,
+    GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, PRESENT, EXEC, RUNTIME, CPU, EGL, WAYLAND, CONTAINER, IMAGE,
+    DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK, SIGNAL, SYNC, IPC, CHECKPOINT,
 ];
 
 #[cfg(test)]
