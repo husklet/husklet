@@ -69,8 +69,10 @@ static uint64_t overflow_report(const hl_a64_assembler *assembler, uint64_t pc) 
 static void compare_zero(hl_a64_assembler *assembler, uint32_t *instruction,
                          const uint8_t *target, int reg);
 
-/* Experiment switch: report journal saturation through dirty_overflow and keep
- * running instead of leaving native execution. Off unless the variable is "1". */
+/* Control switch for continuing after exact-journal saturation. Local malloc
+ * wins do not compose by themselves: full-sequence controls regress a later
+ * syscall phase, so keep this off until scheduler policy accounts for that
+ * cross-phase state. */
 static int hl_a64_dirty_overflow_continues(void) {
     static int cached = -1;
     if (cached < 0) {
