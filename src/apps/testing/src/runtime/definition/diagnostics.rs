@@ -292,11 +292,23 @@ mod tests {
     /// rather than against the few kilobytes a typical case emits.
     #[test]
     fn the_digest_stays_far_under_a_millisecond_at_the_stderr_capture_ceiling() {
+        // Scale rather than wall clock: an absolute bound here failed three lanes on a loaded box,
+        // and the property that matters is that the digest is linear in its input, not quadratic.
+        // Both timings are taken back to back so contention enters each of them equally.
         let line = "hl-native-entry: probes=1 entries=1 declined_executable=0 declined_suppressed=0 declined_cold=0 declined_other=0\n";
-        let report = line.repeat(8 * 1024 * 1024 / line.len()).into_bytes();
+        let small = line.repeat(1024 * 1024 / line.len()).into_bytes();
+        let ceiling = line.repeat(8 * 1024 * 1024 / line.len()).into_bytes();
+
         let started = std::time::Instant::now();
-        assert!(!super::digest(&report).is_empty());
-        assert!(started.elapsed() < std::time::Duration::from_millis(200));
+        assert!(!super::digest(&small).is_empty());
+        let base = started.elapsed().max(std::time::Duration::from_micros(1));
+
+        let started = std::time::Instant::now();
+        assert!(!super::digest(&ceiling).is_empty());
+        let full = started.elapsed();
+
+        // Linear would be 8x for 8x the bytes; quadratic would be 64x. Allow 24x for scheduling.
+        assert!(full < base * 24, "digest scaled {full:?} against {base:?} for 8x the input");
     }
 
     #[test]
