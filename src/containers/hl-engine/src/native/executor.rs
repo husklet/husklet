@@ -9,6 +9,71 @@ use hl_execution::{Aarch64CpuState, CpuState as X86CpuState, FlagState, Nzcv};
 use hl_isa::{AddressRange, GuestAddress};
 use hl_memory::{DirectAuthorityLease, ExecutableToken, MemoryAccessHost, MemoryError, ProjectionLease, Protection};
 
+/// Prices a native crossing in host heap allocations rather than in time, which a
+/// loaded box cannot invalidate. Off unless the `alloc-count` feature is built.
+#[cfg(feature = "alloc-count")]
+pub mod allocations {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    thread_local! {
+        static THREAD: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) static CROSSINGS: AtomicU64 = AtomicU64::new(0);
+    pub(super) static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+
+    pub(super) fn thread_count() -> u64 {
+        THREAD.try_with(Cell::get).unwrap_or(0)
+    }
+
+    fn bump() {
+        let _ = THREAD.try_with(|count| count.set(count.get().wrapping_add(1)));
+    }
+
+    /// Counts one crossing and the allocations its thread made inside it.
+    pub(super) struct Crossing(u64);
+
+    impl Crossing {
+        pub(super) fn begin() -> Self {
+            Self(thread_count())
+        }
+    }
+
+    impl Drop for Crossing {
+        fn drop(&mut self) {
+            CROSSINGS.fetch_add(1, Ordering::Relaxed);
+            ALLOCATIONS.fetch_add(thread_count().wrapping_sub(self.0), Ordering::Relaxed);
+        }
+    }
+
+    pub struct CountingAllocator;
+
+    // SAFETY: every method forwards to `System` unchanged; the counter is a thread-local
+    // `Cell<u64>` with no destructor, so it cannot re-enter the allocator.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            bump();
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            bump();
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            bump();
+            unsafe { System.realloc(pointer, layout, size) }
+        }
+
+        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(pointer, layout) }
+        }
+    }
+}
+
 const ABI: u32 = 1;
 const WRITE_EXACT: u16 = 1;
 const AARCH64: u32 = 1;
@@ -2285,6 +2350,8 @@ impl Executor {
         allow_direct: bool,
         mut poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(RunOutcome, RunStatistics), ()> {
+        #[cfg(feature = "alloc-count")]
+        let _crossing = allocations::Crossing::begin();
         if sources.is_empty() || sources.len() > 8 || sources.iter().any(|span| span.bytes.is_empty()) {
             self.refuse(LeaseStep::Sources);
             return Err(());
@@ -2774,6 +2841,8 @@ impl Executor {
         resolve: &mut dyn FnMut(u64, &mut [u8]) -> Option<(usize, ExecutableToken)>,
         poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(X86RunOutcome, RunStatistics), ()> {
+        #[cfg(feature = "alloc-count")]
+        let _crossing = allocations::Crossing::begin();
         let generation = lease.generation();
         let range = lease.range();
         let primary = ProjectionView {
@@ -3055,6 +3124,13 @@ impl Executor {
 
 impl Drop for Executor {
     fn drop(&mut self) {
+        // Process-wide totals, so read the last line an executor prints.
+        #[cfg(feature = "alloc-count")]
+        eprintln!(
+            "hl-native-alloc: crossings={} allocations={}",
+            allocations::CROSSINGS.load(std::sync::atomic::Ordering::Relaxed),
+            allocations::ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed),
+        );
         if self.diagnostics_enabled
             && let Ok(value) = self.diagnostics()
         {
