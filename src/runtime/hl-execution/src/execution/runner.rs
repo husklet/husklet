@@ -1,7 +1,8 @@
 use crate::{
-    Aarch64Decoder, Aarch64ExecutionExit, Aarch64Interpreter, Aarch64Ir, AccessKind, ExclusiveMemory,
+    Aarch64Decoder, Aarch64ExecutionExit, Aarch64Interpreter, Aarch64Ir, AccessKind, DecodeError, ExclusiveMemory,
     ExecutionCpuSnapshot, ExecutionExit, ExecutionMachine, GuestOperandMemory, GuestSystemPort, MemoryFault,
-    PcCoordinatePort, ScalarInterpreter, ScalarIr, X86ScalarDecoder, aarch64::register::RegisterExecutor,
+    PcCoordinatePort, ScalarInterpreter, ScalarIr, ScalarIrError, X86ScalarDecoder,
+    aarch64::register::RegisterExecutor,
 };
 /// Guest instructions and basic blocks the Rust interpreter retired, as against the
 /// `completed` counter the native executor reports for translated code. Accumulated once
@@ -27,6 +28,15 @@ impl Drop for InterpreterTally {
 }
 
 const X86_MAXIMUM_INSTRUCTION: usize = 15;
+const GUEST_PAGE: usize = 4096;
+
+/// Why an x86 instruction could not be turned into IR: bytes it needs are unmapped,
+/// or the bytes are present and are not an instruction.
+enum X86FetchFailure {
+    Fetch,
+    Decode,
+}
+
 const BLOCK_INSTRUCTIONS: usize = 64;
 const BLOCK_LIMIT: usize = 4096;
 #[derive(Clone, Debug)]
@@ -318,20 +328,16 @@ impl ExecutionMachine {
                 let decoded = if let Some(decoded) = retained {
                     decoded
                 } else {
-                    let mut bytes = [0_u8; X86_MAXIMUM_INSTRUCTION];
-                    let length = match memory.fetch(instruction, &mut bytes) {
-                        Ok(length) if length > 0 && length <= bytes.len() => length,
-                        _ => {
+                    match Self::decode_x86_at(instruction, memory) {
+                        Ok(decoded) => decoded,
+                        Err(X86FetchFailure::Fetch) => {
                             return StepOutcome::Fault(ExecutionFault::Fetch(MemoryFault {
                                 instruction,
                                 address: instruction,
                                 access: AccessKind::Execute,
                             }));
                         }
-                    };
-                    match X86ScalarDecoder::decode(&bytes[..length], instruction) {
-                        Ok(decoded) => decoded,
-                        Err(_) => {
+                        Err(X86FetchFailure::Decode) => {
                             return StepOutcome::Fault(ExecutionFault::Signal(SynchronousTrap {
                                 signal: TrapSignal::Illegal,
                                 code: 2,
@@ -593,16 +599,40 @@ impl ExecutionMachine {
         Some(StepOutcome::Yield)
     }
 
+    /// Asks only for the bytes up to the end of the instruction's page, because a mapping ends on a
+    /// page boundary and demanding a whole 15-byte window there refuses code the hardware would run.
+    /// An instruction that genuinely needs more asks again, and faults if those bytes are absent.
+    fn decode_x86_at<M: ExecutionInstructionMemory>(address: u64, memory: &M) -> Result<ScalarIr, X86FetchFailure> {
+        let mut bytes = [0_u8; X86_MAXIMUM_INSTRUCTION];
+        let read = |window: &mut [u8]| match memory.fetch(address, window) {
+            Ok(length) if length > 0 && length <= window.len() => Ok(length),
+            _ => Err(X86FetchFailure::Fetch),
+        };
+        let page = GUEST_PAGE - (address as usize & (GUEST_PAGE - 1));
+        let available = page.min(X86_MAXIMUM_INSTRUCTION);
+        let length = read(&mut bytes[..available])?;
+        match X86ScalarDecoder::decode(&bytes[..length], address) {
+            Err(ScalarIrError::Structural(DecodeError::Truncated)) if length < X86_MAXIMUM_INSTRUCTION => {
+                let length = read(&mut bytes)?;
+                X86ScalarDecoder::decode(&bytes[..length], address).map_err(|error| {
+                    if matches!(error, ScalarIrError::Structural(DecodeError::Truncated)) {
+                        X86FetchFailure::Fetch
+                    } else {
+                        X86FetchFailure::Decode
+                    }
+                })
+            }
+            result => result.map_err(|_| X86FetchFailure::Decode),
+        }
+    }
+
     fn decode_x86_block<M: ExecutionInstructionMemory>(start: u64, memory: &M) -> Option<X86Block> {
         let mut instructions = Vec::with_capacity(BLOCK_INSTRUCTIONS);
         let mut address = start;
         for _ in 0..BLOCK_INSTRUCTIONS {
-            let mut bytes = [0_u8; X86_MAXIMUM_INSTRUCTION];
-            let length = memory.fetch(address, &mut bytes).ok()?;
-            if length == 0 || length > bytes.len() {
+            let Ok(ir) = Self::decode_x86_at(address, memory) else {
                 break;
-            }
-            let ir = X86ScalarDecoder::decode(&bytes[..length], address).ok()?;
+            };
             address = address.wrapping_add(u64::from(ir.length));
             instructions.push(ir);
         }
