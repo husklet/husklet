@@ -4,6 +4,32 @@ use crate::rule::Rule;
 
 use super::FreeFunction;
 
+/// Writes a second package declaring `Assembly`, so a cross-crate argument has a real owner.
+fn findings_beside_sibling(source: &str, sibling: &str) -> Vec<crate::Finding> {
+    let nonce = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("clock follows Unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("hl-function-rule-pair-{nonce}"));
+    let mut paths = Vec::new();
+    for (name, text) in [("fixture", source), ("hl_runtime", sibling)] {
+        let package = root.join("src/packages").join(name);
+        let path = package.join("src/lib.rs");
+        fs::create_dir_all(path.parent().expect("fixture has a parent")).expect("create fixture");
+        fs::write(
+            package.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n"),
+        )
+        .expect("write manifest");
+        fs::write(&path, text).expect("write fixture");
+        paths.push(path);
+    }
+    let workspace = crate::source::Workspace::load(paths).expect("parse fixture");
+    let values = FreeFunction.check(&workspace).expect("run rule");
+    fs::remove_dir_all(root).expect("remove fixture");
+    values
+}
+
 fn findings(source: &str) -> Vec<crate::Finding> {
     let nonce = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -109,7 +135,7 @@ fn ratio(value: u64, reference: u64) -> f64 {
 }
 
 #[test]
-fn a_declared_type_in_any_argument_position_keeps_the_candidate() {
+fn a_second_argument_relates_two_things_rather_than_naming_a_receiver() {
     let values = findings(
         r"
 pub enum Verdict { Pass }
@@ -118,24 +144,92 @@ fn render(limit: usize, verdict: &Verdict) -> usize {
 }
 ",
     );
-    let [finding] = &values[..] else {
-        panic!("one candidate, got {}", values.len());
-    };
-    assert_eq!(finding.subject, "render");
+    assert!(values.is_empty(), "got {values:?}");
 }
 
 #[test]
-fn a_declared_type_nested_in_a_generic_keeps_the_candidate() {
+fn a_collected_argument_is_a_transformation_with_no_receiver() {
     let values = findings(
         r"
 pub struct Case;
-fn plan(cases: Vec<Case>, limit: usize) -> usize {
-    cases.len() + limit
+fn plan(cases: Vec<Case>) -> usize {
+    cases.len()
+}
+fn count(cases: &[Case]) -> usize {
+    cases.len()
+}
+fn first(case: Option<Case>) -> bool {
+    case.is_some()
+}
+pub type Result<T> = std::result::Result<T, String>;
+fn outcome(case: Result<Case>) -> bool {
+    case.is_ok()
+}
+",
+    );
+    assert!(values.is_empty(), "got {values:?}");
+}
+
+#[test]
+fn a_sole_declared_argument_is_the_receiver_the_method_form_takes() {
+    let values = findings(
+        r"
+pub struct Build;
+fn validate_build(build: &Build) -> bool {
+    let _ = build;
+    true
 }
 ",
     );
     let [finding] = &values[..] else {
         panic!("one candidate, got {}", values.len());
     };
-    assert_eq!(finding.subject, "plan");
+    assert_eq!(finding.subject, "validate_build");
+}
+
+#[test]
+fn a_foreign_type_sharing_a_declared_name_is_not_this_tree_s_type() {
+    let values = findings(
+        r"
+use std::path::Path;
+pub struct Path;
+fn portable_name(path: &Path) -> bool {
+    path.is_absolute()
+}
+fn build_id(path: &std::path::Path) -> bool {
+    path.is_absolute()
+}
+",
+    );
+    assert!(values.is_empty(), "got {values:?}");
+}
+
+#[test]
+fn a_sibling_crate_s_type_cannot_take_an_inherent_method_from_here() {
+    let values = findings_beside_sibling(
+        r"
+fn prepare_tasks(assembly: &hl_runtime::Assembly) -> bool {
+    let _ = assembly;
+    true
+}
+",
+        "pub struct Assembly;",
+    );
+    assert!(values.is_empty(), "got {values:?}");
+}
+
+#[test]
+fn a_command_line_argument_type_is_a_boundary_value_not_an_entity() {
+    let values = findings(
+        r"
+#[derive(clap::Args)]
+pub struct Options {
+    pub verbose: bool,
+}
+pub fn run(options: Options) -> bool {
+    options.verbose
+}
+",
+    );
+    assert!(values.is_empty(), "got {values:?}");
 }

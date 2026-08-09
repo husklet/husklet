@@ -9,7 +9,8 @@ use crate::{
     source::{Workspace, platform_gated, requires_test},
 };
 
-/// Requires one- and two-argument free functions to be refactored or classified.
+/// Requires a free function whose sole argument is a value this tree declares to become a method on
+/// that type, since the argument is already the receiver.
 pub struct FreeFunction;
 
 impl Rule for FreeFunction {
@@ -31,6 +32,8 @@ impl Rule for FreeFunction {
             let mut functions = Functions {
                 path: &source.path,
                 owned: &owned,
+                imports: Imports::of(source),
+                package: source.package.replace('-', "_"),
                 test_scope: false,
                 nesting: Vec::new(),
                 values: Vec::new(),
@@ -88,12 +91,11 @@ impl Candidate {
     ) -> Finding {
         let mut finding = Finding::error(rule, &self.name, source.location(self.span));
         finding.message = format!(
-            "unclassified free function `{}` has {} argument{}",
-            self.name,
-            self.arguments,
-            if self.arguments == 1 { "" } else { "s" }
+            "free function `{}` takes one declared type, which is the receiver a method would take",
+            self.name
         );
-        finding.help = "refactor it or add a temporary #[hl_design::classify(...)] classification".into();
+        finding.help =
+            "make it a method on that type or add a temporary #[hl_design::classify(...)] classification".into();
         finding.related = usages
             .map(|usage| Related {
                 label: usage.context.as_ref().map_or_else(
@@ -128,9 +130,9 @@ impl Candidate {
             ],
             dependencies: self.dependencies,
             questions: vec![
-                "Does one argument already have a meaningful receiver type?".into(),
+                "Does this express the argument's own behavior, or a transformation over it?".into(),
                 "Do related functions share this value and its invariants?".into(),
-                "Would a wrapper collect cohesive behavior, or only hide one helper?".into(),
+                "Would the type's crate be the wrong owner for this behavior?".into(),
                 "Is this a complete low-level algorithm that should remain free?".into(),
             ],
         };
@@ -141,7 +143,9 @@ impl Candidate {
 
 struct Functions<'a> {
     path: &'a std::path::Path,
-    owned: &'a HashSet<String>,
+    owned: &'a HashMap<String, HashSet<String>>,
+    imports: Imports,
+    package: String,
     test_scope: bool,
     nesting: Vec<String>,
     values: Vec<Candidate>,
@@ -152,7 +156,7 @@ impl<'ast> Visit<'ast> for Functions<'_> {
         if !self.test_scope
             && !requires_test(&function.attrs)
             && candidate(function)
-            && receives_owned(function, self.owned)
+            && receives_owned(function, &self.scope())
         {
             let mut dependencies = Dependencies::default();
             dependencies.visit_item_fn(function);
@@ -186,24 +190,138 @@ impl<'ast> Visit<'ast> for Functions<'_> {
 
 /// Names every type the scanned tree declares, so a free function can be asked whether a receiver
 /// for it exists at all.
-fn owned_types(workspace: &Workspace) -> HashSet<String> {
-    let mut names = HashSet::new();
+fn owned_types(workspace: &Workspace) -> HashMap<String, HashSet<String>> {
+    let mut declared = HashMap::<String, HashSet<String>>::new();
+    let mut parsed = HashSet::new();
     for source in workspace.production() {
-        let mut declarations = Declarations { names: &mut names };
+        let mut names = HashSet::new();
+        let mut declarations = Declarations {
+            names: &mut names,
+            parsed: &mut parsed,
+        };
         declarations.visit_file(&source.syntax);
+        declared
+            .entry(source.package.replace('-', "_"))
+            .or_default()
+            .extend(names);
     }
-    names
+    // A command-line argument type is the boundary value a composition root is handed, not an entity
+    // with behavior, so its entry point is correctly free.
+    for names in declared.values_mut() {
+        names.retain(|name| !parsed.contains(name));
+    }
+    declared
+}
+
+fn collect_use(tree: &syn::UseTree, root: Option<&str>, values: &mut HashMap<String, String>) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            let segment = path.ident.to_string();
+            let root = root.unwrap_or(&segment).to_owned();
+            collect_use(&path.tree, Some(&root), values);
+        }
+        syn::UseTree::Name(name) => {
+            if let Some(root) = root {
+                values.insert(name.ident.to_string(), root.to_owned());
+            }
+        }
+        syn::UseTree::Rename(rename) => {
+            if let Some(root) = root {
+                values.insert(rename.rename.to_string(), root.to_owned());
+            }
+        }
+        syn::UseTree::Group(group) => {
+            for tree in &group.items {
+                collect_use(tree, root, values);
+            }
+        }
+        syn::UseTree::Glob(_) => {}
+    }
+}
+
+/// Resolves the argument types of one function against the scanned tree.
+/// The crate each name a source file imports is bound to.
+struct Imports(HashMap<String, String>);
+
+struct Scope<'a> {
+    owned: &'a HashMap<String, HashSet<String>>,
+    imports: &'a Imports,
+    package: &'a str,
+}
+
+impl Scope<'_> {
+    /// Whether a written type path names a type this package declares. A leading segment resolving
+    /// elsewhere disqualifies it: `std::path::Path` is not the tree's own `Path`, and a sibling
+    /// crate's type cannot take an inherent method from here.
+    fn declares(&self, path: &syn::Path) -> bool {
+        let Some(last) = path.segments.last() else {
+            return false;
+        };
+        let first = path.segments[0].ident.to_string();
+        let root = if path.segments.len() > 1 {
+            match first.as_str() {
+                "crate" | "self" | "super" => self.package.to_owned(),
+                _ => first,
+            }
+        } else {
+            self.imports
+                .0
+                .get(&first)
+                .cloned()
+                .unwrap_or_else(|| self.package.to_owned())
+        };
+        root == self.package
+            && self
+                .owned
+                .get(&root)
+                .is_some_and(|names| names.contains(&last.ident.to_string()))
+    }
+}
+
+impl Imports {
+    /// What a source file's `use` items bind each name to, keyed by the bound name and valued by the
+    /// crate the path starts at. Without this a bare `Path` cannot be told from `std::path::Path`.
+    fn of(source: &crate::source::Source) -> Self {
+        let mut values = HashMap::new();
+        for item in &source.syntax.items {
+            if let syn::Item::Use(item) = item {
+                collect_use(&item.tree, None, &mut values);
+            }
+        }
+        Self(values)
+    }
+}
+
+impl Functions<'_> {
+    fn scope(&self) -> Scope<'_> {
+        Scope {
+            owned: self.owned,
+            imports: &self.imports,
+            package: &self.package,
+        }
+    }
 }
 
 struct Declarations<'a> {
     names: &'a mut HashSet<String>,
+    parsed: &'a mut HashSet<String>,
 }
 
 impl<'ast> Visit<'ast> for Declarations<'_> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         match item {
-            syn::Item::Struct(value) => drop(self.names.insert(value.ident.to_string())),
-            syn::Item::Enum(value) => drop(self.names.insert(value.ident.to_string())),
+            syn::Item::Struct(value) => {
+                self.names.insert(value.ident.to_string());
+                if command_line(&value.attrs) {
+                    self.parsed.insert(value.ident.to_string());
+                }
+            }
+            syn::Item::Enum(value) => {
+                self.names.insert(value.ident.to_string());
+                if command_line(&value.attrs) {
+                    self.parsed.insert(value.ident.to_string());
+                }
+            }
             syn::Item::Union(value) => drop(self.names.insert(value.ident.to_string())),
             syn::Item::Type(value) => drop(self.names.insert(value.ident.to_string())),
             syn::Item::Trait(value) => drop(self.names.insert(value.ident.to_string())),
@@ -213,28 +331,41 @@ impl<'ast> Visit<'ast> for Declarations<'_> {
     }
 }
 
-/// Reports whether any argument names a type this tree declares. A function over only foreign and
-/// primitive types has no receiver to become a method on, so the rule's remedy does not exist for it.
-fn receives_owned(function: &ItemFn, owned: &HashSet<String>) -> bool {
-    function.sig.inputs.iter().any(|argument| {
-        let FnArg::Typed(argument) = argument else {
-            return true;
-        };
-        let mut mentioned = Mentioned { names: Vec::new() };
-        mentioned.visit_type(&argument.ty);
-        mentioned.names.iter().any(|name| owned.contains(name))
+/// Whether a type is parsed from the command line, which clap signals through its derives.
+fn command_line(attributes: &[syn::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("derive")
+            && attribute
+                .parse_args_with(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)
+                .is_ok_and(|derives| {
+                    derives.iter().any(|derive| {
+                        derive
+                            .segments
+                            .last()
+                            .is_some_and(|segment| matches!(segment.ident.to_string().as_str(), "Parser" | "Args"))
+                    })
+                })
     })
 }
 
-struct Mentioned {
-    names: Vec<String>,
-}
-
-impl<'ast> Visit<'ast> for Mentioned {
-    fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
-        self.names.push(segment.ident.to_string());
-        syn::visit::visit_path_segment(self, segment);
+/// Reports whether the function's sole argument *is* a value this tree declares, so the argument is
+/// already the receiver the method form would take. A wrapped or collected argument (`Vec<T>`,
+/// `Option<T>`, `Result<T, E>`, `&[T]`) is a transformation over many values and has no receiver, and
+/// a second argument means the function relates two things rather than expressing one thing's
+/// behavior. Both shapes are correctly free in Rust.
+fn receives_owned(function: &ItemFn, scope: &Scope<'_>) -> bool {
+    let [argument] = function.sig.inputs.iter().collect::<Vec<_>>()[..] else {
+        return false;
+    };
+    let FnArg::Typed(argument) = argument else {
+        return true;
+    };
+    let mut ty = argument.ty.as_ref();
+    while let Type::Reference(reference) = ty {
+        ty = reference.elem.as_ref();
     }
+    matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment|
+        matches!(segment.arguments, PathArguments::None)) && scope.declares(&path.path))
 }
 
 fn candidate(function: &ItemFn) -> bool {

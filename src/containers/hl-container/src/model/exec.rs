@@ -158,6 +158,24 @@ impl Exec {
             checkpoint: None,
         }
     }
+
+    /// Ends this execution as faulted, keeping the process identity it was running under. A daemon
+    /// restart leaves an active exec with no supervisor, and only the record can settle it.
+    pub(crate) fn interrupt(&mut self) {
+        let process_id = match self.state {
+            ExecState::Running { process_id, .. } => Some(process_id),
+            ExecState::Created | ExecState::Exited { .. } => None,
+        };
+        self.state = ExecState::Exited {
+            result: ExitStatus::Fault {
+                status: -1,
+                detail: 0,
+                reason: crate::FaultCause::Unknown,
+            },
+            finished_at_ms: now_ms(),
+            process_id,
+        };
+    }
 }
 
 #[cfg(test)]

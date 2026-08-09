@@ -75,6 +75,48 @@ struct Method {
     cluster: Option<&'static str>,
 }
 
+impl Method {
+    /// The domain type names a signature mentions, with language and primitive words removed.
+    fn signature_types(&self) -> BTreeSet<String> {
+        self.types
+            .iter()
+            .filter(|word| {
+                !matches!(
+                    word.as_str(),
+                    "result"
+                        | "option"
+                        | "vec"
+                        | "box"
+                        | "arc"
+                        | "dyn"
+                        | "impl"
+                        | "where"
+                        | "send"
+                        | "sync"
+                        | "static"
+                        | "error"
+                        | "bool"
+                        | "str"
+                        | "string"
+                        | "usize"
+                        | "isize"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "u128"
+                        | "i8"
+                        | "i16"
+                        | "i32"
+                        | "i64"
+                        | "i128"
+                )
+            })
+            .cloned()
+            .collect()
+    }
+}
+
 struct Definition {
     package: String,
     name: String,
@@ -374,47 +416,7 @@ fn separation_evidence(clusters: &BTreeMap<&'static str, Vec<&Method>>) -> usize
 }
 
 fn signature_profile(methods: &[&Method]) -> BTreeSet<String> {
-    methods.iter().flat_map(|method| signature_types(method)).collect()
-}
-
-fn signature_types(method: &Method) -> BTreeSet<String> {
-    method
-        .types
-        .iter()
-        .filter(|word| {
-            !matches!(
-                word.as_str(),
-                "result"
-                    | "option"
-                    | "vec"
-                    | "box"
-                    | "arc"
-                    | "dyn"
-                    | "impl"
-                    | "where"
-                    | "send"
-                    | "sync"
-                    | "static"
-                    | "error"
-                    | "bool"
-                    | "str"
-                    | "string"
-                    | "usize"
-                    | "isize"
-                    | "u8"
-                    | "u16"
-                    | "u32"
-                    | "u64"
-                    | "u128"
-                    | "i8"
-                    | "i16"
-                    | "i32"
-                    | "i64"
-                    | "i128"
-            )
-        })
-        .cloned()
-        .collect()
+    methods.iter().flat_map(|method| method.signature_types()).collect()
 }
 
 fn type_words(source: &Source, span: proc_macro2::Span) -> Vec<String> {
@@ -430,7 +432,7 @@ fn cohesive_contract(name: &str, methods: &[Method]) -> bool {
     }
     let mut occurrences = BTreeMap::<String, usize>::new();
     for method in methods {
-        for ty in signature_types(method) {
+        for ty in method.signature_types() {
             *occurrences.entry(ty).or_default() += 1;
         }
     }

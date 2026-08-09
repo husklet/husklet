@@ -66,6 +66,44 @@ struct Build {
     rustflags: Vec<String>,
 }
 
+impl Build {
+    /// Rejects a manifest whose Cargo coordinates could not name a real build.
+    fn validate(&self) -> Result<(), Error> {
+        if self.package.is_empty()
+            || self.binary.is_empty()
+            || self.target.is_empty()
+            || self.profile.is_empty()
+            || self
+                .binary
+                .chars()
+                .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_')))
+        {
+            return Err("nested Cargo build contains an invalid package, target, profile, or binary".into());
+        }
+        Ok(())
+    }
+
+    /// The toolchain variables a nested Cargo build must inherit, each present even when unset
+    /// so the recorded identity covers absence too.
+    fn environment(&self) -> Vec<(String, String)> {
+        let linker = format!(
+            "CARGO_TARGET_{}_LINKER",
+            self.target.to_ascii_uppercase().replace('-', "_")
+        );
+        [
+            "CARGO",
+            "RUSTC",
+            "RUSTFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "RUSTUP_TOOLCHAIN",
+            &linker,
+        ]
+        .into_iter()
+        .map(|name| (name.to_owned(), environment(name).unwrap_or_default()))
+        .collect()
+    }
+}
+
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum ArtifactSource {
@@ -202,21 +240,6 @@ fn release_profile() -> String {
     "release".into()
 }
 
-fn validate_build(build: &Build) -> Result<(), Error> {
-    if build.package.is_empty()
-        || build.binary.is_empty()
-        || build.target.is_empty()
-        || build.profile.is_empty()
-        || build
-            .binary
-            .chars()
-            .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_')))
-    {
-        return Err("nested Cargo build contains an invalid package, target, profile, or binary".into());
-    }
-    Ok(())
-}
-
 struct BuildIdentity {
     key: String,
     cargo: String,
@@ -224,24 +247,6 @@ struct BuildIdentity {
 
 fn environment(name: &str) -> Option<String> {
     std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
-}
-
-fn build_environment(build: &Build) -> Vec<(String, String)> {
-    let linker = format!(
-        "CARGO_TARGET_{}_LINKER",
-        build.target.to_ascii_uppercase().replace('-', "_")
-    );
-    [
-        "CARGO",
-        "RUSTC",
-        "RUSTFLAGS",
-        "CARGO_ENCODED_RUSTFLAGS",
-        "RUSTUP_TOOLCHAIN",
-        &linker,
-    ]
-    .into_iter()
-    .map(|name| (name.to_owned(), environment(name).unwrap_or_default()))
-    .collect()
 }
 
 fn hash_source_named(digest: &mut crate::record::FramedIdentity, name: &[u8], path: &Path) -> Result<(), Error> {
@@ -470,7 +475,7 @@ impl Workspace {
 
     fn prepare_artifact(&self, artifact: &Artifact) -> Result<(), Error> {
         let build = artifact.build.as_ref().ok_or("prepared artifact has no build")?;
-        validate_build(build)?;
+        build.validate()?;
         let identity = self.build_identity(build)?;
         let key = &identity.key;
         let cache = crate::record::Cache::new(&self.root)?;
@@ -489,7 +494,7 @@ impl Workspace {
 
     fn build_identity(&self, build: &Build) -> Result<BuildIdentity, Error> {
         let cargo = environment("CARGO").unwrap_or_else(|| "cargo".into());
-        let values = build_environment(build);
+        let values = build.environment();
         let key = self.build_key_with_environment(build, &cargo, &values)?;
         Ok(BuildIdentity { key, cargo })
     }
