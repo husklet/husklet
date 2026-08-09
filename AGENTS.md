@@ -193,6 +193,18 @@ pattern-matching form is wrong in one direction or the other:
 
 Use `pgrep -ax testing` when you need the rows as well as the count.
 
+**A renamed binary is invisible to this check.** `pgrep -cx testing` matches
+the exact process name, so a lane that copies the driver to `testing-bin` or
+any other name runs unseen for its entire measurement and every other lane
+reads the box as free. If you copy the driver, keep the basename `testing`
+(`bin/testing` is fine — `-x` matches the name, not the path).
+
+**Long measurements must outlive the turn that starts them.** Background jobs
+are reaped when a turn pauses: one lane lost a nine-minute arm at the eight
+minute mark with no results file ever written. Start anything longer than a
+turn under `setsid nohup` so it survives, and have it write results
+incrementally rather than only at the end.
+
 **A single zero does not mean the box is free.** A measuring lane runs a
 *series* of invocations with brief gaps between them, so a point-in-time
 `pgrep` reads zero in every gap while the job is very much alive. Load average
