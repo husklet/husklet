@@ -91,6 +91,18 @@ static hl_native_executor *create(executable_memory *host) {
     return create_flags(host, HL_NATIVE_DIAGNOSTICS);
 }
 
+static int dirty_overflow_continue_configuration(void) {
+    executable_memory host = {0};
+    hl_native_executor *executor = create_flags(&host, 0);
+    CHECK(executor != NULL && executor->dirty_overflow_continue == 0);
+    CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
+
+    executor = create_flags(&host, HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE);
+    CHECK(executor != NULL && executor->dirty_overflow_continue == 1);
+    CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
+    return 0;
+}
+
 static int publication(void) {
     executable_memory host = {0};
     hl_native_executor *executor = create(&host);
@@ -511,6 +523,7 @@ static int diagnostics_off_cycle_closure(void) {
 }
 
 int main(void) {
-    return branch_diagnostics() != 0 || diagnostics_off_cycle_closure() != 0 ||
+    return dirty_overflow_continue_configuration() != 0 ||
+           branch_diagnostics() != 0 || diagnostics_off_cycle_closure() != 0 ||
            publication() != 0 || execution() != 0;
 }

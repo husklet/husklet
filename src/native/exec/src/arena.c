@@ -40,7 +40,8 @@ hl_native_status hl_native_arena_create(hl_native_arena *arena, const hl_native_
         (config->flags & ~(HL_NATIVE_DUAL_PREFERRED | HL_NATIVE_DUAL_REQUIRED | HL_NATIVE_DIAGNOSTICS |
                            HL_NATIVE_A64_NO_WRITE_RESERVE |
                            HL_NATIVE_A64_NO_WRITE_COMMIT |
-                           HL_NATIVE_A64_RUNTIME_WRITE_RESERVE)) != 0 ||
+                           HL_NATIVE_A64_RUNTIME_WRITE_RESERVE |
+                           HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE)) != 0 ||
         (config->flags & (HL_NATIVE_DUAL_PREFERRED | HL_NATIVE_DUAL_REQUIRED)) ==
             (HL_NATIVE_DUAL_PREFERRED | HL_NATIVE_DUAL_REQUIRED) || config->reserved != 0)
         return HL_NATIVE_ARGUMENT;

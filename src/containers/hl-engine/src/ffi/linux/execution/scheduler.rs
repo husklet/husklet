@@ -526,6 +526,21 @@ mod tests {
     }
 
     #[test]
+    fn dirty_overflow_continuation_is_default_off_and_launch_scoped() {
+        let default = plan(crate::options::Options::default());
+        assert!(!NativePool::new(GuestIsa::Aarch64, &default, None).dirty_overflow_continue);
+
+        let mut options = crate::options::Options::default();
+        options.set("HL_A64_DIRTY_OVERFLOW_CONTINUE", "1", true).unwrap();
+        let configured = plan(options);
+        assert!(NativePool::new(GuestIsa::Aarch64, &configured, None).dirty_overflow_continue);
+        assert!(
+            NativePool::new(GuestIsa::X86_64, &configured, None).dirty_overflow_continue,
+            "the common executor accepts the bit; x86 lowering must remain inert",
+        );
+    }
+
+    #[test]
     fn the_admission_cache_serves_only_an_identical_site_length_and_epoch() {
         let mut options = crate::options::Options::default();
         options.set("HL_NATIVE_ADMISSION_CACHE", "1", true).unwrap();

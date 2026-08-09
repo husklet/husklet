@@ -38,6 +38,7 @@ struct hl_native_executor {
      * this filter out of the CPU record, which run_aarch64 seeds from here and
      * folds back. Set-only, so a concurrent seed can only lose a discovery. */
     uint32_t runtime_write_reserve;
+    uint32_t dirty_overflow_continue;
     uint8_t a64_reserve_filter[HL_NATIVE_A64_SATURATION_SLOTS];
     uint64_t ibtc_fills, ibtc_site_collisions, ibtc_shared_collisions;
     uint64_t boundary_branch, boundary_syscall, boundary_fallback, boundary_yield, completed;

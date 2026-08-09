@@ -213,6 +213,8 @@ pub(in crate::ffi::linux::execution) struct NativePool {
     /// Emits the reservation everywhere but gates it at run time on a per-store-site
     /// saturation byte, so translation stays a pure function of the pc.
     runtime_write_reserve: bool,
+    /// Keeps AArch64 native execution running after the exact dirty journal fills.
+    pub(super) dirty_overflow_continue: bool,
     pub(super) admitted: Option<Admission>,
     pub(super) executors: BTreeMap<hl_task::ProcessId, crate::native::NativeExecutor>,
     pub(super) suppressed: BTreeMap<NativeSite, Probation>,
@@ -295,6 +297,7 @@ impl NativePool {
             write_reserve: plan.options.get("HL_A64_NO_WRITE_RESERVE") != Some("1"),
             write_commit: plan.options.get("HL_A64_NO_WRITE_COMMIT") != Some("1"),
             runtime_write_reserve: plan.options.get("HL_A64_RUNTIME_WRITE_RESERVE") == Some("1"),
+            dirty_overflow_continue: plan.options.get("HL_A64_DIRTY_OVERFLOW_CONTINUE") == Some("1"),
             admitted: None,
             executors: BTreeMap::new(),
             suppressed: BTreeMap::new(),
@@ -339,7 +342,8 @@ impl NativePool {
             direct_sticky_permanent = pool.direct_sticky_permanent,
             write_reserve = pool.write_reserve,
             write_commit = pool.write_commit,
-            runtime_write_reserve = pool.runtime_write_reserve
+            runtime_write_reserve = pool.runtime_write_reserve,
+            dirty_overflow_continue = pool.dirty_overflow_continue
         );
         pool
     }
@@ -368,6 +372,7 @@ impl NativePool {
                     self.write_reserve,
                     self.write_commit,
                     self.runtime_write_reserve,
+                    self.dirty_overflow_continue,
                     self.host_faults.clone(),
                 )
                 .ok()?,

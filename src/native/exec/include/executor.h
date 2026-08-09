@@ -17,6 +17,7 @@
 #define HL_NATIVE_A64_NO_WRITE_RESERVE 8u
 #define HL_NATIVE_A64_NO_WRITE_COMMIT 16u
 #define HL_NATIVE_A64_RUNTIME_WRITE_RESERVE 32u
+#define HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE 64u
 /* Store sites fold into this many saturation slots. A collision only reserves
  * for a site that did not need it, which is slow and never wrong. The slot
  * travels in dirty_overflow as slot+2, so 1 stays "saturated, site unknown"

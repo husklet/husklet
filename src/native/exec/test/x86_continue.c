@@ -83,7 +83,7 @@ static int continuation_contract(void) {
 
     memory.write_begin = executable_begin;
     memory.write_end = executable_end;
-    hl_native_config config = test_config(&memory, 0);
+    hl_native_config config = test_config(&memory, HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE);
     CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
 
     CHECK(run_loop(executor, register_loop, sizeof register_loop, 0x8000,

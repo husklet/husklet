@@ -107,6 +107,11 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
+        "HL_A64_DIRTY_OVERFLOW_CONTINUE",
+        "continue aarch64 native execution after exact dirty-journal saturation and publish the whole window",
+        Flag
+    ),
+    launch!(
         "HL_A64_NO_WRITE_COMMIT",
         "drop the aarch64 post-store dirty-journal commit and publish the whole window per crossing",
         Flag
@@ -286,6 +291,21 @@ mod tests {
         assert_eq!(names.len(), DEFINITIONS.len());
         assert_eq!(DEFINITIONS[0].name, "HL_CHECKPOINT");
         assert_eq!(DEFINITIONS.last().unwrap().ownership, Ownership::DebugOnly);
+    }
+
+    #[test]
+    fn dirty_overflow_continue_is_an_explicit_launch_option() {
+        let definition = DEFINITIONS
+            .iter()
+            .find(|definition| definition.name == "HL_A64_DIRTY_OVERFLOW_CONTINUE")
+            .unwrap();
+        assert_eq!(definition.ownership, Ownership::LaunchInput);
+        assert_eq!(definition.shape, Shape::Flag);
+
+        let mut options = Options::default();
+        assert_eq!(options.get(definition.name), None);
+        options.set(definition.name, "1", true).unwrap();
+        assert_eq!(options.get(definition.name), Some("1"));
     }
 
     #[test]

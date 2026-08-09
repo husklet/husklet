@@ -4,7 +4,6 @@
 #include "stub.h"
 
 #include <stddef.h>
-#include <stdlib.h>
 
 #define CPU 28
 #define OFFSET_FIRST ((int)offsetof(hl_native_aarch64_cpu, memory_first))
@@ -68,19 +67,6 @@ static uint64_t overflow_report(const hl_a64_assembler *assembler, uint64_t pc) 
 
 static void compare_zero(hl_a64_assembler *assembler, uint32_t *instruction,
                          const uint8_t *target, int reg);
-
-/* Control switch for continuing after exact-journal saturation. Local malloc
- * wins do not compose by themselves: full-sequence controls regress a later
- * syscall phase, so keep this off until scheduler policy accounts for that
- * cross-phase state. */
-static int hl_a64_dirty_overflow_continues(void) {
-    static int cached = -1;
-    if (cached < 0) {
-        const char *value = getenv("HL_A64_DIRTY_OVERFLOW_CONTINUE");
-        cached = (value != NULL && value[0] == '1' && value[1] == '\0') ? 1 : 0;
-    }
-    return cached;
-}
 
 /* x30 carries the remaining budget across the whole native run.  The view scans
  * and the archive subroutine borrow it, so they publish it first and recover it
@@ -240,7 +226,7 @@ static void archive_dirty_body(hl_a64_assembler *assembler, uint64_t pc) {
 
     uint8_t *overflow_target = assembler->cursor;
     uint32_t *overflow_continue = NULL;
-    if (hl_a64_dirty_overflow_continues()) {
+    if (assembler->dirty_overflow_continue) {
         /* Report through dirty_overflow and keep running, exactly as the inline
          * full-journal path and both flush_dirty siblings already do. */
         diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));

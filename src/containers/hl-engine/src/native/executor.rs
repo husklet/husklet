@@ -96,6 +96,7 @@ const ABI: u32 = 1;
 const WRITE_EXACT: u16 = 1;
 const AARCH64: u32 = 1;
 const X86_64: u32 = 2;
+const A64_DIRTY_OVERFLOW_CONTINUE: u32 = 64;
 
 fn projection_permissions(authority: Protection, mapped: Protection) -> Protection {
     authority.union(if mapped.contains(Protection::EXECUTE) {
@@ -1830,6 +1831,8 @@ pub(crate) struct Executor {
     diagnostic_calls: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
     boundary_capture: std::sync::Mutex<BoundaryCaptureState>,
+    #[cfg(test)]
+    config_flags: u32,
 }
 
 #[cfg(test)]
@@ -2094,16 +2097,17 @@ impl Executor {
         diagnostics_enabled: bool,
         fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
     ) -> Result<Self, ()> {
-        Self::create_with_journal(diagnostics_enabled, true, true, false, fault_owner)
+        Self::create_with_journal(diagnostics_enabled, true, true, false, false, fault_owner)
     }
 
-    /// `write_journal` false drops the aarch64 exact dirty journal from every emitted
-    /// store, so each crossing publishes the whole window instead of its exact ranges.
+    /// The write-reservation switches select the AArch64 exact dirty-journal policy;
+    /// overflow continuation is an independent, default-off launch experiment.
     pub(crate) fn create_with_journal(
         diagnostics_enabled: bool,
         write_reserve: bool,
         write_commit: bool,
         runtime_write_reserve: bool,
+        dirty_overflow_continue: bool,
         fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
     ) -> Result<Self, ()> {
         let mut memory = Box::new(ExecutableMemory::new());
@@ -2127,7 +2131,12 @@ impl Executor {
                 | if diagnostics_enabled { 4 } else { 0 }
                 | if write_reserve { 0 } else { 8 }
                 | if write_commit { 0 } else { 16 }
-                | if runtime_write_reserve { 32 } else { 0 },
+                | if runtime_write_reserve { 32 } else { 0 }
+                | if dirty_overflow_continue {
+                    A64_DIRTY_OVERFLOW_CONTINUE
+                } else {
+                    0
+                },
             reserved: 0,
             memory: &raw const services,
         };
@@ -2171,6 +2180,8 @@ impl Executor {
             diagnostic_calls: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             boundary_capture: std::sync::Mutex::new(BoundaryCaptureState::default()),
+            #[cfg(test)]
+            config_flags: config.flags,
         })
     }
 
@@ -4269,6 +4280,21 @@ mod test {
             assert!(!executor.memory.writable.is_null());
             drop(executor);
         }
+    }
+
+    #[test]
+    fn dirty_overflow_continue_sets_only_its_config_bit() {
+        let default =
+            Executor::create_with_journal(false, true, true, false, false, None).expect("default native executor");
+        let enabled = Executor::create_with_journal(false, true, true, false, true, None)
+            .expect("dirty-overflow continuation executor");
+
+        assert_eq!(default.config_flags & A64_DIRTY_OVERFLOW_CONTINUE, 0);
+        assert_eq!(
+            enabled.config_flags & A64_DIRTY_OVERFLOW_CONTINUE,
+            A64_DIRTY_OVERFLOW_CONTINUE
+        );
+        assert_eq!(default.config_flags ^ enabled.config_flags, A64_DIRTY_OVERFLOW_CONTINUE);
     }
 
     #[cfg(target_arch = "aarch64")]
