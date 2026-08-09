@@ -12,6 +12,7 @@ static NEXT_PROCESS: AtomicU64 = AtomicU64::new(1);
 pub(super) struct Process {
     pub(super) id: u64,
     pub(super) child: Mutex<Option<Arc<hl_engine::runtime::Engine>>>,
+    pub(super) exit: Mutex<Option<ExitStatus>>,
     pub(super) logs: Mutex<Option<crate::service::LogReceiver>>,
     pub(super) domain: hl_engine::Domain,
     pub(super) checkpointable: bool,
@@ -54,6 +55,17 @@ impl Process {
             .ok_or_else(|| Error::Runtime("process result was already consumed".into()))
     }
 
+    /// `None` once the guest has been reaped, which callers that tolerate a terminal guest use
+    /// to stay a no-op instead of reporting a stop failure.
+    fn live(&self) -> Result<Option<Arc<hl_engine::runtime::Engine>>> {
+        Ok(self
+            .child
+            .lock()
+            .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))?
+            .as_ref()
+            .cloned())
+    }
+
     fn request(signal: Signal) -> hl_engine::engine::StopRequest {
         match signal {
             Signal::Kill => hl_engine::engine::StopRequest::Force,
@@ -82,22 +94,38 @@ impl Running for Process {
     }
 
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
+        if let Some(status) = *self
+            .exit
+            .lock()
+            .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))?
+        {
+            return Ok(status);
+        }
         let engine = self.engine()?;
         let exit = tokio::task::spawn_blocking(move || engine.wait())
             .await
             .map_err(|error| Error::Runtime(format!("engine wait task: {error}")))?
             .map_err(|error| Error::Runtime(format!("engine wait: {error:?}")))?;
+        let status = Self::status(exit);
+        *self
+            .exit
+            .lock()
+            .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))? = Some(status);
         self.child
             .lock()
             .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))?
             .take();
-        Ok(Self::status(exit))
+        Ok(status)
     }
 
+    /// Stopping a guest that already reached a terminal state is the requested outcome, so it
+    /// succeeds; only a live guest that refuses to stop reports a failure.
     async fn signal(&self, signal: Signal) -> Result<()> {
-        self.engine()?
-            .stop(Self::request(signal))
-            .map_err(|error| Error::Runtime(format!("engine stop: {error:?}")))
+        let Some(engine) = self.live()? else { return Ok(()) };
+        match engine.stop(Self::request(signal)) {
+            Ok(()) | Err(hl_engine::engine::EngineError::Exited) => Ok(()),
+            Err(error) => Err(Error::Runtime(format!("engine stop: {error:?}"))),
+        }
     }
 
     async fn pause(&self) -> Result<()> {
@@ -149,7 +177,45 @@ impl Running for Process {
 #[cfg(test)]
 mod tests {
     use super::Process;
-    use crate::{ExitStatus, FaultCause};
+    use crate::service::Running as _;
+    use crate::{ExitStatus, FaultCause, Signal};
+    use std::sync::{Arc, Mutex};
+
+    fn reaped(exit: Option<ExitStatus>) -> Arc<Process> {
+        Arc::new(Process {
+            id: 1,
+            child: Mutex::new(None),
+            exit: Mutex::new(exit),
+            logs: Mutex::new(None),
+            domain: hl_engine::Domain::new().unwrap(),
+            checkpointable: false,
+        })
+    }
+
+    /// Docker answers `stop` on an exited container with 304, not an error, so a teardown that
+    /// races the guest's own exit must not report a stop failure.
+    #[tokio::test]
+    async fn stopping_a_reaped_guest_succeeds() {
+        for signal in [Signal::Terminate, Signal::Kill, Signal::Interrupt] {
+            reaped(None).signal(signal).await.unwrap();
+        }
+    }
+
+    /// `pause` and `unpause` on a container that is not running are conflicts in Docker, so the
+    /// terminal-state tolerance must not spread beyond stop.
+    #[tokio::test]
+    async fn pausing_a_reaped_guest_still_fails() {
+        assert!(reaped(None).pause().await.is_err());
+        assert!(reaped(None).resume().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_exit_result_survives_being_read_again() {
+        assert_eq!(
+            Arc::clone(&reaped(Some(ExitStatus::Code(3)))).wait().await.unwrap(),
+            ExitStatus::Code(3)
+        );
+    }
 
     fn exit(reason: hl_engine::engine::FaultReason) -> hl_engine::engine::EngineExit {
         hl_engine::engine::EngineExit {

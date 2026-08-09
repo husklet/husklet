@@ -198,6 +198,19 @@ fn wait_is_idempotent() {
     assert_eq!(*workspaces.cleaned.lock().unwrap(), 1);
 }
 
+/// `Busy` also means "an operation is in flight", so a terminal guest must report a distinct
+/// error for the container layer to absorb it without hiding a live guest that refused to stop.
+#[test]
+fn stop_after_exit_reports_a_terminal_guest_not_busy() {
+    let (engine, launcher, _) = Fixture::engine(GuestIsa::Aarch64);
+    launcher.release_launch();
+    engine.start().unwrap();
+    engine.wait().unwrap();
+    assert_eq!(engine.phase().unwrap(), EnginePhase::Exited);
+    assert_eq!(engine.terminate(StopRequest::Force), Err(EngineError::Exited));
+    assert_eq!(engine.terminate(StopRequest::Signal(15)), Err(EngineError::Exited));
+}
+
 #[test]
 fn pre_start_stop() {
     let (engine, launcher, _) = Fixture::engine(GuestIsa::Aarch64);

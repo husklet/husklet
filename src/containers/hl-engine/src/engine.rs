@@ -81,6 +81,8 @@ pub enum FaultAccess {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EngineError {
     Busy,
+    /// The guest already reached a terminal state, so the operation had nothing to act on.
+    Exited,
     Destroyed,
     LaunchFailed,
     Construction(crate::composition::ConstructionError),
@@ -311,7 +313,7 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
                 }
                 EnginePhase::Stopping if !terminal => lifecycle.process,
                 EnginePhase::Stopping => return Ok(()),
-                EnginePhase::Exited => return Err(EngineError::Busy),
+                EnginePhase::Exited => return Err(EngineError::Exited),
                 EnginePhase::Destroyed => return Err(EngineError::Destroyed),
             }
         };
