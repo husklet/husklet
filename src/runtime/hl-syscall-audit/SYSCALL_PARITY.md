@@ -7,7 +7,7 @@ This compares the retained C x86-64-to-AArch64 number oracle with the typed Rust
 | Status | Count | Meaning |
 |---|---:|---|
 | supported | 202 | Wired on every applicable guest ISA |
-| router-domain-only | 78 | Typed on an applicable ISA but not fully production-advertised |
+| router-domain-only | 87 | Typed on an applicable ISA but not fully production-advertised |
 | missing | 72 | Missing or number/name-divergent on at least one applicable ISA |
 
 ## Supported
