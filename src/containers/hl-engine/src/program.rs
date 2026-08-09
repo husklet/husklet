@@ -381,6 +381,10 @@ impl Program {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "program_guest_test.rs"]
+mod guest_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
