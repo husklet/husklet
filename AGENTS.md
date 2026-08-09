@@ -240,6 +240,30 @@ Include at least one phase the change provably cannot affect, and check it reads
 1.000. If it does not, the harness is lying and nothing else in the table is
 evidence.
 
+## A control that merely seems unaffected is not a control
+
+Disable the code path in both binaries and measure that. Anything weaker is a
+guess about which phases are unrelated, and the guess has already been wrong.
+
+A suppression change was rejected on a 5.8% `syscall` regression. With native
+execution disabled in **both** builds — so the changed code is unreachable and
+the two must measure identically — `syscall` still read **1.057**, the worst
+phase in the control, and 13 of 17 phases favoured base. Systematic, not random:
+the candidate's engine is simply laid out differently, and `syscall` runs the
+most engine host-side code per guest instruction, so layout shows there first.
+Corrected, the algorithm's own cost was **1.012**. The change was killed for
+~5% of binary layout.
+
+`compute` and `branch` read 1.003 and 0.998 in the same balanced runs and would
+have waved the change through. They looked like controls and were not — they
+were merely phases the change did not reach, which says nothing about what else
+differs between two binaries.
+
+Where disabling the path is impossible, a base-versus-base null arm is the
+accepted substitute and must read 1.000. A control derived from the mechanism is
+better still: one lane used `compute` at 250 probes against 366,696 on `syscall`,
+having first shown the cost scales with probes.
+
 ## Reading a profile
 
 High self-time and removable cost are independent properties, and this engine has
