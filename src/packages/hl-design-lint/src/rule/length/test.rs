@@ -65,8 +65,13 @@ fn rejects_more_than_limit_production_lines() {
 
 #[test]
 fn excludes_declaration_items_sized_by_an_external_enumeration() {
+    use std::fmt::Write;
+
     let (root, source) = fixture("declarations");
-    let enumeration = (0..600).map(|index| format!("    Call{index},\n")).collect::<String>();
+    let mut enumeration = String::new();
+    for index in 0..600 {
+        writeln!(enumeration, "    Call{index},").unwrap();
+    }
     fs::write(&source, format!("pub enum Syscall {{\n{enumeration}}}\n")).unwrap();
     let workspace = Workspace::load([source]).unwrap();
     assert!(FileLength.check(&workspace).unwrap().is_empty());
