@@ -82,13 +82,24 @@ pub(super) struct Aarch64BlockCache {
     epoch: Option<InstructionEpoch>,
     generation: u64,
     blocks: Vec<Option<(u64, Aarch64Block)>>,
+    mask: usize,
+    stats: Option<Box<super::cache_stats::CacheStats>>,
 }
 impl Default for Aarch64BlockCache {
     fn default() -> Self {
+        // Measurement hook: sizing the cache from the environment lets one binary
+        // supply both arms of a capacity comparison.
+        let entries = std::env::var("HL_BLOCK_CACHE_ENTRIES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| value.is_power_of_two())
+            .unwrap_or(BLOCK_LIMIT);
         Self {
             epoch: None,
             generation: 1,
-            blocks: vec![None; BLOCK_LIMIT],
+            blocks: vec![None; entries],
+            mask: entries - 1,
+            stats: super::cache_stats::CacheStats::enabled(entries).map(Box::new),
         }
     }
 }
@@ -96,6 +107,9 @@ impl Aarch64BlockCache {
     pub(super) fn clear(&mut self) {
         self.epoch = None;
         self.blocks.fill(None);
+        if let Some(stats) = self.stats.as_mut() {
+            stats.flush();
+        }
     }
 
     fn synchronize(&mut self, epoch: InstructionEpoch) {
@@ -107,17 +121,30 @@ impl Aarch64BlockCache {
     }
 
     fn insert(&mut self, address: u64, block: Aarch64Block) {
-        let index = Self::index(address);
+        let index = self.index(address);
+        if let Some(stats) = self.stats.as_mut() {
+            let occupied = self.blocks[index].as_ref().map(|(stored, _)| *stored);
+            stats.insert(address, index, occupied, block.instructions.len());
+        }
         self.blocks[index] = Some((address, block));
     }
 
     fn get(&self, address: u64) -> Option<&Aarch64Block> {
-        let (stored, block) = self.blocks[Self::index(address)].as_ref()?;
+        let (stored, block) = self.blocks[self.index(address)].as_ref()?;
         (*stored == address).then_some(block)
     }
 
-    fn index(address: u64) -> usize {
-        (address as usize >> 2) & (BLOCK_LIMIT - 1)
+    /// The one lookup per executed block, which is where the hit rate is defined.
+    fn probe(&mut self, address: u64) -> bool {
+        let hit = self.get(address).is_some();
+        if let Some(stats) = self.stats.as_mut() {
+            stats.lookup(address, hit);
+        }
+        hit
+    }
+
+    fn index(&self, address: u64) -> usize {
+        (address as usize >> 2) & self.mask
     }
 }
 
@@ -661,7 +688,7 @@ impl ExecutionMachine {
             let address = cpu.pc;
             // `synchronize` above has already established that the cache holds this
             // exact epoch, so a hit needs one lookup and no second identity.
-            if cache.get(address).is_none() {
+            if !cache.probe(address) {
                 match self.prepare_block(&mut cache, address, cpu, memory) {
                     Ok(true) => {
                         remaining -= 1;
