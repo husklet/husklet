@@ -2,6 +2,8 @@
 
 #[allow(dead_code)]
 pub(crate) mod control;
+pub(crate) mod process;
+pub(crate) mod worker;
 
 use crate::activation::GuestIsa;
 use crate::composition::RuntimeServices;
@@ -150,6 +152,14 @@ impl crate::composition::NativeTerminalWindowNotification for CTerminalWindowNot
 }
 
 impl StreamBridge {
+    fn inherited() -> Self {
+        Self {
+            output_workers: Vec::new(),
+            guest_fds: None,
+            terminal: None,
+        }
+    }
+
     fn pipe() -> Result<(OwnedFd, OwnedFd), EngineError> {
         let mut descriptors = [-1; 2];
         // SAFETY: descriptors names two writable integers; successful pipe2
@@ -279,6 +289,7 @@ impl StreamBridge {
         })
     }
 
+    #[cfg(test)]
     fn descriptors(&self) -> [c_int; 3] {
         self.guest_fds
             .as_ref()
@@ -287,16 +298,20 @@ impl StreamBridge {
             .map(AsRawFd::as_raw_fd)
     }
 
-    fn attach_terminal(&mut self, handle: Arc<Mutex<Option<usize>>>) -> Result<(), EngineError> {
+    fn attach_terminal(
+        &mut self,
+        notification: Arc<dyn crate::composition::NativeTerminalWindowNotification>,
+    ) -> Result<(), EngineError> {
         let Some((terminal, master)) = self.terminal.take() else {
             return Ok(());
         };
         terminal
-            .attach_native(
-                std::fs::File::from(master),
-                Arc::new(CTerminalWindowNotification { handle }),
-            )
+            .attach_native(std::fs::File::from(master), notification)
             .map_err(|_| EngineError::LaunchFailed)
+    }
+
+    fn take_guest_fds(&mut self) -> Result<[OwnedFd; 3], EngineError> {
+        self.guest_fds.take().ok_or(EngineError::LaunchFailed)
     }
 }
 
@@ -315,10 +330,11 @@ unsafe impl Send for CGuestExecutor {}
 unsafe impl Sync for CGuestExecutor {}
 
 impl CGuestExecutor {
-    pub(crate) fn create(
+    fn create_with_streams(
         isa: GuestIsa,
         plan: &RuntimeLaunchPlan,
-        services: &RuntimeServices,
+        standard_fds: [c_int; 3],
+        streams: Option<StreamBridge>,
     ) -> Result<Self, EngineError> {
         if plan.result_path.is_some() {
             hl_log::hl_error!(
@@ -389,8 +405,6 @@ impl CGuestExecutor {
             .map(|(_, value)| value.as_ptr())
             .collect::<Vec<_>>();
         let option_count = c_uint::try_from(option_records.len()).map_err(|_| EngineError::LaunchFailed)?;
-        let mut streams = StreamBridge::new(services)?;
-        let standard_fds = streams.descriptors();
         let mut handle = std::ptr::null_mut();
         let status = unsafe {
             hl_c_backend_create(
@@ -415,7 +429,12 @@ impl CGuestExecutor {
         }
         let handle = NonNull::new(handle).ok_or(EngineError::LaunchFailed)?;
         let terminal_handle = Arc::new(Mutex::new(Some(handle.as_ptr() as usize)));
-        if let Err(error) = streams.attach_terminal(Arc::clone(&terminal_handle)) {
+        let mut streams = streams;
+        if let Some(streams) = streams.as_mut()
+            && let Err(error) = streams.attach_terminal(Arc::new(CTerminalWindowNotification {
+                handle: Arc::clone(&terminal_handle),
+            }))
+        {
             unsafe { hl_c_backend_destroy(handle.as_ptr()) };
             return Err(error);
         }
@@ -429,7 +448,7 @@ impl CGuestExecutor {
         Ok(Self {
             handle,
             terminal_handle,
-            _streams: streams,
+            _streams: streams.unwrap_or_else(StreamBridge::inherited),
         })
     }
 

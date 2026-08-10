@@ -1,0 +1,111 @@
+use super::control::{FRAME_SIZE, FailureStage, Message};
+use super::{CGuestExecutor, wire};
+use crate::engine::EngineError;
+use std::io::{Read, Write};
+use std::os::fd::{FromRawFd, RawFd};
+use std::sync::Arc;
+
+const MAXIMUM_PLAN: u64 = 64 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerError {
+    Descriptor,
+    Plan,
+    Control,
+    Create,
+    Start,
+}
+
+pub(crate) fn run(plan_descriptor: RawFd, control_descriptor: RawFd) -> Result<i32, WorkerError> {
+    if plan_descriptor < 3 || control_descriptor < 3 || plan_descriptor == control_descriptor {
+        return Err(WorkerError::Descriptor);
+    }
+    // SAFETY: this is the one-shot worker entry and takes unique ownership of inherited descriptors.
+    let plan_file = unsafe { std::fs::File::from_raw_fd(plan_descriptor) };
+    // SAFETY: same one-shot ownership contract, for the distinct control descriptor.
+    let mut control = unsafe { std::os::unix::net::UnixStream::from_raw_fd(control_descriptor) };
+    let mut bytes = Vec::new();
+    plan_file
+        .take(MAXIMUM_PLAN + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| WorkerError::Plan)?;
+    if bytes.len() as u64 > MAXIMUM_PLAN {
+        send_error(&mut control, FailureStage::Decode, 1);
+        return Err(WorkerError::Plan);
+    }
+    let (isa, plan) = wire::decode(&bytes).map_err(|_| {
+        send_error(&mut control, FailureStage::Decode, 2);
+        WorkerError::Plan
+    })?;
+    let executor = Arc::new(
+        CGuestExecutor::create_with_streams(isa, &plan, [0, 1, 2], None).map_err(|_| {
+            send_error(&mut control, FailureStage::Create, 1);
+            WorkerError::Create
+        })?,
+    );
+    write_message(&mut control, Message::Ready)?;
+    if read_message(&mut control)? != Message::Start {
+        send_error(&mut control, FailureStage::Control, 1);
+        return Err(WorkerError::Control);
+    }
+    let request_control = control.try_clone().map_err(|_| WorkerError::Control)?;
+    let request_executor = Arc::clone(&executor);
+    std::thread::Builder::new()
+        .name("hl-c-worker-control".into())
+        .spawn(move || serve_requests(request_control, request_executor))
+        .map_err(|_| WorkerError::Control)?;
+    if let Err(error) = executor.start_plan(&plan) {
+        let _ = error;
+        send_error(&mut control, FailureStage::Start, 1);
+        return Err(WorkerError::Start);
+    }
+    let exit = executor.exit();
+    write_message(&mut control, Message::Exit(exit))?;
+    Ok(crate::program::Program::exit_status(exit))
+}
+
+fn serve_requests(mut control: std::os::unix::net::UnixStream, executor: Arc<CGuestExecutor>) {
+    loop {
+        let Ok(message) = read_message(&mut control) else {
+            return;
+        };
+        let result = match message {
+            Message::Stop(request) => executor.stop_request(request),
+            Message::Resize { rows, columns } => resize(rows, columns)
+                .and_then(|()| executor.stop_request(crate::engine::StopRequest::Signal(libc::SIGWINCH))),
+            _ => Err(EngineError::StopFailed),
+        };
+        if result.is_err() {
+            send_error(&mut control, FailureStage::Control, 2);
+            return;
+        }
+    }
+}
+
+fn resize(rows: u16, columns: u16) -> Result<(), EngineError> {
+    let window = libc::winsize {
+        ws_row: rows,
+        ws_col: columns,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: fd 0 is the inherited PTY slave for terminal launches; ioctl retains no pointer.
+    (unsafe { libc::ioctl(0, libc::TIOCSWINSZ, &raw const window) } == 0)
+        .then_some(())
+        .ok_or(EngineError::StopFailed)
+}
+
+fn read_message(stream: &mut std::os::unix::net::UnixStream) -> Result<Message, WorkerError> {
+    let mut frame = [0_u8; FRAME_SIZE];
+    stream.read_exact(&mut frame).map_err(|_| WorkerError::Control)?;
+    Message::decode(&frame).map_err(|_| WorkerError::Control)
+}
+
+fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) -> Result<(), WorkerError> {
+    let frame = message.encode().map_err(|_| WorkerError::Control)?;
+    stream.write_all(&frame).map_err(|_| WorkerError::Control)
+}
+
+fn send_error(stream: &mut std::os::unix::net::UnixStream, stage: FailureStage, code: i32) {
+    let _ = write_message(stream, Message::Error { stage, code });
+}

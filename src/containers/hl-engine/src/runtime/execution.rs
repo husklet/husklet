@@ -24,8 +24,8 @@ pub(super) struct CMachine {
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 struct CExecutionState {
-    prepared: Option<Arc<crate::c_execution::CGuestExecutor>>,
-    current: Option<Arc<crate::c_execution::CGuestExecutor>>,
+    prepared: Option<Arc<crate::c_execution::process::CWorker>>,
+    current: Option<Arc<crate::c_execution::process::CWorker>>,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
@@ -35,7 +35,7 @@ impl CMachine {
             let mut state = self.execution.lock().map_err(|_| EngineError::Synchronization)?;
             let execution = match state.prepared.take() {
                 Some(execution) => execution,
-                None => Arc::new(crate::c_execution::CGuestExecutor::create(
+                None => Arc::new(crate::c_execution::process::CWorker::create(
                     self.isa,
                     &self.plan,
                     &self.services,
@@ -44,10 +44,10 @@ impl CMachine {
             state.current = Some(Arc::clone(&execution));
             execution
         };
-        execution.start_plan(&self.plan)
+        execution.start()
     }
 
-    fn current(&self) -> Result<Arc<crate::c_execution::CGuestExecutor>, EngineError> {
+    fn current(&self) -> Result<Arc<crate::c_execution::process::CWorker>, EngineError> {
         self.execution
             .lock()
             .map_err(|_| EngineError::Synchronization)?
@@ -85,19 +85,15 @@ impl ProductionFactory {
         {
             return Err(CompositionError::RuntimeConstruction);
         }
-        crate::c_execution::CGuestExecutor::create(request.isa, request.plan, request.services)
-            .map(|execution| {
-                ProductionMachine::C(CMachine {
-                    isa: request.isa,
-                    plan: request.plan.clone(),
-                    services: request.services.clone(),
-                    execution: Mutex::new(CExecutionState {
-                        prepared: Some(Arc::new(execution)),
-                        current: None,
-                    }),
-                })
-            })
-            .map_err(|_| CompositionError::RuntimeConstruction)
+        Ok(ProductionMachine::C(CMachine {
+            isa: request.isa,
+            plan: request.plan.clone(),
+            services: request.services.clone(),
+            execution: Mutex::new(CExecutionState {
+                prepared: None,
+                current: None,
+            }),
+        }))
     }
 }
 
@@ -133,7 +129,7 @@ impl GuestMachine for ProductionMachine {
         match self {
             Self::Rust(machine) => machine.wait(),
             #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
-            Self::C(machine) => Ok(machine.current()?.exit()),
+            Self::C(machine) => machine.current()?.wait(),
         }
     }
 
@@ -141,7 +137,7 @@ impl GuestMachine for ProductionMachine {
         match self {
             Self::Rust(machine) => machine.stop(request),
             #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
-            Self::C(machine) => machine.current()?.stop_request(request),
+            Self::C(machine) => machine.current()?.stop(request),
         }
     }
 

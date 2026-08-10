@@ -68,6 +68,7 @@ pub mod native_launcher {
 mod c_execution;
 pub mod options;
 pub mod program;
+pub mod retained_worker;
 #[cfg(target_os = "linux")]
 #[path = "runtime/api.rs"]
 pub mod runtime;
