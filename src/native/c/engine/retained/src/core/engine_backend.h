@@ -21,5 +21,8 @@ void hl_target_runtime_init(void);
 /* Internal launch path: atomically imports an already validated, instance-owned option snapshot. */
 hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl_host_services *host,
                                         const hl_options *options, hl_engine **out_engine);
+/* Product-only path. The caller keeps options immutable and alive through engine destruction. */
+hl_status hl_engine_create_with_borrowed_options(const hl_engine_config *config, const hl_host_services *host,
+                                                 const hl_options *options, hl_engine **out_engine);
 
 #endif

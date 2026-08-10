@@ -161,6 +161,25 @@ int hl_options_clone(hl_options *destination, const hl_options *source) {
     return 0;
 }
 
+int hl_options_validate(const hl_options *options) {
+    size_t index, total = 0;
+    if (options == NULL || options->values == NULL || options->value_sizes == NULL ||
+        options->value_count != HL_OPTION_COUNT || options->store_size > HL_OPTION_STORE_LIMIT)
+        return -1;
+    for (index = 0; index < options->value_count; ++index) {
+        size_t size = options->value_sizes[index];
+        if (size == 0) {
+            if (options->values[index] != NULL) return -1;
+            continue;
+        }
+        if (size > HL_OPTION_STORE_LIMIT || options->values[index] == NULL ||
+            options->values[index][size - 1] != 0 || total > HL_OPTION_STORE_LIMIT - size)
+            return -1;
+        total += size;
+    }
+    return total == options->store_size ? 0 : -1;
+}
+
 void hl_options_destroy(hl_options *options) {
     size_t index;
     if (options == NULL) return;

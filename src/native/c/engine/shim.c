@@ -18,6 +18,8 @@ typedef struct hl_c_backend {
     hl_host_linux *host;
     hl_host_services services;
     hl_engine *engine;
+    hl_options options;
+    uint32_t options_initialized;
     hl_engine_exit result;
 } hl_c_backend;
 
@@ -42,7 +44,6 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
     hl_c_backend *backend;
     hl_engine_config config;
     hl_status status;
-    hl_options options;
     uint32_t index;
     hl_engine_fd_binding bindings[3];
     hl_host_result imported[3];
@@ -57,7 +58,6 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
         return status;
     }
     memset(&config, 0, sizeof(config));
-    memset(&options, 0, sizeof(options));
     hl_target_register_backend();
     config.abi = HL_ENGINE_ABI;
     config.size = sizeof(config);
@@ -87,15 +87,16 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
         config.fd_bindings = bindings;
         config.fd_binding_count = 3;
     }
-    if (hl_options_init_records(&options, option_count, option_names, option_values) != 0) {
+    if (hl_options_init_records(&backend->options, option_count, option_names, option_values) != 0) {
         hl_host_linux_destroy(backend->host);
         free(backend);
         return HL_STATUS_INVALID_ARGUMENT;
     }
+    backend->options_initialized = 1;
     if (executable_fd >= 0) {
         hl_host_result imported_executable = hl_host_linux_import_file(backend->host, executable_fd);
         if (imported_executable.status != HL_STATUS_OK || imported_executable.value == HL_HOST_HANDLE_INVALID) {
-            hl_options_destroy(&options);
+            hl_options_destroy(&backend->options);
             if (standard_fds != NULL)
                 for (index = 0; index < 3; ++index)
                     (void)backend->services.file->close(backend->services.context, imported[index].value);
@@ -116,21 +117,21 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
     } else if (executable_host != NULL) {
         status = hl_c_backend_executable_open(&backend->services, executable_host, &executable);
         if (status != HL_STATUS_OK) {
-            hl_options_destroy(&options);
+            hl_options_destroy(&backend->options);
             hl_host_linux_destroy(backend->host);
             free(backend);
             return status;
         }
         config.executable = &executable;
     }
-    status = hl_engine_create_with_options(&config, &backend->services, &options, &backend->engine);
-    hl_options_destroy(&options);
+    status = hl_engine_create_with_borrowed_options(&config, &backend->services, &backend->options, &backend->engine);
     if (status != HL_STATUS_OK) {
         hl_c_backend_executable_discard(&backend->services, &executable);
         if (standard_fds != NULL)
             for (index = 0; index < 3; ++index)
                 (void)backend->services.file->close(backend->services.context, imported[index].value);
         hl_host_linux_destroy(backend->host);
+        hl_options_destroy(&backend->options);
         free(backend);
         return status;
     }
@@ -159,6 +160,7 @@ uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend) { return backend 
 void hl_c_backend_destroy(hl_c_backend *backend) {
     if (backend == NULL) return;
     hl_engine_destroy(backend->engine);
+    if (backend->options_initialized) hl_options_destroy(&backend->options);
     hl_host_linux_destroy(backend->host);
     free(backend);
 }

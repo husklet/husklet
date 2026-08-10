@@ -33,6 +33,7 @@ struct hl_engine {
     uint32_t box_initialized;
     hl_options options;
     uint32_t options_initialized;
+    uint32_t options_owned;
     hl_engine_box_config box_config;
     char *owned_rootfs;
     char *owned_working_directory;
@@ -447,8 +448,9 @@ static hl_status hl_engine_apply_box(hl_engine *engine, const hl_engine_box_conf
     return HL_STATUS_OK;
 }
 
-hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl_host_services *host,
-                                        const hl_options *source_options, hl_engine **out_engine) {
+static hl_status hl_engine_create_with_options_mode(const hl_engine_config *config, const hl_host_services *host,
+                                                    const hl_options *source_options, uint32_t borrow_options,
+                                                    hl_engine **out_engine) {
     hl_engine *engine;
     hl_host_handle *candidate_handles = NULL;
     hl_status status;
@@ -460,6 +462,10 @@ hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl
     if (config->flags != 0 || config->reserved != 0) return HL_STATUS_INVALID_ARGUMENT;
     if (config->payload_size != 0 && config->payload == NULL) return HL_STATUS_INVALID_ARGUMENT;
     if (config->payload_size != 0) return HL_STATUS_NOT_SUPPORTED;
+    if (borrow_options &&
+        (source_options == NULL || config->memory_limit != 0 || config->pid_limit != 0 || config->cpu_limit != 0 ||
+         config->box != NULL || hl_options_validate(source_options) != 0))
+        return HL_STATUS_INVALID_ARGUMENT;
     if (config->executable != NULL &&
         (config->executable->abi != HL_ENGINE_ABI || config->executable->size < sizeof(*config->executable)))
         return HL_STATUS_ABI_MISMATCH;
@@ -500,10 +506,15 @@ hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl
         engine->executable_config.host_handle = HL_HOST_HANDLE_INVALID;
         engine->config.executable = &engine->executable_config;
     }
-    if ((source_options == NULL ? hl_options_clone_current(&engine->options)
-                                : hl_options_clone(&engine->options, source_options)) != 0) {
-        status = HL_STATUS_OUT_OF_MEMORY;
-        goto fail;
+    if (borrow_options) {
+        engine->options = *source_options;
+    } else {
+        if ((source_options == NULL ? hl_options_clone_current(&engine->options)
+                                    : hl_options_clone(&engine->options, source_options)) != 0) {
+            status = HL_STATUS_OUT_OF_MEMORY;
+            goto fail;
+        }
+        engine->options_owned = 1;
     }
     /* An explicit per-engine snapshot is authoritative. Embedders must not
      * inherit unrelated process-global HL_* settings behind Rust's resolved
@@ -621,7 +632,7 @@ fail:
         }
         free(engine->box_fds);
         free(engine->box_ofds);
-        if (engine->options_initialized) hl_options_destroy(&engine->options);
+        if (engine->options_initialized && engine->options_owned) hl_options_destroy(&engine->options);
         free(engine->owned_rootfs);
         if (engine->owned_executable_image != NULL) {
             memset(engine->owned_executable_image, 0, engine->executable_config.image_size);
@@ -641,6 +652,16 @@ fail:
         free(engine);
     }
     return status;
+}
+
+hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl_host_services *host,
+                                        const hl_options *source_options, hl_engine **out_engine) {
+    return hl_engine_create_with_options_mode(config, host, source_options, 0, out_engine);
+}
+
+hl_status hl_engine_create_with_borrowed_options(const hl_engine_config *config, const hl_host_services *host,
+                                                 const hl_options *source_options, hl_engine **out_engine) {
+    return hl_engine_create_with_options_mode(config, host, source_options, 1, out_engine);
 }
 
 hl_status hl_engine_create(const hl_engine_config *config, const hl_host_services *host, hl_engine **out_engine) {
@@ -796,7 +817,7 @@ void hl_engine_destroy(hl_engine *engine) {
     }
     free(engine->box_fds);
     free(engine->box_ofds);
-    if (engine->options_initialized) hl_options_destroy(&engine->options);
+    if (engine->options_initialized && engine->options_owned) hl_options_destroy(&engine->options);
     free(engine->owned_rootfs);
     if (engine->owned_executable_image != NULL) {
         memset(engine->owned_executable_image, 0, engine->executable_config.image_size);

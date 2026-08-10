@@ -12,11 +12,15 @@ int main(void) {
     int status = EXIT_FAILURE;
 
     if (hl_options_init_records(&options, 3, names, values) != 0) return EXIT_FAILURE;
+    if (hl_options_validate(&options) != 0) goto done;
     if (hl_options_get(&options, "HL_CHECKPOINT") != NULL) goto done;
     if (strcmp(hl_options_get(&options, "HL_OVERLAY_UPPER"), "") != 0) goto done;
     if (strcmp(hl_options_get(&options, "HL_GID"), "18446744073709551615") != 0) goto done;
     if (strcmp(hl_options_get(&options, "HL_GUEST_ENV_EXACT"), "1") != 0) goto done;
     if (hl_options_get(&options, "HL_LOG") != NULL) goto done;
+    options.store_size++;
+    if (hl_options_validate(&options) == 0) goto done;
+    options.store_size--;
     hl_options_destroy(&options);
     if (hl_options_init_records(&options, 2, duplicate_names, duplicate_values) == 0) {
         hl_options_destroy(&options);

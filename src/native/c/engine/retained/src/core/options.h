@@ -19,6 +19,8 @@ int hl_options_init(hl_options *options);
 int hl_options_init_records(hl_options *options, size_t count, const char *const *names,
                             const char *const *values);
 int hl_options_clone(hl_options *destination, const hl_options *source);
+/* Validate an immutable store before lending its read view to an engine. */
+int hl_options_validate(const hl_options *options);
 /* Snapshot the scoped, process, or centralized default context into an owned store. */
 int hl_options_clone_current(hl_options *destination);
 /* Import supported host environment defaults without replacing explicit values. */
