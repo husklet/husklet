@@ -419,7 +419,7 @@ mod tests {
     #[tokio::test]
     async fn alpine_terminal_flows_through_public_container_session_apis() {
         use crate::{runtime::image::TestImage, suite::Target};
-        use hl_container::{Config, Console, ContainerSpec, ExecSpec, ExitStatus, Process, Size, Streams};
+        use hl_container::{Config, Console, ContainerSpec, ExecSpec, Execution, ExitStatus, Process, Size, Streams};
 
         lifecycle("image.begin");
         let image = TestImage::materialize("alpine", &Target::Arm64.platform())
@@ -439,11 +439,16 @@ mod tests {
             .create(
                 ContainerSpec::from_directory(image.path(), initial)
                     .name("terminal-public-api")
-                    .guest(Target::Arm64.guest()),
+                    .guest(Target::Arm64.guest())
+                    .execution(Execution::rust_interpreted()),
             )
             .await
             .unwrap();
         lifecycle("container_create.end");
+        assert_eq!(
+            containers.inspect("terminal-public-api").await.unwrap().spec.execution,
+            Execution::rust_interpreted()
+        );
         lifecycle("container_start.begin");
         containers.start("terminal-public-api").await.unwrap();
         lifecycle("container_start.end");
