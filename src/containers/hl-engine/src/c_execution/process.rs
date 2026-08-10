@@ -139,11 +139,12 @@ impl CWorker {
             Startup::Failed
         };
         if let Err(error) = &result {
-            hl_log::hl_event!(
+            hl_log::hl_verdict!(
                 hl_log::tag::EXEC,
-                hl_log::Level::Error,
                 "retained_c.worker.start_failed",
-                reason = ?error
+                stage = %"start",
+                reason = ?error;
+                "retained C worker failure stage=start reason={error:?}"
             );
         }
         self.startup_changed.notify_all();
@@ -176,7 +177,15 @@ impl CWorker {
             "retained_c.worker.start_requested"
         );
         drop(writer);
-        if read_message(&mut reader)? != Message::Started {
+        let started = read_message(&mut reader)?;
+        if started != Message::Started {
+            hl_log::hl_verdict!(
+                hl_log::tag::EXEC,
+                "retained_c.worker.protocol_failed",
+                phase = %"started",
+                message = ?started;
+                "retained C worker protocol failure phase=started message={started:?}"
+            );
             return Err(EngineError::LaunchFailed);
         }
         hl_log::hl_event!(hl_log::tag::EXEC, hl_log::Level::Info, "retained_c.worker.started");
@@ -285,11 +294,13 @@ impl CWorker {
             .as_ref()
             .map(Child::id)
             .ok_or(EngineError::StopFailed)?;
-        hl_log::hl_event!(
+        hl_log::hl_verdict!(
             hl_log::tag::EXEC,
-            hl_log::Level::Error,
             "retained_c.worker.force_kill",
-            pid = process
+            stage = %"stop",
+            reason = %"force_kill",
+            pid = process;
+            "retained C worker failure stage=stop reason=force_kill pid={process}"
         );
         signal_process_group(process, libc::SIGKILL)
     }
@@ -350,11 +361,13 @@ impl Drop for CWorker {
         if let Some(child) = child.as_mut()
             && child.try_wait().ok().flatten().is_none()
         {
-            hl_log::hl_event!(
+            hl_log::hl_verdict!(
                 hl_log::tag::EXEC,
-                hl_log::Level::Error,
                 "retained_c.worker.drop_rollback",
-                pid = child.id()
+                stage = %"drop",
+                reason = %"worker_still_running",
+                pid = child.id();
+                "retained C worker failure stage=drop reason=worker_still_running pid={}", child.id()
             );
             let _ = signal_process_group(child.id(), libc::SIGKILL);
             let _ = child.wait();
@@ -368,11 +381,13 @@ impl Drop for ChildGuard {
     fn drop(&mut self) {
         let Some(child) = self.0.as_mut() else { return };
         if child.try_wait().ok().flatten().is_none() {
-            hl_log::hl_event!(
+            hl_log::hl_verdict!(
                 hl_log::tag::EXEC,
-                hl_log::Level::Error,
                 "retained_c.worker.create_rollback",
-                pid = child.id()
+                stage = %"create",
+                reason = %"post_spawn_rollback",
+                pid = child.id();
+                "retained C worker failure stage=create reason=post_spawn_rollback pid={}", child.id()
             );
             let _ = signal_process_group(child.id(), libc::SIGKILL);
             let _ = child.wait();
@@ -448,8 +463,11 @@ fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) 
 
 #[cfg(test)]
 mod tests {
-    use super::{CWorker, ChildGuard, Startup, process_status_matches, worker_environment};
+    use super::{
+        CWorker, ChildGuard, Startup, process_status_matches, read_message, worker_environment, write_message,
+    };
     use crate::c_execution::StreamBridge;
+    use crate::c_execution::control::Message;
     use crate::engine::StopRequest;
     use crate::engine::{EngineExit, ExitKind};
     use std::io::{BufRead, BufReader};
@@ -458,6 +476,24 @@ mod tests {
     use std::process::{Child, Command, Stdio};
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::{Duration, Instant};
+
+    struct Capture(Arc<Mutex<String>>);
+
+    impl hl_log::Sink for Capture {
+        fn write_line(&self, line: &str) {
+            self.0.lock().unwrap().push_str(line);
+        }
+    }
+
+    fn capture_events(run: impl FnOnce()) -> String {
+        static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = CAPTURE_LOCK.lock().unwrap();
+        let output = Arc::new(Mutex::new(String::new()));
+        hl_log::Events::global().set(Box::new(Capture(Arc::clone(&output))));
+        run();
+        hl_log::Events::global().reset();
+        Arc::try_unwrap(output).unwrap().into_inner().unwrap()
+    }
 
     fn exit(status: i32) -> EngineExit {
         EngineExit {
@@ -525,7 +561,10 @@ mod tests {
     fn post_spawn_failure_guard_reaps_the_worker() {
         let child = session_child("exec sleep 60", Stdio::null());
         let process = child.id();
-        drop(ChildGuard(Some(child)));
+        let events = capture_events(|| drop(ChildGuard(Some(child))));
+        assert!(events.contains("retained_c.worker.create_rollback"));
+        assert!(events.contains("\"stage\":\"create\""));
+        assert!(events.contains("\"reason\":\"post_spawn_rollback\""));
         assert_group_gone(process);
     }
 
@@ -545,7 +584,10 @@ mod tests {
             startup: Mutex::new(Startup::Started),
             startup_changed: Condvar::new(),
         };
-        worker.stop(StopRequest::Force).unwrap();
+        let events = capture_events(|| worker.stop(StopRequest::Force).unwrap());
+        assert!(events.contains("retained_c.worker.force_kill"));
+        assert!(events.contains("\"stage\":\"stop\""));
+        assert!(events.contains("\"reason\":\"force_kill\""));
         let status = worker.child.lock().unwrap().as_mut().unwrap().wait().unwrap();
         assert_eq!(status.signal(), Some(libc::SIGKILL));
         assert_group_gone(process);
@@ -573,7 +615,10 @@ mod tests {
             startup: Mutex::new(Startup::Started),
             startup_changed: Condvar::new(),
         };
-        drop(worker);
+        let events = capture_events(|| drop(worker));
+        assert!(events.contains("retained_c.worker.drop_rollback"));
+        assert!(events.contains("\"stage\":\"drop\""));
+        assert!(events.contains("\"reason\":\"worker_still_running\""));
         assert_group_gone(process);
         // The descendant may briefly remain as an init-owned zombie, but it must no longer be
         // signalable as a live process after the private group receives SIGKILL.
@@ -588,5 +633,36 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn malformed_started_response_reports_both_protocol_and_start_failure() {
+        let child = session_child("exec sleep 60", Stdio::null());
+        let process = child.id();
+        let (control, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let reader = control.try_clone().unwrap();
+        let worker = CWorker {
+            child: Mutex::new(Some(child)),
+            reader: Mutex::new(reader),
+            writer: Arc::new(Mutex::new(control)),
+            streams: Mutex::new(Some(StreamBridge::inherited())),
+            exit: Mutex::new(None),
+            startup: Mutex::new(Startup::Starting),
+            startup_changed: Condvar::new(),
+        };
+        let peer_thread = std::thread::spawn(move || {
+            write_message(&mut peer, Message::Ready).unwrap();
+            assert_eq!(read_message(&mut peer).unwrap(), Message::Start);
+            write_message(&mut peer, Message::Ready).unwrap();
+        });
+        let events = capture_events(|| assert_eq!(worker.start(), Err(crate::engine::EngineError::LaunchFailed)));
+        peer_thread.join().unwrap();
+        assert!(events.contains("retained_c.worker.protocol_failed"));
+        assert!(events.contains("\"phase\":\"started\""));
+        assert!(events.contains("retained_c.worker.start_failed"));
+        assert!(events.contains("\"stage\":\"start\""));
+        assert!(events.contains("\"reason\":\"LaunchFailed\""));
+        drop(worker);
+        assert_group_gone(process);
     }
 }
