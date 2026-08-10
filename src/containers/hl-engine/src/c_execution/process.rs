@@ -5,6 +5,7 @@ use crate::composition::{CompositionError, NativeTerminalWindowNotification, Run
 use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::launch_plan::RuntimeLaunchPlan;
 use std::ffi::CString;
+use std::ffi::OsString;
 use std::io::{Read, Seek, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
@@ -51,6 +52,12 @@ impl CWorker {
         plan: &RuntimeLaunchPlan,
         services: &RuntimeServices,
     ) -> Result<Self, EngineError> {
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "retained_c.worker.creating",
+            isa = ?isa
+        );
         let plan_file = sealed_plan(&wire::encode(isa, plan)?)?;
         let (parent_control, child_control) =
             std::os::unix::net::UnixStream::pair().map_err(|_| EngineError::LaunchFailed)?;
@@ -71,10 +78,8 @@ impl CWorker {
             .stdin(Stdio::from(input))
             .stdout(Stdio::from(output))
             .stderr(Stdio::from(error));
-        for name in [hl_log::LOG_TAGS, hl_log::LOG_LEVEL, hl_log::PROFILE_TAGS] {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
+        for (name, value) in worker_environment(|name| std::env::var_os(name)) {
+            command.env(name, value);
         }
         let plan_raw = plan_inherit.as_raw_fd();
         let control_raw = control_inherit.as_raw_fd();
@@ -91,10 +96,24 @@ impl CWorker {
             });
         }
         let child = command.spawn().map_err(|_| EngineError::LaunchFailed)?;
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "retained_c.worker.spawned",
+            isa = ?isa,
+            pid = child.id()
+        );
         let mut child = ChildGuard(Some(child));
         drop((plan_inherit, control_inherit, child_control, plan_file));
         crate::executable::ExecutableAuthority::send_optional(services.executable_authority.as_ref(), &parent_control)
             .map_err(|_| EngineError::LaunchFailed)?;
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "retained_c.worker.authority_transferred",
+            isa = ?isa,
+            present = services.executable_authority.is_some()
+        );
         let reader = parent_control.try_clone().map_err(|_| EngineError::LaunchFailed)?;
         let writer = Arc::new(Mutex::new(parent_control));
         streams.attach_terminal(Arc::new(WorkerTerminalNotification {
@@ -119,6 +138,14 @@ impl CWorker {
         } else {
             Startup::Failed
         };
+        if let Err(error) = &result {
+            hl_log::hl_event!(
+                hl_log::tag::EXEC,
+                hl_log::Level::Error,
+                "retained_c.worker.start_failed",
+                reason = ?error
+            );
+        }
         self.startup_changed.notify_all();
         result
     }
@@ -131,14 +158,28 @@ impl CWorker {
                 hl_log::tag::EXEC,
                 "retained C worker failed before start: message={ready:?}"
             );
+            hl_log::hl_event!(
+                hl_log::tag::EXEC,
+                hl_log::Level::Error,
+                "retained_c.worker.protocol_failed",
+                phase = "ready",
+                message = ?ready
+            );
             return Err(EngineError::LaunchFailed);
         }
+        hl_log::hl_event!(hl_log::tag::EXEC, hl_log::Level::Info, "retained_c.worker.ready");
         let mut writer = self.writer.lock().map_err(|_| EngineError::Synchronization)?;
         write_message(&mut writer, Message::Start)?;
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "retained_c.worker.start_requested"
+        );
         drop(writer);
         if read_message(&mut reader)? != Message::Started {
             return Err(EngineError::LaunchFailed);
         }
+        hl_log::hl_event!(hl_log::tag::EXEC, hl_log::Level::Info, "retained_c.worker.started");
         Ok(())
     }
 
@@ -157,6 +198,13 @@ impl CWorker {
                 hl_log::tag::EXEC,
                 "retained C worker failed while running: message={message:?}"
             );
+            hl_log::hl_event!(
+                hl_log::tag::EXEC,
+                hl_log::Level::Error,
+                "retained_c.worker.protocol_failed",
+                phase = "exit",
+                message = ?message
+            );
             return Err(EngineError::WaitFailed);
         };
         let status = self
@@ -172,14 +220,33 @@ impl CWorker {
                 hl_log::tag::EXEC,
                 "retained C worker process status disagrees with exit: process={status:?} exit={exit:?}"
             );
+            hl_log::hl_event!(
+                hl_log::tag::EXEC,
+                hl_log::Level::Error,
+                "retained_c.worker.status_mismatch",
+                process = ?status,
+                exit = ?exit
+            );
             return Err(EngineError::WaitFailed);
         }
         *self.exit.lock().map_err(|_| EngineError::Synchronization)? = Some(exit);
         drop(self.streams.lock().map_err(|_| EngineError::Synchronization)?.take());
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "retained_c.worker.reaped",
+            exit = ?exit
+        );
         Ok(exit)
     }
 
     pub(crate) fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "retained_c.worker.stop_requested",
+            request = ?request
+        );
         let startup = self.startup.lock().map_err(|_| EngineError::Synchronization)?;
         let startup = self
             .startup_changed
@@ -218,6 +285,12 @@ impl CWorker {
             .as_ref()
             .map(Child::id)
             .ok_or(EngineError::StopFailed)?;
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Error,
+            "retained_c.worker.force_kill",
+            pid = process
+        );
         signal_process_group(process, libc::SIGKILL)
     }
 
@@ -261,6 +334,12 @@ impl CWorker {
         };
         *self.exit.lock().map_err(|_| EngineError::Synchronization)? = Some(exit);
         drop(self.streams.lock().map_err(|_| EngineError::Synchronization)?.take());
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "retained_c.worker.reaped_without_frame",
+            exit = ?exit
+        );
         Ok(exit)
     }
 }
@@ -271,6 +350,12 @@ impl Drop for CWorker {
         if let Some(child) = child.as_mut()
             && child.try_wait().ok().flatten().is_none()
         {
+            hl_log::hl_event!(
+                hl_log::tag::EXEC,
+                hl_log::Level::Error,
+                "retained_c.worker.drop_rollback",
+                pid = child.id()
+            );
             let _ = signal_process_group(child.id(), libc::SIGKILL);
             let _ = child.wait();
         }
@@ -283,10 +368,23 @@ impl Drop for ChildGuard {
     fn drop(&mut self) {
         let Some(child) = self.0.as_mut() else { return };
         if child.try_wait().ok().flatten().is_none() {
+            hl_log::hl_event!(
+                hl_log::tag::EXEC,
+                hl_log::Level::Error,
+                "retained_c.worker.create_rollback",
+                pid = child.id()
+            );
             let _ = signal_process_group(child.id(), libc::SIGKILL);
             let _ = child.wait();
         }
     }
+}
+
+fn worker_environment(get: impl Fn(&str) -> Option<OsString>) -> Vec<(&'static str, OsString)> {
+    [hl_log::LOG_TAGS, hl_log::LOG_LEVEL, hl_log::PROFILE_TAGS]
+        .into_iter()
+        .filter_map(|name| get(name).map(|value| (name, value)))
+        .collect()
 }
 
 fn signal_process_group(process: u32, signal: i32) -> Result<(), EngineError> {
@@ -350,7 +448,7 @@ fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) 
 
 #[cfg(test)]
 mod tests {
-    use super::{CWorker, ChildGuard, Startup, process_status_matches};
+    use super::{CWorker, ChildGuard, Startup, process_status_matches, worker_environment};
     use crate::c_execution::StreamBridge;
     use crate::engine::StopRequest;
     use crate::engine::{EngineExit, ExitKind};
@@ -378,6 +476,16 @@ mod tests {
         assert!(process_status_matches(&seven, exit(7)));
         assert!(!process_status_matches(&success, exit(7)));
         assert!(!process_status_matches(&seven, exit(0)));
+    }
+
+    #[test]
+    fn worker_environment_forwards_only_structured_logging_controls() {
+        let environment = worker_environment(|name| Some(format!("value-for-{name}").into()));
+        assert_eq!(
+            environment.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            [hl_log::LOG_TAGS, hl_log::LOG_LEVEL, hl_log::PROFILE_TAGS]
+        );
+        assert!(environment.iter().all(|(_, value)| !value.is_empty()));
     }
 
     fn session_child(script: &str, stdout: Stdio) -> Child {

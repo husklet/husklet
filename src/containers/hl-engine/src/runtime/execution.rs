@@ -85,6 +85,13 @@ impl ProductionFactory {
         {
             return Err(CompositionError::RuntimeConstruction);
         }
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "execution.backend.selected",
+            backend = "c",
+            isa = ?request.isa
+        );
         Ok(ProductionMachine::C(CMachine {
             isa: request.isa,
             plan: request.plan.clone(),

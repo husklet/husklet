@@ -17,6 +17,8 @@ pub(crate) enum WorkerError {
 }
 
 pub(crate) fn run(plan_descriptor: RawFd, control_descriptor: RawFd) -> Result<i32, WorkerError> {
+    // Lifecycle events belong to the supervising parent: this process's stderr is
+    // the guest's stderr stream, so host diagnostics here would corrupt guest output.
     if plan_descriptor < 3 || control_descriptor < 3 || plan_descriptor == control_descriptor {
         return Err(WorkerError::Descriptor);
     }
