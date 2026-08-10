@@ -285,11 +285,16 @@ const char *hl_process_guest_environment_get(void) {
 }
 
 int hl_process_guest_environment_set(const char *value) {
-    return hl_options_set(hl_process_state != NULL ? hl_process_state : hl_options_current(), "HL_GUEST_ENV", value, 1);
+    hl_options *options = hl_process_state != NULL ? hl_process_state : hl_options_current();
+    if (options == NULL) return -1;
+    if (options->values == NULL && hl_options_init(options) != 0) return -1;
+    return hl_options_set(options, "HL_GUEST_ENV", value, 1);
 }
 
 int hl_process_guest_environment_unset(void) {
-    return hl_options_unset(hl_process_state != NULL ? hl_process_state : hl_options_current(), "HL_GUEST_ENV");
+    hl_options *options = hl_process_state != NULL ? hl_process_state : hl_options_current();
+    if (options == NULL || options->values == NULL) return 0;
+    return hl_options_unset(options, "HL_GUEST_ENV");
 }
 
 void hl_option_reset(void) {

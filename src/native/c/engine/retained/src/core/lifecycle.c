@@ -388,11 +388,7 @@ static int32_t hl_production_cold_entry(void *opaque) {
         free(argv);
         return 71;
     }
-    if (hl_options_init(&process_state) != 0) {
-        hl_options_destroy(&options);
-        free(argv);
-        return 71;
-    }
+    memset(&process_state, 0, sizeof(process_state));
     if (hl_host_windows_create(&native, &services) != HL_STATUS_OK) {
         hl_options_destroy(&process_state);
         hl_options_destroy(&options);
@@ -436,10 +432,7 @@ static int32_t hl_production_entry(void *opaque) {
     hl_options *previous = hl_options_bind_process(context->options);
     hl_options process_state;
     hl_options *previous_state;
-    if (hl_options_init(&process_state) != 0) {
-        (void)hl_options_bind_process(previous);
-        return 71;
-    }
+    memset(&process_state, 0, sizeof(process_state));
     previous_state = hl_options_bind_process_state(&process_state);
     hl_host_handle executable =
         context->config->executable == NULL ? HL_HOST_HANDLE_INVALID : context->config->executable->host_handle;
