@@ -2,7 +2,7 @@ use crate::composition::{CompositionError, GuestMachine, RuntimeConstruction, Ru
 use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::runtime_machine::{RustRuntimeFactory, RustRuntimeMachine};
 use hl_runtime::RuntimeAssemblyConfig;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 type RustMachine = RustRuntimeMachine<crate::native::GuestExecutor>;
 
@@ -14,8 +14,40 @@ pub(super) enum ProductionMachine {
 
 #[cfg(feature = "c-execution")]
 pub(super) struct CMachine {
-    execution: crate::c_execution::CGuestExecutor,
+    isa: crate::activation::GuestIsa,
     plan: crate::launch_plan::RuntimeLaunchPlan,
+    execution: Mutex<CExecutionState>,
+}
+
+#[cfg(feature = "c-execution")]
+struct CExecutionState {
+    prepared: Option<Arc<crate::c_execution::CGuestExecutor>>,
+    current: Option<Arc<crate::c_execution::CGuestExecutor>>,
+}
+
+#[cfg(feature = "c-execution")]
+impl CMachine {
+    fn start(&self) -> Result<(), EngineError> {
+        let execution = {
+            let mut state = self.execution.lock().map_err(|_| EngineError::Synchronization)?;
+            let execution = match state.prepared.take() {
+                Some(execution) => execution,
+                None => Arc::new(crate::c_execution::CGuestExecutor::create(self.isa, &self.plan)?),
+            };
+            state.current = Some(Arc::clone(&execution));
+            execution
+        };
+        execution.start_plan(&self.plan)
+    }
+
+    fn current(&self) -> Result<Arc<crate::c_execution::CGuestExecutor>, EngineError> {
+        self.execution
+            .lock()
+            .map_err(|_| EngineError::Synchronization)?
+            .current
+            .clone()
+            .ok_or(EngineError::NotStarted)
+    }
 }
 
 pub(super) struct ProductionFactory;
@@ -42,14 +74,28 @@ impl RuntimeFactory for ProductionFactory {
                 .map(ProductionMachine::Rust)
             }
             #[cfg(feature = "c-execution")]
-            Some("c") => crate::c_execution::CGuestExecutor::create(request.isa, request.plan)
-                .map(|execution| {
-                    ProductionMachine::C(CMachine {
-                        execution,
-                        plan: request.plan.clone(),
+            Some("c") => {
+                if request.isa != crate::activation::GuestIsa::Aarch64
+                    || request.services.checkpoint_sink.is_some()
+                    || request.services.checkpoint_source.is_some()
+                    || request.plan.options.get("HL_CHECKPOINT").is_some()
+                    || request.plan.options.get("HL_RESTORE").is_some()
+                {
+                    return Err(CompositionError::RuntimeConstruction);
+                }
+                crate::c_execution::CGuestExecutor::create(request.isa, request.plan)
+                    .map(|execution| {
+                        ProductionMachine::C(CMachine {
+                            isa: request.isa,
+                            plan: request.plan.clone(),
+                            execution: Mutex::new(CExecutionState {
+                                prepared: Some(Arc::new(execution)),
+                                current: None,
+                            }),
+                        })
                     })
-                })
-                .map_err(|_| CompositionError::RuntimeConstruction),
+                    .map_err(|_| CompositionError::RuntimeConstruction)
+            }
             Some(_) => Err(CompositionError::RuntimeConstruction),
         }
     }
@@ -60,7 +106,7 @@ impl GuestMachine for ProductionMachine {
         match self {
             Self::Rust(machine) => machine.start(),
             #[cfg(feature = "c-execution")]
-            Self::C(machine) => machine.execution.start_plan(&machine.plan),
+            Self::C(machine) => machine.start(),
         }
     }
 
@@ -68,7 +114,7 @@ impl GuestMachine for ProductionMachine {
         match self {
             Self::Rust(machine) => machine.wait(),
             #[cfg(feature = "c-execution")]
-            Self::C(machine) => Ok(machine.execution.exit()),
+            Self::C(machine) => Ok(machine.current()?.exit()),
         }
     }
 
@@ -76,7 +122,7 @@ impl GuestMachine for ProductionMachine {
         match self {
             Self::Rust(machine) => machine.stop(request),
             #[cfg(feature = "c-execution")]
-            Self::C(machine) => machine.execution.stop_request(request),
+            Self::C(machine) => machine.current()?.stop_request(request),
         }
     }
 
@@ -94,5 +140,67 @@ impl GuestMachine for ProductionMachine {
             #[cfg(feature = "c-execution")]
             Self::C(_) => Err(EngineError::Unsupported),
         }
+    }
+}
+
+#[cfg(all(test, feature = "c-execution"))]
+mod tests {
+    use crate::{
+        activation::GuestIsa,
+        composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStreams},
+        engine::EngineError,
+        launch_plan::RuntimePlan,
+        options::Options,
+        runtime::Engine,
+    };
+    use std::sync::Arc;
+
+    fn c_plan() -> RuntimePlan {
+        let mut options = Options::default();
+        options.set("HL_EXECUTION_BACKEND", "c", true).unwrap();
+        RuntimePlan {
+            rootfs: None,
+            executable_host: None,
+            arguments: vec![b"guest".to_vec()],
+            environment: Vec::new(),
+            result_path: None,
+            options,
+        }
+    }
+
+    struct Store;
+
+    impl CheckpointSink for Store {
+        fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+            Ok(())
+        }
+    }
+
+    impl CheckpointSource for Store {
+        fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn retained_backend_rejects_uncompiled_guest_isa_early() {
+        assert!(matches!(
+            Engine::from_plan(GuestIsa::X86_64, c_plan()),
+            Err(EngineError::LaunchFailed)
+        ));
+    }
+
+    #[test]
+    fn retained_backend_rejects_unbridged_checkpoint_services() {
+        assert!(matches!(
+            Engine::with_checkpoint(
+                GuestIsa::Aarch64,
+                c_plan(),
+                StandardStreams::default(),
+                Arc::new(Store),
+                Arc::new(Store),
+            ),
+            Err(EngineError::LaunchFailed)
+        ));
     }
 }

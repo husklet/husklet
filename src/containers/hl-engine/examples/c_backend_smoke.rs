@@ -25,8 +25,17 @@ fn run() -> Result<i32, EngineError> {
             options,
         },
     )?;
-    engine.start()?;
-    let result = engine.wait()?;
+    let runs = std::env::var("HL_C_BACKEND_SMOKE_RUNS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value != 0)
+        .unwrap_or(1);
+    let mut result = None;
+    for _ in 0..runs {
+        engine.start()?;
+        result = Some(engine.wait()?);
+    }
+    let result = result.expect("at least one C backend smoke run");
     hl_log::hl_event!(
         hl_log::tag::EXEC,
         hl_log::Level::Debug,

@@ -30,7 +30,10 @@ fn main() {
     println!("cargo:rerun-if-changed={SOURCE_MANIFEST}");
     let source_manifest = fs::read_to_string(SOURCE_MANIFEST).expect("read retained C source manifest");
     for source in source_manifest.lines().filter(|line| !line.is_empty()) {
-        println!("cargo:rerun-if-changed={}", PathBuf::from(RETAINED).join(source).display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            PathBuf::from(RETAINED).join(source).display()
+        );
     }
     let manifest = fs::read_to_string(TU_MANIFEST).expect("read retained C translation-unit manifest");
     let units = parse_manifest(&manifest);
