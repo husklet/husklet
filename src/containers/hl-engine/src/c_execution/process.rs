@@ -11,9 +11,11 @@ use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const PLAN_DESCRIPTOR: i32 = 3;
 const CONTROL_DESCRIPTOR: i32 = 4;
+const FORCE_GRACE: Duration = Duration::from_millis(25);
 
 pub(crate) struct CWorker {
     child: Mutex<Option<Child>>,
@@ -54,11 +56,17 @@ impl CWorker {
         let mut command = Command::new(executable);
         command
             .arg("--c-worker")
+            .env_clear()
             .env("HL_C_PLAN_FD", PLAN_DESCRIPTOR.to_string())
             .env("HL_C_CONTROL_FD", CONTROL_DESCRIPTOR.to_string())
             .stdin(Stdio::from(input))
             .stdout(Stdio::from(output))
             .stderr(Stdio::from(error));
+        for name in [hl_log::LOG_TAGS, hl_log::LOG_LEVEL, hl_log::PROFILE_TAGS] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
         let plan_raw = plan_inherit.as_raw_fd();
         let control_raw = control_inherit.as_raw_fd();
         // SAFETY: the child performs only async-signal-safe dup2 calls before immediate exec.
@@ -74,6 +82,7 @@ impl CWorker {
             });
         }
         let child = command.spawn().map_err(|_| EngineError::LaunchFailed)?;
+        let mut child = ChildGuard(Some(child));
         drop((plan_inherit, control_inherit, child_control, plan_file));
         let reader = parent_control.try_clone().map_err(|_| EngineError::LaunchFailed)?;
         let writer = Arc::new(Mutex::new(parent_control));
@@ -81,7 +90,7 @@ impl CWorker {
             writer: Arc::clone(&writer),
         }))?;
         Ok(Self {
-            child: Mutex::new(Some(child)),
+            child: Mutex::new(child.0.take()),
             reader: Mutex::new(reader),
             writer,
             streams: Mutex::new(Some(streams)),
@@ -108,12 +117,9 @@ impl CWorker {
             return Ok(exit);
         }
         let mut reader = self.reader.lock().map_err(|_| EngineError::Synchronization)?;
-        let message = match read_message(&mut reader) {
-            Ok(message) => message,
-            Err(_) => {
-                drop(reader);
-                return self.reap_without_frame();
-            }
+        let Ok(message) = read_message(&mut reader) else {
+            drop(reader);
+            return self.reap_without_frame();
         };
         drop(reader);
         let Message::Exit(exit) = message else {
@@ -131,7 +137,7 @@ impl CWorker {
             .ok_or(EngineError::WaitFailed)?
             .wait()
             .map_err(|_| EngineError::WaitFailed)?;
-        if !status.success() && status.code() != Some(crate::program::Program::exit_status(exit)) {
+        if !process_status_matches(&status, exit) {
             hl_log::hl_error!(
                 hl_log::tag::EXEC,
                 "retained C worker process status disagrees with exit: process={status:?} exit={exit:?}"
@@ -145,8 +151,41 @@ impl CWorker {
 
     pub(crate) fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
         let mut writer = self.writer.lock().map_err(|_| EngineError::Synchronization)?;
-        if write_message(&mut writer, Message::Stop(request)).is_err() {
-            let terminal = self
+        let requested = write_message(&mut writer, Message::Stop(request));
+        drop(writer);
+        if request != StopRequest::Force {
+            if requested.is_err()
+                && self
+                    .child
+                    .lock()
+                    .map_err(|_| EngineError::Synchronization)?
+                    .as_mut()
+                    .ok_or(EngineError::StopFailed)?
+                    .try_wait()
+                    .map_err(|_| EngineError::StopFailed)?
+                    .is_some()
+            {
+                return Ok(());
+            }
+            return requested;
+        }
+        if requested.is_ok() && self.wait_force_grace()? {
+            return Ok(());
+        }
+        let process = self
+            .child
+            .lock()
+            .map_err(|_| EngineError::Synchronization)?
+            .as_ref()
+            .map(Child::id)
+            .ok_or(EngineError::StopFailed)?;
+        signal_process_group(process, libc::SIGKILL)
+    }
+
+    fn wait_force_grace(&self) -> Result<bool, EngineError> {
+        let deadline = Instant::now() + FORCE_GRACE;
+        loop {
+            if self
                 .child
                 .lock()
                 .map_err(|_| EngineError::Synchronization)?
@@ -154,28 +193,15 @@ impl CWorker {
                 .ok_or(EngineError::StopFailed)?
                 .try_wait()
                 .map_err(|_| EngineError::StopFailed)?
-                .is_some();
-            if terminal {
-                return Ok(());
+                .is_some()
+            {
+                return Ok(true);
             }
-            return Err(EngineError::StopFailed);
-        }
-        drop(writer);
-        if request == StopRequest::Force {
-            let process = self
-                .child
-                .lock()
-                .map_err(|_| EngineError::Synchronization)?
-                .as_ref()
-                .map(Child::id)
-                .ok_or(EngineError::StopFailed)?;
-            let process = i32::try_from(process).map_err(|_| EngineError::StopFailed)?;
-            // SAFETY: the worker created a new session and process group whose id is its pid.
-            if unsafe { libc::kill(-process, libc::SIGKILL) } != 0 {
-                return Err(EngineError::StopFailed);
+            if Instant::now() >= deadline {
+                return Ok(false);
             }
+            std::thread::sleep(Duration::from_millis(1));
         }
-        Ok(())
     }
 
     fn reap_without_frame(&self) -> Result<EngineExit, EngineError> {
@@ -206,10 +232,40 @@ impl Drop for CWorker {
         if let Some(child) = child.as_mut()
             && child.try_wait().ok().flatten().is_none()
         {
-            let _ = child.kill();
+            let _ = signal_process_group(child.id(), libc::SIGKILL);
             let _ = child.wait();
         }
     }
+}
+
+struct ChildGuard(Option<Child>);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let Some(child) = self.0.as_mut() else { return };
+        if child.try_wait().ok().flatten().is_none() {
+            let _ = signal_process_group(child.id(), libc::SIGKILL);
+            let _ = child.wait();
+        }
+    }
+}
+
+fn signal_process_group(process: u32, signal: i32) -> Result<(), EngineError> {
+    let process = i32::try_from(process).map_err(|_| EngineError::StopFailed)?;
+    // SAFETY: the worker called setsid before exec, so its pid names its private process group.
+    if unsafe { libc::kill(-process, signal) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(EngineError::StopFailed)
+    }
+}
+
+fn process_status_matches(status: &std::process::ExitStatus, exit: EngineExit) -> bool {
+    status.code() == Some(crate::program::Program::exit_status(exit))
 }
 
 fn sealed_plan(bytes: &[u8]) -> Result<std::fs::File, EngineError> {
@@ -251,4 +307,30 @@ fn read_message(stream: &mut std::os::unix::net::UnixStream) -> Result<Message, 
 fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) -> Result<(), EngineError> {
     let frame = message.encode().map_err(|_| EngineError::StopFailed)?;
     stream.write_all(&frame).map_err(|_| EngineError::StopFailed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::process_status_matches;
+    use crate::engine::{EngineExit, ExitKind};
+    use std::os::unix::process::ExitStatusExt;
+
+    fn exit(status: i32) -> EngineExit {
+        EngineExit {
+            kind: ExitKind::Code,
+            guest_status: status,
+            detail: 0,
+            fault: None,
+        }
+    }
+
+    #[test]
+    fn worker_status_must_match_even_when_the_process_reports_success() {
+        let success = std::process::ExitStatus::from_raw(0);
+        let seven = std::process::ExitStatus::from_raw(7 << 8);
+        assert!(process_status_matches(&success, exit(0)));
+        assert!(process_status_matches(&seven, exit(7)));
+        assert!(!process_status_matches(&success, exit(7)));
+        assert!(!process_status_matches(&seven, exit(0)));
+    }
 }
