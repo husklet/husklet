@@ -36,8 +36,8 @@ impl ExecutableAuthority {
         self.descriptor.as_fd()
     }
 
-    pub(crate) fn send(&self, socket: &UnixStream) -> Result<(), TransferError> {
-        let byte = [0_u8];
+    pub(crate) fn send_optional(authority: Option<&Self>, socket: &UnixStream) -> Result<(), TransferError> {
+        let byte = [u8::from(authority.is_some())];
         let mut vector = libc::iovec {
             iov_base: byte.as_ptr().cast_mut().cast(),
             iov_len: byte.len(),
@@ -55,10 +55,19 @@ impl ExecutableAuthority {
             if header.is_null() {
                 return Err(TransferError::Control);
             }
+            let Some(authority) = authority else {
+                message.msg_control = std::ptr::null_mut();
+                message.msg_controllen = 0;
+                return (libc::sendmsg(socket.as_raw_fd(), &raw const message, libc::MSG_NOSIGNAL) == 1)
+                    .then_some(())
+                    .ok_or(TransferError::Control);
+            };
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
             (*header).cmsg_len = libc::CMSG_LEN(size_of::<i32>() as _) as usize;
-            libc::CMSG_DATA(header).cast::<i32>().write(self.descriptor.as_raw_fd());
+            libc::CMSG_DATA(header)
+                .cast::<i32>()
+                .write(authority.descriptor.as_raw_fd());
             message.msg_controllen = libc::CMSG_SPACE(size_of::<i32>() as _) as usize;
             (libc::sendmsg(socket.as_raw_fd(), &raw const message, libc::MSG_NOSIGNAL) == 1)
                 .then_some(())
@@ -66,7 +75,7 @@ impl ExecutableAuthority {
         }
     }
 
-    pub(crate) fn receive(socket: &UnixStream) -> Result<Self, TransferError> {
+    pub(crate) fn receive_optional(socket: &UnixStream) -> Result<Option<Self>, TransferError> {
         let mut byte = [0_u8];
         let mut vector = libc::iovec {
             iov_base: byte.as_mut_ptr().cast(),
@@ -81,6 +90,14 @@ impl ExecutableAuthority {
         // SAFETY: all buffers described by message are writable for this call.
         let received = unsafe { libc::recvmsg(socket.as_raw_fd(), &raw mut message, libc::MSG_CMSG_CLOEXEC) };
         if received != 1 || message.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0 {
+            return Err(TransferError::Control);
+        }
+        if byte[0] == 0 {
+            return (message.msg_controllen == 0)
+                .then_some(None)
+                .ok_or(TransferError::Descriptor);
+        }
+        if byte[0] != 1 {
             return Err(TransferError::Control);
         }
         // SAFETY: recvmsg initialized ancillary headers within the aligned buffer.
@@ -98,7 +115,7 @@ impl ExecutableAuthority {
         if descriptor < 0 {
             return Err(TransferError::Descriptor);
         }
-        Ok(Self::new(unsafe { OwnedFd::from_raw_fd(descriptor) }))
+        Ok(Some(Self::new(unsafe { OwnedFd::from_raw_fd(descriptor) })))
     }
 }
 
@@ -130,8 +147,8 @@ mod tests {
         std::fs::rename(replacement, &path).unwrap();
         let (sender, receiver) = UnixStream::pair().unwrap();
 
-        authority.send(&sender).unwrap();
-        let received = ExecutableAuthority::receive(&receiver).unwrap();
+        ExecutableAuthority::send_optional(Some(&authority), &sender).unwrap();
+        let received = ExecutableAuthority::receive_optional(&receiver).unwrap().unwrap();
         let mut file = std::fs::File::from(received.descriptor().try_clone_to_owned().unwrap());
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
@@ -144,8 +161,8 @@ mod tests {
         let file = tempfile::tempfile().unwrap();
         let authority = ExecutableAuthority::new(file.into());
         let (sender, receiver) = UnixStream::pair().unwrap();
-        authority.send(&sender).unwrap();
-        let received = ExecutableAuthority::receive(&receiver).unwrap();
+        ExecutableAuthority::send_optional(Some(&authority), &sender).unwrap();
+        let received = ExecutableAuthority::receive_optional(&receiver).unwrap().unwrap();
 
         // SAFETY: F_GETFD only observes the live descriptor.
         let flags = unsafe { libc::fcntl(received.descriptor().as_raw_fd(), libc::F_GETFD) };
@@ -155,10 +172,38 @@ mod tests {
     #[test]
     fn payload_without_descriptor_is_rejected() {
         let (mut sender, receiver) = UnixStream::pair().unwrap();
-        sender.write_all(&[0]).unwrap();
+        sender.write_all(&[1]).unwrap();
         assert_eq!(
-            ExecutableAuthority::receive(&receiver).unwrap_err(),
+            ExecutableAuthority::receive_optional(&receiver).unwrap_err(),
             TransferError::Descriptor
         );
+    }
+
+    #[test]
+    fn absent_authority_round_trips_without_a_descriptor() {
+        let (sender, receiver) = UnixStream::pair().unwrap();
+        ExecutableAuthority::send_optional(None, &sender).unwrap();
+        assert!(ExecutableAuthority::receive_optional(&receiver).unwrap().is_none());
+    }
+
+    #[test]
+    fn failed_transfer_retains_the_owned_descriptor() {
+        use std::io::Seek as _;
+
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(b"still-owned").unwrap();
+        file.rewind().unwrap();
+        let authority = ExecutableAuthority::new(file.into());
+        let (sender, receiver) = UnixStream::pair().unwrap();
+        drop(receiver);
+
+        assert_eq!(
+            ExecutableAuthority::send_optional(Some(&authority), &sender),
+            Err(TransferError::Control)
+        );
+        let mut retained = std::fs::File::from(authority.descriptor().try_clone_to_owned().unwrap());
+        let mut bytes = Vec::new();
+        retained.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"still-owned");
     }
 }

@@ -93,6 +93,8 @@ impl CWorker {
         let child = command.spawn().map_err(|_| EngineError::LaunchFailed)?;
         let mut child = ChildGuard(Some(child));
         drop((plan_inherit, control_inherit, child_control, plan_file));
+        crate::executable::ExecutableAuthority::send_optional(services.executable_authority.as_ref(), &parent_control)
+            .map_err(|_| EngineError::LaunchFailed)?;
         let reader = parent_control.try_clone().map_err(|_| EngineError::LaunchFailed)?;
         let writer = Arc::new(Mutex::new(parent_control));
         streams.attach_terminal(Arc::new(WorkerTerminalNotification {

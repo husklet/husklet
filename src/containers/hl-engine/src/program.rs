@@ -351,6 +351,7 @@ impl Program {
         );
         let services = RuntimeServices {
             activation: Arc::new(Activation),
+            executable_authority: None,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: crate::composition::StandardStreams::default(),

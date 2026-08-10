@@ -24,6 +24,10 @@ pub(crate) fn run(plan_descriptor: RawFd, control_descriptor: RawFd) -> Result<i
     let plan_file = unsafe { std::fs::File::from_raw_fd(plan_descriptor) };
     // SAFETY: same one-shot ownership contract, for the distinct control descriptor.
     let mut control = unsafe { std::os::unix::net::UnixStream::from_raw_fd(control_descriptor) };
+    let _executable_authority = crate::executable::ExecutableAuthority::receive_optional(&control).map_err(|_| {
+        send_error(&mut control, FailureStage::Control, 3);
+        WorkerError::Control
+    })?;
     let mut bytes = Vec::new();
     plan_file
         .take(MAXIMUM_PLAN + 1)

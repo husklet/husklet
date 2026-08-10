@@ -598,6 +598,7 @@ mod tests {
         let error = Arc::new(Mutex::new(Vec::new()));
         let services = RuntimeServices {
             activation: Arc::new(Channel),
+            executable_authority: None,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: StandardStreams::new(
@@ -629,6 +630,7 @@ mod tests {
         let terminal = Terminal::new(Arc::new(Port), 37, 91).unwrap();
         let services = RuntimeServices {
             activation: Arc::new(Channel),
+            executable_authority: None,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: StandardStreams::new(Cursor::new(Vec::new()), Vec::new(), Vec::new()).with_terminal(terminal),

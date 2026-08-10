@@ -197,6 +197,7 @@ impl Builder {
         let factory = ProductionFactory;
         let services = RuntimeServices {
             activation: Arc::new(Activation),
+            executable_authority: None,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: crate::composition::StandardStreams::default(),
@@ -264,8 +265,19 @@ impl Engine {
         plan: RuntimePlan,
         streams: crate::composition::StandardStreams,
     ) -> Result<Self, EngineError> {
+        Self::with_streams_and_executable(isa, plan, streams, None)
+    }
+
+    /// Constructs a runtime with an optional descriptor-pinned executable authority.
+    pub fn with_streams_and_executable(
+        isa: GuestIsa,
+        plan: RuntimePlan,
+        streams: crate::composition::StandardStreams,
+        executable_authority: Option<crate::executable::ExecutableAuthority>,
+    ) -> Result<Self, EngineError> {
         let services = RuntimeServices {
             activation: Arc::new(Activation),
+            executable_authority,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams,
@@ -283,6 +295,7 @@ impl Engine {
     ) -> Result<Self, EngineError> {
         let services = RuntimeServices {
             activation: Arc::new(Activation),
+            executable_authority: None,
             checkpoint_sink: Some(sink),
             checkpoint_source: Some(source),
             streams,

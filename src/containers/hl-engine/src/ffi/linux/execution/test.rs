@@ -214,6 +214,7 @@ fn run_environment(image: Vec<u8>, name: &str, isa: GuestIsa, environment: Vec<V
     let executor = GuestExecutor::default();
     let services = RuntimeServices {
         activation: std::sync::Arc::new(Activation),
+        executable_authority: None,
         checkpoint_sink: None,
         checkpoint_source: None,
         streams: crate::composition::StandardStreams::default(),
