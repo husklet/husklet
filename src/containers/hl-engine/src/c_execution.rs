@@ -39,6 +39,38 @@ fn c_option(name: &str) -> bool {
     )
 }
 
+fn c_volume_path(value: &str) -> String {
+    value
+        .bytes()
+        .fold(String::new(), |mut output, byte| {
+            if matches!(byte, b'%' | b':' | b',') {
+                use std::fmt::Write as _;
+                write!(output, "%{byte:02X}").expect("writing to a String cannot fail");
+            } else {
+                output.push(char::from(byte));
+            }
+            output
+        })
+}
+
+fn c_file_volumes(value: &str) -> Result<Vec<String>, EngineError> {
+    value
+        .lines()
+        .map(|record| {
+            let (source, guest) = record.split_once('\t').ok_or(EngineError::LaunchFailed)?;
+            let (access, source) = source.split_once(':').ok_or(EngineError::LaunchFailed)?;
+            if !matches!(access, "ro" | "rw") || source.is_empty() || !guest.starts_with('/') {
+                return Err(EngineError::LaunchFailed);
+            }
+            Ok(format!(
+                "v2:{access}:{}:{}",
+                c_volume_path(guest),
+                c_volume_path(source)
+            ))
+        })
+        .collect()
+}
+
 unsafe extern "C" {
     fn hl_c_backend_create(
         isa: c_uint,
@@ -305,7 +337,7 @@ impl CGuestExecutor {
         let mut option_records = plan
             .options
             .iter()
-            .filter(|(name, _)| c_option(name))
+            .filter(|(name, _)| c_option(name) && *name != "HL_NAME_BINDS" && *name != "HL_VOLUMES")
             .map(|(name, value)| {
                 Ok((
                     CString::new(name).map_err(|_| EngineError::LaunchFailed)?,
@@ -313,6 +345,22 @@ impl CGuestExecutor {
                 ))
             })
             .collect::<Result<Vec<_>, EngineError>>()?;
+        let mut volumes = plan
+            .options
+            .get("HL_VOLUMES")
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_owned())
+            .into_iter()
+            .collect::<Vec<_>>();
+        if let Some(files) = plan.options.get("HL_NAME_BINDS") {
+            volumes.extend(c_file_volumes(files)?);
+        }
+        if !volumes.is_empty() {
+            option_records.push((
+                CString::new("HL_VOLUMES").unwrap(),
+                CString::new(volumes.join(",")).map_err(|_| EngineError::LaunchFailed)?,
+            ));
+        }
         let mut encoded_environment = Vec::new();
         for (index, record) in plan.environment.iter().enumerate() {
             if index != 0 {
@@ -459,7 +507,7 @@ impl Drop for CGuestExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::StreamBridge;
+    use super::{StreamBridge, c_file_volumes};
     use crate::composition::{
         ActivationChannel, CompositionError, RuntimeServices, StandardStreams, Terminal, TerminalPort,
     };
@@ -503,6 +551,17 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn exact_file_bindings_translate_to_retained_volume_records() {
+        assert_eq!(
+            c_file_volumes("ro:/host/a:b\t/etc/a,b\nrw:/host/c\t/run/c").unwrap(),
+            [
+                "v2:ro:/etc/a%2Cb:/host/a%3Ab",
+                "v2:rw:/run/c:/host/c",
+            ]
+        );
     }
 
     #[test]

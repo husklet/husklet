@@ -69,6 +69,12 @@ unsafe extern "C" {
     fn hl_c_backend_executable_discard(services: *const HostServices, executable: *mut EngineExecutable);
 }
 
+// Keep the package library in this integration-test link. Its build script
+// supplies the retained C archives used by the direct ABI assertions below.
+fn link_engine_native_archives() {
+    drop(hl_engine::options::Options::default());
+}
+
 struct State {
     open_result: HostResult,
     path: Vec<u8>,
@@ -149,6 +155,7 @@ fn executable_with_poison() -> EngineExecutable {
 
 #[test]
 fn opens_workspace_path_as_transfer_authority_and_discards_on_create_failure() {
+    link_engine_native_archives();
     let mut state = State {
         open_result: HostResult {
             status: STATUS_OK,

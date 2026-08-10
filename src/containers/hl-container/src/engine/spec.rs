@@ -30,7 +30,11 @@ impl TryFrom<&ProcessConfig> for Spec {
             launch.checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.restore),
         )?;
 
-        let executable = launch.rootfs.join(Self::guest_program(launch).trim_start_matches('/'));
+        let guest_program = Self::guest_program(launch);
+        let roots = std::iter::once(launch.rootfs.clone())
+            .chain(launch.overlay.iter().map(|overlay| overlay.lower.clone()))
+            .collect::<Vec<_>>();
+        let executable = Self::host_executable(&guest_program, &roots);
         let arguments = std::iter::once(launch.process.program.as_bytes().to_vec())
             .chain(launch.process.args.iter().map(|argument| argument.as_bytes().to_vec()))
             .collect();
@@ -53,7 +57,7 @@ impl TryFrom<&ProcessConfig> for Spec {
             domain,
             plan: RuntimePlan {
                 rootfs: Some(launch.rootfs.as_os_str().as_encoded_bytes().to_vec()),
-                executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+                executable_host: executable.map(|path| path.as_os_str().as_encoded_bytes().to_vec()),
                 arguments,
                 environment,
                 result_path: None,
@@ -95,6 +99,14 @@ impl Spec {
             }
         }
         program
+    }
+
+    fn host_executable(program: &str, roots: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+        let relative = program.trim_start_matches('/');
+        roots
+            .iter()
+            .map(|root| root.join(relative))
+            .find(|candidate| Self::executable_here(candidate))
     }
 
     /// Docker creates a `WORKDIR`/`-w` directory that the image does not carry; the guest
@@ -407,6 +419,10 @@ mod path_tests {
         plant(&lower, "/usr/local/bin/node");
         let resolved = Spec::search_path("node", "/usr/local/bin:/bin", &[upper.clone(), lower.clone()]);
         assert_eq!(resolved, "/usr/local/bin/node");
+        assert_eq!(
+            Spec::host_executable(&resolved, &[upper.clone(), lower.clone()]),
+            Some(lower.join("usr/local/bin/node"))
+        );
         std::fs::remove_dir_all(&upper).unwrap();
         std::fs::remove_dir_all(&lower).unwrap();
     }
@@ -416,5 +432,14 @@ mod path_tests {
     fn an_explicit_path_is_not_searched() {
         assert_eq!(Spec::search_path("/bin/sh", "/usr/bin", &[]), "/bin/sh");
         assert_eq!(Spec::search_path("./tool", "/usr/bin", &[]), "./tool");
+    }
+
+    #[test]
+    fn a_layered_only_executable_has_no_false_host_authority() {
+        let upper = scratch("authority-upper");
+        let lower = scratch("authority-lower");
+        assert_eq!(Spec::host_executable("/bin/sh", &[upper.clone(), lower.clone()]), None);
+        std::fs::remove_dir_all(&upper).unwrap();
+        std::fs::remove_dir_all(&lower).unwrap();
     }
 }
