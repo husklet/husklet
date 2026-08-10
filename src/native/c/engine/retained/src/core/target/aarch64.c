@@ -1251,6 +1251,7 @@ void hl_target_runtime_init(void) {
     ipc_init();
 }
 
+#ifndef HL_ENGINE_NO_STANDALONE
 // The engine entry point uses the public HL prefix so the runtime can be linked as a library and launched
 // by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
 // harness) launching identically.
@@ -1351,3 +1352,4 @@ int hl_engine_entry(int argc, char **argv) {
     }
     return hl_standalone_run(rootfs, NULL, (uint32_t)(argc - ai), argv + ai, NULL, NULL);
 }
+#endif
