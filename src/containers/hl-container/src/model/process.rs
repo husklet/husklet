@@ -600,6 +600,7 @@ pub enum Execution {
     },
     /// Selects the temporary retained-C engine explicitly.
     RetainedC,
+    RetainedCDiagnostics,
     /// Selects the Rust engine with its interpreter only.
     RustInterpreted,
     /// Selects the Rust engine with generated native execution enabled.
@@ -621,6 +622,11 @@ impl Execution {
         Self::RetainedC
     }
 
+    #[must_use]
+    pub const fn retained_c_diagnostics() -> Self {
+        Self::RetainedCDiagnostics
+    }
+
     /// Selects the Rust interpreter independently of the product default.
     #[must_use]
     pub const fn rust_interpreted() -> Self {
@@ -635,13 +641,13 @@ impl Execution {
 
     #[must_use]
     pub const fn is_native(self) -> bool {
-        matches!(self, Self::Native { .. } | Self::RetainedC | Self::RustNative { .. })
+        matches!(self, Self::Native { .. } | Self::RetainedC | Self::RetainedCDiagnostics | Self::RustNative { .. })
     }
 
     #[must_use]
     pub const fn diagnostics(self) -> bool {
         match self {
-            Self::Interpreted | Self::RetainedC | Self::RustInterpreted => false,
+            Self::Interpreted | Self::RetainedC | Self::RetainedCDiagnostics | Self::RustInterpreted => false,
             Self::Native { diagnostics } | Self::RustNative { diagnostics } => diagnostics,
         }
     }
@@ -649,9 +655,13 @@ impl Execution {
     pub(crate) const fn engine_backend(self) -> Option<&'static str> {
         match self {
             Self::Interpreted | Self::Native { .. } => None,
-            Self::RetainedC => Some("c"),
+            Self::RetainedC | Self::RetainedCDiagnostics => Some("c"),
             Self::RustInterpreted | Self::RustNative { .. } => Some("rust"),
         }
+    }
+
+    pub(crate) const fn retained_c_diagnostics_enabled(self) -> bool {
+        matches!(self, Self::RetainedCDiagnostics)
     }
 }
 

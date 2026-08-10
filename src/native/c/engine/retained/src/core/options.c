@@ -34,6 +34,8 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_LAUNCH_OPTION("HL_CHECKPOINT", "arm checkpoint capture over the store channel", HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
+    HL_LAUNCH_OPTION("HL_C_DIAGNOSTICS", "report retained C translation and dispatch phase counters at launch exit",
+                     HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_CWD", "initial guest working directory", HL_OPTION_PATH),
     HL_LAUNCH_OPTION("HL_EGRESS_SOCKS", "SOCKS5 endpoint for external TCP egress", HL_OPTION_TEXT),
     HL_LAUNCH_OPTION("HL_FSGEN_FILE", "shared overlay filesystem-generation file", HL_OPTION_PATH),

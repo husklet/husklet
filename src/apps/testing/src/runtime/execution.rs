@@ -377,8 +377,29 @@ impl<'a> CaseExecution<'a> {
         }
         self.containers.start(name).await?;
         let status = self.wait(name, timeout).await?;
-        let logs = self.containers.logs(name).await?;
+        let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
+        if matches!(self.execution, hl_container::Execution::RetainedCDiagnostics) {
+            let text = std::str::from_utf8(&logs.stderr).map_err(|_| "retained C diagnostics are not UTF-8")?;
+            let profile = text
+                .lines()
+                .find(|line| line.starts_with("[prof] "))
+                .ok_or("retained C profile line was not emitted")?;
+            let misses = profile
+                .split_whitespace()
+                .find_map(|field| field.strip_prefix("ibtc_miss="))
+                .ok_or("retained C profile omitted ibtc_miss")?
+                .parse::<u64>()
+                .map_err(|_| "retained C ibtc_miss is not an integer")?;
+            if misses > 100_000 {
+                return Err(format!("retained C warm IBTC misses {misses} exceed 100000").into());
+            }
+            logs.stderr = text
+                .lines()
+                .filter(|line| !line.starts_with("[prof] "))
+                .flat_map(|line| [line.as_bytes(), b"\n"].concat())
+                .collect();
+        }
         let expected = tokio::fs::read(&self.case.golden)
             .await
             .map_err(|error| context("read golden", &self.case.golden, &error))?;

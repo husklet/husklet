@@ -1,0 +1,15 @@
+targets: [arm64]
+image: python:3.12-alpine
+execution: { retained_c: true, retained_c_diagnostics: true }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2]
+cases:
+  - id: runtime/retained-c/python-rwx-ibtc
+    status: active
+    compat: { class: compatibility }
+    timeout: 60
+    build: { source: python_rwx_ibtc.c, output: python_rwx_ibtc, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python_rwx_ibtc }
+    run: []
+    expect: { exit: 0, stdout: golden/python_rwx_ibtc.out }

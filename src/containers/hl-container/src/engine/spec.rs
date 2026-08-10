@@ -29,6 +29,11 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::flag(&mut options, "HL_NATIVE_DIAGNOSTICS", launch.execution.diagnostics())?;
         Self::flag(
             &mut options,
+            "HL_C_DIAGNOSTICS",
+            launch.execution.retained_c_diagnostics_enabled(),
+        )?;
+        Self::flag(
+            &mut options,
             "HL_RESTORE",
             launch.checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.restore),
         )?;

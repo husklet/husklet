@@ -49,6 +49,10 @@ pub(crate) struct Execution {
     native: bool,
     #[serde(default)]
     diagnostics: bool,
+    #[serde(default)]
+    retained_c: bool,
+    #[serde(default)]
+    retained_c_diagnostics: bool,
 }
 
 impl Execution {
@@ -60,6 +64,16 @@ impl Execution {
     pub(crate) fn container(self) -> Result<hl_container::Execution, Error> {
         if self.diagnostics && !self.native {
             return Err("native diagnostics require native execution".into());
+        }
+        if self.retained_c_diagnostics && !self.retained_c {
+            return Err("retained C diagnostics require retained C execution".into());
+        }
+        if self.retained_c {
+            return Ok(if self.retained_c_diagnostics {
+                hl_container::Execution::retained_c_diagnostics()
+            } else {
+                hl_container::Execution::retained_c()
+            });
         }
         Ok(if self.native {
             hl_container::Execution::native(self.diagnostics)
