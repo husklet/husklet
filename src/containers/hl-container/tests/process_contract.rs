@@ -141,8 +141,14 @@ async fn signalling_an_exec_does_not_stop_its_container() -> Result<(), Error> {
                 .create(name, ExecSpec::new(Process::new("/bin/sleep").args(["30"])))
                 .await?;
             let _session = executions.start(&killed.id).await?;
-            executions.signal(&killed.id, hl_container::Signal::KILL).await?;
-            let result = executions.wait(&killed.id).await?;
+            executions
+                .signal(&killed.id, hl_container::Signal::KILL)
+                .await
+                .map_err(|error| -> Error { format!("signal exec: {error}").into() })?;
+            let result = executions
+                .wait(&killed.id)
+                .await
+                .map_err(|error| -> Error { format!("wait signalled exec: {error}").into() })?;
             if result != ExitStatus::Signal(i32::from(hl_container::Signal::KILL.get())) {
                 return Err(format!("signalled exec exited with {result:?}").into());
             }
@@ -154,6 +160,7 @@ async fn signalling_an_exec_does_not_stop_its_container() -> Result<(), Error> {
                 b"CONTAINER_SURVIVED\n",
             )
             .await
+            .map_err(|error| -> Error { format!("exec after signal: {error}").into() })
         }
         .await;
         let cleanup = fixture.containers.remove_force(name).await.map(|_| ());

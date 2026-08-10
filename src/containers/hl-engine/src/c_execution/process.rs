@@ -145,7 +145,21 @@ impl CWorker {
 
     pub(crate) fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
         let mut writer = self.writer.lock().map_err(|_| EngineError::Synchronization)?;
-        write_message(&mut writer, Message::Stop(request))?;
+        if write_message(&mut writer, Message::Stop(request)).is_err() {
+            let terminal = self
+                .child
+                .lock()
+                .map_err(|_| EngineError::Synchronization)?
+                .as_mut()
+                .ok_or(EngineError::StopFailed)?
+                .try_wait()
+                .map_err(|_| EngineError::StopFailed)?
+                .is_some();
+            if terminal {
+                return Ok(());
+            }
+            return Err(EngineError::StopFailed);
+        }
         drop(writer);
         if request == StopRequest::Force {
             let process = self
