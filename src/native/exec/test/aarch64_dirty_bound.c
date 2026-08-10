@@ -83,6 +83,15 @@ int main(void) {
     hl_a64_ldr(&assembler, 16, 28, 16 * 8);
     hl_a64_guard_written(&assembler, 8);
     hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_BRANCH, 0x4000);
+    size_t observe_offset = hl_a64_assembler_size(&assembler);
+    assembler.diagnostics = 1;
+    hl_a64_stub_prologue(&assembler);
+    hl_a64_ldr(&assembler, 16, 28, 16 * 8);
+    hl_a64_guard_written(&assembler, 8);
+    hl_a64_str(&assembler, 16, 28,
+               (int)offsetof(hl_native_aarch64_cpu, read_token));
+    hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_BRANCH, 0x4800);
+    assembler.diagnostics = 0;
     size_t default_offset = emit_archive(&assembler, 0x5000, UINT64_C(0xdedefa17dedefa17));
     assembler.dirty_overflow_continue = 0;
     size_t legacy_offset = emit_archive(&assembler, 0x6000, UINT64_C(0x5eed5eed5eed5eed));
@@ -107,6 +116,40 @@ int main(void) {
     CHECK(cpu.read_incarnation == UINT64_C(0x1111111111111111));
     CHECK(cpu.read_count == UINT64_C(0x2222222222222222));
     CHECK(cpu.read_views[0][0] == UINT64_C(0x3333333333333333));
+
+    /* Once overflow has made publication conservative, a later completed store
+     * must preserve the first report and skip dead exact-range bookkeeping. It
+     * must still retain the executable-write fact that whole-view publication
+     * cannot infer from a later projection. */
+    uint64_t guest = UINT64_C(0x4000);
+    cpu.dirty_overflow = 7;
+    cpu.memory_delta = (uint64_t)(uintptr_t)data - guest;
+    cpu.memory_first = guest;
+    cpu.memory_last = guest + sizeof(data);
+    cpu.registers[16] = (uint64_t)(uintptr_t)data + 16;
+    cpu.registers[9] = UINT64_C(0x9182736455aa33cc);
+    cpu.flags = UINT64_C(0xa0000000);
+    cpu.dirty_first = guest + 3;
+    cpu.dirty_last = guest + 5;
+    cpu.memory_permissions |= HL_A64_PERMISSION_EXECUTE;
+    cpu.executable_written = 0;
+    cpu.read_token = 0;
+    execute(&cpu, code + observe_offset);
+    CHECK(cpu.dirty_overflow == 7);
+    CHECK(cpu.read_token == guest + 16);
+    CHECK(cpu.registers[9] == UINT64_C(0x9182736455aa33cc));
+    CHECK(cpu.flags == UINT64_C(0xa0000000));
+    CHECK(cpu.memory_written == 1 && cpu.dirty_count == CAPACITY);
+    CHECK(cpu.dirty_first == guest + 3 && cpu.dirty_last == guest + 5);
+    CHECK((cpu.executable_written & HL_A64_PERMISSION_EXECUTE) != 0);
+    CHECK(cpu.diagnostic_dirty_committed == 1);
+
+    cpu.registers[16] = (uint64_t)(uintptr_t)data + 24;
+    cpu.memory_permissions = HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE;
+    execute(&cpu, code + observe_offset);
+    CHECK(cpu.read_token == guest + 24);
+    CHECK((cpu.executable_written & HL_A64_PERMISSION_EXECUTE) != 0);
+    CHECK(cpu.diagnostic_dirty_committed == 2);
 
     seed_overflow(&cpu, data, stack);
     execute(&cpu, code + default_offset);

@@ -370,7 +370,7 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
 
 void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *after_merge, *after_range,
-        *after_contiguous, *full;
+        *after_contiguous, *full, *overflow_clear, *overflow_done;
     /* Journal off: record only what the crossing cannot reconstruct -- that a
      * write happened, whether it landed in executable memory, and that the
      * exact intervals are unavailable so the publish must cover the window.
@@ -388,6 +388,29 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
         hl_a64_str(assembler, 17, CPU, OFFSET_EXECUTABLE_WRITTEN);
         return;
     }
+    /* Once saturation has made the journal conservative, no later exact range
+     * can affect publication. Preserve the first report and retain only the one
+     * fact it cannot cover: whether this successful store was executable. The
+     * loads, cbz, sub, orr, stores and branch leave guest NZCV unchanged. x16 is
+     * restored to the guest address and x17/x18 are stolen, so the saturated
+     * path needs no spill or flag save. */
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_OVERFLOW);
+    overflow_clear = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DELTA);
+    hl_a64_emit32(assembler, UINT32_C(0xcb110210)); /* recover guest EA */
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_PERMISSIONS);
+    hl_a64_ldr(assembler, 18, CPU, OFFSET_EXECUTABLE_WRITTEN);
+    hl_a64_emit32(assembler, 0xAA120231u); /* orr x17,x17,x18 */
+    hl_a64_str(assembler, 17, CPU, OFFSET_EXECUTABLE_WRITTEN);
+    diagnostic_increment(assembler,
+                         (int)offsetof(hl_native_aarch64_cpu,
+                                       diagnostic_dirty_committed));
+    overflow_done = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    uint8_t *exact = assembler->cursor;
+    if (!hl_a64_assembler_ok(assembler)) return;
+    compare_zero(assembler, overflow_clear, exact, 17);
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
@@ -513,6 +536,8 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    branch(assembler, overflow_done, assembler->cursor);
 }
 
 static void test(hl_a64_assembler *assembler, uint32_t *instruction,
