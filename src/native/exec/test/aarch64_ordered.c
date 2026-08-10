@@ -79,10 +79,9 @@ int main(void) {
     CHECK(cpu.reason == HL_NATIVE_EXIT_FALLBACK);
     CHECK(cpu.fault_access == HL_A64_PERMISSION_WRITE && cpu.fault_size == 1);
 
-    /* Exact-journal capacity is checked before the host store. The existing
-     * interval and sixteen retained records leave no exact slot for a
-     * disjoint byte, so the default conservatively reports overflow and keeps
-     * executing the ordered store. */
+    /* The existing interval and sixteen retained records leave no exact slot
+     * for a disjoint byte. After the ordered store succeeds, the load-bearing
+     * commit conservatively reports overflow and keeps executing. */
     uint8_t bounded[32] = {0};
     memset(&cpu, 0, sizeof(cpu));
     cpu.memory_first = (uint64_t)(uintptr_t)bounded;

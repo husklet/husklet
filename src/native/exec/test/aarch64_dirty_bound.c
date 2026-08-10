@@ -111,8 +111,11 @@ int main(void) {
     seed_overflow(&cpu, data, stack);
     execute(&cpu, code + default_offset);
     CHECK(cpu.reason == HL_NATIVE_EXIT_BRANCH && cpu.program == 0x5004);
-    CHECK(cpu.dirty_count == CAPACITY && cpu.dirty_overflow == 1);
-    CHECK(cpu.dirty_first == UINT64_MAX && cpu.dirty_last == 0);
+    /* Continuation has no pre-store exit to preserve, so write_begin leaves
+     * the live interval and full ring untouched. The post-store case above is
+     * still responsible for conservative overflow publication. */
+    CHECK(cpu.dirty_count == CAPACITY && cpu.dirty_overflow == 0);
+    CHECK(cpu.dirty_first == cpu.memory_first && cpu.dirty_last == cpu.memory_first + 8);
     CHECK(cpu.read_token == UINT64_C(0xdedefa17dedefa17));
 
     seed_overflow(&cpu, data, stack);

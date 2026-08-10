@@ -290,7 +290,11 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     /* Without the exact journal the reservation has nothing to reserve: the
      * crossing publishes the whole window, so only the written and
      * executable-written bits that hl_a64_guard_written sets still matter. */
-    if (!assembler->write_reserve) return;
+    /* The reservation existed to leave before a store when an exact journal
+     * was already full. Continuation makes that exit impossible: the paired
+     * post-store commit reports the conservative full-window publication and
+     * performs the same archive after the store has succeeded. */
+    if (!assembler->write_reserve || assembler->dirty_overflow_continue) return;
     if (assembler->runtime_write_reserve) {
         /* Skip the reservation until this site has been seen to saturate the
          * ring. Nothing above the gate is clobbered yet, so the skip is a pure
