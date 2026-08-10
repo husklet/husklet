@@ -13,3 +13,51 @@ cases:
     artifact: { destination: /opt/husklet/python_rwx_ibtc }
     run: []
     expect: { exit: 0, stdout: golden/python_rwx_ibtc.out }
+  - id: runtime/retained-c/python-integer
+    status: active
+    compat: { class: compatibility }
+    timeout: 60
+    build: { source: python_decompose.c, output: python_integer, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python_integer }
+    run: [integer]
+    expect: { exit: 0, stdout: golden/python_integer.out }
+  - id: runtime/retained-c/python-calls
+    status: active
+    compat: { class: compatibility }
+    timeout: 60
+    build: { source: python_decompose.c, output: python_calls, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python_calls }
+    run: [calls]
+    expect: { exit: 0, stdout: golden/python_calls.out }
+  - id: runtime/retained-c/python-list
+    status: active
+    compat: { class: compatibility }
+    timeout: 60
+    build: { source: python_decompose.c, output: python_list, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python_list }
+    run: [list]
+    expect: { exit: 0, stdout: golden/python_list.out }
+  - id: runtime/retained-c/python-branch
+    status: active
+    compat: { class: compatibility }
+    timeout: 60
+    build: { source: python_decompose.c, output: python_branch, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python_branch }
+    run: [branch]
+    expect: { exit: 0, stdout: golden/python_branch.out }
+  - id: runtime/retained-c/python-dict
+    status: active
+    compat: { class: compatibility }
+    timeout: 60
+    build: { source: python_decompose.c, output: python_dict, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python_dict }
+    run: [dict]
+    expect: { exit: 0, stdout: golden/python_dict.out }
+  - id: runtime/retained-c/python-bigint
+    status: active
+    compat: { class: compatibility }
+    timeout: 60
+    build: { source: python_decompose.c, output: python_bigint, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python_bigint }
+    run: [bigint]
+    expect: { exit: 0, stdout: golden/python_bigint.out }
