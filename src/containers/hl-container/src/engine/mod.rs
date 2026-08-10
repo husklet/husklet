@@ -13,6 +13,9 @@ use std::{
 const CHECKPOINT_OBJECT: &str = "rust/image";
 const CHECKPOINT_MANIFEST_MAGIC: &[u8; 8] = b"HLRUST01";
 
+#[cfg(target_os = "linux")]
+#[cfg_attr(not(test), allow(dead_code))]
+mod executable;
 mod process;
 mod spec;
 use process::Process;

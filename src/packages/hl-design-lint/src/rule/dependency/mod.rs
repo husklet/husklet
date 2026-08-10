@@ -361,6 +361,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                 "hl-log"
             )
             | ("hl-container" | "engine" | "testing", "hl-engine")
+            | ("hl-container", "hl-vfs")
             | (
                 "hl-engine",
                 "hl-native"

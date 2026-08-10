@@ -619,6 +619,21 @@ fn accepts_testing_process_mechanism() {
 }
 
 #[test]
+fn accepts_container_vfs_resolution_mechanism() {
+    let root = fixture("container-vfs");
+    package(&root, "runtime", "hl-vfs", "");
+    package(
+        &root,
+        "containers",
+        "hl-container",
+        "[dependencies]\nhl-vfs = { path = \"../../runtime/hl-vfs\" }\n",
+    );
+
+    assert!(findings(&root).is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn checks_role_edges() {
     let root = fixture("roles");
     let directory = root.join("src/runtime/runtime");
