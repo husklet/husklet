@@ -1,5 +1,6 @@
 #include "hl/engine.h"
 #include "hl/linux.h"
+#include "hl/linux_abi.h"
 #include "core/engine_backend.h"
 #include "core/options.h"
 #include "executable_authority.h"
@@ -19,6 +20,20 @@ typedef struct hl_c_backend {
     hl_engine *engine;
     hl_engine_exit result;
 } hl_c_backend;
+
+static uint32_t hl_c_backend_status_flags(uint64_t detail) {
+    uint32_t flags;
+    const uint64_t access = detail & (HL_HOST_FILE_READ | HL_HOST_FILE_WRITE);
+    if (access == (HL_HOST_FILE_READ | HL_HOST_FILE_WRITE))
+        flags = HL_LINUX_O_RDWR;
+    else if (access == HL_HOST_FILE_WRITE)
+        flags = HL_LINUX_O_WRONLY;
+    else
+        flags = HL_LINUX_O_RDONLY;
+    if ((detail & HL_HOST_FILE_APPEND) != 0) flags |= HL_LINUX_O_APPEND;
+    if ((detail & HL_HOST_FILE_NONBLOCK) != 0) flags |= HL_LINUX_O_NONBLOCK;
+    return flags;
+}
 
 int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, uint32_t option_count,
                             const char *const *option_names, const char *const *option_values,
@@ -65,7 +80,7 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
             bindings[index].abi = HL_ENGINE_ABI;
             bindings[index].size = sizeof(bindings[index]);
             bindings[index].guest_fd = index;
-            bindings[index].status_flags = index == 0 ? 0u : 1u;
+            bindings[index].status_flags = hl_c_backend_status_flags(imported[index].detail);
             bindings[index].ownership = HL_ENGINE_FD_TRANSFER;
             bindings[index].host_handle = imported[index].value;
         }

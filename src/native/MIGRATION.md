@@ -7,6 +7,12 @@ responsibility lives in Husklet, which behavior is intentionally absent, and the
 automated evidence required before the retained implementation stops being an
 oracle.
 
+`src/native/c` contains temporary C migration debt only. Permanent Rust runtime
+packages remain in their existing `src/runtime/*` locations; replacing a C
+module extends the corresponding runtime package instead of moving Rust code
+under `src/native`. Once compatibility and performance parity are proved,
+`src/native/c` and differential-only scaffolding are removed.
+
 This document does **not** authorize a file move or a second production owner.
 The retained tree remains the source oracle while Rust owns engine policy and
 `src/native/exec` owns the narrow C/assembly execution kernel described in
