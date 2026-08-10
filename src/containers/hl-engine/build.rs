@@ -26,6 +26,8 @@ fn main() {
     );
 
     println!("cargo:rerun-if-changed=c_backend/shim.c");
+    println!("cargo:rerun-if-changed=c_backend/executable_authority.c");
+    println!("cargo:rerun-if-changed=c_backend/executable_authority.h");
     println!("cargo:rerun-if-changed={TU_MANIFEST}");
     println!("cargo:rerun-if-changed={SOURCE_MANIFEST}");
     let source_manifest = fs::read_to_string(SOURCE_MANIFEST).expect("read retained C source manifest");
@@ -42,7 +44,12 @@ fn main() {
         println!("cargo:rerun-if-changed={}", root.join(unit.source).display());
     }
 
-    compile("hl_c_backend_shim", &["c_backend/shim.c"], &["_GNU_SOURCE"], false);
+    compile(
+        "hl_c_backend_shim",
+        &["c_backend/shim.c", "c_backend/executable_authority.c"],
+        &["_GNU_SOURCE"],
+        false,
+    );
     compile_group("hl_c_backend_runtime", "normal_archive", &units, true);
     compile_group("hl_c_backend_target", "target_unity_direct", &units, false);
     compile_group("hl_c_backend_lifecycle", "lifecycle_direct", &units, false);
