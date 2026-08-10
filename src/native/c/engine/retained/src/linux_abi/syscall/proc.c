@@ -727,13 +727,24 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             fprintf(stderr,
                     "[prof] crossings=%llu syscalls=%llu ibtc_miss=%llu branch_cross=%llu translations=%llu lse=%llu "
                     "wx_toggles=%llu dualmap=%d xlate_ms=%.3f service_ms=%.3f mtibtc=%d mtfill=%llu "
-                    "fwake_fast=%llu fwake_slow=%llu fwait=%llu\n",
+                    "fwake_fast=%llu fwake_slow=%llu fwait=%llu soft_sample_shift=6 soft_sampled_sites=%llu "
+                    "soft_hull_direct_sampled=%llu soft_cached_hit_sampled=%llu soft_miss=%llu soft_span=%llu "
+                    "soft_bounce_prepare=%llu soft_bounce_commit=%llu smc_queued=%llu smc_commit=%llu\n",
                     (unsigned long long)g_prof_cross, (unsigned long long)g_prof_sys, (unsigned long long)g_prof_miss,
                     (unsigned long long)(g_prof_cross - g_prof_sys - g_prof_miss), (unsigned long long)g_prof_xlate,
                     (unsigned long long)g_lse_n, (unsigned long long)g_wx_toggles, g_dualmap, g_xlate_ns / 1e6,
                     g_service_ns / 1e6,
                     g_mtibtc, (unsigned long long)g_mtfill, (unsigned long long)g_futex_wake_fast,
-                    (unsigned long long)g_futex_wake_slow, (unsigned long long)g_futex_wait_n);
+                    (unsigned long long)g_futex_wake_slow, (unsigned long long)g_futex_wait_n,
+                    (unsigned long long)g_prof_soft_sites_sampled,
+                    (unsigned long long)g_prof_soft_hull_sampled,
+                    (unsigned long long)g_prof_soft_cached_sampled,
+                    (unsigned long long)g_prof_soft_miss,
+                    (unsigned long long)g_prof_soft_span,
+                    (unsigned long long)g_prof_soft_bounce_prepare,
+                    (unsigned long long)g_prof_soft_bounce_commit,
+                    (unsigned long long)g_prof_smc_queued,
+                    (unsigned long long)g_prof_smc_commit);
         // A3: §B shadow-return coverage. hit-rate = shret_hit / (shret_hit + shret_fb). bl_shadow /
         // bl_leaf show how the depth-gate split call sites at translate time. PROF-only (keep dark).
         if (0) {

@@ -764,6 +764,11 @@ static inline void ibtc_publish(ibtc_ent *e, uint64_t target, void *body) {
 }
 
 static uint64_t g_prof_miss, g_prof_sys, g_lse_n;
+/* HL_C_DIAGNOSTICS soft-memory attribution. Hot events are sampled at a
+ * deterministic 1/64 of guest PCs; dispatcher-side events are exact. */
+static uint64_t g_prof_soft_hull_sampled, g_prof_soft_cached_sampled, g_prof_soft_sites_sampled;
+static uint64_t g_prof_soft_miss, g_prof_soft_span, g_prof_soft_bounce_prepare, g_prof_soft_bounce_commit;
+static uint64_t g_prof_smc_queued, g_prof_smc_commit;
 // PROF=1: dispatcher crossings / IBTC misses / translations
 // A3 §B instrumentation (PROF=1). Runtime: shadow pushes executed, predicted-return FAST hits (host
 // ret, RAS), and returns that fell through emit_shadow_ret to the IBTC fallback. Translate-time:

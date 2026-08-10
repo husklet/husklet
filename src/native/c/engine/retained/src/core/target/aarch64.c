@@ -987,6 +987,10 @@ static int engine_global_init(void) {
     g_dbg_gprdump = 0;
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
     g_service_ns = 0;
+    g_prof_soft_hull_sampled = g_prof_soft_cached_sampled = g_prof_soft_sites_sampled = 0;
+    g_prof_soft_miss = g_prof_soft_span = 0;
+    g_prof_soft_bounce_prepare = g_prof_soft_bounce_commit = 0;
+    g_prof_smc_queued = g_prof_smc_commit = 0;
     g_no_stw_reclaim = 0;
     g_steal1617 = 1;
     g_noibslim = 0;

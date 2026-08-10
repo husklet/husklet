@@ -727,6 +727,7 @@ struct a64_soft_guard {
     uint8_t *metadata;
     int shared;
     int active;
+    int profile_sample;
     int restore_reg[4];
     int restore_offset[4];
     unsigned nrestore;
@@ -745,6 +746,11 @@ static uint32_t g_soft_resolver_patch_count;
 static void emit_a64_bus_guard(int, uint64_t, uint64_t);
 static void patch_adr(uint32_t *, uint8_t *, unsigned);
 static int shadowgate(void);
+static void emit_prof_bump(void *);
+
+static int soft_profile_sample(uint64_t pc) {
+    return g_prof && ((((pc >> 2) * UINT64_C(0x9e3779b97f4a7c15)) >> 58) == 0);
+}
 
 static uint32_t a64_cbnz_x(int reg, int64_t words) {
     return 0xB5000000u | (((uint32_t)words & 0x7ffffu) << 5) | (unsigned)reg;
@@ -761,6 +767,8 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
     int resume_ea = ea;
     if (!jit_guest_soft_active()) return guard;
     guard.active = 1;
+    guard.profile_sample = soft_profile_sample(pc);
+    if (guard.profile_sample) g_prof_soft_sites_sampled++;
     assert(ea != tmp && ea != tmp2 && tmp != tmp2);
     assert(bytes != 0 && bytes <= 4096);
     /*
@@ -769,7 +777,7 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
      * x16, and share the complete interval/permission check once per block.
      * Shadow-enabled builds retain the proven inline guard below.
      */
-    guard.shared = shadowgate() < 0 && !g_tier2_build;
+    guard.shared = shadowgate() < 0 && !g_tier2_build && !guard.profile_sample;
     if (guard.shared) {
         if (ea != 16) e_movr(16, ea);
         guard.ea = 16;
@@ -876,6 +884,7 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
     }
     e_ldr(tmp, CPUREG, OFF_SOFT_DELTA);
     emit32(0x8B000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)ea); /* add ea,ea,tmp */
+    if (guard.profile_sample) emit_prof_bump(&g_prof_soft_cached_sampled);
     guard.native = g_cp;
     return guard;
 }
@@ -966,8 +975,15 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
             *guard->miss[i] =
                 a64_tbz_x(guard->miss_reg[i], (unsigned)guard->miss_bit[i], (miss - (uint8_t *)guard->miss[i]) / 4);
     }
+    uint8_t *direct = guard->profile_sample ? g_cp : guard->native;
     for (unsigned i = 0; i < guard->ndirect; ++i)
-        *guard->direct[i] = a64_tbz_x(guard->tmp2, 0, (guard->native - (uint8_t *)guard->direct[i]) / 4);
+        *guard->direct[i] = a64_tbz_x(guard->tmp2, 0, (direct - (uint8_t *)guard->direct[i]) / 4);
+    if (guard->profile_sample) {
+        emit_prof_bump(&g_prof_soft_hull_sampled);
+        uint32_t *back = (uint32_t *)g_cp;
+        int64_t words = (guard->native - (uint8_t *)back) / 4;
+        emit32(0x14000000u | ((uint32_t)words & 0x03ffffffu));
+    }
 }
 
 static void aarch64_soft_filter_refresh(struct cpu *c) {
@@ -2491,6 +2507,7 @@ static uint64_t g_last_guest_start;
 static uint64_t g_last_guest_end;
 
 static void smc_queue_line(struct cpu *c, uint64_t address) {
+    if (g_prof) g_prof_smc_queued++;
     /*
      * ET_EXEC code is mapped at a high collision-avoidance bias while its
      * architectural pointers remain link-time-low.  Translation-map source
@@ -2648,11 +2665,13 @@ static int aarch64_soft_prepare_bounce(struct cpu *c) {
     c->soft_delta = (uint64_t)(uintptr_t)c->soft_bounce - c->soft_ea;
     c->soft_protection = c->soft_required;
     c->reason = R_BRANCH;
+    if (g_prof) g_prof_soft_bounce_prepare++;
     return 1;
 }
 
 static int aarch64_soft_bounce_commit(struct cpu *c) {
     if (!c->soft_bounce_pending) return 1;
+    if (g_prof) g_prof_soft_bounce_commit++;
     int ok = !c->soft_bounce_write || aarch64_soft_span_copy(c, 1, 1);
     if (ok && c->soft_bounce_write) aarch64_smc_copyout(c->soft_ea, c->soft_ea + c->soft_bytes);
     c->soft_bounce_pending = 0;
@@ -2690,6 +2709,7 @@ static int aarch64_soft_tlb_span(struct cpu *c) {
 }
 
 static int smc_commit(struct cpu *c) {
+    if (g_prof) g_prof_smc_commit++;
     pthread_mutex_lock(&g_jit_lock);
     txln_activate();                // arm eager line recording; may request a priming wholesale drop
     int force_whole = g_txln_prime; // first SMC after lazy activation: no lines recorded -> can't classify

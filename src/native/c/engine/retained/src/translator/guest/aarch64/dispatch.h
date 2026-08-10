@@ -123,8 +123,10 @@ static uint64_t g_smc_flushes;
 // dispatcher loop into which this expands. Byte-for-byte the prior inline block.
 #define G_DISPATCH_REASON(c)                                                                                           \
     if ((c)->reason == R_SOFTMISS) {                                                                                   \
+        if (g_prof) g_prof_soft_miss++;                                                                                \
         if (aarch64_soft_tlb_miss(c)) {                                                                                \
             if ((c)->reason != R_SOFTSPAN) continue;                                                                   \
+            if (g_prof) g_prof_soft_span++;                                                                            \
             if (aarch64_soft_tlb_span(c) > 0) continue;                                                                \
         }                                                                                                              \
         (c)->fault_addr = (c)->soft_ea;                                                                                \
@@ -142,6 +144,7 @@ static uint64_t g_smc_flushes;
         }                                                                                                              \
         break;                                                                                                         \
     } else if ((c)->reason == R_SOFTSPAN) {                                                                            \
+        if (g_prof) g_prof_soft_span++;                                                                                \
         int _soft_span = aarch64_soft_tlb_span(c);                                                                     \
         if (_soft_span > 0) continue;                                                                                  \
         (c)->fault_addr = (c)->soft_ea;                                                                                \
