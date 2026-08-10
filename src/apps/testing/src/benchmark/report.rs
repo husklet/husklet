@@ -33,8 +33,8 @@ struct Reference {
 
 struct Output {
     baseline: String,
-    references: BTreeMap<(String, String), Reference>,
-    checksums: BTreeMap<(String, String), u64>,
+    references: BTreeMap<(String, String, String), Reference>,
+    checksums: BTreeMap<(String, String, String), u64>,
 }
 
 /// A validated report request with at least one result source.
@@ -75,12 +75,82 @@ impl Report {
         for path in self.paths {
             all.extend(Self::rows(&path)?);
         }
+        let all = Self::summaries(all)?;
         let mut output = Output::new(self.baseline, &all);
         output.header();
         for row in all {
             output.row(row)?;
         }
         Ok(())
+    }
+
+    fn summaries(rows: Vec<Row>) -> Result<Vec<Row>, String> {
+        type Phase = (String, String, String);
+        type Group = (String, String, String, String);
+
+        let mut checksums = BTreeMap::<Phase, u64>::new();
+        let mut counts = BTreeMap::<Phase, BTreeMap<String, usize>>::new();
+        let mut groups = BTreeMap::<Group, (Row, Vec<u64>, Vec<u64>)>::new();
+        for row in rows {
+            let phase = (row.arch.clone(), row.phase.clone(), row.context.clone());
+            if row.phase != "syscall"
+                && checksums
+                    .insert(phase.clone(), row.checksum)
+                    .is_some_and(|value| value != row.checksum)
+            {
+                return Err(format!("checksum divergence: {}/{}", row.arch, row.phase));
+            }
+            *counts
+                .entry(phase)
+                .or_default()
+                .entry(row.provider.clone())
+                .or_default() += 1;
+
+            let key = (
+                row.provider.clone(),
+                row.arch.clone(),
+                row.phase.clone(),
+                row.context.clone(),
+            );
+            if let Some((first, times, walls)) = groups.get_mut(&key) {
+                if first.execution != row.execution || first.diagnostics != row.diagnostics {
+                    return Err(format!(
+                        "inconsistent sample metadata: {}/{}/{}",
+                        row.provider, row.arch, row.phase
+                    ));
+                }
+                times.push(row.time);
+                walls.push(row.wall);
+            } else {
+                let time = row.time;
+                let wall = row.wall;
+                groups.insert(key, (row, vec![time], vec![wall]));
+            }
+        }
+
+        for ((arch, phase, _), providers) in &counts {
+            let mut samples = providers.values();
+            let Some(expected) = samples.next() else {
+                continue;
+            };
+            if samples.any(|count| count != expected) {
+                return Err(format!("unbalanced samples: {arch}/{phase}"));
+            }
+        }
+
+        Ok(groups
+            .into_values()
+            .map(|(mut row, mut times, mut walls)| {
+                row.time = Self::median(&mut times);
+                row.wall = Self::median(&mut walls);
+                row
+            })
+            .collect())
+    }
+
+    fn median(values: &mut [u64]) -> u64 {
+        values.sort_unstable();
+        values[values.len() / 2]
     }
 }
 
@@ -151,7 +221,7 @@ impl Output {
             .filter(|row| row.provider == baseline)
             .map(|row| {
                 (
-                    (row.arch.clone(), row.phase.clone()),
+                    (row.arch.clone(), row.phase.clone(), row.context.clone()),
                     Reference {
                         time: row.time,
                         wall: row.wall,
@@ -174,13 +244,14 @@ impl Output {
     }
 
     fn row(&mut self, row: Row) -> Result<(), String> {
-        let reference = self.references.get(&(row.arch.clone(), row.phase.clone())).copied();
+        let phase = (row.arch.clone(), row.phase.clone(), row.context.clone());
+        let reference = self.references.get(&phase).copied();
         let ratio = reference.map_or_else(|| "-".into(), |value| Reference::ratio(row.time, value.time));
         let wall_ratio = reference.map_or_else(|| "-".into(), |value| Reference::ratio(row.wall, value.wall));
         if row.phase != "syscall"
             && self
                 .checksums
-                .insert((row.arch.clone(), row.phase.clone()), row.checksum)
+                .insert(phase, row.checksum)
                 .is_some_and(|value| value != row.checksum)
         {
             return Err(format!("checksum divergence: {}/{}", row.arch, row.phase));
@@ -205,7 +276,7 @@ impl Output {
 
 #[cfg(test)]
 mod tests {
-    use super::Report;
+    use super::{Output, Reference, Report, Row};
     use std::fs;
 
     #[test]
@@ -246,5 +317,50 @@ mod tests {
         .write()
         .expect_err("checksum must diverge");
         assert_eq!(error, "checksum divergence: aarch64/compute");
+    }
+
+    #[test]
+    fn balanced_cycles_are_aggregated_before_ratios() {
+        fn row(provider: &str, time: u64, wall: u64) -> Row {
+            Row {
+                provider: provider.into(),
+                arch: "aarch64".into(),
+                phase: "compute".into(),
+                time,
+                checksum: 42,
+                wall,
+                execution: "verified".into(),
+                diagnostics: "off".into(),
+                context: "full".into(),
+            }
+        }
+
+        let rows = vec![
+            row("native", 10, 12),
+            row("c", 30, 32),
+            row("rust", 20, 22),
+            row("c", 35, 37),
+            row("rust", 40, 42),
+            row("native", 100, 102),
+            row("rust", 60, 62),
+            row("native", 1000, 1002),
+            row("c", 300, 302),
+        ];
+
+        let summaries = Report::summaries(rows).expect("summarize balanced cycles");
+        assert_eq!(summaries.len(), 3);
+        let output = Output::new("native".into(), &summaries);
+        let reference = output
+            .references
+            .get(&("aarch64".into(), "compute".into(), "full".into()))
+            .expect("aggregated native reference");
+        assert_eq!(reference.time, 100);
+        assert_eq!(reference.wall, 102);
+        let rust = summaries
+            .iter()
+            .find(|row| row.provider == "rust")
+            .expect("aggregated Rust sample");
+        assert_eq!(rust.time, 40);
+        assert_eq!(Reference::ratio(rust.time, reference.time), "0.400");
     }
 }
