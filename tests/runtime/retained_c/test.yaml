@@ -1,0 +1,15 @@
+targets: [arm64]
+image: alpine:3.20
+execution: { native: true, diagnostics: false }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2]
+cases:
+  - id: runtime/retained-c/rwx-ibtc
+    status: active
+    compat: { class: compatibility }
+    timeout: 30
+    build: { source: rwx_ibtc.c, output: rwx_ibtc, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/rwx_ibtc }
+    run: []
+    expect: { exit: 0, stdout: golden/rwx_ibtc.out }

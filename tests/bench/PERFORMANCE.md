@@ -1727,3 +1727,41 @@ syscall row at base `fbfe10df8` measured that discarded provenance root at
 plus 45,515 us release. The correction resolves and platform-validates the
 same image metadata for provenance without creating a writable root. Execution
 still performs exactly one isolated durable fork and release.
+
+### Retained-C RWX indirect-branch fallback
+
+The retained AArch64 engine's compact stolen-`x16`/`x17` indirect path had a
+one-entry direct patch but no shared-IBTC fallback. Once any guest RWX mapping
+latched `g_rwx_guest`, SMC policy correctly suppressed that direct patch. The
+unpatched path consequently returned to the C dispatcher on every execution,
+even though the dispatcher kept publishing the exact target and body into the
+shared IBTC.
+
+Launch-scoped diagnostics on the 6,000,000-iteration Python workload classified
+250,374,064 warm IBTC misses: 250,373,548 came from per-site paths, 250,373,976
+occurred while RWX suppression was active, and only 516 came from shared-only
+sites. At the dispatcher, 250,363,485 misses found the exact requested target
+already in its shared slot; only 2,011 were real hash conflicts and none had a
+null body. The workload was single-threaded (`mtfill=0`) and had not observed SMC.
+This rules out table size and associativity as the cause.
+
+The correction retains the compact direct-hit path and probes the existing
+SMC-invalidatable shared IBTC after its guard misses. The probe uses the same
+16-bit target hash, atomic target/body pair, relocation-aware table pointer, and
+body-entry contract as the other AArch64 paths. With diagnostics enabled, warm
+misses fell to 10,579 and `wait_and_drain` fell from 7,037,678 us to 1,253,866 us.
+These diagnostic timings include counter overhead and are not the product A/B.
+
+The product comparison used diagnostics off, one settled binary per arm, unique
+result ledgers, an exclusive box lock, and balanced base/candidate then
+candidate/base ordering. Exact output and provenance identity were unchanged.
+Base measured 6,828,491 and 6,722,684 us; candidate measured 1,090,703 and
+1,101,869 us, a 6.26x and 6.10x improvement. A base/base null pair measured
+6,820,405 and 6,789,127 us (1.0046). The base engine SHA-256 was
+`ad026d9c4f7f201d9f822cf0c1124b406ff86e42bf4e7f055fef27fd5b812338`, the
+candidate engine SHA-256 was
+`945c45695ce01b0c2e41e3a38b66b1ba16076c98fdf8f39c72e45e2b41be0ba4`, and
+the shared testing SHA-256 was
+`0b9b72985ec94eecf63dd55460b325b9b814f94162f6e8e2d5f65e22de7b2383`.
+The ordinary 200,000-iteration Python work case subsequently measured 133,217
+us minimum, versus the earlier retained-C product result near 315 ms.
