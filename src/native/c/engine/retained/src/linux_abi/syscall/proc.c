@@ -2227,10 +2227,6 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         gna_reset();                   // the old image's PROT_NONE ranges are gone with its address space
         hl_gmap_lock_reset();          // ... and so are its mlock'd ranges (VmLck resets across execve)
         g_nonpie_lo = g_nonpie_hi = 0; // reset; load_elf re-sets it iff the new main image is non-PIE
-#ifdef R_REPSTR // g_nonpie_blob_code lives in the x86-only frontend (translate/x86_64/translate.c); guard so this
-                // shared execve path still compiles into the aarch64 unity (R_REPSTR is x86 cpu.h-only)
-        g_nonpie_blob_code = 0; // reset; load_elf re-sets it iff the new main image carries the V8 blob
-#endif
         p = xpath;
         for (int i = 0; i < ac && i < HL_MAXARGV - 1; i++)
             argv[i] = xargv[i];

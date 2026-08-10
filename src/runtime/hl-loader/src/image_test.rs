@@ -43,6 +43,35 @@ fn displaced_projection() {
 }
 
 #[test]
+fn executable_bytes_cannot_change_displaced_projection() {
+    use crate::test_support::{FakeAddressSpace, FakeSource, TransactionFixture};
+
+    let plain = fixture(GuestArchitecture::X86_64, ImageKind::Executable, false);
+    let mut marked = plain.clone();
+    marked[0x260..0x26e].copy_from_slice(b"\xff Go buildinf:");
+    marked[0x340..0x348].copy_from_slice(b"v8_blob_");
+    let inspector = ElfInspector::new(GuestArchitecture::X86_64, ImageLimits::default());
+    assert_eq!(inspector.inspect(&marked), inspector.inspect(&plain));
+
+    let mut limits = TransactionFixture::limits();
+    limits.executable_placement = ExecutablePlacement::Rebased {
+        deterministic_hint: Some(0xa0_0000),
+    };
+    let mut loader = Loader::new(
+        FakeSource::new(GuestArchitecture::X86_64, ImageKind::Executable),
+        FakeAddressSpace::new(None),
+        limits,
+    );
+    let loaded = loader
+        .load(TransactionFixture::request(GuestArchitecture::X86_64))
+        .unwrap();
+    let projection = loaded.main_projection().unwrap();
+    assert_eq!(projection.guest.start, LINK_BASE);
+    assert_eq!(projection.storage_bias, 0xa0_0000 - LINK_BASE);
+    assert_eq!(projection.storage_address(LINK_BASE + 8), Some(0xa0_0008));
+}
+
+#[test]
 fn native_placement() {
     use crate::test_support::{FakeAddressSpace, FakeSource, TransactionFixture};
 
