@@ -39,7 +39,6 @@ struct hl_native_executor {
      * folds back. Set-only, so a concurrent seed can only lose a discovery. */
     uint32_t runtime_write_reserve;
     uint32_t dirty_overflow_continue;
-    uint32_t fixed_aperture;
     uint8_t a64_reserve_filter[HL_NATIVE_A64_SATURATION_SLOTS];
     uint64_t ibtc_fills, ibtc_site_collisions, ibtc_shared_collisions;
     uint64_t boundary_branch, boundary_syscall, boundary_fallback, boundary_yield, completed;
@@ -53,7 +52,6 @@ struct hl_native_executor {
     _Atomic uint64_t a64_guard_fast, a64_guard_full, a64_guard_fallback;
     _Atomic uint64_t a64_dirty_reserved, a64_dirty_overflow, a64_dirty_committed;
     _Atomic uint64_t a64_dirty_merged;
-    _Atomic uint64_t a64_aperture_scalar_attempts, a64_aperture_hits;
     _Atomic uint64_t x86_cold_builds, x86_cold_quota_exits;
     _Atomic uint64_t x86_guard_fast, x86_guard_full, x86_guard_fallback;
     _Atomic uint64_t x86_dirty_merged, x86_dirty_committed, x86_dirty_overflow;
@@ -91,7 +89,7 @@ hl_native_status hl_native_execution_exit(hl_native_execution *, hl_native_exit 
 hl_native_status hl_native_synchronize_epoch(hl_native_executor *, uint64_t, uint64_t,
                                              uint64_t, uint64_t);
 hl_native_status hl_native_synchronize_direct(hl_native_executor *, uint64_t, uint64_t,
-                                              uint64_t, const hl_native_direct_token *, uint64_t, uint64_t,
+                                              const hl_native_direct_token *, uint64_t, uint64_t,
                                               const hl_native_projection *);
 hl_native_status hl_native_executor_rollover(hl_native_executor *, uint64_t, uint64_t);
 void hl_native_ibtc_fill_shared(hl_native_executor *, uint64_t, void *);
@@ -100,9 +98,9 @@ hl_native_status hl_native_ibtc_fill(hl_native_executor *, hl_native_aarch64_cpu
                                      const hl_native_code *);
 #endif
 int hl_native_direct_request_valid(const hl_native_executor *, const hl_native_direct_token *,
-                                   uint64_t, uint64_t, uint64_t, const hl_native_projection *);
+                                   uint64_t, uint64_t, const hl_native_projection *);
 int hl_native_direct_request_snapshot(const hl_native_executor *, const hl_native_direct_token *,
-                                      uint64_t, uint64_t, uint64_t, const hl_native_projection *,
+                                      uint64_t, uint64_t, const hl_native_projection *,
                                       hl_native_direct_authority *);
 uint64_t hl_native_certificate_cache_identity_issue(hl_native_executor *);
 

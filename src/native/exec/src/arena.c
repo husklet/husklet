@@ -42,8 +42,7 @@ hl_native_status hl_native_arena_create(hl_native_arena *arena, const hl_native_
                            HL_NATIVE_A64_NO_WRITE_COMMIT |
                            HL_NATIVE_A64_RUNTIME_WRITE_RESERVE |
                            HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE |
-                           HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT |
-                           HL_NATIVE_A64_FIXED_APERTURE)) != 0 ||
+                           HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT)) != 0 ||
         (config->flags & (HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE |
                           HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT)) ==
             (HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE | HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT) ||

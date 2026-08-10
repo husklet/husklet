@@ -202,53 +202,6 @@ int hl_a64_single_direct_body(hl_a64_assembler *assembler, uint32_t word, uint64
     return hl_a64_assembler_ok(assembler);
 }
 
-int hl_a64_single_aperture_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc,
-                                const hl_native_direct_authority *authority,
-                                hl_a64_guard *guard,
-                                hl_a64_memory_sites *sites) {
-    hl_a64_memory memory;
-    if (assembler == NULL || authority == NULL || guard == NULL || sites == NULL ||
-        authority->permissions != HL_NATIVE_ACCESS_APERTURE || !valid(word, pc, &memory) ||
-        memory.vector || memory.writeback ||
-        (memory.bytes != 1 && memory.bytes != 2 && memory.bytes != 4 && memory.bytes != 8) ||
-        (memory.kind != HL_A64_MEMORY_LITERAL && memory.kind != HL_A64_MEMORY_UNSIGNED &&
-         memory.kind != HL_A64_MEMORY_UNSCALED && memory.kind != HL_A64_MEMORY_REGISTER))
-        return 0;
-    /* Attempts cover every dynamically reached ordinary scalar candidate,
-     * including loads that are deliberately rejected because canonical host
-     * protections cannot distinguish guest X-only/W-only from readable pages. */
-    hl_a64_guard_aperture_attempt(assembler);
-    if (memory.read) {
-        /* Loads retain the ordinary exact view guard. Its miss enters the
-         * operand resolver, and its retry uses only the generation-qualified
-         * resolved view; it never treats the aperture class as READ authority. */
-        return hl_a64_single_body(assembler, word, pc, guard, sites);
-    }
-
-    memset(guard, 0, sizeof(*guard));
-    memset(sites, 0, sizeof(*sites));
-    guard->pc = pc;
-    effective_address(assembler, word, &memory);
-    hl_a64_guard_aperture_begin(assembler, memory.bytes, HL_A64_PERMISSION_WRITE, guard);
-    unsigned target = memory.target != 31 && stolen(memory.target) ? 17u : memory.target;
-    hl_a64_guard_write_begin(assembler, memory.bytes, pc, guard);
-    if (target == 17u) hl_a64_ldr(assembler, 17, CPU, memory.target * 8);
-    sites->count = 1;
-    sites->entries[0] = (hl_a64_memory_site){
-        .code_offset = hl_a64_assembler_size(assembler),
-        .access = HL_NATIVE_ACCESS_WRITE,
-        .width = (uint32_t)memory.bytes,
-    };
-    uint32_t native = (word & UINT32_C(0xffc00000)) | UINT32_C(0x39000000) |
-        (16u << 5) | target;
-    hl_a64_emit32(assembler, native);
-    /* A synchronous host protection/hole fault skips both the exact journal
-     * commit and this hit. A successful store cannot bypass either one. */
-    hl_a64_guard_written(assembler, memory.bytes);
-    hl_a64_guard_aperture_hit(assembler);
-    return hl_a64_assembler_ok(assembler);
-}
-
 int hl_a64_single_emit(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
     hl_a64_memory memory;
     hl_a64_guard guard;

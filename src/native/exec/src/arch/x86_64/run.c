@@ -678,7 +678,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         (memory_mode == 0) != (authority_identity == 0)) return HL_NATIVE_ARGUMENT;
     hl_native_status epoch_status = memory_mode == 0
         ? hl_native_synchronize_epoch(executor, source->mapping_incarnation, 0, 0, 0)
-        : hl_native_synchronize_direct(executor, source->mapping_incarnation, 0, memory_mode,
+        : hl_native_synchronize_direct(executor, source->mapping_incarnation, 0,
                                        direct_token, authority_generation, authority_identity,
                                        request->projection);
     if (epoch_status != HL_NATIVE_OK) return epoch_status;
@@ -707,7 +707,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             if (status != HL_NATIVE_OK) return status;
             if (memory_mode != 0 && !hl_native_direct_request_valid(
                     executor, direct_token, authority_generation, authority_identity,
-                    memory_mode, request->projection)) {
+                    request->projection)) {
                 (void)hl_native_execution_leave(&execution);
                 return HL_NATIVE_STATE;
             }

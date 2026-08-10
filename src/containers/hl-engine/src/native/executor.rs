@@ -436,8 +436,6 @@ struct Diagnostics {
     x86_dirty_overflow: u64,
     x86_write_cache_hit: u64,
     x86_write_cache_miss: u64,
-    a64_aperture_scalar_attempts: u64,
-    a64_aperture_hits: u64,
 }
 
 #[cfg(test)]
@@ -1557,8 +1555,6 @@ impl NativeAarch64 {
             execution_identity: 0,
             read_valid_count: 0,
             reserve_filter: [0; 8],
-            diagnostic_aperture_scalar_attempts: 0,
-            diagnostic_aperture_hits: 0,
         })
     }
 
@@ -2446,8 +2442,6 @@ impl Executor {
             x86_dirty_overflow: 0,
             x86_write_cache_hit: 0,
             x86_write_cache_miss: 0,
-            a64_aperture_scalar_attempts: 0,
-            a64_aperture_hits: 0,
         };
         // SAFETY: `&self` keeps the handle alive and `output` is a fully initialized local
         // the engine only overwrites; it is not retained past the call.

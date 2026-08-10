@@ -79,13 +79,13 @@ int main(void) {
     uint64_t first_identity = hl_native_direct_identity(executor, first);
     CHECK(first_generation != 0);
     CHECK(first_identity != 0);
-    CHECK(hl_native_direct_request_valid(executor, first, first_generation, first_identity, 1, &projection));
-    CHECK(!hl_native_direct_request_valid(executor, first, first_generation + 1, first_identity, 1, &projection));
-    CHECK(!hl_native_direct_request_valid(executor, first, first_generation, first_identity + 1, 1, &projection));
+    CHECK(hl_native_direct_request_valid(executor, first, first_generation, first_identity, &projection));
+    CHECK(!hl_native_direct_request_valid(executor, first, first_generation + 1, first_identity, &projection));
+    CHECK(!hl_native_direct_request_valid(executor, first, first_generation, first_identity + 1, &projection));
     CHECK(!hl_native_direct_request_valid(executor,
-        (const hl_native_direct_token *)(uintptr_t)UINT64_C(0x1234), first_generation, first_identity, 1, &projection));
+        (const hl_native_direct_token *)(uintptr_t)UINT64_C(0x1234), first_generation, first_identity, &projection));
     view.host_first++;
-    CHECK(!hl_native_direct_request_valid(executor, first, first_generation, first_identity, 1, &projection));
+    CHECK(!hl_native_direct_request_valid(executor, first, first_generation, first_identity, &projection));
     view.host_first--;
 #if defined(__aarch64__)
     const uint32_t instruction = UINT32_C(0xd4000001);
@@ -168,7 +168,7 @@ int main(void) {
     CHECK(hl_native_direct_register(executor, &expected, &third) == HL_NATIVE_OK);
     CHECK(hl_native_direct_generation(executor, third) != second_generation);
     CHECK(hl_native_direct_identity(executor, third) == second_identity);
-    CHECK(!hl_native_direct_request_valid(executor, third, second_generation, second_identity, 1, &projection));
+    CHECK(!hl_native_direct_request_valid(executor, third, second_generation, second_identity, &projection));
     CHECK(hl_native_direct_unregister(executor, third) == HL_NATIVE_OK);
     hl_native_direct_authority variants[7];
     for (size_t index = 0; index < 7; ++index) variants[index] = expected;
@@ -184,56 +184,6 @@ int main(void) {
         CHECK(hl_native_direct_identity(executor, third) != second_identity);
         CHECK(hl_native_direct_unregister(executor, third) == HL_NATIVE_OK);
     }
-    hl_native_direct_authority aperture = expected;
-    aperture.permissions = HL_NATIVE_ACCESS_APERTURE;
-    aperture.guest_first = 0;
-    aperture.guest_last = HL_NATIVE_APERTURE_MAX_BYTES;
-    aperture.host_first = UINT64_C(0x100000000);
-    CHECK(hl_native_direct_register(executor, &aperture, &third) == HL_NATIVE_ARGUMENT);
-    CHECK(hl_native_destroy(executor) == HL_NATIVE_OK);
-
-    config = test_config(&services, HL_NATIVE_A64_FIXED_APERTURE);
-    CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
-    CHECK(hl_native_direct_register(executor, &aperture, &first) == HL_NATIVE_OK);
-    hl_native_projection_view aperture_view = {
-        .guest_first = aperture.guest_first,
-        .guest_last = aperture.guest_last,
-        .host_first = aperture.host_first,
-        .mapping_incarnation = aperture.mapping_incarnation,
-        .permissions = HL_NATIVE_ACCESS_APERTURE,
-        .write_policy = HL_NATIVE_WRITE_EXACT,
-    };
-    hl_native_projection aperture_projection = {
-        &aperture_view, 1, aperture.mapping_incarnation, 0,
-    };
-    first_generation = hl_native_direct_generation(executor, first);
-    first_identity = hl_native_direct_identity(executor, first);
-    CHECK(hl_native_direct_request_valid(executor, first, first_generation, first_identity,
-                                         HL_NATIVE_MEMORY_APERTURE, &aperture_projection));
-    CHECK(!hl_native_direct_request_valid(executor, first, first_generation, first_identity,
-                                          1, &aperture_projection));
-    CHECK(hl_native_direct_unregister(executor, first) == HL_NATIVE_OK);
-    CHECK(hl_native_direct_register(executor, &aperture, &second) == HL_NATIVE_OK);
-    CHECK(!hl_native_direct_request_valid(executor, second, first_generation, first_identity,
-                                          HL_NATIVE_MEMORY_APERTURE, &aperture_projection));
-    CHECK(hl_native_direct_unregister(executor, second) == HL_NATIVE_OK);
-    CHECK(hl_native_direct_register(executor, &expected, &third) == HL_NATIVE_OK);
-    second_generation = hl_native_direct_generation(executor, third);
-    second_identity = hl_native_direct_identity(executor, third);
-    view = (hl_native_projection_view){
-        .guest_first = expected.guest_first,
-        .guest_last = expected.guest_last,
-        .host_first = expected.host_first,
-        .mapping_incarnation = expected.mapping_incarnation,
-        .permissions = expected.permissions,
-        .write_policy = HL_NATIVE_WRITE_EXACT,
-    };
-    projection = (hl_native_projection){&view, 1, expected.mapping_incarnation, 0};
-    CHECK(hl_native_direct_request_valid(executor, third, second_generation, second_identity,
-                                         1, &projection));
-    CHECK(!hl_native_direct_request_valid(executor, third, second_generation, second_identity,
-                                          HL_NATIVE_MEMORY_APERTURE, &projection));
-    CHECK(hl_native_direct_unregister(executor, third) == HL_NATIVE_OK);
     CHECK(hl_native_destroy(executor) == HL_NATIVE_OK);
     return 0;
 }

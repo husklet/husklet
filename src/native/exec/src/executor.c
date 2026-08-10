@@ -117,24 +117,6 @@ static uint64_t authority_identity(hl_native_executor *executor) {
     return executor->next_authority_identity;
 }
 
-static int aperture_range_valid(uint64_t first, uint64_t last, uint64_t host_first) {
-    const uint64_t page_mask = UINT64_C(4095);
-    return first == 0 && last == HL_NATIVE_APERTURE_MAX_BYTES &&
-        (first & page_mask) == 0 && (last & page_mask) == 0 &&
-        (host_first & page_mask) == 0 && host_first <= UINT64_MAX - (last - first);
-}
-
-static int aperture_projection_valid(const hl_native_projection *projection) {
-    if (projection == NULL || projection->views == NULL || projection->count != 1 ||
-        projection->active != 0 || projection->mapping_incarnation == 0)
-        return 0;
-    const hl_native_projection_view *view = &projection->views[0];
-    return view->mapping_incarnation == projection->mapping_incarnation &&
-        view->permissions == HL_NATIVE_ACCESS_APERTURE &&
-        view->write_policy == HL_NATIVE_WRITE_EXACT && view->write_index == 0 &&
-        aperture_range_valid(view->guest_first, view->guest_last, view->host_first);
-}
-
 uint64_t hl_native_certificate_cache_identity_issue(hl_native_executor *executor) {
     if (executor == NULL) return 0;
     uint64_t current = atomic_load_explicit(&executor->next_certificate_cache_identity,
@@ -158,12 +140,9 @@ hl_native_status hl_native_direct_register(hl_native_executor *executor,
     *output = NULL;
     if (executor == NULL || authority == NULL || authority->abi != HL_NATIVE_ABI ||
         authority->size != sizeof(*authority) || authority->reserved != 0 ||
+        authority->permissions == 0 || (authority->permissions & ~7u) != 0 ||
         authority->guest_last <= authority->guest_first ||
-        authority->host_first > UINT64_MAX - (authority->guest_last - authority->guest_first) ||
-        !((authority->permissions != 0 && (authority->permissions & ~7u) == 0) ||
-          (executor->fixed_aperture && authority->permissions == HL_NATIVE_ACCESS_APERTURE &&
-           aperture_range_valid(authority->guest_first, authority->guest_last,
-                                authority->host_first))))
+        authority->host_first > UINT64_MAX - (authority->guest_last - authority->guest_first))
         return HL_NATIVE_ARGUMENT;
     token = calloc(1, sizeof(*token));
     if (token == NULL) return HL_NATIVE_MEMORY;
@@ -218,7 +197,7 @@ uint64_t hl_native_direct_identity(const hl_native_executor *executor,
 
 int hl_native_direct_request_valid(const hl_native_executor *executor,
                                    const hl_native_direct_token *token, uint64_t generation,
-                                   uint64_t identity, uint64_t memory_mode,
+                                   uint64_t identity,
                                    const hl_native_projection *projection) {
     if (hl_native_direct_generation(executor, token) != generation || identity == 0 ||
         token->identity != identity || projection == NULL ||
@@ -226,15 +205,6 @@ int hl_native_direct_request_valid(const hl_native_executor *executor,
         return 0;
     const hl_native_direct_authority *authority = &token->authority;
     const hl_native_projection_view *view = &projection->views[projection->active];
-    if (memory_mode == HL_NATIVE_MEMORY_APERTURE) {
-        if (!executor->fixed_aperture || authority->permissions != HL_NATIVE_ACCESS_APERTURE ||
-            !aperture_projection_valid(projection)) return 0;
-    } else if (memory_mode == 1) {
-        if (authority->permissions == 0 || (authority->permissions & ~7u) != 0 ||
-            view->permissions == 0 || (view->permissions & ~7u) != 0) return 0;
-    } else {
-        return 0;
-    }
     return authority->mapping_incarnation == projection->mapping_incarnation &&
         authority->mapping_incarnation == view->mapping_incarnation &&
         authority->guest_first == view->guest_first && authority->guest_last == view->guest_last &&
@@ -244,11 +214,10 @@ int hl_native_direct_request_valid(const hl_native_executor *executor,
 
 int hl_native_direct_request_snapshot(const hl_native_executor *executor,
                                       const hl_native_direct_token *token, uint64_t generation,
-                                      uint64_t identity, uint64_t memory_mode,
+                                      uint64_t identity,
                                       const hl_native_projection *projection,
                                       hl_native_direct_authority *output) {
-    if (output == NULL || !hl_native_direct_request_valid(executor, token, generation, identity,
-                                                          memory_mode, projection)) return 0;
+    if (output == NULL || !hl_native_direct_request_valid(executor, token, generation, identity, projection)) return 0;
     *output = token->authority;
     return 1;
 }
@@ -580,7 +549,6 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     executor->write_reserve = (config->flags & HL_NATIVE_A64_NO_WRITE_RESERVE) == 0;
     executor->write_commit = (config->flags & HL_NATIVE_A64_NO_WRITE_COMMIT) == 0;
     executor->runtime_write_reserve = (config->flags & HL_NATIVE_A64_RUNTIME_WRITE_RESERVE) != 0;
-    executor->fixed_aperture = (config->flags & HL_NATIVE_A64_FIXED_APERTURE) != 0;
     /* Losing exact journal precision already publishes the whole writable
      * projection. Continue by default; the exit flag retains the old round trip
      * as an explicit control. The positive flag remains accepted for callers
@@ -594,8 +562,6 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     atomic_init(&executor->a64_dirty_overflow, 0);
     atomic_init(&executor->a64_dirty_committed, 0);
     atomic_init(&executor->a64_dirty_merged, 0);
-    atomic_init(&executor->a64_aperture_scalar_attempts, 0);
-    atomic_init(&executor->a64_aperture_hits, 0);
     atomic_init(&executor->relocation_cold_targets, 0);
     atomic_init(&executor->relocation_cycles, 0);
     atomic_init(&executor->relocation_capacity, 0);
@@ -776,7 +742,7 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
     }
     /* The x86 write-path group is the tail of the record, so its gate is the
      * whole size rather than the offset of a following field. */
-    if (output->size >= offsetof(hl_native_diagnostics, a64_aperture_scalar_attempts)) {
+    if (output->size >= sizeof(hl_native_diagnostics)) {
         output->x86_guard_fast = atomic_load_explicit(&executor->x86_guard_fast, memory_order_relaxed);
         output->x86_guard_full = atomic_load_explicit(&executor->x86_guard_full, memory_order_relaxed);
         output->x86_guard_fallback = atomic_load_explicit(&executor->x86_guard_fallback, memory_order_relaxed);
@@ -828,17 +794,10 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
         }
         output->a64_branch_sample_form = sample_form;
     }
-    if (output->size >= offsetof(hl_native_diagnostics, a64_aperture_scalar_attempts)) {
+    if (output->size >= sizeof(*output)) {
         output->ibtc_authenticated_entries = 0;
         output->ibtc_shared_hits = 0;
         output->ibtc_auth_rejections = 0;
-    }
-    if (output->size >= offsetof(hl_native_diagnostics, a64_aperture_hits) +
-                            sizeof(output->a64_aperture_hits)) {
-        output->a64_aperture_scalar_attempts =
-            atomic_load_explicit(&executor->a64_aperture_scalar_attempts, memory_order_relaxed);
-        output->a64_aperture_hits =
-            atomic_load_explicit(&executor->a64_aperture_hits, memory_order_relaxed);
     }
     return HL_NATIVE_OK;
 }
@@ -957,23 +916,19 @@ hl_native_status hl_native_synchronize_epoch(hl_native_executor *executor, uint6
 
 hl_native_status hl_native_synchronize_direct(hl_native_executor *executor, uint64_t mapping_epoch,
                                               uint64_t instruction_epoch,
-                                              uint64_t memory_mode,
                                               const hl_native_direct_token *token, uint64_t generation,
                                               uint64_t identity,
                                               const hl_native_projection *projection) {
     hl_native_status status = hl_native_executor_gate_enter(executor);
     if (status != HL_NATIVE_OK) return status;
-    if (!hl_native_direct_request_valid(executor, token, generation, identity, memory_mode,
-                                        projection)) {
+    if (!hl_native_direct_request_valid(executor, token, generation, identity, projection)) {
         status = HL_STATE("direct synchronize request invalid");
-    } else if (!hl_native_cache_epoch_matches(executor->cache, mapping_epoch, instruction_epoch,
-                                              memory_mode, identity)) {
-        status = hl_native_cache_reset_identity(executor->cache, mapping_epoch, instruction_epoch,
-                                                memory_mode, identity);
+    } else if (!hl_native_cache_epoch_matches(executor->cache, mapping_epoch, instruction_epoch, 1, identity)) {
+        status = hl_native_cache_reset_identity(executor->cache, mapping_epoch, instruction_epoch, 1, identity);
         if (status == HL_NATIVE_OK) ibtc_clear(executor);
     }
     if (status == HL_NATIVE_OK) {
-        executor->memory_mode = memory_mode;
+        executor->memory_mode = 1;
         executor->authority_generation = identity;
     }
     hl_native_executor_gate_leave(executor);
@@ -1200,15 +1155,9 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     if ((quantum_poll == NULL) != (quantum_grant == 0)) return HL_NATIVE_ARGUMENT;
     if ((fault_publish == NULL) != (fault_unpublish == NULL)) return HL_NATIVE_ARGUMENT;
     if (source == NULL || !hl_a64_source_validate(source) ||
-        source->mapping_incarnation != request->mapping_epoch || memory_mode > HL_NATIVE_MEMORY_APERTURE ||
-        (projection != NULL &&
-         (!(memory_mode == HL_NATIVE_MEMORY_APERTURE
-                ? aperture_projection_valid(projection)
-                : hl_a64_projection_validate(projection)) ||
-          projection->mapping_incarnation != request->mapping_epoch)))
-        return HL_NATIVE_ARGUMENT;
-    if (memory_mode == HL_NATIVE_MEMORY_APERTURE &&
-        (projection == NULL || fault_publish == NULL || !executor->fixed_aperture))
+        source->mapping_incarnation != request->mapping_epoch ||
+        (projection != NULL && (!hl_a64_projection_validate(projection) ||
+                                projection->mapping_incarnation != request->mapping_epoch)))
         return HL_NATIVE_ARGUMENT;
     if ((memory_mode == 0) != (authority_generation == 0) ||
         (memory_mode == 0) != (authority_identity == 0)) return HL_NATIVE_ARGUMENT;
@@ -1216,28 +1165,15 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     if (expected_authority == 0) return HL_NATIVE_ARGUMENT;
     hl_native_status epoch_status = memory_mode == 0
         ? hl_native_synchronize_epoch(executor, source->mapping_incarnation, 0, 0, expected_authority)
-        : hl_native_synchronize_direct(executor, source->mapping_incarnation, 0, memory_mode,
+        : hl_native_synchronize_direct(executor, source->mapping_incarnation, 0,
                                        direct_token, authority_generation, authority_identity, projection);
     if (epoch_status != HL_NATIVE_OK) return epoch_status;
     if (projection != NULL) {
         const hl_a64_view *view = &projection->views[projection->active];
-        if (memory_mode == HL_NATIVE_MEMORY_APERTURE) {
-            /* This is an authenticated transform, not blanket R/W/X authority.
-             * Stores are authorized by host page protections; loads stay off
-             * the aperture path because canonical protections are not exact for
-             * guest execute-only/write-only pages. */
-            cpu->memory_first = view->guest_first;
-            cpu->memory_last = view->guest_last;
-            cpu->memory_delta = view->host_first - view->guest_first;
-            cpu->memory_permissions = 0;
-            cpu->memory_write_policy = view->write_policy;
-            cpu->memory_write_index = view->write_index;
-        } else if (!hl_a64_projection_resolve(projection, cpu, view->guest_first,
-                                              view->guest_last - view->guest_first,
-                                              view->permissions)) {
+        if (!hl_a64_projection_resolve(projection, cpu, view->guest_first,
+                                       view->guest_last - view->guest_first, view->permissions))
             return HL_NATIVE_ARGUMENT;
-        }
-        if (memory_mode != HL_NATIVE_MEMORY_APERTURE && HL_A64_RUN_VIEW_CACHE)
+        if (HL_A64_RUN_VIEW_CACHE)
             for (size_t index = projection->count;
                  index > 0 && operand_views.count < HL_A64_RUN_VIEW_COUNT; index--)
                 run_view_install(&operand_views, &projection->views[index - 1]);
@@ -1257,7 +1193,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
             if (memory_mode != 0 && !hl_native_direct_request_snapshot(
-                    executor, direct_token, authority_generation, authority_identity, memory_mode, projection,
+                    executor, direct_token, authority_generation, authority_identity, projection,
                     &direct_authority)) {
                 (void)hl_native_execution_leave(&execution);
                 return HL_STATE("direct authority snapshot refused");
@@ -1450,10 +1386,6 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         cpu->diagnostic_guard_fast = cpu->diagnostic_guard_full = cpu->diagnostic_guard_fallback = 0;
         cpu->diagnostic_dirty_reserved = cpu->diagnostic_dirty_overflow = cpu->diagnostic_dirty_committed = 0;
         cpu->diagnostic_dirty_merged = 0;
-        if (executor->diagnostics) {
-            cpu->diagnostic_aperture_scalar_attempts = 0;
-            cpu->diagnostic_aperture_hits = 0;
-        }
         hl_native_aarch64_enter(cpu, code.entry);
         /* dirty_overflow names the store site that saturated the ring, so that
          * site reserves from here on. The gate reads the CPU copy, so marking
@@ -1477,17 +1409,9 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             atomic_fetch_add_explicit(&executor->a64_dirty_overflow, cpu->diagnostic_dirty_overflow, memory_order_relaxed);
             atomic_fetch_add_explicit(&executor->a64_dirty_committed, cpu->diagnostic_dirty_committed, memory_order_relaxed);
             atomic_fetch_add_explicit(&executor->a64_dirty_merged, cpu->diagnostic_dirty_merged, memory_order_relaxed);
-            atomic_fetch_add_explicit(&executor->a64_aperture_scalar_attempts,
-                                      cpu->diagnostic_aperture_scalar_attempts,
-                                      memory_order_relaxed);
-            atomic_fetch_add_explicit(&executor->a64_aperture_hits,
-                                      cpu->diagnostic_aperture_hits,
-                                      memory_order_relaxed);
             cpu->diagnostic_guard_fast = cpu->diagnostic_guard_full = cpu->diagnostic_guard_fallback = 0;
             cpu->diagnostic_dirty_reserved = cpu->diagnostic_dirty_overflow = cpu->diagnostic_dirty_committed = 0;
             cpu->diagnostic_dirty_merged = 0;
-            cpu->diagnostic_aperture_scalar_attempts = 0;
-            cpu->diagnostic_aperture_hits = 0;
         }
         int executed_identity = 0;
         if ((cpu->execution_identity & 3u) == 1u) {
@@ -1718,8 +1642,7 @@ static hl_native_status run_inner(hl_native_executor *executor, hl_native_cpu *c
         uint64_t identity = request->size >= offsetof(hl_native_run_request, certificate)
             ? request->authority_identity : 0;
         if (!hl_native_direct_request_valid(executor, token, request->authority_generation,
-                                            identity, request->memory_mode,
-                                            request->projection)) {
+                                            identity, request->projection)) {
             (void)hl_native_execution_leave(&execution);
             return HL_STATE("run direct request invalid");
         }
