@@ -33,7 +33,7 @@ static void exec_forward_env(uint64_t envp_guest) {
         // Linux: NULL envp -> the new program runs with an EMPTY environment. Publish an empty, authoritative
         // env (do not leak stale initial HL_GUEST_ENV data) and flag it exact so build_stack adds
         // no defaults -> the guest sees envc==0, byte-exact with the native oracle.
-        hl_option_set("HL_GUEST_ENV", "", 1);
+        hl_process_guest_environment_set("");
         hl_option_set("HL_GUEST_ENV_ESC", "1", 1);
         hl_option_set("HL_GUEST_ENV_EXACT", "1", 1);
         return;
@@ -73,7 +73,7 @@ static void exec_forward_env(uint64_t envp_guest) {
         buf[len++] = '\n'; // HL_GUEST_ENV record separator (build_stack splits on '\n')
         buf[len] = 0;
     }
-    hl_option_set("HL_GUEST_ENV", buf, 1);
+    hl_process_guest_environment_set(buf);
     hl_option_set("HL_GUEST_ENV_ESC", "1", 1);   // tell build_stack the records are escape-encoded
     hl_option_set("HL_GUEST_ENV_EXACT", "1", 1); // guest-initiated exec: this env is authoritative, inject no defaults
     free(buf);

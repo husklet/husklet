@@ -34,6 +34,11 @@ int hl_options_unset(hl_options *options, const char *name);
 hl_options *hl_options_bind(hl_options *options);
 /* Production workers are process-isolated; this fallback is inherited by all of their threads. */
 hl_options *hl_options_bind_process(hl_options *options);
+/* Bind process-private runtime overrides. Missing values fall back to launch options. */
+hl_options *hl_options_bind_process_state(hl_options *options);
+const char *hl_process_guest_environment_get(void);
+int hl_process_guest_environment_set(const char *value);
+int hl_process_guest_environment_unset(void);
 
 /* Existing engine internals resolve through the scoped store. */
 const char *hl_option_get(const char *name);

@@ -2235,7 +2235,7 @@ static const char *xresolve_exec(const char *p, char *buf, size_t n) {
 // merged with any `docker run/exec -e PATH=` override -- the authoritative search path for bare commands.
 static void container_path_env(char *out, size_t n) {
     out[0] = 0;
-    const char *ge = hl_option_get("HL_GUEST_ENV");
+    const char *ge = hl_process_guest_environment_get();
     if (!ge) return;
     for (const char *s = ge; *s;) {
         const char *e = s;
@@ -3366,7 +3366,7 @@ static int proc_environ_text(char *b, size_t n) {
         memcpy(b, g_self_environ, (size_t)L);
         return L;
     }
-    const char *ge = hl_option_get("HL_GUEST_ENV");
+    const char *ge = hl_process_guest_environment_get();
     if (ge && ge[0]) {
         for (const char *s = ge; *s;) {
             const char *e = s;

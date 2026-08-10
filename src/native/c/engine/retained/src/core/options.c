@@ -75,6 +75,7 @@ static const hl_option_definition hl_option_definitions[] = {
 
 static _Thread_local hl_options *hl_bound_options;
 static hl_options *hl_process_options;
+static hl_options *hl_process_state;
 static _Thread_local hl_options hl_default_options;
 static _Thread_local int hl_default_options_ready;
 
@@ -244,6 +245,12 @@ hl_options *hl_options_bind_process(hl_options *options) {
     return previous;
 }
 
+hl_options *hl_options_bind_process_state(hl_options *options) {
+    hl_options *previous = hl_process_state;
+    hl_process_state = options;
+    return previous;
+}
+
 static hl_options *hl_options_current(void) {
     if (hl_bound_options != NULL) return hl_bound_options;
     if (hl_process_options != NULL) return hl_process_options;
@@ -270,6 +277,19 @@ int hl_option_set(const char *name, const char *value, int overwrite) {
 
 int hl_option_unset(const char *name) {
     return hl_options_unset(hl_options_current(), name);
+}
+
+const char *hl_process_guest_environment_get(void) {
+    const char *value = hl_options_get(hl_process_state, "HL_GUEST_ENV");
+    return value != NULL ? value : hl_option_get("HL_GUEST_ENV");
+}
+
+int hl_process_guest_environment_set(const char *value) {
+    return hl_options_set(hl_process_state != NULL ? hl_process_state : hl_options_current(), "HL_GUEST_ENV", value, 1);
+}
+
+int hl_process_guest_environment_unset(void) {
+    return hl_options_unset(hl_process_state != NULL ? hl_process_state : hl_options_current(), "HL_GUEST_ENV");
 }
 
 void hl_option_reset(void) {

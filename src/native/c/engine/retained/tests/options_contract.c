@@ -20,12 +20,26 @@ int main(void) {
     if (hl_options_get(&options, "HL_LOG") != NULL) goto done;
     {
         hl_options *previous = hl_options_bind_process(&options);
-        if (hl_option_set("HL_GUEST_ENV", "A=B", 1) != 0 ||
-            strcmp(hl_options_get(&options, "HL_GUEST_ENV"), "A=B") != 0 ||
-            hl_option_unset("HL_GUEST_ENV") != 0 || hl_options_get(&options, "HL_GUEST_ENV") != NULL) {
+        hl_options state;
+        hl_options *previous_state;
+        if (hl_options_set(&options, "HL_GUEST_ENV", "LAUNCH=1", 1) != 0 || hl_options_init(&state) != 0) {
             (void)hl_options_bind_process(previous);
             goto done;
         }
+        previous_state = hl_options_bind_process_state(&state);
+        if (strcmp(hl_option_get("HL_GUEST_ENV"), "LAUNCH=1") != 0 ||
+            hl_process_guest_environment_set("EXEC=1") != 0 ||
+            strcmp(hl_process_guest_environment_get(), "EXEC=1") != 0 ||
+            strcmp(hl_options_get(&options, "HL_GUEST_ENV"), "LAUNCH=1") != 0 ||
+            hl_process_guest_environment_unset() != 0 ||
+            strcmp(hl_process_guest_environment_get(), "LAUNCH=1") != 0) {
+            (void)hl_options_bind_process_state(previous_state);
+            hl_options_destroy(&state);
+            (void)hl_options_bind_process(previous);
+            goto done;
+        }
+        (void)hl_options_bind_process_state(previous_state);
+        hl_options_destroy(&state);
         (void)hl_options_bind_process(previous);
     }
     options.store_size++;

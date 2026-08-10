@@ -925,7 +925,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // the guest FIRST so they override the defaults, NOT the daemon/host environment. Then the built-in
     // defaults fill ONLY the keys the container didn't set.
     const char *estr[256];
-    const char *ge = hl_option_get("HL_GUEST_ENV");
+    const char *ge = hl_process_guest_environment_get();
     char *gecopy = NULL;
     // execve() escape-encodes records (HL_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
     // record separator -- unescape "\\n"->'\n' and "\\\\"->'\\' after splitting. The daemon-launch path sets

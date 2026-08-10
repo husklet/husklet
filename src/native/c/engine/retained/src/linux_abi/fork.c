@@ -209,7 +209,7 @@ static int hl_forkserver_guest_environment(char *const envv[]) {
         serialized[offset++] = '\n';
     }
     serialized[offset] = 0;
-    if (hl_option_set("HL_GUEST_ENV", serialized, 1) != 0) {
+    if (hl_process_guest_environment_set(serialized) != 0) {
         free(serialized);
         return -1;
     }

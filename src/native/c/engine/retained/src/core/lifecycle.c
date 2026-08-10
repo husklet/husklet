@@ -332,6 +332,7 @@ static int32_t hl_production_cold_entry(void *opaque) {
     hl_host_services services = {0};
     hl_linux_abi *box;
     hl_options options;
+    hl_options process_state;
     const unsigned char *bytes;
     size_t payload_size = 0;
     size_t shared_size = 0;
@@ -339,6 +340,7 @@ static int32_t hl_production_cold_entry(void *opaque) {
     const char *rootfs = NULL;
     const void *image = NULL;
     hl_options *previous;
+    hl_options *previous_state;
     hl_status status;
     uint64_t offset;
     uint32_t index;
@@ -386,7 +388,13 @@ static int32_t hl_production_cold_entry(void *opaque) {
         free(argv);
         return 71;
     }
+    if (hl_options_init(&process_state) != 0) {
+        hl_options_destroy(&options);
+        free(argv);
+        return 71;
+    }
     if (hl_host_windows_create(&native, &services) != HL_STATUS_OK) {
+        hl_options_destroy(&process_state);
         hl_options_destroy(&options);
         free(argv);
         return 71;
@@ -401,6 +409,7 @@ static int32_t hl_production_cold_entry(void *opaque) {
     atomic_store_explicit(&result_published, 0, memory_order_release);
 
     previous = hl_options_bind_process(&options);
+    previous_state = hl_options_bind_process_state(&process_state);
     /* The initialisers the target TU's constructors would run. They are
      * idempotent, and calling them explicitly removes this launch's dependence
      * on where in the constructor list this image's spawn hook happens to sit. */
@@ -411,7 +420,9 @@ static int32_t hl_production_cold_entry(void *opaque) {
     box = hl_production_cold_box(&services);
     result = hl_run_linux_guest(&services, box, rootfs, HL_HOST_HANDLE_INVALID, image, (size_t)header.image_size,
                                 header.argc, argv);
+    (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
+    hl_options_destroy(&process_state);
     hl_engine_child_result_publish(result, hl_run_linux_guest_status(), 0);
     return result;
 }
@@ -423,13 +434,22 @@ static int32_t hl_production_entry(void *opaque) {
     active_result = context->result;
     atomic_store_explicit(&result_published, 0, memory_order_release);
     hl_options *previous = hl_options_bind_process(context->options);
+    hl_options process_state;
+    hl_options *previous_state;
+    if (hl_options_init(&process_state) != 0) {
+        (void)hl_options_bind_process(previous);
+        return 71;
+    }
+    previous_state = hl_options_bind_process_state(&process_state);
     hl_host_handle executable =
         context->config->executable == NULL ? HL_HOST_HANDLE_INVALID : context->config->executable->host_handle;
     const hl_engine_executable *spec = context->config->executable;
     int32_t result = hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
                                         spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
                                         context->argc, (char *const *)(uintptr_t)context->argv);
+    (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
+    hl_options_destroy(&process_state);
     hl_engine_child_result_publish(result, hl_run_linux_guest_status(), 0);
     return result;
 }
