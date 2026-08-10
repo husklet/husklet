@@ -116,6 +116,12 @@ impl ProductionFactory {
             backend = "c",
             isa = ?request.isa
         );
+        hl_log::hl_log!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "execution.backend.selected=c isa={:?}",
+            request.isa
+        );
         Ok(ProductionMachine::C(CMachine {
             isa: request.isa,
             plan: request.plan.clone(),
@@ -224,7 +230,15 @@ mod tests {
         options::Options,
         runtime::Engine,
     };
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+
+    struct LogCapture(Arc<Mutex<String>>);
+
+    impl hl_log::Sink for LogCapture {
+        fn write_line(&self, line: &str) {
+            self.0.lock().unwrap().push_str(line);
+        }
+    }
 
     fn c_plan() -> RuntimePlan {
         let mut options = Options::default();
@@ -259,6 +273,20 @@ mod tests {
             Engine::from_plan(GuestIsa::X86_64, c_plan()),
             Err(EngineError::LaunchFailed)
         ));
+    }
+
+    #[test]
+    fn retained_backend_selection_is_operator_visible() {
+        let output = Arc::new(Mutex::new(String::new()));
+        hl_log::Output::global().set(Box::new(LogCapture(Arc::clone(&output))));
+        hl_log::Logging::global().set(hl_log::tag::EXEC);
+        hl_log::Logging::global().set_level(hl_log::Level::Info);
+
+        assert!(Engine::from_plan(GuestIsa::Aarch64, c_plan()).is_ok());
+
+        hl_log::Logging::global().set(hl_log::Tags::NONE);
+        hl_log::Output::global().reset();
+        assert!(output.lock().unwrap().contains("execution.backend.selected=c isa=Aarch64"));
     }
 
     #[test]
