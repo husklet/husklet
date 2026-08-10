@@ -56,25 +56,19 @@ fn main() {
     compile_group("hl_c_backend_lifecycle", "lifecycle_direct", &units, false);
 
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
-    println!("cargo:rustc-link-arg=-Wl,--start-group");
+    println!("cargo:rustc-link-search=native={}", output.display());
     for archive in [
         "hl_c_backend_shim",
         "hl_c_backend_target",
         "hl_c_backend_lifecycle",
         "hl_c_backend_runtime",
     ] {
-        println!(
-            "cargo:rustc-link-arg={}",
-            output.join(format!("lib{archive}.a")).display()
-        );
+        // Link directives propagate to binaries which depend on hl-engine;
+        // rustc-link-arg does not. Whole-archive also resolves the retained
+        // engine's intentional circular references without relying on final
+        // link-line ordering.
+        println!("cargo:rustc-link-lib=static:+whole-archive={archive}");
     }
-    println!("cargo:rustc-link-arg=-Wl,--end-group");
-    // Rust's native-library directives are placed before late link arguments;
-    // repeat the C runtime dependencies here so archive references resolve in
-    // the same order as the retained CMake link.
-    println!("cargo:rustc-link-arg=-latomic");
-    println!("cargo:rustc-link-arg=-lgcc");
-    println!("cargo:rustc-link-arg=-lc");
     for library in ["atomic", "dl", "m", "pthread"] {
         println!("cargo:rustc-link-lib={library}");
     }
