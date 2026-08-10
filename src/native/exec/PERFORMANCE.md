@@ -1,5 +1,13 @@
 # Native memory performance
 
+## Entry-point scope
+
+“Current Rust” and “Rust production” below name the Rust/native execution arm,
+not every packaged command's default. Linux/AArch64 `dockerd` and ordinary
+`testing runtime` launches currently default to retained C through
+`ProductionFactory`; forcing `HL_EXECUTION_BACKEND=rust` selects this arm. The
+packaged raw `hl-engine` family and signed macOS Husklet GUI use Rust.
+
 ## 2026-08-05 AArch64 source-window fallthrough
 
 The retained read-only audit covered `/Users/x/dd/engine/src/core/dispatch.c`

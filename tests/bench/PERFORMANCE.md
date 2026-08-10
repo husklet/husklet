@@ -1,5 +1,11 @@
 # Engine performance checkpoint
 
+`testing product-ab` explicitly constructs balanced retained-C and Rust arms;
+that does not mean the packaged raw `hl-engine`, `hl-aarch64`, or `hl-x86_64`
+CLI defaults to C. Those CLI entry points use `RustRuntimeFactory`.
+Linux/AArch64 `dockerd` and ordinary `testing runtime` currently default to C
+through `ProductionFactory`, while the signed macOS Husklet GUI uses Rust.
+
 ## 2026-08-10: product retained-C/Rust A/B
 
 Head `73e8c942c4931dd01b0fccced8be5f9cb570b669`, release ARM64 on the
