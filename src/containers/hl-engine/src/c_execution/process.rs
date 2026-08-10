@@ -343,7 +343,7 @@ fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) 
 
 #[cfg(test)]
 mod tests {
-    use super::{CWorker, ChildGuard, process_status_matches};
+    use super::{CWorker, ChildGuard, Startup, process_status_matches};
     use crate::c_execution::StreamBridge;
     use crate::engine::StopRequest;
     use crate::engine::{EngineExit, ExitKind};
@@ -351,7 +351,7 @@ mod tests {
     use std::os::unix::process::CommandExt;
     use std::os::unix::process::ExitStatusExt;
     use std::process::{Child, Command, Stdio};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Condvar, Mutex};
     use std::time::{Duration, Instant};
 
     fn exit(status: i32) -> EngineExit {
@@ -427,6 +427,8 @@ mod tests {
             writer: Arc::new(Mutex::new(control)),
             streams: Mutex::new(Some(StreamBridge::inherited())),
             exit: Mutex::new(None),
+            startup: Mutex::new(Startup::Started),
+            startup_changed: Condvar::new(),
         };
         worker.stop(StopRequest::Force).unwrap();
         let status = worker.child.lock().unwrap().as_mut().unwrap().wait().unwrap();
@@ -453,6 +455,8 @@ mod tests {
             writer: Arc::new(Mutex::new(control)),
             streams: Mutex::new(Some(StreamBridge::inherited())),
             exit: Mutex::new(None),
+            startup: Mutex::new(Startup::Started),
+            startup_changed: Condvar::new(),
         };
         drop(worker);
         assert_group_gone(process);
