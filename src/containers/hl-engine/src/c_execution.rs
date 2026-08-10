@@ -13,6 +13,8 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
+mod wire;
+
 const STATUS_OK: c_int = 0;
 const REQUEST_INTERRUPT: c_uint = 1;
 const REQUEST_FORCE_STOP: c_uint = 2;
@@ -40,17 +42,15 @@ fn c_option(name: &str) -> bool {
 }
 
 fn c_volume_path(value: &str) -> String {
-    value
-        .bytes()
-        .fold(String::new(), |mut output, byte| {
-            if matches!(byte, b'%' | b':' | b',') {
-                use std::fmt::Write as _;
-                write!(output, "%{byte:02X}").expect("writing to a String cannot fail");
-            } else {
-                output.push(char::from(byte));
-            }
-            output
-        })
+    value.bytes().fold(String::new(), |mut output, byte| {
+        if matches!(byte, b'%' | b':' | b',') {
+            use std::fmt::Write as _;
+            write!(output, "%{byte:02X}").expect("writing to a String cannot fail");
+        } else {
+            output.push(char::from(byte));
+        }
+        output
+    })
 }
 
 fn c_file_volumes(value: &str) -> Result<Vec<String>, EngineError> {
@@ -557,10 +557,7 @@ mod tests {
     fn exact_file_bindings_translate_to_retained_volume_records() {
         assert_eq!(
             c_file_volumes("ro:/host/a:b\t/etc/a,b\nrw:/host/c\t/run/c").unwrap(),
-            [
-                "v2:ro:/etc/a%2Cb:/host/a%3Ab",
-                "v2:rw:/run/c:/host/c",
-            ]
+            ["v2:ro:/etc/a%2Cb:/host/a%3Ab", "v2:rw:/run/c:/host/c",]
         );
     }
 
