@@ -56,6 +56,65 @@ materialization and release are recorded separately and excluded from totals.
 The staged worker build completed before arm timing, but warmed the host. Load
 average is visible only inside the LXC host and cannot exclude macOS-side load.
 
+### Controlled retained-C versus host-native Python
+
+A follow-up control asked how much of the Python result is engine overhead by
+running the same Python installation directly on the ARM64 Linux host. The
+source was the `python:3.12-alpine` materialization reported as
+`chain-ab8d...`; its Python executable was reported as `sha256:f8e41e59...`
+and its musl loader as `sha256:32377e6d...`. The orchestration log containing
+the full three digests was not preserved, so these prefixes are provenance
+leads, not exact identities. The exact retained-C guest/output identities are
+available in the product ledger: provenance
+`60a5296c7acc28e314acbf5465c88067297606495f344ba8d1b4893da6936887`
+and output
+`2cff6bc3f6fbdf0ffafccf23ec7c0df9fa4136e30737118caaab126d1b896c19`.
+Every direct-native arm produced the exact text `PYWORK 19999900000`.
+
+Each native invocation received a new disposable reflink of the materialized
+root rather than reusing a root mutated by Python. It entered that root as uid
+0, gid 0, cwd `/`, with an empty environment, captured and checked the output,
+then discarded the reflink. Six pairs alternated `A,B / B,A`. The second take,
+which included a per-invocation root sequence in its fourth column, is retained
+at `/var/tmp/husklet-native-python-disposable2-8065.tsv`, SHA-256
+`223399480db9e406d0e22a50602336ccfd3865a8a9d3dd0ab10c7a1c6906f6dd`:
+
+| round | first arm, us | second arm, us |
+|---:|---:|---:|
+| 0 (`A,B`) | 32,523 | 31,353 |
+| 1 (`B,A`) | 31,114 | 32,823 |
+| 2 (`A,B`) | 32,632 | 32,780 |
+| 3 (`B,A`) | 32,033 | 32,438 |
+| 4 (`A,B`) | 32,284 | 32,176 |
+| 5 (`B,A`) | 32,274 | 31,871 |
+
+The independent balanced native/null take is
+`/var/tmp/husklet-native-python-null-8065.tsv`, SHA-256
+`ee1466a9d2abba46a9e516528cca5bc739cd44427f494aaf5fa8c7a25657ed5f`.
+Its A values were `33,605 29,125 29,729 29,675 29,169 29,170` us and its B
+values were `29,614 29,450 28,892 30,862 28,878 28,840` us. Their medians are
+29,422.5 and 29,171 us, an A/B ratio of **1.009**. Position/order noise is
+therefore about one percent at the median, not the tenfold engine gap.
+
+The fastest controlled native observation was 31,114 us. Against the fastest
+retained-C execution observation of 315,064 us in `python-work.tsv`, the
+best-to-best ratio is `315064 / 31114 = 10.126`: retained C is **at least
+10.126x host-native** under that minimum comparison. This does not contradict
+the 86.2x Rust/C result; it places C between native execution and Rust and shows
+that C itself still carries substantial userspace-engine overhead.
+
+Limitations: the direct arm bypasses container creation, attach/start, virtual
+kernel services and teardown, so only its Python process interval is comparable
+to the product ledger's `execution_us`. The source/Python/musl full digests and
+the orchestration transcript are missing, and the two surviving native TSVs do
+not encode cwd, credentials, environment or output identity themselves; those
+facts are reported protocol, not self-authenticating ledger fields. The files
+are host-local generated evidence, not repository contents. A reusable
+`product-native-control` command was considered but not added: safely encoding
+reflink publication and cleanup, chroot/cwd, credentials, empty environment,
+bounded output verification, balanced arms and a create-new durable ledger is
+a separate execution harness, not a small reuse of `product-ab`.
+
 ## 2026-08-08: BENCH-MAP-4 re-take after the scheduler, store-protocol and signal fixes
 
 Head `3315d2a046b7` on `refactor/merge-rust-engine`, release build, Linux ARM64
