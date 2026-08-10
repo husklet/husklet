@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Explicitly anchors the lifecycle object when the retained backend is linked
+ * from static archives. The function is idempotent and replaces reliance on
+ * linker-specific constructor extraction. */
+extern void hl_target_register_backend(void);
+
 typedef struct hl_c_backend {
     hl_host_linux *host;
     hl_host_services services;
@@ -26,6 +31,7 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, hl_c_backend **out
         return status;
     }
     memset(&config, 0, sizeof(config));
+    hl_target_register_backend();
     config.abi = HL_ENGINE_ABI;
     config.size = sizeof(config);
     config.guest_isa = isa;
