@@ -1,5 +1,61 @@
 # Engine performance checkpoint
 
+## 2026-08-10: product retained-C/Rust A/B
+
+Head `73e8c942c4931dd01b0fccced8be5f9cb570b669`, release ARM64 on the
+18-logical-CPU Linux host. The product scheduler prepared and materialized each
+rootfs once, then ran six balanced pairs in `C,R / R,C` order. It validated the
+same output identity on all 12 invocations. Measurement intent was acquired
+before the quiet check; the run observed 120 continuous quiet seconds, then held
+the exclusive box lock for both benchmarks. Load average was `0.23 1.03 1.32`
+at lock acquisition and `1.04 1.12 1.31` after completion.
+
+The staged runner was
+`sha256:539b74ee193d6a2df072fadf014bb4e9754a3c50c3abaaf5e2fa3af5a4222765`;
+the sibling `hl-aarch64` worker actually used was
+`sha256:8976fd33e029a16f2b8e2f95dd325adfb0c396e8234b95cc115cad0044e0c354`.
+Local ledgers are under
+`target/testing/product-ab/73e8c942c-20260810-201430/`: `lifecycle.tsv`
+(`sha256:542bdccbebc7f93445263044cf1f3325b8e242b1079fe71a44f3bc3cb4fe759b`)
+and `python-work.tsv`
+(`sha256:da71b137961985e5445a4df0c34bf273781f437b446e1c48aeec8511cb033535`).
+They and the staged binaries are ignored generated evidence, not repository
+contents.
+
+Values are minimum / median microseconds over six samples per backend. Ratios
+are Rust divided by retained C; values below one favour Rust.
+
+| workload | metric | retained C min / median | Rust min / median | Rust/C min / median |
+|---|---|---:|---:|---:|
+| lifecycle `/bin/true` | setup | 812 / 910.5 | 847 / 1,607.5 | 1.043 / 1.766 |
+| lifecycle `/bin/true` | execution | 10,504 / 11,387.5 | 4,347 / 5,773.5 | 0.414 / 0.507 |
+| lifecycle `/bin/true` | teardown | 675 / 702.5 | 636 / 698.5 | 0.942 / 0.994 |
+| lifecycle `/bin/true` | **total** | **12,497 / 12,966** | **6,461 / 8,185.5** | **0.517 / 0.631** |
+| Python `work` | setup | 971 / 1,003.5 | 972 / 1,654.5 | 1.001 / 1.649 |
+| Python `work` | execution | 315,064 / 331,209 | 25,221,284 / 28,542,743.5 | 80.051 / 86.177 |
+| Python `work` | teardown | 683 / 770 | 709 / 762 | 1.038 / 0.990 |
+| Python `work` | **total** | **316,795 / 332,975** | **25,223,933 / 28,544,594** | **79.622 / 85.726** |
+
+The result is sharply workload-dependent. Rust is about **1.58x faster** on the
+tiny lifecycle total, where fixed process machinery dominates. On the realistic
+Python work case, retained C is about **85.7x faster** median total; the gap is
+entirely guest execution (`86.2x`), while teardown is at parity.
+
+**Corrected attribution:** before arm context was added, the diagnostic printed
+only `Construction(Start)` and was incorrectly attributed to the first C arm.
+`strace` proved C exited with code 0 and the second, Rust arm failed. Commit
+`73e8c942c` names round, position and backend on every arm error; this completed
+run confirms both backends pass after the rootfs executable-symlink fix.
+
+Limits: this is one ARM64 take on two rootfs workloads, not an x86 result and not
+a sqlite/malloc phase map. It has no separate base/base null arm, although both
+backends are selected by the same runner binary over the same prepared rootfs,
+which removes cross-build guest and runner-layout drift. Per-arm setup is
+create/attach/start and teardown is output-read/remove; shared image
+materialization and release are recorded separately and excluded from totals.
+The staged worker build completed before arm timing, but warmed the host. Load
+average is visible only inside the LXC host and cannot exclude macOS-side load.
+
 ## 2026-08-08: BENCH-MAP-4 re-take after the scheduler, store-protocol and signal fixes
 
 Head `3315d2a046b7` on `refactor/merge-rust-engine`, release build, Linux ARM64
