@@ -7,11 +7,14 @@ use clap::Args;
 use std::{
     fs::OpenOptions,
     io::{BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    process::Stdio,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 const LEDGER_IDENTITY: &str = "husklet-product-ab-v1";
+const STAGED: &str = "HL_PRODUCT_AB_STAGED";
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -42,6 +45,9 @@ fn parse_rounds(value: &str) -> Result<u32, String> {
 
 pub(crate) async fn run(options: Options) -> Result<(), Error> {
     let workspace = runtime::workspace()?;
+    if std::env::var_os(STAGED).is_none() {
+        return stage_and_reexec(&workspace, options.target).await;
+    }
     let directory = workspace.join("tests/bench").join(&options.benchmark);
     let benchmark = Arc::new(Benchmark::load(&directory, &directory.join("test.yaml"))?);
     let case_index = benchmark
@@ -71,6 +77,108 @@ pub(crate) async fn run(options: Options) -> Result<(), Error> {
         result_path.display()
     );
     Ok(())
+}
+
+async fn stage_and_reexec(workspace: &Path, target: Target) -> Result<(), Error> {
+    let worker = worker_name(target);
+    let profile = crate::runtime::profile::PROFILE;
+    let mut build = tokio::process::Command::new(env!("CARGO"));
+    build
+        .current_dir(workspace)
+        .args(["build", "-p", "engine", "--bin", worker]);
+    if profile == "release" {
+        build.arg("--release");
+    }
+    let status = build.status().await?;
+    if !status.success() {
+        return Err(format!("building product A/B worker {worker} failed with {status}").into());
+    }
+
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let artifacts = workspace
+        .join("target/testing/product-ab/artifacts")
+        .join(format!("{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(
+        artifacts
+            .parent()
+            .ok_or("product A/B artifact directory has no parent")?,
+    )?;
+    std::fs::create_dir(&artifacts)?;
+    let source_runner = std::env::current_exe()?;
+    let source_worker = workspace.join("target").join(profile).join(worker);
+    let staged_runner = artifacts.join("testing");
+    let staged_worker = artifacts.join(worker);
+
+    // Keep the two copies in distinct completed phases. A worker is never observed while
+    // either source or destination is still changing.
+    copy_artifact(source_runner.clone(), staged_runner.clone()).await?;
+    copy_artifact(source_worker.clone(), staged_worker.clone()).await?;
+    smoke(&staged_runner, Some("--help"), &[0]).await?;
+    // With no guest argument the architecture worker deliberately returns its
+    // bounded usage status. Reaching that status proves the copied ELF executes.
+    smoke(&staged_worker, None, &[64]).await?;
+    let runner_identity = crate::record::FramedIdentity::of_file(&staged_runner)?;
+    let worker_identity = crate::record::FramedIdentity::of_file(&staged_worker)?;
+    eprintln!(
+        "product-ab: artifacts={} runner_sha256={} worker={} worker_sha256={}",
+        artifacts.display(),
+        runner_identity,
+        worker,
+        worker_identity
+    );
+
+    let status = tokio::process::Command::new(&staged_runner)
+        .args(std::env::args_os().skip(1))
+        .env(STAGED, "1")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("staged product A/B runner failed with {status}").into())
+    }
+}
+
+async fn copy_artifact(source: PathBuf, destination: PathBuf) -> Result<(), Error> {
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        std::fs::copy(&source, &destination).map_err(|error| error.to_string())?;
+        let permissions = std::fs::metadata(&source)
+            .map_err(|error| error.to_string())?
+            .permissions();
+        std::fs::set_permissions(&destination, permissions).map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .await?
+    .map_err(|error| -> Error { error.into() })?;
+    Ok(())
+}
+
+async fn smoke(executable: &Path, argument: Option<&str>, expected: &[i32]) -> Result<(), Error> {
+    let mut command = tokio::process::Command::new(executable);
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if let Some(argument) = argument {
+        command.arg(argument);
+    }
+    let status = command.status().await?;
+    if status.code().is_some_and(|code| expected.contains(&code)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "staged product A/B artifact {} failed smoke run with {status}",
+            executable.display()
+        )
+        .into())
+    }
+}
+
+const fn worker_name(target: Target) -> &'static str {
+    match target {
+        Target::Arm64 => "hl-aarch64",
+        Target::Amd64 => "hl-x86_64",
+    }
 }
 
 struct Ledger {
@@ -156,7 +264,8 @@ impl Ledger {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ledger, parse_rounds};
+    use super::{Ledger, parse_rounds, worker_name};
+    use crate::suite::Target;
 
     #[test]
     fn rounds_must_balance_first_position() {
@@ -172,5 +281,11 @@ mod tests {
         let path = directory.path().join("result.tsv");
         let _first = Ledger::create(&path).unwrap();
         assert!(Ledger::create(&path).is_err());
+    }
+
+    #[test]
+    fn staged_worker_matches_the_exact_guest_architecture() {
+        assert_eq!(worker_name(Target::Arm64), "hl-aarch64");
+        assert_eq!(worker_name(Target::Amd64), "hl-x86_64");
     }
 }
