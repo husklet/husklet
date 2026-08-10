@@ -1,5 +1,8 @@
 #![allow(unsafe_code)]
 
+#[allow(dead_code)]
+pub(crate) mod control;
+
 use crate::activation::GuestIsa;
 use crate::composition::RuntimeServices;
 use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
