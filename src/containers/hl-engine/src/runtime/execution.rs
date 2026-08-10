@@ -3,18 +3,18 @@ use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::runtime_machine::{RustRuntimeFactory, RustRuntimeMachine};
 use hl_runtime::RuntimeAssemblyConfig;
 use std::sync::Arc;
-#[cfg(feature = "c-execution")]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 use std::sync::Mutex;
 
 type RustMachine = RustRuntimeMachine<crate::native::GuestExecutor>;
 
 pub(super) enum ProductionMachine {
     Rust(RustMachine),
-    #[cfg(feature = "c-execution")]
+    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
     C(CMachine),
 }
 
-#[cfg(feature = "c-execution")]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 pub(super) struct CMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launch_plan::RuntimeLaunchPlan,
@@ -22,13 +22,13 @@ pub(super) struct CMachine {
     execution: Mutex<CExecutionState>,
 }
 
-#[cfg(feature = "c-execution")]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 struct CExecutionState {
     prepared: Option<Arc<crate::c_execution::CGuestExecutor>>,
     current: Option<Arc<crate::c_execution::CGuestExecutor>>,
 }
 
-#[cfg(feature = "c-execution")]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 impl CMachine {
     fn start(&self) -> Result<(), EngineError> {
         let execution = {
@@ -59,49 +59,62 @@ impl CMachine {
 
 pub(super) struct ProductionFactory;
 
+impl ProductionFactory {
+    fn rust(request: RuntimeConstruction<'_>) -> Result<ProductionMachine, CompositionError> {
+        hl_log::hl_event!(
+            hl_log::tag::EXEC,
+            hl_log::Level::Info,
+            "execution.backend.selected",
+            backend = "rust",
+            isa = ?request.isa
+        );
+        RustRuntimeFactory::new(
+            Arc::new(crate::native::GuestExecutor::default()),
+            Arc::new(super::Services),
+            RuntimeAssemblyConfig::default(),
+        )
+        .construct(request)
+        .map(ProductionMachine::Rust)
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+    fn c(request: RuntimeConstruction<'_>) -> Result<ProductionMachine, CompositionError> {
+        if request.isa != crate::activation::GuestIsa::Aarch64
+            || request.plan.options.get("HL_CHECKPOINT").is_some()
+            || request.plan.options.get("HL_RESTORE").is_some()
+        {
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        crate::c_execution::CGuestExecutor::create(request.isa, request.plan, request.services)
+            .map(|execution| {
+                ProductionMachine::C(CMachine {
+                    isa: request.isa,
+                    plan: request.plan.clone(),
+                    services: request.services.clone(),
+                    execution: Mutex::new(CExecutionState {
+                        prepared: Some(Arc::new(execution)),
+                        current: None,
+                    }),
+                })
+            })
+            .map_err(|_| CompositionError::RuntimeConstruction)
+    }
+}
+
 impl RuntimeFactory for ProductionFactory {
     type Machine = ProductionMachine;
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
         match request.plan.options.get("HL_EXECUTION_BACKEND") {
-            None | Some("rust") => {
-                hl_log::hl_event!(
-                    hl_log::tag::EXEC,
-                    hl_log::Level::Info,
-                    "execution.backend.selected",
-                    backend = "rust",
-                    isa = ?request.isa
-                );
-                RustRuntimeFactory::new(
-                    Arc::new(crate::native::GuestExecutor::default()),
-                    Arc::new(super::Services),
-                    RuntimeAssemblyConfig::default(),
-                )
-                .construct(request)
-                .map(ProductionMachine::Rust)
-            }
-            #[cfg(feature = "c-execution")]
-            Some("c") => {
-                if request.isa != crate::activation::GuestIsa::Aarch64
-                    || request.plan.options.get("HL_CHECKPOINT").is_some()
-                    || request.plan.options.get("HL_RESTORE").is_some()
-                {
-                    return Err(CompositionError::RuntimeConstruction);
-                }
-                crate::c_execution::CGuestExecutor::create(request.isa, request.plan, request.services)
-                    .map(|execution| {
-                        ProductionMachine::C(CMachine {
-                            isa: request.isa,
-                            plan: request.plan.clone(),
-                            services: request.services.clone(),
-                            execution: Mutex::new(CExecutionState {
-                                prepared: Some(Arc::new(execution)),
-                                current: None,
-                            }),
-                        })
-                    })
-                    .map_err(|_| CompositionError::RuntimeConstruction)
-            }
+            Some("rust") => Self::rust(request),
+            #[cfg(not(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution")))]
+            None => Self::rust(request),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            None if request.isa == crate::activation::GuestIsa::Aarch64 => Self::c(request),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            None => Self::rust(request),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            Some("c") => Self::c(request),
             Some(_) => Err(CompositionError::RuntimeConstruction),
         }
     }
@@ -111,7 +124,7 @@ impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
         match self {
             Self::Rust(machine) => machine.start(),
-            #[cfg(feature = "c-execution")]
+            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
             Self::C(machine) => machine.start(),
         }
     }
@@ -119,7 +132,7 @@ impl GuestMachine for ProductionMachine {
     fn wait(&self) -> Result<EngineExit, EngineError> {
         match self {
             Self::Rust(machine) => machine.wait(),
-            #[cfg(feature = "c-execution")]
+            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
             Self::C(machine) => Ok(machine.current()?.exit()),
         }
     }
@@ -127,7 +140,7 @@ impl GuestMachine for ProductionMachine {
     fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
         match self {
             Self::Rust(machine) => machine.stop(request),
-            #[cfg(feature = "c-execution")]
+            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
             Self::C(machine) => machine.current()?.stop_request(request),
         }
     }
@@ -135,7 +148,7 @@ impl GuestMachine for ProductionMachine {
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         match self {
             Self::Rust(machine) => machine.checkpoint_supported(),
-            #[cfg(feature = "c-execution")]
+            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
             Self::C(_) => Err(EngineError::Unsupported),
         }
     }
@@ -143,13 +156,13 @@ impl GuestMachine for ProductionMachine {
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         match self {
             Self::Rust(machine) => machine.capture_checkpoint(),
-            #[cfg(feature = "c-execution")]
+            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
             Self::C(_) => Err(EngineError::Unsupported),
         }
     }
 }
 
-#[cfg(all(test, feature = "c-execution"))]
+#[cfg(all(test, target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 mod tests {
     use crate::{
         activation::GuestIsa,

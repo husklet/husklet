@@ -64,7 +64,7 @@ pub mod native_launcher {
         ProcessLauncher as NativeLauncher, ProcessWorkspace as NativeWorkspace, Selection as NativeSelection,
     };
 }
-#[cfg(all(target_os = "linux", feature = "c-execution"))]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 mod c_execution;
 pub mod options;
 pub mod program;

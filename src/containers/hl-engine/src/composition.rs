@@ -75,12 +75,12 @@ struct RuntimeTerminalBridge {
     workers: Vec<JoinHandle<()>>,
 }
 
-#[cfg(unix)]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 pub(crate) trait NativeTerminalWindowNotification: Send + Sync {
     fn resize(&self, master: &std::fs::File, rows: u16, columns: u16) -> Result<(), CompositionError>;
 }
 
-#[cfg(unix)]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 struct NativeTerminalBridge {
     master: Option<std::fs::File>,
     window_notification: Arc<dyn NativeTerminalWindowNotification>,
@@ -89,7 +89,7 @@ struct NativeTerminalBridge {
 
 enum AttachedTerminal {
     Runtime(RuntimeTerminalBridge),
-    #[cfg(unix)]
+    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
     Native(NativeTerminalBridge),
 }
 
@@ -225,7 +225,7 @@ impl Terminal {
         Ok(())
     }
 
-    #[cfg(unix)]
+    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
     pub(crate) fn attach_native(
         &self,
         master: std::fs::File,
@@ -298,7 +298,7 @@ impl Terminal {
                     bridge.window_notification.changed()?;
                 }
             }
-            #[cfg(unix)]
+            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
             AttachedTerminal::Native(bridge) => {
                 let master = bridge.master.as_ref().ok_or(CompositionError::RuntimeConstruction)?;
                 bridge.window_notification.resize(master, rows, columns)?;
@@ -320,7 +320,7 @@ impl Terminal {
                         let _ = worker.join();
                     }
                 }
-                #[cfg(unix)]
+                #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
                 AttachedTerminal::Native(mut bridge) => {
                     drop(bridge.master.take());
                     for worker in bridge.workers {

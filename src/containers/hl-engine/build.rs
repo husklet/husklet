@@ -21,10 +21,10 @@ fn main() {
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo supplies CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo supplies CARGO_CFG_TARGET_ARCH");
-    assert!(
-        target_os == "linux" && target_arch == "aarch64",
-        "the retained C execution backend currently supports only Linux/AArch64 (target is {target_arch}-{target_os})"
-    );
+    if target_os != "linux" || target_arch != "aarch64" {
+        println!("cargo:warning=retained C backend unavailable for {target_arch}-{target_os}; using Rust execution");
+        return;
+    }
 
     println!("cargo:rerun-if-changed={C_ENGINE}/shim.c");
     println!("cargo:rerun-if-changed={C_ENGINE}/executable_authority.c");

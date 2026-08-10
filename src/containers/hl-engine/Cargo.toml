@@ -46,7 +46,8 @@ name = "hl_engine"
 path = "src/lib.rs"
 
 [features]
+default = ["c-execution"]
 # Counts host heap allocations per native crossing; see `native::allocations`.
 alloc-count = []
-# Experimental coarse execution backend embedding the retained runtime archives.
+# Production Linux/AArch64 execution backend. Other targets compile the Rust path.
 c-execution = ["hl-native/c-coexist"]

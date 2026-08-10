@@ -544,8 +544,7 @@ mod tests {
             activation: Arc::new(Channel),
             checkpoint_sink: None,
             checkpoint_source: None,
-            streams: StandardStreams::new(Cursor::new(Vec::new()), Vec::new(), Vec::new())
-                .with_terminal(terminal),
+            streams: StandardStreams::new(Cursor::new(Vec::new()), Vec::new(), Vec::new()).with_terminal(terminal),
         };
         let bridge = StreamBridge::new(&services).unwrap();
         let descriptors = bridge.descriptors();
