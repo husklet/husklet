@@ -1,0 +1,12 @@
+image: alpine:3.20
+execution: { native: true, diagnostics: false }
+build:
+  source: main.c
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2, -std=gnu11]
+cases:
+  - id: signal-identity
+    warmups: 0
+    samples: 1
+    timeout: 30
+    expect: { stdout_contains: golden/output.txt }

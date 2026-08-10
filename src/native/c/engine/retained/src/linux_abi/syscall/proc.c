@@ -2231,7 +2231,6 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 // shared execve path still compiles into the aarch64 unity (R_REPSTR is x86 cpu.h-only)
         g_nonpie_blob_code = 0; // reset; load_elf re-sets it iff the new main image carries the V8 blob
 #endif
-        g_go_image = 0; // reset; load_elf re-sets it iff the new main image is a Go image
         p = xpath;
         for (int i = 0; i < ac && i < HL_MAXARGV - 1; i++)
             argv[i] = xargv[i];

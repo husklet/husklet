@@ -3,7 +3,7 @@
 #include "page.h"
 #include "elf_protect.h" // the loader's protection contract, shared with linux_abi/x86.c
 #include "image.h"
-#include "goimage.h"
+
 
 // ---------------- minimal ELF loader (load segments HIGH; PC-relative stays valid) ----------------
 static uint16_t rd16(const uint8_t *p) {
@@ -869,12 +869,6 @@ static void load_elf(const char *path, struct loaded *out) {
     out->phdr = nonpie ? ((uint64_t)base + phoff - bias) : ((uint64_t)base + phoff);
     out->phent = phentsize;
     out->phnum = phnum;
-    // INTERIM: latch whether this is a Go image so signal delivery can auto-suppress Go's async-preempt
-    // SIGURG for it (os/linux/signal.c, g_go_image). OR (never clear): load_elf runs for the main image THEN
-    // the ld.so interpreter -- the interp is never Go, so '|=' keeps a main-image match from being clobbered
-    // by the interp load. execve resets g_go_image to 0 before re-loading (proc.c) so a later non-Go image
-    // starts clean. See the detailed rationale in signal.c.
-    g_go_image |= elf_is_go_image(f, image.size);
     hl_linux_image_release(&image);
 }
 
