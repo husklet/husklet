@@ -43,6 +43,27 @@ impl Worker {
             isa = isa
         );
         let arguments = std::env::args().collect::<Vec<_>>();
+        if arguments.get(1).map(String::as_str) == Some("--c-worker") {
+            let descriptor = |name: &str| {
+                let value = std::env::var(name).ok()?;
+                (!value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit()))
+                    .then(|| value.parse::<i32>().ok())
+                    .flatten()
+                    .filter(|value| *value >= 3)
+            };
+            let status = match (descriptor("HL_C_PLAN_FD"), descriptor("HL_C_CONTROL_FD")) {
+                (Some(plan), Some(control)) if plan != control => hl_engine::retained_worker::run(plan, control)
+                    .unwrap_or_else(|error| {
+                        eprintln!("{}: retained worker failed: {error:?}", guest.program());
+                        error.status()
+                    }),
+                _ => {
+                    eprintln!("{}: retained worker descriptors are invalid", guest.program());
+                    64
+                }
+            };
+            std::process::exit(status);
+        }
         let mut environment = hl_engine::environment::BootstrapEnvironment::capture(std::env::vars());
         let authority = descriptor(environment.take_authority_descriptor());
         let health = descriptor(environment.take_authority_health());

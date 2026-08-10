@@ -8,6 +8,7 @@ use std::ffi::CString;
 use std::io::{Read, Seek, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
+use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -63,6 +64,9 @@ impl CWorker {
         // SAFETY: the child performs only async-signal-safe dup2 calls before immediate exec.
         unsafe {
             command.pre_exec(move || {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 if libc::dup2(plan_raw, PLAN_DESCRIPTOR) < 0 || libc::dup2(control_raw, CONTROL_DESCRIPTOR) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -89,6 +93,10 @@ impl CWorker {
         let mut reader = self.reader.lock().map_err(|_| EngineError::Synchronization)?;
         let ready = read_message(&mut reader)?;
         if ready != Message::Ready {
+            hl_log::hl_error!(
+                hl_log::tag::EXEC,
+                "retained C worker failed before start: message={ready:?}"
+            );
             return Err(EngineError::LaunchFailed);
         }
         let mut writer = self.writer.lock().map_err(|_| EngineError::Synchronization)?;
@@ -100,9 +108,19 @@ impl CWorker {
             return Ok(exit);
         }
         let mut reader = self.reader.lock().map_err(|_| EngineError::Synchronization)?;
-        let message = read_message(&mut reader)?;
+        let message = match read_message(&mut reader) {
+            Ok(message) => message,
+            Err(_) => {
+                drop(reader);
+                return self.reap_without_frame();
+            }
+        };
         drop(reader);
         let Message::Exit(exit) = message else {
+            hl_log::hl_error!(
+                hl_log::tag::EXEC,
+                "retained C worker failed while running: message={message:?}"
+            );
             return Err(EngineError::WaitFailed);
         };
         let status = self
@@ -114,6 +132,10 @@ impl CWorker {
             .wait()
             .map_err(|_| EngineError::WaitFailed)?;
         if !status.success() && status.code() != Some(crate::program::Program::exit_status(exit)) {
+            hl_log::hl_error!(
+                hl_log::tag::EXEC,
+                "retained C worker process status disagrees with exit: process={status:?} exit={exit:?}"
+            );
             return Err(EngineError::WaitFailed);
         }
         *self.exit.lock().map_err(|_| EngineError::Synchronization)? = Some(exit);
@@ -123,7 +145,44 @@ impl CWorker {
 
     pub(crate) fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
         let mut writer = self.writer.lock().map_err(|_| EngineError::Synchronization)?;
-        write_message(&mut writer, Message::Stop(request))
+        write_message(&mut writer, Message::Stop(request))?;
+        drop(writer);
+        if request == StopRequest::Force {
+            let process = self
+                .child
+                .lock()
+                .map_err(|_| EngineError::Synchronization)?
+                .as_ref()
+                .map(Child::id)
+                .ok_or(EngineError::StopFailed)?;
+            let process = i32::try_from(process).map_err(|_| EngineError::StopFailed)?;
+            // SAFETY: the worker created a new session and process group whose id is its pid.
+            if unsafe { libc::kill(-process, libc::SIGKILL) } != 0 {
+                return Err(EngineError::StopFailed);
+            }
+        }
+        Ok(())
+    }
+
+    fn reap_without_frame(&self) -> Result<EngineExit, EngineError> {
+        let status = self
+            .child
+            .lock()
+            .map_err(|_| EngineError::Synchronization)?
+            .as_mut()
+            .ok_or(EngineError::WaitFailed)?
+            .wait()
+            .map_err(|_| EngineError::WaitFailed)?;
+        let signal = status.signal().ok_or(EngineError::WaitFailed)?;
+        let exit = EngineExit {
+            kind: crate::engine::ExitKind::Signal,
+            guest_status: signal,
+            detail: 0,
+            fault: None,
+        };
+        *self.exit.lock().map_err(|_| EngineError::Synchronization)? = Some(exit);
+        drop(self.streams.lock().map_err(|_| EngineError::Synchronization)?.take());
+        Ok(exit)
     }
 }
 
