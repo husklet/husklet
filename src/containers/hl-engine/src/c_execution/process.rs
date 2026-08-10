@@ -10,7 +10,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 const PLAN_DESCRIPTOR: i32 = 3;
@@ -23,6 +23,15 @@ pub(crate) struct CWorker {
     writer: Arc<Mutex<std::os::unix::net::UnixStream>>,
     streams: Mutex<Option<StreamBridge>>,
     exit: Mutex<Option<EngineExit>>,
+    startup: Mutex<Startup>,
+    startup_changed: Condvar,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Startup {
+    Starting,
+    Started,
+    Failed,
 }
 
 struct WorkerTerminalNotification {
@@ -95,10 +104,24 @@ impl CWorker {
             writer,
             streams: Mutex::new(Some(streams)),
             exit: Mutex::new(None),
+            startup: Mutex::new(Startup::Starting),
+            startup_changed: Condvar::new(),
         })
     }
 
     pub(crate) fn start(&self) -> Result<(), EngineError> {
+        let result = self.start_inner();
+        let mut startup = self.startup.lock().map_err(|_| EngineError::Synchronization)?;
+        *startup = if result.is_ok() {
+            Startup::Started
+        } else {
+            Startup::Failed
+        };
+        self.startup_changed.notify_all();
+        result
+    }
+
+    fn start_inner(&self) -> Result<(), EngineError> {
         let mut reader = self.reader.lock().map_err(|_| EngineError::Synchronization)?;
         let ready = read_message(&mut reader)?;
         if ready != Message::Ready {
@@ -150,6 +173,15 @@ impl CWorker {
     }
 
     pub(crate) fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
+        let startup = self.startup.lock().map_err(|_| EngineError::Synchronization)?;
+        let startup = self
+            .startup_changed
+            .wait_while(startup, |state| *state == Startup::Starting)
+            .map_err(|_| EngineError::Synchronization)?;
+        if *startup == Startup::Failed {
+            return Err(EngineError::Exited);
+        }
+        drop(startup);
         let mut writer = self.writer.lock().map_err(|_| EngineError::Synchronization)?;
         let requested = write_message(&mut writer, Message::Stop(request));
         drop(writer);
