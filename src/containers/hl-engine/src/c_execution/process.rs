@@ -311,9 +311,16 @@ fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) 
 
 #[cfg(test)]
 mod tests {
-    use super::process_status_matches;
+    use super::{CWorker, ChildGuard, process_status_matches};
+    use crate::c_execution::StreamBridge;
+    use crate::engine::StopRequest;
     use crate::engine::{EngineExit, ExitKind};
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::process::CommandExt;
     use std::os::unix::process::ExitStatusExt;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     fn exit(status: i32) -> EngineExit {
         EngineExit {
@@ -332,5 +339,103 @@ mod tests {
         assert!(process_status_matches(&seven, exit(7)));
         assert!(!process_status_matches(&success, exit(7)));
         assert!(!process_status_matches(&seven, exit(0)));
+    }
+
+    fn session_child(script: &str, stdout: Stdio) -> Child {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(script).stdout(stdout);
+        // SAFETY: setsid is async-signal-safe, retains no storage, and cannot unwind.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+        command.spawn().unwrap()
+    }
+
+    fn group_exists(process: u32) -> bool {
+        let process = i32::try_from(process).unwrap();
+        // SAFETY: signal zero performs only an existence/permission probe.
+        if unsafe { libc::kill(-process, 0) } == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
+    fn assert_group_gone(process: u32) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while group_exists(process) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!group_exists(process), "worker process group {process} leaked");
+    }
+
+    #[test]
+    fn post_spawn_failure_guard_reaps_the_worker() {
+        let child = session_child("exec sleep 60", Stdio::null());
+        let process = child.id();
+        drop(ChildGuard(Some(child)));
+        assert_group_gone(process);
+    }
+
+    #[test]
+    fn force_stop_survives_a_broken_control_channel() {
+        let child = session_child("exec sleep 60", Stdio::null());
+        let process = child.id();
+        let (control, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let reader = control.try_clone().unwrap();
+        drop(peer);
+        let worker = CWorker {
+            child: Mutex::new(Some(child)),
+            reader: Mutex::new(reader),
+            writer: Arc::new(Mutex::new(control)),
+            streams: Mutex::new(Some(StreamBridge::inherited())),
+            exit: Mutex::new(None),
+        };
+        worker.stop(StopRequest::Force).unwrap();
+        let status = worker.child.lock().unwrap().as_mut().unwrap().wait().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        assert_group_gone(process);
+    }
+
+    #[test]
+    fn dropping_worker_kills_its_descendant_process_group() {
+        let mut child = session_child("sleep 60 & echo $!; wait", Stdio::piped());
+        let process = child.id();
+        let descendant = {
+            let mut line = String::new();
+            BufReader::new(child.stdout.take().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            line.trim().parse::<i32>().unwrap()
+        };
+        let (control, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let reader = control.try_clone().unwrap();
+        let worker = CWorker {
+            child: Mutex::new(Some(child)),
+            reader: Mutex::new(reader),
+            writer: Arc::new(Mutex::new(control)),
+            streams: Mutex::new(Some(StreamBridge::inherited())),
+            exit: Mutex::new(None),
+        };
+        drop(worker);
+        assert_group_gone(process);
+        // The descendant may briefly remain as an init-owned zombie, but it must no longer be
+        // signalable as a live process after the private group receives SIGKILL.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            // SAFETY: signal zero is an existence probe for the child-reported positive pid.
+            let status = unsafe { libc::kill(descendant, 0) };
+            let gone = status != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if gone || Instant::now() >= deadline {
+                assert!(gone, "worker descendant {descendant} leaked");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
