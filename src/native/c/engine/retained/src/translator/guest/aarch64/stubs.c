@@ -181,8 +181,27 @@ static void emit_ibranch_ip2_ready(int rn, int ready) {
     emit32(0);
     uint32_t *p_bhit = (uint32_t *)g_cp;
     emit32(0xD503201Fu);
+    uint32_t *hash = (uint32_t *)g_cp;
+    // The direct per-site patch is deliberately suppressed after an RWX mapping
+    // or SMC observation.  Keep the compact stolen-register path useful in that
+    // mode by falling through to the invalidatable shared IBTC before exiting.
+    e_stur(rn, 31, -32);
+    emit32(0xD3424400u | ((unsigned)rn << 5) | (unsigned)other); // ubfx other,rn,#2,#16
+    emit_ibtcptr(rn);
+    emit32(0x8B000000u | ((unsigned)other << 16) | (4u << 10) | ((unsigned)rn << 5) | (unsigned)rn);
+    e_ldp(other, rn, rn, 0); // {slot.target, slot.body}
+    e_stur(rn, 31, -40);
+    e_ldur(rn, 31, -32);
+    emit32(0xCB000000u | ((unsigned)rn << 16) | ((unsigned)other << 5) | (unsigned)other);
+    uint32_t *p_hash_miss = (uint32_t *)g_cp;
+    emit32(0);
+    e_ldur(rn, 31, -40);
+    e_br(rn);
     uint32_t *miss = (uint32_t *)g_cp;
-    if (ready) e_str(rn, CPUREG, OFF_PC);
+    if (ready) {
+        e_ldur(rn, 31, -32);
+        e_str(rn, CPUREG, OFF_PC);
+    }
     emit_spill();
     if (!ready) {
         e_ldr(9, CPUREG, rn * 8);
@@ -202,7 +221,10 @@ static void emit_ibranch_ip2_ready(int rn, int ready) {
     *(uint64_t *)g_cp = (uint64_t)((uint8_t *)p_bhit - g_cache);
     g_cp += 8;
     *p_ldrt = 0x58000000u | (((uint32_t)((Lt - (uint8_t *)p_ldrt) / 4) & 0x7FFFFu) << 5) | (unsigned)other;
-    *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_cbnz) / 4) & 0x7FFFFu) << 5) | (unsigned)other;
+    *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)hash - (uint8_t *)p_cbnz) / 4) & 0x7FFFFu) << 5) | (unsigned)other;
+    *p_hash_miss = 0xB5000000u |
+                   (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_hash_miss) / 4) & 0x7FFFFu) << 5) |
+                   (unsigned)other;
     int64_t ao = Lt - (uint8_t *)p_adr;
     *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)(ao >> 2) & 0x7FFFFu) << 5) | 9u;
     pc_record_icsite(Lt);
