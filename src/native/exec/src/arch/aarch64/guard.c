@@ -67,6 +67,8 @@ static uint64_t overflow_report(const hl_a64_assembler *assembler, uint64_t pc) 
 
 static void compare_zero(hl_a64_assembler *assembler, uint32_t *instruction,
                          const uint8_t *target, int reg);
+static void compare_not_zero(hl_a64_assembler *assembler, uint32_t *instruction,
+                             const uint8_t *target, int reg);
 
 /* x30 carries the remaining budget across the whole native run.  The view scans
  * and the archive subroutine borrow it, so they publish it first and recover it
@@ -128,6 +130,13 @@ static void compare_zero(hl_a64_assembler *assembler, uint32_t *instruction,
     int64_t words;
     if (!patch_offset(assembler, instruction, target, 19u, &words)) return;
     *instruction = 0x34000000u | (((uint32_t)words & 0x7ffffu) << 5) | (uint32_t)reg;
+}
+
+static void compare_not_zero(hl_a64_assembler *assembler, uint32_t *instruction,
+                             const uint8_t *target, int reg) {
+    int64_t words;
+    if (!patch_offset(assembler, instruction, target, 19u, &words)) return;
+    *instruction = 0x35000000u | (((uint32_t)words & 0x7ffffu) << 5) | (uint32_t)reg;
 }
 
 static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target);
@@ -548,6 +557,14 @@ static void test(hl_a64_assembler *assembler, uint32_t *instruction,
                    (((uint32_t)words & 0x3fffu) << 5) | (reg & 31u);
 }
 
+static void test_not(hl_a64_assembler *assembler, uint32_t *instruction,
+                     const uint8_t *target, unsigned bit, unsigned reg) {
+    int64_t words;
+    if (!patch_offset(assembler, instruction, target, 14u, &words)) return;
+    *instruction = 0x37000000u | ((bit & 0x20u) << 26) | ((bit & 31u) << 19) |
+                   (((uint32_t)words & 0x3fffu) << 5) | (reg & 31u);
+}
+
 static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target) {
     int64_t words;
     if (!patch_offset(assembler, instruction, target, 26u, &words)) return;
@@ -808,6 +825,59 @@ void hl_a64_guard_direct_begin(hl_a64_assembler *assembler, uint64_t bytes, uint
     guard->bytes = bytes;
 }
 
+void hl_a64_guard_aperture_attempt(hl_a64_assembler *assembler) {
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu,
+                                                   diagnostic_aperture_scalar_attempts));
+}
+
+void hl_a64_guard_aperture_begin(hl_a64_assembler *assembler, uint64_t bytes,
+                                 uint32_t required, hl_a64_guard *guard) {
+    guard->aperture = 1;
+    guard->required = required;
+    guard->bytes = bytes;
+    /* The fixed authenticated range is exactly [0,1GiB). Shifting by 30
+     * rejects every address outside it without changing guest NZCV. A
+     * same-page access that starts inside that prefix cannot end outside it,
+     * because the upper boundary is itself 4KiB-aligned. */
+    hl_a64_emit32(assembler, UINT32_C(0xd35efe11)); /* lsr x17,x16,#30 */
+    guard->below = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0); /* cbnz x17,miss */
+    if (bytes > 1) {
+        hl_a64_addi(assembler, 17, 16, (unsigned)bytes - 1u);
+        hl_a64_emit32(assembler, UINT32_C(0xca100231)); /* eor x17,x17,x16 */
+        guard->overflow = (uint32_t *)assembler->cursor;
+        hl_a64_emit32(assembler, 0); /* tbnz x17,#12,miss */
+    }
+    /* An exact load resolver may have replaced the ordinary active bounds
+     * since this trace entered. Republish the authenticated aperture journal
+     * owner. Its retained lease guarantees every resolved view has this same
+     * guest-to-host delta, so the run-local CPU delta remains invariant. */
+    hl_a64_movz(assembler, 17, 0, 0);
+    hl_a64_str(assembler, 17, CPU, OFFSET_FIRST);
+    hl_a64_str(assembler, 17, CPU, OFFSET_PERMISSIONS);
+    hl_a64_str(assembler, 17, CPU, OFFSET_WRITE_INDEX);
+    hl_a64_movconst(assembler, 17, HL_NATIVE_APERTURE_MAX_BYTES);
+    hl_a64_str(assembler, 17, CPU, OFFSET_LAST);
+    hl_a64_movconst(assembler, 17, HL_NATIVE_WRITE_EXACT);
+    hl_a64_str(assembler, 17, CPU, OFFSET_WRITE_POLICY);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DELTA);
+    hl_a64_emit32(assembler, UINT32_C(0x8b110210)); /* add x16,x16,x17 */
+}
+
+void hl_a64_guard_aperture_reject(hl_a64_assembler *assembler, uint64_t bytes,
+                                  uint32_t required, hl_a64_guard *guard) {
+    guard->aperture = 2;
+    guard->required = required;
+    guard->bytes = bytes;
+    guard->below = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0); /* unconditional cold fallback */
+}
+
+void hl_a64_guard_aperture_hit(hl_a64_assembler *assembler) {
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu,
+                                                   diagnostic_aperture_hits));
+}
+
 void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard) {
     /* Placeholder patchers write directly, unlike bounded instruction
      * emission.  A failed begin may therefore leave a placeholder at the
@@ -815,6 +885,32 @@ void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard)
     if (!hl_a64_assembler_ok(assembler)) return;
     if (guard == NULL) {
         assembler->failed = 1;
+        return;
+    }
+    if (guard->aperture != 0) {
+        if (guard->below == NULL || guard->required == 0 || guard->bytes == 0 ||
+            (guard->aperture != 1 && guard->aperture != 2)) {
+            assembler->failed = 1;
+            return;
+        }
+        uint8_t *miss = assembler->cursor;
+        if (guard->aperture == 1) {
+            compare_not_zero(assembler, guard->below, miss, 17);
+            if (guard->overflow != NULL) test_not(assembler, guard->overflow, miss, 12u, 17u);
+        } else {
+            branch(assembler, guard->below, miss);
+        }
+        hl_a64_str(assembler, 16, CPU, OFFSET_FAULT_ADDRESS);
+        hl_a64_movconst(assembler, 17, guard->required);
+        hl_a64_str(assembler, 17, CPU, OFFSET_FAULT_ACCESS);
+        hl_a64_movconst(assembler, 17, guard->bytes);
+        hl_a64_str(assembler, 17, CPU, OFFSET_FAULT_SIZE);
+        hl_a64_movconst(assembler, 17, guard->completed);
+        hl_a64_str(assembler, 17, CPU, OFFSET_FAULT_COMPLETED);
+        diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu,
+                                                       diagnostic_guard_fallback));
+        hl_a64_stub_publish_execution_identity(assembler);
+        hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_FALLBACK, guard->pc);
         return;
     }
     if (guard->below == NULL) {

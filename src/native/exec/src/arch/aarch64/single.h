@@ -12,5 +12,8 @@ int hl_a64_single_body(hl_a64_assembler *, uint32_t, uint64_t, hl_a64_guard *, h
 int hl_a64_single_direct_body(hl_a64_assembler *, uint32_t, uint64_t,
                               const hl_native_direct_authority *, hl_a64_guard *,
                               hl_a64_memory_sites *);
+int hl_a64_single_aperture_body(hl_a64_assembler *, uint32_t, uint64_t,
+                                const hl_native_direct_authority *, hl_a64_guard *,
+                                hl_a64_memory_sites *);
 
 #endif

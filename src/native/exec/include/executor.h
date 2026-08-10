@@ -19,12 +19,19 @@
 #define HL_NATIVE_A64_RUNTIME_WRITE_RESERVE 32u
 #define HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE 64u
 #define HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT 128u
+#define HL_NATIVE_A64_FIXED_APERTURE 256u
 /* Store sites fold into this many saturation slots. A collision only reserves
  * for a site that did not need it, which is slow and never wrong. The slot
  * travels in dirty_overflow as slot+2, so 1 stays "saturated, site unknown"
  * and every value still means "publish the whole window" to its consumers. */
 #define HL_NATIVE_A64_SATURATION_SLOTS 62u
 #define HL_NATIVE_WRITE_EXACT 1u
+/* An aperture authority authenticates only one run-local guest-to-host address
+ * transform. It is deliberately disjoint from READ/WRITE/EXECUTE permission
+ * bits: guest access authority remains with the mapping ledger and host MMU. */
+#define HL_NATIVE_ACCESS_APERTURE 8u
+#define HL_NATIVE_MEMORY_APERTURE UINT64_C(2)
+#define HL_NATIVE_APERTURE_MAX_BYTES (UINT64_C(1) << 30)
 
 typedef uint64_t hl_native_handle;
 
@@ -159,6 +166,11 @@ typedef struct hl_native_diagnostics {
     uint64_t x86_dirty_overflow;
     uint64_t x86_write_cache_hit;
     uint64_t x86_write_cache_miss;
+    /* Executed ordinary scalar 1/2/4/8-byte candidates only. Pair, vector,
+     * ordered, and atomic forms are excluded and must not be inferred from the
+     * attempts/hits ratio. Loads contribute attempts but never aperture hits. */
+    uint64_t a64_aperture_scalar_attempts;
+    uint64_t a64_aperture_hits;
 } hl_native_diagnostics;
 
 typedef enum hl_native_change_kind {
@@ -443,7 +455,9 @@ _Static_assert(offsetof(hl_native_diagnostics, x86_public_epochs) == 448,
                "native diagnostics epoch extension drifted");
 _Static_assert(offsetof(hl_native_diagnostics, ibtc_authenticated_entries) == 520,
                "native diagnostics append offset drifted");
-_Static_assert(sizeof(hl_native_diagnostics) == 608, "native diagnostics ABI drifted");
+_Static_assert(offsetof(hl_native_diagnostics, a64_aperture_scalar_attempts) == 608,
+               "native aperture diagnostics append offset drifted");
+_Static_assert(sizeof(hl_native_diagnostics) == 624, "native diagnostics ABI drifted");
 _Static_assert(sizeof(hl_native_change) == 40, "native change ABI drifted");
 _Static_assert(sizeof(hl_native_fault) == 40, "native fault ABI drifted");
 _Static_assert(sizeof(hl_native_address) == 24, "native address ABI drifted");

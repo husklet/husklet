@@ -624,10 +624,14 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
      * immutable for its lifetime, so this bit is part of that cache's
      * translation identity. Ordinary builders always leave emission unchanged. */
     assembler.diagnostics = diagnostics != 0;
-    assembler.write_reserve = write_reserve != 0;
-    assembler.write_commit = write_commit != 0;
-    assembler.runtime_write_reserve = runtime_write_reserve != 0;
-    assembler.dirty_overflow_continue = dirty_overflow_continue != 0;
+    int aperture = authority != NULL && authority->permissions == HL_NATIVE_ACCESS_APERTURE;
+    /* Aperture stores promise an exact journal. They therefore always reserve
+     * before the store and exit before saturation, independent of the legacy
+     * executor-wide conservative-overflow controls. */
+    assembler.write_reserve = aperture || write_reserve != 0;
+    assembler.write_commit = aperture || write_commit != 0;
+    assembler.runtime_write_reserve = aperture ? 0 : runtime_write_reserve != 0;
+    assembler.dirty_overflow_continue = aperture ? 0 : dirty_overflow_continue != 0;
     hl_a64_stub_prologue(&assembler);
     output->body_offset = hl_a64_assembler_size(&assembler);
     hl_a64_stub_budget_begin(&assembler, pc, &budget_guard);
@@ -720,6 +724,8 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             break;
         }
         if (!body(&assembler, planned_words[index], instruction) &&
+            !hl_a64_single_aperture_body(&assembler, planned_words[index], instruction, authority,
+                                         &guards[guard_count], &memory_sites) &&
             !hl_a64_single_direct_body(&assembler, planned_words[index], instruction, authority,
                                        &guards[guard_count], &memory_sites) &&
             !hl_a64_zero_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&
