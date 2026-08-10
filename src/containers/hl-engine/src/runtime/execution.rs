@@ -59,6 +59,25 @@ impl CMachine {
 
 pub(super) struct ProductionFactory;
 
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[derive(Clone, Copy)]
+enum CUnsupported {
+    GuestIsa,
+    Checkpoint,
+    Restore,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+impl CUnsupported {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::GuestIsa => "guest_isa",
+            Self::Checkpoint => "checkpoint",
+            Self::Restore => "restore",
+        }
+    }
+}
+
 impl ProductionFactory {
     fn rust(request: RuntimeConstruction<'_>) -> Result<ProductionMachine, CompositionError> {
         hl_log::hl_event!(
@@ -79,10 +98,15 @@ impl ProductionFactory {
 
     #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
     fn c(request: RuntimeConstruction<'_>) -> Result<ProductionMachine, CompositionError> {
-        if request.isa != crate::activation::GuestIsa::Aarch64
-            || request.plan.options.get("HL_CHECKPOINT").is_some()
-            || request.plan.options.get("HL_RESTORE").is_some()
-        {
+        if let Some(reason) = Self::c_unsupported(&request) {
+            hl_log::hl_event!(
+                hl_log::tag::EXEC,
+                hl_log::Level::Error,
+                "execution.backend.rejected",
+                backend = "c",
+                isa = ?request.isa,
+                reason = reason.name()
+            );
             return Err(CompositionError::RuntimeConstruction);
         }
         hl_log::hl_event!(
@@ -102,6 +126,19 @@ impl ProductionFactory {
             }),
         }))
     }
+
+    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+    fn c_unsupported(request: &RuntimeConstruction<'_>) -> Option<CUnsupported> {
+        if request.isa != crate::activation::GuestIsa::Aarch64 {
+            Some(CUnsupported::GuestIsa)
+        } else if request.plan.options.get("HL_CHECKPOINT").is_some() {
+            Some(CUnsupported::Checkpoint)
+        } else if request.plan.options.get("HL_RESTORE").is_some() {
+            Some(CUnsupported::Restore)
+        } else {
+            None
+        }
+    }
 }
 
 impl RuntimeFactory for ProductionFactory {
@@ -113,9 +150,21 @@ impl RuntimeFactory for ProductionFactory {
             #[cfg(not(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution")))]
             None => Self::rust(request),
             #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
-            None if request.isa == crate::activation::GuestIsa::Aarch64 => Self::c(request),
-            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
-            None => Self::rust(request),
+            None => match Self::c_unsupported(&request) {
+                None => Self::c(request),
+                Some(reason) => {
+                    hl_log::hl_event!(
+                        hl_log::tag::EXEC,
+                        hl_log::Level::Info,
+                        "execution.backend.fallback",
+                        preferred = "c",
+                        selected = "rust",
+                        isa = ?request.isa,
+                        reason = reason.name()
+                    );
+                    Self::rust(request)
+                }
+            },
             #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
             Some("c") => Self::c(request),
             Some(_) => Err(CompositionError::RuntimeConstruction),
@@ -213,18 +262,46 @@ mod tests {
     }
 
     #[test]
-    fn retained_backend_rejects_active_checkpoint_policy() {
+    fn product_default_falls_back_to_rust_for_uncompiled_guest_isa() {
         let mut plan = c_plan();
-        plan.options.set("HL_RESTORE", "1", true).unwrap();
-        assert!(matches!(
-            Engine::with_checkpoint(
-                GuestIsa::Aarch64,
-                plan,
-                StandardStreams::default(),
-                Arc::new(Store),
-                Arc::new(Store),
-            ),
-            Err(EngineError::LaunchFailed)
-        ));
+        plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
+        assert!(Engine::from_plan(GuestIsa::X86_64, plan).is_ok());
+    }
+
+    #[test]
+    fn retained_backend_rejects_active_checkpoint_policy() {
+        for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
+            let mut plan = c_plan();
+            plan.options.set(option, "1", true).unwrap();
+            assert!(matches!(
+                Engine::with_checkpoint(
+                    GuestIsa::Aarch64,
+                    plan,
+                    StandardStreams::default(),
+                    Arc::new(Store),
+                    Arc::new(Store),
+                ),
+                Err(EngineError::LaunchFailed)
+            ));
+        }
+    }
+
+    #[test]
+    fn product_default_falls_back_to_rust_for_checkpoint_policy() {
+        for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
+            let mut plan = c_plan();
+            plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
+            plan.options.set(option, "1", true).unwrap();
+            assert!(
+                Engine::with_checkpoint(
+                    GuestIsa::Aarch64,
+                    plan,
+                    StandardStreams::default(),
+                    Arc::new(Store),
+                    Arc::new(Store),
+                )
+                .is_ok()
+            );
+        }
     }
 }
