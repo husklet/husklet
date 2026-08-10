@@ -141,6 +141,7 @@ static int jit_cache_init(void) {
 // Dispatcher profiling is one state object. Compatibility aliases keep the wider profiling/reporting
 // code source-compatible while that ownership is progressively narrowed.
 static hl_dispatch_profile g_dispatch_profile;
+static uint64_t g_service_ns;
 #define g_prof (g_dispatch_profile.enabled)
 #define g_prof_cross (g_dispatch_profile.crossings)
 #define g_prof_xlate (g_dispatch_profile.translations)

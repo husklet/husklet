@@ -147,6 +147,11 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
+        "HL_C_DIAGNOSTICS",
+        "report retained C translation and dispatch phase counters at launch exit",
+        Flag
+    ),
+    launch!(
         "HL_NATIVE_EXECUTION",
         "enable the bounded native execution adapter",
         Flag

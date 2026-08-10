@@ -985,7 +985,8 @@ static int engine_global_init(void) {
     g_systrace = 0;
     g_dbg_nochain = 0;
     g_dbg_gprdump = 0;
-    g_prof = 0;
+    g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
+    g_service_ns = 0;
     g_no_stw_reclaim = 0;
     g_steal1617 = 1;
     g_noibslim = 0;
