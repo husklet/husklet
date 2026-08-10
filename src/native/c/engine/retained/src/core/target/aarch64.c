@@ -46,6 +46,7 @@
 #include "hl/engine.h"
 #include "hl/linux_abi.h"
 #include "hl/log.h"
+#include "hl/syscall_trap.h"
 #include "../launch.h"
 #include "../options.h"
 #include "../cli.h"
@@ -62,6 +63,16 @@ static hl_target_services g_target_services;
 #define g_jit_services (g_target_services.bound)
 static hl_status g_engine_result_status;
 static hl_linux_abi *g_linux_box;
+static void *g_syscall_trap_context;
+static hl_syscall_trap_fn g_syscall_trap_dispatch;
+
+void hl_target_syscall_trap_install(void *context, hl_syscall_trap_fn dispatch) {
+    g_syscall_trap_context = context;
+    g_syscall_trap_dispatch = dispatch;
+}
+
+struct cpu;
+static int hl_target_syscall_trap(struct cpu *c);
 static int jit_guest_soft_activate(void);
 static void jit_guest_soft_restore_activate(void);
 static void jit_guest_soft_restore_deactivate(void);
@@ -76,6 +87,44 @@ static uint64_t g_host_launch_monotonic_ns;
 static void filemap_refresh_emulated(uint64_t lo, uint64_t hi);
 
 #include "../../translator/guest/aarch64/cpu.h"
+static int hl_target_syscall_trap(struct cpu *c) {
+    hl_syscall_cpu_aarch64 snapshot;
+    hl_syscall_trap_result result;
+    int32_t status;
+    if (g_syscall_trap_dispatch == NULL) return 0;
+    memset(&snapshot, 0, sizeof(snapshot));
+    snapshot.abi = HL_SYSCALL_TRAP_ABI;
+    snapshot.size = sizeof(snapshot);
+    memcpy(snapshot.x, c->x, sizeof(snapshot.x));
+    snapshot.sp = c->sp;
+    snapshot.pc = c->pc;
+    snapshot.tls = c->tls;
+    snapshot.nzcv = c->nzcv;
+    memset(&result, 0, sizeof(result));
+    result.abi = HL_SYSCALL_TRAP_ABI;
+    result.size = sizeof(result);
+    status = g_syscall_trap_dispatch(g_syscall_trap_context, HL_GUEST_ISA_AARCH64, &snapshot, &result);
+    if (status != 0 || result.abi != HL_SYSCALL_TRAP_ABI || result.size < sizeof(result) ||
+        result.outcome == HL_SYSCALL_TRAP_DECLINED)
+        return 0;
+    memcpy(c->x, snapshot.x, sizeof(snapshot.x));
+    c->sp = snapshot.sp;
+    c->pc = snapshot.pc;
+    c->tls = snapshot.tls;
+    c->nzcv = snapshot.nzcv;
+    if (result.outcome == HL_SYSCALL_TRAP_EXIT) {
+        c->exited = 1;
+        c->exit_code = result.exit_status;
+    } else if (result.outcome == HL_SYSCALL_TRAP_FAULT) {
+        c->exited = 1;
+        c->exit_code = 127;
+    } else if (result.outcome == HL_SYSCALL_TRAP_REPLACE_IMAGE) {
+        c->redirect = 1;
+    } else if (result.outcome != HL_SYSCALL_TRAP_CONTINUE) {
+        return 0;
+    }
+    return 1;
+}
 #include "../../translator/guest/aarch64/signal.h"
 #include "../../translator/guest/aarch64/abi.h" // the cpu interface os/linux/ is written against
 #define HL_GUEST_STAT_SIZE HL_LINUX_STAT_AARCH64_SIZE

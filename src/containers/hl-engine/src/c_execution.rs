@@ -24,6 +24,94 @@ const STATUS_OK: c_int = 0;
 const REQUEST_INTERRUPT: c_uint = 1;
 const REQUEST_FORCE_STOP: c_uint = 2;
 const REQUEST_SIGNAL: c_uint = 3;
+const SYSCALL_TRAP_ABI: u32 = 1;
+const SYSCALL_TRAP_DECLINED: u32 = 0;
+const SYSCALL_TRAP_CONTINUE: u32 = 1;
+const SYSCALL_TRAP_EXIT: u32 = 2;
+const SYSCALL_TRAP_FAULT: u32 = 3;
+const SYSCALL_TRAP_REPLACE_IMAGE: u32 = 4;
+
+#[repr(C)]
+struct CSyscallCpuAarch64 {
+    abi: u32,
+    size: u32,
+    x: [u64; 31],
+    sp: u64,
+    pc: u64,
+    tls: u64,
+    nzcv: u64,
+}
+
+#[repr(C)]
+struct CSyscallTrapResult {
+    abi: u32,
+    size: u32,
+    outcome: u32,
+    exit_status: i32,
+    image_generation: u64,
+}
+
+struct CSyscallTrapContext {
+    trap: Option<Arc<dyn hl_runtime::RuntimeSyscallTrap>>,
+}
+
+unsafe extern "C" fn c_syscall_trap(
+    context: *mut c_void,
+    architecture: c_uint,
+    cpu: *mut CSyscallCpuAarch64,
+    result: *mut CSyscallTrapResult,
+) -> c_int {
+    if context.is_null() || cpu.is_null() || result.is_null() {
+        return -1;
+    }
+    let cpu = unsafe { &mut *cpu };
+    let result = unsafe { &mut *result };
+    if cpu.abi != SYSCALL_TRAP_ABI || cpu.size < std::mem::size_of::<CSyscallCpuAarch64>() as u32 {
+        return -1;
+    }
+    result.abi = SYSCALL_TRAP_ABI;
+    result.size = std::mem::size_of::<CSyscallTrapResult>() as u32;
+    result.outcome = SYSCALL_TRAP_DECLINED;
+    let context = unsafe { &*(context.cast::<CSyscallTrapContext>()) };
+    let Some(trap) = context.trap.as_deref() else {
+        return 0;
+    };
+    if architecture != GuestIsa::Aarch64 as c_uint {
+        return -1;
+    }
+    let mut state = hl_execution::Aarch64CpuState {
+        registers: cpu.x,
+        sp: cpu.sp,
+        pc: cpu.pc,
+        tls: cpu.tls,
+        nzcv: hl_execution::Nzcv::from_bits(cpu.nzcv as u32),
+        ..Default::default()
+    };
+    let mut snapshot = hl_execution::ExecutionCpuSnapshot::Aarch64(state.clone());
+    let outcome = trap.dispatch(hl_isa::GuestArchitecture::Aarch64, &mut snapshot);
+    let hl_execution::ExecutionCpuSnapshot::Aarch64(updated) = snapshot else {
+        return -1;
+    };
+    state = updated;
+    cpu.x = state.registers;
+    cpu.sp = state.sp;
+    cpu.pc = state.pc;
+    cpu.tls = state.tls;
+    cpu.nzcv = u64::from(state.nzcv.bits());
+    match outcome {
+        hl_runtime::RuntimeTrapOutcome::Continue => result.outcome = SYSCALL_TRAP_CONTINUE,
+        hl_runtime::RuntimeTrapOutcome::ReplaceImage { generation } => {
+            result.outcome = SYSCALL_TRAP_REPLACE_IMAGE;
+            result.image_generation = generation;
+        }
+        hl_runtime::RuntimeTrapOutcome::Exit(status) => {
+            result.outcome = SYSCALL_TRAP_EXIT;
+            result.exit_status = status;
+        }
+        hl_runtime::RuntimeTrapOutcome::Fault => result.outcome = SYSCALL_TRAP_FAULT,
+    }
+    0
+}
 
 fn c_option(name: &str) -> bool {
     !matches!(
@@ -42,6 +130,7 @@ fn c_option(name: &str) -> bool {
             | "HL_NATIVE_DIRECT_STICKY_PERMANENT"
             | "HL_NATIVE_EXECUTION"
             | "HL_NATIVE_SPLIT_MODE_EXECUTORS"
+            | "HL_C_SYSCALL_TRAP_DECLINE"
             | "HL_SECCOMP_BASELINE"
     )
 }
@@ -86,6 +175,10 @@ unsafe extern "C" {
         option_names: *const *const c_char,
         option_values: *const *const c_char,
         standard_fds: *const c_int,
+        syscall_context: *mut c_void,
+        syscall_dispatch: Option<
+            unsafe extern "C" fn(*mut c_void, c_uint, *mut CSyscallCpuAarch64, *mut CSyscallTrapResult) -> c_int,
+        >,
         output: *mut *mut c_void,
     ) -> c_int;
     fn hl_c_backend_run(backend: *mut c_void, argc: c_int, argv: *const *const c_char) -> c_int;
@@ -111,6 +204,7 @@ pub(crate) struct CGuestExecutor {
     handle: NonNull<c_void>,
     terminal_handle: Arc<Mutex<Option<usize>>>,
     _streams: StreamBridge,
+    _syscall_trap: Box<CSyscallTrapContext>,
 }
 
 struct StreamBridge {
@@ -408,6 +502,9 @@ impl CGuestExecutor {
             .collect::<Vec<_>>();
         let option_count = c_uint::try_from(option_records.len()).map_err(|_| EngineError::LaunchFailed)?;
         let mut handle = std::ptr::null_mut();
+        // The ABI is live now; syscall families are attached here as they move to hl-runtime.
+        let mut syscall_trap = Box::new(CSyscallTrapContext { trap: None });
+        let measure_declined_trap = plan.options.get("HL_C_SYSCALL_TRAP_DECLINE").is_some();
         let status = unsafe {
             hl_c_backend_create(
                 isa as c_uint,
@@ -420,6 +517,10 @@ impl CGuestExecutor {
                 option_names.as_ptr(),
                 option_values.as_ptr(),
                 standard_fds.as_ptr(),
+                measure_declined_trap
+                    .then_some((&mut *syscall_trap as *mut CSyscallTrapContext).cast())
+                    .unwrap_or(std::ptr::null_mut()),
+                measure_declined_trap.then_some(c_syscall_trap),
                 &raw mut handle,
             )
         };
@@ -452,6 +553,7 @@ impl CGuestExecutor {
             handle,
             terminal_handle,
             _streams: streams.unwrap_or_else(StreamBridge::inherited),
+            _syscall_trap: syscall_trap,
         })
     }
 
@@ -541,7 +643,10 @@ impl Drop for CGuestExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::{CGuestExecutor, StreamBridge, c_file_volumes, c_option};
+    use super::{
+        CGuestExecutor, CSyscallCpuAarch64, CSyscallTrapContext, CSyscallTrapResult, SYSCALL_TRAP_ABI,
+        SYSCALL_TRAP_DECLINED, StreamBridge, c_file_volumes, c_option, c_syscall_trap,
+    };
     use crate::activation::GuestIsa;
     use crate::composition::{
         ActivationChannel, CompositionError, RuntimeServices, StandardStreams, Terminal, TerminalPort,
@@ -549,6 +654,46 @@ mod tests {
     use std::io::{Cursor, Read, Seek, Write};
     use std::os::fd::FromRawFd;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn syscall_callback_abi_layout_is_stable() {
+        assert_eq!(std::mem::size_of::<CSyscallCpuAarch64>(), 288);
+        assert_eq!(std::mem::size_of::<CSyscallTrapResult>(), 24);
+        assert_eq!(SYSCALL_TRAP_ABI, 1);
+    }
+
+    #[test]
+    fn declined_syscall_callback_preserves_snapshot_for_c_fallback() {
+        let mut context = CSyscallTrapContext { trap: None };
+        let mut cpu = CSyscallCpuAarch64 {
+            abi: SYSCALL_TRAP_ABI,
+            size: std::mem::size_of::<CSyscallCpuAarch64>() as u32,
+            x: std::array::from_fn(|index| index as u64 * 17),
+            sp: 0x1234,
+            pc: 0x5678,
+            tls: 0x9abc,
+            nzcv: 0xf000_0000,
+        };
+        let before = (cpu.x, cpu.sp, cpu.pc, cpu.tls, cpu.nzcv);
+        let mut result = CSyscallTrapResult {
+            abi: 0,
+            size: 0,
+            outcome: u32::MAX,
+            exit_status: -1,
+            image_generation: u64::MAX,
+        };
+        let status = unsafe {
+            c_syscall_trap(
+                (&mut context as *mut CSyscallTrapContext).cast(),
+                GuestIsa::Aarch64 as u32,
+                &mut cpu,
+                &mut result,
+            )
+        };
+        assert_eq!(status, 0);
+        assert_eq!(result.outcome, SYSCALL_TRAP_DECLINED);
+        assert_eq!((cpu.x, cpu.sp, cpu.pc, cpu.tls, cpu.nzcv), before);
+    }
 
     #[derive(Clone)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -687,6 +832,44 @@ mod tests {
         let replacement = CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, None, [0, 1, 2], None).unwrap();
         replacement.start_plan(&plan).unwrap();
         assert_eq!(replacement.exit().guest_status, 7);
+    }
+
+    #[test]
+    fn absent_and_declined_syscall_callbacks_have_exactly_the_same_c_service_result() {
+        fn run(path: &std::path::Path, declined: bool) -> (crate::engine::EngineExit, Vec<u8>, Vec<u8>) {
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let error = Arc::new(Mutex::new(Vec::new()));
+            let services = RuntimeServices {
+                activation: Arc::new(Channel),
+                executable_authority: None,
+                checkpoint_sink: None,
+                checkpoint_source: None,
+                streams: StandardStreams::new(
+                    Cursor::new(Vec::new()),
+                    Capture(Arc::clone(&output)),
+                    Capture(Arc::clone(&error)),
+                ),
+            };
+            let mut plan = executable_plan(path);
+            if declined {
+                plan.options.set("HL_C_SYSCALL_TRAP_DECLINE", "1", true).unwrap();
+            }
+            let bridge = StreamBridge::new(&services).unwrap();
+            let descriptors = bridge.descriptors();
+            let executor =
+                CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, None, descriptors, Some(bridge)).unwrap();
+            executor.start_plan(&plan).unwrap();
+            let exit = executor.exit();
+            drop(executor);
+            let stdout = output.lock().unwrap().clone();
+            let stderr = error.lock().unwrap().clone();
+            (exit, stdout, stderr)
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("guest");
+        std::fs::write(&path, exiting_arm(42)).unwrap();
+        assert_eq!(run(&path, false), run(&path, true));
     }
 
     #[test]

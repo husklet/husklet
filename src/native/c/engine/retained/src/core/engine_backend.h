@@ -4,11 +4,13 @@
 #include "hl/engine.h"
 #include "hl/linux_abi.h"
 #include "options.h"
+#include "hl/syscall_trap.h"
 
 typedef struct hl_engine_backend {
     uint32_t guest_isa;
     hl_status (*start_process)(const hl_host_services *host, hl_linux_abi *box, hl_options *options,
                                const hl_engine_config *config, uint32_t argc, const char *const argv[],
+                               void *syscall_context, hl_syscall_trap_fn syscall_dispatch,
                                hl_host_handle *process, hl_host_handle *result);
     hl_status (*finish_process)(const hl_host_services *host, hl_host_handle token, const hl_host_result *waited,
                                 hl_engine_exit *result);
@@ -25,5 +27,8 @@ hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl
  * Execution workers inherit a process-private copy and may update runtime state there. */
 hl_status hl_engine_create_with_borrowed_options(const hl_engine_config *config, const hl_host_services *host,
                                                  const hl_options *options, hl_engine **out_engine);
+hl_status hl_engine_create_with_borrowed_options_and_syscall_trap(
+    const hl_engine_config *config, const hl_host_services *host, const hl_options *options, void *syscall_context,
+    hl_syscall_trap_fn syscall_dispatch, hl_engine **out_engine);
 
 #endif

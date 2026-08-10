@@ -1,6 +1,7 @@
 #include "hl/engine.h"
 #include "hl/linux.h"
 #include "hl/linux_abi.h"
+#include "hl/syscall_trap.h"
 #include "core/engine_backend.h"
 #include "core/options.h"
 #include "executable_authority.h"
@@ -39,7 +40,7 @@ static uint32_t hl_c_backend_status_flags(uint64_t detail) {
 
 int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
                             uint32_t option_count, const char *const *option_names, const char *const *option_values,
-                            const int32_t standard_fds[3],
+                            const int32_t standard_fds[3], void *syscall_context, hl_syscall_trap_fn syscall_dispatch,
                             hl_c_backend **output) {
     hl_c_backend *backend;
     hl_engine_config config;
@@ -124,7 +125,8 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
         }
         config.executable = &executable;
     }
-    status = hl_engine_create_with_borrowed_options(&config, &backend->services, &backend->options, &backend->engine);
+    status = hl_engine_create_with_borrowed_options_and_syscall_trap(
+        &config, &backend->services, &backend->options, syscall_context, syscall_dispatch, &backend->engine);
     if (status != HL_STATUS_OK) {
         hl_c_backend_executable_discard(&backend->services, &executable);
         if (standard_fds != NULL)

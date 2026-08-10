@@ -34,6 +34,8 @@ struct hl_engine {
     hl_options options;
     uint32_t options_initialized;
     uint32_t options_owned;
+    void *syscall_context;
+    hl_syscall_trap_fn syscall_dispatch;
     hl_engine_box_config box_config;
     char *owned_rootfs;
     char *owned_working_directory;
@@ -664,6 +666,17 @@ hl_status hl_engine_create_with_borrowed_options(const hl_engine_config *config,
     return hl_engine_create_with_options_mode(config, host, source_options, 1, out_engine);
 }
 
+hl_status hl_engine_create_with_borrowed_options_and_syscall_trap(
+    const hl_engine_config *config, const hl_host_services *host, const hl_options *source_options,
+    void *syscall_context, hl_syscall_trap_fn syscall_dispatch, hl_engine **out_engine) {
+    hl_status status = hl_engine_create_with_options_mode(config, host, source_options, 1, out_engine);
+    if (status == HL_STATUS_OK) {
+        (*out_engine)->syscall_context = syscall_context;
+        (*out_engine)->syscall_dispatch = syscall_dispatch;
+    }
+    return status;
+}
+
 hl_status hl_engine_create(const hl_engine_config *config, const hl_host_services *host, hl_engine **out_engine) {
     return hl_engine_create_with_options(config, host, NULL, out_engine);
 }
@@ -697,7 +710,8 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     }
     status =
         engine->backend->start_process(&engine->host, engine->box_initialized ? &engine->box : NULL, &engine->options,
-                                       &engine->config, (uint32_t)argc, argv, &process, &process_result);
+                                       &engine->config, (uint32_t)argc, argv, engine->syscall_context,
+                                       engine->syscall_dispatch, &process, &process_result);
     if (status != HL_STATUS_OK) {
         hl_engine_lock(engine);
         engine->state = HL_ENGINE_FINISHED;

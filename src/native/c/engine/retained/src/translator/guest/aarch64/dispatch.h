@@ -179,7 +179,7 @@ static uint64_t g_smc_flushes;
     } else if ((c)->reason == R_SYSCALL) {                                                                             \
         if (g_prof) g_prof_sys++;                                                                                      \
         uint64_t _service_begin = g_prof ? now_ns() : 0;                                                               \
-        service(c);                                                                                                    \
+        if (g_syscall_trap_dispatch == NULL || !hl_target_syscall_trap(c)) service(c);                                 \
         if (g_prof) g_service_ns += now_ns() - _service_begin;                                                         \
         if ((c)->exited) break;                                                                                        \
         if ((c)->redirect)                                                                                             \

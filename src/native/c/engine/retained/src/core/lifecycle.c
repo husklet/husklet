@@ -2,6 +2,7 @@
 #include "engine_backend.h"
 #include "engine_result.h"
 #include "options.h"
+#include "hl/syscall_trap.h"
 
 #include <stdatomic.h>
 #include <signal.h>
@@ -70,6 +71,8 @@ typedef struct hl_production_entry_context {
     hl_linux_abi *box;
     hl_options *options;
     hl_engine_child_result *result;
+    void *syscall_context;
+    hl_syscall_trap_fn syscall_dispatch;
 } hl_production_entry_context;
 
 #if defined(_WIN32)
@@ -437,6 +440,7 @@ static int32_t hl_production_entry(void *opaque) {
     hl_host_handle executable =
         context->config->executable == NULL ? HL_HOST_HANDLE_INVALID : context->config->executable->host_handle;
     const hl_engine_executable *spec = context->config->executable;
+    hl_target_syscall_trap_install(context->syscall_context, context->syscall_dispatch);
     int32_t result = hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
                                         spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
                                         context->argc, (char *const *)(uintptr_t)context->argv);
@@ -458,6 +462,7 @@ static void hl_production_result_release(const hl_host_services *host, hl_host_h
 
 static hl_status hl_production_start_process(const hl_host_services *host, hl_linux_abi *box, hl_options *options,
                                              const hl_engine_config *config, uint32_t argc, const char *const argv[],
+                                             void *syscall_context, hl_syscall_trap_fn syscall_dispatch,
                                              hl_host_handle *process, hl_host_handle *result_token) {
 #if !defined(_WIN32)
     hl_production_entry_context entry = {0};
@@ -516,6 +521,8 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.box = box;
     entry.options = options;
     entry.result = result->record;
+    entry.syscall_context = syscall_context;
+    entry.syscall_dispatch = syscall_dispatch;
     if (box == NULL) {
         spawned = host->process->spawn_cloned(host->context, hl_production_entry, &entry);
     } else {

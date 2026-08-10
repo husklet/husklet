@@ -151,6 +151,11 @@ pub const DEFINITIONS: &[Definition] = &[
         "report retained C translation and dispatch phase counters at launch exit",
         Flag
     ),
+    internal!(
+        "HL_C_SYSCALL_TRAP_DECLINE",
+        "install the declining retained-C syscall trap for bridge overhead measurement",
+        Flag
+    ),
     launch!(
         "HL_NATIVE_EXECUTION",
         "enable the bounded native execution adapter",
