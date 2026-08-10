@@ -43,6 +43,7 @@ unsafe extern "C" {
     fn hl_c_backend_create(
         isa: c_uint,
         rootfs: *const c_char,
+        executable_host: *const c_char,
         option_count: c_uint,
         option_names: *const *const c_char,
         option_values: *const *const c_char,
@@ -291,15 +292,13 @@ impl CGuestExecutor {
             );
             return Err(EngineError::Unsupported);
         }
-        if plan.options.get("HL_OVERLAY_UPPER").is_some() {
-            hl_log::hl_error!(
-                hl_log::tag::EXEC,
-                "c execution backend does not yet support HL_OVERLAY_UPPER"
-            );
-            return Err(EngineError::Unsupported);
-        }
         let rootfs = plan
             .rootfs
+            .as_ref()
+            .map(|value| CString::new(value.as_slice()).map_err(|_| EngineError::LaunchFailed))
+            .transpose()?;
+        let executable_host = plan
+            .executable_host
             .as_ref()
             .map(|value| CString::new(value.as_slice()).map_err(|_| EngineError::LaunchFailed))
             .transpose()?;
@@ -346,6 +345,9 @@ impl CGuestExecutor {
             hl_c_backend_create(
                 isa as c_uint,
                 rootfs.as_ref().map_or(std::ptr::null(), |value| value.as_ptr()),
+                executable_host
+                    .as_ref()
+                    .map_or(std::ptr::null(), |value| value.as_ptr()),
                 option_count,
                 option_names.as_ptr(),
                 option_values.as_ptr(),

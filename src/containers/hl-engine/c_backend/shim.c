@@ -2,6 +2,7 @@
 #include "hl/linux.h"
 #include "core/engine_backend.h"
 #include "core/options.h"
+#include "executable_authority.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -19,7 +20,7 @@ typedef struct hl_c_backend {
     hl_engine_exit result;
 } hl_c_backend;
 
-int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, uint32_t option_count,
+int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, uint32_t option_count,
                             const char *const *option_names, const char *const *option_values,
                             const int32_t standard_fds[3],
                             hl_c_backend **output) {
@@ -30,6 +31,7 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, uint32_t option_co
     uint32_t index;
     hl_engine_fd_binding bindings[3];
     hl_host_result imported[3];
+    hl_engine_executable executable;
     if (output == NULL) return HL_STATUS_INVALID_ARGUMENT;
     *output = NULL;
     backend = calloc(1, sizeof(*backend));
@@ -48,6 +50,7 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, uint32_t option_co
     config.rootfs = rootfs;
     memset(bindings, 0, sizeof(bindings));
     memset(imported, 0, sizeof(imported));
+    memset(&executable, 0, sizeof(executable));
     if (standard_fds != NULL) {
         for (index = 0; index < 3; ++index) {
             imported[index] = hl_host_linux_import_file(backend->host, standard_fds[index]);
@@ -83,9 +86,20 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, uint32_t option_co
             return HL_STATUS_INVALID_ARGUMENT;
         }
     }
+    if (executable_host != NULL) {
+        status = hl_c_backend_executable_open(&backend->services, executable_host, &executable);
+        if (status != HL_STATUS_OK) {
+            hl_options_destroy(&options);
+            hl_host_linux_destroy(backend->host);
+            free(backend);
+            return status;
+        }
+        config.executable = &executable;
+    }
     status = hl_engine_create_with_options(&config, &backend->services, &options, &backend->engine);
     hl_options_destroy(&options);
     if (status != HL_STATUS_OK) {
+        hl_c_backend_executable_discard(&backend->services, &executable);
         if (standard_fds != NULL)
             for (index = 0; index < 3; ++index)
                 (void)backend->services.file->close(backend->services.context, imported[index].value);
