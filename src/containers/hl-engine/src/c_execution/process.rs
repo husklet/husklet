@@ -132,7 +132,12 @@ impl CWorker {
             return Err(EngineError::LaunchFailed);
         }
         let mut writer = self.writer.lock().map_err(|_| EngineError::Synchronization)?;
-        write_message(&mut writer, Message::Start)
+        write_message(&mut writer, Message::Start)?;
+        drop(writer);
+        if read_message(&mut reader)? != Message::Started {
+            return Err(EngineError::LaunchFailed);
+        }
+        Ok(())
     }
 
     pub(crate) fn wait(&self) -> Result<EngineExit, EngineError> {

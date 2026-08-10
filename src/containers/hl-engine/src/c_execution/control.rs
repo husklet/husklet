@@ -19,6 +19,7 @@ const STOP: u16 = 3;
 const RESIZE: u16 = 4;
 const EXIT: u16 = 5;
 const ERROR: u16 = 6;
+const STARTED: u16 = 7;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FailureStage {
@@ -33,6 +34,7 @@ pub(crate) enum FailureStage {
 pub(crate) enum Message {
     Ready,
     Start,
+    Started,
     Stop(StopRequest),
     Resize { rows: u16, columns: u16 },
     Exit(EngineExit),
@@ -58,6 +60,7 @@ impl Message {
         let (kind, length) = match self {
             Self::Ready => (READY, 0),
             Self::Start => (START, 0),
+            Self::Started => (STARTED, 0),
             Self::Stop(request) => {
                 let (tag, signal) = match request {
                     StopRequest::Interrupt => (1, 2),
@@ -118,6 +121,7 @@ impl Message {
         match kind {
             READY if length == 0 => Ok(Self::Ready),
             START if length == 0 => Ok(Self::Start),
+            STARTED if length == 0 => Ok(Self::Started),
             STOP if length == 8 => decode_stop(payload).map(Self::Stop),
             RESIZE if length == 4 => {
                 let rows = get_u16(payload, 0);
@@ -138,7 +142,7 @@ impl Message {
                     code: get_i32(payload, 4),
                 })
             }
-            READY | START | STOP | RESIZE | EXIT | ERROR => Err(WireError::Length),
+            READY | START | STOP | RESIZE | EXIT | ERROR | STARTED => Err(WireError::Length),
             _ => Err(WireError::Kind),
         }
     }
@@ -381,6 +385,7 @@ mod tests {
         let messages = [
             Message::Ready,
             Message::Start,
+            Message::Started,
             Message::Stop(StopRequest::Interrupt),
             Message::Stop(StopRequest::Force),
             Message::Stop(StopRequest::Signal(1)),

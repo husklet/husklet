@@ -54,6 +54,7 @@ pub(crate) fn run(plan_descriptor: RawFd, control_descriptor: RawFd) -> Result<i
         .name("hl-c-worker-control".into())
         .spawn(move || serve_requests(request_control, request_executor))
         .map_err(|_| WorkerError::Control)?;
+    write_message(&mut control, Message::Started)?;
     if let Err(error) = executor.start_plan(&plan) {
         let _ = error;
         send_error(&mut control, FailureStage::Start, 1);
