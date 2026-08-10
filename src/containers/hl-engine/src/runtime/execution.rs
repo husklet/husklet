@@ -2,7 +2,9 @@ use crate::composition::{CompositionError, GuestMachine, RuntimeConstruction, Ru
 use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::runtime_machine::{RustRuntimeFactory, RustRuntimeMachine};
 use hl_runtime::RuntimeAssemblyConfig;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(feature = "c-execution")]
+use std::sync::Mutex;
 
 type RustMachine = RustRuntimeMachine<crate::native::GuestExecutor>;
 
