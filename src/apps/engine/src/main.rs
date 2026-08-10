@@ -1,5 +1,10 @@
 use clap::Parser;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
+
+const C_WORKER_ARGUMENT: &str = "--c-worker";
+const C_PLAN_DESCRIPTOR: &str = "HL_C_PLAN_FD";
+const C_CONTROL_DESCRIPTOR: &str = "HL_C_CONTROL_FD";
 
 fn main() {
     let environment =
@@ -10,6 +15,19 @@ fn main() {
     }
     logging.apply();
     let mut arguments = std::env::args().collect::<Vec<_>>();
+    if let Some(worker) = CWorker::capture(&arguments) {
+        let status = match worker {
+            Ok(worker) => hl_engine::retained_worker::run(worker.plan, worker.control).unwrap_or_else(|error| {
+                eprintln!("hl-engine: retained worker failed: {error:?}");
+                error.status()
+            }),
+            Err(error) => {
+                eprintln!("hl-engine: retained worker configuration failed: {error}");
+                error.status()
+            }
+        };
+        std::process::exit(status);
+    }
     let mut environment = environment.bootstrap();
     let authority = match environment.take_authority_descriptor() {
         hl_engine::environment::AuthorityDescriptor::Absent => None,
@@ -41,6 +59,81 @@ fn main() {
         }
     };
     std::process::exit(status);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CWorker {
+    plan: i32,
+    control: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CWorkerConfigurationError {
+    MissingPlan,
+    InvalidPlan,
+    MissingControl,
+    InvalidControl,
+    AliasedDescriptors,
+}
+
+impl CWorker {
+    fn capture(arguments: &[String]) -> Option<Result<Self, CWorkerConfigurationError>> {
+        Self::parse(arguments, |name| std::env::var_os(name))
+    }
+
+    fn parse(
+        arguments: &[String],
+        environment: impl Fn(&str) -> Option<OsString>,
+    ) -> Option<Result<Self, CWorkerConfigurationError>> {
+        if arguments.get(1).map(String::as_str) != Some(C_WORKER_ARGUMENT) {
+            return None;
+        }
+        let plan = match environment(C_PLAN_DESCRIPTOR) {
+            Some(value) => match descriptor(&value) {
+                Some(value) => value,
+                None => return Some(Err(CWorkerConfigurationError::InvalidPlan)),
+            },
+            None => return Some(Err(CWorkerConfigurationError::MissingPlan)),
+        };
+        let control = match environment(C_CONTROL_DESCRIPTOR) {
+            Some(value) => match descriptor(&value) {
+                Some(value) => value,
+                None => return Some(Err(CWorkerConfigurationError::InvalidControl)),
+            },
+            None => return Some(Err(CWorkerConfigurationError::MissingControl)),
+        };
+        Some(if plan == control {
+            Err(CWorkerConfigurationError::AliasedDescriptors)
+        } else {
+            Ok(Self { plan, control })
+        })
+    }
+}
+
+fn descriptor(value: &OsStr) -> Option<i32> {
+    let value = value.to_str()?;
+    (!value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse::<i32>().ok())
+        .flatten()
+        .filter(|value| *value >= 3)
+}
+
+impl CWorkerConfigurationError {
+    const fn status(self) -> i32 {
+        64
+    }
+}
+
+impl std::fmt::Display for CWorkerConfigurationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::MissingPlan => "HL_C_PLAN_FD is missing",
+            Self::InvalidPlan => "HL_C_PLAN_FD must be a decimal descriptor of 3 or greater",
+            Self::MissingControl => "HL_C_CONTROL_FD is missing",
+            Self::InvalidControl => "HL_C_CONTROL_FD must be a decimal descriptor of 3 or greater",
+            Self::AliasedDescriptors => "HL_C_PLAN_FD and HL_C_CONTROL_FD must be different",
+        })
+    }
 }
 
 #[derive(Debug, Default, Parser)]
@@ -124,8 +217,9 @@ impl ExitReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{Environment, ExitReport};
+    use super::{CWorker, CWorkerConfigurationError, Environment, ExitReport, descriptor};
     use clap::Parser;
+    use std::ffi::{OsStr, OsString};
 
     #[test]
     fn environment_routes() {
@@ -173,5 +267,48 @@ mod tests {
             ExitReport::error_line("aarch64", error),
             "[hl-exit]\tError\t0\taarch64\t0x0\t-\tEngine(Construction(Memory))",
         );
+    }
+
+    #[test]
+    fn c_worker_is_hidden_exactly_at_first_argument() {
+        let environment = |name: &str| match name {
+            "HL_C_PLAN_FD" => Some(OsString::from("7")),
+            "HL_C_CONTROL_FD" => Some(OsString::from("8")),
+            _ => None,
+        };
+        assert_eq!(
+            CWorker::parse(&["hl-engine".into(), "--c-worker".into()], environment),
+            Some(Ok(CWorker { plan: 7, control: 8 }))
+        );
+        assert_eq!(
+            CWorker::parse(&["hl-engine".into(), "guest".into(), "--c-worker".into()], environment),
+            None
+        );
+    }
+
+    #[test]
+    fn c_worker_requires_distinct_bounded_descriptors() {
+        let arguments = ["hl-engine".into(), "--c-worker".into()];
+        assert_eq!(
+            CWorker::parse(&arguments, |_| None),
+            Some(Err(CWorkerConfigurationError::MissingPlan))
+        );
+        assert_eq!(
+            CWorker::parse(&arguments, |name| match name {
+                "HL_C_PLAN_FD" => Some(OsString::from("2")),
+                "HL_C_CONTROL_FD" => Some(OsString::from("4")),
+                _ => None,
+            }),
+            Some(Err(CWorkerConfigurationError::InvalidPlan))
+        );
+        assert_eq!(
+            CWorker::parse(&arguments, |_| Some(OsString::from("9"))),
+            Some(Err(CWorkerConfigurationError::AliasedDescriptors))
+        );
+        for value in ["", "+3", "-3", "3 ", "0x3", "2147483648", "12345678901"] {
+            assert_eq!(descriptor(OsStr::new(value)), None, "{value:?}");
+        }
+        assert_eq!(descriptor(OsStr::new("3")), Some(3));
+        assert_eq!(descriptor(OsStr::new("2147483647")), Some(i32::MAX));
     }
 }
