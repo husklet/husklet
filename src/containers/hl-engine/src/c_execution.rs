@@ -14,6 +14,8 @@ use hl_runtime::RuntimeAssembly;
 use std::ffi::{CString, c_char, c_int, c_uint, c_ulonglong, c_void};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::FileExt;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -165,12 +167,85 @@ fn c_file_volumes(value: &str) -> Result<Vec<String>, EngineError> {
         .collect()
 }
 
+#[derive(Debug, Eq, PartialEq)]
+#[repr(C)]
+struct CMainImagePlan {
+    abi: u32,
+    size: u32,
+    architecture: u32,
+    kind: u32,
+    link_start: u64,
+    link_end: u64,
+    has_interpreter: u32,
+    reserved: u32,
+    interpreter_identity: u64,
+}
+
+struct CImageFile(std::fs::File);
+
+impl hl_loader::ImageReadAt for CImageFile {
+    fn length(&self) -> Result<u64, ()> {
+        self.0.metadata().map(|metadata| metadata.len()).map_err(|_| ())
+    }
+
+    fn read_exact_at(&self, offset: u64, output: &mut [u8]) -> Result<(), ()> {
+        self.0.read_exact_at(output, offset).map_err(|_| ())
+    }
+}
+
+fn c_main_image_plan(
+    isa: GuestIsa,
+    path: Option<&CString>,
+    authority: Option<&crate::executable::ExecutableAuthority>,
+) -> Result<CMainImagePlan, EngineError> {
+    let file = if let Some(authority) = authority {
+        // SAFETY: dup creates independent ownership; File closes only that duplicate.
+        let descriptor = unsafe { libc::dup(authority.descriptor().as_raw_fd()) };
+        if descriptor < 0 {
+            return Err(EngineError::LaunchFailed);
+        }
+        // SAFETY: descriptor is the newly owned duplicate above.
+        unsafe { std::fs::File::from_raw_fd(descriptor) }
+    } else {
+        let path = path.ok_or(EngineError::LaunchFailed)?;
+        std::fs::File::open(std::ffi::OsStr::from_bytes(path.as_bytes())).map_err(|_| EngineError::LaunchFailed)?
+    };
+    let architecture = match isa {
+        GuestIsa::Aarch64 => hl_isa::GuestArchitecture::Aarch64,
+        GuestIsa::X86_64 => hl_isa::GuestArchitecture::X86_64,
+    };
+    let plan = hl_loader::MainImageInspector::new(architecture, hl_loader::ImageLimits::default())
+        .inspect(&CImageFile(file))
+        .map_err(|_| EngineError::LaunchFailed)?;
+    let kind = match plan.kind {
+        hl_loader::ImageKind::Executable => 1,
+        hl_loader::ImageKind::PositionIndependent => 2,
+    };
+    let interpreter_identity = plan.interpreter.as_deref().map_or(0, |path| {
+        path.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+        })
+    });
+    Ok(CMainImagePlan {
+        abi: 1,
+        size: u32::try_from(std::mem::size_of::<CMainImagePlan>()).unwrap(),
+        architecture: isa as u32,
+        kind,
+        link_start: plan.link_start,
+        link_end: plan.link_end,
+        has_interpreter: u32::from(plan.interpreter.is_some()),
+        reserved: 0,
+        interpreter_identity,
+    })
+}
+
 unsafe extern "C" {
     fn hl_c_backend_create(
         isa: c_uint,
         rootfs: *const c_char,
         executable_host: *const c_char,
         executable_fd: c_int,
+        image_plan: *const CMainImagePlan,
         option_count: c_uint,
         option_names: *const *const c_char,
         option_values: *const *const c_char,
@@ -501,6 +576,7 @@ impl CGuestExecutor {
             .map(|(_, value)| value.as_ptr())
             .collect::<Vec<_>>();
         let option_count = c_uint::try_from(option_records.len()).map_err(|_| EngineError::LaunchFailed)?;
+        let image_plan = c_main_image_plan(isa, executable_host.as_ref(), executable_authority)?;
         let mut handle = std::ptr::null_mut();
         // The ABI is live now; syscall families are attached here as they move to hl-runtime.
         let mut syscall_trap = Box::new(CSyscallTrapContext { trap: None });
@@ -513,6 +589,7 @@ impl CGuestExecutor {
                     .as_ref()
                     .map_or(std::ptr::null(), |value| value.as_ptr()),
                 executable_authority.map_or(-1, |authority| authority.descriptor().as_raw_fd()),
+                &raw const image_plan,
                 option_count,
                 option_names.as_ptr(),
                 option_values.as_ptr(),
@@ -645,14 +722,16 @@ impl Drop for CGuestExecutor {
 mod tests {
     use super::{
         CGuestExecutor, CSyscallCpuAarch64, CSyscallTrapContext, CSyscallTrapResult, SYSCALL_TRAP_ABI,
-        SYSCALL_TRAP_DECLINED, StreamBridge, c_file_volumes, c_option, c_syscall_trap,
+        SYSCALL_TRAP_DECLINED, StreamBridge, c_file_volumes, c_main_image_plan, c_option, c_syscall_trap,
     };
     use crate::activation::GuestIsa;
     use crate::composition::{
         ActivationChannel, CompositionError, RuntimeServices, StandardStreams, Terminal, TerminalPort,
     };
+    use std::ffi::CString;
     use std::io::{Cursor, Read, Seek, Write};
     use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -809,6 +888,27 @@ mod tests {
             result_path: None,
             options: crate::options::Options::default(),
         }
+    }
+
+    #[test]
+    fn retained_c_main_image_plan_is_rust_inspected() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("guest");
+        let executable = exiting_arm(0);
+        std::fs::write(&path, &executable).unwrap();
+        let path = CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        let plan = c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).unwrap();
+        assert_eq!(plan.kind, 1);
+        assert_eq!((plan.link_start, plan.link_end), (0x0040_0000, 0x0041_0000));
+        assert_eq!(plan.has_interpreter, 0);
+
+        let mut pie = executable;
+        put_u16(&mut pie, 16, 3);
+        std::fs::write(std::ffi::OsStr::from_bytes(path.as_bytes()), pie).unwrap();
+        assert_eq!(c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).unwrap().kind, 2);
+
+        std::fs::write(std::ffi::OsStr::from_bytes(path.as_bytes()), b"not an elf").unwrap();
+        assert!(c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).is_err());
     }
 
     #[test]

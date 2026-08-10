@@ -51,14 +51,6 @@ impl<'a> ElfView<'a> {
             .checked_add(u64::from(index) * u64::from(table.entry_size()))
             .ok_or(InspectError::TruncatedProgramHeaders)?;
         let base = usize::try_from(offset).map_err(|_| InspectError::TruncatedProgramHeaders)?;
-        Ok(ProgramHeader {
-            kind: self.u32(base),
-            flags: self.u32(base + 4),
-            offset: self.u64(base + 8),
-            virtual_address: self.u64(base + 16),
-            file_size: self.u64(base + 32),
-            memory_size: self.u64(base + 40),
-            alignment: self.u64(base + 48),
-        })
+        ProgramHeader::parse(&self.image[base..])
     }
 }

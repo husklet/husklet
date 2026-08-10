@@ -11,6 +11,7 @@ mod elf;
 mod handoff;
 mod inspection_error;
 mod load_policy;
+mod main_image;
 mod mapping_transaction;
 mod model;
 mod port;
@@ -26,6 +27,7 @@ pub use elf::ElfInspector;
 pub use handoff::{DynamicLoaderHandoff, LoadedModuleHandoff};
 pub use inspection_error::{ImageLimits, InspectError};
 pub use load_policy::{ExecutablePlacement, LoadLimits};
+pub use main_image::{ImageReadAt, MainImageInspectError, MainImageInspector, MainImageMetadata};
 pub use model::{
     FileRegion, ImageKind, ImagePlan, InterpreterPath, LoadSegment, ProgramHeaderTable, RelocationWrite, RelroRegion,
     SegmentFlags, TlsTemplate,

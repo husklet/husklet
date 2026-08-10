@@ -5,10 +5,13 @@
 #include "core/engine_backend.h"
 #include "core/options.h"
 #include "executable_authority.h"
+#include "main_image_plan.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 /* Explicitly anchors the lifecycle object when the retained backend is linked
  * from static archives. The function is idempotent and replaces reliance on
@@ -38,7 +41,65 @@ static uint32_t hl_c_backend_status_flags(uint64_t detail) {
     return flags;
 }
 
+static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *plan) {
+    uint8_t header[64];
+    if (plan == NULL || plan->abi != HL_C_MAIN_IMAGE_PLAN_ABI || plan->size < sizeof(*plan) ||
+        plan->architecture == 0 || plan->reserved != 0 || plan->link_end <= plan->link_start)
+        return 0;
+    if (pread(fd, header, sizeof(header), 0) != (ssize_t)sizeof(header)) return 0;
+    if (memcmp(header, "\177ELF", 4) != 0 || header[4] != 2 || header[5] != 1) return 0;
+    uint16_t type, machine;
+    memcpy(&type, header + 16, sizeof(type));
+    memcpy(&machine, header + 18, sizeof(machine));
+    uint32_t kind = type == 2 ? HL_C_IMAGE_EXECUTABLE : type == 3 ? HL_C_IMAGE_POSITION_INDEPENDENT : 0;
+    uint16_t expected_machine = plan->architecture == 1 ? 0xb7 : plan->architecture == 2 ? 0x3e : 0;
+    uint64_t phoff;
+    uint16_t phentsize, phnum;
+    memcpy(&phoff, header + 32, sizeof(phoff));
+    memcpy(&phentsize, header + 54, sizeof(phentsize));
+    memcpy(&phnum, header + 56, sizeof(phnum));
+    if (kind != plan->kind || machine != expected_machine || phentsize < 56 || phnum == 0) return 0;
+    uint64_t first = UINT64_MAX, last = 0;
+    uint32_t has_interpreter = 0;
+    uint64_t interpreter_identity = 0;
+    for (uint16_t index = 0; index < phnum; ++index) {
+        uint8_t ph[56];
+        uint64_t offset = phoff + (uint64_t)index * phentsize;
+        if (offset < phoff || pread(fd, ph, sizeof(ph), (off_t)offset) != (ssize_t)sizeof(ph)) return 0;
+        uint32_t ph_type;
+        memcpy(&ph_type, ph, sizeof(ph_type));
+        if (ph_type == 3) {
+            uint64_t file_offset, file_size;
+            memcpy(&file_offset, ph + 8, sizeof(file_offset));
+            memcpy(&file_size, ph + 32, sizeof(file_size));
+            if (file_size == 0 || file_size > 4096) return 0;
+            uint8_t interpreter[4096];
+            if (pread(fd, interpreter, (size_t)file_size, (off_t)file_offset) != (ssize_t)file_size) return 0;
+            size_t length = (size_t)file_size;
+            if (length != 0 && interpreter[length - 1] == 0) length--;
+            interpreter_identity = UINT64_C(0xcbf29ce484222325);
+            for (size_t byte = 0; byte < length; ++byte)
+                interpreter_identity = (interpreter_identity ^ interpreter[byte]) * UINT64_C(0x100000001b3);
+            has_interpreter = 1;
+        }
+        if (ph_type != 1) continue;
+        uint64_t address, size;
+        memcpy(&address, ph + 16, sizeof(address));
+        memcpy(&size, ph + 40, sizeof(size));
+        if (address + size < address) return 0;
+        if (address < first) first = address;
+        if (address + size > last) last = address + size;
+    }
+    if (first == UINT64_MAX) return 0;
+    uint64_t start = first & ~UINT64_C(0xfff);
+    if (last < start || last - start > UINT64_MAX - UINT64_C(0xffff)) return 0;
+    uint64_t end = start + ((last - start + UINT64_C(0xffff)) & ~UINT64_C(0xffff));
+    return start == plan->link_start && end == plan->link_end && has_interpreter == plan->has_interpreter &&
+           interpreter_identity == plan->interpreter_identity;
+}
+
 int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
+                            const hl_c_main_image_plan *image_plan,
                             uint32_t option_count, const char *const *option_names, const char *const *option_values,
                             const int32_t standard_fds[3], void *syscall_context, hl_syscall_trap_fn syscall_dispatch,
                             hl_c_backend **output) {
@@ -50,6 +111,15 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
     hl_host_result imported[3];
     hl_engine_executable executable;
     if (output == NULL) return HL_STATUS_INVALID_ARGUMENT;
+    int validation_fd = executable_fd;
+    int validation_owned = 0;
+    if (validation_fd < 0 && executable_host != NULL) {
+        validation_fd = open(executable_host, O_RDONLY | O_CLOEXEC);
+        validation_owned = validation_fd >= 0;
+    }
+    int validation_ok = validation_fd >= 0 && hl_c_validate_main_image_plan(validation_fd, image_plan);
+    if (validation_owned) close(validation_fd);
+    if (!validation_ok) return HL_STATUS_INVALID_ARGUMENT;
     *output = NULL;
     backend = calloc(1, sizeof(*backend));
     if (backend == NULL) return HL_STATUS_OUT_OF_MEMORY;

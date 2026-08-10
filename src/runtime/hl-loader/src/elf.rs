@@ -31,15 +31,20 @@ impl ElfInspector {
     pub fn inspect(self, image: &[u8]) -> Result<ImagePlan, InspectError> {
         self.validate_image_bound(image)?;
         let view = ElfView::new(image);
-        self.validate_identity(&view)?;
-        let kind = self.image_kind(&view)?;
-        let headers = self.program_header_region(&view)?;
+        let header = ElfHeader::parse(
+            &image[..ELF_HEADER_SIZE],
+            image.len() as u64,
+            self.architecture,
+            self.limits,
+        )?;
+        let kind = header.kind;
+        let headers = header.headers;
         let mut state = PlanState::new(self.limits.max_load_segments);
         for index in 0..headers.entry_count() {
             let header = view.program_header(headers, index)?;
             state.accept(&view, header, self.limits.max_interpreter_bytes)?;
         }
-        let plan = state.finish(self.architecture, kind, view.u64(24), headers)?;
+        let plan = state.finish(self.architecture, kind, header.entry, headers)?;
         Ok(plan)
     }
 
@@ -55,8 +60,26 @@ impl ElfInspector {
         }
         Ok(())
     }
+}
 
-    fn validate_identity(self, view: &ElfView<'_>) -> Result<(), InspectError> {
+#[derive(Clone, Copy)]
+pub(crate) struct ElfHeader {
+    pub(crate) kind: ImageKind,
+    pub(crate) entry: u64,
+    pub(crate) headers: ProgramHeaderTable,
+}
+
+impl ElfHeader {
+    pub(crate) fn parse(
+        bytes: &[u8],
+        image_length: u64,
+        architecture: GuestArchitecture,
+        limits: ImageLimits,
+    ) -> Result<Self, InspectError> {
+        if bytes.len() < ELF_HEADER_SIZE {
+            return Err(InspectError::TruncatedHeader);
+        }
+        let view = ElfView::new(bytes);
         if view.bytes(0, 4) != b"\x7fELF" {
             return Err(InspectError::InvalidMagic);
         }
@@ -72,26 +95,17 @@ impl ElfInspector {
         if !matches!(view.byte(7), 0 | 3) {
             return Err(InspectError::UnsupportedAbi);
         }
-        if view.u16(18) != self.architecture.elf_machine() {
+        if view.u16(18) != architecture.elf_machine() {
             return Err(InspectError::WrongArchitecture);
         }
         if view.u16(52) != ELF_HEADER_SIZE as u16 {
             return Err(InspectError::InvalidHeaderSize);
         }
-        Ok(())
-    }
-
-    // Receiver kept so the inspection steps read uniformly on the inspector.
-    #[allow(clippy::unused_self)]
-    fn image_kind(self, view: &ElfView<'_>) -> Result<ImageKind, InspectError> {
-        match view.u16(16) {
-            2 => Ok(ImageKind::Executable),
-            3 => Ok(ImageKind::PositionIndependent),
-            _ => Err(InspectError::UnsupportedImageKind),
-        }
-    }
-
-    fn program_header_region(self, view: &ElfView<'_>) -> Result<ProgramHeaderTable, InspectError> {
+        let kind = match view.u16(16) {
+            2 => ImageKind::Executable,
+            3 => ImageKind::PositionIndependent,
+            _ => return Err(InspectError::UnsupportedImageKind),
+        };
         let offset = view.u64(32);
         let entry_size = view.u16(54);
         let entry_count = view.u16(56);
@@ -101,19 +115,20 @@ impl ElfInspector {
         if entry_count == 0 {
             return Err(InspectError::MissingProgramHeaders);
         }
-        if entry_count > self.limits.max_program_headers {
+        if entry_count > limits.max_program_headers {
             return Err(InspectError::TooManyProgramHeaders);
         }
         let size = u64::from(entry_size)
             .checked_mul(u64::from(entry_count))
             .ok_or(InspectError::TruncatedProgramHeaders)?;
-        view.checked_region(offset, size, InspectError::TruncatedProgramHeaders)?;
-        Ok(ProgramHeaderTable::new(
-            FileRegion::new(offset, size),
-            entry_size,
-            entry_count,
-            None,
-        ))
+        if offset.checked_add(size).is_none_or(|end| end > image_length) {
+            return Err(InspectError::TruncatedProgramHeaders);
+        }
+        Ok(Self {
+            kind,
+            entry: view.u64(24),
+            headers: ProgramHeaderTable::new(FileRegion::new(offset, size), entry_size, entry_count, None),
+        })
     }
 }
 
@@ -211,25 +226,12 @@ impl PlanState {
         if self.segments.len() >= usize::from(self.max_load_segments) {
             return Err(InspectError::TooManyLoadSegments);
         }
-        if header.flags & !7 != 0 {
-            return Err(InspectError::InvalidSegmentFlags);
-        }
-        if header.file_size > header.memory_size {
-            return Err(InspectError::SegmentFileLargerThanMemory);
-        }
+        header.validate_load(view.image.len() as u64)?;
         // `p_offset` identifies file bytes, not the anonymous BSS extent.  GNU
         // linkers legitimately place a pure-BSS segment at its aligned logical
         // file position beyond EOF.  With `p_filesz == 0` there is no source
         // region to bound against the file; address/alignment and memory bounds
         // are still validated below.
-        if header.file_size != 0 {
-            view.checked_region(header.offset, header.file_size, InspectError::SegmentOutsideImage)?;
-        }
-        header
-            .virtual_address
-            .checked_add(header.memory_size)
-            .ok_or(InspectError::AddressOverflow)?;
-        Self::validate_alignment(header)?;
         self.segments.push(LoadSegment::new(
             FileRegion::new(header.offset, header.file_size),
             header.virtual_address,
@@ -272,24 +274,10 @@ impl PlanState {
             return Err(InspectError::MultipleInterpreters);
         }
         let size = usize::try_from(header.file_size).map_err(|_| InspectError::InterpreterTooLong)?;
-        if size == 0 {
-            return Err(InspectError::EmptyInterpreter);
-        }
-        if size > max_interpreter_bytes {
-            return Err(InspectError::InterpreterTooLong);
-        }
         let region = view.checked_region(header.offset, header.file_size, InspectError::SegmentOutsideImage)?;
         let bytes = &view.image[region.as_range()];
-        if bytes.last() != Some(&0) {
-            return Err(InspectError::UnterminatedInterpreter);
-        }
-        let path = &bytes[..bytes.len() - 1];
-        if path.is_empty() {
-            return Err(InspectError::EmptyInterpreter);
-        }
-        if path.contains(&0) {
-            return Err(InspectError::EmbeddedInterpreterNul);
-        }
+        header.validate_interpreter(bytes, max_interpreter_bytes)?;
+        let path = &bytes[..size - 1];
         self.interpreter = Some(InterpreterPath::new(path));
         Ok(())
     }
@@ -402,4 +390,67 @@ pub(crate) struct ProgramHeader {
     pub(crate) file_size: u64,
     pub(crate) memory_size: u64,
     pub(crate) alignment: u64,
+}
+
+impl ProgramHeader {
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, InspectError> {
+        if bytes.len() < usize::from(PROGRAM_HEADER_SIZE) {
+            return Err(InspectError::TruncatedProgramHeaders);
+        }
+        let view = ElfView::new(bytes);
+        Ok(Self {
+            kind: view.u32(0),
+            flags: view.u32(4),
+            offset: view.u64(8),
+            virtual_address: view.u64(16),
+            file_size: view.u64(32),
+            memory_size: view.u64(40),
+            alignment: view.u64(48),
+        })
+    }
+
+    pub(crate) fn validate_load(self, image_length: u64) -> Result<(), InspectError> {
+        if self.flags & !7 != 0 {
+            return Err(InspectError::InvalidSegmentFlags);
+        }
+        if self.file_size > self.memory_size {
+            return Err(InspectError::SegmentFileLargerThanMemory);
+        }
+        if self.file_size != 0
+            && self
+                .offset
+                .checked_add(self.file_size)
+                .is_none_or(|end| end > image_length)
+        {
+            return Err(InspectError::SegmentOutsideImage);
+        }
+        self.virtual_address
+            .checked_add(self.memory_size)
+            .ok_or(InspectError::AddressOverflow)?;
+        PlanState::validate_alignment(self)
+    }
+
+    pub(crate) fn validate_interpreter(self, bytes: &[u8], maximum: usize) -> Result<(), InspectError> {
+        let size = usize::try_from(self.file_size).map_err(|_| InspectError::InterpreterTooLong)?;
+        if size == 0 {
+            return Err(InspectError::EmptyInterpreter);
+        }
+        if size > maximum {
+            return Err(InspectError::InterpreterTooLong);
+        }
+        if bytes.len() != size {
+            return Err(InspectError::SegmentOutsideImage);
+        }
+        if bytes.last() != Some(&0) {
+            return Err(InspectError::UnterminatedInterpreter);
+        }
+        let path = &bytes[..size - 1];
+        if path.is_empty() {
+            return Err(InspectError::EmptyInterpreter);
+        }
+        if path.contains(&0) {
+            return Err(InspectError::EmbeddedInterpreterNul);
+        }
+        Ok(())
+    }
 }
