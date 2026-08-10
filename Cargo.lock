@@ -1185,6 +1185,7 @@ dependencies = [
  "hl-time",
  "libc",
  "ring",
+ "tempfile",
  "zeroize",
 ]
 

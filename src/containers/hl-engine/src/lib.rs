@@ -39,6 +39,8 @@ pub mod config;
 pub mod domain;
 pub mod engine;
 pub mod environment;
+#[cfg(target_os = "linux")]
+pub mod executable;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod ffi;
 pub mod launcher;
