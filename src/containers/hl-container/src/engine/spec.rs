@@ -105,11 +105,65 @@ impl Spec {
     }
 
     fn host_executable(program: &str, roots: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
-        let relative = program.trim_start_matches('/');
-        roots
-            .iter()
-            .map(|root| root.join(relative))
-            .find(|candidate| Self::executable_here(candidate))
+        let mut pending = Self::guest_components(std::path::Path::new(program))?;
+        for _ in 0..40 {
+            let mut prefix = Vec::new();
+            let mut followed = false;
+            for index in 0..pending.len() {
+                prefix.push(pending[index].clone());
+                let relative = prefix.iter().collect::<std::path::PathBuf>();
+                let Some((root, metadata)) = roots.iter().find_map(|root| {
+                    std::fs::symlink_metadata(root.join(&relative))
+                        .ok()
+                        .map(|metadata| (root, metadata))
+                }) else {
+                    return None;
+                };
+                if metadata.file_type().is_symlink() {
+                    let target = std::fs::read_link(root.join(relative)).ok()?;
+                    let mut replacement = if target.is_absolute() {
+                        Vec::new()
+                    } else {
+                        prefix[..prefix.len() - 1].to_vec()
+                    };
+                    Self::append_guest_components(&mut replacement, &target)?;
+                    replacement.extend_from_slice(&pending[index + 1..]);
+                    pending = replacement;
+                    followed = true;
+                    break;
+                }
+            }
+            if followed {
+                continue;
+            }
+            let relative = pending.iter().collect::<std::path::PathBuf>();
+            return roots
+                .iter()
+                .map(|root| root.join(&relative))
+                .find(|candidate| Self::executable_here(candidate));
+        }
+        None
+    }
+
+    fn guest_components(path: &std::path::Path) -> Option<Vec<std::ffi::OsString>> {
+        let mut output = Vec::new();
+        Self::append_guest_components(&mut output, path)?;
+        Some(output)
+    }
+
+    fn append_guest_components(output: &mut Vec<std::ffi::OsString>, path: &std::path::Path) -> Option<()> {
+        use std::path::Component;
+        for component in path.components() {
+            match component {
+                Component::RootDir | Component::CurDir => {}
+                Component::Normal(value) => output.push(value.to_owned()),
+                Component::ParentDir => {
+                    output.pop()?;
+                }
+                Component::Prefix(_) => return None,
+            }
+        }
+        Some(())
     }
 
     /// Docker creates a `WORKDIR`/`-w` directory that the image does not carry; the guest
@@ -358,7 +412,7 @@ impl Spec {
 #[cfg(test)]
 mod path_tests {
     use super::Spec;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::{Path, PathBuf};
 
     fn plant(root: &Path, guest: &str) {
@@ -444,5 +498,42 @@ mod path_tests {
         assert_eq!(Spec::host_executable("/bin/sh", &[upper.clone(), lower.clone()]), None);
         std::fs::remove_dir_all(&upper).unwrap();
         std::fs::remove_dir_all(&lower).unwrap();
+    }
+
+    #[test]
+    fn absolute_image_symlink_resolves_inside_the_rootfs() {
+        let root = scratch("absolute-symlink");
+        plant(&root, "/bin/busybox");
+        symlink("/bin/busybox", root.join("bin/true")).unwrap();
+        assert_eq!(
+            Spec::host_executable("/bin/true", std::slice::from_ref(&root)),
+            Some(root.join("bin/busybox"))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn relative_image_symlink_resolves_from_its_guest_parent() {
+        let root = scratch("relative-symlink");
+        plant(&root, "/usr/lib/tool");
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        symlink("../lib/tool", root.join("usr/bin/tool")).unwrap();
+        assert_eq!(
+            Spec::host_executable("/usr/bin/tool", std::slice::from_ref(&root)),
+            Some(root.join("usr/lib/tool"))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn symlink_loops_and_root_escape_have_no_host_authority() {
+        let root = scratch("unsafe-symlink");
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        symlink("loop-b", root.join("bin/loop-a")).unwrap();
+        symlink("loop-a", root.join("bin/loop-b")).unwrap();
+        symlink("../../../../bin/sh", root.join("bin/escape")).unwrap();
+        assert_eq!(Spec::host_executable("/bin/loop-a", std::slice::from_ref(&root)), None);
+        assert_eq!(Spec::host_executable("/bin/escape", std::slice::from_ref(&root)), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
