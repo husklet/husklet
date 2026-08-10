@@ -35,8 +35,8 @@ static uint32_t hl_c_backend_status_flags(uint64_t detail) {
     return flags;
 }
 
-int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, uint32_t option_count,
-                            const char *const *option_names, const char *const *option_values,
+int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
+                            uint32_t option_count, const char *const *option_names, const char *const *option_values,
                             const int32_t standard_fds[3],
                             hl_c_backend **output) {
     hl_c_backend *backend;
@@ -101,7 +101,28 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
             return HL_STATUS_INVALID_ARGUMENT;
         }
     }
-    if (executable_host != NULL) {
+    if (executable_fd >= 0) {
+        hl_host_result imported_executable = hl_host_linux_import_file(backend->host, executable_fd);
+        if (imported_executable.status != HL_STATUS_OK || imported_executable.value == HL_HOST_HANDLE_INVALID) {
+            hl_options_destroy(&options);
+            if (standard_fds != NULL)
+                for (index = 0; index < 3; ++index)
+                    (void)backend->services.file->close(backend->services.context, imported[index].value);
+            hl_host_linux_destroy(backend->host);
+            free(backend);
+            return imported_executable.status == HL_STATUS_OK ? HL_STATUS_PLATFORM_FAILURE : imported_executable.status;
+        }
+        executable = (hl_engine_executable){
+            .abi = HL_ENGINE_ABI,
+            .size = sizeof(executable),
+            .ownership = HL_ENGINE_FD_TRANSFER,
+            .reserved = 0,
+            .host_handle = imported_executable.value,
+            .image = NULL,
+            .image_size = 0,
+        };
+        config.executable = &executable;
+    } else if (executable_host != NULL) {
         status = hl_c_backend_executable_open(&backend->services, executable_host, &executable);
         if (status != HL_STATUS_OK) {
             hl_options_destroy(&options);

@@ -81,6 +81,7 @@ unsafe extern "C" {
         isa: c_uint,
         rootfs: *const c_char,
         executable_host: *const c_char,
+        executable_fd: c_int,
         option_count: c_uint,
         option_names: *const *const c_char,
         option_values: *const *const c_char,
@@ -333,6 +334,7 @@ impl CGuestExecutor {
     fn create_with_streams(
         isa: GuestIsa,
         plan: &RuntimeLaunchPlan,
+        executable_authority: Option<&crate::executable::ExecutableAuthority>,
         standard_fds: [c_int; 3],
         streams: Option<StreamBridge>,
     ) -> Result<Self, EngineError> {
@@ -413,6 +415,7 @@ impl CGuestExecutor {
                 executable_host
                     .as_ref()
                     .map_or(std::ptr::null(), |value| value.as_ptr()),
+                executable_authority.map_or(-1, |authority| authority.descriptor().as_raw_fd()),
                 option_count,
                 option_names.as_ptr(),
                 option_values.as_ptr(),
@@ -538,11 +541,12 @@ impl Drop for CGuestExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::{StreamBridge, c_file_volumes};
+    use super::{CGuestExecutor, StreamBridge, c_file_volumes};
+    use crate::activation::GuestIsa;
     use crate::composition::{
         ActivationChannel, CompositionError, RuntimeServices, StandardStreams, Terminal, TerminalPort,
     };
-    use std::io::{Cursor, Read, Write};
+    use std::io::{Cursor, Read, Seek, Write};
     use std::os::fd::FromRawFd;
     use std::sync::{Arc, Mutex};
 
@@ -582,6 +586,106 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn exiting_arm(status: u16) -> Vec<u8> {
+        const LINK_BASE: u64 = 0x0040_0000;
+        const ENTRY_OFFSET: usize = 0x100;
+        let mut bytes = vec![0_u8; 4096];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4..7].copy_from_slice(&[2, 1, 1]);
+        put_u16(&mut bytes, 16, 2);
+        put_u16(&mut bytes, 18, hl_isa::GuestArchitecture::Aarch64.elf_machine());
+        put_u32(&mut bytes, 20, 1);
+        put_u64(&mut bytes, 24, LINK_BASE + ENTRY_OFFSET as u64);
+        put_u64(&mut bytes, 32, 64);
+        put_u16(&mut bytes, 52, 64);
+        put_u16(&mut bytes, 54, 56);
+        put_u16(&mut bytes, 56, 1);
+        put_u32(&mut bytes, 64, 1);
+        put_u32(&mut bytes, 68, 5);
+        put_u64(&mut bytes, 80, LINK_BASE);
+        put_u64(&mut bytes, 88, LINK_BASE);
+        let image_length = bytes.len() as u64;
+        put_u64(&mut bytes, 96, image_length);
+        put_u64(&mut bytes, 104, image_length);
+        put_u64(&mut bytes, 112, 4096);
+        for (index, instruction) in [
+            0xd280_0ba8_u32,
+            0xd280_0000_u32 | (u32::from(status) << 5),
+            0xd400_0001_u32,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = ENTRY_OFFSET + index * 4;
+            bytes[offset..offset + 4].copy_from_slice(&instruction.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn executable_plan(path: &std::path::Path) -> crate::launch_plan::RuntimeLaunchPlan {
+        crate::launch_plan::RuntimeLaunchPlan {
+            rootfs: None,
+            executable_host: Some(path.as_os_str().as_encoded_bytes().to_vec()),
+            arguments: vec![b"/guest".to_vec()],
+            environment: Vec::new(),
+            result_path: None,
+            options: crate::options::Options::default(),
+        }
+    }
+
+    #[test]
+    fn descriptor_authority_wins_over_a_replaced_executable_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("guest");
+        std::fs::write(&path, exiting_arm(42)).unwrap();
+        let selected = std::fs::File::open(&path).unwrap();
+        let authority = crate::executable::ExecutableAuthority::new(selected.into());
+        let replacement = directory.path().join("replacement");
+        std::fs::write(&replacement, exiting_arm(7)).unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        let plan = executable_plan(&path);
+
+        let selected =
+            CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, Some(&authority), [0, 1, 2], None).unwrap();
+        drop(authority);
+        selected.start_plan(&plan).unwrap();
+        assert_eq!(selected.exit().guest_status, 42);
+
+        let replacement = CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, None, [0, 1, 2], None).unwrap();
+        replacement.start_plan(&plan).unwrap();
+        assert_eq!(replacement.exit().guest_status, 7);
+    }
+
+    #[test]
+    fn rejected_descriptor_authority_remains_owned_by_the_caller() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invalid");
+        std::fs::write(&path, b"").unwrap();
+        let authority = crate::executable::ExecutableAuthority::new(std::fs::File::open(&path).unwrap().into());
+        let plan = executable_plan(&path);
+
+        assert!(
+            CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, Some(&authority), [0, 1, 2], None).is_err()
+        );
+        let mut retained = std::fs::File::from(authority.descriptor().try_clone_to_owned().unwrap());
+        retained.rewind().unwrap();
+        let mut bytes = Vec::new();
+        retained.read_to_end(&mut bytes).unwrap();
+        assert!(bytes.is_empty());
     }
 
     #[test]
