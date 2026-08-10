@@ -152,8 +152,8 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
-        "HL_C_SYSCALL_TRAP_DECLINE",
-        "install the declining retained-C syscall trap for bridge overhead measurement",
+        "HL_C_NO_RUNTIME_EXIT",
+        "disable the Rust-owned retained-C exit route for same-binary measurement",
         Flag
     ),
     launch!(

@@ -125,6 +125,11 @@ static int hl_target_syscall_trap(struct cpu *c) {
     }
     return 1;
 }
+
+static int hl_target_syscall_trap_selected(const struct cpu *c) {
+    /* AArch64 Linux exit. Keep the selector cheaper than constructing the stable snapshot. */
+    return g_syscall_trap_dispatch != NULL && c->x[8] == 93;
+}
 #include "../../translator/guest/aarch64/signal.h"
 #include "../../translator/guest/aarch64/abi.h" // the cpu interface os/linux/ is written against
 #define HL_GUEST_STAT_SIZE HL_LINUX_STAT_AARCH64_SIZE

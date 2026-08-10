@@ -55,6 +55,7 @@ struct CSyscallTrapResult {
 
 struct CSyscallTrapContext {
     trap: Option<Arc<dyn hl_runtime::RuntimeSyscallTrap>>,
+    retained_exit: Option<Arc<hl_runtime::RetainedExitTrap>>,
 }
 
 unsafe extern "C" fn c_syscall_trap(
@@ -75,6 +76,16 @@ unsafe extern "C" fn c_syscall_trap(
     result.size = std::mem::size_of::<CSyscallTrapResult>() as u32;
     result.outcome = SYSCALL_TRAP_DECLINED;
     let context = unsafe { &*(context.cast::<CSyscallTrapContext>()) };
+    if let Some(trap) = context.retained_exit.as_deref() {
+        match trap.dispatch_aarch64(cpu.x[8], cpu.x[0]) {
+            hl_runtime::RuntimeTrapOutcome::Exit(status) => {
+                result.outcome = SYSCALL_TRAP_EXIT;
+                result.exit_status = status;
+                return 0;
+            }
+            _ => return -1,
+        }
+    }
     let Some(trap) = context.trap.as_deref() else {
         return 0;
     };
@@ -132,7 +143,7 @@ fn c_option(name: &str) -> bool {
             | "HL_NATIVE_DIRECT_STICKY_PERMANENT"
             | "HL_NATIVE_EXECUTION"
             | "HL_NATIVE_SPLIT_MODE_EXECUTORS"
-            | "HL_C_SYSCALL_TRAP_DECLINE"
+            | "HL_C_NO_RUNTIME_EXIT"
             | "HL_SECCOMP_BASELINE"
     )
 }
@@ -578,9 +589,12 @@ impl CGuestExecutor {
         let option_count = c_uint::try_from(option_records.len()).map_err(|_| EngineError::LaunchFailed)?;
         let image_plan = c_main_image_plan(isa, executable_host.as_ref(), executable_authority)?;
         let mut handle = std::ptr::null_mut();
-        // The ABI is live now; syscall families are attached here as they move to hl-runtime.
-        let mut syscall_trap = Box::new(CSyscallTrapContext { trap: None });
-        let measure_declined_trap = plan.options.get("HL_C_SYSCALL_TRAP_DECLINE").is_some();
+        let retained_exit = Arc::new(hl_runtime::RetainedExitTrap);
+        let runtime_exit = plan.options.get("HL_C_NO_RUNTIME_EXIT").is_none();
+        let mut syscall_trap = Box::new(CSyscallTrapContext {
+            trap: runtime_exit.then(|| Arc::clone(&retained_exit) as Arc<dyn hl_runtime::RuntimeSyscallTrap>),
+            retained_exit: runtime_exit.then_some(retained_exit),
+        });
         let status = unsafe {
             hl_c_backend_create(
                 isa as c_uint,
@@ -594,10 +608,10 @@ impl CGuestExecutor {
                 option_names.as_ptr(),
                 option_values.as_ptr(),
                 standard_fds.as_ptr(),
-                measure_declined_trap
+                runtime_exit
                     .then_some((&mut *syscall_trap as *mut CSyscallTrapContext).cast())
                     .unwrap_or(std::ptr::null_mut()),
-                measure_declined_trap.then_some(c_syscall_trap),
+                runtime_exit.then_some(c_syscall_trap),
                 &raw mut handle,
             )
         };
@@ -743,7 +757,10 @@ mod tests {
 
     #[test]
     fn declined_syscall_callback_preserves_snapshot_for_c_fallback() {
-        let mut context = CSyscallTrapContext { trap: None };
+        let mut context = CSyscallTrapContext {
+            trap: None,
+            retained_exit: None,
+        };
         let mut cpu = CSyscallCpuAarch64 {
             abi: SYSCALL_TRAP_ABI,
             size: std::mem::size_of::<CSyscallCpuAarch64>() as u32,
@@ -932,44 +949,6 @@ mod tests {
         let replacement = CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, None, [0, 1, 2], None).unwrap();
         replacement.start_plan(&plan).unwrap();
         assert_eq!(replacement.exit().guest_status, 7);
-    }
-
-    #[test]
-    fn absent_and_declined_syscall_callbacks_have_exactly_the_same_c_service_result() {
-        fn run(path: &std::path::Path, declined: bool) -> (crate::engine::EngineExit, Vec<u8>, Vec<u8>) {
-            let output = Arc::new(Mutex::new(Vec::new()));
-            let error = Arc::new(Mutex::new(Vec::new()));
-            let services = RuntimeServices {
-                activation: Arc::new(Channel),
-                executable_authority: None,
-                checkpoint_sink: None,
-                checkpoint_source: None,
-                streams: StandardStreams::new(
-                    Cursor::new(Vec::new()),
-                    Capture(Arc::clone(&output)),
-                    Capture(Arc::clone(&error)),
-                ),
-            };
-            let mut plan = executable_plan(path);
-            if declined {
-                plan.options.set("HL_C_SYSCALL_TRAP_DECLINE", "1", true).unwrap();
-            }
-            let bridge = StreamBridge::new(&services).unwrap();
-            let descriptors = bridge.descriptors();
-            let executor =
-                CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, None, descriptors, Some(bridge)).unwrap();
-            executor.start_plan(&plan).unwrap();
-            let exit = executor.exit();
-            drop(executor);
-            let stdout = output.lock().unwrap().clone();
-            let stderr = error.lock().unwrap().clone();
-            (exit, stdout, stderr)
-        }
-
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("guest");
-        std::fs::write(&path, exiting_arm(42)).unwrap();
-        assert_eq!(run(&path, false), run(&path, true));
     }
 
     #[test]
