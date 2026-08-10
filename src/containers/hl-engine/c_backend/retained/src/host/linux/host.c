@@ -1211,6 +1211,43 @@ static hl_host_result hl_linux_file_standard_stream(void *context, uint32_t stre
     return result;
 }
 
+hl_host_result hl_host_linux_import_file(hl_host_linux *host, int source) {
+    int flags;
+    int descriptor;
+    int append_descriptor = -1;
+    uint32_t detail = 0;
+    hl_host_result result;
+    if (host == NULL || source < 0) return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    flags = fcntl(source, F_GETFL);
+    if (flags < 0) return hl_linux_errno_result();
+    descriptor = fcntl(source, F_DUPFD_CLOEXEC, 0);
+    if (descriptor < 0) return hl_linux_errno_result();
+    if ((flags & O_ACCMODE) == O_RDONLY)
+        detail |= HL_HOST_FILE_READ;
+    else if ((flags & O_ACCMODE) == O_WRONLY)
+        detail |= HL_HOST_FILE_WRITE;
+    else
+        detail |= HL_HOST_FILE_READ | HL_HOST_FILE_WRITE;
+    if ((flags & O_APPEND) != 0) {
+        detail |= HL_HOST_FILE_APPEND;
+        append_descriptor = fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
+        if (append_descriptor < 0) {
+            result = hl_linux_errno_result();
+            close(descriptor);
+            return result;
+        }
+    }
+    if ((flags & O_NONBLOCK) != 0) detail |= HL_HOST_FILE_NONBLOCK;
+    result = hl_linux_allocate_handle(host, HL_LINUX_HANDLE_FILE, descriptor, NULL, NULL, 0, append_descriptor);
+    if (result.status != HL_STATUS_OK) {
+        close(descriptor);
+        if (append_descriptor >= 0) close(append_descriptor);
+        return result;
+    }
+    result.detail = detail;
+    return result;
+}
+
 static hl_host_result hl_linux_stream_pipe_pair(void *context, uint32_t flags) {
     hl_host_linux *host = context;
     int descriptors[2];

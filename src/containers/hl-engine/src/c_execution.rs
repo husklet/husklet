@@ -7,7 +7,10 @@ use crate::launch_plan::RuntimeLaunchPlan;
 use crate::runtime_machine::GuestExecutionPort;
 use hl_runtime::RuntimeAssembly;
 use std::ffi::{CString, c_char, c_int, c_uint, c_ulonglong, c_void};
+use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
+use std::thread::JoinHandle;
 
 const STATUS_OK: c_int = 0;
 const REQUEST_INTERRUPT: c_uint = 1;
@@ -42,6 +45,7 @@ unsafe extern "C" {
         option_count: c_uint,
         option_names: *const *const c_char,
         option_values: *const *const c_char,
+        standard_fds: *const c_int,
         output: *mut *mut c_void,
     ) -> c_int;
     fn hl_c_backend_run(backend: *mut c_void, argc: c_int, argv: *const *const c_char) -> c_int;
@@ -54,6 +58,117 @@ unsafe extern "C" {
 
 pub(crate) struct CGuestExecutor {
     handle: NonNull<c_void>,
+    _streams: StreamBridge,
+}
+
+struct StreamBridge {
+    output_workers: Vec<JoinHandle<()>>,
+    guest_fds: Option<[OwnedFd; 3]>,
+}
+
+impl StreamBridge {
+    fn pipe() -> Result<(OwnedFd, OwnedFd), EngineError> {
+        let mut descriptors = [-1; 2];
+        // SAFETY: descriptors names two writable integers; successful pipe2
+        // returns two uniquely owned CLOEXEC descriptors.
+        if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return Err(EngineError::LaunchFailed);
+        }
+        // SAFETY: pipe2 succeeded and transferred these distinct descriptors.
+        Ok(unsafe {
+            (
+                OwnedFd::from_raw_fd(descriptors[0]),
+                OwnedFd::from_raw_fd(descriptors[1]),
+            )
+        })
+    }
+
+    fn new(services: &RuntimeServices) -> Result<Self, EngineError> {
+        if services.streams.terminal().is_some() {
+            return Err(EngineError::Unsupported);
+        }
+        let (guest_input, host_input) = Self::pipe()?;
+        let (host_output, guest_output) = Self::pipe()?;
+        let (host_error, guest_error) = Self::pipe()?;
+
+        let input = services.streams.input();
+        std::thread::Builder::new()
+            .name("hl-c-stdin".into())
+            .spawn(move || {
+                let mut destination = std::fs::File::from(host_input);
+                let mut bytes = [0; 16 * 1024];
+                loop {
+                    let count = match input.lock() {
+                        Ok(mut source) => match source.read(&mut bytes) {
+                            Ok(count) => count,
+                            Err(error) => {
+                                hl_log::hl_error!(hl_log::tag::EXEC, "c stdin bridge read failed: error={error}");
+                                return;
+                            }
+                        },
+                        Err(_) => return,
+                    };
+                    if count == 0 || destination.write_all(&bytes[..count]).is_err() {
+                        return;
+                    }
+                }
+            })
+            .map_err(|_| EngineError::LaunchFailed)?;
+
+        let mut output_workers = Vec::with_capacity(2);
+        for (name, source, destination) in [
+            ("hl-c-stdout", host_output, services.streams.output()),
+            ("hl-c-stderr", host_error, services.streams.error()),
+        ] {
+            output_workers.push(
+                std::thread::Builder::new()
+                    .name(name.into())
+                    .spawn(move || {
+                        let mut source = std::fs::File::from(source);
+                        let mut bytes = [0; 16 * 1024];
+                        loop {
+                            let count = match source.read(&mut bytes) {
+                                Ok(0) => break,
+                                Ok(count) => count,
+                                Err(error) => {
+                                    hl_log::hl_error!(hl_log::tag::EXEC, "c output bridge read failed: error={error}");
+                                    break;
+                                }
+                            };
+                            let result = destination
+                                .lock()
+                                .map_err(|_| ())
+                                .and_then(|mut output| output.write_all(&bytes[..count]).map_err(|_| ()));
+                            if result.is_err() {
+                                break;
+                            }
+                        }
+                    })
+                    .map_err(|_| EngineError::LaunchFailed)?,
+            );
+        }
+        Ok(Self {
+            output_workers,
+            guest_fds: Some([guest_input, guest_output, guest_error]),
+        })
+    }
+
+    fn descriptors(&self) -> [c_int; 3] {
+        self.guest_fds
+            .as_ref()
+            .expect("stream descriptors remain live during create")
+            .each_ref()
+            .map(AsRawFd::as_raw_fd)
+    }
+}
+
+impl Drop for StreamBridge {
+    fn drop(&mut self) {
+        drop(self.guest_fds.take());
+        for worker in self.output_workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
 }
 
 // The C lifecycle contract explicitly permits request() from a second thread
@@ -62,7 +177,11 @@ unsafe impl Send for CGuestExecutor {}
 unsafe impl Sync for CGuestExecutor {}
 
 impl CGuestExecutor {
-    pub(crate) fn create(isa: GuestIsa, plan: &RuntimeLaunchPlan) -> Result<Self, EngineError> {
+    pub(crate) fn create(
+        isa: GuestIsa,
+        plan: &RuntimeLaunchPlan,
+        services: &RuntimeServices,
+    ) -> Result<Self, EngineError> {
         if plan.result_path.is_some() {
             hl_log::hl_error!(
                 hl_log::tag::EXEC,
@@ -118,6 +237,8 @@ impl CGuestExecutor {
             .map(|(_, value)| value.as_ptr())
             .collect::<Vec<_>>();
         let option_count = c_uint::try_from(option_records.len()).map_err(|_| EngineError::LaunchFailed)?;
+        let streams = StreamBridge::new(services)?;
+        let standard_fds = streams.descriptors();
         let mut handle = std::ptr::null_mut();
         let status = unsafe {
             hl_c_backend_create(
@@ -126,6 +247,7 @@ impl CGuestExecutor {
                 option_count,
                 option_names.as_ptr(),
                 option_values.as_ptr(),
+                standard_fds.as_ptr(),
                 &raw mut handle,
             )
         };
@@ -144,7 +266,10 @@ impl CGuestExecutor {
             backend = "c",
             isa = ?isa
         );
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            _streams: streams,
+        })
     }
 
     pub(crate) fn exit(&self) -> EngineExit {
@@ -216,5 +341,71 @@ impl GuestExecutionPort for CGuestExecutor {
 impl Drop for CGuestExecutor {
     fn drop(&mut self) {
         unsafe { hl_c_backend_destroy(self.handle.as_ptr()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StreamBridge;
+    use crate::composition::{ActivationChannel, CompositionError, RuntimeServices, StandardStreams};
+    use std::io::{Cursor, Read, Write};
+    use std::os::fd::FromRawFd;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    struct Channel;
+
+    impl ActivationChannel for Channel {
+        fn send(&self, _: &[u8]) -> Result<(), CompositionError> {
+            Ok(())
+        }
+
+        fn receive(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+            Ok(Vec::new())
+        }
+    }
+
+    impl Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stream_bridge_preserves_three_application_owned_channels() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let error = Arc::new(Mutex::new(Vec::new()));
+        let services = RuntimeServices {
+            activation: Arc::new(Channel),
+            checkpoint_sink: None,
+            checkpoint_source: None,
+            streams: StandardStreams::new(
+                Cursor::new(b"input".to_vec()),
+                Capture(Arc::clone(&output)),
+                Capture(Arc::clone(&error)),
+            ),
+        };
+        let mut bridge = StreamBridge::new(&services).unwrap();
+        let descriptors = bridge.descriptors();
+        // SAFETY: dup creates independent owned descriptors from live bridge ends.
+        let mut input = unsafe { std::fs::File::from_raw_fd(libc::dup(descriptors[0])) };
+        let mut stdout = unsafe { std::fs::File::from_raw_fd(libc::dup(descriptors[1])) };
+        let mut stderr = unsafe { std::fs::File::from_raw_fd(libc::dup(descriptors[2])) };
+        let mut bytes = [0; 5];
+        input.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"input");
+        stdout.write_all(b"out").unwrap();
+        stderr.write_all(b"err").unwrap();
+        drop((input, stdout, stderr));
+        drop(bridge.guest_fds.take());
+        drop(bridge);
+        assert_eq!(&*output.lock().unwrap(), b"out");
+        assert_eq!(&*error.lock().unwrap(), b"err");
     }
 }

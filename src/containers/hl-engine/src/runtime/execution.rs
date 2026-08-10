@@ -18,6 +18,7 @@ pub(super) enum ProductionMachine {
 pub(super) struct CMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launch_plan::RuntimeLaunchPlan,
+    services: crate::composition::RuntimeServices,
     execution: Mutex<CExecutionState>,
 }
 
@@ -34,7 +35,11 @@ impl CMachine {
             let mut state = self.execution.lock().map_err(|_| EngineError::Synchronization)?;
             let execution = match state.prepared.take() {
                 Some(execution) => execution,
-                None => Arc::new(crate::c_execution::CGuestExecutor::create(self.isa, &self.plan)?),
+                None => Arc::new(crate::c_execution::CGuestExecutor::create(
+                    self.isa,
+                    &self.plan,
+                    &self.services,
+                )?),
             };
             state.current = Some(Arc::clone(&execution));
             execution
@@ -83,11 +88,12 @@ impl RuntimeFactory for ProductionFactory {
                 {
                     return Err(CompositionError::RuntimeConstruction);
                 }
-                crate::c_execution::CGuestExecutor::create(request.isa, request.plan)
+                crate::c_execution::CGuestExecutor::create(request.isa, request.plan, request.services)
                     .map(|execution| {
                         ProductionMachine::C(CMachine {
                             isa: request.isa,
                             plan: request.plan.clone(),
+                            services: request.services.clone(),
                             execution: Mutex::new(CExecutionState {
                                 prepared: Some(Arc::new(execution)),
                                 current: None,

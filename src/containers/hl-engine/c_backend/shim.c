@@ -21,12 +21,15 @@ typedef struct hl_c_backend {
 
 int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, uint32_t option_count,
                             const char *const *option_names, const char *const *option_values,
+                            const int32_t standard_fds[3],
                             hl_c_backend **output) {
     hl_c_backend *backend;
     hl_engine_config config;
     hl_status status;
     hl_options options;
     uint32_t index;
+    hl_engine_fd_binding bindings[3];
+    hl_host_result imported[3];
     if (output == NULL) return HL_STATUS_INVALID_ARGUMENT;
     *output = NULL;
     backend = calloc(1, sizeof(*backend));
@@ -43,6 +46,29 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, uint32_t option_co
     config.size = sizeof(config);
     config.guest_isa = isa;
     config.rootfs = rootfs;
+    memset(bindings, 0, sizeof(bindings));
+    memset(imported, 0, sizeof(imported));
+    if (standard_fds != NULL) {
+        for (index = 0; index < 3; ++index) {
+            imported[index] = hl_host_linux_import_file(backend->host, standard_fds[index]);
+            if (imported[index].status != HL_STATUS_OK) {
+                uint32_t close_index;
+                for (close_index = 0; close_index < index; ++close_index)
+                    (void)backend->services.file->close(backend->services.context, imported[close_index].value);
+                hl_host_linux_destroy(backend->host);
+                free(backend);
+                return imported[index].status;
+            }
+            bindings[index].abi = HL_ENGINE_ABI;
+            bindings[index].size = sizeof(bindings[index]);
+            bindings[index].guest_fd = index;
+            bindings[index].status_flags = index == 0 ? 0u : 1u;
+            bindings[index].ownership = HL_ENGINE_FD_TRANSFER;
+            bindings[index].host_handle = imported[index].value;
+        }
+        config.fd_bindings = bindings;
+        config.fd_binding_count = 3;
+    }
     if ((option_count != 0 && (option_names == NULL || option_values == NULL)) || hl_options_init(&options) != 0) {
         hl_host_linux_destroy(backend->host);
         free(backend);
@@ -60,6 +86,9 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, uint32_t option_co
     status = hl_engine_create_with_options(&config, &backend->services, &options, &backend->engine);
     hl_options_destroy(&options);
     if (status != HL_STATUS_OK) {
+        if (standard_fds != NULL)
+            for (index = 0; index < 3; ++index)
+                (void)backend->services.file->close(backend->services.context, imported[index].value);
         hl_host_linux_destroy(backend->host);
         free(backend);
         return status;

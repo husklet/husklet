@@ -505,7 +505,10 @@ hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl
         status = HL_STATUS_OUT_OF_MEMORY;
         goto fail;
     }
-    hl_options_import_environment(&engine->options);
+    /* An explicit per-engine snapshot is authoritative. Embedders must not
+     * inherit unrelated process-global HL_* settings behind Rust's resolved
+     * launch plan. The legacy entry point still imports its environment. */
+    if (source_options == NULL) hl_options_import_environment(&engine->options);
     engine->options_initialized = 1;
     engine->owned_rootfs = hl_engine_copy_string(config->rootfs);
     if (config->rootfs != NULL && engine->owned_rootfs == NULL) {
