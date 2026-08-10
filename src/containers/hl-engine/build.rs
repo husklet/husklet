@@ -1,8 +1,9 @@
 use std::{env, fs, path::PathBuf};
 
-const RETAINED: &str = "c_backend/retained";
-const TU_MANIFEST: &str = "c_backend/retained/COMPILED_TUS.tsv";
-const SOURCE_MANIFEST: &str = "c_backend/retained/RUNTIME_SOURCES.manifest";
+const C_ENGINE: &str = "../../native/c/engine";
+const RETAINED: &str = "../../native/c/engine/retained";
+const TU_MANIFEST: &str = "../../native/c/engine/retained/COMPILED_TUS.tsv";
+const SOURCE_MANIFEST: &str = "../../native/c/engine/retained/RUNTIME_SOURCES.manifest";
 
 #[derive(Debug)]
 struct TranslationUnit<'a> {
@@ -25,9 +26,9 @@ fn main() {
         "the retained C execution backend currently supports only Linux/AArch64 (target is {target_arch}-{target_os})"
     );
 
-    println!("cargo:rerun-if-changed=c_backend/shim.c");
-    println!("cargo:rerun-if-changed=c_backend/executable_authority.c");
-    println!("cargo:rerun-if-changed=c_backend/executable_authority.h");
+    println!("cargo:rerun-if-changed={C_ENGINE}/shim.c");
+    println!("cargo:rerun-if-changed={C_ENGINE}/executable_authority.c");
+    println!("cargo:rerun-if-changed={C_ENGINE}/executable_authority.h");
     println!("cargo:rerun-if-changed={TU_MANIFEST}");
     println!("cargo:rerun-if-changed={SOURCE_MANIFEST}");
     let source_manifest = fs::read_to_string(SOURCE_MANIFEST).expect("read retained C source manifest");
@@ -46,7 +47,7 @@ fn main() {
 
     compile(
         "hl_c_backend_shim",
-        &["c_backend/shim.c", "c_backend/executable_authority.c"],
+        &["shim.c", "executable_authority.c"],
         &["_GNU_SOURCE"],
         false,
     );
@@ -161,8 +162,8 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         }
     }
     for source in sources {
-        let path = if source.starts_with("c_backend/") {
-            PathBuf::from(source)
+        let path = if matches!(*source, "shim.c" | "executable_authority.c") {
+            PathBuf::from(C_ENGINE).join(source)
         } else {
             PathBuf::from(RETAINED).join(source)
         };
