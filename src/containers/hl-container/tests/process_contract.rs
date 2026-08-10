@@ -123,6 +123,47 @@ async fn exec_contracts() -> Result<(), Error> {
     .await
 }
 
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn signalling_an_exec_does_not_stop_its_container() -> Result<(), Error> {
+    within_deadline(async {
+        let fixture = Fixture::new().await?;
+        let name = "process-exec-signal";
+        fixture
+            .containers
+            .create(fixture.spec(name, Process::new("/bin/sleep").args(["30"])))
+            .await?;
+        fixture.containers.start(name).await?;
+
+        let outcome = async {
+            let executions = fixture.containers.executions();
+            let killed = executions
+                .create(name, ExecSpec::new(Process::new("/bin/sleep").args(["30"])))
+                .await?;
+            let _session = executions.start(&killed.id).await?;
+            executions.signal(&killed.id, hl_container::Signal::KILL).await?;
+            let result = executions.wait(&killed.id).await?;
+            if result != ExitStatus::Signal(i32::from(hl_container::Signal::KILL.get())) {
+                return Err(format!("signalled exec exited with {result:?}").into());
+            }
+
+            check_exec(
+                &fixture.containers,
+                name,
+                Process::new("/bin/echo").args(["CONTAINER_SURVIVED"]),
+                b"CONTAINER_SURVIVED\n",
+            )
+            .await
+        }
+        .await;
+        let cleanup = fixture.containers.remove_force(name).await.map(|_| ());
+        outcome?;
+        cleanup?;
+        Ok(())
+    })
+    .await
+}
+
 async fn within_deadline<T>(future: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
     tokio::time::timeout(Duration::from_secs(45), future)
         .await
