@@ -286,7 +286,12 @@ mod tests {
 
         hl_log::Logging::global().set(hl_log::Tags::NONE);
         hl_log::Output::global().reset();
-        assert!(output.lock().unwrap().contains("execution.backend.selected=c isa=Aarch64"));
+        assert!(
+            output
+                .lock()
+                .unwrap()
+                .contains("execution.backend.selected=c isa=Aarch64")
+        );
     }
 
     #[test]
