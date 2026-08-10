@@ -98,7 +98,7 @@ pub const DEFINITIONS: &[Definition] = &[
     ),
     launch!(
         "HL_NATIVE_DIRECT_HOLD_RUNS",
-        "resolver admissions a bounded direct hold must serve",
+        "base-budget resolver-run equivalents a bounded direct hold must serve",
         Integer
     ),
     launch!(
