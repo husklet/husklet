@@ -1,6 +1,7 @@
 mod definition;
 mod execution;
 mod ledger;
+pub(crate) mod product_ab;
 
 use crate::{
     runtime,

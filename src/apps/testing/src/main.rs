@@ -53,6 +53,8 @@ enum Command {
     Bench(bench::Options),
     /// Compare two engine arms over one guest binary, serialized and order-balanced.
     Ab(ab::Options),
+    /// Compare the retained C and Rust product backends with balanced order.
+    ProductAb(bench::product_ab::Options),
     /// Run or report a direct provider benchmark.
     Benchmark {
         #[command(subcommand)]
@@ -91,6 +93,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::ScenarioCachePreflight(options) => scenario::cache_preflight(options),
         Command::Bench(options) => bench::run(options).await,
         Command::Ab(options) => ab::run(options),
+        Command::ProductAb(options) => bench::product_ab::run(options).await,
         Command::Benchmark { command } => benchmark::Application::new(std::env::var_os("PATH"))
             .execute(command)
             .map_err(Into::into),
@@ -114,6 +117,7 @@ mod cli_tests {
             "scenario-provenance",
             "scenario-cache-preflight",
             "ab",
+            "product-ab",
             "bench",
             "benchmark",
             "nested",
@@ -125,6 +129,35 @@ mod cli_tests {
     #[test]
     fn runtime_selection_parses() {
         assert!(Cli::try_parse_from(["testing", "runtime", "core", "--isa", "arm64"]).is_ok());
+    }
+
+    #[test]
+    fn product_ab_requires_a_unique_result_destination() {
+        assert!(
+            Cli::try_parse_from([
+                "testing",
+                "product-ab",
+                "lifecycle",
+                "lifecycle",
+                "--results",
+                "target/testing/product-ab/run-1.tsv",
+            ])
+            .is_ok()
+        );
+        assert!(Cli::try_parse_from(["testing", "product-ab"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "testing",
+                "product-ab",
+                "lifecycle",
+                "lifecycle",
+                "--rounds",
+                "3",
+                "--results",
+                "target/testing/product-ab/run-2.tsv",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

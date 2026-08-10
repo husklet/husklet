@@ -53,6 +53,44 @@ pub struct Preparation {
     setup: BTreeMap<String, u128>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductBackend {
+    C,
+    Rust,
+}
+
+impl ProductBackend {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::C => "c",
+            Self::Rust => "rust",
+        }
+    }
+
+    fn execution(self) -> hl_container::Execution {
+        match self {
+            Self::C => hl_container::Execution::retained_c(),
+            Self::Rust => hl_container::Execution::rust_native(false),
+        }
+    }
+}
+
+pub struct ProductSample {
+    pub round: u32,
+    pub position: u8,
+    pub backend: ProductBackend,
+    pub setup_us: u128,
+    pub execution_us: u128,
+    pub teardown_us: u128,
+    pub total_us: u128,
+    pub output_identity: String,
+}
+
+pub struct ProductRun {
+    pub setup: BTreeMap<String, u128>,
+    pub samples: Vec<ProductSample>,
+}
+
 pub struct Measurement {
     pub cold: u128,
     pub samples: Vec<u128>,
@@ -66,6 +104,157 @@ const DIAGNOSTIC_CAPTURE: usize = 4096;
 const DIAGNOSTIC_OUTPUT: usize = 16 * 1024;
 const SETUP_ALLOWANCE: Duration = Duration::from_secs(120);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub async fn run_product_ab(
+    benchmark: Arc<Benchmark>,
+    case_index: usize,
+    target: Target,
+    prepared: Preparation,
+    rounds: u32,
+) -> std::result::Result<ProductRun, Error> {
+    let case = &benchmark.cases[case_index];
+    let invocations = rounds.checked_mul(2).ok_or("product A/B invocation count overflow")?;
+    let deadline = tokio::time::Instant::now()
+        + Duration::from_secs(case.timeout)
+            .checked_mul(invocations)
+            .and_then(|duration| duration.checked_add(SETUP_ALLOWANCE))
+            .ok_or("product A/B deadline overflow")?;
+    let image_started = Instant::now();
+    let image = tokio::time::timeout_at(deadline, TestImage::materialize(&benchmark.image, &target.platform()))
+        .await
+        .map_err(|_| "product A/B image materialization exceeded its deadline")??;
+    if image.identity() != prepared.image_identity {
+        image.release()?;
+        return Err("benchmark image identity changed after product A/B preparation".into());
+    }
+    if let (Some(artifact), Some(identity)) = (&prepared.artifact, &prepared.artifact_identity)
+        && crate::record::FramedIdentity::of_file(artifact)? != *identity
+    {
+        image.release()?;
+        return Err("benchmark artifact identity changed after product A/B preparation".into());
+    }
+    let mut setup = prepared.setup;
+    setup.insert("image_materialize".into(), elapsed_us(image_started));
+    let outcome = run_product_ab_with_image(
+        &benchmark,
+        case,
+        target,
+        image.path(),
+        prepared.artifact.as_deref(),
+        rounds,
+        deadline,
+        &mut setup,
+    )
+    .await;
+    let release_started = Instant::now();
+    let release = tokio::time::timeout(
+        CLEANUP_TIMEOUT,
+        tokio::task::spawn_blocking(move || image.release().map_err(|error| error.to_string())),
+    )
+    .await
+    .map_err(|_| "product A/B image cleanup timed out")??;
+    release?;
+    setup.insert("image_release".into(), elapsed_us(release_started));
+    Ok(ProductRun {
+        setup,
+        samples: outcome?,
+    })
+}
+
+async fn run_product_ab_with_image(
+    benchmark: &Benchmark,
+    case: &BenchmarkCase,
+    target: Target,
+    image: &std::path::Path,
+    artifact: Option<&std::path::Path>,
+    rounds: u32,
+    deadline: tokio::time::Instant,
+    setup: &mut BTreeMap<String, u128>,
+) -> std::result::Result<Vec<ProductSample>, Error> {
+    let started = Instant::now();
+    let state = tempfile::tempdir()?;
+    let containers = tokio::time::timeout_at(
+        deadline,
+        hl_container::Containers::builder(Config::new(state.path())).build(),
+    )
+    .await
+    .map_err(|_| "product A/B container service setup exceeded its deadline")??;
+    setup.insert("container_service".into(), elapsed_us(started));
+    let program = benchmark
+        .rootfs_executable
+        .clone()
+        .unwrap_or_else(|| format!("/opt/husklet/bench-{}", case.id));
+    let started = Instant::now();
+    if let Some(artifact) = artifact {
+        stage(artifact, image, &program)?;
+    }
+    setup.insert("guest_stage".into(), elapsed_us(started));
+    let expected_stdout = tokio::fs::read(&case.stdout_contains).await?;
+    let mut expected_identity = None;
+    let mut samples = Vec::with_capacity((rounds * 2) as usize);
+    for round in 0..rounds {
+        for (position, backend) in product_order(round).into_iter().enumerate() {
+            let name_repetition = round * 2 + u32::try_from(position)?;
+            let invocation = Invocation::new_with_execution(
+                &containers,
+                benchmark,
+                case,
+                target,
+                image,
+                &program,
+                name_repetition,
+                backend.execution(),
+            )?;
+            let outcome = tokio::time::timeout_at(deadline, invocation.execute_captured(&expected_stdout))
+                .await
+                .map_err(|_| "product A/B execution exceeded its deadline")??;
+            let teardown_started = Instant::now();
+            tokio::time::timeout(CLEANUP_TIMEOUT, containers.remove_force(&invocation.name))
+                .await
+                .map_err(|_| "product A/B container cleanup timed out")??;
+            let remove_us = elapsed_us(teardown_started);
+            let identity =
+                crate::record::FramedIdentity::over(&[outcome.stdout.as_slice(), outcome.stderr.as_slice()])?;
+            if let Some(expected) = &expected_identity {
+                if expected != &identity {
+                    return Err(format!("product A/B output changed at round {round} position {position}").into());
+                }
+            } else {
+                expected_identity = Some(identity.clone());
+            }
+            let setup_us = lifecycle_sum(&outcome.lifecycle, &["create", "attach", "start"]);
+            let execution_us = lifecycle_sum(&outcome.lifecycle, &["wait_and_drain"]);
+            let teardown_us = lifecycle_sum(&outcome.lifecycle, &["output_read"]).saturating_add(remove_us);
+            samples.push(ProductSample {
+                round,
+                position: u8::try_from(position)?,
+                backend,
+                setup_us,
+                execution_us,
+                teardown_us,
+                total_us: setup_us.saturating_add(execution_us).saturating_add(teardown_us),
+                output_identity: identity,
+            });
+        }
+    }
+    Ok(samples)
+}
+
+fn lifecycle_sum(values: &[(String, u128)], names: &[&str]) -> u128 {
+    values
+        .iter()
+        .filter(|(name, _)| names.contains(&name.as_str()))
+        .map(|(_, value)| *value)
+        .sum()
+}
+
+fn product_order(round: u32) -> [ProductBackend; 2] {
+    if round % 2 == 0 {
+        [ProductBackend::C, ProductBackend::Rust]
+    } else {
+        [ProductBackend::Rust, ProductBackend::C]
+    }
+}
 
 pub async fn prepare(
     benchmark: &Benchmark,
@@ -396,6 +585,28 @@ impl<'a> Invocation<'a> {
         program: &str,
         repetition: u32,
     ) -> std::result::Result<Self, Error> {
+        Self::new_with_execution(
+            containers,
+            benchmark,
+            case,
+            target,
+            image,
+            program,
+            repetition,
+            benchmark.execution.container()?,
+        )
+    }
+
+    fn new_with_execution(
+        containers: &'a hl_container::Containers,
+        benchmark: &'a Benchmark,
+        case: &'a BenchmarkCase,
+        target: Target,
+        image: &std::path::Path,
+        program: &str,
+        repetition: u32,
+        execution: hl_container::Execution,
+    ) -> std::result::Result<Self, Error> {
         let name = format!(
             "testing-bench-{}-{}-{}-{repetition}",
             benchmark.name,
@@ -408,7 +619,7 @@ impl<'a> Invocation<'a> {
         )
         .name(&name)
         .guest(target.guest())
-        .execution(benchmark.execution.container()?)
+        .execution(execution)
         .isolation(Isolation {
             sandbox: Sandbox::Disabled,
             ..Isolation::default()
@@ -426,6 +637,14 @@ impl<'a> Invocation<'a> {
         &self,
         expected_stdout: &[u8],
     ) -> std::result::Result<(u128, Vec<(String, u128, u64)>, Vec<(String, u128)>), Error> {
+        let mut outcome = self.execute_captured(expected_stdout).await?;
+        outcome
+            .lifecycle
+            .retain(|(name, _)| self.benchmark_phases().iter().any(|phase| phase.name() == name));
+        Ok((outcome.elapsed_ms, outcome.phases, outcome.lifecycle))
+    }
+
+    async fn execute_captured(&self, expected_stdout: &[u8]) -> std::result::Result<InvocationOutcome, Error> {
         let started = Instant::now();
         let phase_started = Instant::now();
         self.containers.create(self.spec.clone()).await?;
@@ -472,14 +691,40 @@ impl<'a> Invocation<'a> {
         let lifecycle = all
             .into_iter()
             .zip(values)
-            .filter(|(phase, _)| self.benchmark_phases().contains(phase))
             .map(|(phase, time)| (phase.name().into(), time))
             .collect();
-        Ok((elapsed, parse_phases(&logs.stdout)?, lifecycle))
+        Ok(InvocationOutcome {
+            elapsed_ms: elapsed,
+            phases: parse_phases(&logs.stdout)?,
+            lifecycle,
+            stdout: logs.stdout,
+            stderr: logs.stderr,
+        })
     }
 
     fn benchmark_phases(&self) -> &[LifecyclePhase] {
         self.phases
+    }
+}
+
+struct InvocationOutcome {
+    elapsed_ms: u128,
+    phases: Vec<(String, u128, u64)>,
+    lifecycle: Vec<(String, u128)>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+#[cfg(test)]
+mod product_tests {
+    use super::{ProductBackend, product_order};
+
+    #[test]
+    fn product_pair_order_balances_first_position() {
+        assert_eq!(product_order(0), [ProductBackend::C, ProductBackend::Rust]);
+        assert_eq!(product_order(1), [ProductBackend::Rust, ProductBackend::C]);
+        assert_eq!(product_order(2), [ProductBackend::C, ProductBackend::Rust]);
+        assert_eq!(product_order(3), [ProductBackend::Rust, ProductBackend::C]);
     }
 }
 
