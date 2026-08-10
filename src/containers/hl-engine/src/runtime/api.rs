@@ -4,14 +4,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hl_runtime::{RuntimeAssembly, RuntimeAssemblyConfig, RuntimeDomain, RuntimeExecPort, RuntimeForkPort};
+mod execution;
+use execution::{ProductionFactory, ProductionMachine};
+
+use hl_runtime::{RuntimeAssembly, RuntimeDomain, RuntimeExecPort, RuntimeForkPort};
 
 use crate::activation::GuestIsa;
 use crate::composition::{ActivationChannel, CompositionError, EngineBackend, RuntimeServices};
 use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::launch_plan::RuntimePlan;
 use crate::options::Options;
-use crate::runtime_machine::{HostServices, RustRuntimeFactory, RustRuntimeMachine};
+use crate::runtime_machine::HostServices;
 
 mod workspace;
 
@@ -119,7 +122,10 @@ impl Builder {
         let Some(environment) = Self::environment(self.environment) else {
             return Err(EngineError::LaunchFailed);
         };
-        let workspace = OwnedWorkspace::create()?;
+        let workspace = OwnedWorkspace::create().map_err(|error| {
+            hl_log::hl_error!(hl_log::tag::EXEC, "engine workspace creation failed: error={error:?}");
+            error
+        })?;
         let prepared = match workspace.prepare_rootfs(&self.executable, self.rootfs, self.guest_executable.as_deref()) {
             Ok(value) => value,
             Err(error) => return workspace.fail(error),
@@ -188,11 +194,7 @@ impl Builder {
             result_path: self.trace.map(|path| path.as_os_str().as_encoded_bytes().to_vec()),
             options,
         };
-        let factory = RustRuntimeFactory::new(
-            Arc::new(crate::native::GuestExecutor::default()),
-            Arc::new(Services),
-            RuntimeAssemblyConfig::default(),
-        );
+        let factory = ProductionFactory;
         let services = RuntimeServices {
             activation: Arc::new(Activation),
             checkpoint_sink: None,
@@ -238,7 +240,7 @@ impl Builder {
     }
 }
 
-type Backend = EngineBackend<RustRuntimeMachine<crate::native::GuestExecutor>, OwnedWorkspace>;
+type Backend = EngineBackend<ProductionMachine, OwnedWorkspace>;
 
 pub struct Engine {
     backend: Backend,
@@ -290,12 +292,11 @@ impl Engine {
 
     fn construct(isa: GuestIsa, plan: RuntimePlan, services: RuntimeServices) -> Result<Self, EngineError> {
         let terminal = services.streams.terminal();
-        let workspace = OwnedWorkspace::create()?;
-        let factory = RustRuntimeFactory::new(
-            Arc::new(crate::native::GuestExecutor::default()),
-            Arc::new(Services),
-            RuntimeAssemblyConfig::default(),
-        );
+        let workspace = OwnedWorkspace::create().map_err(|error| {
+            hl_log::hl_error!(hl_log::tag::EXEC, "engine workspace creation failed: error={error:?}");
+            error
+        })?;
+        let factory = ProductionFactory;
         let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())
             .map_err(|_| EngineError::LaunchFailed)?;
         Ok(Self {

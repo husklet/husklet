@@ -60,6 +60,11 @@ pub const DEFINITIONS: &[Definition] = &[
     ),
     launch!("HL_CPUS", "guest-visible CPU quota", Integer),
     launch!("HL_CWD", "initial guest working directory", Path),
+    launch!(
+        "HL_EXECUTION_BACKEND",
+        "launch-selected execution implementation: rust or c",
+        Text
+    ),
     launch!("HL_EGRESS_SOCKS", "SOCKS5 endpoint for external TCP egress", Text),
     launch!("HL_FSGEN_FILE", "shared overlay filesystem-generation file", Path),
     launch!("HL_FILE_OWNERS", "initial guest file ownership records", Records),
@@ -329,6 +334,19 @@ mod tests {
         assert_eq!(options.get(definition.name), None);
         options.set(definition.name, "1", true).unwrap();
         assert_eq!(options.get(definition.name), Some("1"));
+    }
+
+    #[test]
+    fn execution_backend_is_an_explicit_launch_option() {
+        let definition = DEFINITIONS
+            .iter()
+            .find(|definition| definition.name == "HL_EXECUTION_BACKEND")
+            .unwrap();
+        assert_eq!(definition.ownership, Ownership::LaunchInput);
+        assert_eq!(definition.shape, Shape::Text);
+        let mut options = Options::default();
+        options.set(definition.name, "c", true).unwrap();
+        assert_eq!(options.get(definition.name), Some("c"));
     }
 
     #[test]

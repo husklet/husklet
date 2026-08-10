@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
+build = "build.rs"
 
 [lints]
 workspace = true
@@ -33,6 +34,9 @@ zeroize = "1.9"
 [dev-dependencies]
 hl-fake-host = { path = "../../runtime/hl-fake-host" }
 
+[build-dependencies]
+cc = "1.4.0"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
@@ -44,3 +48,5 @@ path = "src/lib.rs"
 [features]
 # Counts host heap allocations per native crossing; see `native::allocations`.
 alloc-count = []
+# Experimental coarse execution backend embedding the retained runtime archives.
+c-execution = ["hl-native/c-coexist"]

@@ -1161,6 +1161,7 @@ dependencies = [
 name = "hl-engine"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "hl-checkpoint",
  "hl-descriptor",
  "hl-event",
