@@ -541,7 +541,7 @@ impl Drop for CGuestExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::{CGuestExecutor, StreamBridge, c_file_volumes};
+    use super::{CGuestExecutor, StreamBridge, c_file_volumes, c_option};
     use crate::activation::GuestIsa;
     use crate::composition::{
         ActivationChannel, CompositionError, RuntimeServices, StandardStreams, Terminal, TerminalPort,
@@ -586,6 +586,25 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn rust_validation_projects_one_immutable_c_record_set() {
+        let mut options = crate::options::Options::default();
+        assert!(options.iter().next().is_none());
+        options.set("HL_CWD", "", true).unwrap();
+        options.set("HL_UID", "7", true).unwrap();
+        options.set("HL_UID", "8", false).unwrap();
+        options.set("HL_UID", "9", true).unwrap();
+        options.set("HL_EXECUTION_BACKEND", "c", true).unwrap();
+        assert_eq!(
+            options.set("HL_UID", "18446744073709551616", true),
+            Err(crate::options::OptionError::InvalidValue)
+        );
+
+        let records = options.iter().filter(|(name, _)| c_option(name)).collect::<Vec<_>>();
+        assert_eq!(records, [("HL_CWD", b"".as_slice()), ("HL_UID", b"9".as_slice())]);
+        assert!(!records.iter().any(|(name, _)| *name == "HL_LOG"));
     }
 
     fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {

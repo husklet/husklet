@@ -15,6 +15,9 @@ typedef struct hl_options {
 } hl_options;
 
 int hl_options_init(hl_options *options);
+/* Deep-copy one already-validated, unique record set into the C read view. */
+int hl_options_init_records(hl_options *options, size_t count, const char *const *names,
+                            const char *const *values);
 int hl_options_clone(hl_options *destination, const hl_options *source);
 /* Snapshot the scoped, process, or centralized default context into an owned store. */
 int hl_options_clone_current(hl_options *destination);

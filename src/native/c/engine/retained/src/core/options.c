@@ -95,6 +95,8 @@ static size_t hl_option_index(const char *name) {
     return HL_OPTION_COUNT;
 }
 
+static size_t hl_option_value_size(const char *value);
+
 int hl_options_init(hl_options *options) {
     if (options == NULL) return -1;
     memset(options, 0, sizeof(*options));
@@ -108,6 +110,31 @@ int hl_options_init(hl_options *options) {
     }
     options->value_count = HL_OPTION_COUNT;
     return 0;
+}
+
+int hl_options_init_records(hl_options *options, size_t count, const char *const *names,
+                            const char *const *values) {
+    size_t record;
+    if (options == NULL || (count != 0 && (names == NULL || values == NULL)) || count > HL_OPTION_COUNT) return -1;
+    if (hl_options_init(options) != 0) return -1;
+    for (record = 0; record < count; ++record) {
+        size_t index = hl_option_index(names[record]);
+        size_t value_size;
+        char *copy;
+        if (index >= HL_OPTION_COUNT || values[record] == NULL || options->values[index] != NULL) goto fail;
+        value_size = hl_option_value_size(values[record]);
+        if (value_size == 0 || options->store_size > HL_OPTION_STORE_LIMIT - value_size) goto fail;
+        copy = malloc(value_size);
+        if (copy == NULL) goto fail;
+        memcpy(copy, values[record], value_size);
+        options->values[index] = copy;
+        options->value_sizes[index] = value_size;
+        options->store_size += value_size;
+    }
+    return 0;
+fail:
+    hl_options_destroy(options);
+    return -1;
 }
 
 int hl_options_clone(hl_options *destination, const hl_options *source) {

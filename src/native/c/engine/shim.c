@@ -87,19 +87,10 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
         config.fd_bindings = bindings;
         config.fd_binding_count = 3;
     }
-    if ((option_count != 0 && (option_names == NULL || option_values == NULL)) || hl_options_init(&options) != 0) {
+    if (hl_options_init_records(&options, option_count, option_names, option_values) != 0) {
         hl_host_linux_destroy(backend->host);
         free(backend);
-        return HL_STATUS_OUT_OF_MEMORY;
-    }
-    for (index = 0; index < option_count; ++index) {
-        if (option_names[index] == NULL || option_values[index] == NULL ||
-            hl_options_set(&options, option_names[index], option_values[index], 1) != 0) {
-            hl_options_destroy(&options);
-            hl_host_linux_destroy(backend->host);
-            free(backend);
-            return HL_STATUS_INVALID_ARGUMENT;
-        }
+        return HL_STATUS_INVALID_ARGUMENT;
     }
     if (executable_fd >= 0) {
         hl_host_result imported_executable = hl_host_linux_import_file(backend->host, executable_fd);

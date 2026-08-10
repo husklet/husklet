@@ -5,12 +5,23 @@
 
 int main(void) {
     hl_options options;
+    const char *names[] = {"HL_OVERLAY_UPPER", "HL_GID", "HL_GUEST_ENV_EXACT"};
+    const char *values[] = {"", "18446744073709551615", "1"};
+    const char *duplicate_names[] = {"HL_GID", "HL_GID"};
+    const char *duplicate_values[] = {"1", "2"};
     int status = EXIT_FAILURE;
 
-    if (hl_options_init(&options) != 0) return EXIT_FAILURE;
-    if (hl_options_set(&options, "HL_OVERLAY_UPPER", "/var/lib/husklet/upper", 1) != 0) goto done;
-    if (strcmp(hl_options_get(&options, "HL_OVERLAY_UPPER"), "/var/lib/husklet/upper") != 0) goto done;
-    if (hl_options_set(&options, "HL_NOT_REGISTERED", "value", 1) != -1) goto done;
+    if (hl_options_init_records(&options, 3, names, values) != 0) return EXIT_FAILURE;
+    if (hl_options_get(&options, "HL_CHECKPOINT") != NULL) goto done;
+    if (strcmp(hl_options_get(&options, "HL_OVERLAY_UPPER"), "") != 0) goto done;
+    if (strcmp(hl_options_get(&options, "HL_GID"), "18446744073709551615") != 0) goto done;
+    if (strcmp(hl_options_get(&options, "HL_GUEST_ENV_EXACT"), "1") != 0) goto done;
+    if (hl_options_get(&options, "HL_LOG") != NULL) goto done;
+    hl_options_destroy(&options);
+    if (hl_options_init_records(&options, 2, duplicate_names, duplicate_values) == 0) {
+        hl_options_destroy(&options);
+        return EXIT_FAILURE;
+    }
     status = EXIT_SUCCESS;
 
 done:
