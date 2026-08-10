@@ -441,6 +441,42 @@ mod tests {
     }
 
     #[test]
+    fn explicit_retained_c_execution_reaches_the_engine_launch_plan() {
+        let mut launch = launch();
+        launch.execution = crate::Execution::retained_c();
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), Some("c"));
+        assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+    }
+
+    #[test]
+    fn explicit_rust_modes_reach_the_engine_launch_plan() {
+        let mut launch = launch();
+        launch.execution = crate::Execution::rust_interpreted();
+        let interpreted = Spec::try_from(&launch).unwrap();
+        assert_eq!(interpreted.plan.options.get("HL_EXECUTION_BACKEND"), Some("rust"));
+        assert_eq!(interpreted.plan.options.get("HL_NATIVE_EXECUTION"), None);
+        assert_eq!(interpreted.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+
+        launch.execution = crate::Execution::rust_native(true);
+        let native = Spec::try_from(&launch).unwrap();
+        assert_eq!(native.plan.options.get("HL_EXECUTION_BACKEND"), Some("rust"));
+        assert_eq!(native.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
+        assert_eq!(native.plan.options.get("HL_NATIVE_DIAGNOSTICS"), Some("1"));
+    }
+
+    #[test]
+    fn legacy_execution_modes_leave_product_backend_unselected() {
+        for execution in [crate::Execution::default(), crate::Execution::native(false)] {
+            let mut launch = launch();
+            launch.execution = execution;
+            let spec = Spec::try_from(&launch).unwrap();
+            assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), None);
+        }
+    }
+
+    #[test]
     fn network_interfaces_preserve_attachment_order_and_prefixes() {
         let mut launch = launch();
         launch.networks = vec![bridge("front", "172.29.0.2", 24), bridge("back", "10.7.0.9", 19)];

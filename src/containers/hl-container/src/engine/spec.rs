@@ -22,6 +22,9 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::filesystem(&mut options, launch)?;
         Self::resources(&mut options, launch)?;
         Self::network(&mut options, launch)?;
+        if let Some(backend) = launch.execution.engine_backend() {
+            Self::set(&mut options, "HL_EXECUTION_BACKEND", backend)?;
+        }
         Self::flag(&mut options, "HL_NATIVE_EXECUTION", launch.execution.is_native())?;
         Self::flag(&mut options, "HL_NATIVE_DIAGNOSTICS", launch.execution.diagnostics())?;
         Self::flag(

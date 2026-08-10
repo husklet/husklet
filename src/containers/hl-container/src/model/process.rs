@@ -598,6 +598,14 @@ pub enum Execution {
     Native {
         diagnostics: bool,
     },
+    /// Selects the temporary retained-C engine explicitly.
+    RetainedC,
+    /// Selects the Rust engine with its interpreter only.
+    RustInterpreted,
+    /// Selects the Rust engine with generated native execution enabled.
+    RustNative {
+        diagnostics: bool,
+    },
 }
 
 impl Execution {
@@ -607,16 +615,76 @@ impl Execution {
         Self::Native { diagnostics }
     }
 
+    /// Selects the retained-C engine independently of the product default.
+    #[must_use]
+    pub const fn retained_c() -> Self {
+        Self::RetainedC
+    }
+
+    /// Selects the Rust interpreter independently of the product default.
+    #[must_use]
+    pub const fn rust_interpreted() -> Self {
+        Self::RustInterpreted
+    }
+
+    /// Selects the Rust engine's generated native execution independently of the product default.
+    #[must_use]
+    pub const fn rust_native(diagnostics: bool) -> Self {
+        Self::RustNative { diagnostics }
+    }
+
     #[must_use]
     pub const fn is_native(self) -> bool {
-        matches!(self, Self::Native { .. })
+        matches!(self, Self::Native { .. } | Self::RetainedC | Self::RustNative { .. })
     }
 
     #[must_use]
     pub const fn diagnostics(self) -> bool {
         match self {
-            Self::Interpreted => false,
-            Self::Native { diagnostics } => diagnostics,
+            Self::Interpreted | Self::RetainedC | Self::RustInterpreted => false,
+            Self::Native { diagnostics } | Self::RustNative { diagnostics } => diagnostics,
+        }
+    }
+
+    pub(crate) const fn engine_backend(self) -> Option<&'static str> {
+        match self {
+            Self::Interpreted | Self::Native { .. } => None,
+            Self::RetainedC => Some("c"),
+            Self::RustInterpreted | Self::RustNative { .. } => Some("rust"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod execution_tests {
+    use super::Execution;
+
+    #[test]
+    fn legacy_execution_encoding_is_unchanged() {
+        assert_eq!(
+            serde_json::to_string(&Execution::default()).unwrap(),
+            r#"{"backend":"interpreted"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Execution::native(true)).unwrap(),
+            r#"{"backend":"native","diagnostics":true}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Execution>(r#"{"backend":"native","diagnostics":false}"#).unwrap(),
+            Execution::native(false)
+        );
+    }
+
+    #[test]
+    fn explicit_engine_encodings_round_trip() {
+        for execution in [
+            Execution::retained_c(),
+            Execution::rust_interpreted(),
+            Execution::rust_native(false),
+            Execution::rust_native(true),
+        ] {
+            let encoded = serde_json::to_vec(&execution).unwrap();
+            assert_eq!(serde_json::from_slice::<Execution>(&encoded).unwrap(), execution);
         }
     }
 }
