@@ -408,11 +408,7 @@ impl Run {
             }
             for (name, phase) in sample.phases {
                 let summary = phases.entry(name.clone()).or_default();
-                if name != "syscall" && summary.checksum.is_some_and(|expected| expected != phase.checksum) {
-                    return Err(format!("checksum changed across repeats for {name}"));
-                }
-                summary.checksum = Some(phase.checksum);
-                summary.times.push(phase.time);
+                summary.observe(&name, phase)?;
             }
         }
         if phases.values().any(|phase| phase.times.len() != self.repeats) {
@@ -595,6 +591,15 @@ impl Phase {
 }
 
 impl Summary {
+    fn observe(&mut self, name: &str, phase: Phase) -> Result<(), String> {
+        if self.checksum.is_some_and(|expected| expected != phase.checksum) {
+            return Err(format!("checksum changed across repeats for {name}"));
+        }
+        self.checksum = Some(phase.checksum);
+        self.times.push(phase.time);
+        Ok(())
+    }
+
     fn median(values: &mut [u64]) -> u64 {
         values.sort_unstable();
         if values.len().is_multiple_of(2) {
@@ -655,6 +660,18 @@ mod test {
     fn median_contract() {
         assert_eq!(Summary::median(&mut [9, 1, 5]), 5);
         assert_eq!(Summary::median(&mut [9, 1, 5, 3]), 4);
+    }
+
+    #[test]
+    fn repeat_summary_rejects_divergent_syscall_checksums() {
+        let mut summary = Summary::default();
+        summary.observe("syscall", Phase { time: 10, checksum: 42 }).unwrap();
+        assert_eq!(
+            summary
+                .observe("syscall", Phase { time: 11, checksum: 43 })
+                .unwrap_err(),
+            "checksum changed across repeats for syscall"
+        );
     }
 
     #[test]

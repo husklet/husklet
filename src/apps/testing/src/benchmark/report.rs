@@ -93,10 +93,9 @@ impl Report {
         let mut groups = BTreeMap::<Group, (Row, Vec<u64>, Vec<u64>)>::new();
         for row in rows {
             let phase = (row.arch.clone(), row.phase.clone(), row.context.clone());
-            if row.phase != "syscall"
-                && checksums
-                    .insert(phase.clone(), row.checksum)
-                    .is_some_and(|value| value != row.checksum)
+            if checksums
+                .insert(phase.clone(), row.checksum)
+                .is_some_and(|value| value != row.checksum)
             {
                 return Err(format!("checksum divergence: {}/{}", row.arch, row.phase));
             }
@@ -248,11 +247,10 @@ impl Output {
         let reference = self.references.get(&phase).copied();
         let ratio = reference.map_or_else(|| "-".into(), |value| Reference::ratio(row.time, value.time));
         let wall_ratio = reference.map_or_else(|| "-".into(), |value| Reference::ratio(row.wall, value.wall));
-        if row.phase != "syscall"
-            && self
-                .checksums
-                .insert(phase, row.checksum)
-                .is_some_and(|value| value != row.checksum)
+        if self
+            .checksums
+            .insert(phase, row.checksum)
+            .is_some_and(|value| value != row.checksum)
         {
             return Err(format!("checksum divergence: {}/{}", row.arch, row.phase));
         }
@@ -305,8 +303,8 @@ mod tests {
         fs::write(
             &path,
             "provider,arch,phase,time_us,checksum,a,b,c\n\
-             native,aarch64,compute,10,42,0,0,0\n\
-             rust,aarch64,compute,11,43,0,0,0\n",
+             native,aarch64,syscall,10,42,0,0,0\n\
+             rust,aarch64,syscall,11,43,0,0,0\n",
         )
         .expect("write fixture");
 
@@ -316,7 +314,7 @@ mod tests {
         }
         .write()
         .expect_err("checksum must diverge");
-        assert_eq!(error, "checksum divergence: aarch64/compute");
+        assert_eq!(error, "checksum divergence: aarch64/syscall");
     }
 
     #[test]
