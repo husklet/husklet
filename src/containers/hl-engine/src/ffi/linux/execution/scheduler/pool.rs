@@ -610,23 +610,17 @@ impl NativePool {
     }
 
     /// Pays bounded hold debt with the resolver work that actually completed, then records
-    /// the mode. A short exit still costs one unit; an activation extended across several
-    /// base grants costs one unit per grant-equivalent, so suppressing an intermediate exit
-    /// cannot make the same hold cover more guest work. The final resolver run warms the
-    /// process for the next admission after retiring the hold.
-    pub(super) fn observe_direct_run(
-        &mut self,
-        process: hl_task::ProcessId,
-        direct: bool,
-        executed: u64,
-        base_budget: u64,
-    ) {
+    /// the mode. Zero-progress exits do neither: an interrupt or fallback before the first
+    /// native instruction is not evidence about the mode and cannot pay a hold. Positive
+    /// work is charged in fixed scheduler-slice equivalents, independent of whether this
+    /// activation received a shared or solo grant. The final resolver run warms the process
+    /// for the next admission after retiring the hold.
+    pub(super) fn observe_direct_run(&mut self, process: hl_task::ProcessId, direct: bool, executed: u64) {
+        if executed == 0 {
+            return;
+        }
         if !direct {
-            let work = if base_budget == 0 {
-                1
-            } else {
-                executed.div_ceil(base_budget).max(1)
-            };
+            let work = executed.div_ceil(super::SLICE_BUDGET);
             let expired = self.direct_holds.get_mut(&process).is_some_and(|remaining| {
                 if *remaining == DIRECT_HOLD_PERMANENT {
                     return false;

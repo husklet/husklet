@@ -236,7 +236,6 @@ impl GuestExecutor {
                 run.process,
                 stats.direct,
                 retired.expect("native statistics must carry the retired count"),
-                native_budget,
             );
             pool.merge_observed_sources(run.process, lease.generation(), stats.sources, stats.sources_complete)?;
         }

@@ -637,7 +637,7 @@ mod tests {
         assert_eq!(pool.direct_holds.get(&process), Some(&3));
         assert!(!pool.direct_authority(process, entry));
         assert_eq!(pool.direct_holds.get(&process), Some(&3));
-        pool.observe_direct_run(process, false, 1, 1);
+        pool.observe_direct_run(process, false, 1);
         assert_eq!(pool.direct_holds.get(&process), Some(&2));
     }
 
@@ -657,7 +657,7 @@ mod tests {
         assert_eq!(sticky.direct_holds.get(&process), Some(&3));
         assert!(!sticky.direct_authority(process, entry));
         assert_eq!(sticky.direct_holds.get(&process), Some(&3));
-        sticky.observe_direct_run(process, false, 1, 1);
+        sticky.observe_direct_run(process, false, 1);
         assert_eq!(sticky.direct_holds.get(&process), Some(&2));
 
         let mut permanent_options = crate::options::Options::default();
@@ -1270,13 +1270,13 @@ mod tests {
         assert_eq!(pool.bounded_direct_hold_remaining(), 3);
 
         let site = (process, 1, 1, 0x4000);
-        for (executed, remaining) in [(0, 2), (1, 1), (3, 0)] {
+        for (executed, remaining) in [(1, 2), (SLICE_BUDGET, 1), (3, 0)] {
             assert!(
                 !pool.direct_authority(process, site),
                 "every configured hold admission must run through the resolver"
             );
             assert_eq!(pool.bounded_direct_hold_remaining(), remaining + 1);
-            pool.observe_direct_run(process, false, executed, 4);
+            pool.observe_direct_run(process, false, executed);
             assert_eq!(pool.bounded_direct_hold_remaining(), remaining);
         }
         assert!(!pool.direct_holds.contains_key(&process));
@@ -1287,36 +1287,57 @@ mod tests {
     }
 
     #[test]
-    fn bounded_direct_hold_debt_is_invariant_to_activation_extension() {
-        const BUDGET: u64 = 8;
+    fn bounded_direct_hold_debt_is_invariant_to_scheduler_grant_size() {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
         let site = (process, 1, 1, 0x4000);
         let held = || {
             let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
-            pool.direct_holds.insert(process, 10);
+            pool.direct_holds.insert(process, 32);
             pool
         };
-        let mut short = held();
-        let mut extended = held();
+        let shared_budget = GuestExecutor::native_budget(false);
+        let solo_budget = GuestExecutor::native_budget(true);
+        assert_eq!(shared_budget, SLICE_BUDGET);
+        assert_eq!(solo_budget % shared_budget, 0);
+        let shared_grants_per_solo = solo_budget / shared_budget;
+        let mut shared = held();
+        let mut solo = held();
 
-        for _ in 0..6 {
-            assert!(!short.direct_authority(process, site));
-            short.observe_direct_run(process, false, BUDGET, BUDGET);
+        for _ in 0..shared_grants_per_solo {
+            assert!(!shared.direct_authority(process, site));
+            shared.observe_direct_run(process, false, shared_budget);
         }
-        assert!(!extended.direct_authority(process, site));
-        extended.observe_direct_run(process, false, 6 * BUDGET, BUDGET);
-        assert_eq!(short.bounded_direct_hold_remaining(), 4);
-        assert_eq!(extended.bounded_direct_hold_remaining(), 4);
+        assert!(!solo.direct_authority(process, site));
+        solo.observe_direct_run(process, false, solo_budget);
+        assert_eq!(shared.bounded_direct_hold_remaining(), 16);
+        assert_eq!(solo.bounded_direct_hold_remaining(), 16);
 
-        for pool in [&mut short, &mut extended] {
+        for pool in [&mut shared, &mut solo] {
             assert!(!pool.direct_authority(process, site));
-            pool.observe_direct_run(process, false, 3 * BUDGET + 1, BUDGET);
+            pool.observe_direct_run(process, false, solo_budget);
             assert!(!pool.direct_holds.contains_key(&process));
             assert!(
                 pool.direct_authority(process, site),
                 "the resolver run that expires the hold must warm the next admission"
             );
         }
+    }
+
+    #[test]
+    fn zero_progress_direct_run_neither_pays_debt_nor_observes_mode() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        pool.direct_holds.insert(process, 3);
+        pool.direct_modes.insert(process, (true, 7));
+
+        pool.observe_direct_run(process, false, 0);
+
+        assert_eq!(pool.direct_holds.get(&process), Some(&3));
+        assert_eq!(pool.direct_modes.get(&process), Some(&(true, 7)));
+
+        let cold = hl_task::ProcessId::from_wire(2, 1).unwrap();
+        pool.observe_direct_run(cold, true, 0);
+        assert!(!pool.direct_modes.contains_key(&cold));
     }
 
     #[test]
@@ -1368,7 +1389,7 @@ mod tests {
         pool.direct_modes.remove(&process);
         for _ in 0..2 {
             assert!(!pool.direct_earned(process));
-            pool.observe_direct_run(process, false, 1, 1);
+            pool.observe_direct_run(process, false, 1);
         }
         assert!(!pool.direct_holds.contains_key(&process), "the hold must retire");
         assert!(pool.direct_earned(process));
