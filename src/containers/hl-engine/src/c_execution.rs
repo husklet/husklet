@@ -589,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_validation_projects_one_immutable_c_record_set() {
+    fn rust_validation_projects_one_lifetime_stable_c_record_set() {
         let mut options = crate::options::Options::default();
         assert!(options.iter().next().is_none());
         options.set("HL_CWD", "", true).unwrap();

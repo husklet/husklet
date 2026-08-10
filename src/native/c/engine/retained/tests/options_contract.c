@@ -18,6 +18,16 @@ int main(void) {
     if (strcmp(hl_options_get(&options, "HL_GID"), "18446744073709551615") != 0) goto done;
     if (strcmp(hl_options_get(&options, "HL_GUEST_ENV_EXACT"), "1") != 0) goto done;
     if (hl_options_get(&options, "HL_LOG") != NULL) goto done;
+    {
+        hl_options *previous = hl_options_bind_process(&options);
+        if (hl_option_set("HL_GUEST_ENV", "A=B", 1) != 0 ||
+            strcmp(hl_options_get(&options, "HL_GUEST_ENV"), "A=B") != 0 ||
+            hl_option_unset("HL_GUEST_ENV") != 0 || hl_options_get(&options, "HL_GUEST_ENV") != NULL) {
+            (void)hl_options_bind_process(previous);
+            goto done;
+        }
+        (void)hl_options_bind_process(previous);
+    }
     options.store_size++;
     if (hl_options_validate(&options) == 0) goto done;
     options.store_size--;
