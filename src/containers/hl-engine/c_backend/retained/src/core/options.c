@@ -43,6 +43,7 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_LAUNCH_OPTION("HL_HOSTNAME", "Linux guest hostname", HL_OPTION_TEXT),
     HL_LAUNCH_OPTION("HL_IP", "guest virtual IPv4 address paired with HL_NETBR", HL_OPTION_TEXT),
     HL_LAUNCH_OPTION("HL_LOWER", "ordered root filesystem lower layers", HL_OPTION_RECORDS),
+    HL_LAUNCH_OPTION("HL_OVERLAY_UPPER", "writable root filesystem overlay layer", HL_OPTION_PATH),
     HL_LAUNCH_OPTION("HL_OVERLAY_WORK", "launch-private portable overlay work directory", HL_OPTION_TEXT),
     HL_LAUNCH_OPTION("HL_MEM_MAX", "guest memory limit", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_NETBR", "shared virtual-network bridge identity", HL_OPTION_TEXT),
