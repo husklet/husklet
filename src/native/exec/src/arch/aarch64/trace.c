@@ -841,8 +841,9 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
 
 int hl_a64_trace_build(const hl_a64_source *source, uint64_t pc, size_t count, void *buffer,
                        size_t capacity, hl_a64_trace_result *output) {
+    /* Configless builders follow the conservative production default. */
     return trace_build(source, pc, count, buffer, capacity, output, NULL, NULL,
-                       source == NULL ? 0 : source->mapping_incarnation, NULL, 0, 1, 1, 0, 0);
+                       source == NULL ? 0 : source->mapping_incarnation, NULL, 0, 1, 1, 0, 1);
 }
 
 int hl_a64_trace_build_density(const hl_a64_source *source, uint64_t pc, size_t count,
@@ -851,7 +852,7 @@ int hl_a64_trace_build_density(const hl_a64_source *source, uint64_t pc, size_t 
     if (density == NULL) return 0;
     memset(density, 0, sizeof(*density));
     return trace_build(source, pc, count, buffer, capacity, output, NULL, NULL,
-                       source == NULL ? 0 : source->mapping_incarnation, density, 0, 1, 1, 0, 0);
+                       source == NULL ? 0 : source->mapping_incarnation, density, 0, 1, 1, 0, 1);
 }
 
 int hl_a64_trace_build_direct(const hl_a64_source *source, uint64_t pc, size_t count, void *buffer,
@@ -859,7 +860,7 @@ int hl_a64_trace_build_direct(const hl_a64_source *source, uint64_t pc, size_t c
                               uint64_t expected_authority,
                               hl_a64_trace_result *output) {
     return trace_build(source, pc, count, buffer, capacity, output, NULL, authority,
-                       expected_authority, NULL, 0, 1, 1, 0, 0);
+                       expected_authority, NULL, 0, 1, 1, 0, 1);
 }
 
 hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const hl_a64_source *source, uint64_t pc,

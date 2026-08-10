@@ -589,6 +589,60 @@ static int source_window_fallthrough_shape(void) {
     return 0;
 }
 
+static int trace_builder_continuation_default(void) {
+#if !defined(__aarch64__)
+    return 0;
+#else
+    enum { BUILDER_COUNT = 3 };
+    const uint32_t words[] = {
+        UINT32_C(0xf90003e1), /* str x1,[sp] */
+        UINT32_C(0xd4000001), /* svc */
+    };
+    const uint64_t pc = 0x4d00;
+    const hl_a64_source_span span = {pc, (const uint8_t *)words, sizeof(words), 7, 12};
+    const hl_a64_source source = {&span, 1, 7, 12};
+    long page = sysconf(_SC_PAGESIZE);
+    CHECK(page > 0);
+    size_t capacity = (size_t)page * BUILDER_COUNT;
+    uint8_t *code = mmap(NULL, capacity, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(code != MAP_FAILED);
+    hl_a64_trace_result traces[BUILDER_COUNT];
+    hl_a64_trace_density density;
+    CHECK(hl_a64_trace_build(&source, pc, 2, code, (size_t)page, &traces[0]));
+    CHECK(hl_a64_trace_build_density(&source, pc, 2, code + page, (size_t)page,
+                                     &traces[1], &density));
+    CHECK(hl_a64_trace_build_direct(&source, pc, 2, code + 2 * page, (size_t)page,
+                                    NULL, 7, &traces[2]));
+    __builtin___clear_cache((char *)code, (char *)code + capacity);
+    CHECK(mprotect(code, capacity, PROT_READ | PROT_EXEC) == 0);
+
+    for (size_t index = 0; index < BUILDER_COUNT; index++) {
+        uint64_t data[8] = {0};
+        hl_native_aarch64_cpu cpu = {0};
+        cpu.program = pc;
+        cpu.stack = (uint64_t)(uintptr_t)(data + 2);
+        cpu.memory_first = (uint64_t)(uintptr_t)data;
+        cpu.memory_last = (uint64_t)(uintptr_t)(data + 8);
+        cpu.memory_permissions = HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE;
+        cpu.dirty_first = cpu.memory_first;
+        cpu.dirty_last = cpu.memory_first + 8;
+        /* A different live view forces the full ring through the pre-store
+         * archive path whose default this regression owns. */
+        cpu.dirty_view_first = cpu.memory_first + 4096;
+        cpu.dirty_view_last = cpu.memory_first + 8192;
+        cpu.dirty_count = 16;
+        cpu.registers[1] = UINT64_C(0xc01dfacec01dface);
+        execute(&cpu, code + index * (size_t)page);
+        CHECK(cpu.reason == HL_NATIVE_EXIT_SYSCALL && cpu.program == pc + 4);
+        CHECK(data[2] == UINT64_C(0xc01dfacec01dface));
+        CHECK(cpu.dirty_count == 16 && cpu.dirty_overflow != 0);
+    }
+    CHECK(munmap(code, capacity) == 0);
+    return 0;
+#endif
+}
+
 int main(void) {
     if (effect_analysis() != 0) return 1;
     if (loop_preflight() != 0) return 1;
@@ -597,6 +651,7 @@ int main(void) {
     if (certificate_authentication() != 0) return 1;
     if (diagnostics_off_byte_identity_and_density() != 0) return 1;
     if (source_window_fallthrough_shape() != 0) return 1;
+    if (trace_builder_continuation_default() != 0) return 1;
 #if !defined(__aarch64__)
     return 0;
 #else

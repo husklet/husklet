@@ -54,7 +54,7 @@ static int run_loop(hl_native_executor *executor, const uint8_t *bytes, size_t s
     return hl_native_run(executor, &cpu, &request, output) == HL_NATIVE_OK ? 0 : 1;
 }
 
-static int continuation_contract(void) {
+static int continuation_contract(uint32_t flags) {
     static const uint8_t register_loop[] = {
         0x0f, 0x58, 0xc1,       /* addps xmm0,xmm1 */
         0x83, 0xe8, 0x01,       /* sub eax,1 */
@@ -83,8 +83,10 @@ static int continuation_contract(void) {
 
     memory.write_begin = executable_begin;
     memory.write_end = executable_end;
-    hl_native_config config = test_config(&memory, HL_NATIVE_A64_DIRTY_OVERFLOW_CONTINUE);
+    hl_native_config config = test_config(&memory, flags);
     CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
+    CHECK(executor->dirty_overflow_continue ==
+          ((flags & HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT) == 0));
 
     CHECK(run_loop(executor, register_loop, sizeof register_loop, 0x8000,
                    1000, 300, 0, NULL, &state, &output) == 0);
@@ -282,7 +284,11 @@ static int cold_dynamic_chain_is_bounded(void) {
 
 int main(void) {
 #if defined(__aarch64__)
-    if (continuation_contract() != 0) return 1;
+    /* The AArch64 dirty-journal policy is accepted by the common executor but
+     * must not alter x86 lowering or execution. Exercise opposite policy state
+     * under the same x86 contract so the comparison is non-vacuous. */
+    if (continuation_contract(0) != 0) return 1;
+    if (continuation_contract(HL_NATIVE_A64_DIRTY_OVERFLOW_EXIT) != 0) return 1;
     if (projected_return_progress() != 0) return 1;
     if (alternating_writable_views_stay_native() != 0) return 1;
     return cold_dynamic_chain_is_bounded();
