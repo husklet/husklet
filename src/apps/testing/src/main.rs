@@ -55,6 +55,8 @@ enum Command {
     Ab(ab::Options),
     /// Compare the retained C and Rust product backends with balanced order.
     ProductAb(bench::product_ab::Options),
+    /// Build and freeze one runner/worker pair for later product A/B measurements.
+    ProductAbPrepare(bench::product_ab::PrepareOptions),
     /// Run or report a direct provider benchmark.
     Benchmark {
         #[command(subcommand)]
@@ -94,6 +96,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Bench(options) => bench::run(options).await,
         Command::Ab(options) => ab::run(options),
         Command::ProductAb(options) => bench::product_ab::run(options).await,
+        Command::ProductAbPrepare(options) => bench::product_ab::prepare(options).await,
         Command::Benchmark { command } => benchmark::Application::new(std::env::var_os("PATH"))
             .execute(command)
             .map_err(Into::into),
@@ -118,6 +121,7 @@ mod cli_tests {
             "scenario-cache-preflight",
             "ab",
             "product-ab",
+            "product-ab-prepare",
             "bench",
             "benchmark",
             "nested",
@@ -141,6 +145,8 @@ mod cli_tests {
                 "lifecycle",
                 "--results",
                 "target/testing/product-ab/run-1.tsv",
+                "--artifacts",
+                "target/testing/product-ab/artifacts/run-1",
             ])
             .is_ok()
         );
@@ -155,6 +161,8 @@ mod cli_tests {
                 "3",
                 "--results",
                 "target/testing/product-ab/run-2.tsv",
+                "--artifacts",
+                "target/testing/product-ab/artifacts/run-2",
             ])
             .is_err()
         );

@@ -7,14 +7,25 @@ use clap::Args;
 use std::{
     fs::OpenOptions,
     io::{BufWriter, Write},
+    os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
-const LEDGER_IDENTITY: &str = "husklet-product-ab-v1";
+const LEDGER_IDENTITY: &str = "husklet-product-ab-v2";
 const STAGED: &str = "HL_PRODUCT_AB_STAGED";
+const ARTIFACT_IDENTITY: &str = "husklet-product-ab-artifacts-v1";
+
+#[derive(Args)]
+pub(crate) struct PrepareOptions {
+    /// Guest ISA whose architecture worker is staged.
+    #[arg(long = "isa", value_enum, default_value = "arm64")]
+    target: Target,
+    /// New, never-reused artifact directory beneath the repository workspace.
+    #[arg(long, required = true, value_parser = crate::suite::parse::results)]
+    artifacts: PathBuf,
+}
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -33,6 +44,9 @@ pub(crate) struct Options {
     /// New, never-reused result path beneath the repository workspace.
     #[arg(long, required = true, value_parser = crate::suite::parse::results)]
     results: PathBuf,
+    /// Artifact directory created by `product-ab-prepare` before the quiet window.
+    #[arg(long, required = true, value_parser = crate::suite::parse::results)]
+    artifacts: PathBuf,
 }
 
 fn parse_rounds(value: &str) -> Result<u32, String> {
@@ -46,8 +60,9 @@ fn parse_rounds(value: &str) -> Result<u32, String> {
 pub(crate) async fn run(options: Options) -> Result<(), Error> {
     let workspace = runtime::workspace()?;
     if std::env::var_os(STAGED).is_none() {
-        return stage_and_reexec(&workspace, options.target).await;
+        return reexec(&workspace, options.target, &options.artifacts).await;
     }
+    let artifacts = verify_artifacts(&workspace.join(&options.artifacts), options.target, true)?;
     let directory = workspace.join("tests/bench").join(&options.benchmark);
     let benchmark = Arc::new(Benchmark::load(&directory, &directory.join("test.yaml"))?);
     let case_index = benchmark
@@ -64,6 +79,7 @@ pub(crate) async fn run(options: Options) -> Result<(), Error> {
         options.target,
         options.rounds,
         &prepared.identity,
+        &artifacts,
     )?;
     let run = execution::run_product_ab(benchmark, case_index, options.target, prepared, options.rounds).await?;
     ledger.setup(&run.setup)?;
@@ -79,7 +95,12 @@ pub(crate) async fn run(options: Options) -> Result<(), Error> {
     Ok(())
 }
 
-async fn stage_and_reexec(workspace: &Path, target: Target) -> Result<(), Error> {
+pub(crate) async fn prepare(options: PrepareOptions) -> Result<(), Error> {
+    let workspace = runtime::workspace()?;
+    stage(&workspace, options.target, &options.artifacts).await
+}
+
+async fn stage(workspace: &Path, target: Target, relative: &Path) -> Result<(), Error> {
     let worker = worker_name(target);
     let profile = crate::runtime::profile::PROFILE;
     let mut build = tokio::process::Command::new(env!("CARGO"));
@@ -94,10 +115,7 @@ async fn stage_and_reexec(workspace: &Path, target: Target) -> Result<(), Error>
         return Err(format!("building product A/B worker {worker} failed with {status}").into());
     }
 
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let artifacts = workspace
-        .join("target/testing/product-ab/artifacts")
-        .join(format!("{}-{nonce}", std::process::id()));
+    let artifacts = workspace.join(relative);
     std::fs::create_dir_all(
         artifacts
             .parent()
@@ -105,7 +123,10 @@ async fn stage_and_reexec(workspace: &Path, target: Target) -> Result<(), Error>
     )?;
     std::fs::create_dir(&artifacts)?;
     let source_runner = std::env::current_exe()?;
-    let source_worker = workspace.join("target").join(profile).join(worker);
+    let source_worker = source_runner
+        .parent()
+        .ok_or("product A/B runner has no binary directory")?
+        .join(worker);
     let staged_runner = artifacts.join("testing");
     let staged_worker = artifacts.join(worker);
 
@@ -119,6 +140,18 @@ async fn stage_and_reexec(workspace: &Path, target: Target) -> Result<(), Error>
     smoke(&staged_worker, None, &[64]).await?;
     let runner_identity = crate::record::FramedIdentity::of_file(&staged_runner)?;
     let worker_identity = crate::record::FramedIdentity::of_file(&staged_worker)?;
+    let manifest = format!(
+        "{ARTIFACT_IDENTITY}\ntarget={}\nrunner_sha256={runner_identity}\nworker={worker}\nworker_sha256={worker_identity}\n",
+        target.name()
+    );
+    let manifest_path = artifacts.join("manifest.tsv");
+    let mut manifest_file = OpenOptions::new().write(true).create_new(true).open(&manifest_path)?;
+    manifest_file.write_all(manifest.as_bytes())?;
+    manifest_file.sync_all()?;
+    std::fs::set_permissions(&staged_runner, std::fs::Permissions::from_mode(0o555))?;
+    std::fs::set_permissions(&staged_worker, std::fs::Permissions::from_mode(0o555))?;
+    std::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o444))?;
+    std::fs::set_permissions(&artifacts, std::fs::Permissions::from_mode(0o555))?;
     eprintln!(
         "product-ab: artifacts={} runner_sha256={} worker={} worker_sha256={}",
         artifacts.display(),
@@ -127,7 +160,13 @@ async fn stage_and_reexec(workspace: &Path, target: Target) -> Result<(), Error>
         worker_identity
     );
 
-    let status = tokio::process::Command::new(&staged_runner)
+    Ok(())
+}
+
+async fn reexec(workspace: &Path, target: Target, relative: &Path) -> Result<(), Error> {
+    let artifacts = workspace.join(relative);
+    let staged = verify_artifacts(&artifacts, target, false)?;
+    let status = tokio::process::Command::new(&staged.runner)
         .args(std::env::args_os().skip(1))
         .env(STAGED, "1")
         .stdin(Stdio::inherit())
@@ -140,6 +179,45 @@ async fn stage_and_reexec(workspace: &Path, target: Target) -> Result<(), Error>
     } else {
         Err(format!("staged product A/B runner failed with {status}").into())
     }
+}
+
+struct Artifacts {
+    runner: PathBuf,
+    runner_identity: String,
+    worker_identity: String,
+}
+
+fn verify_artifacts(artifacts: &Path, target: Target, require_current_runner: bool) -> Result<Artifacts, Error> {
+    let worker = worker_name(target);
+    let manifest = std::fs::read_to_string(artifacts.join("manifest.tsv"))?;
+    let lines = manifest.lines().collect::<Vec<_>>();
+    if lines.len() != 5
+        || lines[0] != ARTIFACT_IDENTITY
+        || lines[1] != format!("target={}", target.name())
+        || lines[3] != format!("worker={worker}")
+    {
+        return Err(format!("invalid product A/B artifact manifest at {}", artifacts.display()).into());
+    }
+    let runner = artifacts.join("testing");
+    let staged_worker = artifacts.join(worker);
+    let runner_identity = crate::record::FramedIdentity::of_file(&runner)?;
+    let worker_identity = crate::record::FramedIdentity::of_file(&staged_worker)?;
+    if lines[2] != format!("runner_sha256={runner_identity}") || lines[4] != format!("worker_sha256={worker_identity}")
+    {
+        return Err(format!(
+            "product A/B artifacts changed after preparation: {}",
+            artifacts.display()
+        )
+        .into());
+    }
+    if require_current_runner && std::env::current_exe()?.canonicalize()? != runner.canonicalize()? {
+        return Err("HL_PRODUCT_AB_STAGED may only be set by the staged runner".into());
+    }
+    Ok(Artifacts {
+        runner,
+        runner_identity,
+        worker_identity,
+    })
 }
 
 async fn copy_artifact(source: PathBuf, destination: PathBuf) -> Result<(), Error> {
@@ -213,12 +291,15 @@ impl Ledger {
         target: Target,
         rounds: u32,
         identity: &str,
+        artifacts: &Artifacts,
     ) -> Result<(), Error> {
         writeln!(
             self.writer,
-            "{LEDGER_IDENTITY}\tbenchmark={}\tcase={case}\ttarget={}\trounds={rounds}\tprovenance={identity}",
+            "{LEDGER_IDENTITY}\tbenchmark={}\tcase={case}\ttarget={}\trounds={rounds}\tprovenance={identity}\trunner_sha256={}\tworker_sha256={}",
             benchmark.name,
-            target.name()
+            target.name(),
+            artifacts.runner_identity,
+            artifacts.worker_identity
         )?;
         writeln!(
             self.writer,
@@ -264,7 +345,7 @@ impl Ledger {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ledger, parse_rounds, worker_name};
+    use super::{ARTIFACT_IDENTITY, Ledger, parse_rounds, verify_artifacts, worker_name};
     use crate::suite::Target;
 
     #[test]
@@ -287,5 +368,30 @@ mod tests {
     fn staged_worker_matches_the_exact_guest_architecture() {
         assert_eq!(worker_name(Target::Arm64), "hl-aarch64");
         assert_eq!(worker_name(Target::Amd64), "hl-x86_64");
+    }
+
+    #[test]
+    fn artifact_manifest_pins_runner_and_worker_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = directory.path().join("testing");
+        let worker = directory.path().join("hl-aarch64");
+        std::fs::write(&runner, b"runner").unwrap();
+        std::fs::write(&worker, b"worker").unwrap();
+        let runner_identity = crate::record::FramedIdentity::of_file(&runner).unwrap();
+        let worker_identity = crate::record::FramedIdentity::of_file(&worker).unwrap();
+        std::fs::write(
+            directory.path().join("manifest.tsv"),
+            format!(
+                "{ARTIFACT_IDENTITY}\ntarget=arm64\nrunner_sha256={runner_identity}\nworker=hl-aarch64\nworker_sha256={worker_identity}\n"
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            verify_artifacts(directory.path(), Target::Arm64, false).unwrap().runner,
+            runner
+        );
+        std::fs::write(worker, b"changed").unwrap();
+        assert!(verify_artifacts(directory.path(), Target::Arm64, false).is_err());
     }
 }
