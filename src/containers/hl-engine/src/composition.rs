@@ -69,10 +69,28 @@ pub(crate) trait TerminalWindowNotification: Send + Sync {
     fn changed(&self) -> Result<(), CompositionError>;
 }
 
-struct TerminalBridge {
+struct RuntimeTerminalBridge {
     master: Arc<hl_runtime::TerminalDescription>,
     window_notification: Arc<dyn TerminalWindowNotification>,
     workers: Vec<JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+pub(crate) trait NativeTerminalWindowNotification: Send + Sync {
+    fn resize(&self, master: &std::fs::File, rows: u16, columns: u16) -> Result<(), CompositionError>;
+}
+
+#[cfg(unix)]
+struct NativeTerminalBridge {
+    master: Option<std::fs::File>,
+    window_notification: Arc<dyn NativeTerminalWindowNotification>,
+    workers: Vec<JoinHandle<()>>,
+}
+
+enum AttachedTerminal {
+    Runtime(RuntimeTerminalBridge),
+    #[cfg(unix)]
+    Native(NativeTerminalBridge),
 }
 
 /// Copies everything the port produces into the master until either end closes.
@@ -145,7 +163,7 @@ fn write_all_to_port(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
 pub struct Terminal {
     port: Arc<dyn TerminalPort>,
     initial: hl_runtime::TerminalWindow,
-    bridge: Mutex<Option<TerminalBridge>>,
+    bridge: Mutex<Option<AttachedTerminal>>,
 }
 
 impl Terminal {
@@ -199,11 +217,63 @@ impl Terminal {
             let _ = input.join();
             return Err(CompositionError::RuntimeConstruction);
         };
-        *bridge = Some(TerminalBridge {
+        *bridge = Some(AttachedTerminal::Runtime(RuntimeTerminalBridge {
             master,
             window_notification,
             workers: vec![input, output],
-        });
+        }));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn attach_native(
+        &self,
+        master: std::fs::File,
+        window_notification: Arc<dyn NativeTerminalWindowNotification>,
+    ) -> Result<(), CompositionError> {
+        let mut bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
+        if bridge.is_some() {
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        let input_master = master.try_clone().map_err(|_| CompositionError::RuntimeConstruction)?;
+        let output_master = master.try_clone().map_err(|_| CompositionError::RuntimeConstruction)?;
+        let input_port = Arc::clone(&self.port);
+        let input = std::thread::Builder::new()
+            .name("hl-native-terminal-input".into())
+            .spawn(move || {
+                let mut master = input_master;
+                let mut bytes = [0_u8; 16 * 1024];
+                while let Ok(count) = input_port.read(&mut bytes) {
+                    if count == 0 || master.write_all(&bytes[..count]).is_err() {
+                        return;
+                    }
+                }
+            })
+            .map_err(|_| CompositionError::RuntimeConstruction)?;
+        let output_port = Arc::clone(&self.port);
+        let output = std::thread::Builder::new()
+            .name("hl-native-terminal-output".into())
+            .spawn(move || {
+                let mut master = output_master;
+                let mut bytes = [0_u8; 16 * 1024];
+                loop {
+                    let Ok(count) = master.read(&mut bytes) else { return };
+                    if count == 0 || !write_all_to_port(output_port.as_ref(), &bytes[..count]) {
+                        return;
+                    }
+                }
+            });
+        let Ok(output) = output else {
+            self.port.close();
+            drop(master);
+            let _ = input.join();
+            return Err(CompositionError::RuntimeConstruction);
+        };
+        *bridge = Some(AttachedTerminal::Native(NativeTerminalBridge {
+            master: Some(master),
+            window_notification,
+            workers: vec![input, output],
+        }));
         Ok(())
     }
 
@@ -211,24 +281,28 @@ impl Terminal {
         if rows == 0 || columns == 0 {
             return Err(CompositionError::RuntimeConstruction);
         }
-        let (pair, notification) = {
-            let bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
-            let bridge = bridge.as_ref().ok_or(CompositionError::RuntimeConstruction)?;
-            (
-                Arc::clone(bridge.master.pair()),
-                Arc::clone(&bridge.window_notification),
-            )
-        };
-        let changed = pair
-            .set_window(hl_runtime::TerminalWindow {
-                rows,
-                columns,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|_| CompositionError::RuntimeConstruction)?;
-        if changed {
-            notification.changed()?;
+        let bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
+        match bridge.as_ref().ok_or(CompositionError::RuntimeConstruction)? {
+            AttachedTerminal::Runtime(bridge) => {
+                let changed = bridge
+                    .master
+                    .pair()
+                    .set_window(hl_runtime::TerminalWindow {
+                        rows,
+                        columns,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|_| CompositionError::RuntimeConstruction)?;
+                if changed {
+                    bridge.window_notification.changed()?;
+                }
+            }
+            #[cfg(unix)]
+            AttachedTerminal::Native(bridge) => {
+                let master = bridge.master.as_ref().ok_or(CompositionError::RuntimeConstruction)?;
+                bridge.window_notification.resize(master, rows, columns)?;
+            }
         }
         Ok(())
     }
@@ -239,9 +313,20 @@ impl Terminal {
         let bridge = self.bridge.lock().ok().and_then(|mut bridge| bridge.take());
         self.port.close();
         if let Some(bridge) = bridge {
-            bridge.master.close();
-            for worker in bridge.workers {
-                let _ = worker.join();
+            match bridge {
+                AttachedTerminal::Runtime(bridge) => {
+                    bridge.master.close();
+                    for worker in bridge.workers {
+                        let _ = worker.join();
+                    }
+                }
+                #[cfg(unix)]
+                AttachedTerminal::Native(mut bridge) => {
+                    drop(bridge.master.take());
+                    for worker in bridge.workers {
+                        let _ = worker.join();
+                    }
+                }
             }
         }
     }

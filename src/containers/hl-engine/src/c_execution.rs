@@ -10,6 +10,7 @@ use std::ffi::{CString, c_char, c_int, c_uint, c_ulonglong, c_void};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 const STATUS_OK: c_int = 0;
@@ -56,14 +57,60 @@ unsafe extern "C" {
     fn hl_c_backend_destroy(backend: *mut c_void);
 }
 
+#[link(name = "util")]
+unsafe extern "C" {
+    fn openpty(
+        master: *mut c_int,
+        slave: *mut c_int,
+        name: *mut c_char,
+        termios: *const libc::termios,
+        window: *const libc::winsize,
+    ) -> c_int;
+}
+
 pub(crate) struct CGuestExecutor {
     handle: NonNull<c_void>,
+    terminal_handle: Arc<Mutex<Option<usize>>>,
     _streams: StreamBridge,
 }
 
 struct StreamBridge {
     output_workers: Vec<JoinHandle<()>>,
     guest_fds: Option<[OwnedFd; 3]>,
+    terminal: Option<(Arc<crate::composition::Terminal>, OwnedFd)>,
+}
+
+struct CTerminalWindowNotification {
+    handle: Arc<Mutex<Option<usize>>>,
+}
+
+impl crate::composition::NativeTerminalWindowNotification for CTerminalWindowNotification {
+    fn resize(
+        &self,
+        master: &std::fs::File,
+        rows: u16,
+        columns: u16,
+    ) -> Result<(), crate::composition::CompositionError> {
+        let window = libc::winsize {
+            ws_row: rows,
+            ws_col: columns,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: master is a live PTY descriptor and window is initialized.
+        if unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &window) } != 0 {
+            return Err(crate::composition::CompositionError::RuntimeConstruction);
+        }
+        let handle = self
+            .handle
+            .lock()
+            .map_err(|_| crate::composition::CompositionError::RuntimeConstruction)?
+            .ok_or(crate::composition::CompositionError::RuntimeConstruction)?;
+        let status = unsafe { hl_c_backend_request(handle as *mut c_void, REQUEST_SIGNAL, libc::SIGWINCH) };
+        (status == STATUS_OK)
+            .then_some(())
+            .ok_or(crate::composition::CompositionError::RuntimeConstruction)
+    }
 }
 
 impl StreamBridge {
@@ -84,8 +131,50 @@ impl StreamBridge {
     }
 
     fn new(services: &RuntimeServices) -> Result<Self, EngineError> {
-        if services.streams.terminal().is_some() {
-            return Err(EngineError::Unsupported);
+        if let Some(terminal) = services.streams.terminal() {
+            let initial = terminal.initial();
+            let window = libc::winsize {
+                ws_row: initial.rows,
+                ws_col: initial.columns,
+                ws_xpixel: initial.pixel_width,
+                ws_ypixel: initial.pixel_height,
+            };
+            let mut master = -1;
+            let mut slave = -1;
+            // SAFETY: output pointers and the initialized window live for the call.
+            if unsafe {
+                openpty(
+                    &raw mut master,
+                    &raw mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    &raw const window,
+                )
+            } != 0
+            {
+                return Err(EngineError::LaunchFailed);
+            }
+            // SAFETY: successful openpty returns two uniquely owned descriptors.
+            let master = unsafe { OwnedFd::from_raw_fd(master) };
+            // SAFETY: same successful call, with distinct slave ownership.
+            let slave = unsafe { OwnedFd::from_raw_fd(slave) };
+            let duplicate = |descriptor: &OwnedFd| {
+                // SAFETY: descriptor is live; successful dup creates new ownership.
+                let duplicate = unsafe { libc::dup(descriptor.as_raw_fd()) };
+                if duplicate < 0 {
+                    Err(EngineError::LaunchFailed)
+                } else {
+                    // SAFETY: successful dup returned a new owned descriptor.
+                    Ok(unsafe { OwnedFd::from_raw_fd(duplicate) })
+                }
+            };
+            let output = duplicate(&slave)?;
+            let error = duplicate(&slave)?;
+            return Ok(Self {
+                output_workers: Vec::new(),
+                guest_fds: Some([slave, output, error]),
+                terminal: Some((terminal, master)),
+            });
         }
         let (guest_input, host_input) = Self::pipe()?;
         let (host_output, guest_output) = Self::pipe()?;
@@ -150,6 +239,7 @@ impl StreamBridge {
         Ok(Self {
             output_workers,
             guest_fds: Some([guest_input, guest_output, guest_error]),
+            terminal: None,
         })
     }
 
@@ -159,6 +249,18 @@ impl StreamBridge {
             .expect("stream descriptors remain live during create")
             .each_ref()
             .map(AsRawFd::as_raw_fd)
+    }
+
+    fn attach_terminal(&mut self, handle: Arc<Mutex<Option<usize>>>) -> Result<(), EngineError> {
+        let Some((terminal, master)) = self.terminal.take() else {
+            return Ok(());
+        };
+        terminal
+            .attach_native(
+                std::fs::File::from(master),
+                Arc::new(CTerminalWindowNotification { handle }),
+            )
+            .map_err(|_| EngineError::LaunchFailed)
     }
 }
 
@@ -237,7 +339,7 @@ impl CGuestExecutor {
             .map(|(_, value)| value.as_ptr())
             .collect::<Vec<_>>();
         let option_count = c_uint::try_from(option_records.len()).map_err(|_| EngineError::LaunchFailed)?;
-        let streams = StreamBridge::new(services)?;
+        let mut streams = StreamBridge::new(services)?;
         let standard_fds = streams.descriptors();
         let mut handle = std::ptr::null_mut();
         let status = unsafe {
@@ -259,6 +361,11 @@ impl CGuestExecutor {
             return Err(EngineError::LaunchFailed);
         }
         let handle = NonNull::new(handle).ok_or(EngineError::LaunchFailed)?;
+        let terminal_handle = Arc::new(Mutex::new(Some(handle.as_ptr() as usize)));
+        if let Err(error) = streams.attach_terminal(Arc::clone(&terminal_handle)) {
+            unsafe { hl_c_backend_destroy(handle.as_ptr()) };
+            return Err(error);
+        }
         hl_log::hl_event!(
             hl_log::tag::EXEC,
             hl_log::Level::Info,
@@ -268,6 +375,7 @@ impl CGuestExecutor {
         );
         Ok(Self {
             handle,
+            terminal_handle,
             _streams: streams,
         })
     }
@@ -340,6 +448,9 @@ impl GuestExecutionPort for CGuestExecutor {
 
 impl Drop for CGuestExecutor {
     fn drop(&mut self) {
+        if let Ok(mut handle) = self.terminal_handle.lock() {
+            *handle = None;
+        }
         unsafe { hl_c_backend_destroy(self.handle.as_ptr()) };
     }
 }
@@ -347,7 +458,9 @@ impl Drop for CGuestExecutor {
 #[cfg(test)]
 mod tests {
     use super::StreamBridge;
-    use crate::composition::{ActivationChannel, CompositionError, RuntimeServices, StandardStreams};
+    use crate::composition::{
+        ActivationChannel, CompositionError, RuntimeServices, StandardStreams, Terminal, TerminalPort,
+    };
     use std::io::{Cursor, Read, Write};
     use std::os::fd::FromRawFd;
     use std::sync::{Arc, Mutex};
@@ -355,6 +468,19 @@ mod tests {
     #[derive(Clone)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
     struct Channel;
+    struct Port;
+
+    impl TerminalPort for Port {
+        fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
+            Ok(0)
+        }
+
+        fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+            Ok(input.len())
+        }
+
+        fn close(&self) {}
+    }
 
     impl ActivationChannel for Channel {
         fn send(&self, _: &[u8]) -> Result<(), CompositionError> {
@@ -407,5 +533,30 @@ mod tests {
         drop(bridge);
         assert_eq!(&*output.lock().unwrap(), b"out");
         assert_eq!(&*error.lock().unwrap(), b"err");
+    }
+
+    #[test]
+    fn terminal_bridge_creates_shared_tty_descriptors_at_initial_size() {
+        let terminal = Terminal::new(Arc::new(Port), 37, 91).unwrap();
+        let services = RuntimeServices {
+            activation: Arc::new(Channel),
+            checkpoint_sink: None,
+            checkpoint_source: None,
+            streams: StandardStreams::new(Cursor::new(Vec::new()), Vec::new(), Vec::new())
+                .with_terminal(terminal),
+        };
+        let bridge = StreamBridge::new(&services).unwrap();
+        let descriptors = bridge.descriptors();
+        for descriptor in descriptors {
+            assert_eq!(unsafe { libc::isatty(descriptor) }, 1);
+            let mut window = libc::winsize {
+                ws_row: 0,
+                ws_col: 0,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            assert_eq!(unsafe { libc::ioctl(descriptor, libc::TIOCGWINSZ, &raw mut window) }, 0);
+            assert_eq!((window.ws_row, window.ws_col), (37, 91));
+        }
     }
 }
