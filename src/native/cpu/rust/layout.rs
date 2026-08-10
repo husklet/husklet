@@ -328,5 +328,4 @@ const _: () = {
     assert!(std::mem::size_of::<X86_64Cpu>() == 2008);
 
     assert!(std::mem::align_of::<X86_64Cpu>() == 8);
-
 };

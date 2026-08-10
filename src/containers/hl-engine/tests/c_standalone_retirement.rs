@@ -62,7 +62,10 @@ fn linked_test_binary_excludes_retired_standalone_symbols() {
         .lines()
         .filter_map(|line| line.split_whitespace().last())
         .collect::<std::collections::HashSet<_>>();
-    assert!(symbols.contains("hl_engine_run"), "retained engine symbols were not linked");
+    assert!(
+        symbols.contains("hl_engine_run"),
+        "retained engine symbols were not linked"
+    );
     for symbol in RETIRED_SYMBOLS {
         assert!(
             !symbols.contains(symbol),
