@@ -14,7 +14,7 @@ use crate::launch_plan::RuntimeLaunchPlan;
 /// authority and the operand resolver, and the base-budget resolver-run equivalents
 /// each such finding holds for.
 const DIRECT_FLIP_LIMIT: u32 = 32;
-const DIRECT_HOLD_RUNS: u64 = 1 << 16;
+const DIRECT_HOLD_RUNS: u64 = 1 << 14;
 /// Sticky arm: the score does not decay, so a process reaches its configured hold after
 /// sustained alternation. Two flips are tolerated because the warm-up run is a resolver
 /// run by construction and entering direct mode after it is one flip.

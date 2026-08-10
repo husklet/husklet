@@ -1247,7 +1247,7 @@ mod tests {
 
     #[test]
     fn bounded_direct_hold_runs_is_typed_configurable_and_spends_exact_debt() {
-        const DEFAULT: u64 = 1 << 16;
+        const DEFAULT: u64 = 1 << 14;
         let configured = |value: Option<&str>| {
             let mut options = crate::options::Options::default();
             if let Some(value) = value {
