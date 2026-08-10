@@ -55,9 +55,8 @@ pub(crate) fn run(plan_descriptor: RawFd, control_descriptor: RawFd) -> Result<i
         .spawn(move || serve_requests(request_control, request_executor))
         .map_err(|_| WorkerError::Control)?;
     write_message(&mut control, Message::Started)?;
-    if let Err(error) = executor.start_plan(&plan) {
-        let _ = error;
-        send_error(&mut control, FailureStage::Start, 1);
+    if let Err(code) = start_result(executor.run_plan_status(&plan)) {
+        send_error(&mut control, FailureStage::Start, code);
         return Err(WorkerError::Start);
     }
     let exit = executor.exit();
@@ -109,4 +108,26 @@ fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) 
 
 fn send_error(stream: &mut std::os::unix::net::UnixStream, stage: FailureStage, code: i32) {
     let _ = write_message(stream, Message::Error { stage, code });
+}
+
+fn start_result(result: Result<i32, EngineError>) -> Result<(), i32> {
+    match result {
+        Ok(super::STATUS_OK) => Ok(()),
+        Ok(status) => Err(status),
+        Err(_) => Err(-1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::start_result;
+    use crate::engine::EngineError;
+
+    #[test]
+    fn retained_start_preserves_the_c_status_for_the_owner() {
+        assert_eq!(start_result(Ok(0)), Ok(()));
+        assert_eq!(start_result(Ok(6)), Err(6));
+        assert_eq!(start_result(Ok(13)), Err(13));
+        assert_eq!(start_result(Err(EngineError::LaunchFailed)), Err(-1));
+    }
 }

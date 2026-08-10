@@ -467,7 +467,7 @@ impl CGuestExecutor {
         }
     }
 
-    pub(crate) fn start_plan(&self, plan: &RuntimeLaunchPlan) -> Result<(), EngineError> {
+    fn run_plan_status(&self, plan: &RuntimeLaunchPlan) -> Result<c_int, EngineError> {
         let arguments = plan
             .arguments
             .iter()
@@ -475,10 +475,19 @@ impl CGuestExecutor {
             .collect::<Result<Vec<_>, _>>()?;
         let pointers = arguments.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
         let count = c_int::try_from(pointers.len()).map_err(|_| EngineError::LaunchFailed)?;
-        let status = unsafe { hl_c_backend_run(self.handle.as_ptr(), count, pointers.as_ptr()) };
+        Ok(unsafe { hl_c_backend_run(self.handle.as_ptr(), count, pointers.as_ptr()) })
+    }
+
+    pub(crate) fn start_plan(&self, plan: &RuntimeLaunchPlan) -> Result<(), EngineError> {
+        let status = self.run_plan_status(plan)?;
         if status == STATUS_OK {
             Ok(())
         } else {
+            hl_log::hl_error!(
+                hl_log::tag::EXEC,
+                "c execution backend start failed: status={status} argc={}",
+                plan.arguments.len()
+            );
             Err(EngineError::LaunchFailed)
         }
     }
