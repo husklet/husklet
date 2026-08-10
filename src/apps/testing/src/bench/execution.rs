@@ -9,7 +9,8 @@ use crate::{
 use hl_container::{Config, ContainerSpec, Entry, ExitStatus, Isolation, Process, Sandbox, Session};
 use std::{
     collections::BTreeMap,
-    fs,
+    error::Error as StdError,
+    fmt, fs,
     os::unix::fs::PermissionsExt,
     sync::Arc,
     time::{Duration, Instant},
@@ -89,6 +90,51 @@ pub struct ProductSample {
 pub struct ProductRun {
     pub setup: BTreeMap<String, u128>,
     pub samples: Vec<ProductSample>,
+}
+
+#[derive(Debug)]
+struct ProductArmError {
+    round: u32,
+    position: usize,
+    backend: ProductBackend,
+    stage: &'static str,
+    source: Error,
+}
+
+impl fmt::Display for ProductArmError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "product A/B round {} position {} backend {} {}: {}",
+            self.round,
+            self.position,
+            self.backend.name(),
+            self.stage,
+            self.source
+        )
+    }
+}
+
+impl StdError for ProductArmError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+fn product_arm_error(
+    round: u32,
+    position: usize,
+    backend: ProductBackend,
+    stage: &'static str,
+    source: impl Into<Error>,
+) -> Error {
+    Box::new(ProductArmError {
+        round,
+        position,
+        backend,
+        stage,
+        source: source.into(),
+    })
 }
 
 pub struct Measurement {
@@ -204,14 +250,25 @@ async fn run_product_ab_with_image(
                 &program,
                 name_repetition,
                 backend.execution(),
-            )?;
+            )
+            .map_err(|error| product_arm_error(round, position, backend, "specification", error))?;
             let outcome = tokio::time::timeout_at(deadline, invocation.execute_captured(&expected_stdout))
                 .await
-                .map_err(|_| "product A/B execution exceeded its deadline")??;
+                .map_err(|_| {
+                    product_arm_error(
+                        round,
+                        position,
+                        backend,
+                        "execution",
+                        "exceeded the product A/B deadline",
+                    )
+                })?
+                .map_err(|error| product_arm_error(round, position, backend, "execution", error))?;
             let teardown_started = Instant::now();
             tokio::time::timeout(CLEANUP_TIMEOUT, containers.remove_force(&invocation.name))
                 .await
-                .map_err(|_| "product A/B container cleanup timed out")??;
+                .map_err(|_| product_arm_error(round, position, backend, "cleanup", "container cleanup timed out"))?
+                .map_err(|error| product_arm_error(round, position, backend, "cleanup", error))?;
             let remove_us = elapsed_us(teardown_started);
             let identity =
                 crate::record::FramedIdentity::over(&[outcome.stdout.as_slice(), outcome.stderr.as_slice()])?;
@@ -717,7 +774,7 @@ struct InvocationOutcome {
 
 #[cfg(test)]
 mod product_tests {
-    use super::{ProductBackend, product_order};
+    use super::{ProductBackend, product_arm_error, product_order};
 
     #[test]
     fn product_pair_order_balances_first_position() {
@@ -725,6 +782,22 @@ mod product_tests {
         assert_eq!(product_order(1), [ProductBackend::Rust, ProductBackend::C]);
         assert_eq!(product_order(2), [ProductBackend::C, ProductBackend::Rust]);
         assert_eq!(product_order(3), [ProductBackend::Rust, ProductBackend::C]);
+    }
+
+    #[test]
+    fn product_arm_failure_names_context_and_preserves_source() {
+        let error = product_arm_error(
+            3,
+            1,
+            ProductBackend::Rust,
+            "execution",
+            std::io::Error::other("Construction(Start)"),
+        );
+        assert_eq!(
+            error.to_string(),
+            "product A/B round 3 position 1 backend rust execution: Construction(Start)"
+        );
+        assert_eq!(error.source().unwrap().to_string(), "Construction(Start)");
     }
 }
 
