@@ -1,5 +1,7 @@
 #include "hl/engine.h"
 #include "hl/linux.h"
+#include "core/engine_backend.h"
+#include "core/options.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -17,10 +19,14 @@ typedef struct hl_c_backend {
     hl_engine_exit result;
 } hl_c_backend;
 
-int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, hl_c_backend **output) {
+int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, uint32_t option_count,
+                            const char *const *option_names, const char *const *option_values,
+                            hl_c_backend **output) {
     hl_c_backend *backend;
     hl_engine_config config;
     hl_status status;
+    hl_options options;
+    uint32_t index;
     if (output == NULL) return HL_STATUS_INVALID_ARGUMENT;
     *output = NULL;
     backend = calloc(1, sizeof(*backend));
@@ -31,12 +37,28 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, hl_c_backend **out
         return status;
     }
     memset(&config, 0, sizeof(config));
+    memset(&options, 0, sizeof(options));
     hl_target_register_backend();
     config.abi = HL_ENGINE_ABI;
     config.size = sizeof(config);
     config.guest_isa = isa;
     config.rootfs = rootfs;
-    status = hl_engine_create(&config, &backend->services, &backend->engine);
+    if ((option_count != 0 && (option_names == NULL || option_values == NULL)) || hl_options_init(&options) != 0) {
+        hl_host_linux_destroy(backend->host);
+        free(backend);
+        return HL_STATUS_OUT_OF_MEMORY;
+    }
+    for (index = 0; index < option_count; ++index) {
+        if (option_names[index] == NULL || option_values[index] == NULL ||
+            hl_options_set(&options, option_names[index], option_values[index], 1) != 0) {
+            hl_options_destroy(&options);
+            hl_host_linux_destroy(backend->host);
+            free(backend);
+            return HL_STATUS_INVALID_ARGUMENT;
+        }
+    }
+    status = hl_engine_create_with_options(&config, &backend->services, &options, &backend->engine);
+    hl_options_destroy(&options);
     if (status != HL_STATUS_OK) {
         hl_host_linux_destroy(backend->host);
         free(backend);

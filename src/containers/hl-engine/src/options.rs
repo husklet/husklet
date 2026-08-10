@@ -212,6 +212,17 @@ impl Default for Options {
 }
 
 impl Options {
+    /// Iterates the explicitly configured option records in definition order.
+    ///
+    /// This is the lossless handoff used by alternate execution backends; absent
+    /// options remain absent instead of being confused with empty values.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&'static str, &[u8])> {
+        DEFINITIONS
+            .iter()
+            .zip(&self.values)
+            .filter_map(|(definition, value)| value.as_deref().map(|value| (definition.name, value)))
+    }
+
     #[must_use]
     pub fn defines(name: &str) -> bool {
         DEFINITIONS.iter().any(|definition| definition.name == name)
@@ -362,6 +373,17 @@ mod tests {
         options.unset("HL_UID").unwrap();
         assert_eq!(options.get("HL_UID"), None);
         assert_eq!(options.store_size(), 0);
+    }
+
+    #[test]
+    fn iteration_preserves_explicit_empty_and_omits_absent_options() {
+        let mut options = Options::default();
+        options.set("HL_CWD", "", true).unwrap();
+        options.set("HL_UID", "1000", true).unwrap();
+        assert_eq!(
+            options.iter().collect::<Vec<_>>(),
+            [("HL_CWD", b"".as_slice()), ("HL_UID", b"1000".as_slice())]
+        );
     }
 
     #[test]

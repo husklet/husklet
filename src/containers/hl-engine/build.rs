@@ -119,6 +119,7 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
     build
         .cargo_metadata(false)
         .include(format!("{RETAINED}/include"))
+        .include(format!("{RETAINED}/src"))
         .opt_level(2)
         .debug(true)
         .pic(false)

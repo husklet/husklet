@@ -78,8 +78,6 @@ impl RuntimeFactory for ProductionFactory {
             #[cfg(feature = "c-execution")]
             Some("c") => {
                 if request.isa != crate::activation::GuestIsa::Aarch64
-                    || request.services.checkpoint_sink.is_some()
-                    || request.services.checkpoint_source.is_some()
                     || request.plan.options.get("HL_CHECKPOINT").is_some()
                     || request.plan.options.get("HL_RESTORE").is_some()
                 {
@@ -193,11 +191,13 @@ mod tests {
     }
 
     #[test]
-    fn retained_backend_rejects_unbridged_checkpoint_services() {
+    fn retained_backend_rejects_active_checkpoint_policy() {
+        let mut plan = c_plan();
+        plan.options.set("HL_RESTORE", "1", true).unwrap();
         assert!(matches!(
             Engine::with_checkpoint(
                 GuestIsa::Aarch64,
-                c_plan(),
+                plan,
                 StandardStreams::default(),
                 Arc::new(Store),
                 Arc::new(Store),
