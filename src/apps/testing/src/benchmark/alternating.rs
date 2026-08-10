@@ -38,17 +38,37 @@ pub(super) fn plan_over(cycles: u32, providers: &[Provider]) -> Result<Vec<Step>
     if providers.is_empty() {
         return Err("alternating benchmark requires at least one provider".into());
     }
+    let period = match providers.len() {
+        1 => 1,
+        2 => 2,
+        count => u32::try_from(count)
+            .map_err(|_| "alternating benchmark provider count overflow")?
+            .checked_mul(2)
+            .ok_or("alternating benchmark balance period overflow")?,
+    };
+    if !cycles.is_multiple_of(period) {
+        return Err(format!(
+            "alternating benchmark cycles must be a multiple of the {period}-cycle balance period"
+        ));
+    }
     let mut steps = vec![Step {
         cycle: 0,
         provider: Provider::Rust,
         mode: Mode::DiagnosticsProof,
     }];
     for cycle in 0..cycles {
-        let offset = cycle as usize % providers.len();
+        let within = cycle as usize % period as usize;
+        let reverse = providers.len() > 2 && within >= providers.len();
+        let offset = if reverse { within - providers.len() } else { within };
         for ordinal in 0..providers.len() {
+            let relative = if reverse {
+                providers.len() - ordinal - 1
+            } else {
+                ordinal
+            };
             steps.push(Step {
                 cycle: cycle + 1,
-                provider: providers[(offset + ordinal) % providers.len()],
+                provider: providers[(offset + relative) % providers.len()],
                 mode: Mode::Timing,
             });
         }
@@ -184,7 +204,7 @@ mod tests {
 
     #[test]
     fn proof_precedes_balanced_alternation() {
-        let steps = plan(3).unwrap();
+        let steps = plan(6).unwrap();
         assert_eq!(
             (steps[0].provider, steps[0].mode),
             (Provider::Rust, Mode::DiagnosticsProof)
@@ -201,8 +221,18 @@ mod tests {
                 Provider::Rust,
                 Provider::Native,
                 Provider::C,
+                Provider::Rust,
+                Provider::C,
+                Provider::Native,
+                Provider::Native,
+                Provider::Rust,
+                Provider::C,
+                Provider::C,
+                Provider::Native,
+                Provider::Rust,
             ]
         );
+        assert!(plan(3).is_err());
     }
 
     #[test]
@@ -212,7 +242,7 @@ mod tests {
         let calls = Arc::new(Mutex::new(0));
         let first = Arc::clone(&calls);
         assert!(
-            run(1, &ALL, &journal, "tree-rootfs-artifacts", false, move |_| {
+            run(6, &ALL, &journal, "tree-rootfs-artifacts", false, move |_| {
                 let mut n = first.lock().unwrap();
                 *n += 1;
                 if *n == 3 {
@@ -224,12 +254,12 @@ mod tests {
             .is_err()
         );
         let resumed = Arc::clone(&calls);
-        run(1, &ALL, &journal, "tree-rootfs-artifacts", true, move |_| {
+        run(6, &ALL, &journal, "tree-rootfs-artifacts", true, move |_| {
             *resumed.lock().unwrap() += 1;
             Ok("bounded".into())
         })
         .unwrap();
-        assert_eq!(*calls.lock().unwrap(), 5);
-        assert!(run(1, &ALL, &journal, "changed", true, |_| Ok("bounded".into())).is_err());
+        assert_eq!(*calls.lock().unwrap(), 20);
+        assert!(run(6, &ALL, &journal, "changed", true, |_| Ok("bounded".into())).is_err());
     }
 }

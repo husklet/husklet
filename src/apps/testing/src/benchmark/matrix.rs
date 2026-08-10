@@ -30,7 +30,7 @@ pub(crate) struct Matrix {
     rust_engine: PathBuf,
     #[arg(long = "out", default_value = "target/testing/benchmark-matrix")]
     output: PathBuf,
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 6)]
     repeats: usize,
     /// Continue only rows recorded for this exact runner, rootfs, guest, and engine content.
     #[arg(long)]
@@ -108,6 +108,10 @@ impl Matrix {
         if self.repeats == 0 || self.repeats > LIMIT {
             return Err(format!("repeats must be between 1 and {LIMIT}"));
         }
+        alternating::plan_over(
+            u32::try_from(self.repeats).map_err(|_| "matrix repeat overflow")?,
+            &self.providers(),
+        )?;
         #[cfg(target_os = "linux")]
         {
             let affinity = host_affinity();
@@ -463,7 +467,7 @@ mod tests {
             engine_options: Vec::new(),
         };
         matrix.require_native_options().unwrap();
-        let plan = alternating::plan(1).unwrap();
+        let plan = alternating::plan(6).unwrap();
         let proof = matrix.run(plan[0]).validate().unwrap();
         assert_eq!(proof.execution_mode(), "native-verified");
         assert!(
@@ -497,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn fake_executor_observes_proof_then_latin_timing_rows() {
+    fn fake_executor_observes_proof_then_balanced_timing_rows() {
         let directory = tempfile::tempdir().unwrap();
         let binary = directory.path().join("guest");
         let c_engine = directory.path().join("c");
@@ -519,7 +523,7 @@ mod tests {
             c_engine_build_id: "build".into(),
             rust_engine,
             output: directory.path().join("out"),
-            repeats: 3,
+            repeats: 6,
             resume: false,
             skip_native: false,
             clone_thread_evidence: None,
@@ -549,7 +553,16 @@ mod tests {
                 (Provider::Native, false),
                 (Provider::Rust, false),
                 (Provider::Native, false),
-                (Provider::C, false)
+                (Provider::C, false),
+                (Provider::Rust, false),
+                (Provider::C, false),
+                (Provider::Native, false),
+                (Provider::Native, false),
+                (Provider::Rust, false),
+                (Provider::C, false),
+                (Provider::C, false),
+                (Provider::Native, false),
+                (Provider::Rust, false)
             ]
         );
     }

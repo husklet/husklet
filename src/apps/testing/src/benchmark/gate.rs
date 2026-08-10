@@ -27,7 +27,7 @@ pub(crate) struct Gate {
     baseline: PathBuf,
     #[arg(long = "out", default_value = "target/testing/benchmark-gate")]
     output: PathBuf,
-    #[arg(long, default_value_t = 7)]
+    #[arg(long, default_value_t = 6)]
     repeats: usize,
     #[arg(long, default_value_t = 1)]
     divisor: u32,
