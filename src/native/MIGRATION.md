@@ -1,0 +1,146 @@
+# Retained C migration manifest
+
+This is the ownership ledger for the translation, native-execution, guest-memory,
+and translation-cache parts of
+`src/containers/hl-engine/c_backend/retained`. It records where each retained
+responsibility lives in Husklet, which behavior is intentionally absent, and the
+automated evidence required before the retained implementation stops being an
+oracle.
+
+This document does **not** authorize a file move or a second production owner.
+The retained tree remains the source oracle while Rust owns engine policy and
+`src/native/exec` owns the narrow C/assembly execution kernel described in
+[`exec/BOUNDARIES.md`](exec/BOUNDARIES.md).
+
+## Status and evidence rules
+
+The status column uses these terms:
+
+- **Replaced**: Rust owns the responsibility. Copying the retained C into the
+  native kernel would recreate an unwanted second policy owner.
+- **Native**: a current C/assembly implementation exists under
+  `src/native/exec`; it is not necessarily a line-for-line port.
+- **Split**: Rust owns authority, lifetime, or fallback policy and the native
+  kernel owns a bounded mechanism.
+- **Omitted**: the retained optimization is deliberately absent. Semantic
+  behavior must still be covered by the non-optimized path.
+- **Open**: current automated evidence is not sufficient to retire the retained
+  implementation for that row.
+
+Only checked-in, automated assertions are permanent evidence. A source
+comparison, a historical benchmark, or a statement in an audit document is
+useful context but is not parity proof. Each completed semantic row needs:
+
+1. a focused native or Rust test for the local contract;
+2. a native-versus-Rust-interpreter differential when translated guest state is
+   involved; and
+3. an engine-level test for ownership, fallback, invalidation, or lifecycle
+   behavior that crosses the FFI boundary.
+
+The retained implementation is still the behavioral and performance oracle.
+There is currently no general retained-C-versus-current-native differential in
+the permanent gate, so rows marked **Open** must not be declared complete from
+the existing component tests alone.
+
+Path shorthand in the tables is deliberate: retained `translator/...` and
+`core/...` paths are relative to
+`src/containers/hl-engine/c_backend/retained/src`; `arch/...` is relative to
+`src/native/exec/src`; `exec/test/...` is relative to `src/native`; and
+`native/...` and `ffi/...` are relative to `src/containers/hl-engine/src`.
+
+## Ownership boundary
+
+| Concern | Policy and lifetime owner | Bounded native mechanism |
+| --- | --- | --- |
+| Process lifecycle, scheduling, fallback, signals | `src/containers/hl-engine/src/ffi/linux/execution` and the `hl-runtime`, `hl-task`, and `hl-execution` crates | Entry, translated execution, and classified exits only |
+| Guest memory and executable identity | `hl-memory` projection/direct-authority leases and executable versions | Checked source/projection views, memory lowering, dirty ranges, and fault provenance |
+| Translation admission and cache identity | `ffi/linux/execution/scheduler/{native,pool}.rs` and `native/executor.rs` | Per-executor translation cache, relocation, chaining, and IBTC mechanics |
+| Architectural state | Generated schema in `src/native/cpu` and Rust CPU state in `hl-execution` | ABI-compatible state load/store around native entry |
+
+## Translation manifest
+
+| Retained source | Retained responsibility | Current owner | Status | Permanent evidence and retirement condition |
+| --- | --- | --- | --- | --- |
+| `translator/host/aarch64/asm.{c,h}`, `translator/emit.h` | AArch64 instruction encoding and emission primitives | `src/native/exec/src/arch/aarch64/assembler.{c,h}` plus family-specific emitters | **Native** | `exec/test/aarch64_assembler.c` and the family tests named `aarch64_*.c` run through `src/native/tests/exec_c.rs`. Retirement also requires every encoding used by a migrated family to have an assertion; the retained file's existence is not coverage. |
+| `translator/guest/aarch64/translate.c` | Decode, lower, terminate blocks, and select fallback | `arch/aarch64/frontend.c`, `block.c`, `terminator.c`, `trace.c`, and the instruction-family files; unsupported work returns to the Rust interpreter | **Split, Open** | Focused `aarch64_frontend.c`, `aarch64_block.c`, `aarch64_terminator.c`, `aarch64_trace.c`, and family C tests plus AArch64 cases in `native/executor_differential.rs`. Before retirement, inventory every retained decoder family as native-equivalent or intentional Rust fallback and add a retained/current differential for uncovered families. |
+| `translator/guest_fetch.{c,h}` | Bounded guest instruction fetch across source windows | `arch/aarch64/source.{c,h}`, the source spans in `native/executor.rs`, and `hl-memory` projection leases | **Split** | `exec/test/aarch64_source.c`, `aarch64_frontend.c`, `aarch64_stale_site.c`, and source-boundary differential tests in `native/executor_differential.rs`. Retirement requires truncation, overflow, cross-view, and stale-source cases to remain asserted. |
+| `translator/guest/aarch64/stubs.c`, `dispatch.h` | Entry stubs, dispatcher transitions, chaining, and public exits | `arch/aarch64/entry.S`, `stub.c`, `indirect.c`, `terminator.c`, `src/native/exec/src/executor.c`, and `src/native/exec/src/dispatch/exit.c`; Rust scheduler owns whether execution is re-entered | **Split** | `exec/test/{run,exit,integration,lifecycle}.c`, `aarch64_{entry,stub,indirect,stitch,cycle,counter}.c`, `control_metadata.c`, and `indirect_metadata.c`. Engine re-entry/fallback assertions live in `native/executor_differential.rs` and `ffi/linux/execution/test.rs`. |
+| `translator/guest/aarch64/{abi,cpu}.h` | Guest CPU layout and the translator/dispatcher ABI | `src/native/cpu/{layout.tsv,generate.rs,include/layout.h,rust/layout.rs}`, `src/native/exec/include/executor.h`, and `hl-execution` AArch64 CPU state | **Split, Open** | `src/native/cpu/test/layout.c`, C `_Static_assert`s in the public header, `exec/test/state_tally.c`, and Rust executor state round-trip/differential tests are the evidence targets. Before retirement, wire the standalone layout check or an equivalent generated-output check into the permanent gate so changing only one language fails. |
+| No retained x86-64 translator exists in this copied tree | x86-64 guest translation on an AArch64 host | `src/native/exec/src/arch/x86_64` with Rust interpreter fallback | **Native, independently derived** | `exec/test/x86_*.c` and the x86 cases in `native/executor_differential.rs`. AArch64 parity cannot be used as x86 evidence; each scheduler change must compare both ISA arms as required by `AGENTS.md`. |
+
+## Execution and signal manifest
+
+| Retained source | Retained responsibility | Current owner | Status | Permanent evidence and retirement condition |
+| --- | --- | --- | --- | --- |
+| `core/{engine,dispatch,lifecycle}.c` | Engine lifecycle, process start/wait/finish, and dispatch policy | Rust engine/runtime construction and `ffi/linux/execution/{mod,scheduler}.rs` | **Replaced, Open** | Workspace Rust tests, especially `ffi/linux/execution/test.rs`, cover the current owner. Retirement requires the C-backend compatibility suite to exercise start, exit, signal, fork, exec, and fallback through both backends; the native component gate alone cannot prove this row. |
+| `translator/guest/aarch64/signal.{c,h}` | Linux guest signal frame delivery/restoration | `hl-linux/src/signal`, `hl-runtime/src/signal`, and `ffi/linux/execution/{signal_frame,routing/signal,threads/signal}.rs` | **Replaced** | `hl-linux/src/signal/{frame_test,test}.rs`, `hl-runtime/src/signal/{frame_test,queue_test,wait_test}.rs`, task signal tests, and the workspace library/bin gate. Native code must not reacquire signal-queue or signal-frame policy. |
+| The fault-reconstruction half of `translator/guest/aarch64/signal.c` and provenance in `translator/cache.c` | Turn a host fault in translated code into a guest-visible classified exit | `src/native/exec/src/fault`, `arch/aarch64/fault*.c`, `native/signal.rs`, and the Rust `HostFaultOwner` integration | **Split** | `exec/test/{fault_thread,fault_coordinator}.c`, `aarch64_fault.c`, `aarch64_provenance.c`, and Rust host-fault owner tests. Retirement requires cold and warm translated faults, wrong-thread faults, and teardown/fork gaps to remain covered. |
+
+## Memory manifest
+
+| Retained source | Retained responsibility | Current owner | Status | Permanent evidence and retirement condition |
+| --- | --- | --- | --- | --- |
+| `translator/guest_memory.{c,h}` | Resolve guest operands, translate guest addresses, and authorize host access | `hl-memory/src/mapping/{projection,host_access,projection_publish}.rs`, `ffi/linux/mapping*.rs`, `native/executor.rs`, and `arch/aarch64/{memory,projection,direct}.c` | **Split, Open** | `exec/test/aarch64_{memory,projection,direct,dirty_bound,view_hygiene}.c`, `direct.c`, x86 projection/view/write tests, `ffi/linux/mapping_test.rs`, and memory differentials. Retirement requires an automated retained/current comparison for permission failures, aliases, partial windows, dirty publication, and self-modifying code. |
+| `translator/window.{c,h}` | Overflow-safe interval/window construction | No single port: checked ranges are owned by `hl-isa`/`hl-memory`; native source, projection, and cache APIs reject malformed bounds | **Replaced** | Source/projection boundary C tests and Rust `hl-memory` tests must cover zero length, end overflow, region crossing, and bounded projection. A future native helper must not become an ambient memory owner. |
+| `translator/arena.{c,h}` | Executable allocation and writable-to-executable publication | `src/native/exec/src/arena.{c,h}` with memory allocation callbacks owned by `native/executor.rs` | **Split, Open** | `exec/test/allocation.c`, cache/run tests, and `exec/test/memory_lifecycle.sh`. The script is not currently part of `exec_c.rs`; it must become a normal gate before this row is closed. W^X, partial failure, repair, rotation, and destroy-after-fork are required cases. |
+
+## Cache manifest
+
+| Retained source | Retained responsibility | Current owner | Status | Permanent evidence and retirement condition |
+| --- | --- | --- | --- | --- |
+| `translator/cache.c`, `cache_abi.h` | Translation lookup/publication, source provenance, invalidation, generations, chaining, and indirect-target caching | `src/native/exec/cache/cache.{c,h}`, `src/native/exec/src/{translation,executor}.c`, architecture trace/indirect code, and Rust `NativePool` epoch/source tables | **Split, Open** | `exec/test/{cache,provenance,ibtc_rollover,control_metadata,indirect_metadata}.c`, `aarch64_{read_cache,store_cache,stale_site,stitch}.c`, x86 chain tests, and Rust mapping/executable-version tests. `exec/test/translation.c` is currently allowlisted as a known failure, so it is not parity evidence until fixed and removed from `KNOWN_FAILING`. |
+| `translator/reloc.{c,h}` | Record and resolve translation relocations | `src/native/exec/cache/relocation.c` and architecture block/stitch emitters | **Native, Open** | `exec/test/cache.c`, `translation.c`, `aarch64_stitch.c`, `pcrel_materialization.c`, and integration tests. Closure is blocked while `translation.c` remains known-failing. |
+| `translator/guest/aarch64/cache.c` | AArch64 persistent-cache image validation, load/save, and architecture relocation | In-memory architecture metadata and relocation live in the current cache; persistent images do not | **Split, Open** | In-memory behavior is covered by cache/stitch/stale-site tests. Before retiring the oracle, classify each retained field as represented, recomputed, or intentionally discarded and assert that a cold rebuild produces the same guest-visible result. Do not claim persistent-format parity. |
+| `translator/{digest,identity,persist}.{c,h}` | Content identity and persistent translation-cache storage | No current production equivalent | **Omitted** | This is a performance omission, not a semantic fallback. Permanent evidence is an engine test proving that cache absence, invalid data, and a fresh process all rebuild safely without stale execution. A benchmark may justify adding persistence later but cannot close semantic parity. |
+| Retained stop-the-world, fork, and self-modifying-code cache coordination | Prevent execution or reuse while mappings/code identities change | Rust mapping checkpoints, projection/direct-authority leases, executable versions, scheduler pool invalidation, and native per-executor cache generations | **Split, Open** | `exec/test/{lifecycle,fault_thread,fault_coordinator,provenance}.c`, `x86_fork_gap.c`, executable-version tests in `hl-memory`, and engine mapping tests. `memory_lifecycle.c` is skipped by `exec_c.rs`, so lifecycle closure requires integrating its archive-backed runner or equivalent assertions into the permanent gate. |
+
+## Permanent gate
+
+The minimum migration gate is the project gate, run on the exact tip being
+evaluated:
+
+```sh
+cargo test --workspace --lib --bins
+cargo test -p hl-native --test exec_c
+```
+
+Use `make gate` for the complete pinned-toolchain gate. The direct Cargo commands
+above must be run in the pinned development shell as described by `AGENTS.md`.
+The second command discovers standalone C programs in `src/native/exec/test` and
+fails on build failures and unexpected passes. Two exclusions matter to this
+manifest:
+
+- `translation.c` is in `KNOWN_FAILING`; its expected failure is anti-rot, not a
+  passing cache/relocation assertion.
+- `memory_lifecycle.c` is skipped because it needs the malloc-interposing archive
+  built by `memory_lifecycle.sh`; the shell script is useful targeted evidence,
+  but it is not yet part of the permanent gate.
+
+`src/containers/hl-engine/src/native/executor_differential.rs` is the permanent
+native-versus-Rust semantic oracle for translated instructions and boundary
+state. Keep it in the workspace gate. Tests under `src/native/exec/test` prove
+the C kernel's local contracts; they do not by themselves prove Rust ownership,
+scheduler behavior, or retained-backend compatibility.
+
+The audit documents [`exec/HOT_PATH.md`](exec/HOT_PATH.md),
+[`exec/FALLBACK_AUDIT.md`](exec/FALLBACK_AUDIT.md), and
+[`exec/WRITE_PUBLICATION.md`](exec/WRITE_PUBLICATION.md) explain design choices
+and measurements. They are supporting rationale, not permanent parity evidence.
+
+## Retirement order
+
+Retire responsibilities, not filenames. For each row:
+
+1. enumerate the retained entry points and every caller that depends on their
+   semantics;
+2. classify the current owner as Rust, native, split, or intentionally omitted;
+3. add the missing focused, differential, and engine-level assertions;
+4. mutate the current owner and confirm the named assertion fails;
+5. run the permanent gate on the final tip; and
+6. only then remove or archive the retained implementation in a separate change.
+
+The safe dependency order is CPU ABI and checked bounds, then source/projection
+and publication, then translation families and dispatcher exits, then cache
+invalidation/fork coordination, and finally lifecycle integration. Persistent
+cache files are not on the semantic critical path and must not hold up removal
+once cold-rebuild safety is permanently asserted.
