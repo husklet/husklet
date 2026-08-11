@@ -114,6 +114,7 @@ pub use system::{
 #[path = "process/wait.rs"]
 mod process_wait;
 mod retained_exit;
+mod retained_identity;
 mod robust;
 mod runtime_socket;
 mod syscall_router;
@@ -167,6 +168,7 @@ pub use procfs::{
     ResourcePort as ProcfsResourcePort, StatMetrics as ProcfsStatMetrics, StatPort as ProcfsStatPort, TaskProcfs,
 };
 pub use retained_exit::RetainedExitTrap;
+pub use retained_identity::RetainedTaskContext;
 pub use robust::{ExitHandler as RobustExitHandler, Wake as RobustWake};
 pub use runtime_socket::RuntimeSocketRegistry;
 pub(crate) use runtime_socket::{RuntimeSocket, RuntimeSocketKind};

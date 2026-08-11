@@ -85,6 +85,7 @@ static uint64_t g_host_launch_monotonic_ns;
 static void filemap_refresh_emulated(uint64_t lo, uint64_t hi);
 
 #include "../../translator/guest/aarch64/cpu.h"
+static int container_pid(void);
 static int hl_target_syscall_trap(struct cpu *c) {
     hl_syscall_cpu_aarch64 snapshot;
     hl_syscall_trap_result result;
@@ -98,6 +99,7 @@ static int hl_target_syscall_trap(struct cpu *c) {
     snapshot.pc = c->pc;
     snapshot.tls = c->tls;
     snapshot.nzcv = c->nzcv;
+    snapshot.task = (uint64_t)(c->tid ? c->tid : container_pid());
     memset(&result, 0, sizeof(result));
     result.abi = HL_SYSCALL_TRAP_ABI;
     result.size = sizeof(result);
@@ -124,9 +126,30 @@ static int hl_target_syscall_trap(struct cpu *c) {
     return 1;
 }
 
+static int hl_target_task_event(struct cpu *c, uint64_t event, uint64_t value, uint64_t source, uint64_t child) {
+    hl_syscall_cpu_aarch64 snapshot;
+    hl_syscall_trap_result result;
+    if (g_syscall_trap_dispatch == NULL) return 1;
+    memset(&snapshot, 0, sizeof(snapshot));
+    snapshot.abi = HL_SYSCALL_TRAP_ABI;
+    snapshot.size = sizeof(snapshot);
+    snapshot.x[0] = value;
+    snapshot.x[1] = source;
+    snapshot.x[2] = child;
+    snapshot.x[8] = event;
+    snapshot.task = source;
+    memset(&result, 0, sizeof(result));
+    result.abi = HL_SYSCALL_TRAP_ABI;
+    result.size = sizeof(result);
+    int32_t status = g_syscall_trap_dispatch(g_syscall_trap_context, HL_GUEST_ISA_AARCH64, &snapshot, &result);
+    return status == 0 && result.abi == HL_SYSCALL_TRAP_ABI && result.size >= sizeof(result) &&
+           (result.outcome == HL_SYSCALL_TRAP_CONTINUE || result.outcome == HL_SYSCALL_TRAP_DECLINED);
+}
+
 static int hl_target_syscall_trap_selected(const struct cpu *c) {
-    /* AArch64 Linux exit. Keep the selector cheaper than constructing the stable snapshot. */
-    return g_syscall_trap_dispatch != NULL && c->x[8] == 93;
+    /* Rust-owned exit and process identity. Keep selection cheaper than constructing the stable snapshot. */
+    return g_syscall_trap_dispatch != NULL &&
+           (c->x[8] == 93 || c->x[8] == 172 || c->x[8] == 173 || c->x[8] == 178);
 }
 #include "../../translator/guest/aarch64/signal.h"
 #include "../../translator/guest/aarch64/abi.h" // the cpu interface os/linux/ is written against

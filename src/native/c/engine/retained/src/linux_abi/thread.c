@@ -37,8 +37,13 @@ static void thread_process_owner_register(struct cpu *owner) {
     pthread_mutex_unlock(&g_process_owner_lock);
 }
 
-static void thread_exec_owner_handoff(struct cpu *self) {
+static int thread_exec_owner_handoff(struct cpu *self) {
     pthread_mutex_lock(&g_process_owner_lock);
+    int old_tid = self->tid ? self->tid : container_pid();
+    if (!hl_target_task_event(self, HL_TASK_EVENT_EXEC_THREAD, 0, (uint64_t)old_tid, 0)) {
+        pthread_mutex_unlock(&g_process_owner_lock);
+        return 0;
+    }
     if (g_process_owner_cpu && self != g_process_owner_cpu) {
         g_process_exec_cpu = self;
         g_process_exec_pending = 1;
@@ -46,6 +51,7 @@ static void thread_exec_owner_handoff(struct cpu *self) {
         self->tid = 0; // the execing thread becomes the process leader
     }
     pthread_mutex_unlock(&g_process_owner_lock);
+    return 1;
 }
 
 static void thread_exec_owner_complete(struct cpu *self, int status) {
@@ -2780,6 +2786,7 @@ static void *thread_trampoline(void *p) {
     // pthread_join waits on this
     futex_wake_addr(child->ctid);
     thread_exec_owner_complete(child, exit_status);
+    (void)hl_target_task_event(child, HL_TASK_EVENT_EXIT_THREAD, 0, (uint64_t)cpu_tid(child), 0);
     free(child);
     return NULL;
 }
@@ -2863,6 +2870,10 @@ static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, 
     int tid = __sync_add_and_fetch(&g_next_tid, 1);
     // This thread's gettid() identity (see proc.c case 178): a unique id, distinct from the init's pid 1.
     child->tid = tid;
+    if (!hl_target_task_event(parent, HL_TASK_EVENT_CLONE_THREAD, (uint64_t)tid, (uint64_t)cpu_tid(parent), 0)) {
+        free(child);
+        return -EAGAIN;
+    }
     // CLONE_PARENT_SETTID / CLONE_CHILD_SETTID. clone(2)'s tid slots are ordinary guest pointers and a
     // non-PIE guest may hand over a .bss one, so fold for the store (thread.c's rule); c->ctid keeps the
     // guest value, and futex_wake_addr folds again at thread exit.
@@ -2887,17 +2898,20 @@ static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, 
     // clone (g_threaded already 1) must NOT reset the arena in place under live peers. See emit.c /
     // hl_x86_flush_for_thread_start.
     if (!g_threaded && !G_THREAD_START_FLUSH()) {
+        (void)hl_target_task_event(child, HL_TASK_EVENT_EXIT_THREAD, 0, (uint64_t)tid, 0);
         free(child);
         return -EAGAIN;
     }
     g_threaded = 1;
     if (sentry_thread_prepare(child) != 0) {
+        (void)hl_target_task_event(child, HL_TASK_EVENT_EXIT_THREAD, 0, (uint64_t)tid, 0);
         free(child);
         return -EAGAIN;
     }
     pthread_t th;
     if (pthread_create(&th, NULL, thread_trampoline, child) != 0) {
         sentry_thread_cancel(child);
+        (void)hl_target_task_event(child, HL_TASK_EVENT_EXIT_THREAD, 0, (uint64_t)tid, 0);
         free(child);
         return -EAGAIN;
     }

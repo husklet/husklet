@@ -4,6 +4,13 @@
 #include <stdint.h>
 
 #define HL_SYSCALL_TRAP_ABI 1u
+#define HL_TASK_EVENT_CLONE_THREAD UINT64_MAX
+#define HL_TASK_EVENT_FORK_PROCESS (UINT64_MAX - 1u)
+#define HL_TASK_EVENT_EXIT_THREAD (UINT64_MAX - 2u)
+#define HL_TASK_EVENT_PREPARE_FORK (UINT64_MAX - 3u)
+#define HL_TASK_EVENT_CANCEL_FORK (UINT64_MAX - 4u)
+#define HL_TASK_EVENT_EXEC_THREAD (UINT64_MAX - 5u)
+#define HL_TASK_EVENT_REAP_PROCESS (UINT64_MAX - 6u)
 
 enum {
     HL_SYSCALL_TRAP_DECLINED = 0,
@@ -21,6 +28,7 @@ typedef struct hl_syscall_cpu_aarch64 {
     uint64_t pc;
     uint64_t tls;
     uint64_t nzcv;
+    uint64_t task;
 } hl_syscall_cpu_aarch64;
 
 typedef struct hl_syscall_trap_result {
@@ -31,7 +39,7 @@ typedef struct hl_syscall_trap_result {
     uint64_t image_generation;
 } hl_syscall_trap_result;
 
-_Static_assert(sizeof(hl_syscall_cpu_aarch64) == 288, "AArch64 syscall snapshot ABI drifted");
+_Static_assert(sizeof(hl_syscall_cpu_aarch64) == 296, "AArch64 syscall snapshot ABI drifted");
 _Static_assert(sizeof(hl_syscall_trap_result) == 24, "syscall trap result ABI drifted");
 
 typedef int32_t (*hl_syscall_trap_fn)(void *context, uint32_t guest_isa, hl_syscall_cpu_aarch64 *cpu,

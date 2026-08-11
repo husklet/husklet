@@ -1782,6 +1782,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         break;
     }
+    // Standalone C fallback. Product execution selects the Rust-owned process identity before service().
     // getpid (PID ns: init -> 1)
     case 172: G_RET(c) = (uint64_t)container_pid(); break;
     case 173:
@@ -1874,6 +1875,16 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             (void)fcntl(vfork_pipe[0], F_SETFD, FD_CLOEXEC);
             (void)fcntl(vfork_pipe[1], F_SETFD, FD_CLOEXEC);
         }
+        int runtime_source_tid = cpu_tid(c);
+        if (!hl_target_task_event(c, HL_TASK_EVENT_PREPARE_FORK, 0, (uint64_t)runtime_source_tid, 0)) {
+            (void)bound_fork_complete(&bound_fork, 0, -1);
+            if (is_vfork) {
+                close(vfork_pipe[0]);
+                close(vfork_pipe[1]);
+            }
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
         pid_t pid = fork();
         int fork_error = errno;
         if (is_vfork) {
@@ -1886,6 +1897,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         bound_status = bound_fork_complete(&bound_fork, pid == 0, pid == 0 ? (int)getpid() : (int)pid);
         if (bound_status != 0) {
+            (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
             if (pid == 0) _exit(127);
             if (pid > 0) {
                 int failed_status;
@@ -1896,7 +1908,21 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)bound_status;
             break;
         }
+        if (pid < 0)
+            (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
         errno = fork_error;
+        if (pid >= 0) {
+            uint64_t child_pid = (uint64_t)(pid == 0 ? getpid() : pid);
+            uint64_t source_tid = (uint64_t)runtime_source_tid;
+            if (!hl_target_task_event(c, HL_TASK_EVENT_FORK_PROCESS, child_pid, source_tid, pid == 0)) {
+                if (pid == 0) _exit(127);
+                int failed_status;
+                kill(pid, SIGKILL);
+                while (waitpid(pid, &failed_status, 0) < 0 && errno == EINTR) {}
+                G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+                break;
+            }
+        }
         if (pid == 0) {
             guest_fs_after_fork(share_fs);
             // clone(child_stack): Linux resumes the child on the supplied stack regardless of CLONE_VM.
@@ -2192,7 +2218,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // address space and CLOEXEC fds below, tear down any sibling guest threads (a Go all-threads setuid,
         // e.g. gosu/su-exec, leaves netpoller/idle Ms live; a surviving M would run the old image against the
         // freed state). Blocks until all peers have left run_guest, so the teardown below is race-free.
-        thread_exec_owner_handoff(c);
+        if (!thread_exec_owner_handoff(c)) {
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
         thread_exit_others(c);
         // All failure returns are behind us: Linux releases a vfork parent
         // when exec commits, before the new image begins executing.
@@ -2496,7 +2525,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 r = (pid_t)gp;
             }
         }
-        G_RET(c) = status_efault ? (uint64_t)(int64_t)(-EFAULT) : (uint64_t)r;
+        int runtime_reap_fault =
+            r > 0 && (st & 0xff) != 0x7f && st != 0xffff &&
+            !hl_target_task_event(c, HL_TASK_EVENT_REAP_PROCESS, (uint64_t)r,
+                                  (uint64_t)(c->tid ? c->tid : container_pid()), (uint64_t)(uint32_t)st);
+        G_RET(c) = status_efault ? (uint64_t)(int64_t)(-EFAULT)
+                                 : runtime_reap_fault ? (uint64_t)(int64_t)(-EIO) : (uint64_t)r;
     wait_done:; // the EINTR reroute jumps here (G_RET + *status already set)
         break;
     }
@@ -2597,10 +2631,17 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)bound_status;
             break;
         }
+        int runtime_source_tid = cpu_tid(c);
+        if (!hl_target_task_event(c, HL_TASK_EVENT_PREPARE_FORK, 0, (uint64_t)runtime_source_tid, 0)) {
+            (void)bound_fork_complete(&bound_fork, 0, -1);
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
         pid_t pid = fork();
         int fork_error = errno;
         bound_status = bound_fork_complete(&bound_fork, pid == 0, pid == 0 ? (int)getpid() : (int)pid);
         if (bound_status != 0) {
+            (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
             if (pid == 0) _exit(127);
             if (pid > 0) {
                 int failed_status;
@@ -2609,6 +2650,20 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             }
             G_RET(c) = (uint64_t)(int64_t)bound_status;
             break;
+        }
+        if (pid < 0)
+            (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
+        else {
+            uint64_t child_pid = (uint64_t)(pid == 0 ? getpid() : pid);
+            if (!hl_target_task_event(c, HL_TASK_EVENT_FORK_PROCESS, child_pid, (uint64_t)runtime_source_tid,
+                                      pid == 0)) {
+                if (pid == 0) _exit(127);
+                int failed_status;
+                kill(pid, SIGKILL);
+                while (waitpid(pid, &failed_status, 0) < 0 && errno == EINTR) {}
+                G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+                break;
+            }
         }
         errno = fork_error;
         // child: the same shared engine reset as the clone/fork site above (cache re-alias / §B shadow /

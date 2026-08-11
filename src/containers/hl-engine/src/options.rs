@@ -156,6 +156,11 @@ pub const DEFINITIONS: &[Definition] = &[
         "disable the Rust-owned retained-C exit route for same-binary measurement",
         Flag
     ),
+    internal!(
+        "HL_C_NO_RUNTIME_IDENTITY",
+        "disable Rust-owned retained-C task identity for same-binary measurement",
+        Flag
+    ),
     launch!(
         "HL_NATIVE_EXECUTION",
         "enable the bounded native execution adapter",

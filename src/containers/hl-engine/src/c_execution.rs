@@ -17,7 +17,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileExt;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
 mod wire;
@@ -32,6 +32,13 @@ const SYSCALL_TRAP_CONTINUE: u32 = 1;
 const SYSCALL_TRAP_EXIT: u32 = 2;
 const SYSCALL_TRAP_FAULT: u32 = 3;
 const SYSCALL_TRAP_REPLACE_IMAGE: u32 = 4;
+const TASK_EVENT_CLONE_THREAD: u64 = u64::MAX;
+const TASK_EVENT_FORK_PROCESS: u64 = u64::MAX - 1;
+const TASK_EVENT_EXIT_THREAD: u64 = u64::MAX - 2;
+const TASK_EVENT_PREPARE_FORK: u64 = u64::MAX - 3;
+const TASK_EVENT_CANCEL_FORK: u64 = u64::MAX - 4;
+const TASK_EVENT_EXEC_THREAD: u64 = u64::MAX - 5;
+const TASK_EVENT_REAP_PROCESS: u64 = u64::MAX - 6;
 
 #[repr(C)]
 struct CSyscallCpuAarch64 {
@@ -42,6 +49,7 @@ struct CSyscallCpuAarch64 {
     pc: u64,
     tls: u64,
     nzcv: u64,
+    task: u64,
 }
 
 #[repr(C)]
@@ -56,6 +64,23 @@ struct CSyscallTrapResult {
 struct CSyscallTrapContext {
     trap: Option<Arc<dyn hl_runtime::RuntimeSyscallTrap>>,
     retained_exit: Option<Arc<hl_runtime::RetainedExitTrap>>,
+    retained_tasks: Option<OnceLock<Arc<hl_runtime::RetainedTaskContext>>>,
+}
+
+fn retained_tasks(context: &CSyscallTrapContext, initial_task: u64) -> Option<&hl_runtime::RetainedTaskContext> {
+    let slot = context.retained_tasks.as_ref()?;
+    if slot.get().is_none() {
+        let initial_task = u32::try_from(initial_task).ok()?;
+        let tasks = Arc::new(hl_runtime::RetainedTaskContext::new_init(initial_task).ok()?);
+        let _ = slot.set(tasks);
+    }
+    slot.get().map(Arc::as_ref)
+}
+
+fn c_syscall_fault(result: &mut CSyscallTrapResult) -> c_int {
+    hl_log::hl_error!(hl_log::tag::EXEC, "retained runtime syscall transition failed closed");
+    result.outcome = SYSCALL_TRAP_FAULT;
+    0
 }
 
 unsafe extern "C" fn c_syscall_trap(
@@ -76,6 +101,60 @@ unsafe extern "C" fn c_syscall_trap(
     result.size = std::mem::size_of::<CSyscallTrapResult>() as u32;
     result.outcome = SYSCALL_TRAP_DECLINED;
     let context = unsafe { &*(context.cast::<CSyscallTrapContext>()) };
+    if matches!(
+        cpu.x[8],
+        TASK_EVENT_CLONE_THREAD
+            | TASK_EVENT_FORK_PROCESS
+            | TASK_EVENT_EXIT_THREAD
+            | TASK_EVENT_PREPARE_FORK
+            | TASK_EVENT_CANCEL_FORK
+            | TASK_EVENT_EXEC_THREAD
+            | TASK_EVENT_REAP_PROCESS
+    ) {
+        if context.retained_tasks.is_none() {
+            return 0;
+        }
+        let Some(tasks) = retained_tasks(context, cpu.task) else {
+            return c_syscall_fault(result);
+        };
+        let Ok(source) = u32::try_from(cpu.x[1]) else {
+            return c_syscall_fault(result);
+        };
+        let Ok(value) = u32::try_from(cpu.x[0]) else {
+            return c_syscall_fault(result);
+        };
+        let outcome = match cpu.x[8] {
+            TASK_EVENT_CLONE_THREAD => tasks.clone_thread(source, value),
+            TASK_EVENT_FORK_PROCESS => tasks.complete_fork_process(source, value, cpu.x[2] != 0),
+            TASK_EVENT_EXIT_THREAD => tasks.exit_thread(source),
+            TASK_EVENT_PREPARE_FORK => tasks.prepare_fork_process(),
+            TASK_EVENT_CANCEL_FORK => tasks.cancel_fork_process(),
+            TASK_EVENT_EXEC_THREAD => tasks.exec_thread(source),
+            TASK_EVENT_REAP_PROCESS => tasks.reap_process(source, value, cpu.x[2] as u32),
+            _ => unreachable!(),
+        };
+        if outcome != hl_runtime::RuntimeTrapOutcome::Continue {
+            return c_syscall_fault(result);
+        }
+        result.outcome = SYSCALL_TRAP_CONTINUE;
+        return 0;
+    }
+    if matches!(cpu.x[8], 172 | 173 | 178) {
+        if context.retained_tasks.is_some() {
+            let Some(tasks) = retained_tasks(context, cpu.task) else {
+                return c_syscall_fault(result);
+            };
+            let task = u32::try_from(cpu.task).unwrap_or(u32::MAX);
+            let (outcome, value) = tasks.dispatch_aarch64(cpu.x[8], task);
+            if outcome != hl_runtime::RuntimeTrapOutcome::Continue {
+                return c_syscall_fault(result);
+            }
+            cpu.x[0] = value;
+            result.outcome = SYSCALL_TRAP_CONTINUE;
+            return 0;
+        }
+        return 0;
+    }
     if let Some(trap) = context.retained_exit.as_deref() {
         match trap.dispatch_aarch64(cpu.x[8], cpu.x[0]) {
             hl_runtime::RuntimeTrapOutcome::Exit(status) => {
@@ -83,7 +162,7 @@ unsafe extern "C" fn c_syscall_trap(
                 result.exit_status = status;
                 return 0;
             }
-            _ => return -1,
+            _ => return c_syscall_fault(result),
         }
     }
     let Some(trap) = context.trap.as_deref() else {
@@ -144,6 +223,7 @@ fn c_option(name: &str) -> bool {
             | "HL_NATIVE_EXECUTION"
             | "HL_NATIVE_SPLIT_MODE_EXECUTORS"
             | "HL_C_NO_RUNTIME_EXIT"
+            | "HL_C_NO_RUNTIME_IDENTITY"
             | "HL_SECCOMP_BASELINE"
     )
 }
@@ -591,9 +671,11 @@ impl CGuestExecutor {
         let mut handle = std::ptr::null_mut();
         let retained_exit = Arc::new(hl_runtime::RetainedExitTrap);
         let runtime_exit = plan.options.get("HL_C_NO_RUNTIME_EXIT").is_none();
+        let runtime_identity = runtime_exit && plan.options.get("HL_C_NO_RUNTIME_IDENTITY").is_none();
         let mut syscall_trap = Box::new(CSyscallTrapContext {
             trap: runtime_exit.then(|| Arc::clone(&retained_exit) as Arc<dyn hl_runtime::RuntimeSyscallTrap>),
             retained_exit: runtime_exit.then_some(retained_exit),
+            retained_tasks: runtime_identity.then(OnceLock::new),
         });
         let status = unsafe {
             hl_c_backend_create(
@@ -736,7 +818,8 @@ impl Drop for CGuestExecutor {
 mod tests {
     use super::{
         CGuestExecutor, CSyscallCpuAarch64, CSyscallTrapContext, CSyscallTrapResult, SYSCALL_TRAP_ABI,
-        SYSCALL_TRAP_DECLINED, StreamBridge, c_file_volumes, c_main_image_plan, c_option, c_syscall_trap,
+        SYSCALL_TRAP_CONTINUE, SYSCALL_TRAP_DECLINED, StreamBridge, TASK_EVENT_CLONE_THREAD, TASK_EVENT_FORK_PROCESS,
+        TASK_EVENT_PREPARE_FORK, c_file_volumes, c_main_image_plan, c_option, c_syscall_trap,
     };
     use crate::activation::GuestIsa;
     use crate::composition::{
@@ -746,11 +829,12 @@ mod tests {
     use std::io::{Cursor, Read, Seek, Write};
     use std::os::fd::FromRawFd;
     use std::os::unix::ffi::OsStrExt;
+    use std::sync::OnceLock;
     use std::sync::{Arc, Mutex};
 
     #[test]
     fn syscall_callback_abi_layout_is_stable() {
-        assert_eq!(std::mem::size_of::<CSyscallCpuAarch64>(), 288);
+        assert_eq!(std::mem::size_of::<CSyscallCpuAarch64>(), 296);
         assert_eq!(std::mem::size_of::<CSyscallTrapResult>(), 24);
         assert_eq!(SYSCALL_TRAP_ABI, 1);
     }
@@ -760,6 +844,7 @@ mod tests {
         let mut context = CSyscallTrapContext {
             trap: None,
             retained_exit: None,
+            retained_tasks: None,
         };
         let mut cpu = CSyscallCpuAarch64 {
             abi: SYSCALL_TRAP_ABI,
@@ -769,8 +854,9 @@ mod tests {
             pc: 0x5678,
             tls: 0x9abc,
             nzcv: 0xf000_0000,
+            task: 1,
         };
-        let before = (cpu.x, cpu.sp, cpu.pc, cpu.tls, cpu.nzcv);
+        let before = (cpu.x, cpu.sp, cpu.pc, cpu.tls, cpu.nzcv, cpu.task);
         let mut result = CSyscallTrapResult {
             abi: 0,
             size: 0,
@@ -788,7 +874,74 @@ mod tests {
         };
         assert_eq!(status, 0);
         assert_eq!(result.outcome, SYSCALL_TRAP_DECLINED);
-        assert_eq!((cpu.x, cpu.sp, cpu.pc, cpu.tls, cpu.nzcv), before);
+        assert_eq!((cpu.x, cpu.sp, cpu.pc, cpu.tls, cpu.nzcv, cpu.task), before);
+    }
+
+    #[test]
+    fn retained_task_events_publish_fork_and_thread_identity() {
+        let mut context = CSyscallTrapContext {
+            trap: None,
+            retained_exit: None,
+            retained_tasks: Some(OnceLock::new()),
+        };
+        let mut cpu = CSyscallCpuAarch64 {
+            abi: SYSCALL_TRAP_ABI,
+            size: std::mem::size_of::<CSyscallCpuAarch64>() as u32,
+            x: [0; 31],
+            sp: 0,
+            pc: 0,
+            tls: 0,
+            nzcv: 0,
+            task: 41,
+        };
+        let mut result = CSyscallTrapResult {
+            abi: 0,
+            size: 0,
+            outcome: u32::MAX,
+            exit_status: -1,
+            image_generation: 0,
+        };
+        let mut dispatch = |cpu: &mut CSyscallCpuAarch64, result: &mut CSyscallTrapResult| unsafe {
+            c_syscall_trap(
+                (&mut context as *mut CSyscallTrapContext).cast(),
+                GuestIsa::Aarch64 as u32,
+                cpu,
+                result,
+            )
+        };
+
+        cpu.x[8] = 172;
+        assert_eq!(dispatch(&mut cpu, &mut result), 0);
+        assert_eq!((result.outcome, cpu.x[0]), (SYSCALL_TRAP_CONTINUE, 41));
+
+        cpu.x = [0; 31];
+        cpu.x[8] = TASK_EVENT_CLONE_THREAD;
+        cpu.x[0] = 1001;
+        cpu.x[1] = 41;
+        assert_eq!(dispatch(&mut cpu, &mut result), 0);
+        cpu.x = [0; 31];
+        cpu.x[8] = 178;
+        cpu.task = 1001;
+        assert_eq!(dispatch(&mut cpu, &mut result), 0);
+        assert_eq!(cpu.x[0], 1001);
+
+        cpu.x = [0; 31];
+        cpu.x[8] = TASK_EVENT_PREPARE_FORK;
+        cpu.x[1] = 41;
+        cpu.task = 41;
+        assert_eq!(dispatch(&mut cpu, &mut result), 0);
+        cpu.x = [0; 31];
+        cpu.x[8] = TASK_EVENT_FORK_PROCESS;
+        cpu.x[0] = 73;
+        cpu.x[1] = 41;
+        cpu.x[2] = 1;
+        cpu.task = 41;
+        assert_eq!(dispatch(&mut cpu, &mut result), 0);
+        cpu.x = [0; 31];
+        cpu.x[8] = 173;
+        cpu.task = 73;
+        assert_eq!(dispatch(&mut cpu, &mut result), 0);
+        assert_eq!(cpu.x[0], 41);
     }
 
     #[derive(Clone)]
@@ -905,6 +1058,40 @@ mod tests {
             result_path: None,
             options: crate::options::Options::default(),
         }
+    }
+
+    fn matching_process_and_thread_identity_arm() -> Vec<u8> {
+        const ENTRY_OFFSET: usize = 0x100;
+        let mut bytes = exiting_arm(0);
+        for (index, instruction) in [
+            0xd280_0008_u32 | (172 << 5),
+            0xd400_0001,
+            0xaa00_03e9,
+            0xd280_0008_u32 | (178 << 5),
+            0xd400_0001,
+            0xeb09_001f,
+            0x9a9f_07e0,
+            0xd280_0ba8,
+            0xd400_0001,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = ENTRY_OFFSET + index * 4;
+            bytes[offset..offset + 4].copy_from_slice(&instruction.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn retained_process_identity_is_returned_by_the_rust_owned_route() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("guest");
+        std::fs::write(&path, matching_process_and_thread_identity_arm()).unwrap();
+        let plan = executable_plan(&path);
+        let executor = CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, None, [0, 1, 2], None).unwrap();
+        executor.start_plan(&plan).unwrap();
+        assert_eq!(executor.exit().guest_status, 0);
     }
 
     #[test]
