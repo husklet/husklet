@@ -44,6 +44,7 @@ struct hl_engine {
     hl_engine_publish_rule *owned_publish;
     hl_host_handle executable;
     hl_engine_executable executable_config;
+    hl_engine_main_image_plan main_image_plan;
     unsigned char *owned_executable_image;
 };
 
@@ -476,12 +477,25 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
          (config->executable->ownership != HL_ENGINE_FD_TRANSFER &&
           config->executable->ownership != HL_ENGINE_FD_BORROW)))
         return HL_STATUS_INVALID_ARGUMENT;
+    if (config->main_image_plan != NULL &&
+        (config->main_image_plan->abi != HL_ENGINE_MAIN_IMAGE_PLAN_ABI ||
+         config->main_image_plan->size < sizeof(*config->main_image_plan)))
+        return HL_STATUS_ABI_MISMATCH;
+    if (config->main_image_plan != NULL &&
+        (config->main_image_plan->reserved != 0 ||
+         config->main_image_plan->link_end <= config->main_image_plan->link_start ||
+         (config->main_image_plan->kind != 1 && config->main_image_plan->kind != 2)))
+        return HL_STATUS_INVALID_ARGUMENT;
     if (config->fd_binding_count != 0 && config->fd_bindings == NULL) return HL_STATUS_INVALID_ARGUMENT;
     status = hl_host_services_validate(host, HL_HOST_CAP_MEMORY | HL_HOST_CAP_CLOCK | HL_HOST_CAP_SYNC);
     if (status != HL_STATUS_OK) return status;
     engine = calloc(1, sizeof(*engine));
     if (engine == NULL) return HL_STATUS_OUT_OF_MEMORY;
     memcpy(&engine->config, config, sizeof(*config));
+    if (config->main_image_plan != NULL) {
+        engine->main_image_plan = *config->main_image_plan;
+        engine->config.main_image_plan = &engine->main_image_plan;
+    }
     memcpy(&engine->host, host, sizeof(*host));
     engine->executable = HL_HOST_HANDLE_INVALID;
     if (config->executable != NULL) {

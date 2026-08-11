@@ -300,8 +300,8 @@ static void hl_forkserver_runner(int conn, int *fds, int nfd, int argc, char **a
         hl_option_unset("HL_PCACHE_DIR");
     }
     _exit(hl_run_linux_guest(hl_target_services_effective(&g_target_services), g_linux_box,
-                             g_srv_rootfs[0] ? g_srv_rootfs : NULL, HL_HOST_HANDLE_INVALID, NULL, 0, (uint32_t)argc,
-                             argv));
+                             g_srv_rootfs[0] ? g_srv_rootfs : NULL, HL_HOST_HANDLE_INVALID, NULL, 0, NULL,
+                             (uint32_t)argc, argv));
 }
 
 // ---- server ----
@@ -350,7 +350,7 @@ static int hl_server_main(int argc, char **argv) {
         // created once, so every warm COW worker inherits them.
         FSRV_GUEST_HOST_INIT();
         // Load the guest image (this fixes the base every COW worker will share).
-        load_program(prewarm, &g_wmain, &g_winterp, &g_wjump, &g_wat_base, &g_whave_interp);
+        load_program(prewarm, &g_wmain, &g_winterp, &g_wjump, &g_wat_base, &g_whave_interp, NULL);
         g_wmain_span = loaded_span(&g_wmain);
         if (g_whave_interp) g_winterp_span = loaded_span(&g_winterp);
         // Snapshot the PRISTINE writable image BEFORE running anything (data+bss are about to be

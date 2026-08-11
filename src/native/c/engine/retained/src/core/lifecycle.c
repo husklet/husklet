@@ -14,7 +14,8 @@
 #endif
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
-                       const void *executable_image, size_t executable_size, uint32_t argc, char *const argv[]);
+                       const void *executable_image, size_t executable_size,
+                       const hl_engine_main_image_plan *main_image_plan, uint32_t argc, char *const argv[]);
 hl_status hl_run_linux_guest_status(void);
 
 typedef struct hl_production_result_state {
@@ -417,7 +418,7 @@ static int32_t hl_production_cold_entry(void *opaque) {
      * not return until the run is over, which is the same lifetime the call
      * below already relies on for the services pointer itself. */
     box = hl_production_cold_box(&services);
-    result = hl_run_linux_guest(&services, box, rootfs, HL_HOST_HANDLE_INVALID, image, (size_t)header.image_size,
+    result = hl_run_linux_guest(&services, box, rootfs, HL_HOST_HANDLE_INVALID, image, (size_t)header.image_size, NULL,
                                 header.argc, argv);
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
@@ -443,7 +444,8 @@ static int32_t hl_production_entry(void *opaque) {
     hl_target_syscall_trap_install(context->syscall_context, context->syscall_dispatch);
     int32_t result = hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
                                         spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
-                                        context->argc, (char *const *)(uintptr_t)context->argv);
+                                        context->config->main_image_plan, context->argc,
+                                        (char *const *)(uintptr_t)context->argv);
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);

@@ -164,6 +164,7 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
         return HL_STATUS_INVALID_ARGUMENT;
     }
     backend->options_initialized = 1;
+    config.main_image_plan = image_plan;
     if (executable_fd >= 0) {
         hl_host_result imported_executable = hl_host_linux_import_file(backend->host, executable_fd);
         if (imported_executable.status != HL_STATUS_OK || imported_executable.value == HL_HOST_HANDLE_INVALID) {

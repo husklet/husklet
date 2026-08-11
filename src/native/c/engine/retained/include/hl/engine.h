@@ -69,6 +69,19 @@ typedef struct hl_engine_executable {
     size_t image_size;
 } hl_engine_executable;
 
+typedef struct hl_engine_main_image_plan {
+    HL_ABI_HEADER;
+    uint32_t architecture;
+    uint32_t kind;
+    uint64_t link_start;
+    uint64_t link_end;
+    uint32_t has_interpreter;
+    uint32_t reserved;
+    uint64_t interpreter_identity;
+} hl_engine_main_image_plan;
+
+#define HL_ENGINE_MAIN_IMAGE_PLAN_ABI 1u
+
 enum {
     HL_ENGINE_BOX_ROOTFS_READ_ONLY = 1u << 0,
     HL_ENGINE_BOX_SANDBOX = 1u << 1,
@@ -136,6 +149,8 @@ typedef struct hl_engine_config {
     const hl_engine_box_config *box;
     /* Optional authority for the initial main executable only. Never reused by exec or an interpreter. */
     const hl_engine_executable *executable;
+    /* Rust-validated placement of the initial main executable only. */
+    const hl_engine_main_image_plan *main_image_plan;
 } hl_engine_config;
 
 typedef struct hl_engine_exit {

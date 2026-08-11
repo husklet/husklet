@@ -921,8 +921,25 @@ mod tests {
 
         let mut pie = executable;
         put_u16(&mut pie, 16, 3);
+        put_u64(&mut pie, 24, 0x0080_0100);
+        put_u64(&mut pie, 80, 0x0080_0000);
+        put_u64(&mut pie, 88, 0x0080_0000);
         std::fs::write(std::ffi::OsStr::from_bytes(path.as_bytes()), pie).unwrap();
-        assert_eq!(c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).unwrap().kind, 2);
+        let plan = c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).unwrap();
+        assert_eq!(plan.kind, 2);
+        assert_eq!((plan.link_start, plan.link_end), (0x0080_0000, 0x0081_0000));
+
+        let mut interpreted = exiting_arm(0);
+        put_u16(&mut interpreted, 56, 2);
+        put_u32(&mut interpreted, 120, 3);
+        put_u64(&mut interpreted, 128, 192);
+        put_u64(&mut interpreted, 152, 7);
+        put_u64(&mut interpreted, 160, 7);
+        interpreted[192..199].copy_from_slice(b"/ld.so\0");
+        std::fs::write(std::ffi::OsStr::from_bytes(path.as_bytes()), interpreted).unwrap();
+        let plan = c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).unwrap();
+        assert_eq!(plan.has_interpreter, 1);
+        assert_ne!(plan.interpreter_identity, 0);
 
         std::fs::write(std::ffi::OsStr::from_bytes(path.as_bytes()), b"not an elf").unwrap();
         assert!(c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).is_err());
@@ -949,6 +966,25 @@ mod tests {
         let replacement = CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, None, [0, 1, 2], None).unwrap();
         replacement.start_plan(&plan).unwrap();
         assert_eq!(replacement.exit().guest_status, 7);
+    }
+
+    #[test]
+    fn rust_placement_drives_displaced_exec_and_pie_launches() {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, kind, link_base, status) in [("exec", 2_u16, 0x0080_0000_u64, 31_u16), ("pie", 3, 0, 32)] {
+            let path = directory.path().join(name);
+            let mut executable = exiting_arm(status);
+            put_u16(&mut executable, 16, kind);
+            put_u64(&mut executable, 24, link_base + 0x100);
+            put_u64(&mut executable, 80, link_base);
+            put_u64(&mut executable, 88, link_base);
+            std::fs::write(&path, executable).unwrap();
+            let launch = executable_plan(&path);
+            let executor =
+                CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &launch, None, [0, 1, 2], None).unwrap();
+            executor.start_plan(&launch).unwrap();
+            assert_eq!(executor.exit().guest_status, i32::from(status));
+        }
     }
 
     #[test]

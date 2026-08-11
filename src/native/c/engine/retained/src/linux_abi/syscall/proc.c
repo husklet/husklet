@@ -2239,7 +2239,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #ifdef PCACHE_EXEC_HOOKS
         pcache_exec_force_main(); // map the new image at the fixed VA so its cached arena is reusable
 #endif
-        load_elf(p, &lm);
+        load_elf(p, &lm, NULL);
         uint64_t jump = lm.entry, at_base = 0;
         char interp[256];
         if (elf_interp(p, interp, sizeof interp) == 0) {
@@ -2252,7 +2252,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             pcache_exec_force_interp();
 #endif
             struct loaded li;
-            load_elf(ih, &li);
+            load_elf(ih, &li, NULL);
             jump = li.entry;
             at_base = li.base;
         }

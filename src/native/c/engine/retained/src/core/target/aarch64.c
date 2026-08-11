@@ -429,7 +429,8 @@ static int aarch64_image_read(const char *path, hl_linux_image *image) {
 // termios + NET-ns loopback
 #include "../../linux_abi/container/netns.c"
 // ELF fwd-decls + FS-metadata cache
-static void load_elf(const char *path, struct loaded *out);
+struct main_placement;
+static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement);
 static int elf_interp(const char *path, char *out, size_t n);
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base);
 // the syscall layer (service())
@@ -1071,7 +1072,7 @@ static int engine_global_init(void) {
 // is byte-identical and the warm worker re-runs from the same entry at the same base). The gb/pb/ib
 // buffers are static because g_exe_path = prog points into gb and must outlive this call.
 static const char *load_program(const char *prog, struct loaded *lm, struct loaded *li, uint64_t *jump,
-                                uint64_t *at_base, int *have_interp) {
+                                uint64_t *at_base, int *have_interp, const hl_engine_main_image_plan *image_plan) {
     // cache id keys the INVOKED name (argv[0] pre-resolution), exactly as before this refactor.
     const char *argv0 = prog;
     static char gb[1024];
@@ -1101,7 +1102,16 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     // when the persistent cache is on, map the image + interp at FIXED VAs so the translated arena
     // (block-map keys + baked guest addresses) is byte-identical across runs -> reusable from the cache.
     if (g_pcache) g_force_base = PC_IMG_BASE;
-    load_elf(prog_host, lm);
+    struct main_placement main_placement;
+    const struct main_placement *placement = NULL;
+    if (image_plan != NULL) {
+        if (main_placement_from_plan(image_plan, &main_placement) != 0) {
+            fprintf(stderr, "hl-engine: invalid Rust main image placement plan\n");
+            exit(1);
+        }
+        placement = &main_placement;
+    }
+    load_elf(prog_host, lm, placement);
 
     // Dynamic: load the PT_INTERP (ld.so) and enter THERE; it loads libs + relocates.
     *jump = lm->entry;
@@ -1117,7 +1127,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         // follow+confine ld.so symlink (through the overlay)
         interp_host = xresolve_overlay(interp, ib, sizeof ib);
         if (g_pcache) g_force_base = PC_INTERP_BASE;
-        load_elf(interp_host, li);
+        load_elf(interp_host, li, NULL);
         *jump = li->entry;
         *at_base = li->base;
         *have_interp = 1;
@@ -1164,8 +1174,8 @@ static int hl_restore_checkpoint(const char *rootfs) {
 }
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
-                       const void *executable_image, size_t executable_size, uint32_t argument_count,
-                       char *const argv[]) {
+                       const void *executable_image, size_t executable_size, const hl_engine_main_image_plan *image_plan,
+                       uint32_t argument_count, char *const argv[]) {
     int argc;
     (void)executable;
     g_initial_executable_image = executable_image;
@@ -1262,7 +1272,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     struct loaded lm, li;
     uint64_t jump, at_base;
     int have_interp;
-    load_program(argv[0], &lm, &li, &jump, &at_base, &have_interp); // (sets g_pc_binid + fixed bases when g_pcache)
+    load_program(argv[0], &lm, &li, &jump, &at_base, &have_interp, image_plan);
     // try to restore the arena from the persistent cache.
     if (g_pcache) {
         g_pc_entry = jump;

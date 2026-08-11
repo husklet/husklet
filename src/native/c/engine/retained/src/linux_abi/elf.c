@@ -750,7 +750,24 @@ static void elf_mprotect_besteffort(const hl_host_memory_mapping *mapping, void 
     }
 }
 
-static void load_elf(const char *path, struct loaded *out) {
+struct main_placement {
+    uint64_t link_start;
+    uint64_t link_end;
+    int etype;
+};
+
+static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struct main_placement *placement) {
+    if (plan == NULL || placement == NULL || plan->abi != HL_ENGINE_MAIN_IMAGE_PLAN_ABI ||
+        plan->size < sizeof(*plan) ||
+        plan->link_end <= plan->link_start || (plan->kind != 1 && plan->kind != 2))
+        return -1;
+    placement->link_start = plan->link_start;
+    placement->link_end = plan->link_end;
+    placement->etype = plan->kind == 1 ? 2 : 3;
+    return 0;
+}
+
+static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement) {
     hl_linux_image image;
     if (aarch64_image_read(path, &image) != 0) {
         fprintf(stderr, "hl-engine: cannot read guest ELF %s through host services\n", path);
@@ -770,18 +787,25 @@ static void load_elf(const char *path, struct loaded *out) {
     }
     uint64_t e_entry = rd64(f + 24), phoff = rd64(f + 32);
     int phnum = rd16(f + 56), phentsize = rd16(f + 54);
-    uint64_t minv = ~0ull, maxv = 0;
-    for (int i = 0; i < phnum; i++) {
-        uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
-        // PT_LOAD
-        if (rd32(ph) != 1) continue;
-        uint64_t v = rd64(ph + 16), msz = rd64(ph + 40);
-        if (v < minv) minv = v;
-        if (v + msz > maxv) maxv = v + msz;
+    uint64_t basepage, span;
+    int etype;
+    if (placement != NULL) {
+        basepage = placement->link_start;
+        span = placement->link_end - placement->link_start;
+        etype = placement->etype;
+    } else {
+        uint64_t minv = ~0ull, maxv = 0;
+        for (int i = 0; i < phnum; i++) {
+            uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
+            if (rd32(ph) != 1) continue;
+            uint64_t v = rd64(ph + 16), msz = rd64(ph + 40);
+            if (v < minv) minv = v;
+            if (v + msz > maxv) maxv = v + msz;
+        }
+        basepage = minv & ~0xFFFull;
+        span = (maxv - basepage + 0xFFFF) & ~0xFFFFull;
+        etype = rd16(f + 16);
     }
-    uint64_t basepage = minv & ~0xFFFull;
-    uint64_t span = (maxv - basepage + 0xFFFF) & ~0xFFFFull;
-    int etype = rd16(f + 16);
     // NULL: non-colliding (main + interp). A non-PIE ET_EXEC that could NOT take the link address gets
     // biased here; the dispatcher redirects its absolute code jumps (g_nonpie_*) and the nonpie_guard
     // SIGSEGV handler re-serves its absolute DATA refs to the low link vaddr at +bias (nonpie_fixup above).
