@@ -2,19 +2,19 @@ use std::fs;
 #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 use std::process::Command;
 
-const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../native/c/engine/retained/");
+const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/retained/");
 const RETIRED: &str = "src/core/environment.h";
 
 #[test]
 fn retained_environment_boundary_is_physically_absent() {
     let source_manifest = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../native/c/engine/retained/RUNTIME_SOURCES.manifest"
+        "/../../runtime/native/retained/RUNTIME_SOURCES.manifest"
     ))
     .unwrap();
     let options = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../native/c/engine/retained/src/core/options.c"
+        "/../../runtime/native/retained/src/core/options.c"
     ))
     .unwrap();
 

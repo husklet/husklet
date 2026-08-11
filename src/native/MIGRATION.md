@@ -2,7 +2,7 @@
 
 This is the ownership ledger for the translation, native-execution, guest-memory,
 and translation-cache parts of
-`src/native/c/engine/retained`. It records where each retained
+`src/runtime/native/retained`. It records where each retained
 responsibility lives in Husklet, which behavior is intentionally absent, and the
 automated evidence required before the retained implementation stops being an
 oracle.
@@ -57,7 +57,7 @@ the existing component tests alone.
 
 Path shorthand in the tables is deliberate: retained `translator/...` and
 `core/...` paths are relative to
-`src/native/c/engine/retained/src`; `arch/...` is relative to
+`src/runtime/native/retained/src`; `arch/...` is relative to
 `src/native/exec/src`; `exec/test/...` is relative to `src/native`; and
 `native/...` and `ffi/...` are relative to `src/containers/hl-engine/src`.
 

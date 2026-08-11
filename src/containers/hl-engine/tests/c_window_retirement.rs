@@ -2,14 +2,14 @@ use std::fs;
 #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 use std::process::Command;
 
-const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../native/c/engine/retained/");
+const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/retained/");
 const RETIRED: [&str; 2] = ["src/translator/window.c", "src/translator/window.h"];
 
 #[test]
 fn retained_window_helper_is_physically_absent() {
     let manifest = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../native/c/engine/retained/COMPILED_TUS.tsv"
+        "/../../runtime/native/retained/COMPILED_TUS.tsv"
     ))
     .unwrap();
     assert!(manifest.contains("src/translator/guest/aarch64/signal.c"));

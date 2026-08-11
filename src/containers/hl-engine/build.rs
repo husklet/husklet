@@ -1,9 +1,9 @@
 use std::{env, fs, path::PathBuf};
 
-const C_ENGINE: &str = "../../native/c/engine";
-const RETAINED: &str = "../../native/c/engine/retained";
-const TU_MANIFEST: &str = "../../native/c/engine/retained/COMPILED_TUS.tsv";
-const SOURCE_MANIFEST: &str = "../../native/c/engine/retained/RUNTIME_SOURCES.manifest";
+const C_ENGINE: &str = "../../runtime/native";
+const RETAINED: &str = "../../runtime/native/retained";
+const TU_MANIFEST: &str = "../../runtime/native/retained/COMPILED_TUS.tsv";
+const SOURCE_MANIFEST: &str = "../../runtime/native/retained/RUNTIME_SOURCES.manifest";
 
 #[derive(Debug)]
 struct TranslationUnit<'a> {

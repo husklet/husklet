@@ -13,6 +13,9 @@ members = [
 # otherwise pick them up and fail every cargo command with a missing manifest.
 exclude = [
     "src/containers/.cache",
+    # The production native engine is C source consumed by hl-engine's build
+    # script, not a Rust package despite living under the runtime member glob.
+    "src/runtime/native",
 ]
 # hl-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host, so it stays
 # out of the default set; build it explicitly with `cargo build -p hl-gui` (or `make app`) on macOS.
