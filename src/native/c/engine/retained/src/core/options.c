@@ -1,6 +1,5 @@
 // Authoritative engine option registry and instance-owned value store.
 #include "options.h"
-#include "environment.h"
 
 #include <stddef.h>
 #include <stdint.h>

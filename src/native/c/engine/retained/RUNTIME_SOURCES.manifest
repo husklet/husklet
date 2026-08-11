@@ -15,7 +15,6 @@ src/core/dispatch.c
 src/core/engine.c
 src/core/engine_backend.h
 src/core/engine_result.h
-src/core/environment.h
 src/core/fatal.c
 src/core/fatal.h
 src/core/host_services.c
