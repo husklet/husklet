@@ -1,6 +1,6 @@
-#![cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
-
-use std::{fs, process::Command};
+use std::fs;
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+use std::process::Command;
 
 const RETIRED_SOURCES: [&str; 4] = [
     "src/core/cli.c",
@@ -8,6 +8,8 @@ const RETIRED_SOURCES: [&str; 4] = [
     "src/core/launch.c",
     "src/core/target/run.c",
 ];
+
+const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../native/c/engine/retained/");
 
 const RETIRED_SYMBOLS: [&str; 5] = [
     "hl_engine_entry",
@@ -30,6 +32,10 @@ fn product_manifest_excludes_the_retired_standalone_path() {
     );
     for source in RETIRED_SOURCES {
         assert!(
+            !std::path::Path::new(RETAINED_ROOT).join(source).exists(),
+            "retired standalone source returned to the retained tree: {source}"
+        );
+        assert!(
             !manifest.contains(source),
             "retired standalone source returned to product build: {source}"
         );
@@ -50,6 +56,7 @@ fn product_manifest_excludes_the_retired_standalone_path() {
 }
 
 #[test]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 fn linked_test_binary_excludes_retired_standalone_symbols() {
     // Referencing the library keeps its whole-archive native link directives in
     // this integration test, making the symbol assertion non-vacuous.

@@ -19,7 +19,6 @@
 #define g_rwx_guest HL_TARGET_LOCAL(g_rwx_guest)
 #define g_stack_hi HL_TARGET_LOCAL(g_stack_hi)
 #define g_stack_lo HL_TARGET_LOCAL(g_stack_lo)
-#define hl_engine_entry HL_TARGET_LOCAL(engine_entry)
 #define hl_run_linux_guest HL_TARGET_LOCAL(run_linux_guest)
 #define hl_run_linux_guest_status HL_TARGET_LOCAL(run_linux_guest_status)
 #define hl_target_register_backend HL_TARGET_LOCAL(target_register_backend)

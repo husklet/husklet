@@ -98,16 +98,6 @@ typedef struct hl_launch_result {
     uint64_t detail;
 } hl_launch_result;
 
-HL_API hl_status hl_launch_config_validate(const void *wire, size_t wire_size, hl_launch_config *out_config,
-                                           const char **out_pool);
-HL_API hl_status hl_launch_config_string(const hl_launch_config *config, const char *pool, uint32_t offset,
-                                         const char **out_string, size_t *out_size);
-HL_API hl_status hl_launch_config_arguments_validate(const hl_launch_config *config, const char *pool,
-                                                     size_t *out_count);
-HL_API hl_status hl_launch_config_argument(const hl_launch_config *config, const char *pool, size_t index,
-                                           const char **out_argument, size_t *out_size);
-HL_API hl_status hl_launch_config_publish(const hl_launch_config *config, const char *pool,
-                                          const hl_engine_publish_rule **out_rules);
 
 HL_EXTERN_C_END
 

@@ -98,7 +98,7 @@ ownership *and* frequency rather than replacing similarly named files in arbitra
 
 | Retained C modules | Existing permanent owner | Current call edge | Migration rank and required evidence |
 | --- | --- | --- | --- |
-| `core/{cli,config,launch}.c`, `core/target/run.c` | `hl-engine/src/{cli.rs,launcher/{wire,plan}.rs,c_execution/{wire,process,worker}.rs}` | Standalone-only `hl_engine_entry -> hl_cli_route_parse / hl_run_config_file_with -> hl_standalone_run -> hl_native_engine_run`; the product worker instead enters `CGuestExecutor -> hl_c_backend_create/hl_c_backend_run -> hl_engine_create_with_borrowed_options/hl_engine_run` | **1: remove from the product archive.** Assert the four objects and `hl_engine_entry` are absent, run lifecycle/worker tests, then balanced product benchmarks to detect binary-layout movement. |
+| Deleted `core/{cli,config,launch}.c`, `core/target/run.c` | `hl-engine/src/{cli.rs,launcher/{wire,plan}.rs,c_execution/{wire,process,worker}.rs}` | The retired standalone edge was `hl_engine_entry -> hl_cli_route_parse / hl_run_config_file_with -> hl_standalone_run -> hl_native_engine_run`; the product worker enters `CGuestExecutor -> hl_c_backend_create/hl_c_backend_run -> hl_engine_create_with_borrowed_options/hl_engine_run` | **Retired.** `c_standalone_retirement.rs` asserts physical absence, manifest absence, and linked-symbol absence; reintroducing a source file makes the test fail. |
 | `core/options.c` | `hl-engine/src/options.rs` and the validated `RuntimePlan` worker wire | `CGuestExecutor::create_with_streams -> hl_c_backend_create -> hl_options_init_records -> hl_engine_create_with_borrowed_options`; retained consumers read the lifetime-stable launch store, while guest-exec environment mutation uses process-private overlay state | **2: keep the C read view, eliminate remaining C parsing/mutation policy.** Continue separating runtime-only state from launch inputs; differential tests must cover absent versus empty, overwrite, integer bounds, environment exclusion, fork/exec inheritance, and all option consumers. |
 | `linux_abi/container/vfs*.c`, `fdcache.c`, `open_plan.c`, filesystem syscall arms | `hl-vfs`, `hl-fs`, and `hl-runtime` filesystem/descriptor ports | `hl_engine_run -> hl_production_start_process -> hl_run_linux_guest* -> service_local -> syscall/dispatch.c -> fs.c/vfs.c` | **3, cold policy first; path lookup remains performance-sensitive.** Move namespace construction and mount validation before lookup/mutation. Require the filesystem, overlay, exact-bind, descriptor, exec-image, and two-guest sqlite benchmarks before redirecting any lookup call. |
 | `linux_abi/container/{pidmap,state}.c`, `thread.c`, process/signal/wait syscall arms | `hl-task`, `hl-runtime/src/{process,thread,signal}`, `hl-execution` | Translator exits to `service_local`; dispatch calls process/thread globals and returns register results to `run_guest` | **4: retain while C owns guest execution scheduling.** Replacement needs fork/exec/wait/signal/job-control differentials and must not add one host IPC per syscall. |
@@ -107,11 +107,9 @@ ownership *and* frequency rather than replacing similarly named files in arbitra
 | `core/provider/*`, `host/*` | `hl-provider` and `hl-engine/src/native/{authority,host}` | VFS/network/provider operations demultiplex into host file/process/memory services | **Cold authority operations may move early; data-plane operations stay local.** Require SCM_RIGHTS, projected tree/file, readiness, failure/reconnect, and syscall-phase benchmarks. |
 | `translator/*`, `core/dispatch.c`, target entry/stubs | `src/native/exec`, `hl-execution`, and Rust native scheduler | `hl_run_linux_guest* -> run_guest -> cache lookup/translate_block -> emitted native code -> dispatcher exit` | **Keep C now.** This is the proven fast core. Eliminate only by native-vs-retained instruction families and balanced malloc/mmap/sqlite evidence, never by source similarity. |
 
-The first cut deliberately leaves the four standalone source files in the retained oracle tree while
-removing them from `COMPILED_TUS.tsv`. They remain available to compare historical standalone behavior,
-but the product archive no longer carries a second CLI/configuration owner. `HL_ENGINE_NO_STANDALONE`
-also removes `hl_engine_entry`, whose otherwise-unreachable body was the only product reference keeping
-those objects link-required under whole-archive.
+The standalone CLI/config-file launch chain has been physically deleted from the retained tree. Its
+behavioral oracle remains available in read-only `../engine`; Husklet has only the Rust worker/wire/process
+owner. `c_standalone_retirement.rs` prevents either the files or their linked symbols from returning.
 
 ## Memory manifest
 

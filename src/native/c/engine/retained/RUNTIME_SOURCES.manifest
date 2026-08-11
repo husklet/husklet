@@ -12,9 +12,7 @@ src/core/bus.c
 src/core/bus.h
 src/core/checkpoint_channel.c
 src/core/checkpoint_channel.h
-src/core/cli.c
 src/core/cli.h
-src/core/config.c
 src/core/dispatch.c
 src/core/engine.c
 src/core/engine_backend.h
@@ -23,7 +21,6 @@ src/core/environment.h
 src/core/fatal.c
 src/core/fatal.h
 src/core/host_services.c
-src/core/launch.c
 src/core/launch.h
 src/core/lifecycle.c
 src/core/log.c
@@ -46,7 +43,6 @@ src/core/target/bus.h
 src/core/target/namespace.h
 src/core/target/native.c
 src/core/target/native.h
-src/core/target/run.c
 src/core/target/services.c
 src/core/target/services.h
 src/host/child.c

@@ -47,9 +47,7 @@
 #include "hl/linux_abi.h"
 #include "hl/log.h"
 #include "hl/syscall_trap.h"
-#include "../launch.h"
 #include "../options.h"
-#include "../cli.h"
 #include "native.h"
 #include "services.h"
 #include "../bus.h"
@@ -1309,106 +1307,3 @@ void hl_target_runtime_init(void) {
     poslk_init();
     ipc_init();
 }
-
-#ifndef HL_ENGINE_NO_STANDALONE
-// The engine entry point uses the public HL prefix so the runtime can be linked as a library and launched
-// by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
-// harness) launching identically.
-int hl_engine_entry(int argc, char **argv);
-
-static int hl_standalone_run(const char *rootfs, const char *executable_host, uint32_t argc, char *const argv[],
-                             const hl_options *options, const char *result_path) {
-    (void)executable_host;
-    // Earliest point that knows this launch is a restore: cover the whole rebuild against a terminal signal
-    // typed at the pty before the tree exists (ckpt_restore_hold_tty_signals).
-    if (options == NULL ? hl_option_get("HL_RESTORE") != NULL : hl_options_get(options, "HL_RESTORE") != NULL)
-        ckpt_restore_hold_tty_signals();
-    return hl_native_engine_run(HL_GUEST_ISA_AARCH64, rootfs, argc, argv, options, result_path);
-}
-#ifndef HL_ENGINE_NO_MAIN
-int main(int argc, char **argv) {
-    return hl_engine_entry(argc, argv);
-}
-#endif
-int hl_engine_entry(int argc, char **argv) {
-    hl_cli_route route = hl_cli_route_parse(argc, argv);
-    int ai = 1;
-    const char *rootfs = NULL;
-    static char self[4200];
-    hl_option_reset();
-    // Engine's own path, for the persistent-cache build key (mirrors the x86_64 target).
-    g_self_path = realpath(argv[0], self) ? self : argv[0];
-    // Final-product launch: the host provides one serialized, validated HL config file.
-    if (route.mode == HL_CLI_CONFIG) return hl_run_config_file_with(route.config_path, hl_standalone_run);
-    // fork-server dispatch (gated; standalone path untouched when neither flag is present):
-    //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run the resident engine server
-    //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to that server
-    if (route.mode == HL_CLI_SERVER) return hl_server_main(argc, argv);
-    if (route.mode == HL_CLI_CLIENT) return hl_client_main(argc, argv);
-    // container flags (SentryConfig)
-    while (ai < argc && argv[ai][0] == '-' && argv[ai][1] == '-') {
-        if (!strcmp(argv[ai], "--rootfs") && ai + 1 < argc) {
-            rootfs = argv[ai + 1];
-            ai += 2;
-        } else if (!strcmp(argv[ai], "--checkpoint")) {
-            hl_option_set("HL_CHECKPOINT", "1", 1);
-            ai += 1;
-        } else if (!strcmp(argv[ai], "--restore")) {
-            hl_option_set("HL_RESTORE", "1", 1); // guest entry dispatches to restore without an ELF arg
-            ai += 1;
-        } else if (!strcmp(argv[ai], "--checkpoint-store") && ai + 2 < argc) {
-            if (hl_ckpt_channel_adopt(argv[ai + 1], argv[ai + 2]) != 0) {
-                fprintf(stderr, "hl-engine: --checkpoint-store %s %s is not an inherited descriptor pair\n",
-                        argv[ai + 1], argv[ai + 2]);
-                return 2;
-            }
-            ai += 3;
-        } else if (!strcmp(argv[ai], "--restore-policy") && ai + 1 < argc) {
-            if (ckpt_recovery_policy_set(argv[ai + 1]) != 0) return 2;
-            ai += 2;
-        } else if (!strcmp(argv[ai], "--hostname") && ai + 1 < argc) {
-            strncpy(g_hostname, argv[ai + 1], 64);
-            ai += 2;
-        } else if (!strcmp(argv[ai], "--mem-max") && ai + 1 < argc) {
-            g_mem_max = parse_size(argv[ai + 1]);
-            ai += 2;
-        } else if (!strcmp(argv[ai], "--pids-max") && ai + 1 < argc) {
-            g_pids_max = hl_parse_id("--pids-max", argv[ai + 1]);
-            ai += 2;
-        } else if (!strcmp(argv[ai], "--publish") && ai + 1 < argc) {
-            parse_publish(argv[ai + 1]);
-            ai += 2;
-        } else if (!strcmp(argv[ai], "--lower") && ai + 1 < argc) {
-            add_lower(argv[ai + 1]);
-            ai += 2;
-            // ro overlay lower layer
-        } else if (!strcmp(argv[ai], "--netns") && ai + 1 < argc) {
-            snprintf(g_netns, sizeof g_netns, "/tmp/.hl-net-%.40s", argv[ai + 1]);
-            ai += 2;
-            // private loopback ns
-        } else if (!strcmp(argv[ai], "--uid") && ai + 1 < argc) {
-            g_uid = hl_parse_id("--uid", argv[ai + 1]);
-            ai += 2;
-            // USER ns uid
-        } else if (!strcmp(argv[ai], "--gid") && ai + 1 < argc) {
-            g_gid = hl_parse_id("--gid", argv[ai + 1]);
-            ai += 2;
-        } else
-            break;
-    }
-    if (hl_option_get("HL_RESTORE"))
-        return hl_standalone_run(rootfs, NULL, 0, NULL, NULL, NULL); // resume without an ELF arg
-    if (ai >= argc) {
-        fprintf(stderr,
-                "usage: %s [--rootfs DIR] [--checkpoint] [--checkpoint-store BROKER_FD TRIGGER_FD] "
-                "[--hostname NAME] [--mem-max BYTES] [--pids-max N] [--publish H:C] "
-                "<aarch64-elf> [args...]\n"
-                "       %s [--rootfs DIR] --restore --checkpoint-store BROKER_FD TRIGGER_FD\n"
-                "  checkpoint a running guest: bump the trigger word, then send the engine its reserved "
-                "interrupt\n",
-                argv[0], argv[0]);
-        return 2;
-    }
-    return hl_standalone_run(rootfs, NULL, (uint32_t)(argc - ai), argv + ai, NULL, NULL);
-}
-#endif
