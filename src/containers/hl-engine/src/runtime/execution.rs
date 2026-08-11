@@ -157,21 +157,7 @@ impl RuntimeFactory for ProductionFactory {
             #[cfg(not(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution")))]
             None => Self::rust(request),
             #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
-            None => match Self::c_unsupported(&request) {
-                None => Self::c(request),
-                Some(reason) => {
-                    hl_log::hl_event!(
-                        hl_log::tag::EXEC,
-                        hl_log::Level::Info,
-                        "execution.backend.fallback",
-                        preferred = "c",
-                        selected = "rust",
-                        isa = ?request.isa,
-                        reason = reason.name()
-                    );
-                    Self::rust(request)
-                }
-            },
+            None => Self::c(request),
             #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
             Some("c") => Self::c(request),
             Some(_) => Err(CompositionError::RuntimeConstruction),
@@ -296,10 +282,13 @@ mod tests {
     }
 
     #[test]
-    fn product_default_falls_back_to_rust_for_uncompiled_guest_isa() {
+    fn product_default_rejects_uncompiled_guest_isa() {
         let mut plan = c_plan();
         plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
-        assert!(Engine::from_plan(GuestIsa::X86_64, plan).is_ok());
+        assert!(matches!(
+            Engine::from_plan(GuestIsa::X86_64, plan),
+            Err(EngineError::LaunchFailed)
+        ));
     }
 
     #[test]
@@ -321,21 +310,21 @@ mod tests {
     }
 
     #[test]
-    fn product_default_falls_back_to_rust_for_checkpoint_policy() {
+    fn product_default_rejects_checkpoint_policy() {
         for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
             let mut plan = c_plan();
             plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
             plan.options.set(option, "1", true).unwrap();
-            assert!(
+            assert!(matches!(
                 Engine::with_checkpoint(
                     GuestIsa::Aarch64,
                     plan,
                     StandardStreams::default(),
                     Arc::new(Store),
                     Arc::new(Store),
-                )
-                .is_ok()
-            );
+                ),
+                Err(EngineError::LaunchFailed)
+            ));
         }
     }
 }
