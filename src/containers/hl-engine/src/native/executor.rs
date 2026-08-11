@@ -1310,7 +1310,6 @@ struct RunRequest {
     quantum_poll: Option<unsafe extern "C" fn(*mut c_void, u64, u64) -> u32>,
     quantum_grant: u64,
     certificate: *const RunCertificate,
-    memory_snapshot: *const Projection,
 }
 
 #[repr(C)]
@@ -2927,7 +2926,6 @@ impl Executor {
             quantum_poll,
             quantum_grant,
             certificate: std::ptr::null(),
-            memory_snapshot: std::ptr::null(),
         };
         let mut output = RunExit {
             abi: ABI,
@@ -3285,7 +3283,6 @@ impl Executor {
             quantum_poll,
             quantum_grant,
             certificate: std::ptr::null(),
-            memory_snapshot: std::ptr::null(),
         };
         let mut output = RunExit {
             abi: ABI,
@@ -3482,8 +3479,7 @@ const _: () = {
     assert!(std::mem::size_of::<RunCertificate>() == 112);
     assert!(std::mem::offset_of!(RunCertificate, direct_token) == 104);
     assert!(std::mem::offset_of!(RunRequest, certificate) == 160);
-    assert!(std::mem::offset_of!(RunRequest, memory_snapshot) == 168);
-    assert!(std::mem::size_of::<RunRequest>() == 176);
+    assert!(std::mem::size_of::<RunRequest>() == 168);
     assert!(std::mem::size_of::<CpuHandle>() == 24);
     assert!(std::mem::size_of::<FaultScope>() == 32);
     assert!(std::mem::size_of::<RunExit>() == 48);
@@ -3973,8 +3969,6 @@ mod test {
         assert_eq!(std::mem::size_of::<schema::X86_64Cpu>(), 2008);
         assert_eq!(std::mem::size_of::<RunCertificate>(), 112);
         assert_eq!(std::mem::offset_of!(RunRequest, certificate), 160);
-        assert_eq!(std::mem::offset_of!(RunRequest, memory_snapshot), 168);
-        assert_eq!(std::mem::size_of::<RunRequest>(), 176);
     }
 
     #[test]

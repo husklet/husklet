@@ -588,7 +588,6 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     atomic_init(&executor->a64_branch_unidentified, 0);
     atomic_init(&executor->a64_branch_sample_claim, 0);
     atomic_init(&executor->a64_branch_sample_form, 0);
-    atomic_flag_clear_explicit(&executor->a64_snapshot_hot_lock, memory_order_relaxed);
     status = hl_native_arena_create(&executor->arena, config);
     if (status != HL_NATIVE_OK) {
         free(executor);
@@ -852,11 +851,6 @@ hl_native_status hl_native_changed(hl_native_executor *executor, const hl_native
             executor->authority_generation = 0;
             executor->retained_authority_valid = 0;
             executor->retained_authority_identity = 0;
-            while (atomic_flag_test_and_set_explicit(&executor->a64_snapshot_hot_lock,
-                                                     memory_order_acquire)) {}
-            memset(&executor->a64_snapshot_hot, 0, sizeof(executor->a64_snapshot_hot));
-            executor->a64_snapshot_hot_generation = 0;
-            atomic_flag_clear_explicit(&executor->a64_snapshot_hot_lock, memory_order_release);
         }
     }
     hl_native_executor_gate_leave(executor);
@@ -1021,48 +1015,6 @@ static void run_view_install(hl_a64_run_views *cache, const hl_a64_view *view) {
     cache->entries[0] = *view;
 }
 
-static int snapshot_resolve_view(const hl_a64_projection *snapshot,
-                                 hl_native_aarch64_cpu *cpu, uint64_t address,
-                                 uint64_t size, uint32_t required,
-                                 hl_a64_view *selected) {
-    if (snapshot == NULL || selected == NULL) return 0;
-    for (size_t index = 0; index < snapshot->count; ++index) {
-        const hl_a64_view *view = &snapshot->views[index];
-        if (!run_view_contains(view, address, size, required)) continue;
-        hl_a64_projection one = {view, 1, snapshot->mapping_incarnation, 0};
-        if (!hl_a64_projection_resolve(&one, cpu, address, size, required)) return 0;
-        *selected = *view;
-        return 1;
-    }
-    return 0;
-}
-
-static int snapshot_hot_resolve(hl_native_executor *executor,
-                                hl_native_aarch64_cpu *cpu, uint64_t generation,
-                                uint64_t address, uint64_t size, uint32_t required,
-                                hl_a64_view *selected) {
-    hl_a64_view hot;
-    uint64_t hot_generation;
-    while (atomic_flag_test_and_set_explicit(&executor->a64_snapshot_hot_lock,
-                                             memory_order_acquire)) {}
-    hot = executor->a64_snapshot_hot;
-    hot_generation = executor->a64_snapshot_hot_generation;
-    atomic_flag_clear_explicit(&executor->a64_snapshot_hot_lock, memory_order_release);
-    if (hot_generation != generation || !run_view_contains(&hot, address, size, required)) return 0;
-    hl_a64_projection one = {&hot, 1, generation, 0};
-    if (!hl_a64_projection_resolve(&one, cpu, address, size, required)) return 0;
-    *selected = hot;
-    return 1;
-}
-
-static void snapshot_hot_publish(hl_native_executor *executor, const hl_a64_view *view) {
-    while (atomic_flag_test_and_set_explicit(&executor->a64_snapshot_hot_lock,
-                                             memory_order_acquire)) {}
-    executor->a64_snapshot_hot = *view;
-    executor->a64_snapshot_hot_generation = view->mapping_incarnation;
-    atomic_flag_clear_explicit(&executor->a64_snapshot_hot_lock, memory_order_release);
-}
-
 void hl_a64_run_view_publish(const hl_a64_run_views *cache, hl_native_aarch64_cpu *cpu,
                              uint64_t mapping_incarnation) {
     size_t count = cache != NULL ? cache->count : 0;
@@ -1128,7 +1080,6 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     hl_a64_source_span resolved_span;
     hl_a64_source resolved_source;
     const hl_a64_projection *projection = request->projection;
-    const hl_a64_projection *memory_snapshot = NULL;
     uint8_t scratch[HL_A64_TRACE_MAX_BYTES];
     uint64_t budget = request->budget;
     uint64_t cumulative_budget = request->budget;
@@ -1200,21 +1151,13 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         quantum_context = request->quantum_context;
         quantum_poll = request->quantum_poll;
     }
-    if (request->size >= offsetof(hl_native_run_request, memory_snapshot))
-        quantum_grant = request->quantum_grant;
-    if (request->size >= offsetof(hl_native_run_request, memory_snapshot) +
-                             sizeof(request->memory_snapshot))
-        memory_snapshot = request->memory_snapshot;
+    if (request->size >= sizeof(*request)) quantum_grant = request->quantum_grant;
     if ((quantum_poll == NULL) != (quantum_grant == 0)) return HL_NATIVE_ARGUMENT;
     if ((fault_publish == NULL) != (fault_unpublish == NULL)) return HL_NATIVE_ARGUMENT;
     if (source == NULL || !hl_a64_source_validate(source) ||
         source->mapping_incarnation != request->mapping_epoch ||
         (projection != NULL && (!hl_a64_projection_validate(projection) ||
                                 projection->mapping_incarnation != request->mapping_epoch)))
-        return HL_NATIVE_ARGUMENT;
-    if (memory_snapshot != NULL &&
-        (!hl_a64_projection_validate(memory_snapshot) ||
-         memory_snapshot->mapping_incarnation != request->mapping_epoch))
         return HL_NATIVE_ARGUMENT;
     if ((memory_mode == 0) != (authority_generation == 0) ||
         (memory_mode == 0) != (authority_identity == 0)) return HL_NATIVE_ARGUMENT;
@@ -1574,18 +1517,6 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                  * view and installed it as the active owner. Publish that same
                  * bounded ordering before retry so generated guards can select
                  * subsequent cached owners without another dispatcher exit. */
-                hl_a64_run_view_publish(&operand_views, cpu, source->mapping_incarnation);
-                continue;
-            }
-            hl_a64_view snapshot_view;
-            if (snapshot_hot_resolve(executor, cpu, source->mapping_incarnation,
-                                     cpu->fault_address, cpu->fault_size,
-                                     (uint32_t)cpu->fault_access, &snapshot_view) ||
-                snapshot_resolve_view(memory_snapshot, cpu, cpu->fault_address,
-                                      cpu->fault_size, (uint32_t)cpu->fault_access,
-                                      &snapshot_view)) {
-                snapshot_hot_publish(executor, &snapshot_view);
-                if (HL_A64_RUN_VIEW_CACHE) run_view_install(&operand_views, &snapshot_view);
                 hl_a64_run_view_publish(&operand_views, cpu, source->mapping_incarnation);
                 continue;
             }

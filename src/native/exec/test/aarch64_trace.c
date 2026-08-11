@@ -1639,24 +1639,9 @@ int main(void) {
         views.lengths[index] = 16;
         views.permissions[index] = HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE;
     }
-    hl_a64_view snapshot_views[OPERAND_VIEW_COUNT];
-    for (size_t index = 0; index < OPERAND_VIEW_COUNT; ++index) {
-        snapshot_views[index] = (hl_a64_view){
-            .guest_first = views.guests[index],
-            .guest_last = views.guests[index] + views.lengths[index],
-            .host_first = (uint64_t)(uintptr_t)views.values[index],
-            .mapping_incarnation = 7,
-            .permissions = views.permissions[index],
-            .write_policy = HL_NATIVE_WRITE_EXACT,
-            .write_index = (uint16_t)index,
-        };
-    }
-    const hl_a64_projection memory_snapshot = {
-        snapshot_views, OPERAND_VIEW_COUNT, 7, 0};
     run_request.source = &alternating_source;
     run_request.operand_context = &views;
     run_request.operand_resolve = resolve_views;
-    run_request.memory_snapshot = &memory_snapshot;
     run_request.budget = sizeof(alternating_words) / sizeof(alternating_words[0]);
     memset(&run_state, 0, sizeof(run_state));
     run_state.program = 0xb200;
@@ -1664,7 +1649,7 @@ int main(void) {
     run_state.registers[11] = views.guests[1];
     run_state.registers[12] = views.guests[2];
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
-    CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && views.calls == 0);
+    CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && views.calls == 3);
     CHECK(run_state.active_view_incarnation == 0 && run_state.active_view_authority == 0);
     for (size_t index = 0; index < 3; index++) {
         CHECK(run_state.registers[index] == views.values[index][0]);
@@ -1678,34 +1663,7 @@ int main(void) {
     run_state.registers[11] = views.guests[1];
     run_state.registers[12] = views.guests[2];
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
-    CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && views.calls == 0);
-
-    /* The last snapshot-selected interval survives the FFI return by value,
-     * without retaining the borrowed snapshot pointer. */
-    const uint32_t hot_words[] = {LDR_X(0, 12), UINT32_C(0xd4000001)};
-    const hl_a64_source_span hot_span = {
-        0xb280, (const uint8_t *)hot_words, sizeof(hot_words), 7, 8};
-    const hl_a64_source hot_source = {&hot_span, 1, 7, 8};
-    run_request.memory_snapshot = NULL;
-    run_request.source = &hot_source;
-    run_request.budget = 2;
-    memset(&run_state, 0, sizeof(run_state));
-    run_state.program = hot_span.guest_first;
-    run_state.registers[12] = views.guests[2];
-    CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
-    CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && views.calls == 0);
-
-    /* A replace clears the copied interval even if a later replace reuses the
-     * old numeric generation. Without that clear this run would skip callback. */
-    const hl_native_change replace_8 = {.abi = HL_NATIVE_ABI, .size = sizeof(replace_8),
-        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 8};
-    CHECK(hl_native_changed(run_executor, &replace_8, 1) == HL_NATIVE_OK);
-    CHECK(hl_native_changed(run_executor, &run_replace, 1) == HL_NATIVE_OK);
-    memset(&run_state, 0, sizeof(run_state));
-    run_state.program = hot_span.guest_first;
-    run_state.registers[12] = views.guests[2];
-    CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
-    CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && views.calls == 1);
+    CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && views.calls == 6);
 
     const uint32_t eviction_words[] = {
         LDR_X(0, 10), LDR_X(1, 11), LDR_X(2, 12), LDR_X(3, 13),
