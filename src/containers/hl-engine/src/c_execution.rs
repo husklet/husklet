@@ -630,7 +630,7 @@ impl CGuestExecutor {
             .options
             .get("HL_VOLUMES")
             .filter(|value| !value.is_empty())
-            .map(|value| value.to_owned())
+            .map(std::borrow::ToOwned::to_owned)
             .into_iter()
             .collect::<Vec<_>>();
         if let Some(files) = plan.options.get("HL_NAME_BINDS") {
@@ -677,6 +677,11 @@ impl CGuestExecutor {
             retained_exit: runtime_exit.then_some(retained_exit),
             retained_tasks: runtime_identity.then(OnceLock::new),
         });
+        let syscall_context = if runtime_exit {
+            (&raw mut *syscall_trap).cast()
+        } else {
+            std::ptr::null_mut()
+        };
         let status = unsafe {
             hl_c_backend_create(
                 isa as c_uint,
@@ -690,9 +695,7 @@ impl CGuestExecutor {
                 option_names.as_ptr(),
                 option_values.as_ptr(),
                 standard_fds.as_ptr(),
-                runtime_exit
-                    .then_some((&mut *syscall_trap as *mut CSyscallTrapContext).cast())
-                    .unwrap_or(std::ptr::null_mut()),
+                syscall_context,
                 runtime_exit.then_some(c_syscall_trap),
                 &raw mut handle,
             )

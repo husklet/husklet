@@ -117,13 +117,11 @@ impl Spec {
             for index in 0..pending.len() {
                 prefix.push(pending[index].clone());
                 let relative = prefix.iter().collect::<std::path::PathBuf>();
-                let Some((root, metadata)) = roots.iter().find_map(|root| {
+                let (root, metadata) = roots.iter().find_map(|root| {
                     std::fs::symlink_metadata(root.join(&relative))
                         .ok()
                         .map(|metadata| (root, metadata))
-                }) else {
-                    return None;
-                };
+                })?;
                 if metadata.file_type().is_symlink() {
                     let target = std::fs::read_link(root.join(relative)).ok()?;
                     let mut replacement = if target.is_absolute() {

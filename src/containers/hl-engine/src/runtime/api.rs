@@ -122,9 +122,8 @@ impl Builder {
         let Some(environment) = Self::environment(self.environment) else {
             return Err(EngineError::LaunchFailed);
         };
-        let workspace = OwnedWorkspace::create().map_err(|error| {
+        let workspace = OwnedWorkspace::create().inspect_err(|error| {
             hl_log::hl_error!(hl_log::tag::EXEC, "engine workspace creation failed: error={error:?}");
-            error
         })?;
         let prepared = match workspace.prepare_rootfs(&self.executable, self.rootfs, self.guest_executable.as_deref()) {
             Ok(value) => value,
@@ -305,9 +304,8 @@ impl Engine {
 
     fn construct(isa: GuestIsa, plan: RuntimePlan, services: RuntimeServices) -> Result<Self, EngineError> {
         let terminal = services.streams.terminal();
-        let workspace = OwnedWorkspace::create().map_err(|error| {
+        let workspace = OwnedWorkspace::create().inspect_err(|error| {
             hl_log::hl_error!(hl_log::tag::EXEC, "engine workspace creation failed: error={error:?}");
-            error
         })?;
         let factory = ProductionFactory;
         let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())

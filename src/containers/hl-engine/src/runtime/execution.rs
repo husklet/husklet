@@ -9,9 +9,9 @@ use std::sync::Mutex;
 type RustMachine = RustRuntimeMachine<crate::native::GuestExecutor>;
 
 pub(super) enum ProductionMachine {
-    Rust(RustMachine),
+    Rust(Box<RustMachine>),
     #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
-    C(CMachine),
+    C(Box<CMachine>),
 }
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
@@ -93,6 +93,7 @@ impl ProductionFactory {
             RuntimeAssemblyConfig::default(),
         )
         .construct(request)
+        .map(Box::new)
         .map(ProductionMachine::Rust)
     }
 
@@ -122,7 +123,7 @@ impl ProductionFactory {
             "execution.backend.selected=c isa={:?}",
             request.isa
         );
-        Ok(ProductionMachine::C(CMachine {
+        Ok(ProductionMachine::C(Box::new(CMachine {
             isa: request.isa,
             plan: request.plan.clone(),
             services: request.services.clone(),
@@ -130,7 +131,7 @@ impl ProductionFactory {
                 prepared: None,
                 current: None,
             }),
-        }))
+        })))
     }
 
     #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]

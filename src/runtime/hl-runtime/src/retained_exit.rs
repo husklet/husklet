@@ -3,7 +3,7 @@ use hl_isa::GuestArchitecture;
 
 use crate::{RuntimeSyscallTrap, RuntimeTrapOutcome};
 
-/// Runtime owner for the context-free AArch64 `exit` syscall used by the retained translator.
+/// Runtime owner for the context-free `AArch64` `exit` syscall used by the retained translator.
 #[derive(Debug, Default)]
 pub struct RetainedExitTrap;
 
