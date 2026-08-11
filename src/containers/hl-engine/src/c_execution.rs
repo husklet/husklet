@@ -41,6 +41,9 @@ const TASK_EVENT_EXEC_THREAD: u64 = u64::MAX - 5;
 const TASK_EVENT_REAP_PROCESS: u64 = u64::MAX - 6;
 const TASK_EVENT_CREDENTIALS_CHANGED: u64 = u64::MAX - 7;
 
+#[cfg(test)]
+static EVENT_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
 #[repr(C)]
 struct CSyscallCpuAarch64 {
     abi: u32,
@@ -308,17 +311,29 @@ fn c_main_image_plan(
     path: Option<&CString>,
     authority: Option<&crate::executable::ExecutableAuthority>,
 ) -> Result<CMainImagePlan, EngineError> {
+    let source = if authority.is_some() { "authority" } else { "path" };
+    let reject = |stage| {
+        hl_log::hl_verdict!(
+            hl_log::tag::EXEC,
+            "execution.c.image_plan.rejected",
+            isa = ?isa,
+            source = %source,
+            stage = %stage;
+            "retained C image plan rejected isa={isa:?} source={source} stage={stage}"
+        );
+        EngineError::LaunchFailed
+    };
     let file = if let Some(authority) = authority {
         // SAFETY: dup creates independent ownership; File closes only that duplicate.
         let descriptor = unsafe { libc::dup(authority.descriptor().as_raw_fd()) };
         if descriptor < 0 {
-            return Err(EngineError::LaunchFailed);
+            return Err(reject("duplicate"));
         }
         // SAFETY: descriptor is the newly owned duplicate above.
         unsafe { std::fs::File::from_raw_fd(descriptor) }
     } else {
-        let path = path.ok_or(EngineError::LaunchFailed)?;
-        std::fs::File::open(std::ffi::OsStr::from_bytes(path.as_bytes())).map_err(|_| EngineError::LaunchFailed)?
+        let path = path.ok_or_else(|| reject("select"))?;
+        std::fs::File::open(std::ffi::OsStr::from_bytes(path.as_bytes())).map_err(|_| reject("open"))?
     };
     let architecture = match isa {
         GuestIsa::Aarch64 => hl_isa::GuestArchitecture::Aarch64,
@@ -326,7 +341,7 @@ fn c_main_image_plan(
     };
     let plan = hl_loader::MainImageInspector::new(architecture, hl_loader::ImageLimits::default())
         .inspect(&CImageFile(file))
-        .map_err(|_| EngineError::LaunchFailed)?;
+        .map_err(|_| reject("inspect"))?;
     let kind = match plan.kind {
         hl_loader::ImageKind::Executable => 1,
         hl_loader::ImageKind::PositionIndependent => 2,
@@ -839,10 +854,10 @@ impl Drop for CGuestExecutor {
 #[cfg(test)]
 mod tests {
     use super::{
-        CGuestExecutor, CSyscallCpuAarch64, CSyscallTrapContext, CSyscallTrapResult, SYSCALL_TRAP_ABI,
-        SYSCALL_TRAP_CONTINUE, SYSCALL_TRAP_DECLINED, SYSCALL_TRAP_FAULT, StreamBridge, TASK_EVENT_CLONE_THREAD,
-        TASK_EVENT_CREDENTIALS_CHANGED, TASK_EVENT_FORK_PROCESS, TASK_EVENT_PREPARE_FORK, c_file_volumes,
-        c_main_image_plan, c_option, c_syscall_trap,
+        CGuestExecutor, CSyscallCpuAarch64, CSyscallTrapContext, CSyscallTrapResult, EVENT_CAPTURE_LOCK,
+        SYSCALL_TRAP_ABI, SYSCALL_TRAP_CONTINUE, SYSCALL_TRAP_DECLINED, SYSCALL_TRAP_FAULT, StreamBridge,
+        TASK_EVENT_CLONE_THREAD, TASK_EVENT_CREDENTIALS_CHANGED, TASK_EVENT_FORK_PROCESS, TASK_EVENT_PREPARE_FORK,
+        c_file_volumes, c_main_image_plan, c_option, c_syscall_trap,
     };
     use crate::activation::GuestIsa;
     use crate::composition::{
@@ -985,8 +1000,24 @@ mod tests {
 
     #[derive(Clone)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
+    struct EventCapture(Arc<Mutex<String>>);
     struct Channel;
     struct Port;
+
+    impl hl_log::Sink for EventCapture {
+        fn write_line(&self, line: &str) {
+            self.0.lock().unwrap().push_str(line);
+        }
+    }
+
+    fn capture_events(run: impl FnOnce()) -> String {
+        let _guard = EVENT_CAPTURE_LOCK.lock().unwrap();
+        let output = Arc::new(Mutex::new(String::new()));
+        hl_log::Events::global().set(Box::new(EventCapture(Arc::clone(&output))));
+        run();
+        hl_log::Events::global().reset();
+        Arc::try_unwrap(output).unwrap().into_inner().unwrap()
+    }
 
     impl TerminalPort for Port {
         fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
@@ -1168,7 +1199,15 @@ mod tests {
         assert_ne!(plan.interpreter_identity, 0);
 
         std::fs::write(std::ffi::OsStr::from_bytes(path.as_bytes()), b"not an elf").unwrap();
-        assert!(c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).is_err());
+        let events = capture_events(|| {
+            assert!(c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).is_err());
+        });
+        assert!(
+            events.contains(r#""event":"execution.c.image_plan.rejected""#),
+            "{events}"
+        );
+        assert!(events.contains(r#""source":"path""#), "{events}");
+        assert!(events.contains(r#""stage":"inspect""#), "{events}");
     }
 
     #[test]

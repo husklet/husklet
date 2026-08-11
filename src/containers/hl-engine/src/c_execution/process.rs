@@ -486,8 +486,7 @@ mod tests {
     }
 
     fn capture_events(run: impl FnOnce()) -> String {
-        static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
-        let _guard = CAPTURE_LOCK.lock().unwrap();
+        let _guard = crate::c_execution::EVENT_CAPTURE_LOCK.lock().unwrap();
         let output = Arc::new(Mutex::new(String::new()));
         hl_log::Events::global().set(Box::new(Capture(Arc::clone(&output))));
         run();
