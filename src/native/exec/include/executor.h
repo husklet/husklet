@@ -394,6 +394,9 @@ typedef struct hl_native_run_request {
     hl_native_quantum_poll quantum_poll;
     uint64_t quantum_grant;
     const hl_native_run_certificate *certificate;
+    /* Prototype-only immutable VMA snapshot. The caller owns the sorted view
+     * array for this run; the executor retains only one copied hot interval. */
+    const hl_native_projection *memory_snapshot;
 } hl_native_run_request;
 
 typedef struct hl_native_cpu {
@@ -484,7 +487,9 @@ _Static_assert(offsetof(hl_native_run_certificate, direct_token) == 104,
                "native run certificate token offset drifted");
 _Static_assert(offsetof(hl_native_run_request, certificate) == 160,
                "native run certificate pointer offset drifted");
-_Static_assert(sizeof(hl_native_run_request) == 168, "native run request ABI drifted");
+_Static_assert(offsetof(hl_native_run_request, memory_snapshot) == 168,
+               "native run snapshot pointer offset drifted");
+_Static_assert(sizeof(hl_native_run_request) == 176, "native run request ABI drifted");
 _Static_assert(sizeof(hl_native_cpu) == 24, "native CPU handle ABI drifted");
 _Static_assert(sizeof(hl_native_fault_scope) == 32, "native fault scope ABI drifted");
 _Static_assert(sizeof(hl_native_direct_authority) == 64, "native direct authority ABI drifted");

@@ -64,6 +64,9 @@ struct hl_native_executor {
     _Atomic uint64_t a64_fallback_entry_rejection, a64_fallback_generated;
     _Atomic uint64_t a64_fallback_call, a64_fallback_return, a64_fallback_indirect;
     _Atomic uint64_t a64_fallback_system, a64_fallback_form_memory, a64_fallback_form_other;
+    atomic_flag a64_snapshot_hot_lock;
+    hl_native_projection_view a64_snapshot_hot;
+    uint64_t a64_snapshot_hot_generation;
     /* Absolute tail: dormant Stage B preserves every established executor
      * field offset. Production keeps this null until coherent activation. */
     hl_native_ibtc_authenticated_entry *authenticated_ibtc;
