@@ -11,6 +11,11 @@ The transition is complete only when the in-tree C engine supports the required
 architectures and compatibility corpus, satisfies the performance gate, and no
 production selector can fall back to the retired Rust execution engine.
 
+The pinned, source-by-source expansion ledger is
+[`ORACLE_IMPORT_MANIFEST.tsv`](ORACLE_IMPORT_MANIFEST.tsv); sequencing,
+ownership boundaries, conflicts, and the smallest compilable tranche are in
+[`ORACLE_IMPORT_PLAN.md`](ORACLE_IMPORT_PLAN.md).
+
 `../engine` is a read-only behavior and performance oracle during that work.  It
 is never a source dependency.  Source inventories in `retained/` are part of the
 build contract: adding or removing a translation unit requires updating the
