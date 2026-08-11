@@ -550,6 +550,13 @@ static void translation_log_summary(void *context, uint64_t translations, uint64
     HL_LOGF((hl_log_context *)context, HL_LOG_TAG_TRANSLATE, "blocks=%llu", (unsigned long long)translations);
 }
 
+static int credential_publish_or_fault(struct cpu *c) {
+    if (hl_target_credentials_publish(c)) return 1;
+    c->exited = 1;
+    c->exit_code = 127;
+    return 0;
+}
+
 static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                     uint64_t a5) {
     switch (nr) {
@@ -1121,6 +1128,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         g_euid = u;
         g_fsuid_ovr = -1;   // fsuid follows the new euid (POSIX) -> new files stamped with it
         cred_uid_changed(); // recompute CAP_SETID after the uid transition (drop vs keepcaps)
+        if (!credential_publish_or_fault(c)) break;
         G_RET(c) = 0;
         break;
     }
@@ -1135,6 +1143,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (g_cap_setid_eff) g_rgid = g_sgid = gg;
         g_egid = gg;
         g_fsgid_ovr = -1; // fsgid follows the new egid
+        if (!credential_publish_or_fault(c)) break;
         G_RET(c) = 0;
         break;
     }
@@ -1152,6 +1161,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (s != -1) g_suid = s;
         g_fsuid_ovr = -1;   // fsuid follows euid
         cred_uid_changed(); // recompute CAP_SETID after the uid transition (drop vs keepcaps)
+        if (!credential_publish_or_fault(c)) break;
         G_RET(c) = 0;
         break;
     }
@@ -1167,6 +1177,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (e != -1) g_egid = e;
         if (s != -1) g_sgid = s;
         g_fsgid_ovr = -1; // fsgid follows egid
+        if (!credential_publish_or_fault(c)) break;
         G_RET(c) = 0;
         break;
     }
@@ -1184,6 +1195,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (r != -1 || (e != -1 && e != old_ruid)) g_suid = g_euid;
         g_fsuid_ovr = -1;   // fsuid follows euid
         cred_uid_changed(); // recompute CAP_SETID after the uid transition (drop vs keepcaps)
+        if (!credential_publish_or_fault(c)) break;
         G_RET(c) = 0;
         break;
     }
@@ -1200,6 +1212,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (e != -1) g_egid = e;
         if (r != -1 || (e != -1 && e != old_rgid)) g_sgid = g_egid;
         g_fsgid_ovr = -1; // fsgid follows egid
+        if (!credential_publish_or_fault(c)) break;
         G_RET(c) = 0;
         break;
     }
@@ -1210,6 +1223,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         cred_init();
         int prev = newfile_uid(), u = (int)a0;
         if (u != -1 && uid_permitted(u)) g_fsuid_ovr = (u == g_euid) ? -1 : u;
+        if (!credential_publish_or_fault(c)) break;
         G_RET(c) = (uint64_t)(uint32_t)prev;
         break;
     }
@@ -1217,6 +1231,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         cred_init();
         int prev = newfile_gid(), g = (int)a0;
         if (g != -1 && gid_permitted(g)) g_fsgid_ovr = (g == g_egid) ? -1 : g;
+        if (!credential_publish_or_fault(c)) break;
         G_RET(c) = (uint64_t)(uint32_t)prev;
         break;
     }

@@ -39,6 +39,7 @@ const TASK_EVENT_PREPARE_FORK: u64 = u64::MAX - 3;
 const TASK_EVENT_CANCEL_FORK: u64 = u64::MAX - 4;
 const TASK_EVENT_EXEC_THREAD: u64 = u64::MAX - 5;
 const TASK_EVENT_REAP_PROCESS: u64 = u64::MAX - 6;
+const TASK_EVENT_CREDENTIALS_CHANGED: u64 = u64::MAX - 7;
 
 #[repr(C)]
 struct CSyscallCpuAarch64 {
@@ -110,6 +111,7 @@ unsafe extern "C" fn c_syscall_trap(
             | TASK_EVENT_CANCEL_FORK
             | TASK_EVENT_EXEC_THREAD
             | TASK_EVENT_REAP_PROCESS
+            | TASK_EVENT_CREDENTIALS_CHANGED
     ) {
         if context.retained_tasks.is_none() {
             return 0;
@@ -117,6 +119,23 @@ unsafe extern "C" fn c_syscall_trap(
         let Some(tasks) = retained_tasks(context, cpu.task) else {
             return c_syscall_fault(result);
         };
+        if cpu.x[8] == TASK_EVENT_CREDENTIALS_CHANGED {
+            let Ok(task) = u32::try_from(cpu.task) else {
+                return c_syscall_fault(result);
+            };
+            let mut credentials = [0_u32; 8];
+            for (destination, source) in credentials.iter_mut().zip(cpu.x) {
+                let Ok(value) = u32::try_from(source) else {
+                    return c_syscall_fault(result);
+                };
+                *destination = value;
+            }
+            if tasks.publish_credentials(task, credentials) != hl_runtime::RuntimeTrapOutcome::Continue {
+                return c_syscall_fault(result);
+            }
+            result.outcome = SYSCALL_TRAP_CONTINUE;
+            return 0;
+        }
         let Ok(source) = u32::try_from(cpu.x[1]) else {
             return c_syscall_fault(result);
         };
@@ -139,7 +158,7 @@ unsafe extern "C" fn c_syscall_trap(
         result.outcome = SYSCALL_TRAP_CONTINUE;
         return 0;
     }
-    if matches!(cpu.x[8], 172 | 173 | 178) {
+    if matches!(cpu.x[8], 172..=178) {
         if context.retained_tasks.is_some() {
             let Some(tasks) = retained_tasks(context, cpu.task) else {
                 return c_syscall_fault(result);
@@ -821,8 +840,9 @@ impl Drop for CGuestExecutor {
 mod tests {
     use super::{
         CGuestExecutor, CSyscallCpuAarch64, CSyscallTrapContext, CSyscallTrapResult, SYSCALL_TRAP_ABI,
-        SYSCALL_TRAP_CONTINUE, SYSCALL_TRAP_DECLINED, StreamBridge, TASK_EVENT_CLONE_THREAD, TASK_EVENT_FORK_PROCESS,
-        TASK_EVENT_PREPARE_FORK, c_file_volumes, c_main_image_plan, c_option, c_syscall_trap,
+        SYSCALL_TRAP_CONTINUE, SYSCALL_TRAP_DECLINED, SYSCALL_TRAP_FAULT, StreamBridge, TASK_EVENT_CLONE_THREAD,
+        TASK_EVENT_CREDENTIALS_CHANGED, TASK_EVENT_FORK_PROCESS, TASK_EVENT_PREPARE_FORK, c_file_volumes,
+        c_main_image_plan, c_option, c_syscall_trap,
     };
     use crate::activation::GuestIsa;
     use crate::composition::{
@@ -916,6 +936,22 @@ mod tests {
         cpu.x[8] = 172;
         assert_eq!(dispatch(&mut cpu, &mut result), 0);
         assert_eq!((result.outcome, cpu.x[0]), (SYSCALL_TRAP_CONTINUE, 41));
+
+        cpu.x = [0; 31];
+        cpu.x[..8].copy_from_slice(&[10, 11, 12, 13, 20, 21, 22, 23]);
+        cpu.x[8] = TASK_EVENT_CREDENTIALS_CHANGED;
+        assert_eq!(dispatch(&mut cpu, &mut result), 0);
+        for (number, expected) in [(174, 10), (175, 11), (176, 20), (177, 21)] {
+            cpu.x = [0; 31];
+            cpu.x[8] = number;
+            assert_eq!(dispatch(&mut cpu, &mut result), 0);
+            assert_eq!((result.outcome, cpu.x[0]), (SYSCALL_TRAP_CONTINUE, expected));
+        }
+        cpu.x = [0; 31];
+        cpu.x[0] = u64::MAX;
+        cpu.x[8] = TASK_EVENT_CREDENTIALS_CHANGED;
+        assert_eq!(dispatch(&mut cpu, &mut result), 0);
+        assert_eq!(result.outcome, SYSCALL_TRAP_FAULT);
 
         cpu.x = [0; 31];
         cpu.x[8] = TASK_EVENT_CLONE_THREAD;

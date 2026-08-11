@@ -63,14 +63,17 @@ static hl_status g_engine_result_status;
 static hl_linux_abi *g_linux_box;
 static void *g_syscall_trap_context;
 static hl_syscall_trap_fn g_syscall_trap_dispatch;
+static _Atomic int g_runtime_credentials_published;
 
 void hl_target_syscall_trap_install(void *context, hl_syscall_trap_fn dispatch) {
     g_syscall_trap_context = context;
     g_syscall_trap_dispatch = dispatch;
+    atomic_store_explicit(&g_runtime_credentials_published, 0, memory_order_release);
 }
 
 struct cpu;
 static int hl_target_syscall_trap(struct cpu *c);
+static int hl_target_credentials_publish(struct cpu *c);
 static int jit_guest_soft_activate(void);
 static void jit_guest_soft_restore_activate(void);
 static void jit_guest_soft_restore_deactivate(void);
@@ -91,6 +94,13 @@ static int hl_target_syscall_trap(struct cpu *c) {
     hl_syscall_trap_result result;
     int32_t status;
     if (g_syscall_trap_dispatch == NULL) return 0;
+    if (c->x[8] >= 174 && c->x[8] <= 177 &&
+        !atomic_load_explicit(&g_runtime_credentials_published, memory_order_acquire) &&
+        !hl_target_credentials_publish(c)) {
+        c->exited = 1;
+        c->exit_code = 127;
+        return 1;
+    }
     memset(&snapshot, 0, sizeof(snapshot));
     snapshot.abi = HL_SYSCALL_TRAP_ABI;
     snapshot.size = sizeof(snapshot);
@@ -149,7 +159,7 @@ static int hl_target_task_event(struct cpu *c, uint64_t event, uint64_t value, u
 static int hl_target_syscall_trap_selected(const struct cpu *c) {
     /* Rust-owned exit and process identity. Keep selection cheaper than constructing the stable snapshot. */
     return g_syscall_trap_dispatch != NULL &&
-           (c->x[8] == 93 || c->x[8] == 172 || c->x[8] == 173 || c->x[8] == 178);
+           (c->x[8] == 93 || (c->x[8] >= 172 && c->x[8] <= 178));
 }
 #include "../../translator/guest/aarch64/signal.h"
 #include "../../translator/guest/aarch64/abi.h" // the cpu interface os/linux/ is written against
@@ -166,6 +176,34 @@ static int hl_target_syscall_trap_selected(const struct cpu *c) {
 
 // container/ns config state + parsers (early globals)
 #include "../../linux_abi/container/state.c"
+
+static int hl_target_credentials_publish(struct cpu *c) {
+    hl_syscall_cpu_aarch64 snapshot;
+    hl_syscall_trap_result result;
+    if (g_syscall_trap_dispatch == NULL) return 1;
+    cred_init();
+    memset(&snapshot, 0, sizeof(snapshot));
+    snapshot.abi = HL_SYSCALL_TRAP_ABI;
+    snapshot.size = sizeof(snapshot);
+    snapshot.x[0] = (uint32_t)g_ruid;
+    snapshot.x[1] = (uint32_t)g_euid;
+    snapshot.x[2] = (uint32_t)g_suid;
+    snapshot.x[3] = (uint32_t)newfile_uid();
+    snapshot.x[4] = (uint32_t)g_rgid;
+    snapshot.x[5] = (uint32_t)g_egid;
+    snapshot.x[6] = (uint32_t)g_sgid;
+    snapshot.x[7] = (uint32_t)newfile_gid();
+    snapshot.x[8] = HL_TASK_EVENT_CREDENTIALS_CHANGED;
+    snapshot.task = (uint64_t)(c->tid ? c->tid : container_pid());
+    memset(&result, 0, sizeof(result));
+    result.abi = HL_SYSCALL_TRAP_ABI;
+    result.size = sizeof(result);
+    int32_t status = g_syscall_trap_dispatch(g_syscall_trap_context, HL_GUEST_ISA_AARCH64, &snapshot, &result);
+    int accepted = status == 0 && result.abi == HL_SYSCALL_TRAP_ABI && result.size >= sizeof(result) &&
+                   (result.outcome == HL_SYSCALL_TRAP_CONTINUE || result.outcome == HL_SYSCALL_TRAP_DECLINED);
+    if (accepted) atomic_store_explicit(&g_runtime_credentials_published, 1, memory_order_release);
+    return accepted;
+}
 #include "../../linux_abi/fdcache.h"
 #include "../../linux_abi/container/vfs/gmap.h"
 #include "../../linux_abi/container/owner.h"

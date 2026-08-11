@@ -82,6 +82,17 @@ impl RetainedTaskContext {
                 .ok()
                 .and_then(|snapshot| snapshot.parent)
                 .map_or(Some(0), |parent| projection.processes.get(&parent).copied()),
+            174..=177 => self
+                .tasks
+                .process_observation(task.process)
+                .ok()
+                .map(|snapshot| match number {
+                    174 => snapshot.credentials.real_user,
+                    175 => snapshot.credentials.effective_user,
+                    176 => snapshot.credentials.real_group,
+                    177 => snapshot.credentials.effective_group,
+                    _ => unreachable!(),
+                }),
             178 => Some(if guest_thread == 0 {
                 projection.processes.get(&task.process).copied().unwrap_or(0)
             } else {
@@ -125,6 +136,33 @@ impl RetainedTaskContext {
                 thread,
             },
         );
+        Continue
+    }
+
+    pub fn publish_credentials(&self, guest_thread: u32, values: [u32; 8]) -> RuntimeTrapOutcome {
+        let _gate = self.acquire();
+        let projection = self
+            .projection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(task) = projection.threads.get(&guest_thread).copied() else {
+            return RuntimeTrapOutcome::Fault;
+        };
+        let Ok(snapshot) = self.tasks.process_observation(task.process) else {
+            return RuntimeTrapOutcome::Fault;
+        };
+        let mut credentials = snapshot.credentials;
+        credentials.real_user = values[0];
+        credentials.effective_user = values[1];
+        credentials.saved_user = values[2];
+        credentials.filesystem_user = values[3];
+        credentials.real_group = values[4];
+        credentials.effective_group = values[5];
+        credentials.saved_group = values[6];
+        credentials.filesystem_group = values[7];
+        if self.tasks.replace_credentials(task.process, credentials).is_err() {
+            return RuntimeTrapOutcome::Fault;
+        }
         Continue
     }
 
@@ -375,6 +413,19 @@ mod tests {
         assert_eq!(tasks.dispatch_aarch64(178, 1001), (Continue, 1001));
         assert_eq!(tasks.exit_thread(1001), Continue);
         assert_eq!(tasks.dispatch_aarch64(178, 1001), (Fault, 0));
+    }
+
+    #[test]
+    fn published_credentials_drive_all_scalar_identity_queries() {
+        let tasks = RetainedTaskContext::new_init(41).unwrap();
+        assert_eq!(
+            tasks.publish_credentials(41, [10, 11, 12, 13, 20, 21, 22, 23]),
+            Continue
+        );
+        assert_eq!(tasks.dispatch_aarch64(174, 41), (Continue, 10));
+        assert_eq!(tasks.dispatch_aarch64(175, 41), (Continue, 11));
+        assert_eq!(tasks.dispatch_aarch64(176, 41), (Continue, 20));
+        assert_eq!(tasks.dispatch_aarch64(177, 41), (Continue, 21));
     }
 
     #[test]
