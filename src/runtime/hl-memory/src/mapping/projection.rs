@@ -39,6 +39,38 @@ pub struct ProjectionLease<'a, H: MemoryAccessHost> {
     additional: Vec<LiveProjection<H::Projection>>,
 }
 
+/// One immutable, generation-qualified guest mapping projected into stable host storage.
+///
+/// The host delta is wrapping by contract: native consumers recover a host address with
+/// `guest.wrapping_add(host_delta)`. Permission and write-publication semantics remain
+/// owned by this runtime package; the native ABI only receives their scalar encoding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmaSnapshotRecord {
+    pub guest_first: u64,
+    pub guest_last: u64,
+    pub host_delta: u64,
+    pub permissions: Protection,
+    pub write_publication: WritePublication,
+    pub write_index: u16,
+}
+
+/// Rust-owned lifetime pin for an immutable virtual-memory snapshot.
+///
+/// Mapping transitions and checkpoints cannot publish while this value is alive. A queued
+/// transition invalidates [`Self::request_continuation`] before it waits for the transaction
+/// lock, allowing a native caller to stop extending execution without exposing mutable VMA
+/// state to C.
+pub struct VmaSnapshotLease<'a, H: MemoryAccessHost> {
+    coordinator: &'a Coordinator<H>,
+    admission: crate::checkpoint_activity::ActivityAdmission,
+    _transaction: MutexGuard<'a, ()>,
+    mapping_requests: u64,
+    incarnation: u64,
+    mapping_generation: u64,
+    records: Vec<VmaSnapshotRecord>,
+    _projections: Vec<H::Projection>,
+}
+
 /// Non-forgeable Rust ownership of one generation-qualified direct projection.
 ///
 /// This type grants no bare execution by itself. It retains checkpoint and
@@ -107,6 +139,66 @@ struct LiveProjection<P> {
 }
 
 impl<H: MemoryAccessHost> Coordinator<H> {
+    /// Pins every current mapping and returns a sorted immutable snapshot for native lookup.
+    pub fn snapshot_vmas(&self, incarnation: u64) -> Result<VmaSnapshotLease<'_, H>, MemoryError> {
+        if incarnation == 0 {
+            return Err(MemoryError::InvariantViolation);
+        }
+        let admission = self.activity.admit_memory()?;
+        let transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mapping_requests = self.mapping_requests.load(Ordering::Acquire);
+        let mapping_generation = self.ledger.generation();
+        let mut regions = self.ledger.regions();
+        regions.sort_unstable_by_key(|region| region.range().start().get());
+        if regions.len() > usize::from(u16::MAX) {
+            return Err(MemoryError::ResourceLimit);
+        }
+        let mut records = Vec::with_capacity(regions.len());
+        let mut projections = Vec::with_capacity(regions.len());
+        let mut previous_last = 0_u64;
+        for (index, region) in regions.into_iter().enumerate() {
+            let range = region.range();
+            let first = range.start().get();
+            let last = range.end().get();
+            if first < previous_last || first >= last {
+                return Err(MemoryError::InvariantViolation);
+            }
+            if let Backing::File { identity, .. } = region.backing() {
+                self.host
+                    .host
+                    .validate_file(identity, region.backing_offset(), range.length(), range.start())?;
+            }
+            let projection = self.host.host.project(range)?;
+            let storage_address = projection.storage_address();
+            records.push(VmaSnapshotRecord {
+                guest_first: first,
+                guest_last: last,
+                host_delta: storage_address.wrapping_sub(first),
+                permissions: region.protection(),
+                write_publication: WritePublication::Exact,
+                write_index: u16::try_from(index).map_err(|_| MemoryError::ResourceLimit)?,
+            });
+            projections.push(projection);
+            previous_last = last;
+        }
+        if self.ledger.generation() != mapping_generation {
+            return Err(MemoryError::InvariantViolation);
+        }
+        Ok(VmaSnapshotLease {
+            coordinator: self,
+            admission,
+            _transaction: transaction,
+            mapping_requests,
+            incarnation,
+            mapping_generation,
+            records,
+            _projections: projections,
+        })
+    }
+
     pub fn project_direct(
         &self,
         address: GuestAddress,
@@ -175,6 +267,38 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             write_reservation,
             additional: Vec::new(),
         })
+    }
+}
+
+impl<H: MemoryAccessHost> VmaSnapshotLease<'_, H> {
+    #[must_use]
+    pub const fn incarnation(&self) -> u64 {
+        self.incarnation
+    }
+
+    #[must_use]
+    pub const fn mapping_generation(&self) -> u64 {
+        self.mapping_generation
+    }
+
+    #[must_use]
+    pub fn records(&self) -> &[VmaSnapshotRecord] {
+        &self.records
+    }
+
+    #[must_use]
+    pub fn request_continuation(&self) -> RequestContinuation {
+        RequestContinuation::new(&self.coordinator.mapping_requests, self.mapping_requests)
+    }
+
+    #[must_use]
+    pub fn is_current(&self) -> bool {
+        self.request_continuation().is_current() && self.coordinator.ledger.generation() == self.mapping_generation
+    }
+
+    #[must_use]
+    pub fn checkpoint_continuation(&self) -> crate::CheckpointContinuation {
+        self.admission.continuation()
     }
 }
 

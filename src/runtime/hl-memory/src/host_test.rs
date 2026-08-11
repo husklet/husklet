@@ -309,6 +309,59 @@ fn projection_blocks_mapping_transitions_and_checks_access() {
 }
 
 #[test]
+fn vma_snapshot_is_sorted_generation_qualified_and_pins_storage() {
+    let coordinator = Arc::new(MappingCoordinator::new(FakeHost::failing(usize::MAX)));
+    let mut high = request();
+    high.placement = Placement::Fixed(GuestAddress::new(0x5000));
+    high.protection = Protection::READ.union(Protection::WRITE);
+    coordinator.map(high).unwrap();
+    coordinator.map(request()).unwrap();
+
+    let snapshot = coordinator.snapshot_vmas(41).unwrap();
+    assert_eq!(snapshot.incarnation(), 41);
+    assert!(snapshot.mapping_generation() != 0);
+    assert!(snapshot.is_current());
+    assert_eq!(snapshot.records().len(), 2);
+    assert_eq!(snapshot.records()[0].guest_first, 0x1000);
+    assert_eq!(snapshot.records()[1].guest_first, 0x5000);
+    assert_eq!(snapshot.records()[0].host_delta, 0x1000_0000);
+    assert_eq!(snapshot.records()[1].host_delta, 0x1000_0000);
+    assert_eq!(snapshot.records()[0].permissions, Protection::READ);
+    assert_eq!(
+        snapshot.records()[1].permissions,
+        Protection::READ.union(Protection::WRITE)
+    );
+    assert_eq!(snapshot.records()[0].write_publication, crate::WritePublication::Exact);
+    assert_eq!(snapshot.records()[0].write_index, 0);
+    assert_eq!(snapshot.records()[1].write_index, 1);
+
+    let continuation = snapshot.request_continuation();
+    let (done_tx, done_rx) = mpsc::channel();
+    let transitioning = Arc::clone(&coordinator);
+    let worker = thread::spawn(move || done_tx.send(transitioning.unmap(range())).unwrap());
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while continuation.is_current() && std::time::Instant::now() < deadline {
+        thread::yield_now();
+    }
+    assert!(!continuation.is_current());
+    assert!(!snapshot.is_current());
+    assert!(done_rx.recv_timeout(Duration::from_millis(20)).is_err());
+    drop(snapshot);
+    assert_eq!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(()));
+    worker.join().unwrap();
+}
+
+#[test]
+fn vma_snapshot_rejects_unqualified_incarnation() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    coordinator.map(request()).unwrap();
+    assert!(matches!(
+        coordinator.snapshot_vmas(0),
+        Err(MemoryError::InvariantViolation)
+    ));
+}
+
+#[test]
 fn saturated_epoch_denies() {
     use std::sync::atomic::Ordering;
 
