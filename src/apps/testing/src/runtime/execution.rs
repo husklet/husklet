@@ -341,7 +341,7 @@ impl<'a> CaseExecution<'a> {
         let mut spec = ContainerSpec::new(fixture.reference().clone(), process)
             .name(&name)
             .guest(self.target.guest())
-            .execution(self.execution)
+            .execution(options.execution(self.execution))
             .isolation(options.isolation(Isolation {
                 sandbox: Sandbox::Disabled,
                 ..Isolation::default()

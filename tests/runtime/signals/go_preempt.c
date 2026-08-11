@@ -1,17 +1,6 @@
-// sigurg_go_preempt.c -- BUG-A regression: the engine suppresses Go's async-preempt SIGURG (23) for EVERY
-// aarch64 Go image, not only the cgo (CGO_ENABLED=1 / runtime.iscgo==1) class. The internal-linked toolchain
-// children `go build` forks (compile/asm/link) crash identically when SIGURG is delivered -- a SIGURG taken in
-// sysmon's runtime.usleep SIGSEGVs (addr=0x0) and, under build parallelism, corrupts thread startup so
-// clone/newosproc returns EAGAIN. `GODEBUG=asyncpreemptoff=1` fixes it, which is exactly what dropping SIGURG
-// for a Go image emulates (os/linux/elf.c elf_is_go_image -> signal.c g_go_image -> maybe_deliver_signal drop).
-//
-// This binary is detected as a Go image ONLY by the linker's Go build-info magic ("\xff Go buildinf:"), which
-// it carries in a .rodata blob below. It deliberately has NO "CGO_ENABLED=1" modinfo, so the OLD (cgo-only)
-// detector left it UNSUPPRESSED: a hammer thread tgkill()ing SIGURG at the spinning main thread ran the handler
-// (delivered>=1). The fixed engine drops every SIGURG for this Go-magic image, so the handler NEVER runs and
-// the deterministic checksum below is byte-identical every run. Golden = engine behavior (delivered=0), which
-// differs from a native kernel (native always delivers) -- exactly like sigurg_preempt.c's engine-behavior
-// golden. Kept aarch64-only: g_go_image is set only by the aarch64 loader.
+// Generic async-signal boundary regression. A linker marker is inert guest data: it must not change signal
+// policy. The hammer directs SIGURG at a compute-bound thread so delivery crosses translated block boundaries,
+// while the deterministic checksum proves that the interrupted architectural state resumes coherently.
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <signal.h>
@@ -44,7 +33,7 @@ static uint64_t __attribute__((noinline)) mix(uint64_t a, uint64_t b) {
 static void *hammer(void *arg) {
     (void)arg;
     int pid = getpid();
-    while (__atomic_load_n(&g_run, __ATOMIC_RELAXED)) {
+    while (__atomic_load_n(&g_run, __ATOMIC_RELAXED) && !__atomic_load_n(&g_hits, __ATOMIC_RELAXED)) {
         syscall(SYS_tgkill, pid, g_target_tid, SIGURG); // thread-directed async preempt at the main thread
         for (volatile int k = 0; k < 64; k++) {
         }
@@ -75,7 +64,7 @@ int main(void) {
     g_run = 0;
     pthread_join(th, NULL);
 
-    // delivered=0 on a fixed engine (SIGURG dropped for the Go image); delivered=1 on the old cgo-only engine.
+    // Linux delivers SIGURG regardless of inert bytes elsewhere in the executable image.
     printf("sigurg-go: delivered=%d csum=%016llx\n", g_hits > 0 ? 1 : 0, (unsigned long long)acc);
-    return g_hits > 0 ? 1 : 0;
+    return g_hits > 0 ? 0 : 1;
 }

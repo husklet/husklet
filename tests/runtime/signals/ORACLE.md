@@ -123,9 +123,11 @@ divergence. A parallel ARM64 production run emitted native diagnostics and then
 aborted with stack-smashing inside the wider active cohort. These provider and
 runtime observations are recorded without an application-specific workaround.
 The manifest represents `rt-signal-order` as typed broken for the known x86-64
-ordering defect. It also represents `sigurg-go-preempt` as broken because its
-legacy golden requires the prohibited executable-identity suppression described
-above; the generic `sigurg-preempt` case remains active. The focused Rust test
+ordering defect. The explicit retained-C and Rust `sigurg-go-preempt` arms now
+assert the same image-independent delivery contract as `sigurg-preempt`: inert
+Go linker bytes cannot suppress SIGURG, and delivery across translated compute
+boundaries must resume with an exact checksum. The Rust arm retains the native
+execution counter floor; the C arm cannot emit that Rust-only record. The focused Rust test
 build was attempted but the concurrent
 shared tree lacked unrelated `hl-task` set-id and terminal-transition APIs needed
 by `hl-runtime`; that compile blocker is outside this fixture-only migration.
