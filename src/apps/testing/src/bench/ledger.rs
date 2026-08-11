@@ -223,4 +223,17 @@ mod tests {
         let resumed = Ledger::open(&report, "stamp", &BTreeSet::from([changed]), true).unwrap();
         assert!(resumed.prior.is_empty());
     }
+
+    #[test]
+    fn measurement_ledger_refuses_reused_and_vacuous_resume_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let report = directory.path().join("results.tsv");
+        let keys = BTreeSet::from([key("bench/a")]);
+
+        assert!(Ledger::open_unique(&report, "stamp", &keys, true).is_err());
+        let opened = Ledger::open_unique(&report, "stamp", &keys, false).unwrap();
+        drop(opened);
+        assert!(Ledger::open_unique(&report, "stamp", &keys, false).is_err());
+        assert!(Ledger::open_unique(&report, "stamp", &keys, true).is_ok());
+    }
 }

@@ -30,7 +30,7 @@ pub async fn run(options: Options) -> Result<(), Error> {
     let report = runtime::workspace()?.join(&options.results);
     let resume = options.resume;
     let opened = tokio::task::spawn_blocking(move || {
-        ledger::Ledger::open(&report, LEDGER_IDENTITY, &keys, resume).map_err(|error| error.to_string())
+        ledger::Ledger::open_unique(&report, LEDGER_IDENTITY, &keys, resume).map_err(|error| error.to_string())
     })
     .await??;
     let ledger = Arc::new(opened.ledger);
