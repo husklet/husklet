@@ -12,6 +12,15 @@ HL_EXTERN_C_BEGIN
  * rejected outright -- there is no per-generation field-presence gating to read past. */
 #define HL_ENGINE_BOX_ABI 1u
 
+/* checkpoint_mode: which directions of the store channel this engine uses. Zero disables checkpointing. */
+#define HL_ENGINE_CHECKPOINT_CAPTURE 1u
+#define HL_ENGINE_CHECKPOINT_RESTORE 2u
+/* Zero asks for no policy: restore is permissive, capture refuses resources it cannot capture. */
+#define HL_ENGINE_CHECKPOINT_DEFAULT 0u
+#define HL_ENGINE_CHECKPOINT_RECONNECT 1u
+#define HL_ENGINE_CHECKPOINT_DISCARD_OPTIONAL 2u
+#define HL_ENGINE_CHECKPOINT_REFUSE 3u
+
 typedef struct hl_engine hl_engine;
 
 /* Highest descriptor number available to a guest launch; descriptors at and above this value are reserved
@@ -99,10 +108,10 @@ typedef struct hl_engine_box_config {
     const char *egress_proxy;
     /* Newline-separated normalized-relative-path<TAB>uid<TAB>gid records. */
     const char *file_owners;
-    /* HL_CONFIG_CHECKPOINT_CAPTURE|RESTORE; zero disables checkpointing. The image travels over the
+    /* HL_ENGINE_CHECKPOINT_CAPTURE|RESTORE; zero disables checkpointing. The image travels over the
      * store channel activation hands the engine -- there is no location to name here. */
     uint32_t checkpoint_mode;
-    /* HL_CONFIG_CHECKPOINT_*; zero asks for no policy (permissive restore). */
+    /* HL_ENGINE_CHECKPOINT_*; zero asks for no policy (permissive restore). */
     uint32_t checkpoint_policy;
 } hl_engine_box_config;
 

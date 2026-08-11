@@ -1,7 +1,6 @@
 include/hl/activation.h
 include/hl/base.h
 include/hl/checkpoint_stream.h
-include/hl/config.h
 include/hl/engine.h
 include/hl/host_services.h
 include/hl/linux.h
@@ -12,7 +11,6 @@ src/core/bus.c
 src/core/bus.h
 src/core/checkpoint_channel.c
 src/core/checkpoint_channel.h
-src/core/cli.h
 src/core/dispatch.c
 src/core/engine.c
 src/core/engine_backend.h
@@ -21,7 +19,6 @@ src/core/environment.h
 src/core/fatal.c
 src/core/fatal.h
 src/core/host_services.c
-src/core/launch.h
 src/core/lifecycle.c
 src/core/log.c
 src/core/options.c
@@ -121,7 +118,6 @@ src/linux_abi/fork.c
 src/linux_abi/fork_codec.c
 src/linux_abi/fork_codec.h
 src/linux_abi/forwarded.h
-src/linux_abi/goimage.h
 src/linux_abi/guest_stat.h
 src/linux_abi/host_dirent.h
 src/linux_abi/host_fd.h

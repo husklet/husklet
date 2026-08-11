@@ -92,7 +92,7 @@ struct ckpt_cpu_header {
 #define CKF_DEVICE 13     // path-backed character/block device; reconnect to current host device
 #define CKFA_DIRECTORY UINT64_C(1)
 
-// Wire values of HL_CHECKPOINT_POLICY (HL_CONFIG_CHECKPOINT_*). Zero means the caller asked for nothing.
+// Wire values of HL_CHECKPOINT_POLICY (HL_ENGINE_CHECKPOINT_*). Zero means the caller asked for nothing.
 enum ckpt_recovery_policy {
     CKPT_RECOVERY_DEFAULT = 0,
     CKPT_RECOVERY_RECONNECT = 1,

@@ -1,5 +1,4 @@
 #include "hl/engine.h"
-#include "hl/config.h"
 #include "hl/linux_abi.h"
 #include "engine_backend.h"
 #include "options.h"
@@ -324,8 +323,8 @@ static hl_status hl_engine_apply_box(hl_engine *engine, const hl_engine_box_conf
     /* One accepted generation. An undersized box is rejected rather than partially read. */
     if (box->abi != HL_ENGINE_BOX_ABI || box->size < sizeof(*box)) return HL_STATUS_ABI_MISMATCH;
     if ((box->flags & ~known_flags) != 0 || box->reserved != 0 || box->uid < -1 || box->gid < -1 ||
-        box->checkpoint_policy > HL_CONFIG_CHECKPOINT_REFUSE ||
-        (box->checkpoint_mode & ~(HL_CONFIG_CHECKPOINT_CAPTURE | HL_CONFIG_CHECKPOINT_RESTORE)) != 0)
+        box->checkpoint_policy > HL_ENGINE_CHECKPOINT_REFUSE ||
+        (box->checkpoint_mode & ~(HL_ENGINE_CHECKPOINT_CAPTURE | HL_ENGINE_CHECKPOINT_RESTORE)) != 0)
         return HL_STATUS_INVALID_ARGUMENT;
     if (box->working_directory != NULL && box->working_directory[0] != '/') return HL_STATUS_INVALID_ARGUMENT;
     if (!hl_engine_hostname_valid(box->hostname) || !hl_engine_environment_valid(box->environment))
@@ -354,9 +353,9 @@ static hl_status hl_engine_apply_box(hl_engine *engine, const hl_engine_box_conf
         number[0] = (char)('0' + box->checkpoint_policy);
         number[1] = 0;
         if (hl_options_set(&engine->options, "HL_CHECKPOINT_POLICY", number, 1) != HL_STATUS_OK ||
-            ((box->checkpoint_mode & HL_CONFIG_CHECKPOINT_CAPTURE) &&
+            ((box->checkpoint_mode & HL_ENGINE_CHECKPOINT_CAPTURE) &&
              hl_options_set(&engine->options, "HL_CHECKPOINT", "1", 1) != HL_STATUS_OK) ||
-            ((box->checkpoint_mode & HL_CONFIG_CHECKPOINT_RESTORE) &&
+            ((box->checkpoint_mode & HL_ENGINE_CHECKPOINT_RESTORE) &&
              hl_options_set(&engine->options, "HL_RESTORE", "1", 1) != HL_STATUS_OK))
             return HL_STATUS_OUT_OF_MEMORY;
     }

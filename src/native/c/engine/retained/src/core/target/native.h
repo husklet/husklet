@@ -1,7 +1,6 @@
 #ifndef HL_CORE_TARGET_NATIVE_H
 #define HL_CORE_TARGET_NATIVE_H
 
-#include "hl/config.h"
 #include "hl/engine.h"
 #include "hl/host_services.h"
 #include "../engine_backend.h"

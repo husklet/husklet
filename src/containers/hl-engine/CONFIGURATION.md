@@ -5,15 +5,17 @@ runtime algorithms or host process mechanics.
 
 ## Launch-config wire
 
-The retained `hl_launch_config` ABI is an architecture-neutral 184-byte
-version-one header followed by a bounded byte pool. The parser validates magic,
-ABI, declared header and pool sizes, reserved fields, process-domain identity,
-network invariants, lower-layer records, publish records, string termination,
-and argument termination before producing owned launch input.
+Rust owns the historical version-one launch wire in `launcher/wire.rs`. Its
+borrowed parser validates magic, ABI, declared header and pool sizes, reserved
+fields, process-domain identity, network invariants, lower-layer records,
+publish records, string termination, and argument termination before producing
+owned launch input. Retained C no longer declares or parses this wire.
 
 The wire carries rootfs, lower layers, working directory, guest uid/gid,
 process domain, resource limits, network settings, guest arguments, and the
-other per-box options defined by `include/hl/config.h`.
+other per-box options projected into `RuntimeLaunchPlan`. The remaining C box
+ABI is `include/hl/engine.h`; it contains only settings consumed by the retained
+execution backend.
 
 ## Activation
 
@@ -36,11 +38,11 @@ introduced.
 ## Workspace
 
 A direct-launch workspace is temporary host lifecycle state used to stage and
-clean up a launch. It is not public configuration, is not serialized in
-`hl_launch_config`, and will belong to the future process/platform adapter that
-creates it. The lifecycle coordinator now consumes a narrow `Workspace` port;
-native workspace creation remains empty. Keeping it out of configuration
-prevents host implementation details from becoming a persistent ABI.
+clean up a launch. It is not public configuration or serialized launch input,
+and belongs to the process/platform adapter that creates it. The lifecycle
+coordinator consumes a narrow `Workspace` port. Keeping workspace mechanics out
+of configuration prevents host implementation details from becoming a
+persistent ABI.
 
 ## Runtime plan and lifecycle
 
