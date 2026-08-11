@@ -28,26 +28,6 @@
 
 typedef uint64_t hl_native_handle;
 
-/* Immutable Rust-owned VMA snapshot ABI. C may inspect these records only while
- * the owner keeps the matching pin alive; no native resolver consumes them yet. */
-typedef struct hl_native_vma_range {
-    uint64_t guest_first;
-    uint64_t guest_last;
-    uint64_t host_delta;
-    uint32_t permissions;
-    uint16_t write_policy;
-    uint16_t write_index;
-} hl_native_vma_range;
-
-typedef struct hl_native_vma_snapshot {
-    uint32_t abi;
-    uint32_t size;
-    uint64_t incarnation;
-    uint64_t mapping_generation;
-    const hl_native_vma_range *ranges;
-    size_t count;
-} hl_native_vma_snapshot;
-
 typedef enum hl_native_status {
     HL_NATIVE_OK = 0,
     HL_NATIVE_ARGUMENT = 1,

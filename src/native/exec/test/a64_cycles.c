@@ -11,11 +11,6 @@
 
 #define CHECK(value) do { if (!(value)) { fprintf(stderr, "a64_cycles:%d: %s\n", __LINE__, #value); return 1; } } while (0)
 
-_Static_assert(sizeof(hl_native_vma_range) == 32, "VMA range ABI");
-_Static_assert(offsetof(hl_native_vma_range, permissions) == 24, "VMA permission ABI");
-_Static_assert(sizeof(hl_native_vma_snapshot) == 40, "VMA snapshot ABI");
-_Static_assert(offsetof(hl_native_vma_snapshot, ranges) == 24, "VMA ranges ABI");
-
 #if defined(__aarch64__)
 void enter_register_16(void);
 __asm__(".type enter_register_16,%function\n"

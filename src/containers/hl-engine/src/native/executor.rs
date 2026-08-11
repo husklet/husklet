@@ -7,10 +7,7 @@ use std::ptr::NonNull;
 use hl_execution::ScalarState;
 use hl_execution::{Aarch64CpuState, CpuState as X86CpuState, FlagState, Nzcv};
 use hl_isa::{AddressRange, GuestAddress};
-use hl_memory::{
-    DirectAuthorityLease, ExecutableToken, MappingCoordinator, MemoryAccessHost, MemoryError, ProjectionLease,
-    Protection, VmaSnapshotLease, WritePublication,
-};
+use hl_memory::{DirectAuthorityLease, ExecutableToken, MemoryAccessHost, MemoryError, ProjectionLease, Protection};
 
 /// Prices a native crossing in host heap allocations rather than in time, which a
 /// loaded box cannot invalidate. Off unless the `alloc-count` feature is built.
@@ -1213,76 +1210,6 @@ pub(crate) struct Projection {
     pub(crate) count: usize,
     pub(crate) mapping_incarnation: u64,
     pub(crate) active: usize,
-}
-
-/// Scalar ABI record derived from a runtime-owned immutable VMA snapshot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(C)]
-pub(crate) struct VmaRange {
-    pub(crate) guest_first: u64,
-    pub(crate) guest_last: u64,
-    pub(crate) host_delta: u64,
-    pub(crate) permissions: u32,
-    pub(crate) write_policy: u16,
-    pub(crate) write_index: u16,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub(crate) struct VmaSnapshot {
-    pub(crate) abi: u32,
-    pub(crate) size: u32,
-    pub(crate) incarnation: u64,
-    pub(crate) mapping_generation: u64,
-    pub(crate) ranges: *const VmaRange,
-    pub(crate) count: usize,
-}
-
-/// Rust owner that keeps host projections and mapping admission alive for every
-/// pointer exposed through [`VmaSnapshot`]. Native code receives no ownership.
-#[allow(dead_code, reason = "prototype ABI owner; no C-local resolver consumes it yet")]
-pub(crate) struct VmaSnapshotPin<'a, H: MemoryAccessHost> {
-    snapshot: VmaSnapshotLease<'a, H>,
-    ranges: Box<[VmaRange]>,
-}
-
-#[allow(dead_code, reason = "prototype ABI owner; no C-local resolver consumes it yet")]
-impl<'a, H: MemoryAccessHost> VmaSnapshotPin<'a, H> {
-    pub(crate) fn capture(coordinator: &'a MappingCoordinator<H>, incarnation: u64) -> Result<Self, MemoryError> {
-        let snapshot = coordinator.snapshot_vmas(incarnation)?;
-        let ranges = snapshot
-            .records()
-            .iter()
-            .map(|record| VmaRange {
-                guest_first: record.guest_first,
-                guest_last: record.guest_last,
-                host_delta: record.host_delta,
-                permissions: u32::from(record.permissions.bits()),
-                write_policy: match record.write_publication {
-                    WritePublication::Exact => WRITE_EXACT,
-                    WritePublication::WholeView => 2,
-                },
-                write_index: record.write_index,
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        Ok(Self { snapshot, ranges })
-    }
-
-    pub(crate) fn descriptor(&self) -> VmaSnapshot {
-        VmaSnapshot {
-            abi: ABI,
-            size: std::mem::size_of::<VmaSnapshot>() as u32,
-            incarnation: self.snapshot.incarnation(),
-            mapping_generation: self.snapshot.mapping_generation(),
-            ranges: self.ranges.as_ptr(),
-            count: self.ranges.len(),
-        }
-    }
-
-    pub(crate) fn is_current(&self) -> bool {
-        self.snapshot.is_current()
-    }
 }
 
 #[repr(C)]
@@ -3474,8 +3401,6 @@ const _: () = {
     assert!(std::mem::size_of::<Source>() == 32);
     assert!(std::mem::size_of::<ProjectionView>() == 40);
     assert!(std::mem::size_of::<Projection>() == 32);
-    assert!(std::mem::size_of::<VmaRange>() == 32);
-    assert!(std::mem::size_of::<VmaSnapshot>() == 40);
     assert!(std::mem::size_of::<RunCertificate>() == 112);
     assert!(std::mem::offset_of!(RunCertificate, direct_token) == 104);
     assert!(std::mem::offset_of!(RunRequest, certificate) == 160);
@@ -4262,9 +4187,6 @@ mod test {
         assert_eq!(std::mem::offset_of!(RunRequest, source_context), 48);
         assert_eq!(std::mem::offset_of!(RunRequest, operand_context), 64);
         assert_eq!(std::mem::offset_of!(ProjectionView, permissions), 32);
-        assert_eq!(std::mem::offset_of!(VmaRange, permissions), 24);
-        assert_eq!(std::mem::offset_of!(VmaSnapshot, ranges), 24);
-        assert_eq!(std::mem::offset_of!(VmaSnapshot, count), 32);
         assert_eq!(std::mem::offset_of!(SourceSpan, instruction_epoch), 32);
     }
 
