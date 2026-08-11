@@ -21,7 +21,6 @@ normal_archive	hl-translator	src/translator/guest_memory.c	HL_ENABLE_LOGGING=0;H
 normal_archive	hl-translator	src/translator/identity.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-translator	src/translator/persist.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-translator	src/translator/reloc.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
-normal_archive	hl-translator	src/translator/window.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-translator	src/translator/host/aarch64/asm.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-translator	src/translator/guest/aarch64/signal.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-linux-abi	src/linux_abi/affinity.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include

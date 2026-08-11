@@ -88,8 +88,12 @@
 #include "../../reloc.h"
 #include "../../digest.h"
 #include "../../identity.h"
-#include "../../window.h"
 #include "../../persist.h"
+
+static int pc_window_contains(uint64_t extent, uint64_t offset, uint64_t width, uint64_t alignment) {
+    if (alignment == 0 || offset % alignment != 0) return 0;
+    return offset <= extent && width <= extent - offset;
+}
 
 // reloc kinds (packed into pc_reloc.info: kind<<0 | rd<<8 | slot<<16)
 #define RK_BLOCKRET 1   // 4-insn movz/movk of block_return into reg `rd`
@@ -446,7 +450,7 @@ static void pcache_relocate(uint64_t saved_rx) {
 static int pc_reloc_ok(hl_reloc r, uint64_t arena_used) {
     int kind = r.info & 0xff, slot = (r.info >> 16) & 0xffff;
     uint64_t width = kind == RK_GUEST_ADRP ? 4 : 16;
-    if (!hl_window_contains(arena_used, r.off, width, kind == RK_ICSITE ? 8 : 4)) return 0;
+    if (!pc_window_contains(arena_used, r.off, width, kind == RK_ICSITE ? 8 : 4)) return 0;
     if (kind == RK_ICSITE) return 1;
     if (((r.info >> 8) & 0xff) > 30) return 0; // rd must be a real GPR (we never bake into sp/xzr)
     if (kind == RK_T2CNT) return slot < T2_MAX;
@@ -538,11 +542,11 @@ static int pcache_load(uint64_t entry_jump) {
     for (uint64_t i = 0; ok && i < h.n_reloc; i++)
         ok = pc_guest_adrp_ok(re[i], abuf, h.arena_rx_at);
     for (uint64_t i = 0; ok && i < h.n_mapent; i++)
-        ok = hl_window_contains(h.arena_used, me[i].host_off, 1, 4) &&
-             hl_window_contains(h.arena_used, me[i].body_off, 1, 4) && me[i].guest_start <= me[i].gpc &&
+        ok = pc_window_contains(h.arena_used, me[i].host_off, 1, 4) &&
+             pc_window_contains(h.arena_used, me[i].body_off, 1, 4) && me[i].guest_start <= me[i].gpc &&
              me[i].gpc < me[i].guest_end;
     for (uint64_t i = 0; ok && i < h.n_pend; i++) {
-        ok = hl_window_contains(h.arena_used, pe[i].slot_off, 4, 4) && pe[i].kind <= 2 && pe[i].fwd <= 1;
+        ok = pc_window_contains(h.arena_used, pe[i].slot_off, 4, 4) && pe[i].kind <= 2 && pe[i].fwd <= 1;
         if (ok && pe[i].kind == 2) {
             uint32_t in = pe[i].orig;
             int valid = (in & 0xff000010u) == 0x54000000u || (in & 0x7e000000u) == 0x34000000u ||
@@ -552,7 +556,7 @@ static int pcache_load(uint64_t entry_jump) {
         }
     }
     for (uint64_t i = 0; ok && i < h.n_prov; i++)
-        ok = pv[i].reserved == 0 && pv[i].size != 0 && hl_window_contains(h.arena_used, pv[i].host_off, pv[i].size, 4);
+        ok = pv[i].reserved == 0 && pv[i].size != 0 && pc_window_contains(h.arena_used, pv[i].host_off, pv[i].size, 4);
     for (uint64_t i = 0; ok && i < h.n_lib; i++) {
         uint64_t end = libs[i].base + libs[i].len;
         ok = libs[i].id != 0 && libs[i].len != 0 && !(libs[i].base & UINT64_C(0x1fffff)) && end >= libs[i].base &&
