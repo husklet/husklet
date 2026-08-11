@@ -32,6 +32,21 @@ const RETIRED_SYMBOLS: [&str; 5] = [
 ];
 
 #[test]
+fn product_build_does_not_depend_on_sibling_engines() {
+    for (name, source) in [
+        ("build.rs", include_str!("../build.rs")),
+        ("Cargo.toml", include_str!("../Cargo.toml")),
+    ] {
+        for sibling in ["../engine", "../engine_rust"] {
+            assert!(
+                !source.contains(sibling),
+                "{name} must not read or link the sibling checkout {sibling}"
+            );
+        }
+    }
+}
+
+#[test]
 fn product_manifest_excludes_the_retired_standalone_path() {
     let manifest = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
