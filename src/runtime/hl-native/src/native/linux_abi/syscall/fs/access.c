@@ -387,344 +387,411 @@ static void svc_fs_access_437(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t 
     }
 }
 
-static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                             uint64_t a4, uint64_t a5) {
-    switch (nr) {
-    case 56: {
-        // openat -- Linux O_* -> macOS O_* (they differ!)
-        /* Consume any resolve intent carried over from an openat2 fall-through;
-         * a direct openat leaves it cleared. */
-        uint32_t openat2_intent = g_openat2_resolve_intent;
-        g_openat2_resolve_intent = 0;
-        int lf = (int)a2, mf = lf & 0x3;
-        // O_PATH (Linux 0x200000, arch-independent): the fd only NAMES the file -- fstat / *at dirfd /
-        // fchdir work through it, but read/write are rejected EBADF. macOS has no O_PATH, so we open a
-        // normal read fd (O_RDONLY, +O_DIRECTORY for a dir) for the metadata ops and record the flag so the
-        // I/O family (svc_io) returns EBADF. Marked on every open-success path below.
-        int is_opath = (lf & 0x200000) != 0;
-        // Confinement turns a relative guest name into an absolute host path. Validate its directory
-        // descriptor first, while Linux still considers it: otherwise host openat() ignores the invalid
-        // dirfd and reports an unrelated path error (usually ENOENT).
-        int directory_error = at_dirfd_check((int32_t)a0, (const char *)a1);
-        if (directory_error < 0) {
-            G_RET(c) = (uint64_t)(int64_t)directory_error;
-            break;
+static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, int mf, int is_opath) {
+    // synthesize /proc/* (macOS has no /proc)
+    const char *rp = (const char *)a1;
+    // Resolve a RELATIVE target to its guest-absolute path so the /proc checks below fire even when
+    // the guest opened e.g. "stat" or "<pid>/stat" relative to a /proc cwd (busybox top xchdir's to
+    // /proc, then opens "<pid>/stat"). Absolute paths are untouched -> zero change for those callers;
+    // a resolved non-/proc relative path matches none of the synth checks and the real open (which
+    // uses the original a1) is unaffected.
+    char gpb_syn[4200];
+    if (rp && rp[0] != '/') {
+        abs_guest((int)a0, rp, gpb_syn, sizeof gpb_syn);
+        rp = gpb_syn;
+    }
+    // abs_guest emits "/<gdir>/<name>", so a gdir tracked as "/proc" (a materialized proc dir fd)
+    // yields a leading "//proc/..." -- collapse it so the /proc checks below match. This is what
+    // makes htop's relative openat(pid_dirfd, "stat"/"task"/...) re-enter the /proc synthesis.
+    while (rp && rp[0] == '/' && rp[1] == '/')
+        rp++;
+    if (rp && (!strcmp(rp, "/proc/self/fd") || !strcmp(rp, "/proc/self/fd/") ||
+               !strcmp(rp, "/proc/thread-self/fd") || !strcmp(rp, "/proc/thread-self/fd/"))) {
+        int d = proc_fd_dir_open();
+        if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC);
+        if (d >= 0 && d < HL_NFD) g_opath[d] = is_opath;
+        G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+        return 1;
+    }
+    // A bare "/proc/self" (or thread-self) opened as a DIRECTORY (`cd /proc/self`, then relative
+    // reads) follows the magic symlink to the numeric pid dir -- rewrite it so the /proc/<pid>
+    // materialization below (proc_dir_try_open) serves it and tags the fd's guest path.
+    char selfdb[40];
+    if (rp && (!strncmp(rp, "/proc/self", 10) || !strncmp(rp, "/proc/thread-self", 17))) {
+        const char *tail = rp + (rp[6] == 's' ? 10 : 17);
+        if (tail[0] == 0 || !strcmp(tail, "/")) {
+            snprintf(selfdb, sizeof selfdb, "/proc/%d", container_pid());
+            rp = selfdb;
         }
-        // openat/openat2 never give an empty pathname AT_EMPTY_PATH semantics,
-        // including for O_PATH. Resolving "" through atpath() instead folded the
-        // dirfd itself into the host path and opened it successfully.
-        if (a1 && !guest_bad_ptr(a1, 1) && !*(const char *)a1) {
-            G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
-            break;
-        }
-        // O_PATH|O_NOFOLLOW naming a SYMLINK: Linux opens the LINK ITSELF (so readlinkat(fd,"",..) and
-        // fstatat(fd,"",AT_EMPTY_PATH) operate on the symlink --). macOS has no O_PATH, and a plain
-        // follow-open would open the TARGET (F_GETPATH then names the target, breaking the empty-path
-        // readlink). Use macOS O_SYMLINK for exactly this combination so the fd names the symlink node; a
-        // regular file opens normally under O_SYMLINK too, and a plain (non-O_PATH) O_NOFOLLOW open still
-        // ELOOPs on a symlink as Linux requires.
-        int osymlink = (is_opath && (lf & G_O_NOFOLLOW)) ? O_SYMLINK : 0;
-        // Read-only bind mount: any write-intent open (O_WRONLY/O_RDWR/O_CREAT/O_TRUNC/O_APPEND, incl.
-        // O_TMPFILE which carries O_RDWR) under an `-v …:ro` volume fails EROFS -- exactly as the kernel
-        // rejects a write-open on a read-only mount. A pure O_RDONLY open still succeeds. Checked up front
-        // so neither O_TMPFILE nor the memoized open-cache walk below can slip a write through.
-        int write_intent = (lf & 3) || (lf & 0x40) || (lf & 0x200) || (lf & 0x400);
-        char projected_path[4200];
-        const hl_provider_node *projected_open_node = NULL;
-        if (write_intent) {
-            guest_abspath_at((int)a0, (const char *)a1, projected_path, sizeof projected_path);
-            projected_open_node = hl_provider_namespace_launch_resolve(projected_path, strlen(projected_path));
-        }
-        if (write_intent && projected_open_node == NULL && jail_ro_at((int)a0, (const char *)a1)) {
+    }
+    // runc MaskedPaths / ReadonlyPaths (container isolation). A ReadonlyPath opened for WRITE fails
+    // EROFS BEFORE the /proc synth can hand back a (falsely writable) temp fd -- so `sysctl -w` and a
+    // write to /proc/sysrq-trigger diverge from Linux exactly like runc's read-only bind. Masked paths
+    // are then served as empty file/dir for BOTH read and write intent (an empty, inert stand-in).
+    if (rp && g_rootfs) {
+        int write_intent = (lf & 3) || (lf & 0x40) || (lf & 0x200) || (lf & 0x400); // RW/CREAT/TRUNC/APPEND
+        if (proc_ro_path(rp) && !proc_masked_kind(rp) && write_intent) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
-            break;
+            return 1;
         }
-        // O_TMPFILE (the __O_TMPFILE bit 0x400000 is arch-independent): create an unnamed, auto-cleaned
-        // regular file inside the named directory by making one + immediately unlinking it (macOS has no
-        // O_TMPFILE). The fd is a normal RW file with link count 0.
-        if (lf & 0x400000) {
-            char pb[4200];
-            const char *dir = atpath((int)a0, (const char *)a1, pb, sizeof pb, 0);
-            int dfd = open(dir, O_RDONLY | O_DIRECTORY);
-            if (dfd < 0) {
-                G_RET(c) = (uint64_t)(-errno);
-                break;
-            }
-            int fd = -1, e = ENOENT;
-            for (int t = 0; t < 64; t++) {
-                char nm[40];
-                snprintf(nm, sizeof nm, ".hl-tmpfile-%d-%d", (int)getpid(), rand());
-                fd = openat(dfd, nm, O_CREAT | O_EXCL | O_RDWR, (mode_t)(a3 ? a3 : 0600));
-                e = errno;
-                if (fd >= 0) {
-                    unlinkat(dfd, nm, 0);
-                    break;
-                }
-                if (e != EEXIST) break;
-            }
-            close(dfd);
-            if (fd >= 0 && fd < HL_NFD) {
-                g_fdpath[fd][0] = 0;   // anonymous: no tracked path
-                memf_attach(fd, 0, 0); // O_TMPFILE is unambiguously private scratch -> back it with RAM
-            }
-            G_RET(c) = fd < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)fd;
-            break;
+        int md = proc_masked_open(rp);
+        if (md != -2) {
+            if (md >= 0 && (lf & 0x80000)) fcntl(md, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+            G_RET(c) = md < 0 ? (uint64_t)(-errno) : (uint64_t)md;
+            return 1;
         }
+    }
+    // Synthetic non-pid directories whose direct leaves already exist but whose DIRECTORY was not
+    // enumerable: /proc/net, /proc/[self|pid]/ns, /sys/fs/cgroup, /sys/class/block, /sys/block,
+    // cpuN/topology, and /dev/fd (== /proc/self/fd). A directory walk of these now sees their entries.
+    if (rp) {
+        int md = synth_misc_dir_open(rp);
+        if (md != -2) {
+            if (md >= 0 && (lf & 0x80000)) fcntl(md, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+            if (md >= 0 && md < HL_NFD) g_opath[md] = is_opath;            // O_PATH fd -> I/O EBADF
+            G_RET(c) = md < 0 ? (uint64_t)(-errno) : (uint64_t)md;
+            return 1;
+        }
+    }
+    // opendir("/proc"): materialize the process table (numeric pid dir per live container process
+    // + the synthesized static files) so getdents enumerates the whole container -- `ps`/top/htop
+    // read this to find processes. Without it the empty rootfs /proc dir yielded an empty table.
+    if (rp && g_rootfs && (!strcmp(rp, "/proc") || !strcmp(rp, "/proc/"))) {
+        int d = proc_root_dir_open();
+        if (d >= 0) {
+            G_RET(c) = (uint64_t)d;
+            return 1;
+        }
+        // else fall through to the real (empty) rootfs /proc
+    }
+    if (rp && !strncmp(rp, "/proc/", 6)) {
+        // /proc/<pid>, /proc/<pid>/task, /proc/<pid>/task/<tid> as DIRECTORIES: materialize a temp
+        // dir so opendir/getdents work and htop can descend (it opens each pid as an O_DIRECTORY fd
+        // and reads task/<tid>/stat). Per-pid FILES return -2 -> served by proc_open below.
+        int pd = proc_dir_try_open(rp);
+        if (pd != -2) {
+            if (pd >= 0 && (lf & 0x80000)) fcntl(pd, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+            G_RET(c) = pd < 0 ? (uint64_t)(-errno) : (uint64_t)pd;
+            return 1;
+        }
+        // /proc/[self|pid]/exe -> open the actual guest executable (the magic symlink target)
+        char ep[1024];
+        if (proc_self_exe(rp, ep, sizeof ep)) {
+            char hb[4200];
+            const char *hp = xresolve_overlay(ep, hb, sizeof hb);
+            int ef = open(hp, O_RDONLY);
+            if (ef >= 0 && (lf & 0x80000)) fcntl(ef, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+            G_RET(c) = ef < 0 ? (uint64_t)(-errno) : (uint64_t)ef;
+            return 1;
+        }
+        // /proc/[self|pid]/map_files/<start>-<end> -> the mapped file itself (the kernel opens the
+        // VMA's file through this link). Falling through opened the HOST /proc entry, i.e. one of
+        // the engine's own mappings.
         {
-            // synthesize /proc/* (macOS has no /proc)
-            const char *rp = (const char *)a1;
-            // Resolve a RELATIVE target to its guest-absolute path so the /proc checks below fire even when
-            // the guest opened e.g. "stat" or "<pid>/stat" relative to a /proc cwd (busybox top xchdir's to
-            // /proc, then opens "<pid>/stat"). Absolute paths are untouched -> zero change for those callers;
-            // a resolved non-/proc relative path matches none of the synth checks and the real open (which
-            // uses the original a1) is unaffected.
-            char gpb_syn[4200];
-            if (rp && rp[0] != '/') {
-                abs_guest((int)a0, rp, gpb_syn, sizeof gpb_syn);
-                rp = gpb_syn;
-            }
-            // abs_guest emits "/<gdir>/<name>", so a gdir tracked as "/proc" (a materialized proc dir fd)
-            // yields a leading "//proc/..." -- collapse it so the /proc checks below match. This is what
-            // makes htop's relative openat(pid_dirfd, "stat"/"task"/...) re-enter the /proc synthesis.
-            while (rp && rp[0] == '/' && rp[1] == '/')
-                rp++;
-            if (rp && (!strcmp(rp, "/proc/self/fd") || !strcmp(rp, "/proc/self/fd/") ||
-                       !strcmp(rp, "/proc/thread-self/fd") || !strcmp(rp, "/proc/thread-self/fd/"))) {
-                int d = proc_fd_dir_open();
-                if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC);
-                if (d >= 0 && d < HL_NFD) g_opath[d] = is_opath;
-                G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-                break;
-            }
-            // A bare "/proc/self" (or thread-self) opened as a DIRECTORY (`cd /proc/self`, then relative
-            // reads) follows the magic symlink to the numeric pid dir -- rewrite it so the /proc/<pid>
-            // materialization below (proc_dir_try_open) serves it and tags the fd's guest path.
-            char selfdb[40];
-            if (rp && (!strncmp(rp, "/proc/self", 10) || !strncmp(rp, "/proc/thread-self", 17))) {
-                const char *tail = rp + (rp[6] == 's' ? 10 : 17);
-                if (tail[0] == 0 || !strcmp(tail, "/")) {
-                    snprintf(selfdb, sizeof selfdb, "/proc/%d", container_pid());
-                    rp = selfdb;
-                }
-            }
-            // runc MaskedPaths / ReadonlyPaths (container isolation). A ReadonlyPath opened for WRITE fails
-            // EROFS BEFORE the /proc synth can hand back a (falsely writable) temp fd -- so `sysctl -w` and a
-            // write to /proc/sysrq-trigger diverge from Linux exactly like runc's read-only bind. Masked paths
-            // are then served as empty file/dir for BOTH read and write intent (an empty, inert stand-in).
-            if (rp && g_rootfs) {
-                int write_intent = (lf & 3) || (lf & 0x40) || (lf & 0x200) || (lf & 0x400); // RW/CREAT/TRUNC/APPEND
-                if (proc_ro_path(rp) && !proc_masked_kind(rp) && write_intent) {
-                    G_RET(c) = (uint64_t)(int64_t)(-EROFS);
-                    break;
-                }
-                int md = proc_masked_open(rp);
-                if (md != -2) {
-                    if (md >= 0 && (lf & 0x80000)) fcntl(md, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
-                    G_RET(c) = md < 0 ? (uint64_t)(-errno) : (uint64_t)md;
-                    break;
-                }
-            }
-            // Synthetic non-pid directories whose direct leaves already exist but whose DIRECTORY was not
-            // enumerable: /proc/net, /proc/[self|pid]/ns, /sys/fs/cgroup, /sys/class/block, /sys/block,
-            // cpuN/topology, and /dev/fd (== /proc/self/fd). A directory walk of these now sees their entries.
-            if (rp) {
-                int md = synth_misc_dir_open(rp);
-                if (md != -2) {
-                    if (md >= 0 && (lf & 0x80000)) fcntl(md, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
-                    if (md >= 0 && md < HL_NFD) g_opath[md] = is_opath;            // O_PATH fd -> I/O EBADF
-                    G_RET(c) = md < 0 ? (uint64_t)(-errno) : (uint64_t)md;
-                    break;
-                }
-            }
-            // opendir("/proc"): materialize the process table (numeric pid dir per live container process
-            // + the synthesized static files) so getdents enumerates the whole container -- `ps`/top/htop
-            // read this to find processes. Without it the empty rootfs /proc dir yielded an empty table.
-            if (rp && g_rootfs && (!strcmp(rp, "/proc") || !strcmp(rp, "/proc/"))) {
-                int d = proc_root_dir_open();
-                if (d >= 0) {
-                    G_RET(c) = (uint64_t)d;
-                    break;
-                }
-                // else fall through to the real (empty) rootfs /proc
-            }
-            if (rp && !strncmp(rp, "/proc/", 6)) {
-                // /proc/<pid>, /proc/<pid>/task, /proc/<pid>/task/<tid> as DIRECTORIES: materialize a temp
-                // dir so opendir/getdents work and htop can descend (it opens each pid as an O_DIRECTORY fd
-                // and reads task/<tid>/stat). Per-pid FILES return -2 -> served by proc_open below.
-                int pd = proc_dir_try_open(rp);
-                if (pd != -2) {
-                    if (pd >= 0 && (lf & 0x80000)) fcntl(pd, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
-                    G_RET(c) = pd < 0 ? (uint64_t)(-errno) : (uint64_t)pd;
-                    break;
-                }
-                // /proc/[self|pid]/exe -> open the actual guest executable (the magic symlink target)
-                char ep[1024];
-                if (proc_self_exe(rp, ep, sizeof ep)) {
-                    char hb[4200];
-                    const char *hp = xresolve_overlay(ep, hb, sizeof hb);
-                    int ef = open(hp, O_RDONLY);
-                    if (ef >= 0 && (lf & 0x80000)) fcntl(ef, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
-                    G_RET(c) = ef < 0 ? (uint64_t)(-errno) : (uint64_t)ef;
-                    break;
-                }
-                // /proc/[self|pid]/map_files/<start>-<end> -> the mapped file itself (the kernel opens the
-                // VMA's file through this link). Falling through opened the HOST /proc entry, i.e. one of
-                // the engine's own mappings.
-                {
-                    const char *mfl = proc_self_leaf(rp);
-                    if (mfl && !strncmp(mfl, "map_files/", 10) && mfl[10]) {
-                        char tgt[4200], hb2[4200];
-                        if (!map_files_target(mfl + 10, tgt, sizeof tgt)) {
-                            G_RET(c) = (uint64_t)(-ENOENT);
-                            break;
-                        }
-                        int mf2 = open(xresolve_overlay(tgt, hb2, sizeof hb2), O_RDONLY);
-                        if (mf2 >= 0 && (lf & 0x80000)) fcntl(mf2, F_SETFD, FD_CLOEXEC);
-                        G_RET(c) = mf2 < 0 ? (uint64_t)(-errno) : (uint64_t)mf2;
-                        break;
-                    }
-                }
-                // /proc/[self|pid]/auxv (rustix/libc read it)
-                if (strstr(rp, "/auxv")) {
-                    char tn[] = "/tmp/.hl-auxvXXXXXX";
-                    int afd = mkstemp(tn);
-                    if (afd >= 0) {
-                        unlink(tn);
-                        if (write(afd, g_auxv_data, g_auxv_len) < 0) {}
-                        lseek(afd, 0, SEEK_SET);
-                    }
-                    G_RET(c) = afd < 0 ? (uint64_t)(-errno) : (uint64_t)afd;
-                    break;
-                }
-                // cpuinfo/meminfo/stat/mounts/uptime/loadavg/version
-                int pf = proc_open(rp);
-                if (pf != -2) {
-                    G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
-                    break;
-                }
-                // Any other pid's /proc must not fall through to the host's: a non-member is a host process
-                // the guest cannot see (a bare run reached the host's systemd), and a member peer's host
-                // /proc describes the engine process running it.
-                if (proc_pid_not_self(rp)) {
+            const char *mfl = proc_self_leaf(rp);
+            if (mfl && !strncmp(mfl, "map_files/", 10) && mfl[10]) {
+                char tgt[4200], hb2[4200];
+                if (!map_files_target(mfl + 10, tgt, sizeof tgt)) {
                     G_RET(c) = (uint64_t)(-ENOENT);
-                    break;
+                    return 1;
                 }
-            }
-            // cgroup v2 limit files (JVM/Go self-size on these). The synthesized cgroup2 mount is advertised
-            // read-only (mountinfo "cgroup2 ... ro,nsdelegate") and its values are fixed, so a write-intent
-            // open must fail EROFS -- exactly as a non-delegated container's cgroup mount does. Without this
-            // proc_open handed back a (falsely writable) temp fd, so `echo max > cpu.max` reported success and
-            // a runtime believed it had changed a limit it had not (silent fake-success).
-            if (rp && !strncmp(rp, "/sys/fs/cgroup/", 15)) {
-                int cg_write = (lf & 3) || (lf & 0x40) || (lf & 0x200) || (lf & 0x400); // RW/CREAT/TRUNC/APPEND
-                if (cg_write) {
-                    G_RET(c) = (uint64_t)(int64_t)(-EROFS);
-                    break;
-                }
-                int pf = proc_open(rp);
-                if (pf != -2) {
-                    G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
-                    break;
-                }
-            }
-            // /sys/class/net: interface introspection. Directory opens (the class dir + per-iface
-            // dirs) materialize a temp dir for getdents; attribute files are served by proc_open.
-            if (rp && !strncmp(rp, "/sys/class/net", 14)) {
-                if (sysnet_hidden(rp)) {
-                    G_RET(c) = (uint64_t)(int64_t)-ENOENT;
-                    break;
-                }
-                int d = sysnet_dir_open(rp);
-                if (d != -2) {
-                    if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
-                    G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-                    break;
-                }
-                int pf = proc_open(rp);
-                if (pf != -2) {
-                    G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
-                    break;
-                }
-            }
-            // CPU topology sysfs: glibc __get_nprocs and tcmalloc NumPossibleCPUs read these to size
-            // their per-CPU structures; an empty/missing file makes mongod abort.
-            if (rp && !strncmp(rp, "/sys/devices/system/cpu/", 24)) {
-                const char *leaf = rp + 24;
-                if (!strcmp(leaf, "online") || !strcmp(leaf, "possible") || !strcmp(leaf, "present")) {
-                    char rng[32];
-                    cpu_range_str(rng, sizeof rng);
-                    int d = synth_str_fd(rng);
-                    G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-                    break;
-                }
-                // cpuN/topology/<core_id|physical_package_id|thread_siblings[_list]|...>: lscpu/util-linux
-                // reconstruct sockets/cores/threads from these; an ENOENT makes lscpu mis-count (engine-specific).
-                char tb[96];
-                int tn = syscpu_topology_content(rp, tb, sizeof tb);
-                if (tn >= 0) {
-                    int d = synth_str_fd(tb);
-                    G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-                    break;
-                }
-            }
-            // the CPU-topology sysfs DIRECTORY itself (and each cpuN subdir). htop opendirs
-            // /sys/devices/system/cpu and counts cpuN subdirs to size its CPU meters; finding none it keeps
-            // its default of 1. macOS has no /sys, so materialize the directory tree for getdents. Matches the
-            // base dir "/sys/devices/system/cpu" (no trailing slash) and any "/sys/devices/system/cpu/cpuN".
-            if (rp && !strncmp(rp, "/sys/devices/system/cpu", 23)) {
-                int d = syscpu_dir_open(rp);
-                if (d != -2) {
-                    if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
-                    if (d >= 0 && d < HL_NFD) g_opath[d] = is_opath;             // O_PATH fd -> I/O EBADF
-                    G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-                    break;
-                }
-            }
-            // Other synthesized /sys/kernel attribute files (e.g. /sys/kernel/mm/transparent_hugepage/enabled):
-            // served by proc_open's constant table, same as their stat() (synth_stat_raw). proc_open returns
-            // -2 for anything it doesn't recognize, so a genuine rootfs /sys path or ENOENT falls through
-            // untouched to the normal handler below.
-            if (rp && !strncmp(rp, "/sys/kernel/", 12)) {
-                int pf = proc_open(rp);
-                if (pf != -2) {
-                    if (pf >= 0 && (lf & 0x80000)) fcntl(pf, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
-                    G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
-                    break;
-                }
-            }
-            // device nodes -> host devices (rootfs has no real /dev)
-            if (rp && !strncmp(rp, "/dev/", 5)) {
-                const char *hd = dev_node_hostpath(rp);
-                if (hd) {
-                    // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap, exactly
-                    // like every other open path (the /dev/* device open used to skip this and let the guest
-                    // exceed its own soft limit -- opening /dev/null in a loop never hit EMFILE).
-                    int d = nofile_gate(open(hd, mf));
-                    // O_CLOEXEC (0x80000) must set FD_CLOEXEC on the new descriptor exactly like every
-                    // other open branch -- mf here carries only the access mode (the flag translation at
-                    // the bottom of case 56 runs after this block breaks), so a /dev/null (or any device
-                    // node) opened O_CLOEXEC used to leak across execve because FD_CLOEXEC was never set.
-                    if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC);
-                    // /dev/full is backed by /dev/zero for reads; flag the fd so its writes fail ENOSPC.
-                    if (d >= 0 && d < HL_NFD) g_devfull[d] = !strcmp(rp, "/dev/full");
-                    // /dev/tty (and /dev/console, backed by /dev/null): tty read semantics -- a nonblocking
-                    // empty read is EAGAIN, never EOF (see g_devtty). Flag the fd so svc_io maps 0->EAGAIN.
-                    if (d >= 0 && d < HL_NFD) g_devtty[d] = (!strcmp(rp, "/dev/tty") || !strcmp(rp, "/dev/console"));
-                    // This dev open uses only the access mode (mf gains O_NONBLOCK below, after this block),
-                    // so propagate the guest's O_NONBLOCK onto the tty fd now -- both so its host reads are
-                    // genuinely nonblocking and so F_GETFL reflects it for the 0->EAGAIN remap in svc_io.
-                    if (d >= 0 && d < HL_NFD && g_devtty[d] && (lf & 0x800)) {
-                        int gf = fcntl(d, F_GETFL);
-                        if (gf >= 0) fcntl(d, F_SETFL, gf | O_NONBLOCK);
-                    }
-                    // /dev/urandom + /dev/random accept seed writes on Linux (macOS EPERMs); flag the fd.
-                    if (d >= 0 && d < HL_NFD)
-                        g_devseed[d] = (!strcmp(rp, "/dev/urandom") || !strcmp(rp, "/dev/random"));
-                    G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-                    break;
-                }
+                int mf2 = open(xresolve_overlay(tgt, hb2, sizeof hb2), O_RDONLY);
+                if (mf2 >= 0 && (lf & 0x80000)) fcntl(mf2, F_SETFD, FD_CLOEXEC);
+                G_RET(c) = mf2 < 0 ? (uint64_t)(-errno) : (uint64_t)mf2;
+                return 1;
             }
         }
+        // /proc/[self|pid]/auxv (rustix/libc read it)
+        if (strstr(rp, "/auxv")) {
+            char tn[] = "/tmp/.hl-auxvXXXXXX";
+            int afd = mkstemp(tn);
+            if (afd >= 0) {
+                unlink(tn);
+                if (write(afd, g_auxv_data, g_auxv_len) < 0) {}
+                lseek(afd, 0, SEEK_SET);
+            }
+            G_RET(c) = afd < 0 ? (uint64_t)(-errno) : (uint64_t)afd;
+            return 1;
+        }
+        // cpuinfo/meminfo/stat/mounts/uptime/loadavg/version
+        int pf = proc_open(rp);
+        if (pf != -2) {
+            G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
+            return 1;
+        }
+        // Any other pid's /proc must not fall through to the host's: a non-member is a host process
+        // the guest cannot see (a bare run reached the host's systemd), and a member peer's host
+        // /proc describes the engine process running it.
+        if (proc_pid_not_self(rp)) {
+            G_RET(c) = (uint64_t)(-ENOENT);
+            return 1;
+        }
+    }
+    // cgroup v2 limit files (JVM/Go self-size on these). The synthesized cgroup2 mount is advertised
+    // read-only (mountinfo "cgroup2 ... ro,nsdelegate") and its values are fixed, so a write-intent
+    // open must fail EROFS -- exactly as a non-delegated container's cgroup mount does. Without this
+    // proc_open handed back a (falsely writable) temp fd, so `echo max > cpu.max` reported success and
+    // a runtime believed it had changed a limit it had not (silent fake-success).
+    if (rp && !strncmp(rp, "/sys/fs/cgroup/", 15)) {
+        int cg_write = (lf & 3) || (lf & 0x40) || (lf & 0x200) || (lf & 0x400); // RW/CREAT/TRUNC/APPEND
+        if (cg_write) {
+            G_RET(c) = (uint64_t)(int64_t)(-EROFS);
+            return 1;
+        }
+        int pf = proc_open(rp);
+        if (pf != -2) {
+            G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
+            return 1;
+        }
+    }
+    // /sys/class/net: interface introspection. Directory opens (the class dir + per-iface
+    // dirs) materialize a temp dir for getdents; attribute files are served by proc_open.
+    if (rp && !strncmp(rp, "/sys/class/net", 14)) {
+        if (sysnet_hidden(rp)) {
+            G_RET(c) = (uint64_t)(int64_t)-ENOENT;
+            return 1;
+        }
+        int d = sysnet_dir_open(rp);
+        if (d != -2) {
+            if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+            G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+            return 1;
+        }
+        int pf = proc_open(rp);
+        if (pf != -2) {
+            G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
+            return 1;
+        }
+    }
+    // CPU topology sysfs: glibc __get_nprocs and tcmalloc NumPossibleCPUs read these to size
+    // their per-CPU structures; an empty/missing file makes mongod abort.
+    if (rp && !strncmp(rp, "/sys/devices/system/cpu/", 24)) {
+        const char *leaf = rp + 24;
+        if (!strcmp(leaf, "online") || !strcmp(leaf, "possible") || !strcmp(leaf, "present")) {
+            char rng[32];
+            cpu_range_str(rng, sizeof rng);
+            int d = synth_str_fd(rng);
+            G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+            return 1;
+        }
+        // cpuN/topology/<core_id|physical_package_id|thread_siblings[_list]|...>: lscpu/util-linux
+        // reconstruct sockets/cores/threads from these; an ENOENT makes lscpu mis-count (engine-specific).
+        char tb[96];
+        int tn = syscpu_topology_content(rp, tb, sizeof tb);
+        if (tn >= 0) {
+            int d = synth_str_fd(tb);
+            G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+            return 1;
+        }
+    }
+    // the CPU-topology sysfs DIRECTORY itself (and each cpuN subdir). htop opendirs
+    // /sys/devices/system/cpu and counts cpuN subdirs to size its CPU meters; finding none it keeps
+    // its default of 1. macOS has no /sys, so materialize the directory tree for getdents. Matches the
+    // base dir "/sys/devices/system/cpu" (no trailing slash) and any "/sys/devices/system/cpu/cpuN".
+    if (rp && !strncmp(rp, "/sys/devices/system/cpu", 23)) {
+        int d = syscpu_dir_open(rp);
+        if (d != -2) {
+            if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+            if (d >= 0 && d < HL_NFD) g_opath[d] = is_opath;             // O_PATH fd -> I/O EBADF
+            G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+            return 1;
+        }
+    }
+    // Other synthesized /sys/kernel attribute files (e.g. /sys/kernel/mm/transparent_hugepage/enabled):
+    // served by proc_open's constant table, same as their stat() (synth_stat_raw). proc_open returns
+    // -2 for anything it doesn't recognize, so a genuine rootfs /sys path or ENOENT falls through
+    // untouched to the normal handler below.
+    if (rp && !strncmp(rp, "/sys/kernel/", 12)) {
+        int pf = proc_open(rp);
+        if (pf != -2) {
+            if (pf >= 0 && (lf & 0x80000)) fcntl(pf, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+            G_RET(c) = pf < 0 ? (uint64_t)(-errno) : (uint64_t)pf;
+            return 1;
+        }
+    }
+    // device nodes -> host devices (rootfs has no real /dev)
+    if (rp && !strncmp(rp, "/dev/", 5)) {
+        const char *hd = dev_node_hostpath(rp);
+        if (hd) {
+            // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap, exactly
+            // like every other open path (the /dev/* device open used to skip this and let the guest
+            // exceed its own soft limit -- opening /dev/null in a loop never hit EMFILE).
+            int d = nofile_gate(open(hd, mf));
+            // O_CLOEXEC (0x80000) must set FD_CLOEXEC on the new descriptor exactly like every
+            // other open branch -- mf here carries only the access mode (the flag translation at
+            // the bottom of case 56 runs after this block breaks), so a /dev/null (or any device
+            // node) opened O_CLOEXEC used to leak across execve because FD_CLOEXEC was never set.
+            if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC);
+            // /dev/full is backed by /dev/zero for reads; flag the fd so its writes fail ENOSPC.
+            if (d >= 0 && d < HL_NFD) g_devfull[d] = !strcmp(rp, "/dev/full");
+            // /dev/tty (and /dev/console, backed by /dev/null): tty read semantics -- a nonblocking
+            // empty read is EAGAIN, never EOF (see g_devtty). Flag the fd so svc_io maps 0->EAGAIN.
+            if (d >= 0 && d < HL_NFD) g_devtty[d] = (!strcmp(rp, "/dev/tty") || !strcmp(rp, "/dev/console"));
+            // This dev open uses only the access mode (mf gains O_NONBLOCK below, after this block),
+            // so propagate the guest's O_NONBLOCK onto the tty fd now -- both so its host reads are
+            // genuinely nonblocking and so F_GETFL reflects it for the 0->EAGAIN remap in svc_io.
+            if (d >= 0 && d < HL_NFD && g_devtty[d] && (lf & 0x800)) {
+                int gf = fcntl(d, F_GETFL);
+                if (gf >= 0) fcntl(d, F_SETFL, gf | O_NONBLOCK);
+            }
+            // /dev/urandom + /dev/random accept seed writes on Linux (macOS EPERMs); flag the fd.
+            if (d >= 0 && d < HL_NFD)
+                g_devseed[d] = (!strcmp(rp, "/dev/urandom") || !strcmp(rp, "/dev/random"));
+            G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, int lf,
+                            int mf, int osymlink, int is_opath, int nf_want, uint32_t openat2_intent) {
+// TOCTOU-free per-component resolve in the jail
+if (jail_routed_at((int)a0, (const char *)a1)) {
+    // W4D: openat resolution cache. Memoizes the guest-abs-path -> canonical host path that the
+    // jail walk below produces, so a REPEATED open of the same path collapses the ~6-syscall
+    // per-component walk to a single open(host, O_NOFOLLOW). The real open ALWAYS still runs (no
+    // fabricated existence/contents); a stale entry can only ever be the wrong PATH, which the
+    // shared g_res_epoch (bumped above on every FS mutation, incl. this case's O_CREAT) prevents.
+    // EXCLUDE O_CREAT/O_EXCL/O_TRUNC (mutating/creating) and O_DIRECTORY (deep-host-path reopen
+    // regressed; see optimization-research/w4d-openat.md). Kill switch: W4_NOOPENCACHE=1.
+    // ALSO exclude O_NOFOLLOW: the cache stores the CANONICAL (symlink-followed) host
+    // path from a follow-mode walk, so serving it to an O_NOFOLLOW open of a symlink would
+    // succeed on the target where Linux must fail ELOOP -- and an O_NOFOLLOW walk's result
+    // stored under the same key would let a later follow-mode open miss the link. Keep both
+    // exact by never mixing nofollow opens into the cache.
+    int cacheable = !(lf & (0x40 | 0x80 | 0x200 | G_O_DIRECTORY | G_O_NOFOLLOW));
+    char gkey[4200], hostc[4200];
+    if (cacheable) abs_guest((int)a0, (const char *)a1, gkey, sizeof gkey);
+    if (cacheable && hl_fdcache_open_lookup(gkey, hostc, sizeof hostc)) {
+        // ONE atomic open replaces the per-component walk; hostc is already canonical+symlink-free.
+        int r = open(hostc, mf | O_NOFOLLOW, (mode_t)a3);
+        int e = errno;
+        r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE
+        if (r < 0 && errno == EMFILE) e = EMFILE;
+        if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
+        if (r >= 0) {
+            hl_fdcache_fd_setpath(r, hostc);
+            if (lf & 3) { // write-open: keep the metadata caches coherent (same as the walk path)
+                hl_fdcache_metadata_evict(hostc);
+                hl_fdcache_readlink_evict(hostc);
+                hl_fdcache_access_evict(hostc);
+            }
+        }
+        G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
+        return 1;
+    }
+    char fin[512];
+    hl_open_plan plan;
+    int typed_created = 0;
+    bound_handle_slot typed_slot = {0};
+    uint32_t intent = (lf & 3) == 0 ? HL_OPEN_READ : HL_OPEN_WRITE;
+    if (lf & 0x40) intent |= HL_OPEN_CREATE;
+    if (lf & 0x200) intent |= HL_OPEN_TRUNCATE;
+    if (lf & 0x400) intent |= HL_OPEN_APPEND;
+    if (is_opath) intent |= HL_OPEN_PATH_ONLY;
+    if (lf & G_O_NOFOLLOW) intent |= HL_OPEN_NOFOLLOW;
+    if (lf & G_O_DIRECTORY) intent |= HL_OPEN_DIRECTORY;
+    intent |= openat2_intent;
+    if (is_opath)
+        intent &=
+            ~(uint32_t)(HL_OPEN_READ | HL_OPEN_WRITE | HL_OPEN_CREATE | HL_OPEN_TRUNCATE | HL_OPEN_APPEND);
+    // resolve following the final symlink unless the guest asked O_NOFOLLOW (per-arch bit)
+    int pfd =
+        jail_open_plan((int)a0, (const char *)a1, intent, typed_host_access(a2, is_opath),
+                       is_opath ? 0 : typed_host_creation(a2), (uint32_t)a3, !nf_want, bound_handle_reserve,
+                       &typed_slot, bound_handle_dirfd_error, &typed_created, fin, sizeof fin, &plan);
+    if (pfd < 0) {
+        bound_handle_cancel(&typed_slot);
+        G_RET(c) = (uint64_t)(int64_t)pfd;
+        return 1;
+    }
+    // fin is resolved -> O_NOFOLLOW safe
+    // probe pre-existence (relative to the resolved parent) so we stamp ONLY a fresh create.
+    int nf_new = nf_want && faccessat(pfd, fin, F_OK, AT_SYMLINK_NOFOLLOW) != 0;
+    char typed_guest_path[4200];
+    abs_guest((int)a0, (const char *)a1, typed_guest_path, sizeof typed_guest_path);
+    int typed_directory = plan.target_type == HL_HOST_FILE_TYPE_DIRECTORY && (lf & G_O_DIRECTORY) &&
+                          (!g_nlower || jail_is_vol(typed_guest_path));
+    /* The sentry owns newly opened descriptors and virtualizes their numbers before returning to the
+     * worker, so opaque host handles remain typed across the boundary without lending a native fd. */
+    if (plan.directory == HL_HOST_HANDLE_INVALID && plan.target != HL_HOST_HANDLE_INVALID &&
+        ((plan.target_type == HL_HOST_FILE_TYPE_REGULAR && !(lf & G_O_DIRECTORY)) || typed_directory)) {
+        int64_t opened;
+        char typed_host_path[HL_LINUX_PATH_MAX + 1];
+        int have_typed_host_path =
+            bound_handle_host_path(plan.target, typed_host_path, sizeof typed_host_path) == 0;
+        close(pfd);
+        opened = bound_adopt_handle(&typed_slot, plan.target, typed_open_flags(a2));
+        if (opened < 0) (void)g_host_services->file->close(g_host_services->context, plan.target);
+        opened = bound_relocate_lowest(opened);
+        if (opened >= 0 && (projected != NULL || hl_provider_tree_files_active()) && opened < HL_NFD) {
+            if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], overlay_guest) != 0)
+                g_fdpath[(int)opened][0] = 0;
+        } else if (opened >= 0 && have_typed_host_path) {
+            hl_fdcache_fd_setpath((int)opened, typed_host_path);
+            if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
+                HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "open-cache-evict path=%s typed=1 created=%d",
+                        typed_host_path, typed_created);
+                hl_fdcache_metadata_evict(typed_host_path);
+                hl_fdcache_readlink_evict(typed_host_path);
+                hl_fdcache_access_evict(typed_host_path);
+            }
+            if (typed_created && newfile_stamp_wanted()) newfile_stamp_path(typed_host_path, 1);
+        }
+        if (opened >= 0 && opened < 1024 && (lf & G_O_DIRECTORY)) {
+            uint32_t provider_cursor = 0;
+            if (hl_provider_namespace_launch_child(typed_guest_path, strlen(typed_guest_path),
+                                                   &provider_cursor) != NULL &&
+                path_copy(g_ovldir[(int)opened], sizeof g_ovldir[(int)opened], typed_guest_path) != 0)
+                g_ovldir[(int)opened][0] = 0;
+        }
+        G_RET(c) = (uint64_t)opened;
+        return 1;
+    }
+    bound_handle_cancel(&typed_slot);
+    if (plan.target != HL_HOST_HANDLE_INVALID)
+        (void)g_host_services->file->close(g_host_services->context, plan.target);
+    if (plan.directory != HL_HOST_HANDLE_INVALID)
+        (void)g_host_services->file->close(g_host_services->context, plan.directory);
+    // O_PATH|O_NOFOLLOW on a symlink -> open the LINK via O_SYMLINK (else O_NOFOLLOW ELOOPs); a
+    // regular O_NOFOLLOW open keeps ELOOPing on a symlink as Linux does.
+    int r = openat(pfd, fin, mf | (osymlink ? O_SYMLINK : O_NOFOLLOW), (mode_t)a3);
+    int e = errno;
+    close(pfd);
+    r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE (host table is far larger)
+    if (r < 0 && errno == EMFILE) e = EMFILE;
+    if (r >= 0 && nf_new) newfile_stamp_fd(r);
+    if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
+    if (r >= 0) {
+        char gp[4200];
+        // canonical host path for tracking
+        if (hl_native_fd_path(r, gp, sizeof gp) == 0) {
+            hl_fdcache_fd_setpath(r, gp);
+            if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
+                HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "open-cache-evict path=%s typed=0 created=%d", gp, nf_new);
+                hl_fdcache_metadata_evict(gp);
+                hl_fdcache_readlink_evict(gp);
+                hl_fdcache_access_evict(gp);
+            }
+            // W4D: memoize this walk's result (gp = F_GETPATH = canonical in-jail host path) so the
+            // next open of the same guest path is a single open(). hl_fdcache_open_store re-checks
+            // in-jail+epoch.
+            if (cacheable) hl_fdcache_open_store(gkey, gp);
+        }
+    }
+    G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
+    return 1;
+}
+    return 0;
+}
+
+static uint64_t open_tmpfile(uint64_t a0, uint64_t a1, uint64_t a3) {
+        if (lf & 0x400000) {
+            G_RET(c) = open_tmpfile(a0, a1, a3);
+            break;
+        }
+        if (open_synthetic_path(c, a0, a1, lf, mf, is_opath)) break;
         if (lf & 0x40) mf |= O_CREAT;
         if (lf & 0x80) mf |= O_EXCL;
         if (lf & 0x200) mf |= O_TRUNC;
@@ -919,143 +986,7 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
             break;
         }
-        // TOCTOU-free per-component resolve in the jail
-        if (jail_routed_at((int)a0, (const char *)a1)) {
-            // W4D: openat resolution cache. Memoizes the guest-abs-path -> canonical host path that the
-            // jail walk below produces, so a REPEATED open of the same path collapses the ~6-syscall
-            // per-component walk to a single open(host, O_NOFOLLOW). The real open ALWAYS still runs (no
-            // fabricated existence/contents); a stale entry can only ever be the wrong PATH, which the
-            // shared g_res_epoch (bumped above on every FS mutation, incl. this case's O_CREAT) prevents.
-            // EXCLUDE O_CREAT/O_EXCL/O_TRUNC (mutating/creating) and O_DIRECTORY (deep-host-path reopen
-            // regressed; see optimization-research/w4d-openat.md). Kill switch: W4_NOOPENCACHE=1.
-            // ALSO exclude O_NOFOLLOW: the cache stores the CANONICAL (symlink-followed) host
-            // path from a follow-mode walk, so serving it to an O_NOFOLLOW open of a symlink would
-            // succeed on the target where Linux must fail ELOOP -- and an O_NOFOLLOW walk's result
-            // stored under the same key would let a later follow-mode open miss the link. Keep both
-            // exact by never mixing nofollow opens into the cache.
-            int cacheable = !(lf & (0x40 | 0x80 | 0x200 | G_O_DIRECTORY | G_O_NOFOLLOW));
-            char gkey[4200], hostc[4200];
-            if (cacheable) abs_guest((int)a0, (const char *)a1, gkey, sizeof gkey);
-            if (cacheable && hl_fdcache_open_lookup(gkey, hostc, sizeof hostc)) {
-                // ONE atomic open replaces the per-component walk; hostc is already canonical+symlink-free.
-                int r = open(hostc, mf | O_NOFOLLOW, (mode_t)a3);
-                int e = errno;
-                r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE
-                if (r < 0 && errno == EMFILE) e = EMFILE;
-                if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
-                if (r >= 0) {
-                    hl_fdcache_fd_setpath(r, hostc);
-                    if (lf & 3) { // write-open: keep the metadata caches coherent (same as the walk path)
-                        hl_fdcache_metadata_evict(hostc);
-                        hl_fdcache_readlink_evict(hostc);
-                        hl_fdcache_access_evict(hostc);
-                    }
-                }
-                G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
-                break;
-            }
-            char fin[512];
-            hl_open_plan plan;
-            int typed_created = 0;
-            bound_handle_slot typed_slot = {0};
-            uint32_t intent = (lf & 3) == 0 ? HL_OPEN_READ : HL_OPEN_WRITE;
-            if (lf & 0x40) intent |= HL_OPEN_CREATE;
-            if (lf & 0x200) intent |= HL_OPEN_TRUNCATE;
-            if (lf & 0x400) intent |= HL_OPEN_APPEND;
-            if (is_opath) intent |= HL_OPEN_PATH_ONLY;
-            if (lf & G_O_NOFOLLOW) intent |= HL_OPEN_NOFOLLOW;
-            if (lf & G_O_DIRECTORY) intent |= HL_OPEN_DIRECTORY;
-            intent |= openat2_intent;
-            if (is_opath)
-                intent &=
-                    ~(uint32_t)(HL_OPEN_READ | HL_OPEN_WRITE | HL_OPEN_CREATE | HL_OPEN_TRUNCATE | HL_OPEN_APPEND);
-            // resolve following the final symlink unless the guest asked O_NOFOLLOW (per-arch bit)
-            int pfd =
-                jail_open_plan((int)a0, (const char *)a1, intent, typed_host_access(a2, is_opath),
-                               is_opath ? 0 : typed_host_creation(a2), (uint32_t)a3, !nf_want, bound_handle_reserve,
-                               &typed_slot, bound_handle_dirfd_error, &typed_created, fin, sizeof fin, &plan);
-            if (pfd < 0) {
-                bound_handle_cancel(&typed_slot);
-                G_RET(c) = (uint64_t)(int64_t)pfd;
-                break;
-            }
-            // fin is resolved -> O_NOFOLLOW safe
-            // probe pre-existence (relative to the resolved parent) so we stamp ONLY a fresh create.
-            int nf_new = nf_want && faccessat(pfd, fin, F_OK, AT_SYMLINK_NOFOLLOW) != 0;
-            char typed_guest_path[4200];
-            abs_guest((int)a0, (const char *)a1, typed_guest_path, sizeof typed_guest_path);
-            int typed_directory = plan.target_type == HL_HOST_FILE_TYPE_DIRECTORY && (lf & G_O_DIRECTORY) &&
-                                  (!g_nlower || jail_is_vol(typed_guest_path));
-            /* The sentry owns newly opened descriptors and virtualizes their numbers before returning to the
-             * worker, so opaque host handles remain typed across the boundary without lending a native fd. */
-            if (plan.directory == HL_HOST_HANDLE_INVALID && plan.target != HL_HOST_HANDLE_INVALID &&
-                ((plan.target_type == HL_HOST_FILE_TYPE_REGULAR && !(lf & G_O_DIRECTORY)) || typed_directory)) {
-                int64_t opened;
-                char typed_host_path[HL_LINUX_PATH_MAX + 1];
-                int have_typed_host_path =
-                    bound_handle_host_path(plan.target, typed_host_path, sizeof typed_host_path) == 0;
-                close(pfd);
-                opened = bound_adopt_handle(&typed_slot, plan.target, typed_open_flags(a2));
-                if (opened < 0) (void)g_host_services->file->close(g_host_services->context, plan.target);
-                opened = bound_relocate_lowest(opened);
-                if (opened >= 0 && (projected != NULL || hl_provider_tree_files_active()) && opened < HL_NFD) {
-                    if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], overlay_guest) != 0)
-                        g_fdpath[(int)opened][0] = 0;
-                } else if (opened >= 0 && have_typed_host_path) {
-                    hl_fdcache_fd_setpath((int)opened, typed_host_path);
-                    if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
-                        HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "open-cache-evict path=%s typed=1 created=%d",
-                                typed_host_path, typed_created);
-                        hl_fdcache_metadata_evict(typed_host_path);
-                        hl_fdcache_readlink_evict(typed_host_path);
-                        hl_fdcache_access_evict(typed_host_path);
-                    }
-                    if (typed_created && newfile_stamp_wanted()) newfile_stamp_path(typed_host_path, 1);
-                }
-                if (opened >= 0 && opened < 1024 && (lf & G_O_DIRECTORY)) {
-                    uint32_t provider_cursor = 0;
-                    if (hl_provider_namespace_launch_child(typed_guest_path, strlen(typed_guest_path),
-                                                           &provider_cursor) != NULL &&
-                        path_copy(g_ovldir[(int)opened], sizeof g_ovldir[(int)opened], typed_guest_path) != 0)
-                        g_ovldir[(int)opened][0] = 0;
-                }
-                G_RET(c) = (uint64_t)opened;
-                break;
-            }
-            bound_handle_cancel(&typed_slot);
-            if (plan.target != HL_HOST_HANDLE_INVALID)
-                (void)g_host_services->file->close(g_host_services->context, plan.target);
-            if (plan.directory != HL_HOST_HANDLE_INVALID)
-                (void)g_host_services->file->close(g_host_services->context, plan.directory);
-            // O_PATH|O_NOFOLLOW on a symlink -> open the LINK via O_SYMLINK (else O_NOFOLLOW ELOOPs); a
-            // regular O_NOFOLLOW open keeps ELOOPing on a symlink as Linux does.
-            int r = openat(pfd, fin, mf | (osymlink ? O_SYMLINK : O_NOFOLLOW), (mode_t)a3);
-            int e = errno;
-            close(pfd);
-            r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE (host table is far larger)
-            if (r < 0 && errno == EMFILE) e = EMFILE;
-            if (r >= 0 && nf_new) newfile_stamp_fd(r);
-            if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
-            if (r >= 0) {
-                char gp[4200];
-                // canonical host path for tracking
-                if (hl_native_fd_path(r, gp, sizeof gp) == 0) {
-                    hl_fdcache_fd_setpath(r, gp);
-                    if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
-                        HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "open-cache-evict path=%s typed=0 created=%d", gp, nf_new);
-                        hl_fdcache_metadata_evict(gp);
-                        hl_fdcache_readlink_evict(gp);
-                        hl_fdcache_access_evict(gp);
-                    }
-                    // W4D: memoize this walk's result (gp = F_GETPATH = canonical in-jail host path) so the
-                    // next open of the same guest path is a single open(). hl_fdcache_open_store re-checks
-                    // in-jail+epoch.
-                    if (cacheable) hl_fdcache_open_store(gkey, gp);
-                }
-            }
-            G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
-            break;
-        }
+        if (open_jailed_path(c, a0, a1, a2, a3, lf, mf, osymlink, is_opath, nf_want, openat2_intent)) break;
         char pb[4200];
         // no jail
         /* openat2 containment (RESOLVE_NO_SYMLINKS/BENEATH/IN_ROOT, carried as
