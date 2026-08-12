@@ -16,8 +16,8 @@ pub use repository::{
     TestDirectory, TestName, TestSuiteKebabPath,
 };
 pub use rust::{
-    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, DuplicateEntity,
-    EnvironmentAccess, FiniteStateString, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
+    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, ConstructorOwnership,
+    DuplicateEntity, EnvironmentAccess, FiniteStateString, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
     IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, PathModules, PlatformCommand,
     ReceiverRepetition, StructNaming, SuffixRole, UnsafeBoundary,
 };

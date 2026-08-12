@@ -23,11 +23,12 @@ pub use policy::{
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CCallPolicy, CPolicy, CStructure, CatchAllModule,
-    CatchAllSourcePath, CeremonialStructure, DependencyDirection, Documentation, DuplicateEntity, EmptyDirectory,
-    EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage,
-    IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules,
-    PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool,
-    SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory, TestName, UnsafeBoundary,
+    CatchAllSourcePath, CeremonialStructure, ConstructorOwnership, DependencyDirection, Documentation, DuplicateEntity,
+    EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject,
+    GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication,
+    ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule,
+    RuntimeTool, SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory, TestName,
+    UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 
@@ -76,6 +77,7 @@ impl Linter {
                 .register(rule::RuntimeTool::new(ownership))
                 .register(rule::UnsafeBoundary::new(unsafe_boundary))
                 .register(rule::FreeFunction)
+                .register(rule::ConstructorOwnership)
                 .register(rule::DuplicateEntity)
                 .register(rule::BooleanState)
                 .register(rule::BroadTrait)
