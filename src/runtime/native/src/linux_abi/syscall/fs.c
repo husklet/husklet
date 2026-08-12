@@ -3695,9 +3695,16 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // snapshot cache is indexed directly by guest fd (no slot table -> no eviction thrash)
             if (!g_ovldents[fd].taken) {
                 g_ovldents[fd].taken = 1;
-                g_ovldents[fd].pos = 0;
                 g_ovldents[fd].n = overlay_readdir(g_ovldir[fd], &g_ovldents[fd].nm, &g_ovldents[fd].ty);
             }
+            // The host directory descriptor is the open-file-description state shared by dup() and fork().
+            // Keep the synthetic overlay cursor in its offset instead of treating this descriptor-indexed
+            // replay cache as authoritative.  Otherwise every alias starts its own snapshot at zero, and a
+            // fork copies the parent's cursor rather than observing the child's reads.  It also makes EOF a
+            // durable offset: freeing the snapshot at EOF used to make the next call silently restart at zero.
+            off_t shared_pos = lseek(fd, 0, SEEK_CUR);
+            g_ovldents[fd].pos =
+                shared_pos >= 0 && shared_pos <= g_ovldents[fd].n ? (int)shared_pos : 0;
             size_t o = 0;
             int einval = 0;
             while (g_ovldents[fd].pos < g_ovldents[fd].n) {
@@ -3745,13 +3752,76 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 o += lr;
                 g_ovldents[fd].pos++;
             }
-            // exhausted -> free the snapshot (releases the heap arrays too)
-            if (o == 0 && !einval) ovldents_free(fd);
+            // Publish the cursor through the real descriptor so every alias and fork peer observes it.
+            // The snapshot remains owned until the last descriptor number using it is closed; retaining an
+            // exhausted snapshot is what makes repeated getdents64 calls continue to report EOF.
+            if (!einval) (void)lseek(fd, (off_t)g_ovldents[fd].pos, SEEK_SET);
             G_RET(c) = einval > 0   ? (uint64_t)(int64_t)(-EINVAL)
                        : einval < 0 ? (uint64_t)(int64_t)(-EFAULT)
                                     : (uint64_t)o;
             break;
         }
+#if defined(__linux__)
+        // Linux already produces the guest's linux_dirent64 wire format.  Read through the original
+        // descriptor, not a fdopendir(dup(fd)) stream: DIR buffering advances the shared OFD past entries
+        // that only one descriptor-local DIR has consumed, so dup aliases and fork peers incorrectly see
+        // EOF.  A bounded staging buffer keeps the host kernel away from guest memory while preserving the
+        // kernel-owned shared cursor.  On a guest-memory fault, restore the last published directory cookie
+        // so an entry that was not copied remains pending.
+        size_t capacity = (size_t)a2;
+        if (capacity > (1u << 20)) capacity = 1u << 20;
+        if (capacity < 24) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        uint8_t *records = malloc(capacity);
+        if (!records) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOMEM);
+            break;
+        }
+        off_t beginning = lseek(fd, 0, SEEK_CUR);
+        long count;
+        do
+            count = syscall(SYS_getdents64, fd, records, capacity);
+        while (count < 0 && errno == EINTR);
+        if (count <= 0) {
+            free(records);
+            G_RET(c) = count < 0 ? (uint64_t)(-errno) : 0;
+            break;
+        }
+        size_t copied = 0;
+        off_t published = beginning;
+        while (copied < (size_t)count) {
+            if ((size_t)count - copied < 19) {
+                copied = 0;
+                errno = EIO;
+                break;
+            }
+            uint16_t record_size;
+            int64_t next_offset;
+            memcpy(&next_offset, records + copied + 8, sizeof next_offset);
+            memcpy(&record_size, records + copied + 16, sizeof record_size);
+            if (record_size < 24 || record_size > (size_t)count - copied) {
+                if (beginning >= 0) (void)lseek(fd, beginning, SEEK_SET);
+                copied = 0;
+                errno = EIO;
+                break;
+            }
+            if (guest_accessible_prefix(a1 + copied, record_size, HL_LOGICAL_VMA_WRITE) != record_size ||
+                guest_copy_to(a1 + copied, records + copied, record_size) != (ssize_t)record_size) {
+                if (published >= 0) (void)lseek(fd, published, SEEK_SET);
+                if (copied == 0) errno = EFAULT;
+                break;
+            }
+            published = (off_t)next_offset;
+            copied += record_size;
+        }
+        free(records);
+        G_RET(c) = copied == 0 && errno == EFAULT ? (uint64_t)(int64_t)(-EFAULT)
+                   : copied == 0 && errno == EIO  ? (uint64_t)(int64_t)(-EIO)
+                                                  : (uint64_t)copied;
+        break;
+#endif
         DIR *dir = NULL;
         for (int i = 0; i < g_ndirs; i++)
             if (g_dirs[i].fd == fd) {

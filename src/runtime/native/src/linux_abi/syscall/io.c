@@ -666,7 +666,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_nlower && g_ovldir[(int)a0][0]) {
             if (whence == 0 /*SEEK_SET*/) {
                 ovldents_rewind((int)a0, (int)(off_t)a1);
-                G_RET(c) = (uint64_t)a1;
+                // The overlay replay cursor is mirrored in the real directory OFD so dup aliases and fork
+                // peers share it.  Move that shared offset as well as this descriptor's local snapshot.
+                off_t r = lseek((int)a0, (off_t)a1, SEEK_SET);
+                G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
                 break;
             }
         }
