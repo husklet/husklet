@@ -245,6 +245,7 @@ HL_API hl_status hl_linux_abi_fork_child(hl_linux_abi *linux_abi, hl_linux_fork_
  */
 HL_API hl_status hl_linux_abi_spawn(hl_linux_abi *linux_abi, hl_host_process_entry entry, void *entry_context,
                                     hl_host_handle *out_process);
+/* out_fd is required and becomes HL_LINUX_FD_LIMIT before other input validation; failures never expose a guest fd. */
 HL_API hl_status hl_linux_fd_install(hl_linux_abi *linux_abi, hl_host_handle host_handle, uint32_t status_flags,
                                      uint32_t descriptor_flags, hl_linux_fd *out_fd);
 /* Installs only at the requested vacant guest descriptor; never exposes or duplicates a native descriptor. */

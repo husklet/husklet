@@ -1,3 +1,5 @@
+#include "descriptor_output.h"
+
 hl_status hl_linux_fd_install(hl_linux_abi *linux_abi, hl_host_handle host_handle, uint32_t status_flags,
                               uint32_t descriptor_flags, hl_linux_fd *out_fd) {
     hl_linux_fd fd;
@@ -6,8 +8,8 @@ hl_status hl_linux_fd_install(hl_linux_abi *linux_abi, hl_host_handle host_handl
     hl_host_result created;
     const hl_host_sync_services *sync;
     hl_status status;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || host_handle == HL_HOST_HANDLE_INVALID ||
-        out_fd == NULL)
+    if (!hl_linux_fd_output_prepare(out_fd)) return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || host_handle == HL_HOST_HANDLE_INVALID)
         return HL_STATUS_INVALID_ARGUMENT;
     sync = hl_linux_sync(linux_abi);
     if (sync == NULL || sync->mutex_create == NULL || sync->mutex_close == NULL) return HL_STATUS_NOT_SUPPORTED;
@@ -139,4 +141,3 @@ hl_status hl_linux_object_install_at(hl_linux_abi *linux_abi, hl_linux_fd fd, co
 
 static hl_status hl_linux_ofd_finalize(hl_linux_abi *linux_abi, hl_linux_ofd_entry *ofd_entry,
                                        hl_host_handle *last_host_handle);
-

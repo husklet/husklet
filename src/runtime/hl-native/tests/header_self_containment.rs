@@ -383,6 +383,44 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove run output probe directory");
 }
 
+#[test]
+fn descriptor_install_failure_clears_stale_guest_fd() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-fd-output-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("descriptor output probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "linux_abi/descriptor_output.h"
+
+int main(void) {
+    hl_linux_fd output = 7;
+    if (!hl_linux_fd_output_prepare(&output)) return 1;
+    if (output != HL_LINUX_FD_LIMIT) return 2;
+    return hl_linux_fd_output_prepare(0) == 0 ? 0 : 3;
+}
+"#,
+    )
+    .expect("descriptor output probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("descriptor output probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("descriptor output probe execution");
+    assert!(run.success(), "descriptor output probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove descriptor output probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {
