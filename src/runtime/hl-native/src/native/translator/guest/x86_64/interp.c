@@ -3314,14 +3314,14 @@ static int interp_x87_memory_arith(struct cpu *cpu, struct insn *insn, uint64_t 
     return STEP_NEXT;
 }
 
-static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+static int interp_step_x87_memory(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     // Neither the /digit nor the ST(i) selector is REX-extended: x87 has eight slots.
     int reg = insn->reg & 7;
     int rm = insn->rm & 7;
     interp_x87_arm(cpu);
 
-    if (insn->is_mem) {
+    {
         uint64_t address = interp_ea(cpu, insn, next);
         switch (op) {
         case 0xD8: return interp_x87_memory_arith(cpu, insn, pc, next, interp_x87_load_f32(address));
@@ -3499,43 +3499,58 @@ static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         default: return interp_undefined(cpu, insn, pc, "x87 memory form");
         }
     }
+}
 
+static void interp_x87_register_arithmetic(struct cpu *cpu, uint8_t op, int reg, int rm) {
+    int kind = reg;
+    int target = op == 0xD8 ? 0 : rm;
+    int live = interp_x87_live(cpu, 0, rm);
+    double destination = interp_x87_get(cpu, target);
+    double source = op == 0xD8 ? interp_x87_get(cpu, rm) : interp_x87_get(cpu, 0);
+    if (op != 0xD8 && kind >= 4) kind ^= 1;
+    interp_x87_set(cpu, target, live ? interp_x87_arith(cpu, kind, destination, source) : hl_x87_indefinite());
+    if (live) interp_x87_c1(cpu, 0);
+    if (op == 0xDE) interp_x87_pop(cpu);
+}
+
+static int interp_x87_register_status(struct cpu *cpu, struct insn *insn, int reg, int rm, uint64_t pc) {
+    if (reg == 4 && rm == 0) interp_reg_write(cpu, insn, RAX, 2, interp_x87_status_word(cpu));
+    else if (reg == 5 || reg == 6) {
+        if (interp_x87_live(cpu, 0, rm))
+            interp_x87_compare_eflags(cpu, interp_x87_get(cpu, 0), interp_x87_get(cpu, rm), reg == 6);
+        else interp_x87_compare_unordered_eflags(cpu);
+        interp_x87_pop(cpu);
+    } else return interp_undefined(cpu, insn, pc, "x87 DF register form");
+    return STEP_NEXT;
+}
+
+static void interp_x87_register_compare(struct cpu *cpu, uint8_t op, int reg, int rm) {
+    if (interp_x87_live(cpu, 0, rm))
+        interp_x87_compare_fpsw(cpu, interp_x87_get(cpu, 0), interp_x87_get(cpu, rm), 1);
+    else interp_x87_compare_unordered_fpsw(cpu);
+    if (op == 0xDE && rm == 1) interp_x87_pop(cpu);
+    if (reg == 3) interp_x87_pop(cpu);
+}
+
+static int interp_step_x87_register(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    int reg = insn->reg & 7;
+    int rm = insn->rm & 7;
+    interp_x87_arm(cpu);
     switch (op) {
     case 0xD8:
     case 0xDC:
     case 0xDE:
         if (reg == 2 || reg == 3) { // FCOM / FCOMP; DE D9 = FCOMPP, pops TWICE
-            if (interp_x87_live(cpu, 0, rm))
-                interp_x87_compare_fpsw(cpu, interp_x87_get(cpu, 0), interp_x87_get(cpu, rm), 1);
-            else
-                interp_x87_compare_unordered_fpsw(cpu);
-            if (op == 0xDE && rm == 1) interp_x87_pop(cpu);
-            if (reg == 3) interp_x87_pop(cpu);
+            interp_x87_register_compare(cpu, op, reg, rm);
             cpu->rip = next;
             return STEP_NEXT;
         }
-        {
-            // D8 writes ST0 reading ST(i); DC/DE write ST(i) reading ST0, with the REVERSE digits
-            // SWAPPED between directions (D8 /4 FSUB vs DC /4 FSUBR, likewise /6): else b-a.
-            int kind = reg;
-            int target = op == 0xD8 ? 0 : rm;
-            int live = interp_x87_live(cpu, 0, rm);
-            double destination = interp_x87_get(cpu, target);
-            double source = op == 0xD8 ? interp_x87_get(cpu, rm) : interp_x87_get(cpu, 0);
-            if (op != 0xD8 && (kind == 4 || kind == 5 || kind == 6 || kind == 7)) kind ^= 1;
-            if (live) {
-                interp_x87_set(cpu, target, interp_x87_arith(cpu, kind, destination, source));
-                interp_x87_c1(cpu, 0); // see interp_x87_c1
-            } else {
-                interp_x87_set(cpu, target, hl_x87_indefinite());
-            }
-            if (op == 0xDE) interp_x87_pop(cpu); // DE pops after writing
-        }
+        interp_x87_register_arithmetic(cpu, op, reg, rm);
         cpu->rip = next;
         return STEP_NEXT;
 
     case 0xD9:
-        // Every arm writes C1 as 0; FXAM/FPREM/FPREM1 override.
         interp_x87_c1(cpu, 0);
         switch (reg) {
         case 0: // FLD ST(i): an empty source underflows, and the PUSHED slot takes the indefinite
@@ -3553,7 +3568,6 @@ static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
             if (rm != 0) return interp_undefined(cpu, insn, pc, "x87 D9 /2 (only FNOP is defined)");
             break; // FNOP
         case 4:
-            // FXAM never faults: it is the instruction that REPORTS emptiness (C3:C2:C0 = 101).
             if (rm == 5) {
                 interp_x87_classify(cpu);
                 break;
@@ -3580,7 +3594,6 @@ static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
             break;
         }
         case 6:
-            // F0..F3 are transcendentals with no host FP instruction and exit to x87math.c.
             if (rm <= 3) {
                 static const int selector[4] = {X87_F2XM1, X87_FYL2X, X87_FPTAN, X87_FPATAN};
                 if (!interp_x87_transcendental(cpu, selector[rm])) break;
@@ -3651,7 +3664,6 @@ static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
 
     case 0xDA:
         if (reg <= 3) {
-            // From the INTEGER EFLAGS, not the FSW; DB /0../3 are these negated.
             static const int condition[4] = {2 /*B*/, 4 /*E*/, 6 /*BE*/, 10 /*U (P)*/};
             if (interp_cond(cpu, condition[reg])) interp_x87_set(cpu, 0, interp_x87_get(cpu, rm));
         } else if (reg == 5 && rm == 1) { // FUCOMPP: pop twice
@@ -3721,22 +3733,20 @@ static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         return STEP_NEXT;
 
     case 0xDF:
-        if (reg == 4 && rm == 0) { // FNSTSW AX -- 16-bit, so RAX 63:16 are PRESERVED
-            interp_reg_write(cpu, insn, RAX, 2, interp_x87_status_word(cpu));
-        } else if (reg == 5 || reg == 6) { // FUCOMIP / FCOMIP: then pop
-            if (interp_x87_live(cpu, 0, rm))
-                interp_x87_compare_eflags(cpu, interp_x87_get(cpu, 0), interp_x87_get(cpu, rm), reg == 6);
-            else
-                interp_x87_compare_unordered_eflags(cpu);
-            interp_x87_pop(cpu);
-        } else {
-            return interp_undefined(cpu, insn, pc, "x87 DF register form");
+        {
+            int result = interp_x87_register_status(cpu, insn, reg, rm, pc);
+            if (result != STEP_NEXT) return result;
         }
         cpu->rip = next;
         return STEP_NEXT;
 
     default: return interp_undefined(cpu, insn, pc, "x87 register form");
     }
+}
+
+static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    return insn->is_mem ? interp_step_x87_memory(cpu, insn, pc, next)
+                        : interp_step_x87_register(cpu, insn, pc, next);
 }
 
 static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
