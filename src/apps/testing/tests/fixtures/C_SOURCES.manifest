@@ -1,0 +1,12 @@
+# Testing-owned guest sources. `fixture` means compiled only by integration tests,
+# never linked into the native runtime product.
+fixture	guest/checkpoint_tree.c
+fixture	guest/elf/displaced.c
+fixture	guest/elf/pie.c
+fixture	guest/elf/static_pie.c
+fixture	guest/process_loop.c
+fixture	guest/projected_directory.c
+fixture	guest/projected_read.c
+fixture	guest/projected_spin.c
+fixture	guest/projected_static.c
+fixture	guest/projected_write.c

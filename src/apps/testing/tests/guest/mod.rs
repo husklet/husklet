@@ -18,6 +18,12 @@ pub const FREESTANDING: &[&str] = &[
 ];
 pub const HOSTED: &[&str] = &["-static", "-no-pie", "-O2", "-std=gnu11"];
 
+fn fixture(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/guest")
+        .join(relative)
+}
+
 fn repository(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..").join(relative)
 }
@@ -48,30 +54,25 @@ pub fn projection(name: &str, isa: &str, destination: &Path) {
     } else {
         FREESTANDING
     };
-    let source = repository("src/runtime/native/fixtures/testing").join(name);
+    let source = fixture(name);
     compile(&source, isa, destination, flags);
 }
 
 /// Builds the generic static `ET_EXEC` displacement fixture.
 pub fn displaced_et_exec(isa: &str, destination: &Path) {
-    compile(
-        &repository("src/runtime/native/fixtures/testing/elf/displaced.c"),
-        isa,
-        destination,
-        FREESTANDING,
-    );
+    compile(&fixture("elf/displaced.c"), isa, destination, FREESTANDING);
 }
 
 /// Builds a self-contained `ET_DYN` guest using the requested PIE linker mode.
 pub fn pie_exec(isa: &str, destination: &Path, static_pie: bool) {
     let (source, flags) = if static_pie {
         (
-            "src/runtime/native/fixtures/testing/elf/static_pie.c",
+            "elf/static_pie.c",
             vec!["-static-pie", "-fPIE", "-O2", "-std=gnu11", "-Wl,--build-id=none"],
         )
     } else {
         (
-            "src/runtime/native/fixtures/testing/elf/pie.c",
+            "elf/pie.c",
             vec![
                 "-nostdlib",
                 "-fPIE",
@@ -86,7 +87,7 @@ pub fn pie_exec(isa: &str, destination: &Path, static_pie: bool) {
             ],
         )
     };
-    compile(&repository(source), isa, destination, &flags);
+    compile(&fixture(source), isa, destination, &flags);
 }
 
 /// Builds the runtime socket-stop application, whose folder case cannot drive an external stop.

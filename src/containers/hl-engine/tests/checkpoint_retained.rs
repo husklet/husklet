@@ -30,7 +30,8 @@ fn fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     if let Some(path) = std::env::var_os(variable) {
         return PathBuf::from(path);
     }
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/native/tests/checkpoint_tree.c");
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/testing/tests/fixtures/guest/checkpoint_tree.c");
     let output = directory.join(name);
     let status = std::process::Command::new(compiler)
         .args(["-static", "-O2", "-o"])

@@ -279,15 +279,6 @@ fixture	exec/test/x86_write_counters.c
 fixture	exec/test/xadd.c
 source	executable_authority.c
 source	executable_authority.h
-fixture	fixtures/testing/elf/displaced.c
-fixture	fixtures/testing/elf/pie.c
-fixture	fixtures/testing/projected_directory.c
-fixture	fixtures/testing/process_loop.c
-fixture	fixtures/testing/projected_read.c
-fixture	fixtures/testing/projected_spin.c
-fixture	fixtures/testing/projected_static.c
-fixture	fixtures/testing/projected_write.c
-fixture	fixtures/testing/elf/static_pie.c
 source	linter/src/analyzers.c
 source	linter/src/analyzers.h
 source	linter/src/cli.c
@@ -617,4 +608,3 @@ source	retained/src/translator/window.h
 fixture	retained/tests/aarch64_interpreter_link_smoke.c
 source	retained/tools/lifecycle_runner.c
 source	shim.c
-fixture	tests/checkpoint_tree.c
