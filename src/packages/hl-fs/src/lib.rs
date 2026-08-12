@@ -5,7 +5,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static ANONYMOUS_FILE_ID: AtomicU64 = AtomicU64::new(0);
 static REPLACEMENT_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
 /// A staged sibling whose directory entry is owned until atomic publication.
@@ -191,58 +190,6 @@ impl<P: Into<PathBuf>> From<P> for File {
     }
 }
 
-/// An unlinked temporary file suitable for descriptor-backed shared memory.
-pub struct AnonymousFile(std::fs::File);
-
-impl AnonymousFile {
-    /// Creates an exclusively owned file, sizes it, then removes its directory entry.
-    ///
-    /// The open descriptor retains the file until its final owner closes it. This is portable across the
-    /// Linux and macOS hosts supported by Husklet and avoids platform-specific `memfd_create` assumptions.
-    ///
-    /// # Errors
-    /// Returns directory, exclusive-create, sizing, or unlink failures.
-    pub fn new(directory: &Path, name: &str, length: u64) -> io::Result<Self> {
-        let name: String = name
-            .chars()
-            .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
-            .collect();
-        let name = if name.is_empty() { "anonymous" } else { &name };
-
-        for _ in 0..128 {
-            let id = ANONYMOUS_FILE_ID.fetch_add(1, Ordering::Relaxed);
-            let path = directory.join(format!("hl-{name}-{}-{id}", std::process::id()));
-            let file = match std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(file) => file,
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            };
-            if let Err(error) = file.set_len(length) {
-                let _ = std::fs::remove_file(path);
-                return Err(error);
-            }
-            std::fs::remove_file(path)?;
-            return Ok(Self(file));
-        }
-
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "could not allocate a unique anonymous file",
-        ))
-    }
-
-    /// Returns the owned file for descriptor transfer or mapping.
-    #[must_use]
-    pub fn into_file(self) -> std::fs::File {
-        self.0
-    }
-}
-
 enum TreeKind {
     Directory(std::fs::Permissions),
     File,
@@ -394,21 +341,7 @@ impl<P: Into<PathBuf>> From<P> for Directory {
 
 #[cfg(test)]
 mod tests {
-    use super::{AnonymousFile, CreateError, Creation, Directory, File};
-    use std::io::{Read, Seek, Write};
-
-    #[test]
-    fn anonymous_file_is_sized_writable_and_unlinked() {
-        let mut file = AnonymousFile::new(&std::env::temp_dir(), "wayland shm", 16)
-            .unwrap()
-            .into_file();
-        assert_eq!(file.metadata().unwrap().len(), 16);
-        file.write_all(b"pixels").unwrap();
-        file.rewind().unwrap();
-        let mut bytes = [0; 6];
-        file.read_exact(&mut bytes).unwrap();
-        assert_eq!(&bytes, b"pixels");
-    }
+    use super::{CreateError, Creation, Directory, File};
 
     #[test]
     fn replacement_never_exposes_a_partial_value() {
