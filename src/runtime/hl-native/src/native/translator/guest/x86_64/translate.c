@@ -3489,25 +3489,63 @@ static int lower_exchange(struct insn *instruction, uint64_t guest_pc, uint64_t 
     return TX_NEXT;
 }
 
-static int lower_stack_transfer(struct insn *instruction, uint64_t next) {
+static int lower_stack_control(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
     if (instruction->op == 0x68 || instruction->op == 0x6A) {
         e_subi(RSP, RSP, 8, 1);
         e_movconst(16, (uint64_t)instruction->imm);
         e_store(8, 16, RSP);
         return TX_NEXT;
     }
-    if (instruction->op != 0x8F) return TX_FALL;
-    if (instruction->is_mem) {
-        // The destination address observes RSP after the pop.
-        e_load(8, 19, RSP);
-        e_addi(RSP, RSP, 8, 1);
-        emit_ea(instruction, next);
-        e_store(8, 19, 17);
-    } else {
-        e_load(8, 16, RSP);
-        e_addi(RSP, RSP, 8, 1);
-        e_mov_rr(instruction->rm_reg, 16, 1);
+    if (instruction->op == 0x8F) {
+        if (instruction->is_mem) {
+            // The destination address observes RSP after the pop.
+            e_load(8, 19, RSP);
+            e_addi(RSP, RSP, 8, 1);
+            emit_ea(instruction, next);
+            e_store(8, 19, 17);
+        } else {
+            e_load(8, 16, RSP);
+            e_addi(RSP, RSP, 8, 1);
+            e_mov_rr(instruction->rm_reg, 16, 1);
+        }
+        return TX_NEXT;
     }
+    if (instruction->op == 0xC3 || instruction->op == 0xC2) {
+        if (emit_soft_memory_active()) {
+            e_mov_rr(17, RSP, 1);
+            emit_memory_guard(17, 8, guest_pc, X86_SOFT_READ);
+        }
+        e_load(8, 16, emit_soft_memory_active() ? 17 : RSP);
+        e_addi(RSP, RSP, 8, 1);
+        if (instruction->op == 0xC2) {
+            e_movconst(19, (uint64_t)(uint16_t)instruction->imm);
+            e_rrr(A_ADD, RSP, RSP, 19, 1, 0);
+        }
+        e_movconst(19, guest_pc);
+        e_str(19, 28, OFF_IBSRC);
+        emit_ibranch();
+        return TX_BREAK;
+    }
+    if (instruction->op != 0xC9) return TX_FALL;
+    if (emit_soft_memory_active()) {
+        e_mov_rr(17, RBP, 1);
+        emit_memory_guard(17, 8, guest_pc, X86_SOFT_READ);
+    }
+    e_mov_rr(RSP, RBP, 1);
+    e_load(8, RBP, emit_soft_memory_active() ? 17 : RSP);
+    e_addi(RSP, RSP, 8, 1);
+    return TX_NEXT;
+}
+
+static int lower_immediate_multiply(struct insn *instruction, uint64_t guest_pc, uint64_t next,
+                                    const hl_x86_trace_state *trace_state) {
+    if (instruction->op != 0x69 && instruction->op != 0x6B) return TX_FALL;
+    int memory;
+    int source = rm_load(instruction, next, instruction->opsize, &memory);
+    e_movconst(19, (uint64_t)instruction->imm);
+    int overflow_live = !trace_state->flag_elision ||
+                        (hl_x86_trace_flags_livein(trace_state, next, guest_pc) & HL_X86_FLAG_NZCV);
+    e_imul2(instruction->reg, source, 19, instruction->opsize, overflow_live);
     return TX_NEXT;
 }
 
@@ -3683,7 +3721,17 @@ static int lower_flag_stack_control(struct insn *instruction, uint64_t guest_pc)
 
 static int lower_accumulator_legacy(struct insn *instruction, int sf) {
     uint8_t opcode = instruction->op;
-    if (opcode == 0x90) return TX_NEXT;
+    if (opcode == 0x90) {
+        // 90 is XCHG eAX,rN and is only a NOP when N is rAX. REX.B selects r8.
+        if (!instruction->rep && instruction->rexB) {
+            int reg = instruction->rexB << 3;
+            e_mov_rr(19, RAX, sf);
+            e_mov_rr(RAX, reg, sf);
+            e_mov_rr(reg, 19, sf);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0x9B) return TX_NEXT; // fwait/wait: host FPU operations are synchronous
     if (opcode >= 0x91 && opcode <= 0x97) {
         int reg = (opcode - 0x90) | (instruction->rexB << 3);
         if (instruction->opsize == 2) {
@@ -4045,6 +4093,153 @@ static int lower_multibyte_hint(const struct insn *instruction) {
     if (opcode == 0x1E && instruction->imm_bytes == 0) return TX_NEXT;
     if (opcode == 0x1F || opcode == 0x18 || opcode == 0x0D || (opcode >= 0x19 && opcode <= 0x1D))
         return TX_NEXT;
+    return TX_FALL;
+}
+
+// Lowers the two-byte SSE/MMX move family. Keeping these forms together makes
+// their operand width and register-file rules explicit, especially where bare
+// encodings name MMX while mandatory prefixes name XMM registers.
+static int lower_sse_moves(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm,
+                           int mmx) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0x6E) { // movd/movq xmm, r/m (bare form names MMX)
+        if (instruction->is_mem) {
+            emit_ea(instruction, next);
+            emit_memory_guard(17, instruction->rexW ? 8u : 4u, guest_pc, X86_SOFT_READ);
+            if (instruction->rexW)
+                g_ldr_d(vd, 17);
+            else
+                g_ldr_s(vd, 17);
+        } else if (instruction->rexW) {
+            e_fmov_to_d(vd, instruction->rm_reg);
+        } else {
+            e_fmov_to_s(vd, instruction->rm_reg);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0x7E && instruction->rep) { // F3 0F 7E: movq xmm, xmm/m64
+        if (instruction->is_mem) {
+            emit_ea(instruction, next);
+            emit_memory_guard(17, 8, guest_pc, X86_SOFT_READ);
+            g_ldr_d(vd, 17);
+        } else {
+            e_vmov8(vd, vm);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0x7E) { // movd/movq r/m, xmm (bare form names MMX)
+        if (instruction->is_mem) {
+            emit_ea(instruction, next);
+            emit_memory_guard(17, instruction->rexW ? 8u : 4u, guest_pc, X86_SOFT_WRITE);
+            if (instruction->rexW)
+                g_str_d(vd, 17);
+            else
+                g_str_s(vd, 17);
+            if (emit_soft_memory_active()) emit_soft_store_commit(instruction->rexW ? 8u : 4u);
+        } else if (instruction->rexW) {
+            e_fmov_from_d(instruction->rm_reg, vd);
+        } else {
+            e_fmov_from_s(instruction->rm_reg, vd);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0xD6) {
+        // Mandatory prefixes select the register file: 66=MOVQ, F3=MOVQ2DQ,
+        // F2=MOVDQ2Q. Bare 0F D6 and memory operands for F3/F2 are invalid.
+        if ((!instruction->p66 && !instruction->rep && !instruction->repne) ||
+            (instruction->is_mem && !instruction->p66)) {
+            emit_sigill(guest_pc);
+            return TX_BREAK;
+        }
+        if (instruction->rep)
+            e_vmov8(vd, vm & 7);
+        else if (instruction->repne)
+            e_vmov8(vd & 7, vm);
+        else if (instruction->is_mem) {
+            emit_ea(instruction, next);
+            emit_memory_guard(17, 8, guest_pc, X86_SOFT_WRITE);
+            g_str_d(vd, 17);
+            if (emit_soft_memory_active()) emit_soft_store_commit(8);
+        } else {
+            e_vmov8(vm, vd);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0x6F && !instruction->p66 && !instruction->rep && !instruction->repne) {
+        // Bare 0F 6F is the 64-bit MMX form, not a 128-bit XMM load.
+        if (instruction->is_mem) {
+            emit_ea(instruction, next);
+            emit_memory_guard(17, 8, guest_pc, X86_SOFT_READ);
+            g_ldr_d(vd, 17);
+        } else {
+            e_vmov8(vd, vm);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0x7F && !instruction->p66 && !instruction->rep && !instruction->repne) {
+        if (instruction->is_mem) {
+            emit_ea(instruction, next);
+            emit_memory_guard(17, 8, guest_pc, X86_SOFT_WRITE);
+            g_str_d(vd, 17);
+            if (emit_soft_memory_active()) emit_soft_store_commit(8);
+        } else {
+            e_vmov8(vm, vd);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0xF0 && instruction->repne && instruction->is_mem) {
+        g_ldr_q_ea(vd, instruction, next); // LDDQU: architectural result is an unaligned load.
+        return TX_NEXT;
+    }
+    if (opcode == 0x6F || opcode == 0x28 ||
+        (opcode == 0x10 && !instruction->rep && !instruction->repne)) {
+        if (instruction->is_mem)
+            g_ldr_q_ea(vd, instruction, next);
+        else
+            e_vmov(vd, vm);
+        return TX_NEXT;
+    }
+    if (opcode == 0x7F || opcode == 0x29 ||
+        (opcode == 0x11 && !instruction->rep && !instruction->repne)) {
+        if (instruction->is_mem)
+            g_str_q_ea(vd, instruction, next);
+        else
+            e_vmov(vm, vd);
+        return TX_NEXT;
+    }
+    if ((opcode == 0x10 || opcode == 0x11) && instruction->rep) {
+        int store = opcode == 0x11;
+        if (instruction->is_mem) {
+            emit_ea(instruction, next);
+            emit_memory_guard(17, 4, guest_pc, store ? X86_SOFT_WRITE : X86_SOFT_READ);
+            if (store) {
+                g_str_s(vd, 17);
+                if (emit_soft_memory_active()) emit_soft_store_commit(4);
+            } else {
+                g_ldr_s(vd, 17);
+            }
+        } else {
+            emit32(0x6E040400u | ((store ? vd : vm) << 5) | (store ? vm : vd));
+        }
+        return TX_NEXT;
+    }
+    if ((opcode == 0x10 || opcode == 0x11) && instruction->repne) {
+        int store = opcode == 0x11;
+        if (instruction->is_mem) {
+            emit_ea(instruction, next);
+            emit_memory_guard(17, 8, guest_pc, store ? X86_SOFT_WRITE : X86_SOFT_READ);
+            if (store) {
+                g_str_d(vd, 17);
+                if (emit_soft_memory_active()) emit_soft_store_commit(8);
+            } else {
+                g_ldr_d(vd, 17);
+            }
+        } else {
+            emit32(0x6E080400u | ((store ? vd : vm) << 5) | (store ? vm : vd));
+        }
+        return TX_NEXT;
+    }
+    (void)mmx;
     return TX_FALL;
 }
 
@@ -5059,19 +5254,14 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            int stack_result = lower_stack_transfer(&I, next);
+            int stack_result = lower_stack_control(&I, gpc, next);
             if (stack_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
-            // ---- imul reg, r/m, imm (69 iz, 6B ib) ----
-            if (op == 0x69 || op == 0x6B) {
-                int mem;
-                int rmv = rm_load(&I, next, I.opsize, &mem);
-                e_movconst(19, (uint64_t)I.imm);
-                int imm_co_live = !trace_state.flag_elision ||
-                                  (hl_x86_trace_flags_livein(&trace_state, next, gpc) & HL_X86_FLAG_NZCV);
-                e_imul2(I.reg, rmv, 19, I.opsize, imm_co_live); // dst = r/m * imm, sets x86 CF/OF on overflow
+            if (stack_result == TX_BREAK) break;
+            int multiply_result = lower_immediate_multiply(&I, gpc, next, &trace_state);
+            if (multiply_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
@@ -5184,53 +5374,6 @@ static void *translate_block(uint64_t gpc) {
                 emit_chain_exit(taken);
                 break;
             }
-            // ---- ret (C3) / ret imm16 (C2) ----
-            if (op == 0xC3 || op == 0xC2) {
-                if (emit_soft_memory_active()) {
-                    e_mov_rr(17, RSP, 1);
-                    emit_memory_guard(17, 8, gpc, X86_SOFT_READ);
-                }
-                e_load(8, 16, emit_soft_memory_active() ? 17 : RSP);
-                e_addi(RSP, RSP, 8, 1);
-                if (op == 0xC2) {
-                    e_movconst(19, (uint64_t)(uint16_t)I.imm);
-                    e_rrr(A_ADD, RSP, RSP, 19, 1, 0);
-                }
-                e_movconst(19, gpc);
-                e_str(19, 28, OFF_IBSRC); // debug
-                emit_ibranch();
-                break; // IBTC inline probe (target in x16)
-            }
-            // ---- leave (C9) ----
-            if (op == 0xC9) {
-                if (emit_soft_memory_active()) {
-                    e_mov_rr(17, RBP, 1);
-                    emit_memory_guard(17, 8, gpc, X86_SOFT_READ);
-                }
-                e_mov_rr(RSP, RBP, 1);
-                e_load(8, RBP, emit_soft_memory_active() ? 17 : RSP);
-                e_addi(RSP, RSP, 8, 1);
-                gpc = next;
-                continue;
-            }
-            // ---- nop (90) / xchg rAX, rN (91-97) ----
-            if (op == 0x90 && !I.rep) {
-                // `90` is XCHG eAX,rN — only a NOP when N==rAX. With REX.B it targets r8 (`49 90` =
-                // xchg rax,r8), a REAL swap; dropping it (stale r8) is the busybox `sort` SIGSEGV (the
-                // `call malloc; xchg %rax,%r8` allocator idiom). Mirror the 0x91-0x97 sibling.
-                if (I.rexB) {
-                    int r = I.rexB << 3; // r8
-                    e_mov_rr(19, RAX, sf);
-                    e_mov_rr(RAX, r, sf);
-                    e_mov_rr(r, 19, sf);
-                }
-                gpc = next;
-                continue;
-            } // (F3 90 = pause -> also nop)
-            if (op == 0x9B) {
-                gpc = next;
-                continue;
-            } // fwait/wait -> nop (FPU sync)
             int flag_register_result = lower_flag_register_transfer(&I);
             if (flag_register_result == TX_NEXT) {
                 gpc = next;
