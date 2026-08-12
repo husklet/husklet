@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Generate a concrete rootfs-aware E/R/I campaign configuration."""
+"""Generate E/R/I config only from engines that positively receipt their backend."""
 
 import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
+
+
+BACKEND_RECEIPT_SCHEMA = "husklet-engine-backend-v1"
 
 
 PYTHON_PROGRAM = """import time
@@ -51,6 +56,30 @@ def executable(value, label):
     return path
 
 
+def backend_receipt(engine, backend, options=()):
+    command = [str(engine), "--backend-receipt"]
+    for option in options:
+        command.extend(("--engine-option", option))
+    completed = subprocess.run(command, capture_output=True, check=False)
+    if completed.returncode or completed.stderr:
+        raise ValueError(
+            f"{backend} engine does not provide a quiet executable backend receipt; "
+            "direct Program execution cannot prove ProductionFactory selection"
+        )
+    try:
+        observed = json.loads(completed.stdout.decode("utf-8", "strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{backend} engine backend receipt is not strict JSON") from error
+    expected = {
+        "schema": BACKEND_RECEIPT_SCHEMA,
+        "backend": backend,
+        "engine_sha256": digest(engine),
+    }
+    if observed != expected:
+        raise ValueError(f"{backend} engine backend receipt does not match the executable")
+    return {"command": command, **expected}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--external", required=True)
@@ -69,6 +98,12 @@ def main(argv=None):
         "E": executable(args.external, "external engine"),
         "R": executable(args.retained, "retained engine"),
         "I": executable(args.integrated, "integrated engine"),
+    }
+    receipts = {
+        "R": backend_receipt(engines["R"], "retained-c", ("HL_EXECUTION_BACKEND=c",)),
+        # The current integrated product deliberately embeds the retained-C backend. R/I are a
+        # selector/default no-op control until a distinct integrated backend receipts its own name.
+        "I": backend_receipt(engines["I"], "retained-c"),
     }
     rootfs = Path(args.rootfs).resolve()
     if not rootfs.is_dir():
@@ -94,16 +129,19 @@ def main(argv=None):
         ]
         command.extend(extra)
         command.append("--")
-        return {
+        result = {
             "command": command,
             "artifacts": {
                 "adapter": {"path": str(adapter), "sha256": digest(adapter)},
                 "engine": {"path": str(engines[label]), "sha256": digest(engines[label])},
             },
         }
+        if label in receipts:
+            result["backend_receipt"] = receipts[label]
+        return result
 
     config = {
-        "schema": "husklet-eri-v1",
+        "schema": "husklet-eri-v2",
         "rounds": args.rounds,
         "rootfs": {"path": str(rootfs), "sha256": tree_digest(rootfs)},
         "arms": {
@@ -124,4 +162,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as error:
+        print(f"eri-config: {error}", file=sys.stderr)
+        sys.exit(1)

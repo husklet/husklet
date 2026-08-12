@@ -68,6 +68,49 @@ class MatrixTests(unittest.TestCase):
             (root / "value").write_text("two")
             self.assertNotEqual(first, eri.tree_digest(root))
 
+    def test_backend_receipt_is_executable_and_engine_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = pathlib.Path(directory) / "engine"
+            engine.write_text(
+                "#!/bin/sh\n"
+                "hash=$(sha256sum \"$0\" | cut -d' ' -f1)\n"
+                "printf '{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"%s\"}\\n' \"$hash\"\n"
+            )
+            engine.chmod(0o755)
+            sha256 = eri.digest(engine)
+            arm = {
+                "artifacts": {"engine": {"path": str(engine), "sha256": sha256}},
+                "backend_receipt": {
+                    "command": [str(engine), "--backend-receipt"],
+                    "backend": "retained-c",
+                    "engine_sha256": sha256,
+                },
+            }
+            self.assertEqual(eri.verify_backend_receipt("R", arm)["backend"], "retained-c")
+            arm["backend_receipt"]["backend"] = "integrated-c"
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                eri.verify_backend_receipt("R", arm)
+
+    def test_backend_receipt_cannot_name_a_different_engine(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = pathlib.Path(directory) / "engine"
+            other = pathlib.Path(directory) / "other"
+            engine.write_text("#!/bin/sh\nexit 0\n")
+            other.write_text("#!/bin/sh\nexit 0\n")
+            engine.chmod(0o755)
+            other.chmod(0o755)
+            sha256 = eri.digest(engine)
+            arm = {
+                "artifacts": {"engine": {"path": str(engine), "sha256": sha256}},
+                "backend_receipt": {
+                    "command": [str(other)],
+                    "backend": "retained-c",
+                    "engine_sha256": sha256,
+                },
+            }
+            with self.assertRaisesRegex(ValueError, "not bound"):
+                eri.verify_backend_receipt("R", arm)
+
 
 if __name__ == "__main__":
     unittest.main()

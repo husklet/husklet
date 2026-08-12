@@ -52,6 +52,14 @@ class AdapterTests(unittest.TestCase):
             (root / "link").symlink_to("missing")
             self.assertNotEqual(first, config.tree_digest(root))
 
+    def test_config_probe_rejects_an_engine_without_backend_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = pathlib.Path(directory) / "engine"
+            engine.write_text("#!/bin/sh\nexit 0\n")
+            engine.chmod(0o755)
+            with self.assertRaisesRegex(ValueError, "backend receipt"):
+                config.backend_receipt(engine, "retained-c", ("HL_EXECUTION_BACKEND=c",))
+
 
 if __name__ == "__main__":
     unittest.main()

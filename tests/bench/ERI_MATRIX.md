@@ -7,9 +7,32 @@ ordering and therefore requires a multiple of four rounds.
 Four crossed warmup pairs run before recorded samples in every cell, including
 after resume.
 
-Generate a concrete configuration from separately copied and smoke-tested
-artifacts. The generator hashes the adapter, runner, every engine and guest,
-and the complete Python rootfs; it contains no backend-name placeholders:
+Configuration generation is currently deliberately unavailable for the direct
+Husklet product CLI. That CLI constructs `RustRuntimeFactory` directly, so an
+`HL_EXECUTION_BACKEND=c` argument is ignored and even a bogus backend value can
+succeed. It is not the retained-C product path.
+
+The generator now requires R and I to implement an executable receipt command:
+
+```text
+ENGINE --backend-receipt [--engine-option HL_EXECUTION_BACKEND=c]
+```
+
+The command must exit zero, write no stderr, and emit exactly one JSON value
+whose schema is `husklet-engine-backend-v1`, whose backend is `retained-c`, and
+whose `engine_sha256` matches the measured executable. R selects retained C
+explicitly and I exercises the integrated product default; while both receipt
+`retained-c`, that pair is a proven selector/default no-op control, not two
+distinct engines. A future distinct integrated backend must receipt a distinct
+name before the generator can label it as such. The matrix re-executes and verifies that receipt before every
+campaign. Until the production entry point routes through `ProductionFactory`
+and emits this receipt after selection, `eri_config.py` fails without writing a
+configuration. A log line, accepted selector string, or identical R/I binary is
+not backend evidence.
+
+Once those receipts exist, generate a concrete configuration from separately
+copied and smoke-tested artifacts. The generator hashes the adapter, every
+engine and guest, and the complete Python rootfs:
 
 ```sh
 tests/bench/eri_config.py \

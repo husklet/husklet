@@ -14,7 +14,8 @@ import sys
 import time
 from pathlib import Path
 
-SCHEMA = "husklet-eri-v1"
+SCHEMA = "husklet-eri-v2"
+BACKEND_RECEIPT_SCHEMA = "husklet-engine-backend-v1"
 CELLS = (("E", "E"), ("R", "R"), ("I", "I"), ("E", "R"), ("E", "I"), ("R", "I"))
 ORDER = ((0, 1), (1, 0), (1, 0), (0, 1))
 WARMUP_PAIRS = 4
@@ -45,6 +46,39 @@ def tree_digest(root):
         else:
             raise ValueError(f"unsupported rootfs entry: {path}")
     return value.hexdigest()
+
+
+def verify_backend_receipt(label, arm):
+    receipt = arm.get("backend_receipt")
+    if not isinstance(receipt, dict):
+        raise ValueError(f"arm {label} has no executable backend receipt")
+    command = receipt.get("command")
+    if not isinstance(command, list) or not command:
+        raise ValueError(f"arm {label} backend receipt command must be a nonempty argv array")
+    executable = Path(command[0]).resolve()
+    if not executable.is_file():
+        raise ValueError(f"arm {label} backend receipt executable does not exist: {executable}")
+    command[0] = str(executable)
+    engine = arm.get("artifacts", {}).get("engine", {})
+    engine_path = Path(engine.get("path", "")).resolve()
+    engine_sha256 = engine.get("sha256")
+    if executable != engine_path or receipt.get("engine_sha256") != engine_sha256:
+        raise ValueError(f"arm {label} backend receipt is not bound to its measured engine")
+    completed = subprocess.run(command, capture_output=True, check=False)
+    if completed.returncode or completed.stderr:
+        raise ValueError(f"arm {label} backend receipt command did not succeed quietly")
+    try:
+        observed = json.loads(completed.stdout.decode("utf-8", "strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"arm {label} backend receipt is not strict JSON") from error
+    expected = {
+        "schema": BACKEND_RECEIPT_SCHEMA,
+        "backend": receipt.get("backend"),
+        "engine_sha256": engine_sha256,
+    }
+    if observed != expected:
+        raise ValueError(f"arm {label} backend receipt does not match its claimed backend and engine")
+    return observed
 
 
 def canonical(stdout, stderr):
@@ -93,6 +127,8 @@ def validate(config):
             if expected != observed:
                 raise ValueError(f"arm {label} artifact {name} sha256 changed")
             artifact["path"] = str(path)
+        if label in ("R", "I"):
+            verify_backend_receipt(label, arm)
     for name, workload in config["workloads"].items():
         if not isinstance(workload.get("argv"), list) or not workload["argv"]:
             raise ValueError(f"workload {name} argv must be a nonempty array")
