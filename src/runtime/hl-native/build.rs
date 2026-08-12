@@ -67,7 +67,7 @@ fn main() {
     println!("cargo:host_os={target_os}");
     println!("cargo:host_arch={target_arch}");
 
-    println!("cargo:rerun-if-changed={NATIVE_ROOT}");
+    emit_native_rerun_inputs(Path::new(NATIVE_ROOT));
     let runtime_sources = discover_runtime_roots(&target_os, &target_arch);
     let runtime_source_refs = runtime_sources.iter().map(String::as_str).collect::<Vec<_>>();
 
@@ -167,6 +167,23 @@ fn main() {
     );
     if env::var("HL_C_SANITIZER").as_deref() == Ok("leak") && target_os == "linux" {
         println!("cargo:rustc-link-lib=lsan");
+    }
+}
+
+fn emit_native_rerun_inputs(directory: &Path) {
+    println!("cargo:rerun-if-changed={}", directory.display());
+    let mut entries = fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|error| panic!("enumerate {}: {error}", directory.display()));
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            emit_native_rerun_inputs(&path);
+        } else if path.is_file() {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
     }
 }
 
