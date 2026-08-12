@@ -1123,6 +1123,9 @@ static int engine_global_init(void) {
     // ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
     // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
     ptrace_arena_init();
+    // POSIX record locks and BSD flock ownership share a process-tree broker. Embedded builds skip the
+    // standalone constructor, so initialize it explicitly before any guest fork can inherit this engine.
+    if (poslk_init() != 0) return 70;
     // Arm the generation-counter checkpoint control channel when HL_CHECKPOINT is set.
     // Runs in every process (init + forked children) so the whole tree is checkpointable.
     if (ckpt_control_init() != 0) return 70;

@@ -316,16 +316,17 @@ static void poslk_after_fork(void) {
     g_i_locked = 0; // POSIX: a fork child inherits NONE of the parent's record locks
 }
 
-static void poslk_init(void) {
-    if (g_poslk) return;
+static int poslk_init(void) {
+    if (g_poslk) return 0;
     void *m = mmap(NULL, sizeof(struct poslk_shm), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
-    if (m == MAP_FAILED) return;     // no shared table -> every op falls back to the host fcntl path
+    if (m == MAP_FAILED) return -1;
     g_poslk = (struct poslk_shm *)m; // MAP_ANON is zero-filled: lockword=0, hi=0, all owner=0
+    return 0;
 }
 
 #ifndef HL_EMBEDDED_BUILD
 __attribute__((constructor)) static void poslk_ctor(void) {
-    poslk_init();
+    (void)poslk_init();
 }
 #endif
 
