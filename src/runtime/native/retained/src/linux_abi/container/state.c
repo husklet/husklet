@@ -586,8 +586,8 @@ static int gid_permitted(int id) {
 // PR_CAPBSET_DROP; inheritable/ambient stay empty (the docker default). Previously hl reported all-ones
 // (0xffffffffffffffff) — grossly over-reporting caps vs real docker.
 #define HL_CAP_DEFAULT                                                                                                 \
-    0x00000000a80425fbull                   // chown,dac_override,fowner,fsetid,kill,setgid,setuid,setpcap,
-                                            // net_bind_service,net_raw,sys_chroot,mknod,audit_write,setfcap
+    0x00000000a80425fbull // chown,dac_override,fowner,fsetid,kill,setgid,setuid,setpcap,
+                          // net_bind_service,net_raw,sys_chroot,mknod,audit_write,setfcap
 #define HL_CAP_FS_MASK (0x1full | (1ull << 9) | (1ull << 27) | (1ull << 32) | (1ull << 33))
 static uint64_t g_cap_eff = HL_CAP_DEFAULT; // process EFFECTIVE cap set (capset(2) may narrow it)
 static uint64_t g_cap_prm = HL_CAP_DEFAULT; // process PERMITTED cap set (uid transitions/capset may narrow it)
@@ -608,6 +608,7 @@ static void cred_uid_changed(void) {
         g_cap_setid_perm = 0;
     }
 }
+
 // The file-mode creation mask. Forwarded to the host on umask(2) so real inode creation honours it, but ALSO
 // tracked here so /proc/self/status `Umask:` reflects the guest's current value (it was hardcoded 0022, so a
 // guest umask(2) changed real file modes yet the status line stayed 0022 -- a syscall-vs-/proc disagreement).
