@@ -8,7 +8,7 @@ use hl_network::{
 };
 use hl_runtime::{
     CheckpointDescriptorTable, CheckpointNetworkCatalog, NetworkCheckpointParticipant, NetworkObjectBindings,
-    PortableNetworkCodec, RuntimeSocketRegistry,
+    PortableNetworkCodec, SocketRegistry,
 };
 
 use super::Native;
@@ -32,7 +32,7 @@ impl CheckpointRuntime {
             Some(authority) => Native::authorized(authority),
             None => Native::new(),
         });
-        let sockets = Arc::new(RuntimeSocketRegistry::default());
+        let sockets = Arc::new(SocketRegistry::default());
         let bindings = Arc::new(NetworkObjectBindings::new(
             descriptors,
             Arc::clone(&sockets),

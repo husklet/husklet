@@ -7,7 +7,7 @@ use hl_network::{
     NetworkCheckpointRebind, NetworkSocketState, SocketId,
 };
 
-use crate::{CheckpointDescriptorTable, RuntimeSocket, RuntimeSocketRegistry};
+use crate::{CheckpointDescriptorTable, RuntimeSocket, SocketRegistry};
 
 mod adoption;
 mod descriptor;
@@ -38,7 +38,7 @@ struct State {
 
 pub struct ObjectBindings<H: CheckpointHost> {
     descriptors: Arc<CheckpointDescriptorTable>,
-    sockets: Arc<RuntimeSocketRegistry<H>>,
+    sockets: Arc<SocketRegistry<H>>,
     host: Option<Arc<H>>,
     state: Arc<Mutex<State>>,
 }
@@ -83,7 +83,7 @@ impl<H: CheckpointHost> ObjectBindings<H> {
     #[must_use]
     pub fn new(
         descriptors: Arc<CheckpointDescriptorTable>,
-        sockets: Arc<RuntimeSocketRegistry<H>>,
+        sockets: Arc<SocketRegistry<H>>,
         host: Option<Arc<H>>,
     ) -> Self {
         Self {

@@ -7,7 +7,7 @@ use hl_network::{
     SocketProtocol, SocketType, UnixAddress, UnixSocketPair,
 };
 
-use crate::{DescriptorTransfer, RuntimeNetworkHost, RuntimeSocket, RuntimeSocketRegistry};
+use crate::{DescriptorTransfer, RuntimeNetworkHost, RuntimeSocket, SocketRegistry};
 
 use super::{SocketCredentials, errno::SocketErrno};
 
@@ -18,7 +18,7 @@ pub struct RuntimeNetworkSyscalls<H: RuntimeNetworkHost, M: GuestMemory> {
     pub(crate) memory: M,
     pub(crate) architecture: GuestArchitecture,
     pub(crate) host: Option<Arc<H>>,
-    pub(crate) sockets: Arc<RuntimeSocketRegistry<H>>,
+    pub(crate) sockets: Arc<SocketRegistry<H>>,
     pub(crate) credentials: Option<Arc<dyn SocketCredentials>>,
     pub(crate) wait: Option<Arc<dyn crate::SocketWait>>,
     pub(crate) transfer: Option<Arc<dyn DescriptorTransfer<H::Attachment>>>,
@@ -51,7 +51,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             memory,
             architecture,
             host: None,
-            sockets: Arc::new(RuntimeSocketRegistry::default()),
+            sockets: Arc::new(SocketRegistry::default()),
             credentials: None,
             wait: None,
             transfer: None,
@@ -81,7 +81,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     }
 
     #[must_use]
-    pub fn with_registry(mut self, sockets: Arc<RuntimeSocketRegistry<H>>) -> Self {
+    pub fn with_registry(mut self, sockets: Arc<SocketRegistry<H>>) -> Self {
         self.sockets = sockets;
         self
     }

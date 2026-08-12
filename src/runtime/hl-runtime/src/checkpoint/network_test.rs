@@ -16,7 +16,7 @@ use crate::{
     CheckpointDescriptorTable, CheckpointNetworkCatalog, CheckpointParticipant, DescriptorCheckpointParticipant,
     DescriptorObjectCatalog, NetworkCheckpointCodec, NetworkCheckpointHost, NetworkCheckpointParticipant,
     NetworkObjectBindings, PortableNetworkCodec, RuntimeNetworkError, RuntimeNetworkHost, RuntimeSocket,
-    RuntimeSocketKind, RuntimeSocketRegistry,
+    RuntimeSocketKind, SocketRegistry,
 };
 
 #[derive(Default)]
@@ -423,7 +423,7 @@ fn unix_pair_restore() {
         NetworkConfiguration::new(Vec::new(), Vec::new(), Vec::new()).unwrap(),
     ));
     let checkpoint_catalog = Arc::new(CheckpointNetworkCatalog::new(catalog.clone()));
-    let sockets = Arc::new(RuntimeSocketRegistry::<UnixRestoreHost>::default());
+    let sockets = Arc::new(SocketRegistry::<UnixRestoreHost>::default());
     let bindings = Arc::new(NetworkObjectBindings::new(descriptors.clone(), sockets.clone(), None));
     let pair =
         Arc::new(UnixSocketPair::new(SocketType::Stream, StatusFlags::from_bits(StatusFlags::NONBLOCKING)).unwrap());
@@ -522,7 +522,7 @@ mod port_restore {
             NetworkConfiguration::new(Vec::new(), Vec::new(), Vec::new()).unwrap(),
         ));
         let checkpoint_catalog = Arc::new(CheckpointNetworkCatalog::new(catalog.clone()));
-        let sockets = Arc::new(RuntimeSocketRegistry::<UnixRestoreHost>::default());
+        let sockets = Arc::new(SocketRegistry::<UnixRestoreHost>::default());
         let host = Arc::new(UnixRestoreHost::default());
         let bindings = Arc::new(NetworkObjectBindings::new(
             descriptors.clone(),

@@ -3,17 +3,17 @@ use std::sync::Arc;
 use hl_descriptor::DescriptionIdentity;
 use hl_network::SocketType;
 
-use crate::{RuntimeNetworkHost, RuntimeSocketKind, RuntimeSocketRegistry, SocketIoctlPort};
+use crate::{RuntimeNetworkHost, RuntimeSocketKind, SocketIoctlPort, SocketRegistry};
 
 /// Joins descriptor identity to socket state for socket-owned ioctl operations.
 pub struct SocketIoctl<H: RuntimeNetworkHost> {
     host: Arc<H>,
-    sockets: Arc<RuntimeSocketRegistry<H>>,
+    sockets: Arc<SocketRegistry<H>>,
     policy: hl_network::NetworkPolicy,
 }
 
 impl<H: RuntimeNetworkHost> SocketIoctl<H> {
-    pub fn new(host: Arc<H>, sockets: Arc<RuntimeSocketRegistry<H>>) -> Self {
+    pub fn new(host: Arc<H>, sockets: Arc<SocketRegistry<H>>) -> Self {
         let policy =
             hl_network::NetworkPolicy::from_launch(false, b"", b"", b"").expect("default namespace interface policy");
         Self { host, sockets, policy }

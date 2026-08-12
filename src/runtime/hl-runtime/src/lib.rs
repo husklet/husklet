@@ -173,7 +173,7 @@ pub use procfs::{
 pub use retained_exit::RetainedExitTrap;
 pub use retained_identity::RetainedTaskContext;
 pub use robust::{ExitHandler as RobustExitHandler, Wake as RobustWake};
-pub use runtime_socket::RuntimeSocketRegistry;
+pub use runtime_socket::Registry as SocketRegistry;
 pub(crate) use runtime_socket::{RuntimeSocket, RuntimeSocketKind};
 pub use signal::{FramePort, PreparedFramePublication};
 pub use syscall_router::{

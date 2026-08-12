@@ -43,7 +43,7 @@ pub(crate) struct RuntimeSocket<H: SocketHostIo> {
     pub(crate) kind: RuntimeSocketKind<H>,
     pub(crate) id: SocketId,
     pub(crate) snapshot: Mutex<SocketSnapshot>,
-    registry: Mutex<Option<(Weak<RuntimeSocketRegistry<H>>, DescriptionIdentity)>>,
+    registry: Mutex<Option<(Weak<Registry<H>>, DescriptionIdentity)>>,
     catalog: Mutex<Arc<CatalogLifetime>>,
     closed: AtomicBool,
     options: Mutex<BTreeMap<(i32, i32), hl_linux::GuestSocketOption>>,
@@ -78,7 +78,7 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         }
     }
 
-    fn attach_registry(&self, registry: &Arc<RuntimeSocketRegistry<H>>, identity: DescriptionIdentity) {
+    fn attach_registry(&self, registry: &Arc<Registry<H>>, identity: DescriptionIdentity) {
         *self.registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some((Arc::downgrade(registry), identity));
     }
@@ -473,4 +473,4 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
 mod description;
 mod registry;
 
-pub use registry::RuntimeSocketRegistry;
+pub use registry::Registry;

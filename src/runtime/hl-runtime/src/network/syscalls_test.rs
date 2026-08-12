@@ -324,7 +324,7 @@ struct Fixture {
     catalog: Arc<NetworkCatalog>,
     memory: Memory,
     host: Arc<Host>,
-    sockets: Arc<crate::RuntimeSocketRegistry<Host>>,
+    sockets: Arc<crate::SocketRegistry<Host>>,
 }
 
 impl Fixture {
@@ -336,7 +336,7 @@ impl Fixture {
             )),
             memory: Memory::new(),
             host: Arc::new(Host::default()),
-            sockets: Arc::new(crate::RuntimeSocketRegistry::default()),
+            sockets: Arc::new(crate::SocketRegistry::default()),
         }
     }
 

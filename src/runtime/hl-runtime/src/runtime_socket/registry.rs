@@ -7,7 +7,7 @@ use hl_network::{SocketHostIo, SocketId};
 use super::{RuntimeSocket, RuntimeSocketKind};
 
 #[derive(Debug)]
-pub struct RuntimeSocketRegistry<H: SocketHostIo> {
+pub struct Registry<H: SocketHostIo> {
     state: Mutex<RegistryState<H>>,
     unix: Mutex<Arc<hl_network::UnixNamespace>>,
 }
@@ -18,7 +18,7 @@ struct RegistryState<H: SocketHostIo> {
     sockets: BTreeMap<DescriptionIdentity, Arc<RuntimeSocket<H>>>,
 }
 
-impl<H: SocketHostIo> Default for RuntimeSocketRegistry<H> {
+impl<H: SocketHostIo> Default for Registry<H> {
     fn default() -> Self {
         Self {
             state: Mutex::new(RegistryState {
@@ -30,7 +30,7 @@ impl<H: SocketHostIo> Default for RuntimeSocketRegistry<H> {
     }
 }
 
-impl<H: SocketHostIo> RuntimeSocketRegistry<H> {
+impl<H: SocketHostIo> Registry<H> {
     #[must_use]
     pub fn unix_namespace(&self) -> Arc<hl_network::UnixNamespace> {
         self.unix

@@ -102,7 +102,7 @@ impl CpuTimerPublication {
 }
 
 #[derive(Default)]
-struct ProcessCpuTimers {
+struct CpuTimers {
     virtual_timer: TimerState,
     prof_timer: TimerState,
     publication: Option<Arc<CpuTimerPublication>>,
@@ -112,7 +112,7 @@ pub struct AlarmRegistry {
     tasks: Arc<TaskRegistry>,
     scheduler: Arc<dyn AlarmScheduler>,
     timers: Mutex<BTreeMap<ProcessId, TimerState>>,
-    cpu_timers: Mutex<BTreeMap<ProcessId, ProcessCpuTimers>>,
+    cpu_timers: Mutex<BTreeMap<ProcessId, CpuTimers>>,
     /// True while some process holds an armed `ITIMER_VIRTUAL`/`ITIMER_PROF` deadline.
     /// Reading the CPU clocks costs two host syscalls, so the signal boundary
     /// consults this first and skips the poll entirely when nothing is armed.
@@ -140,7 +140,7 @@ impl AlarmRegistry {
     }
 
     /// Recomputes the armed flag from the table the caller already holds locked.
-    fn refresh_cpu_armed(&self, timers: &BTreeMap<ProcessId, ProcessCpuTimers>) {
+    fn refresh_cpu_armed(&self, timers: &BTreeMap<ProcessId, CpuTimers>) {
         let armed = timers
             .values()
             .any(|entry| entry.virtual_timer.deadline.is_some() || entry.prof_timer.deadline.is_some());
@@ -230,7 +230,7 @@ impl AlarmRegistry {
         publication
     }
 
-    fn publish_cpu(timers: &ProcessCpuTimers) {
+    fn publish_cpu(timers: &CpuTimers) {
         if let Some(publication) = &timers.publication {
             publication.publish(timers.virtual_timer.deadline, timers.prof_timer.deadline);
         }

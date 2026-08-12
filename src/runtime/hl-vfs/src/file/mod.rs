@@ -12,7 +12,7 @@ mod vector;
 pub use description::{SeekPosition, VfsFileDescription, VfsFileHost, VfsFileToken};
 pub use metadata::*;
 pub use statfs::*;
-pub use transfer::FileTransfer;
+pub use transfer::Transfer;
 
 #[cfg(test)]
 mod description_test;

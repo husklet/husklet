@@ -5,7 +5,7 @@ use hl_network::{NetworkCatalog, SocketDescription, SocketSnapshot};
 
 use crate::{
     CreatedSocket, ImportedDescription, ImportedTransfer, RuntimeNetworkError, RuntimeNetworkHost, RuntimeSocket,
-    RuntimeSocketRegistry, TransferPublication,
+    SocketRegistry, TransferPublication,
 };
 
 pub struct HostImport<T> {
@@ -14,7 +14,7 @@ pub struct HostImport<T> {
     pub status: StatusFlags,
 }
 
-impl<H: RuntimeNetworkHost> RuntimeSocketRegistry<H> {
+impl<H: RuntimeNetworkHost> SocketRegistry<H> {
     pub fn import_hosts(
         self: &Arc<Self>,
         host: Arc<H>,
@@ -31,13 +31,13 @@ impl<H: RuntimeNetworkHost> RuntimeSocketRegistry<H> {
 }
 
 struct SocketTransfer<H: RuntimeNetworkHost> {
-    registry: Arc<RuntimeSocketRegistry<H>>,
+    registry: Arc<SocketRegistry<H>>,
     objects: Vec<(Arc<RuntimeSocket<H>>, StatusFlags)>,
     active: bool,
 }
 
 impl<H: RuntimeNetworkHost> SocketTransfer<H> {
-    fn new(registry: Arc<RuntimeSocketRegistry<H>>, capacity: usize) -> Self {
+    fn new(registry: Arc<SocketRegistry<H>>, capacity: usize) -> Self {
         Self {
             registry,
             objects: Vec::with_capacity(capacity),

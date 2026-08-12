@@ -19,7 +19,7 @@ impl<H: VfsFileHost> VfsFileDescription<H> {
             .domain_extension()
             .and_then(|extension| extension.downcast_ref::<VfsFileDescription<H>>())
             .ok_or(ObjectError::NotSupported)?;
-        let transfer = FileTransfer::prepare(
+        let transfer = Transfer::prepare(
             self,
             input_offset,
             target,
@@ -60,7 +60,7 @@ impl<H: VfsFileHost> VfsFileDescription<H> {
 /// Implicit cursors remain unchanged until `commit`. Dropping this value rolls
 /// every reservation back. Aliased descriptions use one reservation and are
 /// rejected when their effective ranges overlap.
-pub struct FileTransfer {
+pub struct Transfer {
     input: Option<(Arc<Cursor>, u64)>,
     output: Option<(Arc<Cursor>, u64)>,
     maximum: usize,
@@ -68,7 +68,7 @@ pub struct FileTransfer {
     output_start: u64,
 }
 
-impl FileTransfer {
+impl Transfer {
     /// Reserves every implicit cursor in stable address order.
     ///
     /// # Errors
@@ -209,7 +209,7 @@ impl FileTransfer {
     }
 }
 
-impl Drop for FileTransfer {
+impl Drop for Transfer {
     fn drop(&mut self) {
         let aliased = self
             .input

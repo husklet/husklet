@@ -10,7 +10,7 @@ use hl_descriptor::{
 };
 
 use crate::{
-    FileTransfer, GuestPathBytes, Identity, Kind, Metadata, Permissions, SeekPosition, Timestamp, VfsFileDescription,
+    GuestPathBytes, Identity, Kind, Metadata, Permissions, SeekPosition, Timestamp, Transfer, VfsFileDescription,
     VfsFileHost, VfsFileToken,
 };
 
@@ -457,17 +457,17 @@ fn dual_cursor_commit_and_rollback() {
     let input = host.description(AccessMode::ReadWrite, StatusFlags::default());
     let output = host.description(AccessMode::ReadWrite, StatusFlags::default());
     output.seek(SeekPosition::Start(8)).unwrap();
-    let transfer = FileTransfer::prepare(&input, None, &output, None, 4, false, None).unwrap();
+    let transfer = Transfer::prepare(&input, None, &output, None, 4, false, None).unwrap();
     assert_eq!(transfer.input_offset(), Some(0));
     assert_eq!(transfer.output_offset(), Some(8));
     assert!(matches!(
-        FileTransfer::prepare(&input, None, &output, None, 1, true, None),
+        Transfer::prepare(&input, None, &output, None, 1, true, None),
         Err(ObjectError::WouldBlock)
     ));
     transfer.commit(2).unwrap();
     assert_eq!((input.offset(), output.offset()), (2, 10));
 
-    let transfer = FileTransfer::prepare(&input, None, &output, None, 2, false, None).unwrap();
+    let transfer = Transfer::prepare(&input, None, &output, None, 2, false, None).unwrap();
     drop(transfer);
     assert_eq!((input.offset(), output.offset()), (2, 10));
 }
@@ -477,14 +477,14 @@ fn dual_cursor_alias_and_preflight_are_atomic() {
     let host = FakeFileHost::new(b"abcdefghijklmnop");
     let description = host.description(AccessMode::ReadWrite, StatusFlags::default());
     assert!(matches!(
-        FileTransfer::prepare(&description, None, &description, None, 1, false, None),
+        Transfer::prepare(&description, None, &description, None, 1, false, None),
         Err(ObjectError::InvalidArgument)
     ));
     assert_eq!(description.offset(), 0);
 
     let output = host.description(AccessMode::ReadWrite, StatusFlags::default());
     output.seek(SeekPosition::Start(8)).unwrap();
-    let transfer = FileTransfer::prepare(&description, None, &output, None, 4, false, None).unwrap();
+    let transfer = Transfer::prepare(&description, None, &output, None, 4, false, None).unwrap();
     assert_eq!(transfer.commit(5), Err(ObjectError::InvalidArgument));
     assert_eq!((description.offset(), output.offset()), (0, 8));
 }
@@ -509,7 +509,7 @@ fn dual_cursor_cancellation_releases_first_gate() {
         let input = Arc::clone(&input);
         let output = Arc::clone(&output);
         let cancellation = Arc::clone(&cancellation);
-        thread::spawn(move || FileTransfer::prepare(&input, None, &output, None, 1, false, Some(&*cancellation)))
+        thread::spawn(move || Transfer::prepare(&input, None, &output, None, 1, false, Some(&*cancellation)))
     };
     cancellation.wait_subscribed();
     cancellation.interrupt();

@@ -33,12 +33,12 @@ pub use device::{
 };
 pub use device::{Registration as DeviceRegistration, Registry as DeviceRegistry, Snapshot as DeviceSnapshot};
 pub use directory_description::{VfsDirectoryDescription, VfsDirectoryEntry, VfsDirectoryHost};
-pub use file::{FileTransfer, SeekPosition, VfsFileDescription, VfsFileHost, VfsFileToken};
 pub use file::{FilesystemKind, FilesystemStats, FilesystemStatsError};
 pub use file::{
     Identity, Identity as FileIdentity, Kind, Kind as FileKind, Metadata, Metadata as FileMetadata, MetadataError,
     Permissions, Timestamp, Timestamp as FileTimestamp,
 };
+pub use file::{SeekPosition, Transfer, VfsFileDescription, VfsFileHost, VfsFileToken};
 pub use mutation::VfsMutations;
 pub use mutation::{
     Action as MutationAction, Error as MutationError, HostError as MutationHostError, PinnedParent, RenameFlags,

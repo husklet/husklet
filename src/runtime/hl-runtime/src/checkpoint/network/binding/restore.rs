@@ -10,7 +10,7 @@ use hl_network::{
     SocketSnapshot, UnixPairSnapshot, UnixSocketPair,
 };
 
-use crate::{RuntimeSocket, RuntimeSocketRegistry};
+use crate::{RuntimeSocket, SocketRegistry};
 
 use super::{CheckpointHost, ObjectBindings, Phase, State};
 
@@ -22,7 +22,7 @@ pub(super) struct HostStage<T> {
 
 pub(super) struct RestoreTransaction<H: CheckpointHost> {
     pub(super) state: Arc<Mutex<State>>,
-    pub(super) sockets: Arc<RuntimeSocketRegistry<H>>,
+    pub(super) sockets: Arc<SocketRegistry<H>>,
     pub(super) host: Option<Arc<H>>,
     pub(super) descriptors: Arc<hl_descriptor::DescriptorTable>,
     pub(super) image: NetworkCheckpointImage,
