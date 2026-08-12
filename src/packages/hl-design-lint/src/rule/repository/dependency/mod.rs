@@ -7,7 +7,7 @@ use std::{
 use crate::{
     LintError, Result,
     model::{Finding, Related, Review, Severity},
-    policy::{DependencyKind, DependencyPolicy, LayerPolicy},
+    policy::{DependencyPolicy, LayerPolicy},
     rule::Rule,
     source::Workspace,
 };
@@ -60,16 +60,6 @@ enum Kind {
     Normal,
     Development,
     Build,
-}
-
-impl From<Kind> for DependencyKind {
-    fn from(value: Kind) -> Self {
-        match value {
-            Kind::Normal => Self::Normal,
-            Kind::Development => Self::Development,
-            Kind::Build => Self::Build,
-        }
-    }
 }
 
 impl Kind {
@@ -173,21 +163,57 @@ impl Graph {
     fn direction_findings(&self, rule: &'static str) -> Vec<Finding> {
         let mut findings = Vec::new();
         for package in self.packages.values() {
+            if let Some(maximum) = self.policy.package_budget(&package.name) {
+                let targets = package
+                    .dependencies
+                    .iter()
+                    .filter_map(|dependency| self.target(dependency).map(|target| target.name.as_str()))
+                    .collect::<BTreeSet<_>>();
+                if targets.len() > maximum {
+                    let mut finding = Finding::error(
+                        rule,
+                        format!("{} local dependency budget", package.name),
+                        location::package(package),
+                    );
+                    finding.message = format!(
+                        "`{}` has {} distinct local dependencies, exceeding its configured maximum of {maximum}",
+                        package.name,
+                        targets.len(),
+                    );
+                    finding.help = "remove dependencies, invert narrow capabilities, or change the repository-owned package budget after architectural review".into();
+                    let mut review = Review::error();
+                    review.metadata.extend([
+                        ("Maximum local dependencies".into(), maximum.to_string()),
+                        ("Observed local dependencies".into(), targets.len().to_string()),
+                    ]);
+                    review.dependencies.extend(targets.into_iter().map(str::to_owned));
+                    finding.review = Some(review);
+                    findings.push(finding);
+                }
+            }
             for dependency in &package.dependencies {
                 let Some(target) = self.target(dependency) else {
                     continue;
                 };
                 let source_layer = package.layer.as_deref().and_then(|name| self.layer(name));
-                let layer_violation = source_layer
-                    .zip(target.layer.as_deref())
-                    .filter(|(source, target)| !source.may_depend_on.iter().any(|allowed| allowed == *target))
-                    .map(|_| "the repository layer policy forbids this dependency direction");
-                let reviewed = self
-                    .policy
-                    .permits_edge(&package.name, &target.name, dependency.kind.into());
-                let policy_violation = (self.policy.require_reviewed_edges && !reviewed)
-                    .then_some("the local dependency is absent from the repository policy");
-                let Some(message) = layer_violation.or(policy_violation) else {
+                let layer_violation = if self.policy.layers.is_empty() {
+                    None
+                } else {
+                    match (source_layer, target.layer.as_deref()) {
+                        (Some(source), Some(target))
+                            if !source.may_depend_on.iter().any(|allowed| allowed == target) =>
+                        {
+                            Some("the repository layer policy forbids this dependency direction")
+                        }
+                        (Some(_), None) => Some("the dependency target is not classified by repository layer policy"),
+                        (None, Some(_)) => Some("the dependency source is not classified by repository layer policy"),
+                        (None, None) => {
+                            Some("the dependency source and target are not classified by repository layer policy")
+                        }
+                        _ => None,
+                    }
+                };
+                let Some(message) = layer_violation else {
                     continue;
                 };
                 let mut finding = Finding::error(
@@ -206,13 +232,7 @@ impl Graph {
                         .map(|target| format!(" under target `{target}`"))
                         .unwrap_or_default(),
                 );
-                finding.help = match layer_violation {
-                    Some(_) => "invert the edge through a lower-layer port or update the repository-owned layer policy after review".into(),
-                    None => format!(
-                        "remove the edge, invert it through a consumer-owned port, or record `{} -> {}` in the repository policy",
-                        package.name, target.name
-                    ),
-                };
+                finding.help = "invert the edge through a lower-layer port or update the repository-owned layer policy after review".into();
                 finding.related.push(Related {
                     label: format!(
                         "dependency target in {} layer",

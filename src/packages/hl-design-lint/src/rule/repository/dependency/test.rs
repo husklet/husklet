@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::{DependencyKind, DependencyPolicy, EdgePolicy, LayerPolicy, Workspace, rule::Rule};
+use crate::{DependencyPolicy, LayerPolicy, PackageDependencyBudget, Workspace, rule::Rule};
 
 use super::Direction;
 
@@ -38,7 +38,6 @@ fn package(root: &Path, layer: &str, name: &str, dependencies: &str) {
 fn policy() -> DependencyPolicy {
     DependencyPolicy {
         ignored_packages: vec!["ignored-analyzer".into()],
-        require_reviewed_edges: true,
         layers: vec![
             LayerPolicy {
                 name: "foundation".into(),
@@ -56,11 +55,7 @@ fn policy() -> DependencyPolicy {
                 may_depend_on: vec!["foundation".into(), "service".into(), "product".into()],
             },
         ],
-        edges: vec![EdgePolicy {
-            sources: vec!["scheduler".into()],
-            targets: vec!["clock".into()],
-            kinds: vec![DependencyKind::Normal, DependencyKind::Build],
-        }],
+        package_budgets: Vec::new(),
     }
 }
 
@@ -70,7 +65,7 @@ fn findings(root: &Path, policy: DependencyPolicy) -> Vec<crate::Finding> {
 }
 
 #[test]
-fn accepts_reviewed_edge_from_configuration() {
+fn accepts_dependency_permitted_by_layer_policy() {
     let root = fixture();
     package(&root, "foundation", "clock", "");
     package(
@@ -84,24 +79,7 @@ fn accepts_reviewed_edge_from_configuration() {
 }
 
 #[test]
-fn rejects_unreviewed_edge_and_points_to_repository_policy() {
-    let root = fixture();
-    package(&root, "foundation", "clock", "");
-    package(
-        &root,
-        "services",
-        "queue",
-        "[dependencies]\nclock = { path = \"../../foundation/clock\" }\n",
-    );
-    let values = findings(&root, policy());
-    assert_eq!(values.len(), 1);
-    assert_eq!(values[0].subject, "queue -> clock");
-    assert!(values[0].help.contains("repository policy"));
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn rejects_forbidden_layer_direction_even_when_edge_is_reviewed() {
+fn rejects_forbidden_layer_direction() {
     let root = fixture();
     package(&root, "products", "console", "");
     package(
@@ -110,15 +88,47 @@ fn rejects_forbidden_layer_direction_even_when_edge_is_reviewed() {
         "clock",
         "[dependencies]\nconsole = { path = \"../../products/console\" }\n",
     );
+    let values = findings(&root, policy());
+    assert_eq!(values.len(), 1);
+    assert!(values[0].message.contains("layer policy"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn package_budget_counts_distinct_local_targets_across_dependency_kinds() {
+    let root = fixture();
+    package(&root, "foundation", "clock", "");
+    package(&root, "foundation", "storage", "");
+    package(
+        &root,
+        "services",
+        "scheduler",
+        "[dependencies]\nclock = { path = \"../../foundation/clock\" }\n[dev-dependencies]\nstorage = { path = \"../../foundation/storage\" }\n",
+    );
     let mut policy = policy();
-    policy.edges.push(EdgePolicy {
-        sources: vec!["clock".into()],
-        targets: vec!["console".into()],
-        kinds: vec![DependencyKind::Normal],
+    policy.package_budgets.push(PackageDependencyBudget {
+        package: "scheduler".into(),
+        maximum: 1,
     });
     let values = findings(&root, policy);
     assert_eq!(values.len(), 1);
-    assert!(values[0].message.contains("layer policy"));
+    assert!(values[0].message.contains("exceeding its configured maximum of 1"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn configured_policy_rejects_unclassified_local_packages() {
+    let root = fixture();
+    package(&root, "unknown", "clock", "");
+    package(
+        &root,
+        "services",
+        "scheduler",
+        "[dependencies]\nclock = { path = \"../../unknown/clock\" }\n",
+    );
+    let values = findings(&root, policy());
+    assert_eq!(values.len(), 1);
+    assert!(values[0].message.contains("not classified"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -172,7 +182,7 @@ fn dependency_analyzer_contains_no_repository_business_literals() {
         ] {
             assert!(
                 !source.contains(forbidden),
-                "generic dependency analyzer {name} contains repository literal {forbidden:?}",
+                "generic dependency analyzer {name} contains repository literal {forbidden:?}"
             );
         }
     }

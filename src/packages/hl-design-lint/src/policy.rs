@@ -11,15 +11,12 @@ pub struct DependencyPolicy {
     /// Package names omitted from dependency analysis.
     #[serde(default)]
     pub ignored_packages: Vec<String>,
-    /// Whether every local dependency must occur in `edges`.
-    #[serde(default)]
-    pub require_reviewed_edges: bool,
     /// Directory-to-layer classifications and permitted layer directions.
     #[serde(default)]
     pub layers: Vec<LayerPolicy>,
-    /// Reviewed package dependency groups.
+    /// Package-specific dependency budgets for unusually narrow components.
     #[serde(default)]
-    pub edges: Vec<EdgePolicy>,
+    pub package_budgets: Vec<PackageDependencyBudget>,
 }
 
 /// Complete, repository-owned configuration for the reusable analyzers.
@@ -199,33 +196,14 @@ pub struct LayerPolicy {
     pub may_depend_on: Vec<String>,
 }
 
-/// One compact set of reviewed source-to-target package edges.
+/// A package-specific cap on local Cargo dependencies.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EdgePolicy {
-    /// Source package names.
-    pub sources: Vec<String>,
-    /// Target package names.
-    pub targets: Vec<String>,
-    /// Dependency kinds accepted by this edge group.
-    #[serde(default = "production_kinds")]
-    pub kinds: Vec<DependencyKind>,
-}
-
-/// Cargo dependency table categories understood by the analyzer.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum DependencyKind {
-    /// `[dependencies]`.
-    Normal,
-    /// `[dev-dependencies]`.
-    Development,
-    /// `[build-dependencies]`.
-    Build,
-}
-
-fn production_kinds() -> Vec<DependencyKind> {
-    vec![DependencyKind::Normal, DependencyKind::Build]
+pub struct PackageDependencyBudget {
+    /// Exact Cargo package name to constrain.
+    pub package: String,
+    /// Maximum number of distinct local dependency packages across all kinds and targets.
+    pub maximum: usize,
 }
 
 impl DependencyPolicy {
@@ -233,12 +211,11 @@ impl DependencyPolicy {
         self.layers.iter().find(|layer| layer.directory == directory)
     }
 
-    pub(crate) fn permits_edge(&self, source: &str, target: &str, kind: DependencyKind) -> bool {
-        self.edges.iter().any(|edge| {
-            edge.sources.iter().any(|value| value == source)
-                && edge.targets.iter().any(|value| value == target)
-                && edge.kinds.contains(&kind)
-        })
+    pub(crate) fn package_budget(&self, package: &str) -> Option<usize> {
+        self.package_budgets
+            .iter()
+            .find(|budget| budget.package == package)
+            .map(|budget| budget.maximum)
     }
 }
 
@@ -251,7 +228,6 @@ mod tests {
         let policy: Policy = toml::from_str(
             r#"
 [dependency]
-require_reviewed_edges = true
 ignored_packages = ["policy-checker"]
 
 [[dependency.layers]]
@@ -259,25 +235,14 @@ name = "foundation"
 directory = "foundation"
 may_depend_on = ["foundation"]
 
-[[dependency.edges]]
-sources = ["scheduler"]
-targets = ["clock"]
-kinds = ["normal", "development"]
+[[dependency.package_budgets]]
+package = "translator"
+maximum = 1
 "#,
         )
         .unwrap();
-        assert!(policy.dependency.require_reviewed_edges);
         assert_eq!(policy.dependency.layer("foundation").unwrap().name, "foundation");
-        assert!(
-            policy
-                .dependency
-                .permits_edge("scheduler", "clock", DependencyKind::Development)
-        );
-        assert!(
-            !policy
-                .dependency
-                .permits_edge("clock", "scheduler", DependencyKind::Normal)
-        );
+        assert_eq!(policy.dependency.package_budget("translator"), Some(1));
     }
 
     #[test]

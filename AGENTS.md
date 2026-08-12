@@ -1108,8 +1108,8 @@ clang-tidy, or cppcheck command pipelines. Native C compilation is owned by
 the pinned shell:
 
 ```text
-cargo run --locked --offline -q -p hl-design-lint -- --policy design-lint.toml src tests
-cargo run --locked --offline -q -p hl-design-lint -- --policy design-lint.toml --cases lint src tests
+cargo run --locked --offline -q -p hl-design-lint -- --policy lint.toml src tests
+cargo run --locked --offline -q -p hl-design-lint -- --policy lint.toml --cases lint src tests
 ```
 
 It enforces dependency direction and cycles, source ownership, ambient environment
