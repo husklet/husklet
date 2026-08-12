@@ -169,6 +169,76 @@ fn public_visibility_selects_export_and_import_annotations() {
     assert!(windows_import.contains("__declspec(dllimport)"));
 }
 
+#[test]
+fn service_validation_rejects_truncated_versions_and_null_callbacks() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-service-abi-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("service ABI probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "hl/host_services.h"
+
+int main(void) {
+    hl_host_services host = {0};
+    host.abi = HL_HOST_SERVICES_ABI;
+    host.size = sizeof(host);
+    if (hl_host_services_validate(&host, 0) != HL_STATUS_OK) return 1;
+
+    host.size = sizeof(host) - 1;
+    if (hl_host_services_validate(&host, 0) != HL_STATUS_ABI_MISMATCH) return 2;
+    host.size = sizeof(host);
+    host.abi = HL_HOST_SERVICES_ABI - 1;
+    if (hl_host_services_validate(&host, 0) != HL_STATUS_ABI_MISMATCH) return 3;
+    host.abi = HL_HOST_SERVICES_ABI;
+
+    hl_host_memory_services memory = {0};
+    memory.abi = 7;
+    memory.size = 144;
+    host.capabilities = HL_HOST_CAP_MEMORY;
+    host.memory = &memory;
+    if (hl_host_services_validate(&host, HL_HOST_CAP_MEMORY) != HL_STATUS_ABI_MISMATCH) return 4;
+    memory.abi = HL_HOST_MEMORY_ABI;
+    memory.size = sizeof(memory);
+    if (hl_host_services_validate(&host, HL_HOST_CAP_MEMORY) != HL_STATUS_ABI_MISMATCH) return 5;
+
+    hl_host_network_services network = {0};
+    network.abi = 1;
+    network.size = 56;
+    host.capabilities = HL_HOST_CAP_NETWORK;
+    host.memory = 0;
+    host.network = &network;
+    if (hl_host_services_validate(&host, HL_HOST_CAP_NETWORK) != HL_STATUS_ABI_MISMATCH) return 6;
+
+    hl_host_sync_services sync = {0};
+    sync.abi = 2;
+    sync.size = 64;
+    host.capabilities = HL_HOST_CAP_SYNC;
+    host.network = 0;
+    host.sync = &sync;
+    if (hl_host_services_validate(&host, HL_HOST_CAP_SYNC) != HL_STATUS_ABI_MISMATCH) return 7;
+    return 0;
+}
+"#,
+    )
+    .expect("service ABI probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("engine/host_services.c"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("service ABI probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("service ABI probe execution");
+    assert!(run.success(), "service ABI probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove service ABI probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {

@@ -7,10 +7,9 @@ HL_EXTERN_C_BEGIN
 
 #define HL_HOST_SERVICES_ABI 4u
 #define HL_HOST_MEMORY_ABI 8u
-/* Oldest memory group still accepted. An ABI 6 provider ends at repair_signal_page and an ABI 7
- * provider ends at unwire_range; callbacks appended after a provider's own version are absent
- * rather than NULL, so validation checks the prefix that version is required to carry and only
- * demands an appended callback from a provider that declares the version which added it. */
+/* The production engine requires this complete generation. Historical ABI 6 and 7 prefix endpoints
+ * remain statically pinned below so a table edit cannot silently reinterpret an old provider, but
+ * they are not accepted because current execution reaches the appended callbacks. */
 #define HL_HOST_FILE_MAPPING_ABI 1u
 #define HL_HOST_MEMORY_MAPPING_ABI 1u
 #define HL_HOST_CLOCK_ABI 4u
@@ -19,15 +18,13 @@ HL_EXTERN_C_BEGIN
 #define HL_HOST_PROCESS_ABI 3u
 #define HL_HOST_EVENT_ABI 2u
 #define HL_HOST_NETWORK_ABI 2u
-/* Oldest network group still accepted. An ABI 1 provider ends at close; the fourteen operations
- * appended in ABI 2 are absent rather than NULL, so validation checks the ABI 1 prefix and only
- * demands the appended callbacks from an ABI 2 provider. */
+/* The production engine requires ABI 2. The ABI 1 prefix endpoint remains pinned for drift detection,
+ * but current Linux socket behavior reaches the appended operations and cannot safely accept it. */
 #define HL_HOST_SHARED_MEMORY_ABI 1u
 #define HL_HOST_COUNTER_ABI 2u
 #define HL_HOST_SYNC_ABI 3u
-/* Oldest sync group still accepted. An ABI 2 provider ends at fork_child; the parking operations
- * appended in ABI 3 are absent rather than NULL, so validation checks the ABI 2 prefix and only
- * demands the appended callbacks from an ABI 3 provider. */
+/* The production engine requires ABI 3. ABI 2 ended at fork_child; it remains a pinned historical
+ * prefix, not an accepted table, because current thread and futex paths require parking callbacks. */
 #define HL_HOST_TERMINAL_ABI 1u
 #define HL_HOST_TRANSFER_ABI 2u
 #define HL_HOST_DIRECTORY_ABI 1u
