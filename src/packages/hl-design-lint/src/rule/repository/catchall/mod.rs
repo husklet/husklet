@@ -31,24 +31,19 @@ impl Rule for SourcePath {
             {
                 paths.insert(source.clone());
             }
-            for root in workspace.paths() {
-                let mut directory = source.parent();
-                while let Some(path) = directory {
-                    if !path.starts_with(root) {
-                        break;
-                    }
-                    if path.file_name().and_then(|value| value.to_str()).is_some_and(forbidden) {
-                        paths.insert(path.to_owned());
-                    }
-                    if path == root {
-                        break;
-                    }
-                    directory = path.parent();
-                }
-            }
+            paths.extend(forbidden_directories(source, workspace.paths()));
         }
         Ok(paths.into_iter().map(|path| finding(self.id(), &path)).collect())
     }
+}
+
+fn forbidden_directories(source: &Path, roots: &[std::path::PathBuf]) -> BTreeSet<std::path::PathBuf> {
+    roots
+        .iter()
+        .flat_map(|root| source.ancestors().take_while(move |path| path.starts_with(root)))
+        .filter(|path| path.file_name().and_then(|value| value.to_str()).is_some_and(forbidden))
+        .map(Path::to_owned)
+        .collect()
 }
 
 fn forbidden(name: &str) -> bool {
