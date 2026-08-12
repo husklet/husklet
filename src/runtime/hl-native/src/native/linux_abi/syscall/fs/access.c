@@ -645,7 +645,8 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
 }
 
 static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, int lf,
-                            int mf, int osymlink, int is_opath, int nf_want, uint32_t openat2_intent) {
+                            int mf, int osymlink, int is_opath, int nf_want, uint32_t openat2_intent,
+                            const hl_provider_node *projected, const char *overlay_guest) {
 // TOCTOU-free per-component resolve in the jail
 if (jail_routed_at((int)a0, (const char *)a1)) {
     // W4D: openat resolution cache. Memoizes the guest-abs-path -> canonical host path that the
@@ -786,9 +787,87 @@ if (jail_routed_at((int)a0, (const char *)a1)) {
     return 0;
 }
 
-static uint64_t open_tmpfile(uint64_t a0, uint64_t a1, uint64_t a3) {
+static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                             uint64_t a4, uint64_t a5) {
+    switch (nr) {
+    case 56: {
+        // openat -- Linux O_* -> macOS O_* (they differ!)
+        /* Consume any resolve intent carried over from an openat2 fall-through;
+         * a direct openat leaves it cleared. */
+        uint32_t openat2_intent = g_openat2_resolve_intent;
+        g_openat2_resolve_intent = 0;
+        int lf = (int)a2, mf = lf & 0x3;
+        // O_PATH (Linux 0x200000, arch-independent): the fd only NAMES the file -- fstat / *at dirfd /
+        // fchdir work through it, but read/write are rejected EBADF. macOS has no O_PATH, so we open a
+        // normal read fd (O_RDONLY, +O_DIRECTORY for a dir) for the metadata ops and record the flag so the
+        // I/O family (svc_io) returns EBADF. Marked on every open-success path below.
+        int is_opath = (lf & 0x200000) != 0;
+        // Confinement turns a relative guest name into an absolute host path. Validate its directory
+        // descriptor first, while Linux still considers it: otherwise host openat() ignores the invalid
+        // dirfd and reports an unrelated path error (usually ENOENT).
+        int directory_error = at_dirfd_check((int32_t)a0, (const char *)a1);
+        if (directory_error < 0) {
+            G_RET(c) = (uint64_t)(int64_t)directory_error;
+            break;
+        }
+        // openat/openat2 never give an empty pathname AT_EMPTY_PATH semantics,
+        // including for O_PATH. Resolving "" through atpath() instead folded the
+        // dirfd itself into the host path and opened it successfully.
+        if (a1 && !guest_bad_ptr(a1, 1) && !*(const char *)a1) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
+            break;
+        }
+        // O_PATH|O_NOFOLLOW naming a SYMLINK: Linux opens the LINK ITSELF (so readlinkat(fd,"",..) and
+        // fstatat(fd,"",AT_EMPTY_PATH) operate on the symlink --). macOS has no O_PATH, and a plain
+        // follow-open would open the TARGET (F_GETPATH then names the target, breaking the empty-path
+        // readlink). Use macOS O_SYMLINK for exactly this combination so the fd names the symlink node; a
+        // regular file opens normally under O_SYMLINK too, and a plain (non-O_PATH) O_NOFOLLOW open still
+        // ELOOPs on a symlink as Linux requires.
+        int osymlink = (is_opath && (lf & G_O_NOFOLLOW)) ? O_SYMLINK : 0;
+        // Read-only bind mount: any write-intent open (O_WRONLY/O_RDWR/O_CREAT/O_TRUNC/O_APPEND, incl.
+        // O_TMPFILE which carries O_RDWR) under an `-v …:ro` volume fails EROFS -- exactly as the kernel
+        // rejects a write-open on a read-only mount. A pure O_RDONLY open still succeeds. Checked up front
+        // so neither O_TMPFILE nor the memoized open-cache walk below can slip a write through.
+        int write_intent = (lf & 3) || (lf & 0x40) || (lf & 0x200) || (lf & 0x400);
+        char projected_path[4200];
+        const hl_provider_node *projected_open_node = NULL;
+        if (write_intent) {
+            guest_abspath_at((int)a0, (const char *)a1, projected_path, sizeof projected_path);
+            projected_open_node = hl_provider_namespace_launch_resolve(projected_path, strlen(projected_path));
+        }
+        if (write_intent && projected_open_node == NULL && jail_ro_at((int)a0, (const char *)a1)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EROFS);
+            break;
+        }
+        // O_TMPFILE (the __O_TMPFILE bit 0x400000 is arch-independent): create an unnamed, auto-cleaned
+        // regular file inside the named directory by making one + immediately unlinking it (macOS has no
+        // O_TMPFILE). The fd is a normal RW file with link count 0.
         if (lf & 0x400000) {
-            G_RET(c) = open_tmpfile(a0, a1, a3);
+            char pb[4200];
+            const char *dir = atpath((int)a0, (const char *)a1, pb, sizeof pb, 0);
+            int dfd = open(dir, O_RDONLY | O_DIRECTORY);
+            if (dfd < 0) {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+            int fd = -1, e = ENOENT;
+            for (int t = 0; t < 64; t++) {
+                char nm[40];
+                snprintf(nm, sizeof nm, ".hl-tmpfile-%d-%d", (int)getpid(), rand());
+                fd = openat(dfd, nm, O_CREAT | O_EXCL | O_RDWR, (mode_t)(a3 ? a3 : 0600));
+                e = errno;
+                if (fd >= 0) {
+                    unlinkat(dfd, nm, 0);
+                    break;
+                }
+                if (e != EEXIST) break;
+            }
+            close(dfd);
+            if (fd >= 0 && fd < HL_NFD) {
+                g_fdpath[fd][0] = 0;   // anonymous: no tracked path
+                memf_attach(fd, 0, 0); // O_TMPFILE is unambiguously private scratch -> back it with RAM
+            }
+            G_RET(c) = fd < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)fd;
             break;
         }
         if (open_synthetic_path(c, a0, a1, lf, mf, is_opath)) break;
@@ -986,7 +1065,9 @@ static uint64_t open_tmpfile(uint64_t a0, uint64_t a1, uint64_t a3) {
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
             break;
         }
-        if (open_jailed_path(c, a0, a1, a2, a3, lf, mf, osymlink, is_opath, nf_want, openat2_intent)) break;
+        if (open_jailed_path(c, a0, a1, a2, a3, lf, mf, osymlink, is_opath, nf_want, openat2_intent, projected,
+                             overlay_guest))
+            break;
         char pb[4200];
         // no jail
         /* openat2 containment (RESOLVE_NO_SYMLINKS/BENEATH/IN_ROOT, carried as
