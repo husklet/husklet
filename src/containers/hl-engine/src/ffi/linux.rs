@@ -5,6 +5,8 @@ use crate::native_host::{
     Protection,
 };
 use std::ffi::CStr;
+use std::io::Write;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::sync::Arc;
 
 use self::abi as libc;
@@ -34,6 +36,29 @@ mod socket;
 pub(crate) mod transfer;
 #[path = "linux/watch.rs"]
 mod watch;
+
+pub(crate) fn sealed_projected_executable(bytes: &[u8]) -> Result<std::fs::File, ()> {
+    // SAFETY: the literal is terminated and flags request a private sealing-capable descriptor.
+    let descriptor = unsafe {
+        ::libc::memfd_create(
+            c"hl-projected-executable".as_ptr(),
+            ::libc::MFD_CLOEXEC | ::libc::MFD_ALLOW_SEALING,
+        )
+    };
+    if descriptor < 0 {
+        return Err(());
+    }
+    // SAFETY: successful memfd_create transfers unique descriptor ownership.
+    let mut file = unsafe { std::fs::File::from_raw_fd(descriptor) };
+    file.write_all(bytes).map_err(|_| ())?;
+    let seals = ::libc::F_SEAL_SEAL | ::libc::F_SEAL_SHRINK | ::libc::F_SEAL_GROW | ::libc::F_SEAL_WRITE;
+    // SAFETY: file owns a live sealing-capable memfd and fcntl retains no pointer.
+    if unsafe { ::libc::fcntl(file.as_raw_fd(), ::libc::F_ADD_SEALS, seals) } < 0 {
+        return Err(());
+    }
+    Ok(file)
+}
+
 #[derive(Default)]
 pub struct LinuxHost;
 

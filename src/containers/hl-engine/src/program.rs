@@ -11,6 +11,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 const CONFIG_LIMIT: u64 = 64 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PROJECTED_EXECUTABLE_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProgramError {
@@ -54,19 +56,31 @@ impl<M: GuestMachine + 'static, W: Workspace> SessionWatch<'_, M, W> {
 
 impl Program {
     #[cfg(target_os = "linux")]
-    fn validate_projected(worker: &mut crate::native::AuthorityWorker) -> Result<(), ProgramError> {
+    fn projected_executable(
+        worker: &mut crate::native::AuthorityWorker,
+    ) -> Result<crate::executable::ExecutableAuthority, ProgramError> {
         let handle = worker
             .open_file(1)
             .map_err(|_| ProgramError::Engine(EngineError::AuthorityFailed))?;
-        let info = worker
-            .file_info(handle)
-            .map_err(|_| ProgramError::Engine(EngineError::AuthorityFailed));
+        let result = Self::copy_projected_executable(worker, handle);
         let closed = worker
             .close_file(handle)
             .map_err(|_| ProgramError::Engine(EngineError::AuthorityFailed));
-        let info = info?;
+        let executable = result?;
         closed?;
+        Ok(executable)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn copy_projected_executable(
+        worker: &mut crate::native::AuthorityWorker,
+        handle: u64,
+    ) -> Result<crate::executable::ExecutableAuthority, ProgramError> {
+        let info = worker
+            .file_info(handle)
+            .map_err(|_| ProgramError::Engine(EngineError::AuthorityFailed))?;
         if info.size == 0
+            || info.size > PROJECTED_EXECUTABLE_LIMIT
             || info.device == 0
             || info.inode == 0
             || info.mode & libc::S_IFMT != libc::S_IFREG
@@ -74,7 +88,35 @@ impl Program {
         {
             return Err(ProgramError::Engine(EngineError::AuthorityFailed));
         }
-        Ok(())
+        // This copy is completed before host confinement. The worker receives a
+        // sealed, immutable inode rather than reopening the guest pathname after
+        // the authority has selected it.
+        let capacity = usize::try_from(info.size).map_err(|_| ProgramError::Engine(EngineError::AuthorityFailed))?;
+        let mut image = Vec::with_capacity(capacity);
+        let mut offset = 0_u64;
+        while offset < info.size {
+            let remaining = usize::try_from((info.size - offset).min(hl_provider::FileWire::MAX_READ_DATA as u64))
+                .map_err(|_| ProgramError::Engine(EngineError::AuthorityFailed))?;
+            let bytes = worker
+                .read_file(handle, offset, remaining)
+                .map_err(|_| ProgramError::Engine(EngineError::AuthorityFailed))?;
+            if bytes.len() != remaining {
+                return Err(ProgramError::Engine(EngineError::AuthorityFailed));
+            }
+            image.extend_from_slice(&bytes);
+            offset = offset
+                .checked_add(bytes.len() as u64)
+                .ok_or(ProgramError::Engine(EngineError::AuthorityFailed))?;
+        }
+        let after = worker
+            .file_info(handle)
+            .map_err(|_| ProgramError::Engine(EngineError::AuthorityFailed))?;
+        if after != info {
+            return Err(ProgramError::Engine(EngineError::AuthorityFailed));
+        }
+        let file = crate::ffi::linux::sealed_projected_executable(&image)
+            .map_err(|()| ProgramError::Engine(EngineError::AuthorityFailed))?;
+        Ok(crate::executable::ExecutableAuthority::new(file.into()))
     }
 
     #[cfg(target_os = "linux")]
@@ -122,14 +164,14 @@ impl Program {
             }
         };
         let requires_authority = authority_descriptor.is_some() || plan.options.get("HL_UNTRUSTED").is_some();
-        let authority = match (requires_authority, authority_descriptor, health_descriptor) {
-            (false, None, None) => None,
+        let (authority, executable_authority) = match (requires_authority, authority_descriptor, health_descriptor) {
+            (false, None, None) => (None, None),
             (true, Some(descriptor), Some(health)) => {
                 let mut worker =
                     crate::native::AuthorityWorker::inherit(descriptor, health).map_err(ProgramError::Engine)?;
                 worker.enter(|| ()).map_err(ProgramError::Engine)?;
-                Self::validate_projected(&mut worker)?;
-                Some(Arc::new(std::sync::Mutex::new(worker)))
+                let executable = Self::projected_executable(&mut worker)?;
+                (Some(Arc::new(std::sync::Mutex::new(worker))), Some(executable))
             }
             _ => return Err(ProgramError::Engine(EngineError::AuthorityFailed)),
         };
@@ -145,10 +187,7 @@ impl Program {
                 ))
             })
             .transpose()?;
-        if authority.is_some() {
-            crate::native::HostConfinement::apply().map_err(ProgramError::Engine)?;
-        }
-        let result = Self::execute(isa, plan, authority.as_ref(), health);
+        let result = Self::execute(isa, plan, authority.as_ref(), executable_authority, health);
         if let Some(worker) = authority {
             worker
                 .lock()
@@ -306,22 +345,26 @@ impl Program {
         isa: GuestIsa,
         plan: RuntimePlan,
         authority: Option<&Arc<std::sync::Mutex<crate::native::AuthorityWorker>>>,
+        executable_authority: Option<crate::executable::ExecutableAuthority>,
         health: Option<(crate::native::AuthorityHealth, crate::native::AuthorityHealth)>,
     ) -> Result<EngineExit, ProgramError> {
         // Backend selection belongs to the production factory.  In particular,
         // a direct architecture worker must not silently bypass retained C by
         // constructing the retired Rust runtime itself.
-        let _ = authority;
         let factory = crate::runtime::ProductionFactory;
         let services = RuntimeServices {
             activation: Arc::new(Activation),
-            executable_authority: None,
+            executable_authority,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: crate::composition::StandardStreams::default(),
         };
         let backend = EngineBackend::construct(isa, plan, services, &factory, WorkspacePort)
             .map_err(ProgramError::Composition)?;
+        // Guest execution and its host-facing filesystem operations live in the
+        // isolated retained-C worker. Applying the legacy in-process filter to
+        // this supervisor would deny its bounded wait/kill/fcntl lifecycle and
+        // does not confine the child; worker policy is carried in the plan.
         backend.start().map_err(ProgramError::Engine)?;
         let exit = match authority {
             Some(_) => {
@@ -339,6 +382,7 @@ impl Program {
         _: GuestIsa,
         _: RuntimePlan,
         _: Option<&Arc<std::sync::Mutex<crate::native::AuthorityWorker>>>,
+        _: Option<crate::executable::ExecutableAuthority>,
         _: Option<(crate::native::AuthorityHealth, crate::native::AuthorityHealth)>,
     ) -> Result<EngineExit, ProgramError> {
         Err(ProgramError::Unsupported)
