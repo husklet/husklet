@@ -160,16 +160,23 @@ fn spawn_output(
                     Ok(0) | Err(_) => break,
                     Ok(count) => count,
                 };
-                let mut written = 0;
-                while written < count {
-                    match port.write(&bytes[written..count]) {
-                        Ok(0) | Err(_) => return,
-                        Ok(count) => written += count,
-                    }
+                if !write_output(port.as_ref(), &bytes[..count]) {
+                    return;
                 }
             }
         })
         .map_err(|_| CompositionError::RuntimeConstruction)
+}
+
+fn write_output(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
+    let mut written = 0;
+    while written < bytes.len() {
+        match port.write(&bytes[written..]) {
+            Ok(0) | Err(_) => return false,
+            Ok(count) => written += count,
+        }
+    }
+    true
 }
 
 #[cfg(test)]
