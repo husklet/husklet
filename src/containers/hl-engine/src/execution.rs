@@ -1066,19 +1066,23 @@ mod tests {
     #[test]
     fn rust_placement_drives_displaced_exec_and_pie_launches() {
         let directory = tempfile::tempdir().unwrap();
-        for (name, kind, link_base, status) in [("exec", 2_u16, 0x0080_0000_u64, 31_u16), ("pie", 3, 0, 32)] {
-            let path = directory.path().join(name);
-            let mut executable = exiting_arm(status);
-            put_u16(&mut executable, 16, kind);
-            put_u64(&mut executable, 24, link_base + 0x100);
-            put_u64(&mut executable, 80, link_base);
-            put_u64(&mut executable, 88, link_base);
-            std::fs::write(&path, executable).unwrap();
-            let launch = executable_plan(&path);
-            let executor =
-                CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &launch, None, [0, 1, 2], None).unwrap();
-            executor.start_plan(&launch).unwrap();
-            assert_eq!(executor.exit().guest_status, i32::from(status));
+        for (isa, isa_name) in [(GuestIsa::Aarch64, "arm64"), (GuestIsa::X86_64, "x86_64")] {
+            for (name, kind, link_base, status) in [("exec", 2_u16, 0x0080_0000_u64, 31_u16), ("pie", 3, 0, 32)] {
+                let path = directory.path().join(format!("{isa_name}-{name}"));
+                let mut executable = match isa {
+                    GuestIsa::Aarch64 => exiting_arm(status),
+                    GuestIsa::X86_64 => exiting_x86_64(status),
+                };
+                put_u16(&mut executable, 16, kind);
+                put_u64(&mut executable, 24, link_base + 0x100);
+                put_u64(&mut executable, 80, link_base);
+                put_u64(&mut executable, 88, link_base);
+                std::fs::write(&path, executable).unwrap();
+                let launch = executable_plan(&path);
+                let executor = CGuestExecutor::create_with_streams(isa, &launch, None, [0, 1, 2], None).unwrap();
+                executor.start_plan(&launch).unwrap();
+                assert_eq!(executor.exit().guest_status, i32::from(status));
+            }
         }
     }
 

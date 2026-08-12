@@ -1,7 +1,6 @@
 // hl/linux_abi -- x86-64 ELF loader (ET_EXEC at its link address on Linux, biased high on macOS;
 // static-PIE + dynamic via ld.so) + stack. Placement rule: thread.c, "non-PIE image placement, per host".
 #include "placement.h"
-#include "goimage.h"
 
 struct elf_host_map_context {
     hl_host_memory_mapping mapping;
@@ -327,8 +326,24 @@ static void go_rebase_nonpie(const uint8_t *f, size_t fsz, uint64_t bias, uint64
                 (unsigned long long)g_nonpie_types_hi);
 }
 
-static void load_elf(const char *path, struct loaded *out, const void *placement) {
-    (void)placement;
+struct main_placement {
+    uint64_t link_start;
+    uint64_t link_end;
+    int etype;
+};
+
+static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struct main_placement *placement) {
+    if (plan == NULL || placement == NULL || plan->abi != HL_ENGINE_MAIN_IMAGE_PLAN_ABI || plan->size < sizeof(*plan) ||
+        plan->link_end <= plan->link_start || (plan->kind != 1 && plan->kind != 2))
+        return -1;
+    placement->link_start = plan->link_start;
+    placement->link_end = plan->link_end;
+    placement->etype = plan->kind == 1 ? 2 : 3;
+    return 0;
+}
+
+static void load_elf(const char *path, struct loaded *out, const void *placement_argument) {
+    const struct main_placement *placement = placement_argument;
     hl_linux_image image;
     if (x86_image_read(path, &image) != 0) {
         fprintf(stderr, "hl-engine: cannot read guest ELF %s through host services\n", path);
@@ -338,17 +353,25 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     if (rd16(f + 18) != 0x3E) fprintf(stderr, "[hl] warning: e_machine=%u (want 62=x86-64)\n", rd16(f + 18));
     uint64_t e_entry = rd64(f + 24), phoff = rd64(f + 32);
     int phnum = rd16(f + 56), phentsize = rd16(f + 54);
-    uint64_t minv = ~0ull, maxv = 0;
-    for (int i = 0; i < phnum; i++) {
-        uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
-        if (rd32(ph) != 1) continue;
-        uint64_t v = rd64(ph + 16), msz = rd64(ph + 40);
-        if (v < minv) minv = v;
-        if (v + msz > maxv) maxv = v + msz;
+    uint64_t basepage, span;
+    int etype;
+    if (placement != NULL) {
+        basepage = placement->link_start;
+        span = placement->link_end - placement->link_start;
+        etype = placement->etype;
+    } else {
+        uint64_t minv = ~0ull, maxv = 0;
+        for (int i = 0; i < phnum; i++) {
+            uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
+            if (rd32(ph) != 1) continue;
+            uint64_t v = rd64(ph + 16), msz = rd64(ph + 40);
+            if (v < minv) minv = v;
+            if (v + msz > maxv) maxv = v + msz;
+        }
+        basepage = minv & ~0xFFFull;
+        span = (maxv - basepage + 0xFFFF) & ~0xFFFFull;
+        etype = rd16(f + 16);
     }
-    uint64_t basepage = minv & ~0xFFFull;
-    uint64_t span = (maxv - basepage + 0xFFFF) & ~0xFFFFull;
-    int etype = rd16(f + 16);
     struct elf_host_map_context map_context = {
         .mapping = {HL_HOST_MEMORY_MAPPING_ABI, sizeof(hl_host_memory_mapping), 0, 0, 0, 0}};
     uint8_t *base = NULL;
@@ -495,10 +518,6 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     if (g_trace || g_diag)
         fprintf(stderr, "[LOADED] %s base=%llx span=%llx end=%llx entry=%llx\n", path, (unsigned long long)base,
                 (unsigned long long)span, (unsigned long long)((uint64_t)base + span), (unsigned long long)out->entry);
-    // Latch a Go main image so signal delivery suppresses Go's async-preempt SIGURG (signal.c, g_go_image),
-    // exactly as the aarch64 loader does. OR, never clear: the interp load must not clobber a main-image
-    // match; execve resets the flag before re-loading.
-    g_go_image |= elf_is_go_image(f, image.size);
     hl_linux_image_release(&image);
 }
 

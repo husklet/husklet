@@ -79,7 +79,6 @@ static hl_target_services g_target_services;
 #define g_jit_services (g_target_services.bound)
 static hl_status g_engine_result_status;
 static hl_linux_abi *g_linux_box;
-static int g_go_image;
 
 /* The stable runtime trap record is AArch64-only today. Keep the lifecycle
  * seam present for the namespaced x86 backend while its syscalls remain on
@@ -1121,7 +1120,6 @@ static int engine_global_init(void) {
 // gb/pb/ib buffers are static because g_exe_path = prog points into gb and must outlive this call.
 static const char *load_program(const char *prog, struct loaded *lm, struct loaded *li, uint64_t *jump,
                                 uint64_t *at_base, int *have_interp, const hl_engine_main_image_plan *image_plan) {
-    (void)image_plan;
     static char gb[1024];
     prog = find_in_path(prog, gb, sizeof gb);   // bare "sh" (docker) -> "/bin/sh" via the container PATH
     if (!g_comm_store[0]) set_guest_comm(prog); // record the pre-shebang name; preload lands here
@@ -1148,7 +1146,16 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     // opt8: load the guest image + interp at FIXED VAs so the translated arena is byte-identical across
     // runs (one-shot g_force_base, cleared inside load_elf). Only when the persistent cache is enabled.
     if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_IMG_BASE;
-    load_elf(prog_host, lm, NULL);
+    struct main_placement main_placement;
+    const struct main_placement *placement = NULL;
+    if (image_plan != NULL) {
+        if (main_placement_from_plan(image_plan, &main_placement) != 0) {
+            fprintf(stderr, "hl-engine: invalid Rust main image placement plan\n");
+            exit(1);
+        }
+        placement = &main_placement;
+    }
+    load_elf(prog_host, lm, placement);
     g_loadbase = lm->base;
     *jump = lm->entry;
     *at_base = 0;
@@ -1219,7 +1226,6 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_initial_executable_size = executable_size;
     g_authorized_executable_image = executable_image;
     g_authorized_executable_size = executable_size;
-    (void)image_plan;
     if (argument_count > (uint32_t)INT_MAX) return 2;
     argc = (int)argument_count;
     hl_target_services_inject(&g_target_services, host);
