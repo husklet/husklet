@@ -199,7 +199,10 @@ impl Plan {
             link_start,
             link_end,
             has_interpreter: u32::from(layout.interpreter.is_some()),
-            flags: 0,
+            // ET_EXEC images are always stored away from their fixed guest link addresses. This keeps
+            // host address ownership independent of executable-specific assumptions; the C projection
+            // layer translates every guest-visible address back to the ELF link range.
+            flags: u32::from(kind == 1),
             interpreter_identity,
         })
     }
@@ -413,6 +416,13 @@ mod tests {
         marked[0x260..0x26e].copy_from_slice(b"\xff Go buildinf:");
         marked[0x340..0x348].copy_from_slice(b"v8_blob_");
         assert_eq!(inspect(&plain), inspect(&marked));
+    }
+
+    #[test]
+    fn executable_plan_requires_generic_displacement() {
+        let plan = inspect(&image()).unwrap();
+        assert_eq!(plan.kind, 1);
+        assert_eq!(plan.flags, 1);
     }
 
     #[test]

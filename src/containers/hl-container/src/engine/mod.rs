@@ -373,13 +373,34 @@ mod tests {
     }
 
     #[test]
+    fn file_mounts_use_the_volume_protocol() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("guest-program");
+        std::fs::write(&source, b"program").unwrap();
+        let mut launch = launch();
+        launch.mounts.push(crate::model::ResolvedMount {
+            source: source.clone(),
+            target: "/bin/guest-program".into(),
+            access: crate::Access::ReadOnly,
+        });
+
+        let spec = Spec::try_from(&launch).unwrap();
+
+        assert_eq!(
+            spec.plan.options.get("HL_VOLUMES"),
+            Some(format!("ro:/bin/guest-program:{}", source.display()).as_str())
+        );
+        assert_eq!(spec.plan.options.get("HL_NAME_BINDS"), None);
+    }
+
+    #[test]
     fn native_execution_reaches_the_engine_launch_plan() {
         let mut launch = launch();
         launch.execution = crate::Execution::native(true);
         let spec = Spec::try_from(&launch).unwrap();
-        assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
-        assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), Some("1"));
-        assert_eq!(spec.plan.options.get("HL_C_EXECUTION_ATTESTATION"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), None);
+        assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+        assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), Some("1"));
     }
 
     #[test]
@@ -387,9 +408,9 @@ mod tests {
         let mut launch = launch();
         launch.execution = crate::Execution::native(false);
         let spec = Spec::try_from(&launch).unwrap();
-        assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), None);
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
-        assert_eq!(spec.plan.options.get("HL_C_EXECUTION_ATTESTATION"), None);
+        assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), None);
     }
 
     #[test]
@@ -398,20 +419,18 @@ mod tests {
         launch.execution = crate::Execution::retained_c();
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), None);
-        assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), None);
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
         assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), None);
-        assert_eq!(spec.plan.options.get("HL_C_EXECUTION_ATTESTATION"), None);
     }
 
     #[test]
-    fn retained_c_diagnostics_enable_profile_and_completion_attestation() {
+    fn retained_c_diagnostics_enable_c_profile() {
         let mut launch = launch();
         launch.execution = crate::Execution::retained_c_diagnostics();
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), None);
         assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), Some("1"));
-        assert_eq!(spec.plan.options.get("HL_C_EXECUTION_ATTESTATION"), Some("1"));
     }
 
     #[test]

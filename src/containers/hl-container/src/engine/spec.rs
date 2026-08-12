@@ -22,16 +22,9 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::filesystem(&mut options, launch)?;
         Self::resources(&mut options, launch)?;
         Self::network(&mut options, launch)?;
-        Self::flag(&mut options, "HL_NATIVE_EXECUTION", launch.execution.is_native())?;
-        Self::flag(&mut options, "HL_NATIVE_DIAGNOSTICS", launch.execution.diagnostics())?;
         Self::flag(
             &mut options,
             "HL_C_DIAGNOSTICS",
-            launch.execution.retained_c_diagnostics_enabled(),
-        )?;
-        Self::flag(
-            &mut options,
-            "HL_C_EXECUTION_ATTESTATION",
             launch.execution.diagnostics() || launch.execution.retained_c_diagnostics_enabled(),
         )?;
         Self::flag(
@@ -285,7 +278,6 @@ impl Spec {
         let mounts = launch
             .mounts
             .iter()
-            .filter(|mount| mount.source.is_dir())
             .map(|mount| {
                 let access = match mount.access {
                     crate::Access::ReadOnly => "ro",
@@ -297,22 +289,6 @@ impl Spec {
             .join(",");
         if !mounts.is_empty() {
             Self::set(options, "HL_VOLUMES", mounts)?;
-        }
-        let files = launch
-            .mounts
-            .iter()
-            .filter(|mount| mount.source.is_file())
-            .map(|mount| {
-                let access = match mount.access {
-                    crate::Access::ReadOnly => "ro",
-                    crate::Access::ReadWrite => "rw",
-                };
-                format!("{access}:{}\t{}", mount.source.display(), mount.target.display())
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !files.is_empty() {
-            Self::set(options, "HL_NAME_BINDS", files)?;
         }
         Ok(())
     }
