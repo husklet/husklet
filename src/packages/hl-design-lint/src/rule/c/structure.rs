@@ -1,8 +1,8 @@
-use std::{fs, path::Path};
+use std::{collections::BTreeSet, fs, path::Path};
 
 use tree_sitter::{Node, Parser};
 
-use super::source_files;
+use super::{source_files, suppression};
 use crate::{Finding, LintError, Location, Result, Review, Severity, rule::Rule, source::Workspace};
 
 const FILE_LINES: usize = 1_500;
@@ -46,7 +46,16 @@ fn analyze(path: &Path, text: &str) -> Result<Vec<Finding>> {
         findings.push(metric(path, 1, 1, "file length", effective, FILE_LINES));
     }
     visit_functions(tree.root_node(), &clean, path, &mut findings);
-    Ok(findings)
+    let rules = BTreeSet::from(["c-file-length", "c-function-length", "c-maximum-nesting"]);
+    Ok(suppression::apply(
+        path,
+        text,
+        tree.root_node(),
+        &rules,
+        &rules,
+        false,
+        findings,
+    ))
 }
 
 fn visit_functions(node: Node<'_>, clean: &str, path: &Path, findings: &mut Vec<Finding>) {

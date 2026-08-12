@@ -8,6 +8,7 @@ use std::{
 use crate::{LintError, Result, source::Workspace};
 mod policy;
 mod structure;
+mod suppression;
 
 pub use policy::{CallPolicy, Policy};
 pub use structure::Structure;

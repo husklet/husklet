@@ -50,3 +50,27 @@ int sample(int value) {
     let findings = analyze(Path::new("portable.c"), source).unwrap();
     assert!(findings.iter().all(|finding| finding.rule != "c-maximum-nesting"));
 }
+
+#[test]
+fn reasoned_annotation_suppresses_exactly_one_structural_diagnostic() {
+    let mut source = String::from(
+        "// hl-lint: allow(c-function-length) -- generated dispatch table is algorithmic data\nint generated(void) {\n",
+    );
+    for _ in 0..=FUNCTION_LINES {
+        source.push_str("  value += 1;\n");
+    }
+    source.push_str("  return value;\n}\n");
+    let findings = analyze(Path::new("generated.c"), &source).unwrap();
+    assert!(findings.iter().all(|finding| finding.rule != "c-function-length"));
+}
+
+#[test]
+fn obsolete_structural_annotation_is_a_lint_error() {
+    let source = "// hl-lint: allow(c-function-length) -- no longer large\nint small(void) { return 0; }\n";
+    let findings = analyze(Path::new("small.c"), source).unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.rule == "c-lint-suppression" && finding.message.contains("unnecessary"))
+    );
+}
