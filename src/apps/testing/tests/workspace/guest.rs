@@ -1,4 +1,4 @@
-// Each test target includes this module and uses only the builders it needs.
+// The workspace integration test uses these guest builders.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};

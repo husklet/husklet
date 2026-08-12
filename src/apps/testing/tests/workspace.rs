@@ -1,3 +1,4 @@
+#[path = "workspace/guest.rs"]
 mod guest;
 
 use hl_engine::activation::GuestIsa;
