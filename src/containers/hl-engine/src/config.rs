@@ -228,8 +228,6 @@ impl From<PublishRule> for PortPublication {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::activation::ActivationStreams;
-    use crate::launch_plan::{ConfigOrigin, DiagnosticsMode, LaunchMaterial};
 
     fn word(bytes: &mut [u8], offset: usize, value: u32) {
         bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
@@ -267,22 +265,5 @@ mod tests {
         assert_eq!(LaunchConfig::parse(&bytes), Err(ConfigError::Corrupt));
         word(&mut bytes, 0, 0x484c_4346);
         assert_eq!(LaunchConfig::parse(&bytes), Err(ConfigError::AbiMismatch));
-    }
-
-    #[test]
-    fn launch_material_preserves() {
-        let mut bytes = minimal_wire();
-        bytes.splice(192..192, [0xaa, 0xbb, 0xcc, 0xdd]);
-        word(&mut bytes, 8, 196);
-        let material = LaunchMaterial::from_validated_wire(
-            &bytes,
-            ConfigOrigin::ActivationChannel,
-            ActivationStreams::default(),
-            None,
-            DiagnosticsMode::Disabled,
-        )
-        .unwrap();
-        assert_eq!(material.wire, bytes);
-        assert_eq!(material.process_domain, [1, 0]);
     }
 }

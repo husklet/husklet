@@ -138,13 +138,6 @@ impl Engine {
         let detail = unsafe { bindings::hl_c_backend_exit_detail(self.0.as_ptr()) };
         Exit { kind, status, detail }
     }
-
-    #[must_use]
-    pub fn translation_count(&self) -> u64 {
-        // SAFETY: `self` owns a live backend and this accessor performs an
-        // atomic/read-only observation of its translation counter.
-        unsafe { bindings::hl_c_backend_translation_count(self.0.as_ptr()) }
-    }
 }
 
 impl Plan {

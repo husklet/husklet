@@ -14,7 +14,7 @@ mod provider;
 mod artifact;
 
 pub use bindings::SyscallDispatch;
-pub use engine::{Engine, EngineConfig, Exit, STATUS_OK};
+pub use engine::{Engine, EngineConfig, Exit};
 pub use provider::{LIBRARY_NAME, Native};
 
 pub use platform::{HostArch, HostOs, HostTarget};

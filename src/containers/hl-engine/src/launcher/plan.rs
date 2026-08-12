@@ -1,7 +1,6 @@
 //! Projection from validated application configuration to runtime inputs.
 
-use crate::activation::ActivationStreams;
-use crate::config::{ConfigError, LaunchConfig, PortPublication};
+use crate::config::{LaunchConfig, PortPublication};
 use crate::options::{OptionError, Options};
 
 const NETWORK_HOST: u32 = 2;
@@ -13,28 +12,6 @@ const LOWERS_LIMIT: usize = 8192;
 pub enum DiagnosticsMode {
     Disabled,
     Enabled,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SandboxMode {
-    Disabled,
-    Confined,
-    Authority,
-}
-
-impl SandboxMode {
-    const fn from_raw(value: u32) -> Self {
-        match value {
-            0 => Self::Disabled,
-            SANDBOX_ENABLED => Self::Confined,
-            _ => Self::Authority,
-        }
-    }
-
-    #[must_use]
-    pub const fn requires_authority(self) -> bool {
-        !matches!(self, Self::Disabled)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -55,72 +32,6 @@ pub enum PlanError {
     OptionStore,
     PublishTooLarge,
     LowerLayersTooLarge,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ConfigOrigin {
-    ActivationChannel,
-    File(Vec<u8>),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct InheritedDescriptor(i32);
-
-impl InheritedDescriptor {
-    pub fn new(value: i32) -> Result<Self, MaterialError> {
-        (value >= 0).then_some(Self(value)).ok_or(MaterialError::Descriptor)
-    }
-
-    #[must_use]
-    pub const fn get(self) -> i32 {
-        self.0
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Material {
-    pub wire: Vec<u8>,
-    pub plan: RuntimePlan,
-    pub origin: ConfigOrigin,
-    pub streams: ActivationStreams,
-    pub activation_channel: Option<InheritedDescriptor>,
-    pub process_domain: [u64; 2],
-    pub sandbox: SandboxMode,
-    _validated: (),
-}
-
-/// Compatibility name retained while downstream callers migrate to [`Material`].
-pub type LaunchMaterial = Material;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MaterialError {
-    Config(ConfigError),
-    Plan(PlanError),
-    Descriptor,
-}
-
-impl Material {
-    pub fn from_validated_wire(
-        wire: &[u8],
-        origin: ConfigOrigin,
-        streams: ActivationStreams,
-        activation_channel: Option<i32>,
-        diagnostics: DiagnosticsMode,
-    ) -> Result<Self, MaterialError> {
-        let config = LaunchConfig::parse(wire).map_err(MaterialError::Config)?;
-        let plan = RuntimePlan::project(&config, diagnostics).map_err(MaterialError::Plan)?;
-        let activation_channel = activation_channel.map(InheritedDescriptor::new).transpose()?;
-        Ok(Self {
-            wire: wire.to_vec(),
-            plan,
-            origin,
-            streams,
-            activation_channel,
-            process_domain: config.process_domain,
-            sandbox: SandboxMode::from_raw(config.sandbox),
-            _validated: (),
-        })
-    }
 }
 
 /// Resolves a host path only when the platform adapter is constructed.

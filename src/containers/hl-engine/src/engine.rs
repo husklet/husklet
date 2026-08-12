@@ -1,7 +1,7 @@
 //! Per-engine lifecycle coordination over injected launch capabilities.
 
 use crate::activation::GuestIsa;
-use crate::launch_plan::{LaunchMaterial, RuntimeLaunchPlan};
+use crate::launch_plan::RuntimeLaunchPlan;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,9 +117,6 @@ pub struct ProcessId(pub u64);
 /// Creates and removes launch-private host staging without exposing paths.
 pub trait Workspace: Send + Sync {
     fn prepare(&self) -> Result<WorkspaceId, EngineError>;
-    fn prepare_material(&self, _: &LaunchMaterial) -> Result<WorkspaceId, EngineError> {
-        self.prepare()
-    }
     fn cleanup(&self, workspace: WorkspaceId) -> Result<(), EngineError>;
 }
 
@@ -127,14 +124,6 @@ pub trait Workspace: Send + Sync {
 pub trait Launcher: Send + Sync {
     fn launch(&self, isa: GuestIsa, plan: &RuntimeLaunchPlan, workspace: WorkspaceId)
     -> Result<ProcessId, EngineError>;
-    fn launch_material(
-        &self,
-        isa: GuestIsa,
-        material: &LaunchMaterial,
-        workspace: WorkspaceId,
-    ) -> Result<ProcessId, EngineError> {
-        self.launch(isa, &material.plan, workspace)
-    }
     fn wait(&self, process: ProcessId) -> Result<EngineExit, EngineError>;
     fn terminate(&self, process: ProcessId, request: StopRequest) -> Result<(), EngineError>;
 }
@@ -160,7 +149,6 @@ struct EngineContext<L, W> {
 pub struct Engine<L, W> {
     isa: GuestIsa,
     plan: RuntimeLaunchPlan,
-    material: Option<LaunchMaterial>,
     shared: Arc<EngineContext<L, W>>,
 }
 
@@ -169,7 +157,6 @@ impl<L, W> Clone for Engine<L, W> {
         Self {
             isa: self.isa,
             plan: self.plan.clone(),
-            material: self.material.clone(),
             shared: Arc::clone(&self.shared),
         }
     }
@@ -185,7 +172,6 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
         Self {
             isa,
             plan,
-            material: None,
             shared: Arc::new(EngineContext {
                 lifecycle: Mutex::new(Lifecycle {
                     phase: EnginePhase::Created,
@@ -202,14 +188,6 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
                 workspaces,
             }),
         }
-    }
-
-    #[must_use]
-    pub fn new_material(isa: GuestIsa, material: LaunchMaterial, launcher: L, workspaces: W) -> Self {
-        let plan = material.plan.clone();
-        let mut engine = Self::new(isa, plan, launcher, workspaces);
-        engine.material = Some(material);
-        engine
     }
 
     pub fn start(&self) -> Result<(), EngineError> {
@@ -240,10 +218,7 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             let _ = self.shared.workspaces.cleanup(workspace);
         }
 
-        let Ok(workspace) = self.material.as_ref().map_or_else(
-            || self.shared.workspaces.prepare(),
-            |material| self.shared.workspaces.prepare_material(material),
-        ) else {
+        let Ok(workspace) = self.shared.workspaces.prepare() else {
             self.fail_start(EngineError::WorkspaceFailed)?;
             return Err(EngineError::WorkspaceFailed);
         };
@@ -251,10 +226,7 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             let mut lifecycle = self.lock()?;
             lifecycle.workspace = Some(workspace);
         }
-        let process = match self.material.as_ref().map_or_else(
-            || self.shared.launcher.launch(self.isa, &self.plan, workspace),
-            |material| self.shared.launcher.launch_material(self.isa, material, workspace),
-        ) {
+        let process = match self.shared.launcher.launch(self.isa, &self.plan, workspace) {
             Ok(process) => process,
             Err(error) => {
                 self.lock()?.workspace = None;
