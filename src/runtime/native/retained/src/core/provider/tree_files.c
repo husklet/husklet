@@ -213,8 +213,8 @@ static hl_host_result tree_open_relative(void *context, hl_host_handle directory
     if (remote == 0) return failure(EBADF);
     if ((access & (HL_HOST_FILE_NOFOLLOW | HL_HOST_FILE_PATH_ONLY)) == HL_HOST_FILE_NOFOLLOW) {
         unsigned char target;
-        hl_host_result probe = open_tree(remote, path, path_size, HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY, 0, 0,
-                                         HL_PROVIDER_TREE_LINK);
+        hl_host_result probe =
+            open_tree(remote, path, path_size, HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY, 0, 0, HL_PROVIDER_TREE_LINK);
         hl_host_result inspected;
         if (probe.status != HL_STATUS_OK) return probe;
         inspected = tree_readlink(context, probe.value, (hl_host_bytes){.data = &target, .size = sizeof(target)});
