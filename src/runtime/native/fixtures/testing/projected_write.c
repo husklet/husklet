@@ -60,6 +60,7 @@ void _start(void) {
     if (call3(NR_READ, file, (long)bytes, 1) != 1 || bytes[0] != 'a') fail(3);
     if (call3(NR_READ, alias, (long)bytes, 1) != 1 || bytes[0] != 'b') fail(4);
     if (call4(NR_PWRITE, file, (long)"Z", 1, 0) != 1) fail(5);
+    if (call3(NR_READ, file, (long)bytes, 1) != 1 || bytes[0] != 'c') fail(10);
     call1(NR_CLOSE, alias);
     call1(NR_CLOSE, file);
 

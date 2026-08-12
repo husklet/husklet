@@ -151,13 +151,12 @@ fn confined_static_guest() {
     assert!(matches!(authority_exit, None | Some(ChildExit::Code(0))));
 }
 
-#[test]
-fn confined_projected_file() {
-    let root = std::env::temp_dir().join(format!("hl-root-{}", std::process::id()));
+fn confined_projected_file(isa: &str, engine: &str) {
+    let root = std::env::temp_dir().join(format!("hl-root-{isa}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir(&root).unwrap();
     let guest = root.join("guest");
-    guest::projection("projected_read.c", "x86_64", &guest);
+    guest::projection("projected_read.c", isa, &guest);
     std::fs::write(root.join("data"), b"original").unwrap();
     let authority = ProcessAuthority::projected_root(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
@@ -172,10 +171,10 @@ fn confined_projected_file() {
     let descriptor = channel.descriptor();
     let health = channel.health();
     let request = SpawnRequest {
-        program: CString::new(engine_binary("hl-x86_64")).unwrap(),
+        program: CString::new(engine).unwrap(),
         arguments: vec![
             CString::new("--guest-isa").unwrap(),
-            CString::new("x86_64").unwrap(),
+            CString::new(isa).unwrap(),
             CString::new("/guest").unwrap(),
         ],
         environment: vec![
@@ -194,6 +193,16 @@ fn confined_projected_file() {
     assert!(!authority_timeout, "projected authority timed out: {authority_exit:?}");
     assert_eq!(worker_exit, ChildExit::Code(0));
     assert!(matches!(authority_exit, None | Some(ChildExit::Code(0))));
+}
+
+#[test]
+fn projected_file_x86() {
+    confined_projected_file("x86_64", &engine_binary("hl-x86_64"));
+}
+
+#[test]
+fn projected_file_arm() {
+    confined_projected_file("aarch64", &engine_binary("hl-aarch64"));
 }
 
 fn projected_directory(isa: &str, engine: &str) {

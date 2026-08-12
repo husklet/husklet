@@ -48,7 +48,15 @@ int main(void) {
         && read(relative, value, 1) == 1 && value[0] == 'v'
         && read(absolute, value, 1) == 1 && value[0] == 'v';
     int links = link_count == 5 && !memcmp(link, "child", 5);
+    errno = 0;
+    int ambient_absolute = open("/etc/passwd", O_RDONLY);
+    int absolute_confined = ambient_absolute == -1 && errno == ENOENT;
+    if (ambient_absolute >= 0) close(ambient_absolute);
+    errno = 0;
+    int ambient_relative = openat(directory, "../../../../etc/passwd", O_RDONLY);
+    int relative_confined = ambient_relative == -1 && errno == ENOENT;
+    if (ambient_relative >= 0) close(ambient_relative);
     printf("projected-directory reads=%d links=%d loop=%d tiny=%d entries=%d count=%ld errno=%d\n",
         reads, links, loop_ok, tiny_ok, entries, (long)link_count, link_errno);
-    return !(reads && links && loop_ok && tiny_ok && entries);
+    return !(reads && links && loop_ok && tiny_ok && entries && absolute_confined && relative_confined);
 }
