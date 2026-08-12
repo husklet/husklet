@@ -76,7 +76,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [ ] Finish netns ancillary/service function decomposition (in progress).
 - [ ] Split `container/vfs.c` and its oversized/nested functions (in progress).
 - [ ] Split `syscall/binding.c` and `bound_route` (in progress).
-- [ ] Finish sentry service and worker-route decomposition (in progress).
+- [x] Split sentry service, lifecycle, marshalling, copy-back, and worker routing below all configured C structure limits.
 - [ ] Split remaining oversized syscall domains: memory, network, process, rare, signal, SysV, and time.
 - [ ] Split remaining oversized Linux ABI sources: context, ELF, fork, socket ABI header, number translation, and thread support.
 - [ ] Split ARM64 interpreter/translator units and oversized functions.
