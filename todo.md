@@ -120,7 +120,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Preserve strict C compiler warnings and Cargo-owned source discovery.
 - [x] Integrate clang-format verification, clang-tidy, and cppcheck without Make/CMake. Cargo owns C compilation and the embedded tree-sitter rules; Nix supplies Bear, clang-format, clang-tidy, and cppcheck, and the normal verification derivation runs them through `hl-design-lint` with Cargo's real compilation database and file-level diagnostics.
 - [ ] Make the complete `hl-design-lint` suite green.
-- [ ] Run `cargo check --workspace --all-targets` on the final merged tip.
+- [x] Run `cargo check --workspace --all-targets` successfully on the integrated C-backed workspace; rerun on the final delivery tip.
 - [x] Run `cargo test --workspace --lib --bins` successfully after restoring the C-backed engine/testing applications; rerun again on the final delivery tip.
 - [ ] Run `cargo test -p hl-native --all-targets` and all C executable/compatibility tests on the final merged tip.
 - [ ] Run feature-gated application Clippy checks and Nix flake checks on the final merged tip.
