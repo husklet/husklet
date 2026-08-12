@@ -232,7 +232,9 @@ HL_API hl_status hl_linux_abi_init(hl_linux_abi *linux_abi, const hl_host_servic
  * destroy's entry onward; after success the instance may only be initialized.
  */
 HL_API hl_status hl_linux_abi_destroy(hl_linux_abi *linux_abi);
-/* Caller must quiesce every concurrent operation on linux_abi until parent/child completion. */
+/* Caller must quiesce every concurrent operation on linux_abi until parent/child completion.
+ * A valid plan has count/armed/host_completed cleared before other validation; failure never leaves
+ * a prior plan armed for parent or child completion. Invalid ABI records remain untouched. */
 HL_API hl_status hl_linux_abi_fork_prepare(hl_linux_abi *linux_abi, hl_linux_fork_plan *plan);
 /* Marks that process.spawn_prepared already completed the inherited host fork bracket. */
 HL_API hl_status hl_linux_abi_fork_host_completed(hl_linux_fork_plan *plan);

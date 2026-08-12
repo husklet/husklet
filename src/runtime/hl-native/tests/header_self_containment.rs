@@ -652,6 +652,44 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove count output probe directory");
 }
 
+#[test]
+fn fork_prepare_failure_disarms_stale_plan() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-fork-output-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("fork output probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "linux_abi/fork_output.h"
+
+int main(void) {
+    hl_linux_fork_plan plan = {HL_LINUX_ABI_VERSION, sizeof(plan), 0, 0, 5, 1, 1};
+    if (!hl_linux_fork_plan_output_prepare(&plan)) return 1;
+    if (plan.count != 0 || plan.armed != 0 || plan.host_completed != 0) return 2;
+    plan = (hl_linux_fork_plan){0, sizeof(plan), 0, 0, 5, 1, 1};
+    if (hl_linux_fork_plan_output_prepare(&plan) != 0) return 3;
+    return plan.count == 5 && plan.armed == 1 && plan.host_completed == 1 ? 0 : 4;
+}
+"#,
+    )
+    .expect("fork output probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("fork output probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("fork output probe execution");
+    assert!(run.success(), "fork output probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove fork output probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {

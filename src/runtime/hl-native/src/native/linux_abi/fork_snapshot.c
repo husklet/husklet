@@ -1,10 +1,12 @@
+#include "fork_output.h"
+
 hl_status hl_linux_abi_fork_prepare(hl_linux_abi *linux_abi, hl_linux_fork_plan *plan) {
     const hl_host_file_services *files;
     const hl_host_sync_services *sync;
     uint32_t index;
     int topology_changed;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || plan == NULL ||
-        plan->abi != HL_LINUX_ABI_VERSION || plan->size < sizeof(*plan) ||
+    if (!hl_linux_fork_plan_output_prepare(plan)) return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION ||
         (plan->capacity != 0 && plan->records == NULL))
         return HL_STATUS_INVALID_ARGUMENT;
     files = hl_linux_files(linux_abi);
@@ -13,9 +15,6 @@ hl_status hl_linux_abi_fork_prepare(hl_linux_abi *linux_abi, hl_linux_fork_plan 
         sync->fork_prepare == NULL)
         return HL_STATUS_NOT_SUPPORTED;
 retry_snapshot:
-    plan->count = 0;
-    plan->armed = 0;
-    plan->host_completed = 0;
     topology_changed = 0;
     hl_linux_lock(linux_abi);
     if (linux_abi->reserved_fds != 0) {
@@ -145,4 +144,3 @@ arm_failed:
     if (topology_changed) goto retry_snapshot;
     return HL_STATUS_BUSY;
 }
-
