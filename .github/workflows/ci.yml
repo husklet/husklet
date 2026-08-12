@@ -41,7 +41,9 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Verify the pinned workspace
-        run: make test-ci
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes'
+          flake check -L --option cores 0 --max-jobs auto
 
       - name: Fetch locked application dependencies
         run: >-

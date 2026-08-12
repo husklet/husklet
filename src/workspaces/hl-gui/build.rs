@@ -1,7 +1,7 @@
 //! Bake the app version into the binary as `HL_VERSION`. Source of truth is the **git tag** (CI
 //! passes it via `$HL_VERSION`; locally we read `git describe --tags`), falling back to the crate
 //! version. The updater and Settings read `env!("HL_VERSION")` — never the Cargo.toml version
-//! directly — so a release tag drives both "what am I" and the `.dmg` name (via the Makefile).
+//! directly — so a release tag drives both "what am I" and the `.dmg` name used by the packaging scripts.
 
 use std::process::Command;
 

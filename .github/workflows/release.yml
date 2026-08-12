@@ -145,7 +145,17 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build, sign, notarize, and staple Husklet
-        run: make dmg VERSION="${{ steps.version.outputs.version }}"
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            bash -euo pipefail -c '
+              export CARGO_TARGET_DIR="$PWD/target-macos"
+              export HL_BUNDLE_TARGET="$PWD/target"
+              export HL_VERSION="$RELEASE_VERSION"
+              src/apps/husklet/package/bundle.sh "$RELEASE_VERSION"
+              src/apps/husklet/package/make-dmg.sh "$RELEASE_VERSION"
+            '
 
       - name: Verify the distributable
         id: artifact

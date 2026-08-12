@@ -3,7 +3,6 @@
 #
 # Must run inside the GTK dev shell so the GTK build/runtime data and tools are on PATH:
 #   nix develop . --command src/apps/husklet/package/bundle.sh
-# (the Makefile `app` target does this for you).
 #
 # Produces Husklet.app with:
 #   Contents/MacOS/husklet                    the workspace application

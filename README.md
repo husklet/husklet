@@ -75,24 +75,25 @@ terminal with reliable session restoration.
 ## Development
 
 The pinned Nix flake supplies the Rust, C, GTK, and fixture toolchain. Build the
-two production engine workers with `make engine`; the C engine source lives only
+two production engine workers with
+`nix develop . --command cargo build --release -p engine --bins --locked --offline`;
+the C engine source lives only
 under `src/runtime/native` and is linked into `hl-aarch64` and `hl-x86_64`.
 Rust remains the product host: it validates launch plans, supervises workers,
 and owns the container, filesystem, networking, image, daemon, and application
 services around the in-process C Linux ABI and translator. Neither build nor
 runtime reads `../engine` or `../engine_rust`.
 
-On Linux, verify a worker built by `make engine` with
+On Linux, verify a worker built by Cargo with
 `target/release/hl-aarch64 --backend-receipt` or
 `target/release/hl-x86_64 --backend-receipt`. A successful JSON receipt names the
 `retained-c` backend and hashes the worker that actually performed selection;
 it is not a compatibility or performance result.
 
-Run `make lint-c` for its source inventory, strict-warning builds,
-clang-format, clang-tidy, cppcheck, and repository policy checks. Use
-`make fmt-c-check` for format-only verification and `make gate` for the complete
-headless repository gate. `make gate-fixture` is optional and requires the
-documented Alpine fixture and a static-capable host C compiler.
+Run `nix flake check -L` for the complete pinned repository gate, including
+Rust and C compilation, formatting, static analysis, repository policy, and
+tests. Direct Cargo commands remain the primary build and test interface; Nix
+provides the pinned compilers, analyzers, system libraries, and release tooling.
 
 ELF inspection and the main-image placement plan are generic for `ET_EXEC` and
 `ET_DYN` (PIE and static PIE), and both workers consume that typed plan. When an
