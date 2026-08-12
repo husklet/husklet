@@ -471,17 +471,18 @@ static void readlink_filesystem(struct cpu *c, int dirfd, const char *path, cons
     if (hl_provider_tree_files_active()) {
         char projected[4200];
         guest_abspath_at(dirfd, path, projected, sizeof projected);
-        hl_host_result opened = hl_provider_tree_open_root(projected, strlen(projected),
-            HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0, HL_PROVIDER_TREE_LINK);
+        hl_host_result opened = hl_provider_tree_open_root(
+            projected, strlen(projected), HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0,
+            HL_PROVIDER_TREE_LINK);
         if (opened.status != HL_STATUS_OK) {
             G_RET(c) = (uint64_t)(int64_t)vfs_host_error((hl_status)opened.status);
             return;
         }
         hl_host_result linked = g_host_services->file->readlink(g_host_services->context, opened.value,
-                                                                 (hl_host_bytes){.data = buf, .size = size});
+                                                                (hl_host_bytes){.data = buf, .size = size});
         (void)g_host_services->file->close(g_host_services->context, opened.value);
-        G_RET(c) = linked.status == HL_STATUS_OK ? linked.value
-                                                 : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
+        G_RET(c) =
+            linked.status == HL_STATUS_OK ? linked.value : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
         return;
     }
     if (readlink_synth_regular(c, path, guest_path)) return;
@@ -503,388 +504,34 @@ static void svc_fs_directory_78(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                                 uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 78: {
-        const char *p = (const char *)a1;
-        size_t bs = (size_t)a3;
-        char local_result[4096];
-        char *buf = local_result;
-        // Linux validates the buffer size FIRST: bufsiz <= 0 is EINVAL even for a nonexistent path.
+        const char *path = (const char *)a1;
+        size_t size = (size_t)a3;
+        char result[4096];
         if ((int64_t)a3 <= 0) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
-        // The link target is written straight into the guest buffer by the branches below (memcpy / host
-        // readlink), so a bad/unmapped destination must EFAULT like Linux, not fault the engine. A symlink
-        // is at most PATH_MAX bytes, so validating the first min(bufsiz, PATH_MAX) bytes bounds every write.
-        {
-            size_t chk = bs > 4096 ? 4096 : bs;
-            if (guest_accessible_prefix(a2, chk, HL_LOGICAL_VMA_WRITE) != chk) {
-                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                break;
-            }
+        size_t checked = size > sizeof result ? sizeof result : size;
+        if (guest_accessible_prefix(a2, checked, HL_LOGICAL_VMA_WRITE) != checked) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            break;
         }
-        if (bs > sizeof local_result) bs = sizeof local_result;
-        do {
-            // AT_EMPTY_PATH form: readlinkat(dirfd, "", buf, sz) with an EMPTY pathname operates on the file the
-            // DIRFD itself names -- an O_PATH|O_NOFOLLOW fd opened directly on a symlink. macOS has no
-            // AT_EMPTY_PATH (and passing "" to host readlinkat yields ENOTDIR/ENOENT), so recover the fd's own
-            // host path via F_GETPATH and readlink THAT link. (-- LTP readlinkat01 dir_fd2/emptypath;
-            // AT_FDCWD is excluded: an empty path there is a genuine ENOENT, handled by the normal path below.)
-            if (p && !p[0] && (int)a0 >= 0) {
-                char fp[4200];
-                const char *named = NULL;
-                /* F_GETPATH may report an O_SYMLINK descriptor's resolved target
-                 * rather than the link node.  The open path is the authoritative
-                 * identity retained for O_PATH, and preserves the final symlink. */
-                if ((int)a0 < HL_NFD && g_opath[(int)a0] && g_fdpath[(int)a0][0])
-                    named = g_fdpath[(int)a0];
-                else if (hl_native_fd_path((int)a0, fp, sizeof fp) == 0)
-                    named = fp;
-                if (named) {
-                    ssize_t r = readlink(named, buf, bs);
-                    G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
-                } else {
-                    G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                }
-                break;
-            }
-            // Match every /proc magic link on the GUEST-ABSOLUTE path, so readlink("/proc/self/exe"),
-            // readlinkat(AT_FDCWD, "proc/self/exe") from "/", and readlinkat(pid_dirfd, "exe") agree
-            // byte-exactly. Paths that don't land in /proc (or /dev/fd) keep the raw pointer,
-            // so the real-resolution fallback below is byte-identical for ordinary symlinks.
-            char gpb[4200];
-            const char *gp = p;
-            if (p) {
-                guest_abspath_at((int)a0, p, gpb, sizeof gpb);
-                if (!strcmp(gpb, "/proc") || !strncmp(gpb, "/proc/", 6) || !strncmp(gpb, "/dev/fd/", 8) ||
-                    !strncmp(gpb, "/dev/std", 8))
-                    gp = gpb;
-            }
-            // /proc/self is a magic symlink to the caller's own pid; /proc/thread-self resolves to the calling
-            // thread's per-task dir "<pid>/task/<tid>" (glibc/tcmalloc/profilers readlink it to reach the current
-            // thread's files without a gettid syscall). On the main thread tid==pid. `ls -l /proc` readlinks
-            // "self" now that /proc lists it.
-            if (p && !strcmp(gp, "/proc/self")) {
-                char num[16];
-                int l = snprintf(num, sizeof num, "%d", container_pid());
-                if ((size_t)l > bs) l = (int)bs;
-                memcpy(buf, num, (size_t)l);
-                G_RET(c) = (uint64_t)l;
-                break;
-            }
-            if (p && !strcmp(gp, "/proc/thread-self")) {
-                char num[32];
-                int tid = c->tid ? c->tid : container_pid();
-                int l = snprintf(num, sizeof num, "%d/task/%d", container_pid(), tid);
-                if ((size_t)l > bs) l = (int)bs;
-                memcpy(buf, num, (size_t)l);
-                G_RET(c) = (uint64_t)l;
-                break;
-            }
-            // /proc/mounts is itself a symlink to self/mounts (glibc/util-linux realpath it before parsing).
-            if (p && !strcmp(gp, "/proc/mounts")) {
-                static const char *const mt = "self/mounts";
-                size_t l = strlen(mt);
-                if (l > bs) l = bs;
-                memcpy(buf, mt, l);
-                G_RET(c) = (uint64_t)l;
-                break;
-            }
-            // /proc/self/fd/N -> the path host fd N currently points at (recovered via F_GETPATH on macOS).
-            int pfn = procfd_num(gp);
-            if (pfn >= 0) {
-                if (eventfd_peer_is_engine_fd(pfn)) {
-                    G_RET(c) = (uint64_t)(-ENOENT);
-                    break;
-                }
-                // a guest-created pty. Its slave must readlink to /dev/pts/N (never the host /dev/ttysNNN)
-                // so ttyname(3)/`ls -l /proc/self/fd` resolve the Linux path; its master to the /dev/ptmx
-                // multiplexer. Checked ahead of F_GETPATH, which would otherwise leak the host device name.
-                {
-                    int pn = pts_index_of_fd(pfn);
-                    if (pn >= 0) {
-                        char nm[32];
-                        int l = pts_fd_is_master(pfn) ? snprintf(nm, sizeof nm, "/dev/ptmx")
-                                                      : snprintf(nm, sizeof nm, "/dev/pts/%d", pn);
-                        if ((size_t)l > bs) l = (int)bs;
-                        memcpy(buf, nm, (size_t)l);
-                        G_RET(c) = (uint64_t)l;
-                        break;
-                    }
-                }
-                // The controlling terminal (stdio pty from `docker run -t`) is named /dev/pts/0 in the
-                // container -- return that instead of leaking the host pty device (mac /dev/ttysNNN), so
-                // ttyname(3)/`tty`/`ps` resolve a device that actually exists in the guest.
-                if (fd_is_ctty(pfn)) {
-                    static const char *const cn = "/dev/pts/0";
-                    size_t l = strlen(cn);
-                    if (l > bs) l = bs;
-                    memcpy(buf, cn, l);
-                    G_RET(c) = l;
-                    break;
-                }
-                // Typed descriptors live in the Rust host-service table, not at the same native descriptor
-                // number in this isolated C worker. Ask that authority for the path before inspecting the
-                // worker's unrelated native fd table.
-                if (!bound_source_is_native()) {
-                    hl_linux_fd_snapshot typed;
-                    char target[4200];
-                    if (g_linux_box != NULL &&
-                        hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)pfn, &typed) == HL_STATUS_OK &&
-                        bound_handle_host_path(typed.host_handle, target, sizeof target) == 0) {
-                        int mapped = proc_fd_rebase(target, sizeof target);
-                        if (mapped < 0 || (g_rootfs && mapped == 0)) {
-                            G_RET(c) = (uint64_t)(int64_t)(mapped < 0 ? mapped : -EACCES);
-                        } else {
-                            size_t copied = strlen(target);
-                            if (copied > bs) copied = bs;
-                            memcpy(buf, target, copied);
-                            G_RET(c) = (uint64_t)copied;
-                        }
-                        break;
-                    }
-                }
-                /* A descriptor supplied through the engine API may deliberately
-                 * have no native descriptor at the same number (typed stdio is
-                 * the important case).  Resolve its published logical identity
-                 * before inspecting the engine process's unrelated native fd. */
-                {
-                    uint32_t kind;
-                    uint64_t device, object;
-                    if (proc_fdvis_lookup((int)getpid(), pfn, &kind, &device, &object)) {
-                        char target[4200];
-                        int length = proc_fd_link_pid((int)getpid(), pfn, target, sizeof target);
-                        if (length < 0) {
-                            G_RET(c) = (uint64_t)(-ENOENT);
-                        } else {
-                            size_t copied = (size_t)length > bs ? bs : (size_t)length;
-                            memcpy(buf, target, copied);
-                            G_RET(c) = (uint64_t)copied;
-                        }
-                        break;
-                    }
-                }
-                /* Linux exposes anonymous pipes through native /proc, while macOS has no native fd path for
-                   them.  Prefer the engine's OFD identity on both hosts so self and peer procfs views report
-                   the same object.  A named FIFO has no pipe identity and still follows its filesystem path. */
-                if (pfn >= 0 && pfn < HL_NFD && g_pipe_identity[pfn] != 0) {
-                    char syn[64];
-                    int sl = snprintf(syn, sizeof syn, "pipe:[%llu]", (unsigned long long)g_pipe_identity[pfn]);
-                    size_t l = (size_t)sl > bs ? bs : (size_t)sl;
-                    memcpy(buf, syn, l);
-                    G_RET(c) = (uint64_t)l;
-                    break;
-                }
-                char gp[4200];
-                if (hl_native_fd_path(pfn, gp, sizeof gp) != 0) {
-                    // A pathless fd (pipe/socket/eventfd/timerfd/anon inode): Linux still resolves
-                    // /proc/self/fd/N to a synthetic "pipe:[ino]" / "socket:[ino]" / "anon_inode:[...]" name --
-                    // never EBADF for an OPEN fd. Reproduce that so `ls -l /proc/self/fd`, lsof, and Go's
-                    // os.Readlink on a pipe fd work instead of erroring.
-                    if (fcntl(pfn, F_GETFD) < 0) {
-                        // Linux: the /proc/self/fd entry for a CLOSED fd simply doesn't exist -> ENOENT
-                        // (EBADF is only for a bad dirfd argument, never for the named link).
-                        G_RET(c) = (uint64_t)(-ENOENT);
-                        break;
-                    }
-                    struct stat ss;
-                    int have = fstat(pfn, &ss) == 0;
-                    char syn[64];
-                    int sl;
-                    if (have && S_ISFIFO(ss.st_mode))
-                        sl = snprintf(
-                            syn, sizeof syn, "pipe:[%llu]",
-                            (unsigned long long)(g_pipe_identity[pfn] ? g_pipe_identity[pfn] : (uint64_t)ss.st_ino));
-                    else if (have && S_ISSOCK(ss.st_mode))
-                        sl = snprintf(syn, sizeof syn, "socket:[%llu]", (unsigned long long)ss.st_ino);
-                    else if (pfn >= 0 && pfn < HL_NFD && g_eventfd_peer[pfn])
-                        sl = snprintf(syn, sizeof syn, "anon_inode:[eventfd]");
-                    else if (pfn >= 0 && pfn < HL_NFD && g_timerfd[pfn])
-                        sl = snprintf(syn, sizeof syn, "anon_inode:[timerfd]");
-                    else
-                        sl = snprintf(syn, sizeof syn, "anon_inode:inode");
-                    size_t l = (size_t)sl > bs ? bs : (size_t)sl;
-                    memcpy(buf, syn, l);
-                    G_RET(c) = (uint64_t)l;
-                    break;
-                }
-                // Map the host path back into the guest's view: strip the rootfs prefix if jailed AND rebase a
-                // bound volume (e.g. /tmp -> a host scratch dir) through the volume table, so the guest never
-                // sees the raw host path -- the old rootfs-only strip leaked the macOS /private/tmp path for a
-                // fd on a mapped volume. proc_fd_rebase is a no-op for a host path under no known mount.
-                int mapped = proc_fd_rebase(gp, sizeof gp);
-                if (mapped < 0 || (g_rootfs && mapped == 0)) {
-                    G_RET(c) = (uint64_t)(int64_t)(mapped < 0 ? mapped : -EACCES);
-                    break;
-                }
-                const char *gpath = gp;
-                if (!gpath[0]) gpath = "/";
-                size_t l = strlen(gpath);
-                if (l > bs) l = bs;
-                memcpy(buf, gpath, l);
-                G_RET(c) = l;
-                break;
-            }
-            // /proc/[self|pid]/root and /proc/[self|pid]/cwd are magic symlinks: root -> the container's "/",
-            // cwd -> the process's current working dir (Go/Rust path code and some init resolve these).
-            if (p) {
-                const char *leaf = proc_self_leaf(gp);
-                if (leaf && (!strcmp(leaf, "root") || !strcmp(leaf, "cwd"))) {
-                    char cwb[4200], cwg[sizeof cwb + sizeof g_vols[0].guest];
-                    const char *tgt = "/";
-                    // Bare mode (no rootfs): the live host cwd IS the guest cwd, except inside a mapped volume
-                    // -- readlink() must never hand the guest a host path (see guest_from_host_volume).
-                    if (!strcmp(leaf, "cwd")) {
-                        if (!g_rootfs && getcwd(cwb, sizeof cwb)) {
-                            int mapped = guest_from_host_volume(cwb, cwg, sizeof cwg);
-                            if (mapped < 0) {
-                                G_RET(c) = (uint64_t)(int64_t)mapped;
-                                break;
-                            }
-                            tgt = mapped > 0 ? cwg : cwb;
-                        } else {
-                            tgt = g_cwd[0] ? g_cwd : "/";
-                        }
-                    }
-                    size_t l = strlen(tgt);
-                    if (l > bs) l = bs;
-                    memcpy(buf, tgt, l);
-                    G_RET(c) = (uint64_t)l;
-                    break;
-                }
-                // /proc/[self|pid]/map_files/<start>-<end> -> the path of the file-backed VMA with exactly those
-                // bounds. Unintercepted this resolved against the HOST directory and named the engine's own
-                // binary and libraries by absolute host path. A name with no matching VMA is ENOENT, as in Linux.
-                if (leaf && !strncmp(leaf, "map_files/", 10) && leaf[10]) {
-                    char tgt[4200];
-                    if (!map_files_target(leaf + 10, tgt, sizeof tgt)) {
-                        G_RET(c) = (uint64_t)(-ENOENT);
-                        break;
-                    }
-                    size_t l = strlen(tgt);
-                    if (l > bs) l = bs;
-                    memcpy(buf, tgt, l);
-                    G_RET(c) = (uint64_t)l;
-                    break;
-                }
-                // /proc/[self|pid]/ns/<name> -> "<name>:[<inode>]" namespace links (nsenter/iproute2 read these;
-                // the inode constants are the kernel's initial-namespace values -- stable and plausible).
-                if (leaf && !strncmp(leaf, "ns/", 3) && leaf[3]) {
-                    char nsb[64];
-                    int nl = ns_link_target(leaf + 3, nsb, sizeof nsb);
-                    if (nl >= 0) {
-                        size_t l = (size_t)nl > bs ? bs : (size_t)nl;
-                        memcpy(buf, nsb, l);
-                        G_RET(c) = (uint64_t)l;
-                        break;
-                    }
-                }
-            }
-            // Peer /proc/<pid>/ns/<name>: a container is a single namespace set, so a LIVE peer process's
-            // namespace links readlink to the SAME "<name>:[<inode>]" values as self (lsns/nsenter inspect
-            // live children by peer pid). proc_self_leaf matches only our own pid, so cover foreign pids here.
-            if (p) {
-                int peer = -1, hp = 0;
-                const char *aleaf = proc_any_leaf(gp, &peer);
-                if (aleaf && !strncmp(aleaf, "ns/", 3) && aleaf[3] && proc_pid_member(peer, &hp)) {
-                    char nsb[64];
-                    int nl = ns_link_target(aleaf + 3, nsb, sizeof nsb);
-                    if (nl >= 0) {
-                        size_t l = (size_t)nl > bs ? bs : (size_t)nl;
-                        memcpy(buf, nsb, l);
-                        G_RET(c) = (uint64_t)l;
-                        break;
-                    }
-                }
-                if (aleaf && (!strcmp(aleaf, "root") || !strcmp(aleaf, "cwd")) && proc_pid_member(peer, &hp)) {
-                    // The process registry does not expose a peer's host cwd capability. Forked peers inherit
-                    // the container root/cwd, and returning the confined root is both useful and non-leaking.
-                    const char *target = "/";
-                    size_t copied = strlen(target);
-                    if (copied > bs) copied = bs;
-                    memcpy(buf, target, copied);
-                    G_RET(c) = (uint64_t)copied;
-                    break;
-                }
-                // Peer /proc/<pid>/fd/<N> -> the fd's target (symlink-target view), read from the peer's libproc
-                // fd table (its fds live in another hl worker process; procfd_num rejected the foreign pid above).
-                // A closed/absent peer fd -> ENOENT. Opening the link stays deferred (needs cross-process fd
-                // passing). proc_self_leaf matched only our own pid, so cover foreign pids here.
-                if (aleaf && !strncmp(aleaf, "fd/", 3) && aleaf[3] && proc_pid_member(peer, &hp)) {
-                    int isnum = 1;
-                    for (const char *t = aleaf + 3; *t; t++)
-                        if (*t < '0' || *t > '9') isnum = 0;
-                    if (isnum) {
-                        char tgt[4200];
-                        int tl = proc_fd_link_pid(hp, atoi(aleaf + 3), tgt, sizeof tgt);
-                        if (tl < 0) {
-                            G_RET(c) = (uint64_t)(-ENOENT);
-                            break;
-                        }
-                        size_t l = (size_t)tl > bs ? bs : (size_t)tl;
-                        memcpy(buf, tgt, l);
-                        G_RET(c) = (uint64_t)l;
-                        break;
-                    }
-                }
-            }
-            char ep[1024];
-            if (proc_self_exe(gp, ep, sizeof ep)) {
-                size_t l = strlen(ep);
-                if (l > bs) l = bs;
-                memcpy(buf, ep, l);
-                G_RET(c) = l;
-            } else if (hl_provider_tree_files_active()) {
-                char projected_path[4200];
-                guest_abspath_at((int)a0, p, projected_path, sizeof projected_path);
-                hl_host_result opened = hl_provider_tree_open_root(
-                    projected_path, strlen(projected_path),
-                    HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0, HL_PROVIDER_TREE_LINK);
-                if (opened.status != HL_STATUS_OK) {
-                    G_RET(c) = (uint64_t)(int64_t)vfs_host_error((hl_status)opened.status);
-                } else {
-                    hl_host_result linked = g_host_services->file->readlink(g_host_services->context, opened.value,
-                                                                            (hl_host_bytes){.data = buf, .size = bs});
-                    (void)g_host_services->file->close(g_host_services->context, opened.value);
-                    G_RET(c) = linked.status == HL_STATUS_OK
-                                   ? linked.value
-                                   : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
-                }
-            } else {
-                // A path that EXISTS in the synthesized /proc (or cgroup /sys) view but is not one of the
-                // magic links above is a regular file/dir there -> EINVAL, exactly like Linux. It must NOT
-                // fall through to ENOENT: glibc/musl realpath() readlink every component and treat ENOENT as
-                // "no such path" but EINVAL as "ordinary component" (completeness).
-                struct stat ss;
-                if (p && gp != p &&
-                    (!strcmp(gp, "/proc") || !strncmp(gp, "/proc/", 6) || !strncmp(gp, "/sys/fs/cgroup/", 15)) &&
-                    (!strcmp(gp, "/proc") || (synth_stat_raw(gp, &ss) && !S_ISLNK(ss.st_mode)))) {
-                    G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                    break;
-                }
-                char pb[4200];
-                // Resolve through atpath (overlay-aware, nofollow=read the link itself, dirfd-relative confined):
-                // a bare xlate() only consults the writable upper, so readlink of a lower-only path (e.g. a
-                // PATH-launched binary in a read-only image layer) hit a non-existent upper path and returned
-                // ENOENT instead of EINVAL -- breaking musl/glibc realpath(), which readlinks each path prefix
-                // and treats ENOENT as "no such path" (PostgreSQL find_my_exec: "could not resolve path ...").
-                const char *rp = atpath((int)a0, p, pb, sizeof pb, 1);
-                // a result atpath left RELATIVE (bare mode, no rootfs) must resolve against the CALLER's
-                // dirfd, not the engine cwd -- readlink(2) on it silently used the host cwd, so a dirfd-relative
-                // link came back ENOENT/garbage. An absolute result ignores the dirfd, as before.
-                int rel = rp && rp[0] != '/';
-                int rc, len;
-                if (!rel && hl_fdcache_readlink_lookup(rp, &rc, buf, bs, &len)) {
-                    G_RET(c) = rc < 0 ? (uint64_t)(int64_t)rc : (uint64_t)len;
-                    break;
-                }
-                ssize_t r = readlinkat(rel ? ATFD(a0) : AT_FDCWD, rp, buf, bs);
-                // Cache only absolute keys, and only UNTRUNCATED reads: r == bs may be a clipped read whose
-                // stored text would poison a later full-buffer readlink of the same path with the short length.
-                if (!rel && (r < 0 || (size_t)r < bs))
-                    hl_fdcache_readlink_store(rp, r < 0 ? -errno : (int)r, buf, r < 0 ? 0 : (int)r);
-                G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
-            }
-        } while (0);
+        if (size > sizeof result) size = sizeof result;
+        char absolute[4200];
+        const char *guest_path = path;
+        if (path) {
+            guest_abspath_at((int)a0, path, absolute, sizeof absolute);
+            if (!strcmp(absolute, "/proc") || !strncmp(absolute, "/proc/", 6) || !strncmp(absolute, "/dev/fd/", 8) ||
+                !strncmp(absolute, "/dev/std", 8))
+                guest_path = absolute;
+        }
+        if (!readlink_empty_path(c, (int)a0, path, result, size) &&
+            !readlink_proc_identity(c, guest_path, result, size) && !readlink_procfd(c, guest_path, result, size) &&
+            !readlink_self_leaf(c, guest_path, result, size) && !readlink_peer(c, guest_path, result, size))
+            readlink_filesystem(c, (int)a0, path, guest_path, result, size);
+        if ((int64_t)G_RET(c) > 0 && guest_copy_to(a2, result, (size_t)G_RET(c)) != (ssize_t)G_RET(c))
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+
         if ((int64_t)G_RET(c) > 0 && guest_copy_to(a2, local_result, (size_t)G_RET(c)) != (ssize_t)G_RET(c))
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
         break;
