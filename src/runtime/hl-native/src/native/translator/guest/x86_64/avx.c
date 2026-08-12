@@ -1320,6 +1320,28 @@ static enum avx_dispatch_result avx_dispatch_packed_low_multiply(const hl_x86_av
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_sign_mask(const hl_x86_avx_state *state, struct cpu *c,
+                                                           struct insn *instruction, uint64_t next, int map, int op,
+                                                           int prefix, int destination, int width) {
+    if (map != 1 || (op != 0x50 && op != 0xD7)) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t input[64];
+    int element_size;
+    if (op == 0x50) { // vmovmskps/pd is register-only
+        avx_get(c, instruction->rm_reg, input);
+        element_size = prefix == 1 ? 8 : 4;
+    } else { // vpmovmskb
+        avx_get_rm(state, c, instruction, next, width, input);
+        element_size = 1;
+    }
+    uint64_t mask = 0;
+    for (int element = 0; element < width / element_size; element++)
+        if (input[(element + 1) * element_size - 1] & 0x80) mask |= UINT64_C(1) << element;
+    c->r[destination] = mask;
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1773,6 +1795,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
         return;
     if (avx_dispatch_saturating_pack(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_packed_low_multiply(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map1_sign_mask(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -1830,15 +1853,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 }
             }
             avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x50: { // vmovmskps(pp0)/vmovmskpd(pp1): gpr <- sign bits of each element across W (reg src)
-            avx_get(c, I.rm_reg, a);
-            int nb = (pp == 1) ? 8 : 4;
-            uint32_t m = 0;
-            for (int i = 0; i < W / nb; i++)
-                if (a[i * nb + nb - 1] & 0x80) m |= (1u << i);
-            c->r[I.reg] = m; // zero-extends into the 64-bit GPR
             goto done;
         }
         case 0x14:   // vunpcklps(pp0)/vunpcklpd(pp1)
@@ -2249,14 +2263,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + i, &m, (size_t)es);
             }
             avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0xD7: { // vpmovmskb: gpr <- sign bits of each byte of rm (per 128-bit lane, packed)
-            avx_get_rm(state, c, &I, next, W, b);
-            uint64_t m = 0;
-            for (int i = 0; i < W; i++)
-                if (b[i] & 0x80) m |= (1ull << i);
-            c->r[rd] = m;
             goto done;
         }
         case 0x70: { // vpshufd(66)/vpshuflw(F2)/vpshufhw(F3) reg <- rm, imm8 (per 128-bit lane)
