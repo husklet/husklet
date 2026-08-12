@@ -37,6 +37,30 @@ cases:
     artifact: { destination: /opt/husklet/python/exec-python-json }
     run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w', encoding='utf-8').write(json.dumps({'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_json.out }
+  - id: runtime/python/cpython-json-import
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-json-import, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-json-import }
+    run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w').write('1\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_minimal.out }
+  - id: runtime/python/cpython-json-ascii
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-json-ascii, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-json-ascii }
+    run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w').write(json.dumps({'value': 7}, sort_keys=True) + '\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_json_ascii.out }
+  - id: runtime/python/cpython-unicode
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-unicode, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-unicode }
+    run: [-I, -u, -S, -c, "open('/tmp/husklet-cpython-proof', 'w', encoding='utf-8').write('\u03bb\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_unicode.out }
   - id: runtime/python/cpython-generator
     status: active
     compat: { class: compatibility }
