@@ -373,23 +373,9 @@ fn directory_shapes(
 }
 
 fn conventional_single_directory(path: &Path) -> bool {
-    let name = path.file_name().and_then(|name| name.to_str());
-    let artifact_boundary = path.components().any(|component| {
-        matches!(
-            component.as_os_str().to_str(),
-            Some("references" | "registry" | "golden")
-        )
-    });
-    matches!(
-        name,
-        Some("test" | "tests" | "benches" | "examples" | "migrations" | "bin" | ".cargo")
-    ) || artifact_boundary
-        || (name == Some("src") && path.join("../Cargo.toml").is_file())
-        || ((path.join("test.rs").is_file() || path.join("tests.rs").is_file())
-            && path
-                .parent()
-                .zip(name)
-                .is_some_and(|(parent, name)| parent.join(format!("{name}.rs")).is_file()))
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == ".cargo")
 }
 
 fn placeholder(path: &Path) -> bool {

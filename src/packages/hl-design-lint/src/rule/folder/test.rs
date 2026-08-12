@@ -30,6 +30,9 @@ fn reports_one_file() {
 
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].subject, "workspace");
+    assert_eq!(findings[0].severity, crate::Severity::Error);
+    assert_eq!(findings[0].location.path, module);
+    assert!(findings[0].message.contains("view.rs"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -48,10 +51,6 @@ fn keeps_cargo_roots() {
     fs::create_dir_all(&module).unwrap();
     fs::write(root.join("layout.rs"), "mod tests;").unwrap();
     fs::write(module.join("tests.rs"), "").unwrap();
-    let registry = root.join("registry");
-    fs::create_dir_all(&registry).unwrap();
-    fs::write(registry.join("commands.manifest"), "").unwrap();
-
     let workspace = Workspace::load([root.clone()]).unwrap();
 
     assert!(SingleFileDirectory.check(&workspace).unwrap().is_empty());
@@ -68,5 +67,37 @@ fn keeps_fixture_golden_boundary() {
     let workspace = Workspace::load([root.clone()]).unwrap();
 
     assert!(SingleFileDirectory.check(&workspace).unwrap().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reports_when_required_structure_is_mutated_into_arbitrary_structure() {
+    let root = fixture("non-vacuity");
+    let package = root.join("crate");
+    fs::create_dir_all(package.join("src")).unwrap();
+    fs::write(package.join("Cargo.toml"), "[package]\nname='crate'\nversion='0.0.0'\n").unwrap();
+    fs::write(package.join("src/lib.rs"), "").unwrap();
+    let workspace = Workspace::load([root.clone()]).unwrap();
+    assert!(SingleFileDirectory.check(&workspace).unwrap().is_empty());
+
+    fs::rename(package.join("src"), package.join("implementation")).unwrap();
+    let workspace = Workspace::load([root.clone()]).unwrap();
+    let findings = SingleFileDirectory.check(&workspace).unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].location.path, package.join("implementation"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn does_not_exempt_arbitrary_registry_or_reference_directories() {
+    let root = fixture("narrow");
+    for name in ["registry", "references", "migrations"] {
+        let directory = root.join(name);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("only.data"), "value").unwrap();
+    }
+    let workspace = Workspace::load([root.clone()]).unwrap();
+    let findings = SingleFileDirectory.check(&workspace).unwrap();
+    assert_eq!(findings.len(), 3);
     fs::remove_dir_all(root).unwrap();
 }

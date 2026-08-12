@@ -18,24 +18,31 @@ impl Rule for SingleFileDirectory {
     }
 
     fn severity(&self) -> Severity {
-        Severity::Warning
+        Severity::Error
     }
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         Ok(workspace
             .single_file_directories()
             .iter()
-            .filter(|(directory, _)| !is_fixture_boundary(directory))
+            .filter(|(directory, _)| !is_required_structure(directory))
             .map(|(directory, file)| finding(self.id(), directory, file))
             .collect())
     }
 }
 
-fn is_fixture_boundary(directory: &std::path::Path) -> bool {
-    matches!(
-        directory.file_name().and_then(|name| name.to_str()),
-        Some("expected" | "golden")
-    ) && directory.components().any(|part| part.as_os_str() == "tests")
+fn is_required_structure(directory: &std::path::Path) -> bool {
+    let name = directory.file_name().and_then(|name| name.to_str());
+    let cargo_package_source = name == Some("src") && directory.join("../Cargo.toml").is_file();
+    let cargo_target = matches!(name, Some("bin" | "benches" | "examples" | "tests"));
+    let rust_companion = (directory.join("test.rs").is_file() || directory.join("tests.rs").is_file())
+        && directory
+            .parent()
+            .zip(name)
+            .is_some_and(|(parent, name)| parent.join(format!("{name}.rs")).is_file());
+    let fixture_boundary = matches!(name, Some("expected" | "golden"))
+        && directory.components().any(|part| part.as_os_str() == "tests");
+    cargo_package_source || cargo_target || rust_companion || fixture_boundary
 }
 
 fn finding(rule: &'static str, directory: &std::path::Path, file: &std::path::Path) -> Finding {
@@ -44,7 +51,7 @@ fn finding(rule: &'static str, directory: &std::path::Path, file: &std::path::Pa
         .and_then(|name| name.to_str())
         .unwrap_or("directory")
         .to_owned();
-    let mut finding = Finding::warning(
+    let mut finding = Finding::error(
         rule,
         subject,
         Location {
