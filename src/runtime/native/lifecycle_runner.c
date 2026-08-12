@@ -2,14 +2,14 @@
 #include "hl/log.h"
 #if defined(HL_TEST_HOST_LINUX)
 #include "hl/linux.h"
-#include "../src/host/linux/probe.h"
+#include "src/host/linux/probe.h"
 typedef hl_host_linux lifecycle_host;
 #define lifecycle_host_create hl_host_linux_create
 #define lifecycle_host_destroy hl_host_linux_destroy
 #define lifecycle_active_mappings hl_host_linux_active_mappings
 #else
 #include "hl/macos.h"
-#include "../src/host/macos/probe.h"
+#include "src/host/macos/probe.h"
 typedef hl_host_macos lifecycle_host;
 #define lifecycle_host_create hl_host_macos_create
 #define lifecycle_host_destroy hl_host_macos_destroy

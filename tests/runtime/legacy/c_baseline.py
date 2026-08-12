@@ -107,7 +107,7 @@ def main() -> int:
     parser.add_argument("--aarch64-engine", type=Path, required=True)
     parser.add_argument("--x86-64-engine", type=Path, required=True)
     parser.add_argument("--timeout-ms", type=int, default=10_000)
-    parser.add_argument("--output", type=Path, default=ROOT / "report" / "c_results.tsv")
+    parser.add_argument("--output", type=Path, default=ROOT / "c_results.tsv")
     parser.add_argument("--resume", action="store_true")
     arguments = parser.parse_args()
     if arguments.timeout_ms < 100 or arguments.timeout_ms > 3_600_000:

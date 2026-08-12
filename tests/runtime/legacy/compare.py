@@ -17,7 +17,7 @@ def read(path: Path) -> list[dict[str, str]]:
 
 
 def main() -> int:
-    c_rows = read(REPORT / "c_results.tsv")
+    c_rows = read(ROOT / "c_results.tsv")
     rust = {(row["suite"], row["case"], row["isa"]): row for row in read(REPORT / "results.tsv")}
     rows = []
     for c_row in c_rows:

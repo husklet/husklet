@@ -160,7 +160,7 @@ static inline void interp_access_end(void) {
 
 int interp_signal_capture(struct cpu *cpu, void *native_context);
 void interp_signal_resume(struct cpu *cpu, void *native_context);
-static int translit_signal_capture(struct cpu *cpu, void *native_context); // translit/translit.c
+static int translit_signal_capture(struct cpu *cpu, void *native_context); // translit.c
 
 // 1 only for a fault the GUEST caused: inside a marked interpreter access, or -- when the transliterator
 // is on -- at a host PC inside the code cache, where every access is a guest access by construction and
@@ -699,7 +699,7 @@ static uint64_t interp_locked_rmw(uint64_t guest_address, int width, enum interp
 // host_entry_off is the whole of the transliterator's intrusion on this backend: 0 means "interpret this
 // block", anything else is the offset to same-ISA host code emitted straight after the header. Both kinds
 // live in one cache and the dispatcher cannot tell them apart, which is what makes the second backend
-// strictly additive (translit/translit.c).
+// strictly additive (translit.c).
 struct interp_block {
     uint64_t magic;
     uint64_t gpc;
@@ -709,7 +709,7 @@ struct interp_block {
     uint32_t host_len;
 };
 
-#include "translit/translit.c"
+#include "translit.c"
 
 // Must return a distinct non-NULL pointer per guest PC: non-NULL from map_host() suppresses re-translation.
 static void *translate_block(uint64_t gpc) {

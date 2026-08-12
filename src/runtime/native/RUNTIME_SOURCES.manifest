@@ -281,7 +281,7 @@ src/translator/guest/x86_64/rotate.c
 src/translator/guest/x86_64/rotate.h
 src/translator/guest/x86_64/signal.c
 src/translator/guest/x86_64/translate.c
-src/translator/guest/x86_64/translit/translit.c
+src/translator/guest/x86_64/translit.c
 src/translator/guest/x86_64/x87math.c
 src/translator/guest/x86_64/x87math.h
 src/translator/guest/x86_64/x87state.c
@@ -292,7 +292,7 @@ src/translator/guest_memory.c
 src/translator/guest_memory.h
 src/translator/host/aarch64/asm.c
 src/translator/host/aarch64/asm.h
-src/translator/host/x86_64/asm.h
+src/translator/host/x86_asm.h
 src/translator/identity.c
 src/translator/identity.h
 src/translator/persist.c
@@ -302,4 +302,4 @@ src/translator/reloc.h
 src/translator/window.c
 src/translator/window.h
 tests/aarch64_interpreter_link_smoke.c
-tools/lifecycle_runner.c
+lifecycle_runner.c

@@ -35,7 +35,7 @@ fn imported_x86_closure_is_pinned_and_inventoried() {
         "src/linux_abi/x86.c",
         "src/translator/guest/x86_64/decode.c",
         "src/translator/guest/x86_64/interp_dispatch.h",
-        "src/translator/host/x86_64/asm.h",
+        "src/translator/host/x86_asm.h",
     ] {
         assert!(sources.contains(path), "source inventory omitted {path}");
     }

@@ -65,12 +65,12 @@ source_revision	source	destination	tranche	disposition	conflict
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rotate.h	src/translator/guest/x86_64/rotate.h	x86_closure	import	Rotate lowering
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/signal.c	src/translator/guest/x86_64/signal.c	x86_closure	import_adapt	Rust owns signal delivery
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/translate.c	src/translator/guest/x86_64/translate.c	x86_closure	import_adapt	Retained cache and projection contracts
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/translit/translit.c	src/translator/guest/x86_64/translit/translit.c	x86_closure	import_adapt	Off by default; no product selection without evidence
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/translit.c	src/translator/guest/x86_64/translit.c	x86_closure	import_adapt	Off by default; no product selection without evidence
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87math.c	src/translator/guest/x86_64/x87math.c	x86_closure	import	X87 semantics
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87math.h	src/translator/guest/x86_64/x87math.h	x86_closure	import	X87 semantics
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87state.c	src/translator/guest/x86_64/x87state.c	x86_closure	import	X87 state
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87state.h	src/translator/guest/x86_64/x87state.h	x86_closure	import	X87 state
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/host/x86_64/asm.h	src/translator/host/x86_64/asm.h	x86_closure	import	Host assembler
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/host/x86_asm.h	src/translator/host/x86_asm.h	x86_closure	import	Host assembler
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/window.c	src/translator/window.c	x86_closure	import_adapt	Prefer active cache-local checked window helper where possible
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/window.h	src/translator/window.h	x86_closure	import_adapt	Prefer active cache-local checked window helper where possible
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/cache.c	src/translator/cache.c	conflict_audit	retain_active	Active cache identity and bounds differ

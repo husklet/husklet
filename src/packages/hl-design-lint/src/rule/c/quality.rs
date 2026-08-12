@@ -34,7 +34,7 @@ const STDIO_ALLOW: &[&str] = &[
     "src/translator/guest/x86_64/dispatch.h",
     "src/translator/guest/x86_64/signal.c",
     "src/translator/guest/x86_64/translate.c",
-    "tools/lifecycle_runner.c",
+    "lifecycle_runner.c",
 ];
 
 /// Repository-owned C source inventory, deterministic policies, and external analyzers.

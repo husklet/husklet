@@ -93,7 +93,7 @@ normal_archive	hl-host-linux	src/host/private.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_
 normal_archive	hl-host-linux	src/host/range.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-host-linux	src/host/resolve.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-host-linux	src/host/sync.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
-lifecycle_runner_direct	life_runner_aarch64	tools/lifecycle_runner.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0;_GNU_SOURCE;HL_TEST_HOST_LINUX=1;HL_TEST_GUEST_ISA=HL_GUEST_ISA_AARCH64	include
+lifecycle_runner_direct	life_runner_aarch64	lifecycle_runner.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0;_GNU_SOURCE;HL_TEST_HOST_LINUX=1;HL_TEST_GUEST_ISA=HL_GUEST_ISA_AARCH64	include
 target_aarch64_direct	life_target_aarch64	src/core/target/aarch64.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0;_GNU_SOURCE;HL_EMBEDDED_BUILD=1;HL_ENGINE_NO_MAIN=1;HL_ENGINE_NO_STANDALONE=1;HL_TARGET_NAMESPACE=aarch64	include
 target_x86_64_direct	life_target_x86_64	src/core/target/x86_64.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0;_GNU_SOURCE;HL_EMBEDDED_BUILD=1;HL_ENGINE_NO_MAIN=1;HL_ENGINE_NO_STANDALONE=1;HL_TARGET_NAMESPACE=x86_64	include
 unity_include	life_target_aarch64	src/translator/guest/aarch64/interp.c	HL_A64_INTERPRETER_SMOKE=1	include

@@ -26,7 +26,7 @@
 // transliterator does not attempt it: g_nonpie_lo != 0 declines the image outright and every block runs on
 // the interpreter, which already implements both directions. This is a refusal, not an implementation.
 
-#include "../../../host/x86_64/asm.h"
+#include "../../host/x86_asm.h"
 
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
 #include <sys/syscall.h>
