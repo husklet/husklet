@@ -26,6 +26,8 @@ impl Native {
         // string. A null result would violate that ABI and is diagnosed here.
         let value = unsafe { super::bindings::hl_engine_version() };
         assert!(!value.is_null(), "native engine returned a null version");
+        // SAFETY: the null check above establishes pointer validity and the C
+        // ABI guarantees the referenced NUL-terminated bytes live forever.
         unsafe { CStr::from_ptr(value) }
     }
 }

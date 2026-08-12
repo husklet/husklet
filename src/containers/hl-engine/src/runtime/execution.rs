@@ -36,13 +36,7 @@ impl ProductionMachine {
             if index != 0 {
                 encoded.push(b'\n');
             }
-            for byte in record {
-                match byte {
-                    b'\\' => encoded.extend_from_slice(b"\\\\"),
-                    b'\n' => encoded.extend_from_slice(b"\\n"),
-                    byte => encoded.push(*byte),
-                }
-            }
+            encode_environment_record(&mut encoded, record);
         }
         encoded
     }
@@ -69,12 +63,21 @@ impl ProductionMachine {
             .map(|(name, value)| Ok((CString::new(name)?, CString::new(value)?)))
             .collect::<Result<Vec<_>, std::ffi::NulError>>()
             .map_err(|_| EngineError::LaunchFailed)?;
-        options.push((CString::new("HL_GUEST_ENV").expect("literal"), CString::new(self.encode_environment()).map_err(|_| EngineError::LaunchFailed)?));
-        options.push((CString::new("HL_GUEST_ENV_ESC").expect("literal"), CString::new("1").expect("literal")));
-        options.push((CString::new("HL_GUEST_ENV_EXACT").expect("literal"), CString::new("1").expect("literal")));
+        options.push((
+            CString::new("HL_GUEST_ENV").expect("literal"),
+            CString::new(self.encode_environment()).map_err(|_| EngineError::LaunchFailed)?,
+        ));
+        options.push((
+            CString::new("HL_GUEST_ENV_ESC").expect("literal"),
+            CString::new("1").expect("literal"),
+        ));
+        options.push((
+            CString::new("HL_GUEST_ENV_EXACT").expect("literal"),
+            CString::new("1").expect("literal"),
+        ));
         let names = options.iter().map(|(name, _)| name.as_ptr()).collect::<Vec<_>>();
         let values = options.iter().map(|(_, value)| value.as_ptr()).collect::<Vec<_>>();
-        let config = hl_native::Create {
+        let config = hl_native::EngineConfig {
             isa: match self.isa {
                 crate::activation::GuestIsa::Aarch64 => 1,
                 crate::activation::GuestIsa::X86_64 => 2,
@@ -117,6 +120,16 @@ impl ProductionMachine {
     }
 }
 
+fn encode_environment_record(encoded: &mut Vec<u8>, record: &[u8]) {
+    for byte in record {
+        match byte {
+            b'\\' => encoded.extend_from_slice(b"\\\\"),
+            b'\n' => encoded.extend_from_slice(b"\\n"),
+            byte => encoded.push(*byte),
+        }
+    }
+}
+
 impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
         let engine = Arc::new(self.create()?);
@@ -142,6 +155,8 @@ impl GuestMachine for ProductionMachine {
             StopRequest::Force => (REQUEST_FORCE_STOP, request.signal()),
             StopRequest::Signal(signal) => (REQUEST_SIGNAL, signal),
         };
-        self.current()?.request(kind, signal).map_err(|_| EngineError::StopFailed)
+        self.current()?
+            .request(kind, signal)
+            .map_err(|_| EngineError::StopFailed)
     }
 }
