@@ -87,7 +87,7 @@ impl Launcher for Arc<FakeLauncher> {
 #[test]
 fn launch_error_preserved() {
     let (engine, launcher, _) = Fixture::engine(GuestIsa::X86_64);
-    let error = EngineError::Load(hl_loader::LoadError::InvalidInterpreter);
+    let error = EngineError::Construction(crate::composition::ConstructionError::Start);
     {
         let mut state = launcher.state.lock().unwrap();
         state.launch_released = true;
