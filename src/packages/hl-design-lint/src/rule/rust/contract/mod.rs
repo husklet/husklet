@@ -400,19 +400,25 @@ fn separation_evidence(clusters: &BTreeMap<&'static str, Vec<&Method>>) -> usize
         })
         .collect::<Vec<_>>();
     let mut separated = BTreeSet::new();
-    for left in 0..profiles.len() {
-        for right in left + 1..profiles.len() {
-            let type_difference = profiles[left].0 != profiles[right].0;
-            let noun_difference = !profiles[left].1.is_empty()
-                && !profiles[right].1.is_empty()
-                && profiles[left].1.is_disjoint(&profiles[right].1);
-            if type_difference || noun_difference {
-                separated.insert(left);
-                separated.insert(right);
-            }
-        }
+    for (left, right) in
+        profile_pairs(&profiles).filter(|(left, right)| distinct_profile(&profiles[*left], &profiles[*right]))
+    {
+        separated.insert(left);
+        separated.insert(right);
     }
     separated.len()
+}
+
+type Profile = (BTreeSet<String>, BTreeSet<String>);
+
+fn profile_pairs(profiles: &[Profile]) -> impl Iterator<Item = (usize, usize)> + '_ {
+    (0..profiles.len()).flat_map(move |left| (left + 1..profiles.len()).map(move |right| (left, right)))
+}
+
+fn distinct_profile(left: &Profile, right: &Profile) -> bool {
+    let type_difference = left.0 != right.0;
+    let noun_difference = !left.1.is_empty() && !right.1.is_empty() && left.1.is_disjoint(&right.1);
+    type_difference || noun_difference
 }
 
 fn signature_profile(methods: &[&Method]) -> BTreeSet<String> {
