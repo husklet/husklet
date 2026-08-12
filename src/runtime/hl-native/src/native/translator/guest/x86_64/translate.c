@@ -4047,6 +4047,127 @@ static int lower_multibyte_hint(const struct insn *instruction) {
     return TX_FALL;
 }
 
+static int lower_double_shift(struct insn *instruction, uint64_t next) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0xA4 && opcode != 0xA5 && opcode != 0xAC && opcode != 0xAD) return TX_FALL;
+    int isleft = (opcode == 0xA4 || opcode == 0xA5), bycl = (opcode == 0xA5 || opcode == 0xAD);
+    int w = instruction->opsize, mem;
+    if (w == 2) {
+        // 16-bit SHLD/SHRD: EXTR can't do 16-bit lanes, so build a 32-bit concatenation and
+        // shift it. SHLD: t = (dst<<16)|src; t<<=n; result = t>>16. SHRD: t = (src<<16)|dst;
+        // t>>=n; result = t&0xffff. Exact for n in [0,16] (x86 leaves n>15 undefined for 16-bit).
+        int dst = rm_load(instruction, next, 2, &mem), src = instruction->reg;
+        e_uxt(19, dst, 2); // x19 = dst & 0xffff
+        e_uxt(20, src, 2); // x20 = src & 0xffff
+        if (!bycl) {
+            int n = (int)(instruction->imm & 31);
+            if (n == 0) {
+                if (mem) e_store(2, dst, 17);
+                return TX_NEXT;
+            } // count 0 -> no change, flags intact
+            if (isleft) {
+                e_lsl_i(19, 19, 16, 0);         // dst<<16
+                e_rrr(A_ORR, 19, 19, 20, 0, 0); // (dst<<16)|src
+                e_lsl_i(19, 19, n, 0);          // <<= n
+                e_lsr_i(16, 19, 16, 0);         // result = >>16
+            } else {
+                e_lsl_i(20, 20, 16, 0);         // src<<16
+                e_rrr(A_ORR, 19, 20, 19, 0, 0); // (src<<16)|dst
+                e_lsr_i(16, 19, n, 0);          // >>= n (low 16 = result)
+            }
+        } else {
+            e_movconst(23, 31);
+            e_rrr(A_AND, 17, RCX, 23, 0, 0); // n = cl & 31
+            if (isleft) {
+                e_lsl_i(19, 19, 16, 0);
+                e_rrr(A_ORR, 19, 19, 20, 0, 0); // (dst<<16)|src
+                e_shv(S_LSLV, 19, 19, 17, 0);   // <<= n
+                e_lsr_i(16, 19, 16, 0);
+            } else {
+                e_lsl_i(20, 20, 16, 0);
+                e_rrr(A_ORR, 19, 20, 19, 0, 0); // (src<<16)|dst
+                e_shv(S_LSRV, 16, 19, 17, 0);   // >>= n
+            }
+            // n==0: dst unchanged. The concat-shift already yields dst for n==0, so no csel needed.
+        }
+        e_lsl_i(21, 16, 16, 0); // 16-bit SF/ZF via high-bit test
+        e_tst(21, 0);
+        e_nzcv_save();
+        rm_store(instruction, 2, 16);
+        return TX_NEXT;
+    }
+    int ssf = (w == 8) ? 1 : 0, width = ssf ? 64 : 32;
+    int dst = rm_load(instruction, next, w, &mem), src = instruction->reg;
+    if (!bycl) {
+        int n = (int)(instruction->imm & (ssf ? 63 : 31));
+        if (n == 0) {
+            if (mem) e_store(w, dst, 17);
+            return TX_NEXT;
+        } // count 0 -> no change, flags intact
+        if (isleft)
+            e_extr(16, dst, src, width - n, ssf); // (dst<<n)|(src>>(W-n))
+        else
+            e_extr(16, src, dst, n, ssf); // (dst>>n)|(src<<(W-n))
+        // M: x86 flags. SF/ZF/PF from the result; CF = the LAST bit shifted out of the ORIGINAL
+        // dst -- SHLD: bit (W-n); SHRD: bit (n-1). n is a nonzero constant here. OF is defined
+        // only for n==1 (sign change); left undefined for the general case as x86 permits.
+        e_lsr_i(21, dst, isleft ? (width - n) : (n - 1), ssf);
+        e_movconst(19, 1);
+        e_rrr(A_AND, 21, 21, 19, 0, 0); // x21 = x86 CF (0/1)
+        e_tst(16, ssf);                 // N/Z from result
+        e_pf_save(16);                  // PF source = result low byte
+        e_nzcv_save_setcf(21);          // stored C = NOT CF, keep N/Z
+        rm_store(instruction, w, 16);
+        return TX_NEXT;
+    }
+    // ---- SHLD/SHRD by CL ----
+    e_mov_rr(22, dst, ssf); // preserve orig dst for the n==0 select + CF
+    e_movconst(19, ssf ? 63 : 31);
+    e_rrr(A_AND, 17, RCX, 19, ssf, 0); // n = cl & (W-1)
+    e_movconst(20, width);
+    e_rrr(A_SUB, 20, 20, 17, ssf, 0); // 20 = W - n
+    if (isleft) {
+        e_shv(S_LSLV, 19, dst, 17, ssf);
+        e_shv(S_LSRV, 20, src, 20, ssf);
+    } else {
+        e_shv(S_LSRV, 19, dst, 17, ssf);
+        e_shv(S_LSLV, 20, src, 20, ssf);
+    }
+    e_rrr(A_ORR, 16, 19, 20, ssf, 0); // combined = t1 | t2
+    e_tst(17, ssf);
+    e_csel(16, 22, 16, 0 /*EQ: n==0*/, ssf); // n==0 -> dst unchanged
+    // M: x86 flags. If the masked count n==0 ALL flags are unchanged; else SF/ZF/PF from the
+    // result and CF = the last bit shifted out of the ORIGINAL dst (x22): SHLD bit (W-n), SHRD
+    // bit (n-1). OF (n==1 only) left undefined. Mirrors the SHL/SHR/SAR count==0-preserve path.
+    e_ldr(24, 28, OFF_NZCV);  // old stored flags (kept when n==0)
+    e_tst(16, ssf);           // live N/Z from result
+    emit32(0xD53B4200u | 20); // mrs x20, nzcv (N/Z valid; C/V stale)
+    if (isleft) {
+        e_movconst(19, width);
+        e_rrr(A_SUB, 19, 19, 17, ssf, 0); // x19 = W - n
+    } else {
+        e_subi(19, 17, 1, ssf); // x19 = n - 1
+    }
+    e_shv(S_LSRV, 21, 22, 19, ssf);
+    e_movconst(19, 1);
+    e_rrr(A_AND, 21, 21, 19, 0, 0); // x21 = x86 CF (0/1)
+    e_rrr(A_EOR, 21, 21, 19, 0, 0); // x21 = NOT CF (stored borrow convention)
+    e_movconst(19, 1u << 29);
+    e_rrr(A_BIC, 20, 20, 19, 1, 0);  // clear stored C (bit 29)
+    e_rrr(A_ORR, 20, 20, 21, 1, 29); // stored C = (NOT CF) << 29
+    e_tst(17, ssf);                  // Z = (n == 0)
+    e_csel(20, 24, 20, 0 /*EQ*/, 1); // n==0 -> keep old flags
+    e_str(20, 28, OFF_NZCV);
+    if (!g_pfaf_dead) { // PF: n==0 keeps old, else result low byte (live Z still = n==0 here)
+        e_ldr(25, 28, OFF_PF);
+        e_csel(23, 25, 16, 0 /*EQ*/, 1);
+        e_pf_save(23);
+    }
+    emit32(0xD51B4200u | 20); // sync live ARM NZCV to the stored value
+    rm_store(instruction, w, 16);
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6092,127 +6213,8 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // shld/shrd (0F A4 imm8, 0F A5 cl, 0F AC imm8, 0F AD cl):  dst=r/m, src=reg, count
-            if (op == 0xA4 || op == 0xA5 || op == 0xAC || op == 0xAD) {
-                int isleft = (op == 0xA4 || op == 0xA5), bycl = (op == 0xA5 || op == 0xAD);
-                int w = I.opsize, mem;
-                if (w == 2) {
-                    // 16-bit SHLD/SHRD: EXTR can't do 16-bit lanes, so build a 32-bit concatenation and
-                    // shift it. SHLD: t = (dst<<16)|src; t<<=n; result = t>>16. SHRD: t = (src<<16)|dst;
-                    // t>>=n; result = t&0xffff. Exact for n in [0,16] (x86 leaves n>15 undefined for 16-bit).
-                    int dst = rm_load(&I, next, 2, &mem), src = I.reg;
-                    e_uxt(19, dst, 2); // x19 = dst & 0xffff
-                    e_uxt(20, src, 2); // x20 = src & 0xffff
-                    if (!bycl) {
-                        int n = (int)(I.imm & 31);
-                        if (n == 0) {
-                            if (mem) e_store(2, dst, 17);
-                            gpc = next;
-                            continue;
-                        } // count 0 -> no change, flags intact
-                        if (isleft) {
-                            e_lsl_i(19, 19, 16, 0);         // dst<<16
-                            e_rrr(A_ORR, 19, 19, 20, 0, 0); // (dst<<16)|src
-                            e_lsl_i(19, 19, n, 0);          // <<= n
-                            e_lsr_i(16, 19, 16, 0);         // result = >>16
-                        } else {
-                            e_lsl_i(20, 20, 16, 0);         // src<<16
-                            e_rrr(A_ORR, 19, 20, 19, 0, 0); // (src<<16)|dst
-                            e_lsr_i(16, 19, n, 0);          // >>= n (low 16 = result)
-                        }
-                    } else {
-                        e_movconst(23, 31);
-                        e_rrr(A_AND, 17, RCX, 23, 0, 0); // n = cl & 31
-                        if (isleft) {
-                            e_lsl_i(19, 19, 16, 0);
-                            e_rrr(A_ORR, 19, 19, 20, 0, 0); // (dst<<16)|src
-                            e_shv(S_LSLV, 19, 19, 17, 0);   // <<= n
-                            e_lsr_i(16, 19, 16, 0);
-                        } else {
-                            e_lsl_i(20, 20, 16, 0);
-                            e_rrr(A_ORR, 19, 20, 19, 0, 0); // (src<<16)|dst
-                            e_shv(S_LSRV, 16, 19, 17, 0);   // >>= n
-                        }
-                        // n==0: dst unchanged. The concat-shift already yields dst for n==0, so no csel needed.
-                    }
-                    e_lsl_i(21, 16, 16, 0); // 16-bit SF/ZF via high-bit test
-                    e_tst(21, 0);
-                    e_nzcv_save();
-                    rm_store(&I, 2, 16);
-                    gpc = next;
-                    continue;
-                }
-                int ssf = (w == 8) ? 1 : 0, width = ssf ? 64 : 32;
-                int dst = rm_load(&I, next, w, &mem), src = I.reg;
-                if (!bycl) {
-                    int n = (int)(I.imm & (ssf ? 63 : 31));
-                    if (n == 0) {
-                        if (mem) e_store(w, dst, 17);
-                        gpc = next;
-                        continue;
-                    } // count 0 -> no change, flags intact
-                    if (isleft)
-                        e_extr(16, dst, src, width - n, ssf); // (dst<<n)|(src>>(W-n))
-                    else
-                        e_extr(16, src, dst, n, ssf); // (dst>>n)|(src<<(W-n))
-                    // M: x86 flags. SF/ZF/PF from the result; CF = the LAST bit shifted out of the ORIGINAL
-                    // dst -- SHLD: bit (W-n); SHRD: bit (n-1). n is a nonzero constant here. OF is defined
-                    // only for n==1 (sign change); left undefined for the general case as x86 permits.
-                    e_lsr_i(21, dst, isleft ? (width - n) : (n - 1), ssf);
-                    e_movconst(19, 1);
-                    e_rrr(A_AND, 21, 21, 19, 0, 0); // x21 = x86 CF (0/1)
-                    e_tst(16, ssf);                 // N/Z from result
-                    e_pf_save(16);                  // PF source = result low byte
-                    e_nzcv_save_setcf(21);          // stored C = NOT CF, keep N/Z
-                    rm_store(&I, w, 16);
-                    gpc = next;
-                    continue;
-                }
-                // ---- SHLD/SHRD by CL ----
-                e_mov_rr(22, dst, ssf); // preserve orig dst for the n==0 select + CF
-                e_movconst(19, ssf ? 63 : 31);
-                e_rrr(A_AND, 17, RCX, 19, ssf, 0); // n = cl & (W-1)
-                e_movconst(20, width);
-                e_rrr(A_SUB, 20, 20, 17, ssf, 0); // 20 = W - n
-                if (isleft) {
-                    e_shv(S_LSLV, 19, dst, 17, ssf);
-                    e_shv(S_LSRV, 20, src, 20, ssf);
-                } else {
-                    e_shv(S_LSRV, 19, dst, 17, ssf);
-                    e_shv(S_LSLV, 20, src, 20, ssf);
-                }
-                e_rrr(A_ORR, 16, 19, 20, ssf, 0); // combined = t1 | t2
-                e_tst(17, ssf);
-                e_csel(16, 22, 16, 0 /*EQ: n==0*/, ssf); // n==0 -> dst unchanged
-                // M: x86 flags. If the masked count n==0 ALL flags are unchanged; else SF/ZF/PF from the
-                // result and CF = the last bit shifted out of the ORIGINAL dst (x22): SHLD bit (W-n), SHRD
-                // bit (n-1). OF (n==1 only) left undefined. Mirrors the SHL/SHR/SAR count==0-preserve path.
-                e_ldr(24, 28, OFF_NZCV);  // old stored flags (kept when n==0)
-                e_tst(16, ssf);           // live N/Z from result
-                emit32(0xD53B4200u | 20); // mrs x20, nzcv (N/Z valid; C/V stale)
-                if (isleft) {
-                    e_movconst(19, width);
-                    e_rrr(A_SUB, 19, 19, 17, ssf, 0); // x19 = W - n
-                } else {
-                    e_subi(19, 17, 1, ssf); // x19 = n - 1
-                }
-                e_shv(S_LSRV, 21, 22, 19, ssf);
-                e_movconst(19, 1);
-                e_rrr(A_AND, 21, 21, 19, 0, 0); // x21 = x86 CF (0/1)
-                e_rrr(A_EOR, 21, 21, 19, 0, 0); // x21 = NOT CF (stored borrow convention)
-                e_movconst(19, 1u << 29);
-                e_rrr(A_BIC, 20, 20, 19, 1, 0);  // clear stored C (bit 29)
-                e_rrr(A_ORR, 20, 20, 21, 1, 29); // stored C = (NOT CF) << 29
-                e_tst(17, ssf);                  // Z = (n == 0)
-                e_csel(20, 24, 20, 0 /*EQ*/, 1); // n==0 -> keep old flags
-                e_str(20, 28, OFF_NZCV);
-                if (!g_pfaf_dead) { // PF: n==0 keeps old, else result low byte (live Z still = n==0 here)
-                    e_ldr(25, 28, OFF_PF);
-                    e_csel(23, 25, 16, 0 /*EQ*/, 1);
-                    e_pf_save(23);
-                }
-                emit32(0xD51B4200u | 20); // sync live ARM NZCV to the stored value
-                rm_store(&I, w, 16);
+            int double_shift_result = lower_double_shift(&I, next);
+            if (double_shift_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
