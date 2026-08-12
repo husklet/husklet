@@ -15,10 +15,14 @@ fn main() {
     println!("cargo:rerun-if-env-changed=HL_C_SANITIZER");
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo supplies CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo supplies CARGO_CFG_TARGET_ARCH");
-    if !platform::supported(&target_os, &target_arch) {
+    let Some(target) = platform::HostTarget::from_cfg(&target_os, &target_arch) else {
+        println!("cargo:supported=0");
         println!("cargo:warning=native C engine unavailable for {target_arch}-{target_os}");
         return;
-    }
+    };
+    println!("cargo:supported=1");
+    println!("cargo:host_os={}", target.os.cfg_name());
+    println!("cargo:host_arch={}", target.arch.cfg_name());
 
     println!("cargo:rerun-if-changed={NATIVE_ROOT}");
     let runtime_sources = discover_runtime_roots(&target_os);

@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 build = "build.rs"
+links = "hl_native"
 
 [lints]
 workspace = true

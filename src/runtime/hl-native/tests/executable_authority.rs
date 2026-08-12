@@ -72,7 +72,7 @@ unsafe extern "C" {
 // Keep the package library in this integration-test link. Its build script
 // supplies the native C archives used by the direct ABI assertions below.
 fn link_engine_native_archives() {
-    assert!(hl_native::supported(std::env::consts::OS, std::env::consts::ARCH));
+    assert!(hl_native::HostTarget::from_cfg(std::env::consts::OS, std::env::consts::ARCH).is_some());
 }
 
 struct State {

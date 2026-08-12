@@ -12,11 +12,7 @@ pub use bindings::SyscallDispatch;
 pub use engine::{Engine, EngineConfig, Exit, STATUS_OK};
 pub use provider::{LIBRARY_NAME, Native};
 
-/// Reports whether this package contains a production engine for the target.
-#[must_use]
-pub fn supported(target_os: &str, target_arch: &str) -> bool {
-    platform::supported(target_os, target_arch)
-}
+pub use platform::{ExecutionMode, GuestIsa, HostArch, HostOs, HostTarget, SUPPORTED_HOSTS};
 
 mod platform;
 
