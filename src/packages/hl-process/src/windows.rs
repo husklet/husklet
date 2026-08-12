@@ -2,14 +2,12 @@
 #![allow(unsafe_code)]
 
 use super::{Capture, Command as OwnedCommand, Outcome};
+use crate::drain::Drain;
 use std::fs::{self, File};
-use std::io::Read;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::ptr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
     CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
@@ -202,53 +200,6 @@ fn finish(capture: &Capture, stdout: Drain, stderr: Drain, outcome: Outcome) -> 
     fs::write(&capture.stdout, stdout.bytes)?;
     fs::write(&capture.stderr, stderr.bytes)?;
     Ok(if exceeded { Outcome::OutputLimit } else { outcome })
-}
-
-struct DrainOutput {
-    bytes: Vec<u8>,
-    exceeded: bool,
-}
-
-struct Drain {
-    count: Arc<AtomicU64>,
-    limit: u64,
-    thread: thread::JoinHandle<std::io::Result<Vec<u8>>>,
-}
-
-impl Drain {
-    fn spawn(mut source: impl Read + Send + 'static, limit: u64) -> Self {
-        let count = Arc::new(AtomicU64::new(0));
-        let observed = Arc::clone(&count);
-        let thread = thread::spawn(move || {
-            let capacity = usize::try_from(limit.min(1024 * 1024)).unwrap_or(1024 * 1024);
-            let mut retained = Vec::with_capacity(capacity);
-            let mut buffer = [0_u8; 16 * 1024];
-            loop {
-                let size = source.read(&mut buffer)?;
-                if size == 0 {
-                    break;
-                }
-                observed.fetch_add(size as u64, Ordering::Release);
-                let available = usize::try_from(limit.saturating_sub(retained.len() as u64)).unwrap_or(usize::MAX);
-                retained.extend_from_slice(&buffer[..size.min(available)]);
-            }
-            Ok(retained)
-        });
-        Self { count, limit, thread }
-    }
-
-    fn exceeded(&self) -> bool {
-        self.count.load(Ordering::Acquire) > self.limit
-    }
-
-    fn finish(self) -> std::io::Result<DrainOutput> {
-        let exceeded = self.exceeded();
-        let bytes = self
-            .thread
-            .join()
-            .map_err(|_| std::io::Error::other("subprocess capture thread panicked"))??;
-        Ok(DrainOutput { bytes, exceeded })
-    }
 }
 
 struct OwnedHandle(HANDLE);

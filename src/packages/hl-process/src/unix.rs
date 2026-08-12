@@ -2,6 +2,7 @@
 #![allow(unsafe_code)]
 
 use super::{Capture, Command as OwnedCommand, Outcome};
+use crate::drain::Drain;
 use std::fs;
 use std::os::unix::process::ExitStatusExt;
 use std::sync::Mutex;
@@ -16,7 +17,7 @@ static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 mod child;
 mod spawn;
 
-use child::{Drain, OwnedChild, Process};
+use child::{OwnedChild, Process, nonblocking};
 use spawn::spawn;
 
 pub(super) fn run(
@@ -27,8 +28,10 @@ pub(super) fn run(
 ) -> std::io::Result<Outcome> {
     let spawned = spawn(command)?;
     let mut owned = OwnedChild::new(spawned.process);
-    let stdout = Drain::spawn(spawned.stdout, capture.stdout_limit)?;
-    let stderr = Drain::spawn(spawned.stderr, capture.stderr_limit)?;
+    nonblocking(&spawned.stdout)?;
+    nonblocking(&spawned.stderr)?;
+    let stdout = Drain::spawn(spawned.stdout, capture.stdout_limit);
+    let stderr = Drain::spawn(spawned.stderr, capture.stderr_limit);
     supervise(&mut owned, stdout, stderr, capture, timeout, cancelled)
 }
 

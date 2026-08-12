@@ -15,6 +15,7 @@ use std::time::Duration;
 const ENVIRONMENT_COUNT_LIMIT: usize = 4096;
 const ENVIRONMENT_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 
+mod drain;
 #[cfg(unix)]
 mod unix;
 mod platform;
