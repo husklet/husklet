@@ -3337,6 +3337,98 @@ static enum avx_dispatch_result sse_dispatch_lane_transfer(const hl_x86_avx_stat
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result sse_dispatch_integer_extension(const hl_x86_avx_state *state, struct cpu *c,
+                                                               struct insn *I, uint64_t next, uint8_t destination[16]) {
+    int op = I->op;
+    int sign_extend = op >= 0x20 && op <= 0x25;
+    int zero_extend = op >= 0x30 && op <= 0x35;
+    if (I->map3 != 2 || (!sign_extend && !zero_extend)) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t source[16];
+    uint8_t result[16];
+    sse_get_rm(state, c, I, next, source);
+    if (sign_extend) {
+        int8_t bytes[16];
+        int16_t words[8];
+        int32_t dwords[4];
+        memcpy(bytes, source, 16);
+        memcpy(words, source, 16);
+        memcpy(dwords, source, 16);
+        if (op == 0x20) {
+            int16_t output[8];
+            for (int index = 0; index < 8; index++)
+                output[index] = bytes[index];
+            memcpy(result, output, 16);
+        } else if (op == 0x21) {
+            int32_t output[4];
+            for (int index = 0; index < 4; index++)
+                output[index] = bytes[index];
+            memcpy(result, output, 16);
+        } else if (op == 0x22) {
+            int64_t output[2];
+            for (int index = 0; index < 2; index++)
+                output[index] = bytes[index];
+            memcpy(result, output, 16);
+        } else if (op == 0x23) {
+            int32_t output[4];
+            for (int index = 0; index < 4; index++)
+                output[index] = words[index];
+            memcpy(result, output, 16);
+        } else if (op == 0x24) {
+            int64_t output[2];
+            for (int index = 0; index < 2; index++)
+                output[index] = words[index];
+            memcpy(result, output, 16);
+        } else {
+            int64_t output[2];
+            for (int index = 0; index < 2; index++)
+                output[index] = dwords[index];
+            memcpy(result, output, 16);
+        }
+    } else {
+        uint8_t bytes[16];
+        uint16_t words[8];
+        uint32_t dwords[4];
+        memcpy(bytes, source, 16);
+        memcpy(words, source, 16);
+        memcpy(dwords, source, 16);
+        if (op == 0x30) {
+            uint16_t output[8];
+            for (int index = 0; index < 8; index++)
+                output[index] = bytes[index];
+            memcpy(result, output, 16);
+        } else if (op == 0x31) {
+            uint32_t output[4];
+            for (int index = 0; index < 4; index++)
+                output[index] = bytes[index];
+            memcpy(result, output, 16);
+        } else if (op == 0x32) {
+            uint64_t output[2];
+            for (int index = 0; index < 2; index++)
+                output[index] = bytes[index];
+            memcpy(result, output, 16);
+        } else if (op == 0x33) {
+            uint32_t output[4];
+            for (int index = 0; index < 4; index++)
+                output[index] = words[index];
+            memcpy(result, output, 16);
+        } else if (op == 0x34) {
+            uint64_t output[2];
+            for (int index = 0; index < 2; index++)
+                output[index] = words[index];
+            memcpy(result, output, 16);
+        } else {
+            uint64_t output[2];
+            for (int index = 0; index < 2; index++)
+                output[index] = dwords[index];
+            memcpy(result, output, 16);
+        }
+    }
+    memcpy(destination, result, 16);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3368,6 +3460,8 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
         c->rip = next;
         return;
     }
+
+    if (sse_dispatch_integer_extension(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     // ---- the remaining ops are xmm-destructive: load the r/m source, compute into r, write to D -----
     sse_get_rm(state, c, &I, next, s);
@@ -3456,96 +3550,6 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(&value, s + i, (size_t)es);
                 uint64_t output = simd_element_negative(value, es) ? simd_element_negate(value, es) : value;
                 memcpy(r + i, &output, (size_t)es);
-            }
-            break;
-        }
-        case 0x20:
-        case 0x21:
-        case 0x22:
-        case 0x23:
-        case 0x24:
-        case 0x25: { // pmovsx (sign-extend)
-            int8_t b8[16];
-            int16_t w16[8];
-            int32_t d32[4];
-            memcpy(b8, s, 16);
-            memcpy(w16, s, 16);
-            memcpy(d32, s, 16);
-            if (op == 0x20) {
-                int16_t o[8];
-                for (int i = 0; i < 8; i++)
-                    o[i] = b8[i];
-                memcpy(r, o, 16);
-            } else if (op == 0x21) {
-                int32_t o[4];
-                for (int i = 0; i < 4; i++)
-                    o[i] = b8[i];
-                memcpy(r, o, 16);
-            } else if (op == 0x22) {
-                int64_t o[2];
-                for (int i = 0; i < 2; i++)
-                    o[i] = b8[i];
-                memcpy(r, o, 16);
-            } else if (op == 0x23) {
-                int32_t o[4];
-                for (int i = 0; i < 4; i++)
-                    o[i] = w16[i];
-                memcpy(r, o, 16);
-            } else if (op == 0x24) {
-                int64_t o[2];
-                for (int i = 0; i < 2; i++)
-                    o[i] = w16[i];
-                memcpy(r, o, 16);
-            } else {
-                int64_t o[2];
-                for (int i = 0; i < 2; i++)
-                    o[i] = d32[i];
-                memcpy(r, o, 16);
-            }
-            break;
-        }
-        case 0x30:
-        case 0x31:
-        case 0x32:
-        case 0x33:
-        case 0x34:
-        case 0x35: { // pmovzx (zero-extend)
-            uint8_t b8[16];
-            uint16_t w16[8];
-            uint32_t d32[4];
-            memcpy(b8, s, 16);
-            memcpy(w16, s, 16);
-            memcpy(d32, s, 16);
-            if (op == 0x30) {
-                uint16_t o[8];
-                for (int i = 0; i < 8; i++)
-                    o[i] = b8[i];
-                memcpy(r, o, 16);
-            } else if (op == 0x31) {
-                uint32_t o[4];
-                for (int i = 0; i < 4; i++)
-                    o[i] = b8[i];
-                memcpy(r, o, 16);
-            } else if (op == 0x32) {
-                uint64_t o[2];
-                for (int i = 0; i < 2; i++)
-                    o[i] = b8[i];
-                memcpy(r, o, 16);
-            } else if (op == 0x33) {
-                uint32_t o[4];
-                for (int i = 0; i < 4; i++)
-                    o[i] = w16[i];
-                memcpy(r, o, 16);
-            } else if (op == 0x34) {
-                uint64_t o[2];
-                for (int i = 0; i < 2; i++)
-                    o[i] = w16[i];
-                memcpy(r, o, 16);
-            } else {
-                uint64_t o[2];
-                for (int i = 0; i < 2; i++)
-                    o[i] = d32[i];
-                memcpy(r, o, 16);
             }
             break;
         }
