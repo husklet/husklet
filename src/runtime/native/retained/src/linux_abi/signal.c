@@ -1114,7 +1114,10 @@ static int deliver_guest_fatal_fault(int hostsig, siginfo_t *si, void *ucv) {
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     if (!c) return 0;
     if (!sigframe_capture_fault(c, ucv)) return 0; // host PC not in translated code -> engine/async: re-raise
-    sig_diag_fatal_fault(sig, hostsig, si, c, ucv);
+    /* This is a classified guest fault and its signal termination is expected
+       process behavior.  Keep HLFATAL for engine faults that fall through to
+       the host re-raise path; writing it here leaks guest control flow onto the
+       container's stderr and breaks ordinary fork/wait probes. */
     // A genuine, fatal, unmaskable guest fault. Terminate the guest process HERE (async-signal-safe _exit),
     // not by resuming the dispatcher: the guest state is captured mid-fault (e.g. SP overrun into the guard),
     // so re-entering the code cache would run off into garbage. A non-init guest records its Linux
