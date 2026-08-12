@@ -3720,6 +3720,50 @@ static int lower_accumulator_legacy(struct insn *instruction, int sf) {
     return TX_NEXT;
 }
 
+static int lower_bit_scan(struct insn *instruction, uint64_t next, int sf) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0xBC && opcode != 0xBD) return TX_FALL;
+    int mem;
+    int rmv = rm_load(instruction, next, instruction->opsize, &mem);
+    int count_form = instruction->rep;
+    int source = rmv;
+    if (!mem && instruction->reg == rmv) {
+        e_mov_rr(23, rmv, sf);
+        source = 23;
+    }
+    int word_form = instruction->opsize == 2;
+    if (word_form) {
+        e_movconst(19, 0xffff);
+        e_rrr(A_AND, 23, source, 19, 0, 0);
+        source = 23;
+    }
+    int destination = word_form ? 21 : instruction->reg;
+    if (word_form) e_mov_rr(21, instruction->reg, 0);
+    int bit_destination = count_form ? destination : 22;
+    if (opcode == 0xBC) {
+        e_rbit(bit_destination, source, sf);
+        e_clz(bit_destination, bit_destination, sf);
+    } else if (count_form) {
+        e_clz(destination, source, sf);
+    } else {
+        e_clz(20, source, sf);
+        e_movconst(19, sf ? 63 : 31);
+        e_rrr(A_SUB, 22, 19, 20, sf, 0);
+    }
+    if (count_form) {
+        e_rrr(A_SUBS, 31, source, 31, sf, 0);
+        e_cset(19, 0, sf);
+        e_rrr(A_ANDS, 31, destination, destination, sf, 0);
+        e_nzcv_save_setcf(19);
+    } else {
+        e_rrr(A_ANDS, 31, source, source, sf, 0);
+        e_csel(destination, destination, 22, 0, sf);
+        e_nzcv_save();
+    }
+    if (word_form) e_bfi(instruction->reg, destination, 0, 16, 1);
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6016,66 +6060,8 @@ static void *translate_block(uint64_t gpc) {
                     break;
                 }
             }
-            // bsf/tzcnt (0F BC), bsr/lzcnt (0F BD). The F3 prefix selects the BMI/ABM count form, which is
-            // DISTINCT from the legacy bit-scan: tzcnt==bsf result for src!=0 but lzcnt != bsr (lzcnt = leading
-            // ZERO COUNT = CLZ; bsr = bit INDEX = (w-1)-CLZ). Mixing them up silently corrupts BMI codegen
-            // (e.g. tinystr length math) -- the bug behind uutils' garbled "en-US" locale.
-            if (op == 0xBC || op == 0xBD) {
-                int mem;
-                int rmv = rm_load(&I, next, I.opsize, &mem);
-                int cnt = I.rep; // F3 -> tzcnt/lzcnt (counts; src==0 -> opsize, the ARM CLZ result naturally)
-                // The destination write below clobbers the source register when dest==src (e.g.
-                // `bsf %edx,%edx` -- exactly the form Go's bytealg.IndexByteString emits). The flag
-                // computation below reads the source AFTER that write, so without this guard the x86
-                // ZF/CF would reflect the RESULT, not the source -> a no-match bsf wrongly clears ZF and
-                // the caller mis-reads a hit. Preserve the source in a scratch (x23) so flags stay correct.
-                int src = rmv;
-                if (!mem && I.reg == rmv) {
-                    e_mov_rr(23, rmv, sf);
-                    src = 23;
-                }
-                // 16-bit forms scan ONLY bits 15:0 and write ONLY bits 15:0. The register operand
-                // still carries the full 64-bit guest value, so mask the source into scratch first
-                // (`bsrw %bx,%ax` on 0x...8888 otherwise reported bit 31, not bit 15) and land the
-                // result in scratch so the destination's bits 63:16 survive.
-                int w16 = (I.opsize == 2);
-                if (w16) {
-                    e_movconst(19, 0xffff);
-                    e_rrr(A_AND, 23, src, 19, 0, 0);
-                    src = 23;
-                }
-                int dreg = w16 ? 21 : I.reg;
-                if (w16) e_mov_rr(21, I.reg, 0); // seed for the src==0 "destination unchanged" csel
-                // Legacy bsf/bsr (no F3) compute the bit INDEX into x22 first: x86 leaves the
-                // DESTINATION UNCHANGED when src==0 (real-hw behavior that glibc memrchr relies on -- its
-                // not-found tail is `bsr; je; ret <dest>`), so the index is csel'd in only when src!=0.
-                // tzcnt/lzcnt (F3) instead DEFINE src==0 -> opsize and write the dest unconditionally.
-                int bdst = cnt ? dreg : 22;
-                if (op == 0xBC) { // tzcnt / bsf: trailing zeros = RBIT+CLZ (same value; src==0 -> opsize)
-                    e_rbit(bdst, src, sf);
-                    e_clz(bdst, bdst, sf);
-                } else if (cnt) { // lzcnt: leading zeros = CLZ
-                    e_clz(dreg, src, sf);
-                } else { // bsr: (w-1) - clz
-                    // clz lands in a scratch that can NEVER alias src: for a memory operand rm_load returns
-                    // x16, so using x16 here would clobber the loaded source before the ZF test below reads
-                    // it (a top-bit-set operand -> clz==0 -> ZF wrongly set -> csel keeps the old dest). x20
-                    // is engine scratch (guest regs are x0..x15), so it is safe.
-                    e_clz(20, src, sf);
-                    e_movconst(19, sf ? 63 : 31);
-                    e_rrr(A_SUB, 22, 19, 20, sf, 0);
-                }
-                if (cnt) { // tzcnt/lzcnt: x86 CF = (src==0), ZF = (result==0)
-                    e_rrr(A_SUBS, 31, src, 31, sf, 0);
-                    e_cset(19, 0 /*EQ*/, sf);             // x19 = (src==0) = x86 CF
-                    e_rrr(A_ANDS, 31, dreg, dreg, sf, 0); // live N/Z from the result
-                    e_nzcv_save_setcf(19);                // store N/Z, stored C = NOT(src==0)
-                } else {                                  // bsf/bsr: ZF = (src==0), dest UNCHANGED if src==0
-                    e_rrr(A_ANDS, 31, src, src, sf, 0);   // Z = (src == 0)
-                    e_csel(dreg, dreg, 22, 0 /*EQ*/, sf); // src==0 -> keep dest, else the computed index
-                    e_nzcv_save();
-                }
-                if (w16) e_bfi(I.reg, dreg, 0, 16, 1);
+            int bit_scan_result = lower_bit_scan(&I, next, sf);
+            if (bit_scan_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
