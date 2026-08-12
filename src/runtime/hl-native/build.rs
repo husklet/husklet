@@ -25,6 +25,8 @@ const RUST_BRIDGE_EXPORTS: &[&str] = &[
     "hl_c_backend_exit_detail",
     "hl_c_backend_translation_count",
     "hl_c_backend_destroy",
+    "hl_c_backend_executable_open",
+    "hl_c_backend_executable_discard",
 ];
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -302,7 +304,14 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
     let destination = output.join(filename);
     let mut command = compiler.to_command();
     if target_os == "macos" {
+        let export_list = output.join("hl_native_engine.exports");
+        let exported = RUST_BRIDGE_EXPORTS
+            .iter()
+            .map(|symbol| format!("_{symbol}\n"))
+            .collect::<String>();
+        fs::write(&export_list, exported).expect("write Darwin native export list");
         command.args(["-dynamiclib", "-Wl,-install_name,@rpath/libhl_native_engine.dylib"]);
+        command.arg(format!("-Wl,-exported_symbols_list,{}", export_list.display()));
         for archive in archives {
             command.arg(format!(
                 "-Wl,-force_load,{}",
@@ -310,8 +319,15 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
             ));
         }
     } else if target_os == "windows" {
+        let definition = output.join("hl_native_engine.def");
+        let exported = RUST_BRIDGE_EXPORTS
+            .iter()
+            .map(|symbol| format!("  {symbol}\n"))
+            .collect::<String>();
+        fs::write(&definition, format!("EXPORTS\n{exported}")).expect("write Windows native export definition");
         command.arg("-shared");
         command.arg(format!("-Wl,/IMPLIB:{}", output.join("hl_native_engine.lib").display()));
+        command.arg(format!("-Wl,/DEF:{}", definition.display()));
         for archive in archives {
             command.arg(format!(
                 "-Wl,/WHOLEARCHIVE:{}",

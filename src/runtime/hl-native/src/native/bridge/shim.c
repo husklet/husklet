@@ -6,6 +6,7 @@
 #include "../engine/provider/tree_files.h"
 #endif
 #include "executable_authority.h"
+#include "api.h"
 #include "hl/engine.h"
 #include "hl/linux_abi.h"
 #include "hl/syscall_trap.h"
@@ -41,7 +42,7 @@ static ssize_t hl_c_backend_pread(int fd, void *buffer, size_t size, off_t offse
 extern void hl_aarch64_target_register_backend(void);
 extern void hl_x86_64_target_register_backend(void);
 
-typedef struct hl_c_backend {
+struct hl_c_backend {
     hl_c_bridge_host *host;
     hl_host_services services;
     hl_engine *engine;
@@ -54,7 +55,7 @@ typedef struct hl_c_backend {
     uint32_t provider_files_installed;
     int32_t provider_fd;
     hl_engine_exit result;
-} hl_c_backend;
+};
 
 #if defined(HL_LEAK_CHECK_PROBE)
 /* Non-vacuity hook for the dedicated sanitizer gate. It is compiled only into

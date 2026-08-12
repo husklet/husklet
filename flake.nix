@@ -465,6 +465,8 @@
             printf '%s\n' \
               hl_c_backend_create \
               hl_c_backend_destroy \
+              hl_c_backend_executable_discard \
+              hl_c_backend_executable_open \
               hl_c_backend_exit_detail \
               hl_c_backend_exit_kind \
               hl_c_backend_exit_status \
