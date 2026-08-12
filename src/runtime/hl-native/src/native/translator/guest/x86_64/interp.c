@@ -3752,6 +3752,61 @@ static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
                         : interp_step_x87_register(cpu, insn, pc, next);
 }
 
+static int interp_sse_integer_arithmetic(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    int mmx = interp_sse_prefix(insn) == SSE_NP;
+    int wide = mmx ? 8 : 16;
+    uint8_t d[16], s[16];
+    if (op == 0xDB || op == 0xDF || op == 0xEB || op == 0xEF) {
+        interp_simd_get(cpu, mmx, insn->reg, d);
+        interp_simd_rm_get(cpu, insn, mmx, next, s);
+        for (int i = 0; i < wide; i++)
+            d[i] = op == 0xDB ? (uint8_t)(d[i] & s[i])
+                   : op == 0xDF ? (uint8_t)(~d[i] & s[i])
+                   : op == 0xEB ? (uint8_t)(d[i] | s[i])
+                                : (uint8_t)(d[i] ^ s[i]);
+    } else if (op == 0xFC || op == 0xFD || op == 0xFE || op == 0xD4 || op == 0xF8 || op == 0xF9 ||
+               op == 0xFA || op == 0xFB || op == 0xEC || op == 0xED || op == 0xDC || op == 0xDD ||
+               op == 0xE8 || op == 0xE9 || op == 0xD8 || op == 0xD9) {
+        interp_simd_get(cpu, mmx, insn->reg, d);
+        interp_simd_rm_get(cpu, insn, mmx, next, s);
+        switch (op) {
+        case 0xFC: interp_padd(d, s, 1); break;
+        case 0xFD: interp_padd(d, s, 2); break;
+        case 0xFE: interp_padd(d, s, 4); break;
+        case 0xD4: interp_padd(d, s, 8); break;
+        case 0xF8: interp_psub(d, s, 1); break;
+        case 0xF9: interp_psub(d, s, 2); break;
+        case 0xFA: interp_psub(d, s, 4); break;
+        case 0xFB: interp_psub(d, s, 8); break;
+        case 0xEC: interp_padds(d, s, 1, 0, 1); break;
+        case 0xED: interp_padds(d, s, 2, 0, 1); break;
+        case 0xDC: interp_padds(d, s, 1, 0, 0); break;
+        case 0xDD: interp_padds(d, s, 2, 0, 0); break;
+        case 0xE8: interp_padds(d, s, 1, 1, 1); break;
+        case 0xE9: interp_padds(d, s, 2, 1, 1); break;
+        case 0xD8: interp_padds(d, s, 1, 1, 0); break;
+        default: interp_padds(d, s, 2, 1, 0); break;
+        }
+    } else if (op == 0xDA || op == 0xDE || op == 0xEA || op == 0xEE) {
+        interp_simd_get(cpu, mmx, insn->reg, d);
+        interp_simd_rm_get(cpu, insn, mmx, next, s);
+        if (op == 0xDA || op == 0xDE) {
+            for (int i = 0; i < wide; i++) d[i] = (op == 0xDA) == (d[i] < s[i]) ? d[i] : s[i];
+        } else {
+            for (int i = 0; i < wide / 2; i++) {
+                int16_t a = (int16_t)interp_lane16(d, i), b = (int16_t)interp_lane16(s, i);
+                interp_put16(d, i, (uint16_t)(((op == 0xEA) == (a < b)) ? a : b));
+            }
+        }
+    } else {
+        return -1;
+    }
+    interp_simd_put(cpu, mmx, insn->reg, d);
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int prefix = interp_sse_prefix(insn);
@@ -3759,6 +3814,8 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
 
     // Native host FP under the guest's MXCSR.
     if (interp_sse_is_float_arithmetic(op)) return interp_step_sse_fp(cpu, insn, pc, next);
+    int delegated = interp_sse_integer_arithmetic(cpu, insn, next);
+    if (delegated >= 0) return delegated;
 
     // These have both MMX (no prefix, 64-bit) and SSE2 (0x66, 128-bit xmm) encodings. The MMX half of the
     // opcode is the SAME operation at half the width, so one arm serves both: `mmx` picks the register
@@ -4192,80 +4249,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         cpu->rip = next;
         return STEP_NEXT;
     }
-
-    case 0xDB: // PAND
-    case 0xDF: // PANDN
-    case 0xEB: // POR
-    case 0xEF: // PXOR
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        for (int i = 0; i < wide; i++)
-            d[i] = op == 0xDB   ? (uint8_t)(d[i] & s[i])
-                   : op == 0xDF ? (uint8_t)(~d[i] & s[i]) // PANDN: NOT dest, then AND
-                   : op == 0xEB ? (uint8_t)(d[i] | s[i])
-                                : (uint8_t)(d[i] ^ s[i]);
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-
-    case 0xFC: // PADDB
-    case 0xFD: // PADDW
-    case 0xFE: // PADDD
-    case 0xD4: // PADDQ
-    case 0xF8: // PSUBB
-    case 0xF9: // PSUBW
-    case 0xFA: // PSUBD
-    case 0xFB: // PSUBQ
-    case 0xEC: // PADDSB
-    case 0xED: // PADDSW
-    case 0xDC: // PADDUSB
-    case 0xDD: // PADDUSW
-    case 0xE8: // PSUBSB
-    case 0xE9: // PSUBSW
-    case 0xD8: // PSUBUSB
-    case 0xD9: // PSUBUSW
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        switch (op) {
-        case 0xFC: interp_padd(d, s, 1); break;
-        case 0xFD: interp_padd(d, s, 2); break;
-        case 0xFE: interp_padd(d, s, 4); break;
-        case 0xD4: interp_padd(d, s, 8); break;
-        case 0xF8: interp_psub(d, s, 1); break;
-        case 0xF9: interp_psub(d, s, 2); break;
-        case 0xFA: interp_psub(d, s, 4); break;
-        case 0xFB: interp_psub(d, s, 8); break;
-        case 0xEC: interp_padds(d, s, 1, 0, 1); break;
-        case 0xED: interp_padds(d, s, 2, 0, 1); break;
-        case 0xDC: interp_padds(d, s, 1, 0, 0); break;
-        case 0xDD: interp_padds(d, s, 2, 0, 0); break;
-        case 0xE8: interp_padds(d, s, 1, 1, 1); break;
-        case 0xE9: interp_padds(d, s, 2, 1, 1); break;
-        case 0xD8: interp_padds(d, s, 1, 1, 0); break;
-        default: interp_padds(d, s, 2, 1, 0); break; // 0xD9 PSUBUSW
-        }
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-
-    case 0xDA: // PMINUB
-    case 0xDE: // PMAXUB
-    case 0xEA: // PMINSW
-    case 0xEE: // PMAXSW
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        if (op == 0xDA || op == 0xDE) {
-            for (int i = 0; i < wide; i++)
-                d[i] = (op == 0xDA) == (d[i] < s[i]) ? d[i] : s[i];
-        } else {
-            for (int i = 0; i < wide / 2; i++) {
-                int16_t a = (int16_t)interp_lane16(d, i), b = (int16_t)interp_lane16(s, i);
-                interp_put16(d, i, (uint16_t)(((op == 0xEA) == (a < b)) ? a : b));
-            }
-        }
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
 
     case 0xD5: // PMULLW: low 16 of each product
     case 0xE4: // PMULHUW: high 16, unsigned
