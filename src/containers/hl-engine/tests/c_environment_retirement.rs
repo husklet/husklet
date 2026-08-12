@@ -1,5 +1,5 @@
 use std::fs;
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 use std::process::Command;
 
 const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/retained/");
@@ -34,7 +34,7 @@ fn retained_environment_boundary_is_physically_absent() {
 }
 
 #[test]
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 fn retained_environment_symbols_are_not_linked() {
     drop(hl_engine::options::Options::default());
     let executable = std::env::current_exe().unwrap();

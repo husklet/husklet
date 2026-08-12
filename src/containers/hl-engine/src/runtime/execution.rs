@@ -3,18 +3,18 @@ use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::runtime_machine::{RustRuntimeFactory, RustRuntimeMachine};
 use hl_runtime::RuntimeAssemblyConfig;
 use std::sync::Arc;
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 use std::sync::Mutex;
 
 type RustMachine = RustRuntimeMachine<crate::native::GuestExecutor>;
 
 pub(super) enum ProductionMachine {
     Rust(Box<RustMachine>),
-    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+    #[cfg(hl_retained_c)]
     C(Box<CMachine>),
 }
 
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 pub(super) struct CMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launch_plan::RuntimeLaunchPlan,
@@ -22,13 +22,13 @@ pub(super) struct CMachine {
     execution: Mutex<CExecutionState>,
 }
 
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 struct CExecutionState {
     prepared: Option<Arc<crate::c_execution::process::CWorker>>,
     current: Option<Arc<crate::c_execution::process::CWorker>>,
 }
 
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 impl CMachine {
     fn start(&self) -> Result<(), EngineError> {
         let execution = {
@@ -59,7 +59,7 @@ impl CMachine {
 
 pub(super) struct ProductionFactory;
 
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 #[derive(Clone, Copy)]
 enum CUnsupported {
     GuestIsa,
@@ -67,7 +67,7 @@ enum CUnsupported {
     Restore,
 }
 
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 impl CUnsupported {
     const fn name(self) -> &'static str {
         match self {
@@ -97,7 +97,7 @@ impl ProductionFactory {
         .map(ProductionMachine::Rust)
     }
 
-    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+    #[cfg(hl_retained_c)]
     fn c(request: RuntimeConstruction<'_>) -> Result<ProductionMachine, CompositionError> {
         if let Some(reason) = Self::c_unsupported(&request) {
             hl_log::hl_event!(
@@ -134,7 +134,7 @@ impl ProductionFactory {
         })))
     }
 
-    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+    #[cfg(hl_retained_c)]
     fn c_unsupported(request: &RuntimeConstruction<'_>) -> Option<CUnsupported> {
         if request.isa != crate::activation::GuestIsa::Aarch64 {
             Some(CUnsupported::GuestIsa)
@@ -154,11 +154,11 @@ impl RuntimeFactory for ProductionFactory {
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
         match request.plan.options.get("HL_EXECUTION_BACKEND") {
             Some("rust") => Self::rust(request),
-            #[cfg(not(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution")))]
+            #[cfg(not(hl_retained_c))]
             None => Self::rust(request),
-            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            #[cfg(hl_retained_c)]
             None => Self::c(request),
-            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            #[cfg(hl_retained_c)]
             Some("c") => Self::c(request),
             Some(_) => Err(CompositionError::RuntimeConstruction),
         }
@@ -169,7 +169,7 @@ impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
         match self {
             Self::Rust(machine) => machine.start(),
-            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            #[cfg(hl_retained_c)]
             Self::C(machine) => machine.start(),
         }
     }
@@ -177,7 +177,7 @@ impl GuestMachine for ProductionMachine {
     fn wait(&self) -> Result<EngineExit, EngineError> {
         match self {
             Self::Rust(machine) => machine.wait(),
-            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            #[cfg(hl_retained_c)]
             Self::C(machine) => machine.current()?.wait(),
         }
     }
@@ -185,7 +185,7 @@ impl GuestMachine for ProductionMachine {
     fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
         match self {
             Self::Rust(machine) => machine.stop(request),
-            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            #[cfg(hl_retained_c)]
             Self::C(machine) => machine.current()?.stop(request),
         }
     }
@@ -193,7 +193,7 @@ impl GuestMachine for ProductionMachine {
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         match self {
             Self::Rust(machine) => machine.checkpoint_supported(),
-            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            #[cfg(hl_retained_c)]
             Self::C(_) => Err(EngineError::Unsupported),
         }
     }
@@ -201,13 +201,13 @@ impl GuestMachine for ProductionMachine {
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         match self {
             Self::Rust(machine) => machine.capture_checkpoint(),
-            #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+            #[cfg(hl_retained_c)]
             Self::C(_) => Err(EngineError::Unsupported),
         }
     }
 }
 
-#[cfg(all(test, target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(all(test, hl_retained_c))]
 mod tests {
     use crate::{
         activation::GuestIsa,

@@ -231,7 +231,7 @@ impl Options {
     ///
     /// This is the lossless handoff used by alternate execution backends; absent
     /// options remain absent instead of being confused with empty values.
-    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+    #[cfg(hl_retained_c)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&'static str, &[u8])> {
         DEFINITIONS
             .iter()
@@ -392,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+    #[cfg(hl_retained_c)]
     fn iteration_preserves_explicit_empty_and_omits_absent_options() {
         let mut options = Options::default();
         options.set("HL_CWD", "", true).unwrap();

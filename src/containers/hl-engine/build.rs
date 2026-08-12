@@ -1,5 +1,8 @@
 use std::{env, fs, path::PathBuf};
 
+#[path = "src/retained_platform.rs"]
+mod retained_platform;
+
 const C_ENGINE: &str = "../../runtime/native";
 const RETAINED: &str = "../../runtime/native/retained";
 const TU_MANIFEST: &str = "../../runtime/native/retained/COMPILED_TUS.tsv";
@@ -15,16 +18,18 @@ struct TranslationUnit<'a> {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_C_EXECUTION");
+    println!("cargo:rustc-check-cfg=cfg(hl_retained_c)");
     if env::var_os("CARGO_FEATURE_C_EXECUTION").is_none() {
         return;
     }
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo supplies CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo supplies CARGO_CFG_TARGET_ARCH");
-    if target_os != "linux" || target_arch != "aarch64" {
+    if !retained_platform::supported(&target_os, &target_arch) {
         println!("cargo:warning=retained C backend unavailable for {target_arch}-{target_os}; using Rust execution");
         return;
     }
+    println!("cargo:rustc-cfg=hl_retained_c");
 
     println!("cargo:rerun-if-changed={C_ENGINE}/shim.c");
     println!("cargo:rerun-if-changed={C_ENGINE}/executable_authority.c");

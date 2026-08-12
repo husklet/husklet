@@ -77,7 +77,10 @@ impl Native {
                 let available = (length as usize)
                     .saturating_sub(std::mem::offset_of!(libc::sockaddr_un, sun_path))
                     .min(value.sun_path.len());
-                let mut bytes: Vec<u8> = value.sun_path[..available].to_vec();
+                let mut bytes: Vec<u8> = value.sun_path[..available]
+                    .iter()
+                    .map(|byte| u8::from_ne_bytes(byte.to_ne_bytes()))
+                    .collect();
                 if bytes.first() != Some(&0) {
                     Self::trim_unix(&mut bytes);
                 }
@@ -126,6 +129,23 @@ impl Native {
             Self::decode_address(&storage, length)
         } else {
             Err(Self::runtime_error())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Native;
+    use hl_network::SocketAddress;
+
+    #[test]
+    fn unix_addresses_round_trip_across_host_c_char_signedness() {
+        for address in [
+            SocketAddress::Unix(b"/tmp/husklet.sock".to_vec()),
+            SocketAddress::Unix(vec![0, 0x80, 0xff]),
+        ] {
+            let (storage, length) = Native::socket_address(&address).unwrap();
+            assert_eq!(Native::decode_address(&storage, length), Ok(address));
         }
     }
 }

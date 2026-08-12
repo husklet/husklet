@@ -66,10 +66,12 @@ pub mod native_launcher {
         ProcessLauncher as NativeLauncher, ProcessWorkspace as NativeWorkspace, Selection as NativeSelection,
     };
 }
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 mod c_execution;
 pub mod options;
 pub mod program;
+#[cfg(test)]
+mod retained_platform;
 pub mod retained_worker;
 #[cfg(target_os = "linux")]
 #[path = "runtime/api.rs"]

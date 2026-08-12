@@ -25,7 +25,7 @@ impl RetainedWorkerError {
 ///
 /// The descriptors become owned by this one-shot worker and must not be used again by the caller.
 pub fn run(plan_descriptor: i32, control_descriptor: i32) -> Result<i32, RetainedWorkerError> {
-    #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+    #[cfg(hl_retained_c)]
     {
         crate::c_execution::worker::run(plan_descriptor, control_descriptor).map_err(|error| match error {
             crate::c_execution::worker::WorkerError::Descriptor => RetainedWorkerError::Descriptor,
@@ -35,7 +35,7 @@ pub fn run(plan_descriptor: i32, control_descriptor: i32) -> Result<i32, Retaine
             crate::c_execution::worker::WorkerError::Start => RetainedWorkerError::Start,
         })
     }
-    #[cfg(not(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution")))]
+    #[cfg(not(hl_retained_c))]
     {
         let _ = (plan_descriptor, control_descriptor);
         Err(RetainedWorkerError::Unsupported)
@@ -46,7 +46,7 @@ pub fn run(plan_descriptor: i32, control_descriptor: i32) -> Result<i32, Retaine
 mod tests {
     use super::RetainedWorkerError;
 
-    #[cfg(not(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution")))]
+    #[cfg(not(hl_retained_c))]
     #[test]
     fn unsupported_build_rejects_worker_deterministically() {
         assert_eq!(super::run(3, 4), Err(RetainedWorkerError::Unsupported));

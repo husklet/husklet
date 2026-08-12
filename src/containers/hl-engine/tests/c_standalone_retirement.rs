@@ -1,5 +1,5 @@
 use std::fs;
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 use std::process::Command;
 
 const RETIRED_PATHS: [&str; 5] = [
@@ -94,7 +94,7 @@ fn product_manifest_excludes_the_retired_standalone_path() {
 }
 
 #[test]
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#[cfg(hl_retained_c)]
 fn linked_test_binary_excludes_retired_standalone_symbols() {
     // Referencing the library keeps its whole-archive native link directives in
     // this integration test, making the symbol assertion non-vacuous.

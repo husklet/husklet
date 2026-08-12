@@ -1,4 +1,4 @@
-#![cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
+#![cfg(hl_retained_c)]
 #![allow(unsafe_code)]
 
 use std::{ffi::c_void, os::raw::c_char, ptr};
