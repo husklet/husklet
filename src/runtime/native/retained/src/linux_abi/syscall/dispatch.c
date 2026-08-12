@@ -150,8 +150,6 @@ typedef struct ep_object_watch {
     uint32_t epoll_generation;
     int descriptor;
     uint32_t descriptor_generation;
-    hl_linux_ofd ofd;
-    uint32_t ofd_generation;
     uint32_t events; /* raw guest epoll event mask (EPOLLONESHOT etc.) */
     uint32_t interests;
     uint64_t data;
@@ -192,12 +190,8 @@ static void ep_object_retire_endpoint(int fd) {
     if (fd < 0 || fd >= HL_NFD) return;
     for (uint32_t index = 0; index < EP_OBJECT_WATCH_LIMIT; ++index) {
         ep_object_watch *watch = &g_ep_object_watches[index];
-        /* A watch belongs to the watched open-file description, not to the
-           descriptor number used to install it.  Closing that number must not
-           retire the watch while a dup still references the OFD.  The sampling
-           path pins the recorded OFD and retires it after the final alias is
-           gone.  An epoll instance itself remains descriptor-generation keyed. */
-        if (atomic_load_explicit(&watch->active, memory_order_acquire) != 0 && watch->epoll == fd)
+        if (atomic_load_explicit(&watch->active, memory_order_acquire) != 0 &&
+            (watch->epoll == fd || watch->descriptor == fd))
             ep_object_free(watch);
     }
     g_ep_object_count[fd] = 0;

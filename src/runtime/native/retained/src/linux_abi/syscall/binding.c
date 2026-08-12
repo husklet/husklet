@@ -3001,8 +3001,6 @@ static int bound_route(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                                 watch->epoll_generation = epoll_generation;
                                 watch->descriptor = (int)a2;
                                 watch->descriptor_generation = watched.descriptor_generation;
-                                watch->ofd = watched.ofd;
-                                watch->ofd_generation = watched.ofd_generation;
                                 g_ep_object_count[registry_ep]++;
                             }
                             watch->events = events;
