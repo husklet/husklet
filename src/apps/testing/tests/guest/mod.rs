@@ -55,7 +55,7 @@ pub fn projection(name: &str, isa: &str, destination: &Path) {
 /// Builds the generic static ET_EXEC displacement fixture.
 pub fn displaced_et_exec(isa: &str, destination: &Path) {
     compile(
-        &repository("src/runtime/native/fixtures/testing/displaced_et_exec.c"),
+        &repository("src/runtime/native/fixtures/testing/elf/displaced.c"),
         isa,
         destination,
         FREESTANDING,
@@ -66,12 +66,12 @@ pub fn displaced_et_exec(isa: &str, destination: &Path) {
 pub fn pie_exec(isa: &str, destination: &Path, static_pie: bool) {
     let (source, flags) = if static_pie {
         (
-            "src/runtime/native/fixtures/testing/static_pie_exec.c",
+            "src/runtime/native/fixtures/testing/elf/static_pie.c",
             vec!["-static-pie", "-fPIE", "-O2", "-std=gnu11", "-Wl,--build-id=none"],
         )
     } else {
         (
-            "src/runtime/native/fixtures/testing/pie_exec.c",
+            "src/runtime/native/fixtures/testing/elf/pie.c",
             vec![
                 "-nostdlib",
                 "-fPIE",
