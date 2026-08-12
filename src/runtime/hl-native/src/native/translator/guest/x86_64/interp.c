@@ -2321,6 +2321,75 @@ static void interp_fp_comis_flags(struct cpu *cpu, unsigned char zf, unsigned ch
         interp_fp_comis_flags((cpu), zf_, pf_, cf_);                                                                   \
     } while (0)
 
+static void interp_fp_arithmetic(uint8_t op, int dbl, int scalar, uint8_t d[16], const uint8_t s[16]) {
+    if (dbl) {
+        __m128d a = interp_fp_get_pd(d), b = interp_fp_get_pd(s);
+        if (op == 0x58 && scalar) INTERP_FP_BIN("addsd");
+        else if (op == 0x58) INTERP_FP_BIN("addpd");
+        else if (op == 0x59 && scalar) INTERP_FP_BIN("mulsd");
+        else if (op == 0x59) INTERP_FP_BIN("mulpd");
+        else if (op == 0x5C && scalar) INTERP_FP_BIN("subsd");
+        else if (op == 0x5C) INTERP_FP_BIN("subpd");
+        else if (op == 0x5D && scalar) INTERP_FP_BIN("minsd");
+        else if (op == 0x5D) INTERP_FP_BIN("minpd");
+        else if (op == 0x5E && scalar) INTERP_FP_BIN("divsd");
+        else if (op == 0x5E) INTERP_FP_BIN("divpd");
+        else if (scalar) INTERP_FP_BIN("maxsd");
+        else INTERP_FP_BIN("maxpd");
+        interp_fp_put_pd(d, a);
+    } else {
+        __m128 a = interp_fp_get_ps(d), b = interp_fp_get_ps(s);
+        if (op == 0x58 && scalar) INTERP_FP_BIN("addss");
+        else if (op == 0x58) INTERP_FP_BIN("addps");
+        else if (op == 0x59 && scalar) INTERP_FP_BIN("mulss");
+        else if (op == 0x59) INTERP_FP_BIN("mulps");
+        else if (op == 0x5C && scalar) INTERP_FP_BIN("subss");
+        else if (op == 0x5C) INTERP_FP_BIN("subps");
+        else if (op == 0x5D && scalar) INTERP_FP_BIN("minss");
+        else if (op == 0x5D) INTERP_FP_BIN("minps");
+        else if (op == 0x5E && scalar) INTERP_FP_BIN("divss");
+        else if (op == 0x5E) INTERP_FP_BIN("divps");
+        else if (scalar) INTERP_FP_BIN("maxss");
+        else INTERP_FP_BIN("maxps");
+        interp_fp_put_ps(d, a);
+    }
+}
+
+static void interp_fp_mmx_convert(struct cpu *cpu, struct insn *insn, uint64_t next, uint8_t op, int dbl,
+                                  unsigned source_bytes) {
+    uint8_t d[16], s[16], result[16] = {0};
+    int destination = insn->reg;
+    if (op == 0x2A) {
+        interp_simd_rm_get(cpu, insn, 1, next, s);
+        interp_xmm_get(cpu, destination, d);
+        if (dbl)
+            interp_fp_put_pd(d, _mm_cvtepi32_pd(interp_fp_get_dq(s)));
+        else {
+            interp_fp_put_ps(result, _mm_cvtepi32_ps(interp_fp_get_dq(s)));
+            memcpy(d, result, 8);
+        }
+        interp_xmm_put(cpu, destination, d);
+        return;
+    }
+    interp_sse_rm_get(cpu, insn, next, source_bytes, s);
+    if (dbl && op == 0x2C) interp_fp_put_dq(result, _mm_cvttpd_epi32(interp_fp_opaque_pd(interp_fp_get_pd(s))));
+    else if (dbl) interp_fp_put_dq(result, _mm_cvtpd_epi32(interp_fp_opaque_pd(interp_fp_get_pd(s))));
+    else if (op == 0x2C) interp_fp_put_dq(result, _mm_cvttps_epi32(interp_fp_opaque_ps(interp_fp_get_ps(s))));
+    else interp_fp_put_dq(result, _mm_cvtps_epi32(interp_fp_opaque_ps(interp_fp_get_ps(s))));
+    interp_mm_put(cpu, destination, result);
+}
+
+static void interp_fp_compare(struct cpu *cpu, struct insn *insn, uint64_t next, int dbl, int scalar,
+                              unsigned source_bytes) {
+    uint8_t d[16], s[16];
+    interp_xmm_get(cpu, insn->reg, d);
+    interp_sse_rm_get(cpu, insn, next, source_bytes, s);
+    unsigned predicate = (unsigned)insn->imm & 7u;
+    if (dbl) interp_fp_put_pd(d, interp_fp_cmp_pd(interp_fp_get_pd(d), interp_fp_get_pd(s), predicate, scalar));
+    else interp_fp_put_ps(d, interp_fp_cmp_ps(interp_fp_get_ps(d), interp_fp_get_ps(s), predicate, scalar));
+    interp_xmm_put(cpu, insn->reg, d);
+}
+
 static int interp_step_sse_fp(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int prefix = interp_sse_prefix(insn);
@@ -2330,45 +2399,14 @@ static int interp_step_sse_fp(struct cpu *cpu, struct insn *insn, uint64_t pc, u
     unsigned source_bytes = interp_fp_source_bytes(op, prefix);
     uint8_t d[16], s[16];
 
-    // 0x2A/0x2C/0x2D name an MMX operand unless the prefix makes them scalar: CVTPI2PS/PD and
-    // CVT[T]PS2PI / CVT[T]PD2PI. Same host-intrinsic rule as the xmm conversions -- rounding is MXCSR.RC
-    // for 2D and truncation for 2C, and the out-of-range/NaN result is hardware's integer indefinite.
-    // The unused high lanes of the 4-wide intrinsics are fed ZEROES (interp_*_rm_get clears the tail), not
-    // the source's own upper half: a NaN parked there would raise #IE the guest instruction never raises.
     if ((op == 0x2A || op == 0x2C || op == 0x2D) && !scalar) {
-        uint8_t result[16] = {0};
-        if (op == 0x2A) { // xmm := two int32 from mm/m64
-            interp_simd_rm_get(cpu, insn, 1 /*mmx*/, next, s);
-            interp_xmm_get(cpu, destination, d);
-            if (dbl) {
-                interp_fp_put_pd(d, _mm_cvtepi32_pd(interp_fp_get_dq(s))); // CVTPI2PD writes all 128 bits
-            } else {
-                interp_fp_put_ps(result, _mm_cvtepi32_ps(interp_fp_get_dq(s)));
-                memcpy(d, result, 8); // CVTPI2PS merges: upper 64 bits of the destination are preserved
-            }
-            interp_xmm_put(cpu, destination, d);
-        } else { // mm := two int32 from xmm/m64 (NP) or xmm/m128 (66)
-            // One arm per conversion, each with its own interp_fp_opaque_*: without the barrier the
-            // not-taken conversion runs too, into the guest's MXCSR.
-            interp_sse_rm_get(cpu, insn, next, source_bytes, s);
-            if (dbl && op == 0x2C)
-                interp_fp_put_dq(result, _mm_cvttpd_epi32(interp_fp_opaque_pd(interp_fp_get_pd(s))));
-            else if (dbl)
-                interp_fp_put_dq(result, _mm_cvtpd_epi32(interp_fp_opaque_pd(interp_fp_get_pd(s))));
-            else if (op == 0x2C)
-                interp_fp_put_dq(result, _mm_cvttps_epi32(interp_fp_opaque_ps(interp_fp_get_ps(s))));
-            else
-                interp_fp_put_dq(result, _mm_cvtps_epi32(interp_fp_opaque_ps(interp_fp_get_ps(s))));
-            interp_mm_put(cpu, destination, result);
-        }
+        interp_fp_mmx_convert(cpu, insn, next, op, dbl, source_bytes);
         cpu->rip = next;
         return STEP_NEXT;
     }
-    // RSQRT and RCP are single-precision only; there is no RSQRTPD/RCPSD encoding to reach.
     if ((op == 0x52 || op == 0x53) && dbl) return interp_undefined(cpu, insn, pc, "reserved (no RSQRTPD/RCPPD)");
 
     switch (op) {
-    // CVTSI2SS / CVTSI2SD (F3/F2 0F 2A): an INTEGER r/m, hence the ordinary integer path; destination merges.
     case 0x2A: {
         interp_operand operand = interp_rm(cpu, insn, next);
         int width = insn->rexW ? 8 : 4;
@@ -2388,7 +2426,6 @@ static int interp_step_sse_fp(struct cpu *cpu, struct insn *insn, uint64_t pc, u
         return STEP_NEXT;
     }
 
-    // CVTTSS2SI (0F 2C, truncating) and CVTSS2SI (0F 2D, per MXCSR.RC). ModRM.reg names a GPR here.
     case 0x2C:
     case 0x2D: {
         int width = insn->rexW ? 8 : 4;
@@ -2433,7 +2470,6 @@ static int interp_step_sse_fp(struct cpu *cpu, struct insn *insn, uint64_t pc, u
         return STEP_NEXT;
     }
 
-    // SQRT (51), RSQRT (52), RCP (53). Unary; a scalar form's upper lanes come from the DESTINATION.
     case 0x51:
     case 0x52:
     case 0x53: {
@@ -2476,89 +2512,7 @@ static int interp_step_sse_fp(struct cpu *cpu, struct insn *insn, uint64_t pc, u
     case 0x5F: {
         interp_xmm_get(cpu, destination, d);
         interp_sse_rm_get(cpu, insn, next, source_bytes, s);
-        if (dbl) {
-            __m128d a = interp_fp_get_pd(d), b = interp_fp_get_pd(s);
-            switch (op) {
-            case 0x58:
-                if (scalar)
-                    INTERP_FP_BIN("addsd");
-                else
-                    INTERP_FP_BIN("addpd");
-                break;
-            case 0x59:
-                if (scalar)
-                    INTERP_FP_BIN("mulsd");
-                else
-                    INTERP_FP_BIN("mulpd");
-                break;
-            case 0x5C:
-                if (scalar)
-                    INTERP_FP_BIN("subsd");
-                else
-                    INTERP_FP_BIN("subpd");
-                break;
-            case 0x5D:
-                if (scalar)
-                    INTERP_FP_BIN("minsd");
-                else
-                    INTERP_FP_BIN("minpd");
-                break;
-            case 0x5E:
-                if (scalar)
-                    INTERP_FP_BIN("divsd");
-                else
-                    INTERP_FP_BIN("divpd");
-                break;
-            default:
-                if (scalar)
-                    INTERP_FP_BIN("maxsd");
-                else
-                    INTERP_FP_BIN("maxpd");
-                break;
-            }
-            interp_fp_put_pd(d, a);
-        } else {
-            __m128 a = interp_fp_get_ps(d), b = interp_fp_get_ps(s);
-            switch (op) {
-            case 0x58:
-                if (scalar)
-                    INTERP_FP_BIN("addss");
-                else
-                    INTERP_FP_BIN("addps");
-                break;
-            case 0x59:
-                if (scalar)
-                    INTERP_FP_BIN("mulss");
-                else
-                    INTERP_FP_BIN("mulps");
-                break;
-            case 0x5C:
-                if (scalar)
-                    INTERP_FP_BIN("subss");
-                else
-                    INTERP_FP_BIN("subps");
-                break;
-            case 0x5D:
-                if (scalar)
-                    INTERP_FP_BIN("minss");
-                else
-                    INTERP_FP_BIN("minps");
-                break;
-            case 0x5E:
-                if (scalar)
-                    INTERP_FP_BIN("divss");
-                else
-                    INTERP_FP_BIN("divps");
-                break;
-            default:
-                if (scalar)
-                    INTERP_FP_BIN("maxss");
-                else
-                    INTERP_FP_BIN("maxps");
-                break;
-            }
-            interp_fp_put_ps(d, a);
-        }
+        interp_fp_arithmetic(op, dbl, scalar, d, s);
         interp_xmm_put(cpu, destination, d);
         cpu->rip = next;
         return STEP_NEXT;
@@ -2655,14 +2609,7 @@ static int interp_step_sse_fp(struct cpu *cpu, struct insn *insn, uint64_t pc, u
     }
 
     case 0xC2: {
-        unsigned predicate = (unsigned)insn->imm & 7u;
-        interp_xmm_get(cpu, destination, d);
-        interp_sse_rm_get(cpu, insn, next, source_bytes, s);
-        if (dbl)
-            interp_fp_put_pd(d, interp_fp_cmp_pd(interp_fp_get_pd(d), interp_fp_get_pd(s), predicate, scalar));
-        else
-            interp_fp_put_ps(d, interp_fp_cmp_ps(interp_fp_get_ps(d), interp_fp_get_ps(s), predicate, scalar));
-        interp_xmm_put(cpu, destination, d);
+        interp_fp_compare(cpu, insn, next, dbl, scalar, source_bytes);
         cpu->rip = next;
         return STEP_NEXT;
     }
