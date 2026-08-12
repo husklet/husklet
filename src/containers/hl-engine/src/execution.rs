@@ -5,6 +5,7 @@ pub(crate) mod control;
 pub(crate) mod process;
 pub(crate) mod worker;
 
+mod attestation;
 mod checkpoint_broker;
 mod checkpoint_control;
 mod environment;

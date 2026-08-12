@@ -152,6 +152,11 @@ pub const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_C_EXECUTION_ATTESTATION",
+        "request one cold retained-C completion record from the Rust lifecycle supervisor",
+        Flag
+    ),
+    internal!(
         "HL_C_NO_RUNTIME_EXIT",
         "disable the Rust-owned retained-C exit route for same-binary measurement",
         Flag

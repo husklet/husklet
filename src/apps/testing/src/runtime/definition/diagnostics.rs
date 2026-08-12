@@ -1,7 +1,7 @@
 //! Assertions over the engine counters a case already receives on the worker's stderr.
 //!
-//! The engine prints `hl-native:` and `hl-native-detail:` records when the app asks for them
-//! through `execution: { native: true, diagnostics: true }`. They were forwarded and never
+//! The engine prints backend-owned records when the app asks for them through
+//! `execution: { native: true, diagnostics: true }`. They were forwarded and never
 //! compared, so a case could not fail for never having entered native execution.
 
 use super::super::Error;
@@ -9,7 +9,13 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// The records that carry named counters; other `hl-native-*` lines are per-site histograms.
-const RECORDS: [&str; 4] = ["hl-native:", "hl-native-detail:", "hl-native-entry:", "hl-interp:"];
+const RECORDS: [&str; 5] = [
+    "hl-c:",
+    "hl-native:",
+    "hl-native-detail:",
+    "hl-native-entry:",
+    "hl-interp:",
+];
 
 /// The counters written into every result row, in this order. Deliberately a subset: five emitted
 /// counters carry no information (`ibtc_shared_hits`, `ibtc_authenticated_entries`,
@@ -73,7 +79,15 @@ pub(crate) fn digest(stderr: &[u8]) -> String {
         return String::new();
     }
     fields.extend(histograms(stderr));
-    format!("native {}", fields.join(" "))
+    let backend = if String::from_utf8_lossy(stderr)
+        .lines()
+        .any(|line| line.trim_start().starts_with("hl-c:"))
+    {
+        "c"
+    } else {
+        "native"
+    };
+    format!("{backend} {}", fields.join(" "))
 }
 
 /// Collapses the per-pc lines into one field each, hottest first.
@@ -192,7 +206,7 @@ impl Counters {
     /// Named so a missing counter reports what the engine did emit, including nothing at all.
     fn summary(&self) -> String {
         if self.0.is_empty() {
-            return "none (the engine emitted no hl-native record)".to_owned();
+            return "none (the engine emitted no execution diagnostic record)".to_owned();
         }
         self.0
             .iter()
@@ -260,7 +274,15 @@ mod tests {
     fn absent_diagnostics_fail_rather_than_skip() {
         let message = violation(&assertions("- { counter: runs, greater-than: 0 }"), b"").unwrap();
         assert!(message.contains("never emitted"), "{message}");
-        assert!(message.contains("no hl-native record"), "{message}");
+        assert!(message.contains("no execution diagnostic record"), "{message}");
+    }
+
+    #[test]
+    fn retained_c_completion_satisfies_the_execution_floor() {
+        let report = b"hl-c: runs=1\n";
+        assert!(violation(&assertions("- { counter: runs, greater-than: 0 }"), report).is_none());
+        assert_eq!(Counters::parse(report).get("runs"), Some(1));
+        assert_eq!(super::digest(report), "c runs=1");
     }
 
     #[test]

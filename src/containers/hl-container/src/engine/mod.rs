@@ -456,6 +456,7 @@ mod tests {
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_C_EXECUTION_ATTESTATION"), Some("1"));
     }
 
     #[test]
@@ -465,6 +466,7 @@ mod tests {
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+        assert_eq!(spec.plan.options.get("HL_C_EXECUTION_ATTESTATION"), None);
     }
 
     #[test]

@@ -37,6 +37,7 @@ pub(crate) struct CWorker {
     startup_changed: Condvar,
     provider_broker: Option<std::thread::JoinHandle<()>>,
     checkpoint: Option<CheckpointControl>,
+    diagnostics: bool,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -91,6 +92,7 @@ impl CWorker {
             .transpose()?;
         let checkpoint_requested =
             plan.options.get("HL_CHECKPOINT").is_some() || plan.options.get("HL_RESTORE").is_some();
+        let diagnostics = super::attestation::requested(plan);
         let checkpoint = if checkpoint_requested {
             let sink = services.checkpoint_sink.clone().ok_or(EngineError::LaunchFailed)?;
             let source = services.checkpoint_source.clone().ok_or(EngineError::LaunchFailed)?;
@@ -223,6 +225,7 @@ impl CWorker {
             startup_changed: Condvar::new(),
             provider_broker,
             checkpoint,
+            diagnostics,
         })
     }
 
@@ -345,10 +348,7 @@ impl CWorker {
             let status = child.wait().map_err(|_| EngineError::WaitFailed)?;
             (process, status)
         };
-        // The retained engine runs guest tasks as descendants of this private
-        // session.  Its tracked leader can exit before those descendants do.
-        // Quiesce the session before dropping the stream bridge: descendants
-        // inherit stdout/stderr and would otherwise keep its pump threads alive.
+        // Quiesce descendants that inherited streams after the tracked leader exited.
         signal_process_group(process, libc::SIGKILL)?;
         if !process_status_matches(&status, exit) {
             hl_log::hl_error!(
@@ -366,6 +366,7 @@ impl CWorker {
         }
         *self.exit.lock().map_err(|_| EngineError::Synchronization)? = Some(exit);
         drop(self.streams.lock().map_err(|_| EngineError::Synchronization)?.take());
+        super::attestation::report_completed(self.diagnostics);
         hl_log::hl_event!(
             hl_log::tag::EXEC,
             hl_log::Level::Info,
@@ -679,6 +680,7 @@ mod tests {
             startup_changed: Condvar::new(),
             provider_broker: None,
             checkpoint: None,
+            diagnostics: false,
         };
 
         worker.stop(StopRequest::Signal(libc::SIGSTOP)).unwrap();
@@ -715,6 +717,7 @@ mod tests {
             startup_changed: Condvar::new(),
             provider_broker: None,
             checkpoint: None,
+            diagnostics: false,
         };
         let events = capture_events(|| worker.stop(StopRequest::Force).unwrap());
         assert!(events.contains("retained_c.worker.force_kill"));
@@ -748,6 +751,7 @@ mod tests {
             startup_changed: Condvar::new(),
             provider_broker: None,
             checkpoint: None,
+            diagnostics: false,
         };
 
         worker.stop(StopRequest::Force).unwrap();
@@ -784,6 +788,7 @@ mod tests {
             startup_changed: Condvar::new(),
             provider_broker: None,
             checkpoint: None,
+            diagnostics: false,
         };
         let events = capture_events(|| drop(worker));
         assert!(events.contains("retained_c.worker.drop_rollback"));
@@ -821,6 +826,7 @@ mod tests {
             startup_changed: Condvar::new(),
             provider_broker: None,
             checkpoint: None,
+            diagnostics: false,
         };
         let peer_thread = std::thread::spawn(move || {
             write_message(&mut peer, Message::Ready).unwrap();

@@ -4,6 +4,7 @@ pub(super) fn c_option(name: &str) -> bool {
     !matches!(
         name,
         "HL_EXECUTION_BACKEND"
+            | "HL_C_EXECUTION_ATTESTATION"
             | "HL_A64_DIRTY_OVERFLOW_CONTINUE"
             | "HL_A64_DIRTY_OVERFLOW_EXIT"
             | "HL_A64_NO_WRITE_COMMIT"
@@ -51,4 +52,15 @@ pub(super) fn c_file_volumes(value: &str) -> Result<Vec<String>, EngineError> {
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::c_option;
+
+    #[test]
+    fn supervisor_attestation_never_reaches_the_c_option_store() {
+        assert!(!c_option("HL_C_EXECUTION_ATTESTATION"));
+        assert!(c_option("HL_C_DIAGNOSTICS"));
+    }
 }
