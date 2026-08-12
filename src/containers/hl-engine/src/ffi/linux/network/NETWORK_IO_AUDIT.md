@@ -49,7 +49,7 @@ Every row produced checksum `1800000`. The test binaries were invoked directly:
 
 ```text
 taskset -c 17 <test-binary> --exact --ignored --nocapture \
-  ffi::linux::execution::network::native::kind_cache_test::loopback_stream_and_datagram_data_path
+  ffi::linux::network::native::kind_cache_test::loopback_stream_and_datagram_data_path
 ```
 
 The instrumented baseline was commit `ed55aa0b80c0b44876b7ae95bb04ef2aa0649c2c`,

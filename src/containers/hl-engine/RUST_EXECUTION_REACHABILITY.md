@@ -14,14 +14,16 @@ their unit fixtures, and the old Rust `Program` guest fixture are removed.
 The Rust guest executor is still physically compiled under
 `src/ffi/linux/execution/**`, with reexports through `src/ffi.rs`,
 `src/ffi/linux.rs`, and `src/native/mod.rs`. Nothing constructs it in production.
-Most of that directory can be deleted after its one live product service is
-moved: `runtime/api.rs` reexports
-`ffi::linux::execution::network::CheckpointRuntime`.
+The live checkpoint network service has moved to `ffi/linux/network/**`, and
+`runtime/api.rs` now reexports it from that non-executor location. The service
+still shares `execution::process_memory` and the file-transfer registry while
+the old syscall router is compiled; those adapters must move before deleting
+the directory wholesale.
 
 The bounded follow-up is:
 
-1. Move the checkpoint network catalog/host projection into a non-executor
-   service module and update the public reexport.
+1. Move the shared process-memory and file-transfer adapters out of the
+   executor directory without narrowing SCM_RIGHTS/checkpoint behavior.
 2. Remove the temporary `GuestExecutionPort` trait and its C and Rust impls;
    the C worker already invokes `CGuestExecutor` directly.
 3. Delete `ffi/linux/execution/**`, its three `GuestExecutor` reexports, and

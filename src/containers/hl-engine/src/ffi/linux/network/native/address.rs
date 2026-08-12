@@ -49,7 +49,7 @@ impl Native {
         }
     }
 
-    pub(in crate::ffi::linux::execution::network) fn decode_address(
+    pub(in crate::ffi::linux::network) fn decode_address(
         storage: &libc::sockaddr_storage,
         length: u32,
     ) -> Result<SocketAddress, RuntimeNetworkError> {

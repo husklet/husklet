@@ -35,6 +35,7 @@ mod mapping_access;
 #[cfg(test)]
 mod mapping_test;
 mod memory_control;
+pub(crate) mod network;
 #[path = "linux/virtual/backing.rs"]
 mod shared_backing;
 #[path = "linux/signal.rs"]

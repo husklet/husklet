@@ -129,7 +129,8 @@ struct SyntheticProvenance {
     filesystem: hl_runtime::FilesystemStats,
 }
 
-pub(super) use transfer::{FileIntent, FileOperation, FileTransferRegistry};
+pub(in crate::ffi::linux) use transfer::FileTransferRegistry;
+pub(super) use transfer::{FileIntent, FileOperation};
 
 struct InitialTerminalWindowNotification {
     tasks: Arc<hl_task::TaskRegistry>,

@@ -19,7 +19,7 @@ mod workspace;
 use workspace::OwnedWorkspace;
 pub use workspace::{BaseSystem, Input, Rootfs};
 
-pub use crate::ffi::linux::execution::network::CheckpointRuntime;
+pub use crate::ffi::linux::network::CheckpointRuntime;
 
 #[derive(Clone, Debug)]
 pub struct Builder {

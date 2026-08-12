@@ -8,7 +8,7 @@ use hl_memory::Protection;
 
 /// Linux syscall access to the same arena used by guest execution.
 #[derive(Clone)]
-pub(super) struct ProcessMemory(Arc<AddressSpace>);
+pub(in crate::ffi::linux) struct ProcessMemory(Arc<AddressSpace>);
 
 impl ProcessMemory {
     pub(super) fn new(memory: Arc<AddressSpace>) -> Self {

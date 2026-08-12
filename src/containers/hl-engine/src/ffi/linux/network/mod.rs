@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use hl_runtime::RuntimeNetworkSyscalls;
 
-use super::process_memory::ProcessMemory;
+use crate::ffi::linux::execution::process_memory::ProcessMemory;
 
 mod checkpoint;
 mod native;

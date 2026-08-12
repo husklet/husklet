@@ -71,11 +71,11 @@ impl CheckpointRuntime {
         self.policy.clone()
     }
 
-    pub(in crate::ffi::linux::execution) fn unix_namespace(&self) -> Arc<hl_network::UnixNamespace> {
+    pub(in crate::ffi::linux) fn unix_namespace(&self) -> Arc<hl_network::UnixNamespace> {
         self.sockets.unix_namespace()
     }
 
-    pub(in crate::ffi::linux::execution) fn bindings(&self) -> Arc<NetworkObjectBindings<Native>> {
+    pub(in crate::ffi::linux) fn bindings(&self) -> Arc<NetworkObjectBindings<Native>> {
         Arc::clone(&self.bindings)
     }
 
@@ -83,11 +83,11 @@ impl CheckpointRuntime {
         Arc::clone(&self.catalog)
     }
 
-    pub(in crate::ffi::linux::execution) fn files(&self) -> Arc<FileTransferRegistry> {
+    pub(in crate::ffi::linux) fn files(&self) -> Arc<FileTransferRegistry> {
         Arc::clone(&self.files)
     }
 
-    pub(in crate::ffi::linux::execution) fn socket_ioctl(&self) -> Arc<hl_runtime::SocketIoctl<Native>> {
+    pub(in crate::ffi::linux) fn socket_ioctl(&self) -> Arc<hl_runtime::SocketIoctl<Native>> {
         Arc::new(
             hl_runtime::SocketIoctl::new(Arc::clone(&self.host), Arc::clone(&self.sockets))
                 .with_policy(self.policy.clone()),

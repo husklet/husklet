@@ -56,7 +56,7 @@ impl FileOperation {
 }
 
 #[derive(Default)]
-pub(in crate::ffi::linux::execution) struct FileTransferRegistry {
+pub(in crate::ffi::linux) struct FileTransferRegistry {
     files: Mutex<BTreeMap<DescriptionIdentity, Weak<dyn FileCapability>>>,
 }
 
@@ -91,7 +91,7 @@ impl FileTransferRegistry {
         Ok(())
     }
 
-    pub(in crate::ffi::linux::execution) fn duplicate(
+    pub(in crate::ffi::linux) fn duplicate(
         &self,
         identity: DescriptionIdentity,
     ) -> Result<OwnedFd, RuntimeNetworkError> {
@@ -122,7 +122,7 @@ impl FileTransferRegistry {
         capability.operate(request, &mut terminal)
     }
 
-    pub(in crate::ffi::linux::execution) fn import(
+    pub(in crate::ffi::linux) fn import(
         self: &Arc<Self>,
         descriptor: OwnedFd,
     ) -> Result<ImportedTransfer, RuntimeNetworkError> {
