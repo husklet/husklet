@@ -13,7 +13,7 @@ cases:
     build: { source: source/directory.c, output: directory, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
     artifact: { destination: /opt/husklet/runtime-directory }
     run: [lifecycle]
-    expect: { exit: 0, stdout: golden/empty.bin }
+    expect: { exit: 0, stdout_empty: true }
   - id: runtime/filesystem/positional-arm64
     status: active
     targets: [arm64]
@@ -22,7 +22,7 @@ cases:
     artifact: { destination: /opt/husklet/runtime-positional }
     run: [io]
     # Straight-line syscall code with no hot loop, so the native tier never builds a region.
-    expect: { exit: 0, stdout: golden/empty.bin, diagnostics: [] }
+    expect: { exit: 0, stdout_empty: true, diagnostics: [] }
   - id: runtime/filesystem/positional-amd64
     status: active
     targets: [amd64]
@@ -31,7 +31,7 @@ cases:
     artifact: { destination: /opt/husklet/runtime-positional-amd64 }
     run: [io]
     # Straight-line syscall code with no hot loop, so the native tier never builds a region.
-    expect: { exit: 0, stdout: golden/empty.bin, diagnostics: [] }
+    expect: { exit: 0, stdout_empty: true, diagnostics: [] }
   - id: runtime/filesystem/path-metadata
     status: !oracle-excluded
       reason: "QEMU oracle requires a fresh isolated working directory not yet supplied by the shared runner"
@@ -40,7 +40,7 @@ cases:
     build: { source: source/path_metadata.c, output: path-metadata, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
     artifact: { destination: /opt/husklet/path-metadata }
     run: []
-    expect: { exit: 0, stdout: golden/empty.bin }
+    expect: { exit: 0, stdout_empty: true }
   - id: runtime/filesystem/typed-create-cache
     status: active
     compat: { class: compatibility }

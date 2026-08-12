@@ -14,7 +14,7 @@ cases:
     build: { source: source/exit.c, inputs: [source/abi.h], output: exit, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
     artifact: { destination: /opt/husklet/exit }
     run: []
-    expect: { exit: 42, stdout: golden/empty.bin }
+    expect: { exit: 42, stdout_empty: true }
   - id: runtime/bootstrap/write
     status: active
     compat: { class: smoke }

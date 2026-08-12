@@ -31,6 +31,18 @@ fn legacy_run_is_a_single_typed_argv_action() {
 }
 
 #[test]
+fn empty_output_is_typed_and_exclusive() {
+    let scenario = load(
+        "cases:\n  - id: sample/quiet\n    image: alpine\n    actions: [{ shell: { script: true } }]\n    expect: { output_empty: true }\n",
+    )
+    .unwrap();
+    assert!(scenario.cases[0].output_empty);
+    assert!(
+        load("cases:\n  - id: sample/conflict\n    image: alpine\n    actions: [{ shell: { script: true } }]\n    expect: { output_empty: true, stdout_exact: golden/exact.txt }\n").is_err()
+    );
+}
+
+#[test]
 fn rich_contract_preserves_bounds_and_order() {
     let scenario = load(
         r#"cases:

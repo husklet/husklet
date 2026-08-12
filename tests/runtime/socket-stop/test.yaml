@@ -16,4 +16,4 @@ cases:
     targets: [arm64, amd64]
     compat: { class: compatibility }
     run: [blocking-read]
-    expect: { exit: 0, stdout: golden/empty.bin }
+    expect: { exit: 0, stdout_empty: true }

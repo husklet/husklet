@@ -54,8 +54,37 @@ fn verification_combines_stdout_and_stderr() {
         exit: 0,
         stdout_contains: vec![marker],
         stdout_exact: None,
+        output_empty: false,
     };
     assert!(verify(&case, ExitStatus::Code(0), b"stdout", b"from-stderr").is_ok());
+}
+
+#[test]
+fn empty_output_assertion_rejects_either_stream() {
+    let case = Sample {
+        id: "example/quiet".into(),
+        image: "fixture".into(),
+        execution: Execution::default(),
+        class: Class::Quick,
+        targets: vec![Target::Arm64],
+        expected_failures: Vec::new(),
+        resources: Vec::new(),
+        environment: BTreeMap::new(),
+        working_directory: "/".into(),
+        actions: vec![Step::Shell("true".into())],
+        fixtures: Vec::new(),
+        readiness: None,
+        timeout: 1,
+        warmups: 0,
+        repetitions: 1,
+        exit: 0,
+        stdout_contains: Vec::new(),
+        stdout_exact: None,
+        output_empty: true,
+    };
+    assert!(verify(&case, ExitStatus::Code(0), b"", b"").is_ok());
+    assert!(verify(&case, ExitStatus::Code(0), b"unexpected", b"").is_err());
+    assert!(verify(&case, ExitStatus::Code(0), b"", b"unexpected").is_err());
 }
 
 #[test]

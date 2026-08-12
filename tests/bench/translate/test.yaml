@@ -7,4 +7,4 @@ build:
 cases:
   - id: translate
     repetitions: 3
-    expect: { stdout_contains: golden/empty.txt }
+    expect: { output_empty: true }

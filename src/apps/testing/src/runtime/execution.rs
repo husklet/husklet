@@ -387,9 +387,13 @@ impl<'a> CaseExecution<'a> {
                 .flat_map(|line| [line.as_bytes(), b"\n"].concat())
                 .collect();
         }
-        let expected = tokio::fs::read(&self.case.golden)
-            .await
-            .map_err(|error| context("read golden", &self.case.golden, &error))?;
+        let expected = if let Some(golden) = &self.case.golden {
+            tokio::fs::read(golden)
+                .await
+                .map_err(|error| context("read golden", golden, &error))?
+        } else {
+            Vec::new()
+        };
         if status != ExitStatus::Code(self.case.exit) {
             return Err(format!("exit {status:?}, expected {}", self.case.exit).into());
         }

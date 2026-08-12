@@ -40,4 +40,4 @@ cases:
         value: dumb
       - name: LANG
         value: C
-    expect: { exit: 0, stdout: golden/initial-stack.txt }
+    expect: { exit: 0, stdout_empty: true }

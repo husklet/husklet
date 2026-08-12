@@ -162,7 +162,11 @@ pub(crate) enum CompatClass {
 #[serde(deny_unknown_fields)]
 pub(super) struct Expectation {
     pub(super) exit: i32,
-    pub(super) stdout: PathBuf,
+    #[serde(default)]
+    pub(super) stdout: Option<PathBuf>,
+    /// Asserts that stdout is exactly zero bytes without requiring a placeholder file.
+    #[serde(default)]
+    pub(super) stdout_empty: bool,
     /// Declared stderr line patterns; an absent list keeps the default that stderr must be empty.
     #[serde(default)]
     pub(super) stderr: Vec<String>,

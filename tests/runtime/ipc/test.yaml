@@ -16,7 +16,7 @@ cases:
     artifact: { destination: /opt/husklet/socket-stop }
     run: []
     timeout: 3
-    expect: { exit: 0, stdout: golden/socket_stop.bin }
+    expect: { exit: 0, stdout_empty: true }
   - id: runtime/ipc/sysv-fork
     status: active
     compat: { class: compatibility }

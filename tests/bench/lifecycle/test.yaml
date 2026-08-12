@@ -7,4 +7,4 @@ cases:
   - id: lifecycle
     warmups: 1
     samples: 11
-    expect: { stdout_contains: golden/empty.txt }
+    expect: { output_empty: true }

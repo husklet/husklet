@@ -108,6 +108,9 @@ pub(super) fn verify(case: &Sample, status: ExitStatus, stdout: &[u8], stderr: &
             .into());
         }
     }
+    if case.output_empty && !output.is_empty() {
+        return Err(format!("combined output is not empty; {}", output_summary(stdout, stderr)).into());
+    }
     Ok(())
 }
 

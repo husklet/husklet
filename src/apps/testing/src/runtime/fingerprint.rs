@@ -45,7 +45,7 @@ struct FingerprintInput {
     directory: PathBuf,
     source: ManifestPath,
     build_inputs: Vec<ManifestPath>,
-    golden: PathBuf,
+    golden: Option<PathBuf>,
     environment: Vec<(Vec<u8>, Vec<u8>)>,
     metadata: String,
 }
@@ -76,12 +76,15 @@ fn fingerprint_files(inputs: &[FingerprintInput]) -> Result<String, String> {
             &input.directory.join(input.source.native()),
         )?;
         hash_build_inputs(&mut digest, &input.directory, &input.build_inputs)?;
-        let golden = input
-            .golden
-            .strip_prefix(&input.directory)
-            .map_err(|_| format!("golden is outside runtime category: {}", input.golden.display()))?;
-        let golden_name = portable_name(golden)?;
-        hash_file(&mut digest, b"golden", &golden_name, &input.golden)?;
+        if let Some(golden) = &input.golden {
+            let relative = golden
+                .strip_prefix(&input.directory)
+                .map_err(|_| format!("golden is outside runtime category: {}", golden.display()))?;
+            let golden_name = portable_name(relative)?;
+            hash_file(&mut digest, b"golden", &golden_name, golden)?;
+        } else {
+            hash_field(&mut digest, b"stdout-empty")?;
+        }
     }
     Ok(digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }
@@ -148,7 +151,7 @@ mod tests {
                 .iter()
                 .map(|value| serde_yaml::from_str::<ManifestPath>(value).unwrap())
                 .collect(),
-            golden: directory.join("golden.out"),
+            golden: Some(directory.join("golden.out")),
             environment: Vec::new(),
             metadata: "metadata".to_owned(),
         }

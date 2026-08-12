@@ -634,4 +634,4 @@ cases:
     build: { source: stat_layout.c, output: stat_layout, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/abi/stat_layout }
     run: []
-    expect: { exit: 0, stdout: golden/stat_layout.out }
+    expect: { exit: 0, stdout_empty: true }

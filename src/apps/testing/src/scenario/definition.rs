@@ -163,6 +163,8 @@ struct Expectation {
     stdout_contains: Paths,
     #[serde(default)]
     stdout_exact: Option<PathBuf>,
+    #[serde(default)]
+    output_empty: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -230,6 +232,7 @@ pub struct Sample {
     pub exit: i32,
     pub stdout_contains: Vec<PathBuf>,
     pub stdout_exact: Option<PathBuf>,
+    pub output_empty: bool,
 }
 
 #[derive(Debug)]
@@ -361,7 +364,10 @@ fn load_case(directory: &Path, definition: &Path, case: Input, ids: &mut BTreeSe
         .stdout_exact
         .map(|path| local_file(directory, path, "exact golden output"))
         .transpose()?;
-    if stdout_contains.is_empty() && stdout_exact.is_none() {
+    if case.expect.output_empty && (!stdout_contains.is_empty() || stdout_exact.is_some()) {
+        return Err(format!("{} combines an empty-output assertion with a golden output", case.id).into());
+    }
+    if stdout_contains.is_empty() && stdout_exact.is_none() && !case.expect.output_empty {
         return Err(format!("{} defines no output oracle", case.id).into());
     }
     let readiness = case.readiness.map(Readiness::validate).transpose()?;
@@ -384,6 +390,7 @@ fn load_case(directory: &Path, definition: &Path, case: Input, ids: &mut BTreeSe
         exit: case.expect.exit,
         stdout_contains,
         stdout_exact,
+        output_empty: case.expect.output_empty,
     })
 }
 

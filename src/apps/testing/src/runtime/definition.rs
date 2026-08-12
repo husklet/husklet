@@ -34,7 +34,7 @@ pub struct Workload {
     pub engine_options: EngineOptions,
     pub timeout: u64,
     pub exit: i32,
-    pub golden: PathBuf,
+    pub golden: Option<PathBuf>,
     pub(crate) stderr: Vec<String>,
     pub(crate) diagnostics: Vec<diagnostics::Assertion>,
     pub(crate) guest_files: Vec<GuestFile>,
@@ -152,7 +152,15 @@ impl App {
                 if !outputs.insert(output.clone()) || !destinations.insert(destination.clone()) {
                     return Err(format!("{} has duplicate case output or destination", definition.display()).into());
                 }
-                let golden = validate_golden(directory, &case.expect.stdout)?;
+                if case.expect.stdout_empty == case.expect.stdout.is_some() {
+                    return Err(format!("{} must declare exactly one of stdout or stdout_empty", case.id).into());
+                }
+                let golden = case
+                    .expect
+                    .stdout
+                    .as_deref()
+                    .map(|path| validate_golden(directory, path))
+                    .transpose()?;
                 let stderr =
                     manifest::stderr_patterns(case.expect.stderr).map_err(|error| format!("{}: {error}", case.id))?;
                 let declared = case.expect.diagnostics.unwrap_or_else(|| floor.clone());
@@ -304,11 +312,15 @@ impl App {
                 )
                 .into());
             }
-            if update {
-                let temporary = case.golden.with_extension("tmp");
-                fs::write(&temporary, &stdout)?;
-                fs::rename(temporary, &case.golden)?;
-            } else if fs::read(&case.golden)? != stdout {
+            if let Some(golden) = &case.golden {
+                if update {
+                    let temporary = golden.with_extension("tmp");
+                    fs::write(&temporary, &stdout)?;
+                    fs::rename(temporary, golden)?;
+                } else if fs::read(golden)? != stdout {
+                    return Err(format!("oracle output differs for {} {}", case.id, target.name()).into());
+                }
+            } else if !stdout.is_empty() {
                 return Err(format!("oracle output differs for {} {}", case.id, target.name()).into());
             }
             println!("ORACLE {} {}", case.id, target.name());

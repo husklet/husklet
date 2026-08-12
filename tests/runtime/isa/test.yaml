@@ -34,7 +34,7 @@ cases:
     artifact: { destination: /opt/husklet/isa-ctest }
     run: []
     timeout: 120
-    expect: { exit: 7, stdout: golden/ctest.out }
+    expect: { exit: 7, stdout_empty: true }
   - id: runtime/isa/x86_64/hx
     status: active
     targets: [amd64]
