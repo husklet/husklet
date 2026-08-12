@@ -68,6 +68,7 @@ fn collect(node: Node<'_>, source: &str, functions: &BTreeSet<String>, path: &Pa
         && let Some(call) = node.named_child(0).and_then(discarded_call)
         && let Some(function) = call
             .child_by_field_name("function")
+            .and_then(unparenthesized)
             .filter(|child| child.kind() == "identifier")
         && let Ok(name) = function.utf8_text(source.as_bytes())
         && functions.contains(name)
@@ -82,10 +83,15 @@ fn collect(node: Node<'_>, source: &str, functions: &BTreeSet<String>, path: &Pa
 }
 
 fn discarded_call(mut expression: Node<'_>) -> Option<Node<'_>> {
+    expression = unparenthesized(expression)?;
+    (expression.kind() == "call_expression").then_some(expression)
+}
+
+fn unparenthesized(mut expression: Node<'_>) -> Option<Node<'_>> {
     while expression.kind() == "parenthesized_expression" {
         expression = expression.named_child(0)?;
     }
-    (expression.kind() == "call_expression").then_some(expression)
+    Some(expression)
 }
 
 fn finding(path: &Path, node: Node<'_>, name: &str) -> Finding {
