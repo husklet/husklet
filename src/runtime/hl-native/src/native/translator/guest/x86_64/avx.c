@@ -3539,6 +3539,25 @@ static enum avx_dispatch_result sse_dispatch_aes(const hl_x86_avx_state *state, 
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result sse_dispatch_test(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
+                                                  uint64_t next, const uint8_t destination[16]) {
+    if (I->map3 != 2 || I->op != 0x17) return AVX_DISPATCH_UNMATCHED;
+    uint8_t source[16];
+    uint64_t destination_low, destination_high, source_low, source_high;
+    sse_get_rm(state, c, I, next, source);
+    memcpy(&destination_low, destination, 8);
+    memcpy(&destination_high, destination + 8, 8);
+    memcpy(&source_low, source, 8);
+    memcpy(&source_high, source + 8, 8);
+    int zero = (destination_low & source_low) == 0 && (destination_high & source_high) == 0;
+    int carry = (source_low & ~destination_low) == 0 && (source_high & ~destination_high) == 0;
+    c->nzcv = ((uint64_t)zero << 30) | ((uint64_t)(!carry) << 29);
+    c->pf = 1;
+    c->af = 0;
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3553,23 +3572,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     if (sse_dispatch_lane_transfer(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_string_compare(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
-    // ---- PTEST (66 0F38 17, SSE4.1): read-only flag-setter. ZF=(D & s)==0, CF=(s & ~D)==0, OF/SF/AF/PF=0.
-    // D = operand1 (reg/xmm1), s = operand2 (r/m). node/V8 startup branches on these. Substrate: x86 CF=NOT stored-C.
-    if (map == 2 && op == 0x17) {
-        sse_get_rm(state, c, &I, next, s);
-        uint64_t d0, d1, s0, s1;
-        memcpy(&d0, D, 8);
-        memcpy(&d1, D + 8, 8);
-        memcpy(&s0, s, 8);
-        memcpy(&s1, s + 8, 8);
-        int zf = ((d0 & s0) == 0 && (d1 & s1) == 0);
-        int cf = ((s0 & ~d0) == 0 && (s1 & ~d1) == 0);
-        c->nzcv = ((uint64_t)zf << 30) | ((uint64_t)(!cf) << 29); // SF=0 (bit31), OF=0 (bit28)
-        c->pf = 1;                                                // odd-popcount source byte -> x86 PF=0
-        c->af = 0;                                                // AF=0
-        c->rip = next;
-        return;
-    }
+    if (sse_dispatch_test(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     if (sse_dispatch_integer_extension(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_packed_arithmetic(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
