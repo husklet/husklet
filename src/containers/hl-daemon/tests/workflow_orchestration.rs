@@ -1,5 +1,6 @@
 //! Rust orchestration replacing shell-era end-to-end workflows.
 
+#[path = "workflow/mod.rs"]
 mod workflows;
 
 use workflows::{build, compose, network};
