@@ -5,8 +5,8 @@ use std::{
 };
 
 fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(directory).expect("translator header directory") {
-        let path = entry.expect("translator header entry").path();
+    for entry in fs::read_dir(directory).expect("native header directory") {
+        let path = entry.expect("native header entry").path();
         if path.is_dir() {
             headers(&path, output);
         } else if path.extension().is_some_and(|extension| extension == "h") {
@@ -22,8 +22,18 @@ fn owned_native_headers_are_self_contained() {
     let guest = native.join("translator/guest/x86_64");
     let mut owned = Vec::new();
     headers(&guest, &mut owned);
-    for boundary in ["bridge", "engine", "linux_abi"] {
+    for boundary in ["bridge", "engine", "host/linux", "host/macos", "include", "linux_abi"] {
         headers(&native.join(boundary), &mut owned);
+    }
+    if cfg!(target_os = "windows") {
+        headers(&native.join("host/windows"), &mut owned);
+    } else {
+        // These shared Windows boundaries are deliberately empty or Win32-type-free off Windows. The
+        // fault and internal headers require the platform SDK and join the sweep on a Windows host.
+        owned.extend([
+            native.join("host/windows/launch.h"),
+            native.join("host/windows/win32.h"),
+        ]);
     }
     owned.sort();
 
