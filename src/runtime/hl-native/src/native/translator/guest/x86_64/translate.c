@@ -5249,6 +5249,89 @@ static int lower_two_byte_boundary(const struct insn *instruction, uint64_t gues
     return TX_FALL;
 }
 
+static int lower_sse_shuffle(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
+    if (instruction->op != 0x70) return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    unsigned immediate = (unsigned)instruction->imm & 0xff;
+    if (instruction->p66) {
+        if (immediate == 0xE4) {
+            if (vd != source) e_vmov(vd, source);
+        } else if (immediate == 0x4E) {
+            e_ext(vd, source, source, 8);
+        } else if (immediate == 0xB1) {
+            emit32(0x4EA00800u | (source << 5) | vd);
+        } else if (immediate == 0x00 || immediate == 0x55 || immediate == 0xAA || immediate == 0xFF) {
+            hl_x86_emit_vector_broadcast32(vd, source, (int)(immediate & 3));
+        } else {
+            int output = vd == source ? 17 : vd;
+            for (int lane = 0; lane < 4; lane++)
+                e_ins_s(output, lane, source, (immediate >> (2 * lane)) & 3);
+            if (output != vd) e_vmov(vd, output);
+        }
+        return TX_NEXT;
+    }
+    if (instruction->rep || instruction->repne) {
+        int high = instruction->rep;
+        e_vmov(17, source);
+        for (int lane = 0; lane < 4; lane++) {
+            int destination_lane = high ? 4 + lane : lane;
+            int source_lane = (high ? 4 : 0) + (int)((immediate >> (2 * lane)) & 3);
+            emit32(0x6E000400u | ((((unsigned)destination_lane << 2) | 2u) << 16) |
+                   (((unsigned)source_lane << 1) << 11) | (source << 5) | 17);
+        }
+        e_vmov(vd, 17);
+        return TX_NEXT;
+    }
+    return TX_FALL;
+}
+
+static int lower_sse_sign_mask(struct insn *instruction, int vm, int mmx) {
+    if (instruction->op == 0x50) {
+        if (instruction->p66) {
+            e_vshr_imm(17, vm, 64, 63, 0);
+            emit32(0x4E003C00u | ((0u * 16 + 8) << 16) | (17 << 5) | instruction->reg);
+            emit32(0x4E003C00u | ((1u * 16 + 8) << 16) | (17 << 5) | 19);
+            e_rrr(A_ORR, instruction->reg, instruction->reg, 19, 1, 1);
+        } else {
+            e_vshr_imm(17, vm, 32, 31, 0);
+            emit32(0x0E003C00u | ((0u * 8 + 4) << 16) | (17 << 5) | instruction->reg);
+            for (int lane = 1; lane < 4; lane++) {
+                emit32(0x0E003C00u | (((unsigned)lane * 8 + 4) << 16) | (17 << 5) | 19);
+                e_rrr(A_ORR, instruction->reg, instruction->reg, 19, 0, lane);
+            }
+        }
+        return TX_NEXT;
+    }
+    if (instruction->op != 0xD7) return TX_FALL;
+    int source = vm;
+    if (mmx) {
+        e_vmov8(18, vm);
+        source = 18;
+    }
+    if (!nosseopt()) {
+        g_pmovmskb_n++;
+        e_vshr_imm(17, source, 8, 7, 0);
+        emit32(0x6F001400u | (25u << 16) | (17 << 5) | 17);
+        emit32(0x6F001400u | (50u << 16) | (17 << 5) | 17);
+        emit32(0x6F001400u | (100u << 16) | (17 << 5) | 17);
+        emit32(0x0E003C00u | (1u << 16) | (17 << 5) | 16);
+        emit32(0x0E003C00u | (17u << 16) | (17 << 5) | instruction->reg);
+        e_rrr(A_ORR, instruction->reg, 16, instruction->reg, 0, 8);
+    } else {
+        e_str_q(source, 28, OFF_MM);
+        e_addi(17, 28, OFF_MM, 1);
+        e_movz(instruction->reg, 0, 0);
+        for (int lane = 0; lane < 16; lane++) {
+            emit32(0x39400000u | ((unsigned)lane << 10) | (17 << 5) | 16);
+            emit32(0x53071C00u | (16 << 5) | 16);
+            emit32(0x2A000000u | (16 << 16) | ((unsigned)lane << 10) | (instruction->reg << 5) |
+                   instruction->reg);
+        }
+    }
+    return TX_NEXT;
+}
+
 // Owns the x87 run boundary as well as opcode dispatch. Every memory form
 // materializes the shadow stack before a potentially faulting access or C exit.
 static int lower_x87_family(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
@@ -5705,41 +5788,7 @@ static void *translate_block(uint64_t gpc) {
                         report_unimpl(gpc, &I);
                         break;
                     }
-                } else if (op == 0x70 && I.p66) { // pshufd xmm, xmm/m, imm8
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    unsigned im = (unsigned)I.imm & 0xff;
-                    // AES-endgame perf: single-insn forms for the shuffles crypto/ghash loops actually use.
-                    if (im == 0xE4) { // identity {0,1,2,3}
-                        if (vd != s) e_vmov(vd, s);
-                    } else if (im == 0x4E) { // {2,3,0,1}: swap 64-bit halves = EXT #8
-                        e_ext(vd, s, s, 8);
-                    } else if (im == 0xB1) { // {1,0,3,2}: swap dwords in each qword = REV64 .4s
-                        emit32(0x4EA00800u | (s << 5) | vd);
-                    } else if (im == 0x00 || im == 0x55 || im == 0xAA || im == 0xFF) { // broadcast one lane
-                        hl_x86_emit_vector_broadcast32(vd, s, (int)(im & 3));
-                    } else if (vd != s) { // no self-overlap: build directly in the destination (4 insns)
-                        for (int i = 0; i < 4; i++)
-                            e_ins_s(vd, i, s, (im >> (2 * i)) & 3);
-                    } else {
-                        for (int i = 0; i < 4; i++)
-                            e_ins_s(17, i, s, (im >> (2 * i)) & 3); // build in v17
-                        e_vmov(vd, 17);
-                    }
-                } else if (op == 0x70 && (I.rep || I.repne)) { // pshufhw(F3=high) / pshuflw(F2=low): shuffle 4 words
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    unsigned im = (unsigned)I.imm;
-                    int hi = I.rep; // F3 shuffles the HIGH 4 words, F2 the LOW 4
-                    e_vmov(17, s);  // v17 = src (the un-shuffled half is preserved)
-                    for (int i = 0; i < 4; i++) {
-                        int dlane = hi ? 4 + i : i;
-                        int slane = (hi ? 4 : 0) + (int)((im >> (2 * i)) & 3);
-                        // INS v17.H[dlane], s.H[slane]
-                        emit32(0x6E000400u | ((((unsigned)dlane << 2) | 2u) << 16) | (((unsigned)slane << 1) << 11) |
-                               (s << 5) | 17);
-                    }
-                    e_vmov(vd, 17);
+                } else if (lower_sse_shuffle(&I, next, vd, vm, mmx) == TX_NEXT) {
                 } else if (lower_sse_packed_binary(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted the complete lane-wise operation.
                 } else if (lower_sse_widening_multiply(&I, next, vd, vm, mmx) == TX_NEXT) {
@@ -5831,49 +5880,9 @@ static void *translate_block(uint64_t gpc) {
                         emit32(hi | (sz << 22) | (s << 5) | 17);  // narrow src's lanes -> v17 high
                         e_vmov(vd, 17);
                     }
-                } else if (op == 0xD7 && !nosseopt()) { // pmovmskb -> NEON (W3b SSE-SIMD idiom upgrade)
-                    // Gather the 16 byte-MSBs into the low 16 bits of I.reg with a cascading
-                    // shift-accumulate that needs NO memory round-trip and NO constant load
-                    // (the proven sse2neon _mm_movemask_epi8 sequence). 7 host insns vs ~51.
-                    //   ushr v17.16b, vm.16b, #7      ; t[i] = byte[i] MSB  (bit0 of each byte)
-                    //   usra v17.8h,  v17.8h,  #7     ; pack 2 bits -> low byte of each halfword
-                    //   usra v17.4s,  v17.4s,  #14    ; pack 4 bits -> low byte of each word
-                    //   usra v17.2d,  v17.2d,  #28    ; pack 8 bits -> byte[0] and byte[8]
-                    //   umov w16,   v17.b[0]          ; mask bits 0..7
-                    //   umov wREG,  v17.b[8]          ; mask bits 8..15
-                    //   orr  wREG,  w16, wREG, lsl #8 ; combine (W-form zero-extends to 64)
-                    g_pmovmskb_n++;
-                    // MMX yields an 8-BIT mask. This cascade reads all 16 source bytes, so zero-extend the
-                    // 64-bit operand first: bytes 8..15 then contribute nothing and the b[8] half is 0.
-                    int ms = vm;
-                    if (mmx) {
-                        e_vmov8(18, vm);
-                        ms = 18;
-                    }
-                    mmx_wb = -1;                                           // destination is a GPR
-                    e_vshr_imm(17, ms, 8, 7, 0);                           // ushr v17.16b, ms.16b, #7
-                    emit32(0x6F001400u | (25u << 16) | (17 << 5) | 17);    // usra v17.8h, v17.8h, #7
-                    emit32(0x6F001400u | (50u << 16) | (17 << 5) | 17);    // usra v17.4s, v17.4s, #14
-                    emit32(0x6F001400u | (100u << 16) | (17 << 5) | 17);   // usra v17.2d, v17.2d, #28
-                    emit32(0x0E003C00u | (1u << 16) | (17 << 5) | 16);     // umov w16, v17.b[0]
-                    emit32(0x0E003C00u | (17u << 16) | (17 << 5) | I.reg); // umov wREG, v17.b[8]
-                    e_rrr(A_ORR, I.reg, 16, I.reg, 0, 8);                  // orr wREG, w16, wREG, lsl #8
-                } else if (op == 0xD7) { // pmovmskb scalar fallback (NOSSEOPT=1 -> baseline codegen)
-                    int ms = vm;
-                    if (mmx) { // 8-bit mask: zero the spilled bytes 8..15 (see the NEON arm above)
-                        e_vmov8(18, vm);
-                        ms = 18;
-                    }
-                    mmx_wb = -1;               // destination is a GPR
-                    e_str_q(ms, 28, OFF_MM);   // spill the 16 bytes to scratch
-                    e_addi(17, 28, OFF_MM, 1); // x17 = &scratch
-                    e_movz(I.reg, 0, 0);       // result = 0
-                    for (int i = 0; i < 16; i++) {
-                        emit32(0x39400000u | ((unsigned)i << 10) | (17 << 5) | 16); // ldrb w16,[x17,#i]
-                        emit32(0x53071C00u | (16 << 5) | 16);                       // ubfx w16,w16,#7,#1
-                        emit32(0x2A000000u | (16 << 16) | ((unsigned)i << 10) | (I.reg << 5) |
-                               I.reg); // orr reg,reg,w16,lsl#i
-                    }
+                } else if (op == 0xD7) {
+                    mmx_wb = -1;
+                    (void)lower_sse_sign_mask(&I, vm, mmx);
                 } else if ((op == 0x2A || op == 0x2C || op == 0x2D) && !I.rep && !I.repne) {
                     // The MMX conversions: without F2/F3, 0F 2A/2C/2D name an mm operand, not a GPR --
                     // CVTPI2PS/PD (2A), CVT[T]PS2PI and CVT[T]PD2PI (2C trunc / 2D rounds by MXCSR.RC).
@@ -6359,20 +6368,8 @@ static void *translate_block(uint64_t gpc) {
                     emit32(0x4E801800u | (vd << 16) | (vd << 5) | 17); // uzp1 v17.4s, vd.4s, vd.4s -> [d0,d2,..]
                     emit32(0x4E801800u | (s << 16) | (s << 5) | 18);   // uzp1 v18.4s, s.4s,  s.4s  -> [s0,s2,..]
                     emit32(0x2EA0C000u | (18 << 16) | (17 << 5) | vd); // umull vd.2d, v17.2s, v18.2s
-                } else if (op == 0x50) {               // movmskps(NP)/movmskpd(66): pack sign bits -> GPR
-                    if (I.p66) {                       // 2 doubles -> low 2 bits
-                        e_vshr_imm(17, vm, 64, 63, 0); // ushr v17.2d, vm.2d, #63
-                        emit32(0x4E003C00u | ((0u * 16 + 8) << 16) | (17 << 5) | I.reg); // umov xREG, v17.d[0]
-                        emit32(0x4E003C00u | ((1u * 16 + 8) << 16) | (17 << 5) | 19);    // umov x19, v17.d[1]
-                        e_rrr(A_ORR, I.reg, I.reg, 19, 1, 1);                            // orr REG, REG, x19, lsl#1
-                    } else {                                                             // 4 floats -> low 4 bits
-                        e_vshr_imm(17, vm, 32, 31, 0);                                   // ushr v17.4s, vm.4s, #31
-                        emit32(0x0E003C00u | ((0u * 8 + 4) << 16) | (17 << 5) | I.reg);  // umov wREG, v17.s[0]
-                        for (int i = 1; i < 4; i++) {
-                            emit32(0x0E003C00u | (((unsigned)i * 8 + 4) << 16) | (17 << 5) | 19); // umov w19, v17.s[i]
-                            e_rrr(A_ORR, I.reg, I.reg, 19, 0, i); // orr wREG, wREG, w19, lsl#i
-                        }
-                    }
+                } else if (op == 0x50) {
+                    (void)lower_sse_sign_mask(&I, vm, mmx);
                 } else if (op == 0x5B) { // cvtdq2ps(NP)/cvtps2dq(66)/cvttps2dq(F3): packed 4-lane int<->float
                     int s = vm;
                     if (I.is_mem) {
