@@ -30,6 +30,10 @@ may_depend_on = ["package", "runtime", "container", "workspace", "application"]
 package = "hl-native"
 maximum = 0
 
+[documentation]
+allowed = ["AGENTS.md", "README.md", "lint/examples/negative.md", "lint/examples/positive.md", "todo.md"]
+examples = ["lint/examples/negative.md", "lint/examples/positive.md"]
+
 [unsafe_boundary]
 module_names = ["ffi"]
 [[unsafe_boundary.module_owners]]
@@ -50,11 +54,6 @@ path_contains = "/src/ffi"
 domain = "apps"
 [[environment_boundary.allow]]
 package = "hl-engine"
-[[environment_boundary.allow]]
-package = "hl-gpu-wgpu"
-[[environment_boundary.allow]]
-path_contains = "/shim/"
-
 [command_boundary]
 [[command_boundary.allow]]
 package = "hl-engine"
