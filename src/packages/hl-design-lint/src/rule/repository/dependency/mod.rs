@@ -274,17 +274,7 @@ impl Graph {
     }
 
     fn cycle_findings(&self, rule: &'static str) -> Vec<Finding> {
-        let mut edges: HashMap<&str, Vec<(&str, &Dependency)>> = HashMap::new();
-        for package in self.packages.values() {
-            for dependency in &package.dependencies {
-                if dependency.kind.joins_build_cycle() {
-                    let Some(target) = self.target(dependency) else {
-                        continue;
-                    };
-                    edges.entry(&package.name).or_default().push((&target.name, dependency));
-                }
-            }
-        }
+        let edges = self.cycle_edges();
 
         let components = cycle::components(self.packages.keys().map(String::as_str), &edges);
         let mut findings = Vec::new();
@@ -323,6 +313,22 @@ impl Graph {
             findings.push(finding);
         }
         findings
+    }
+
+    fn cycle_edges(&self) -> HashMap<&str, Vec<(&str, &Dependency)>> {
+        let mut edges: HashMap<&str, Vec<(&str, &Dependency)>> = HashMap::new();
+        self.packages
+            .values()
+            .flat_map(|package| package.dependencies.iter().map(move |dependency| (package, dependency)))
+            .filter(|(_, dependency)| dependency.kind.joins_build_cycle())
+            .filter_map(|(package, dependency)| {
+                self.target(dependency)
+                    .map(|target| (package.name.as_str(), target.name.as_str(), dependency))
+            })
+            .for_each(|(source, target, dependency)| {
+                edges.entry(source).or_default().push((target, dependency));
+            });
+        edges
     }
 
     fn target(&self, dependency: &Dependency) -> Option<&Package> {
