@@ -799,6 +799,208 @@ static int cmsg_import_eventfd_trailer(int *fds, int nfds) {
 
 static void cmsg_note_recv_sock_fd(int fd);
 
+struct cmsg_export {
+    int *descriptors;
+    int capacity;
+    int count;
+};
+
+static int cmsg_export_visible(struct cmsg_export *export, const int *fds, int count,
+                               struct hl_cmsg_kqueue_meta *kqueue_metadata, int engine_metadata) {
+    memset(kqueue_metadata, 0, (size_t)count * sizeof *kqueue_metadata);
+    for (int index = 0; index < count; ++index) {
+        if (engine_metadata && kqueue_scm_export(fds[index], &kqueue_metadata[index]) > 0) {
+            int placeholder = cmsg_kqueue_placeholder();
+            if (placeholder < 0) return EMFILE;
+            kqueue_metadata[index].magic = UINT32_C(0x484c4b51);
+            kqueue_metadata[index].ordinal = (uint32_t)index;
+            kqueue_metadata[index].source_pid = (int32_t)getpid();
+            kqueue_metadata[index].source_fd = fds[index];
+            export->descriptors[export->count++] = placeholder;
+            (void)ofd_identity_ensure(fds[index]);
+            continue;
+        }
+        int native = fds[index];
+        int borrowed = bound_attachment_borrow(fds[index], &native);
+        if (borrowed < 0 || (borrowed > 0 && cmsg_tmpfd_track(native, 1) != 0)) {
+            if (borrowed > 0) bound_attachment_release(native);
+            return borrowed < 0 ? -borrowed : EMFILE;
+        }
+        export->descriptors[export->count++] = native;
+        (void)ofd_identity_ensure(fds[index]);
+        if (engine_metadata && fds[index] >= 0 && fds[index] < HL_NFD && g_seq_ref[fds[index]] &&
+            g_cmsg_nseq < 253) {
+            uint32_t slot = g_seq_ref[fds[index]] - 1;
+            uint32_t end = g_seq_end[fds[index]];
+            __atomic_add_fetch(&g_seq_refs[slot].refs[end], 1, __ATOMIC_ACQ_REL);
+            __atomic_add_fetch(&g_seq_refs[slot].pending[end], 1, __ATOMIC_ACQ_REL);
+            g_cmsg_seq_slot[g_cmsg_nseq] = (uint16_t)slot;
+            g_cmsg_seq_end[g_cmsg_nseq++] = (uint8_t)end;
+        }
+    }
+    return 0;
+}
+
+static int cmsg_export_sequence_and_event(struct cmsg_export *export, const int *fds, int count) {
+    for (int index = 0; index < count; ++index) {
+        int fd = fds[index];
+        if (fd >= 0 && fd < HL_NFD && g_seq_ref[fd]) {
+            struct hl_cmsg_seq_meta metadata = {
+                .magic = HL_CMSG_SEQ_MAGIC,
+                .ordinal = (uint32_t)index,
+                .slot = (uint32_t)(g_seq_ref[fd] - 1),
+                .end = (uint32_t)g_seq_end[fd],
+            };
+            int marker = cmsg_seq_marker(&metadata);
+            if (marker < 0) return EMSGSIZE;
+            export->descriptors[export->count++] = marker;
+        }
+    }
+    for (int index = 0; index < count; ++index) {
+        int fd = fds[index];
+        if (fd < 0 || fd >= HL_NFD || !g_eventfd_peer[fd]) continue;
+        if (export->count + 2 > export->capacity) return EMSGSIZE;
+        int hidden = g_eventfd_peer[fd] - 1;
+        int flags = fcntl(hidden, F_GETFL);
+        if (flags >= 0) fcntl(hidden, F_SETFL, flags | O_NONBLOCK);
+        fcntl(hidden, F_SETFD, FD_CLOEXEC);
+        int event_slot = eventfd_counter_slot(fd);
+        if (event_slot < 0 || event_slot >= HL_NFD || g_cmsg_nevent >= 253) return EMSGSIZE;
+        struct hl_cmsg_eventfd_meta metadata = {
+            .magic = HL_CMSG_EVENTFD_MAGIC,
+            .ordinal = (uint32_t)index,
+            .slot = (uint32_t)event_slot,
+            .sema = (uint32_t)(g_eventfd_sema[fd] != 0),
+            .nb = (uint32_t)eventfd_guest_nb(fd),
+        };
+        g_eventfd_refs[event_slot]++;
+        g_cmsg_event_slot[g_cmsg_nevent++] = (uint16_t)event_slot;
+        int marker = cmsg_eventfd_marker(&metadata);
+        if (marker < 0) return EMSGSIZE;
+        export->descriptors[export->count++] = hidden;
+        export->descriptors[export->count++] = marker;
+    }
+    return 0;
+}
+
+static int cmsg_export_memfd_and_pipe(struct cmsg_export *export, const int *fds, int count) {
+    for (int index = 0; index < count; ++index) {
+        int fd = fds[index];
+        if (!memfd_ensure_fd(fd)) continue;
+        if (export->count + 1 > export->capacity) return EMSGSIZE;
+        struct hl_cmsg_memfd_meta metadata = {
+            .magic = UINT32_C(0x484c4d46),
+            .ordinal = (uint32_t)index,
+            .seals = g_memfd_seal[fd],
+        };
+        int marker = cmsg_memfd_marker(&metadata);
+        if (marker < 0) return EMSGSIZE;
+        export->descriptors[export->count++] = marker;
+    }
+    for (int index = 0; index < count; ++index) {
+        int fd = fds[index];
+        if (fd < 0 || fd >= HL_NFD || g_pipe_identity[fd] == 0) continue;
+        if (export->count + 1 > export->capacity) return EMSGSIZE;
+        struct hl_cmsg_pipe_meta metadata = {
+            .magic = UINT32_C(0x484c5049),
+            .ordinal = (uint32_t)index,
+            .identity = g_pipe_identity[fd],
+            .size = g_pipesz[fd],
+        };
+        int marker = cmsg_pipe_marker(&metadata);
+        if (marker < 0) return EMSGSIZE;
+        export->descriptors[export->count++] = marker;
+    }
+    return 0;
+}
+
+static int cmsg_export_kqueue(struct cmsg_export *export, const struct hl_cmsg_kqueue_meta *metadata, int count) {
+    for (int index = 0; index < count; ++index) {
+        struct hl_cmsg_kqueue_meta item = metadata[index];
+        if (item.kind == 0) continue;
+        int hidden_count = epoll_scm_hidden_export(&item, NULL, 0);
+        if (hidden_count < 0 || export->count + hidden_count + 1 > 253) return EMSGSIZE;
+        if (export->count + hidden_count + 1 > export->capacity) {
+            int expanded = export->count + hidden_count + 1;
+            int *replacement = realloc(export->descriptors, (size_t)expanded * sizeof *replacement);
+            if (replacement == NULL) return ENOMEM;
+            export->descriptors = replacement;
+            export->capacity = expanded;
+        }
+        if (hidden_count != 0 &&
+            epoll_scm_hidden_export(&item, export->descriptors + export->count, hidden_count) != hidden_count)
+            return EIO;
+        export->count += hidden_count;
+        int marker = cmsg_kqueue_marker(&item);
+        if (marker < 0) return EMSGSIZE;
+        export->descriptors[export->count++] = marker;
+    }
+    return 0;
+}
+
+static int cmsg_export_signal_and_timer(struct cmsg_export *export, const int *fds, int count) {
+    for (int index = 0; index < count; ++index) {
+        int fd = fds[index];
+        if (fd < 0 || fd >= HL_NFD || !g_sigfd_slot[fd]) continue;
+        int slot = g_sigfd_slot[fd] - 1;
+        if (slot < 0 || slot >= HL_SFD_MAX || g_sfd[slot].wr < 0 || export->count + 2 > export->capacity)
+            return EMSGSIZE;
+        struct hl_cmsg_signalfd_meta metadata = {
+            .magic = UINT32_C(0x484c5346),
+            .ordinal = (uint32_t)index,
+            .source_pid = (int32_t)getpid(),
+            .source_slot = slot,
+            .mask = g_sfd[slot].mask,
+        };
+        int marker = cmsg_signalfd_marker(&metadata);
+        if (marker < 0) return EMSGSIZE;
+        export->descriptors[export->count++] = g_sfd[slot].wr;
+        export->descriptors[export->count++] = marker;
+    }
+    for (int index = 0; index < count; ++index) {
+        int fd = fds[index];
+        if (fd < 0 || fd >= HL_NFD || !g_timerfd[fd]) continue;
+        if (export->count + 1 > export->capacity) return EMSGSIZE;
+        struct hl_cmsg_timerfd_meta metadata = {
+            .magic = HL_CMSG_TIMERFD_MAGIC,
+            .ordinal = (uint32_t)index,
+            .first_oneshot = (uint32_t)(g_tfd_first_oneshot[fd] != 0),
+            .clock = g_tfd_clock[fd],
+            .deadline = g_tfd_deadline[fd],
+            .interval = g_tfd_interval[fd],
+            .source_fd = fd,
+            .source_pid = (int32_t)getpid(),
+            .nb = (uint32_t)(g_tfd_nb[fd] != 0),
+            .portable = 1,
+            .object = g_tfd_object[fd],
+            .shared_state = (uint64_t)(uintptr_t)g_tfd_shared[fd],
+        };
+        struct hl_cmsg_timerfd_meta placeholder_metadata = {0};
+        int placeholder = cmsg_timerfd_marker(&placeholder_metadata);
+        if (placeholder < 0) return EMSGSIZE;
+        export->descriptors[index] = placeholder;
+        int marker = cmsg_timerfd_marker(&metadata);
+        if (marker < 0) return EMSGSIZE;
+        export->descriptors[export->count++] = marker;
+    }
+    return 0;
+}
+
+static int cmsg_export_ofd(struct cmsg_export *export, const int *fds, int count) {
+    for (int index = 0; index < count; ++index) {
+        struct hl_cmsg_ofd_meta metadata = {
+            .magic = HL_CMSG_OFD_MAGIC,
+            .ordinal = (uint32_t)index,
+            .identity = g_ofd_id[fds[index]],
+        };
+        int marker = cmsg_ofd_marker(&metadata);
+        if (marker < 0) return EMSGSIZE;
+        export->descriptors[export->count++] = marker;
+        cmsg_inflight_hold(fds[index], marker);
+    }
+    return 0;
+}
+
 // guest(Linux) control buf -> host(macOS) control buf. Returns host bytes written (<=cap), 0/none,
 // or -1 with *errp set. A partial ancillary conversion must never be sent: silently dropping SCM_RIGHTS
 // fds leaves higher-level protocols with a successful data message but missing handles.
@@ -820,9 +1022,7 @@ static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap, i
             return -1;
         }
         size_t dlen = (size_t)clen - LX_CMSGHDR; // payload bytes (e.g. N*4 fds)
-        int *combo = NULL;
-        int combo_cap = 0;
-        int combo_n = 0;
+        struct cmsg_export export = {0};
         if (lvl == LX_SOL_SOCKET && typ == SCM_RIGHTS && dlen >= sizeof(int)) {
             const int *fds = (const int *)(g + go + LX_CMSGHDR);
             int nfds = (int)(dlen / sizeof(int));
@@ -830,267 +1030,29 @@ static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap, i
                 if (errp) *errp = EINVAL;
                 return -1;
             }
-            combo_cap = nfds * 6; // visible + OFD/seq/timer markers + eventfd sideband pair
-            combo = malloc((size_t)combo_cap * sizeof(int));
-            if (!combo) {
+            export.capacity = nfds * 6; // visible + OFD/seq/timer markers + eventfd sideband pair
+            export.descriptors = malloc((size_t)export.capacity * sizeof *export.descriptors);
+            if (!export.descriptors) {
                 if (errp) *errp = ENOMEM;
                 return -1;
             }
             struct hl_cmsg_kqueue_meta kqueue_metadata[253];
-            memset(kqueue_metadata, 0, sizeof kqueue_metadata);
-            for (int i = 0; i < nfds; i++) {
-                if (engine_metadata && kqueue_scm_export(fds[i], &kqueue_metadata[i]) > 0) {
-                    int placeholder = cmsg_kqueue_placeholder();
-                    if (placeholder < 0) {
-                        free(combo);
-                        if (errp) *errp = EMFILE;
-                        return -1;
-                    }
-                    kqueue_metadata[i].magic = UINT32_C(0x484c4b51);
-                    kqueue_metadata[i].ordinal = (uint32_t)i;
-                    kqueue_metadata[i].source_pid = (int32_t)getpid();
-                    kqueue_metadata[i].source_fd = fds[i];
-                    combo[combo_n++] = placeholder;
-                    (void)ofd_identity_ensure(fds[i]);
-                    continue;
-                }
-                int native = fds[i];
-                int borrowed = bound_attachment_borrow(fds[i], &native);
-                if (borrowed < 0 || (borrowed > 0 && cmsg_tmpfd_track(native, 1) != 0)) {
-                    if (borrowed > 0) bound_attachment_release(native);
-                    free(combo);
-                    if (errp) *errp = borrowed < 0 ? -borrowed : EMFILE;
-                    return -1;
-                }
-                combo[combo_n++] = native;
-                (void)ofd_identity_ensure(fds[i]);
-                if (engine_metadata && fds[i] >= 0 && fds[i] < HL_NFD && g_seq_ref[fds[i]] && g_cmsg_nseq < 253) {
-                    uint32_t slot = g_seq_ref[fds[i]] - 1;
-                    uint32_t end = g_seq_end[fds[i]];
-                    __atomic_add_fetch(&g_seq_refs[slot].refs[end], 1, __ATOMIC_ACQ_REL);
-                    __atomic_add_fetch(&g_seq_refs[slot].pending[end], 1, __ATOMIC_ACQ_REL);
-                    g_cmsg_seq_slot[g_cmsg_nseq] = (uint16_t)slot;
-                    g_cmsg_seq_end[g_cmsg_nseq++] = (uint8_t)end;
-                }
+            int error = cmsg_export_visible(&export, fds, nfds, kqueue_metadata, engine_metadata);
+            if (!error && engine_metadata) error = cmsg_export_sequence_and_event(&export, fds, nfds);
+            if (!error && engine_metadata) error = cmsg_export_memfd_and_pipe(&export, fds, nfds);
+            if (!error && engine_metadata) error = cmsg_export_kqueue(&export, kqueue_metadata, nfds);
+            if (!error && engine_metadata) error = cmsg_export_signal_and_timer(&export, fds, nfds);
+            if (!error && engine_metadata) error = cmsg_export_ofd(&export, fds, nfds);
+            if (error) {
+                free(export.descriptors);
+                if (errp) *errp = error;
+                return -1;
             }
-            if (!engine_metadata) goto cmsg_visible_only;
-            for (int i = 0; i < nfds; i++) {
-                int fd = fds[i];
-                if (fd >= 0 && fd < HL_NFD && g_seq_ref[fd]) {
-                    struct hl_cmsg_seq_meta sm = {
-                        .magic = HL_CMSG_SEQ_MAGIC,
-                        .ordinal = (uint32_t)i,
-                        .slot = (uint32_t)(g_seq_ref[fd] - 1),
-                        .end = (uint32_t)g_seq_end[fd],
-                    };
-                    int marker = cmsg_seq_marker(&sm);
-                    if (marker < 0) {
-                        free(combo);
-                        if (errp) *errp = EMSGSIZE;
-                        return -1;
-                    }
-                    combo[combo_n++] = marker;
-                }
-            }
-            for (int i = 0; i < nfds; i++) {
-                int fd = fds[i];
-                if (fd < 0 || fd >= HL_NFD || !g_eventfd_peer[fd]) continue;
-                if (combo_n + 2 > combo_cap) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                int hidden = g_eventfd_peer[fd] - 1;
-                int fl = fcntl(hidden, F_GETFL);
-                if (fl >= 0) fcntl(hidden, F_SETFL, fl | O_NONBLOCK);
-                fcntl(hidden, F_SETFD, FD_CLOEXEC);
-                struct hl_cmsg_eventfd_meta m = {
-                    .magic = HL_CMSG_EVENTFD_MAGIC,
-                    .ordinal = (uint32_t)i,
-                    .slot = (uint32_t)eventfd_counter_slot(fd),
-                    .sema = (uint32_t)(g_eventfd_sema[fd] != 0),
-                    .nb = (uint32_t)eventfd_guest_nb(fd),
-                };
-                int event_slot = eventfd_counter_slot(fd);
-                if (event_slot < 0 || event_slot >= HL_NFD || g_cmsg_nevent >= 253) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                g_eventfd_refs[event_slot]++;
-                g_cmsg_event_slot[g_cmsg_nevent++] = (uint16_t)event_slot;
-                int marker = cmsg_eventfd_marker(&m);
-                if (marker < 0) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                combo[combo_n++] = hidden;
-                combo[combo_n++] = marker;
-            }
-            for (int i = 0; i < nfds; i++) {
-                int fd = fds[i];
-                if (!memfd_ensure_fd(fd)) continue;
-                if (combo_n + 1 > combo_cap) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                struct hl_cmsg_memfd_meta metadata = {
-                    .magic = UINT32_C(0x484c4d46),
-                    .ordinal = (uint32_t)i,
-                    .seals = g_memfd_seal[fd],
-                };
-                int marker = cmsg_memfd_marker(&metadata);
-                if (marker < 0) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                combo[combo_n++] = marker;
-            }
-            for (int i = 0; i < nfds; i++) {
-                int fd = fds[i];
-                if (fd < 0 || fd >= HL_NFD || g_pipe_identity[fd] == 0) continue;
-                if (combo_n + 1 > combo_cap) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                struct hl_cmsg_pipe_meta metadata = {
-                    .magic = UINT32_C(0x484c5049),
-                    .ordinal = (uint32_t)i,
-                    .identity = g_pipe_identity[fd],
-                    .size = g_pipesz[fd],
-                };
-                int marker = cmsg_pipe_marker(&metadata);
-                if (marker < 0) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                combo[combo_n++] = marker;
-            }
-            for (int i = 0; i < nfds; i++) {
-                struct hl_cmsg_kqueue_meta metadata = kqueue_metadata[i];
-                if (metadata.kind == 0) continue;
-                int hidden_count = epoll_scm_hidden_export(&metadata, NULL, 0);
-                if (hidden_count < 0 || combo_n + hidden_count + 1 > 253) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                if (combo_n + hidden_count + 1 > combo_cap) {
-                    int expanded = combo_n + hidden_count + 1;
-                    int *replacement = realloc(combo, (size_t)expanded * sizeof *combo);
-                    if (replacement == NULL) {
-                        free(combo);
-                        if (errp) *errp = ENOMEM;
-                        return -1;
-                    }
-                    combo = replacement;
-                    combo_cap = expanded;
-                }
-                if (hidden_count != 0 &&
-                    epoll_scm_hidden_export(&metadata, combo + combo_n, hidden_count) != hidden_count) {
-                    free(combo);
-                    if (errp) *errp = EIO;
-                    return -1;
-                }
-                combo_n += hidden_count;
-                int marker = cmsg_kqueue_marker(&metadata);
-                if (marker < 0) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                combo[combo_n++] = marker;
-            }
-            for (int i = 0; i < nfds; i++) {
-                int fd = fds[i];
-                if (fd < 0 || fd >= HL_NFD || !g_sigfd_slot[fd]) continue;
-                int slot = g_sigfd_slot[fd] - 1;
-                if (slot < 0 || slot >= HL_SFD_MAX || g_sfd[slot].wr < 0 || combo_n + 2 > combo_cap) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                struct hl_cmsg_signalfd_meta metadata = {
-                    .magic = UINT32_C(0x484c5346),
-                    .ordinal = (uint32_t)i,
-                    .source_pid = (int32_t)getpid(),
-                    .source_slot = slot,
-                    .mask = g_sfd[slot].mask,
-                };
-                int marker = cmsg_signalfd_marker(&metadata);
-                if (marker < 0) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                combo[combo_n++] = g_sfd[slot].wr;
-                combo[combo_n++] = marker;
-            }
-            for (int i = 0; i < nfds; i++) {
-                int fd = fds[i];
-                if (fd < 0 || fd >= HL_NFD || !g_timerfd[fd]) continue;
-                if (combo_n + 1 > combo_cap) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                struct hl_cmsg_timerfd_meta tm = {
-                    .magic = HL_CMSG_TIMERFD_MAGIC,
-                    .ordinal = (uint32_t)i,
-                    .first_oneshot = (uint32_t)(g_tfd_first_oneshot[fd] != 0),
-                    .clock = g_tfd_clock[fd],
-                    .deadline = g_tfd_deadline[fd],
-                    .interval = g_tfd_interval[fd],
-                    .source_fd = fd,
-                    .source_pid = (int32_t)getpid(),
-                    .nb = (uint32_t)(g_tfd_nb[fd] != 0),
-                    .portable = 1,
-                    .object = g_tfd_object[fd],
-                    .shared_state = (uint64_t)(uintptr_t)g_tfd_shared[fd],
-                };
-                struct hl_cmsg_timerfd_meta placeholder_metadata;
-                memset(&placeholder_metadata, 0, sizeof placeholder_metadata);
-                int placeholder = cmsg_timerfd_marker(&placeholder_metadata);
-                if (placeholder < 0) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                combo[i] = placeholder;
-                int marker = cmsg_timerfd_marker(&tm);
-                if (marker < 0) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                combo[combo_n++] = marker;
-            }
-            for (int i = 0; i < nfds; i++) {
-                struct hl_cmsg_ofd_meta metadata = {
-                    .magic = HL_CMSG_OFD_MAGIC,
-                    .ordinal = (uint32_t)i,
-                    .identity = g_ofd_id[fds[i]],
-                };
-                int marker = cmsg_ofd_marker(&metadata);
-                if (marker < 0) {
-                    free(combo);
-                    if (errp) *errp = EMSGSIZE;
-                    return -1;
-                }
-                combo[combo_n++] = marker;
-                cmsg_inflight_hold(fds[i], marker);
-            }
-        cmsg_visible_only:
-            dlen = (size_t)combo_n * sizeof(int);
+            dlen = (size_t)export.count * sizeof(int);
         }
         size_t need = CMSG_SPACE(dlen);
         if (ho + need > cap) {
-            free(combo);
+            free(export.descriptors);
             if (errp) *errp = EMSGSIZE;
             return -1;
         }
@@ -1100,11 +1062,11 @@ static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap, i
         ch.cmsg_level = cmsg_level_l2m(lvl);
         ch.cmsg_type = typ; // SCM_RIGHTS==1 on both
         memcpy(h + ho, &ch, sizeof ch);
-        if (lvl == LX_SOL_SOCKET && typ == SCM_RIGHTS && combo_n > 0)
-            memcpy(CMSG_DATA((struct cmsghdr *)(h + ho)), combo, dlen);
+        if (lvl == LX_SOL_SOCKET && typ == SCM_RIGHTS && export.count > 0)
+            memcpy(CMSG_DATA((struct cmsghdr *)(h + ho)), export.descriptors, dlen);
         else
             memcpy(CMSG_DATA((struct cmsghdr *)(h + ho)), g + go + LX_CMSGHDR, dlen);
-        free(combo);
+        free(export.descriptors);
         ho += need;
         go += LX_CMSG_ALIGN(clen);
     }
