@@ -610,6 +610,9 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
         *(uint16_t *)u = nif.arphrd;
         memcpy(u + 2, nif.mac, 6);
         break;
+    default:
+        *out = -ENOTSUP;
+        return 1;
     }
     *out = 0;
     return 1;

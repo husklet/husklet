@@ -423,6 +423,7 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
     case 'D': state_name = "disk sleep"; break;
     case 'T': state_name = "stopped"; break;
     case 'Z': state_name = "zombie"; break;
+    default: break;
     }
     char groups[512]; // peers carry the same container supplementary set (image-derived, see self)
     groups_status_str(groups, sizeof groups);
