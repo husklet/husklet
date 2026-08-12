@@ -180,6 +180,70 @@ static enum translation_step translate_system_instruction(uint64_t guest_pc, uin
     return TRANSLATION_UNHANDLED;
 }
 
+static int translate_literal_load(uint64_t guest_pc, uint32_t instruction) {
+    int64_t offset = sext((instruction >> 5) & 0x7FFFF, 19) << 2;
+    if ((instruction & 0xBF000000u) == 0x18000000u) {
+        int target = instruction & 31;
+        int is_64_bit = (instruction >> 30) & 1;
+        int bytes = is_64_bit ? 8 : 4;
+        if (is_stolen(target)) {
+            e_movconst(16, guest_pc + offset);
+            emit_a64_bus_guard(16, bytes, guest_pc);
+            struct a64_soft_guard soft = emit_a64_soft_guard_begin(16, 17, 18, bytes, HL_LOGICAL_VMA_READ, guest_pc);
+            if (is_64_bit)
+                e_ldr(16, 16, 0);
+            else
+                emit32(0xB9400000u | (16 << 5) | 16);
+            emit_a64_soft_guard_end(&soft);
+            e_str(16, CPUREG, target * 8);
+        } else {
+            e_movconst(target, guest_pc + offset);
+            emit_a64_bus_guard(target, bytes, guest_pc);
+            struct a64_soft_guard soft =
+                emit_a64_soft_guard_begin(target, 16, 17, bytes, HL_LOGICAL_VMA_READ, guest_pc);
+            if (is_64_bit)
+                e_ldr(target, target, 0);
+            else
+                emit32(0xB9400000u | (target << 5) | target);
+            emit_a64_soft_guard_end(&soft);
+        }
+        emit_a64_soft_bounce_commit(guest_pc + 4);
+        return 1;
+    }
+    if ((instruction & 0xFF000000u) == 0x98000000u) {
+        int target = instruction & 31;
+        int stolen = is_stolen(target);
+        int address = stolen ? 16 : target;
+        e_movconst(address, guest_pc + offset);
+        emit_a64_bus_guard(address, 4, guest_pc);
+        struct a64_soft_guard soft =
+            emit_a64_soft_guard_begin(address, stolen ? 17 : 16, stolen ? 18 : 17, 4, HL_LOGICAL_VMA_READ, guest_pc);
+        emit32(0xB9800000u | (address << 5) | address);
+        emit_a64_soft_guard_end(&soft);
+        if (stolen) e_str(16, CPUREG, target * 8);
+        emit_a64_soft_bounce_commit(guest_pc + 4);
+        return 1;
+    }
+    if ((instruction & 0x3F000000u) == 0x1C000000u && ((instruction >> 30) & 3) != 3) {
+        int vector = instruction & 31;
+        int size_shift = (instruction >> 30) & 3;
+        uint64_t bytes = UINT64_C(4) << size_shift;
+        uint32_t load = size_shift == 0 ? 0xBD400000u : (size_shift == 1 ? 0xFD400000u : 0x3DC00000u);
+        e_movconst(16, guest_pc + offset);
+        emit_a64_bus_guard(16, bytes, guest_pc);
+        struct a64_soft_guard soft = emit_a64_soft_guard_begin(16, 17, 18, bytes, HL_LOGICAL_VMA_READ, guest_pc);
+        emit32(load | (16u << 5) | (uint32_t)vector);
+        emit_a64_soft_guard_end(&soft);
+        emit_a64_soft_bounce_commit(guest_pc + 4);
+        return 1;
+    }
+    if ((instruction & 0xFF000000u) == 0xD8000000u || is_prfm_register_or_immediate(instruction)) {
+        emit32(0xD503201Fu);
+        return 1;
+    }
+    return 0;
+}
+
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
        an executable view backed by an emulated host-page snapshot. */
@@ -921,105 +985,7 @@ static void *translate_block(uint64_t gpc) {
             gpc += 4;
             continue;
         }
-        // ldr (literal) 32/64
-        if ((in & 0xBF000000u) == 0x18000000u) {
-            int rt = in & 31, is64 = (in >> 30) & 1;
-            int64_t off = sext((in >> 5) & 0x7FFFF, 19) << 2;
-            if (is_stolen(rt)) {
-                e_movconst(16, gpc + off);
-                emit_a64_bus_guard(16, is64 ? 8 : 4, gpc);
-                struct a64_soft_guard soft =
-                    emit_a64_soft_guard_begin(16, 17, 18, is64 ? 8 : 4, HL_LOGICAL_VMA_READ, gpc);
-                if (is64)
-                    e_ldr(16, 16, 0);
-                else
-                    emit32(0xB9400000u | (16 << 5) | 16);
-                emit_a64_soft_guard_end(&soft);
-                e_str(16, CPUREG, rt * 8);
-                emit_a64_soft_bounce_commit(gpc + 4);
-            } else {
-                e_movconst(rt, gpc + off);
-                emit_a64_bus_guard(rt, is64 ? 8 : 4, gpc);
-                struct a64_soft_guard soft =
-                    emit_a64_soft_guard_begin(rt, 16, 17, is64 ? 8 : 4, HL_LOGICAL_VMA_READ, gpc);
-                if (is64)
-                    e_ldr(rt, rt, 0);
-                else
-                    emit32(0xB9400000u | (rt << 5) | rt);
-                emit_a64_soft_guard_end(&soft);
-                emit_a64_soft_bounce_commit(gpc + 4);
-            }
-            gpc += 4;
-            continue;
-        }
-        // ldrsw (literal): opc=10, V=0 -> top byte 0x98 (unique: bits[29:27]=011, bits[25:24]=00, bit26=0).
-        // The integer ldr-literal above masks 0xBF (only bit30), so opc=10 does NOT match it and this
-        // sign-extending 32->64 word literal load would fall through to the verbatim emit -- executing
-        // PC-relative from the HOST code cache and loading a garbage word (then sign-extended into Xt).
-        // Compilers emit LDRSW-literal for switch/jump tables (sign-extended word offsets). Same hazard
-        // and same fix as the integer/SIMD forms: materialize the GUEST literal address and LDRSW from it,
-        // so the value is correct regardless of host arena placement or a warm pcache load.
-        if ((in & 0xFF000000u) == 0x98000000u) {
-            int rt = in & 31;
-            int64_t off = sext((in >> 5) & 0x7FFFF, 19) << 2;
-            if (is_stolen(rt)) {
-                e_movconst(16, gpc + off); // x16 = guest literal address
-                emit_a64_bus_guard(16, 4, gpc);
-                struct a64_soft_guard soft = emit_a64_soft_guard_begin(16, 17, 18, 4, HL_LOGICAL_VMA_READ, gpc);
-                emit32(0xB9800000u | (16 << 5) | 16); // ldrsw x16, [x16]
-                emit_a64_soft_guard_end(&soft);
-                e_str(16, CPUREG, rt * 8);
-                emit_a64_soft_bounce_commit(gpc + 4);
-            } else {
-                e_movconst(rt, gpc + off);
-                emit_a64_bus_guard(rt, 4, gpc);
-                struct a64_soft_guard soft = emit_a64_soft_guard_begin(rt, 16, 17, 4, HL_LOGICAL_VMA_READ, gpc);
-                emit32(0xB9800000u | (rt << 5) | rt); // ldrsw xt, [xt]
-                emit_a64_soft_guard_end(&soft);
-                emit_a64_soft_bounce_commit(gpc + 4);
-            }
-            gpc += 4;
-            continue;
-        }
-        // ldr (literal), SIMD&FP: `ldr St/Dt/Qt, [pc, #imm]`. The integer ldr-literal above only matches
-        // V=0; the SIMD/FP form (V=1, bit26) would otherwise fall through to the verbatim emit and execute
-        // PC-relative from the HOST code cache -- loading garbage instead of the guest literal pool. LuaJIT
-        // trace mcode loads its double constants this way (e.g. `ldr d15,[pc,#-N]`), so a verbatim emit
-        // corrupts the trace's FP constants (intermittent crashes once a bad value reaches a Lua value).
-        // Rewrite it like the integer case: materialize the guest literal ADDRESS into a scratch GPR and
-        // load the V register from it. opc[31:30]: 00=S(32b) 01=D(64b) 10=Q(128b); 11 is PRFM (no data reg).
-        if ((in & 0x3F000000u) == 0x1C000000u && ((in >> 30) & 3) != 3) {
-            int vt = in & 31, sz = (in >> 30) & 3;
-            int64_t off = sext((in >> 5) & 0x7FFFF, 19) << 2;
-            // ldr (V), [Xn] unsigned-offset #0 base forms, Rn=x0: S=0xBD400000 D=0xFD400000 Q=0x3DC00000
-            uint32_t ld = sz == 0 ? 0xBD400000u : (sz == 1 ? 0xFD400000u : 0x3DC00000u);
-            e_movconst(16, gpc + off); // x16 = guest literal address
-            emit_a64_bus_guard(16, UINT64_C(4) << sz, gpc);
-            struct a64_soft_guard soft =
-                emit_a64_soft_guard_begin(16, 17, 18, UINT64_C(4) << sz, HL_LOGICAL_VMA_READ, gpc);
-            emit32(ld | (16u << 5) | (uint32_t)vt); // ldr St/Dt/Qt, [x16]
-            emit_a64_soft_guard_end(&soft);
-            emit_a64_soft_bounce_commit(gpc + 4);
-            gpc += 4;
-            continue;
-        }
-        // prfm (literal): opc=11, V=0 -> top byte 0xD8. A prefetch HINT that reads its target address
-        // PC-relative from the guest literal pool. It has no destination register and never faults, but a
-        // verbatim emit would prefetch a host-PC-relative (garbage) address -- useless work, never the
-        // intended guest line. Prefetch is architecturally optional, so honoring it as "no prefetch" is
-        // always legal: drop it to a nop. This completes the PC-relative literal-load family (0x18/0x58
-        // LDR-lit, 0x98 LDRSW-lit, 0x1C/0x5C/0x9C LDR-lit-SIMD, 0xD8 PRFM-lit) -- every form rewritten.
-        if ((in & 0xFF000000u) == 0xD8000000u) {
-            emit32(0xD503201Fu); // nop
-            gpc += 4;
-            continue;
-        }
-        /* Register/immediate PRFM is also an architecturally optional,
-           non-faulting hint.  Sending it through the ordinary fold would
-           incorrectly require WRITE permission and could synthesize a guest
-           fault.  Drop it exactly like PRFM-literal. */
-        if (is_prfm_register_or_immediate(in)) {
-            emit32(0xD503201Fu);
+        if (translate_literal_load(gpc, in)) {
             gpc += 4;
             continue;
         }
