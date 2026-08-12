@@ -46,6 +46,35 @@ fn static_aarch64(status: u16) -> Vec<u8> {
     bytes
 }
 
+fn static_x86_64(status: u8) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 4096];
+    bytes[..4].copy_from_slice(b"\x7fELF");
+    bytes[4] = 2;
+    bytes[5] = 1;
+    bytes[6] = 1;
+    put_u16(&mut bytes, 16, 2);
+    put_u16(&mut bytes, 18, 62);
+    put_u32(&mut bytes, 20, 1);
+    put_u64(&mut bytes, 24, LINK_BASE + ENTRY_OFFSET as u64);
+    put_u64(&mut bytes, 32, 64);
+    put_u16(&mut bytes, 52, 64);
+    put_u16(&mut bytes, 54, 56);
+    put_u16(&mut bytes, 56, 1);
+    put_u32(&mut bytes, 64, 1);
+    put_u32(&mut bytes, 68, 5);
+    put_u64(&mut bytes, 80, LINK_BASE);
+    put_u64(&mut bytes, 88, LINK_BASE);
+    let image_length = bytes.len() as u64;
+    put_u64(&mut bytes, 96, image_length);
+    put_u64(&mut bytes, 104, image_length);
+    put_u64(&mut bytes, 112, 4096);
+    bytes[ENTRY_OFFSET..ENTRY_OFFSET + 5].copy_from_slice(&[0xb8, 60, 0, 0, 0]);
+    bytes[ENTRY_OFFSET + 5] = 0xbf;
+    bytes[ENTRY_OFFSET + 6..ENTRY_OFFSET + 10].copy_from_slice(&u32::from(status).to_le_bytes());
+    bytes[ENTRY_OFFSET + 10..ENTRY_OFFSET + 12].copy_from_slice(&[0x0f, 0x05]);
+    bytes
+}
+
 #[test]
 fn direct_aarch64_worker_defaults_to_retained_c() {
     let path = std::env::temp_dir().join(format!("hl-retained-direct-{}", std::process::id()));
@@ -56,6 +85,20 @@ fn direct_aarch64_worker_defaults_to_retained_c() {
         .unwrap();
     fs::remove_file(path).unwrap();
     assert_eq!(output.status.code(), Some(42));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn direct_x86_64_worker_defaults_to_retained_c() {
+    let path = std::env::temp_dir().join(format!("hl-retained-direct-x86-{}", std::process::id()));
+    fs::write(&path, static_x86_64(43)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+        .arg(&path)
+        .output()
+        .unwrap();
+    fs::remove_file(path).unwrap();
+    assert_eq!(output.status.code(), Some(43));
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }
@@ -75,7 +118,7 @@ fn receipt_is_machine_readable_and_hash_bound() {
 }
 
 #[test]
-fn receipt_fails_closed_for_unselected_backends_and_guest() {
+fn receipt_accepts_both_guests_and_fails_closed_for_unselected_backends() {
     let aarch64 = env!("CARGO_BIN_EXE_hl-aarch64");
     let accepted = Command::new(aarch64)
         .args(["--backend-receipt", "--engine-option", "HL_EXECUTION_BACKEND=c"])
@@ -102,7 +145,16 @@ fn receipt_fails_closed_for_unselected_backends_and_guest() {
         .arg("--backend-receipt")
         .output()
         .unwrap();
-    assert_eq!(x86.status.code(), Some(125));
-    assert!(x86.stdout.is_empty());
+    assert!(x86.status.success());
     assert!(x86.stderr.is_empty());
+    let receipt: serde_json::Value = serde_json::from_slice(&x86.stdout).unwrap();
+    assert_eq!(receipt["backend"], "retained-c");
+
+    let unsupported_guest = Command::new(env!("CARGO_BIN_EXE_hl-engine"))
+        .args(["--backend-receipt", "--guest-isa", "riscv64"])
+        .output()
+        .unwrap();
+    assert_eq!(unsupported_guest.status.code(), Some(125));
+    assert!(unsupported_guest.stdout.is_empty());
+    assert!(unsupported_guest.stderr.is_empty());
 }

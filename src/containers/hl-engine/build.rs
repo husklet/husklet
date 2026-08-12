@@ -27,7 +27,9 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo supplies CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo supplies CARGO_CFG_TARGET_ARCH");
     if !retained_platform::supported(&target_os, &target_arch) {
-        println!("cargo:warning=retained C backend unavailable for {target_arch}-{target_os}; using Rust execution");
+        println!(
+            "cargo:warning=retained C backend unavailable for {target_arch}-{target_os}; production execution is disabled"
+        );
         return;
     }
     println!("cargo:rustc-cfg=hl_retained_c");

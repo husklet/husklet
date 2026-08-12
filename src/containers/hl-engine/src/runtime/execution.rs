@@ -57,7 +57,6 @@ pub(crate) struct ProductionFactory;
 #[cfg(hl_retained_c)]
 #[derive(Clone, Copy)]
 enum CUnsupported {
-    GuestIsa,
     Checkpoint,
     Restore,
 }
@@ -66,7 +65,6 @@ enum CUnsupported {
 impl CUnsupported {
     const fn name(self) -> &'static str {
         match self {
-            Self::GuestIsa => "guest_isa",
             Self::Checkpoint => "checkpoint",
             Self::Restore => "restore",
         }
@@ -113,9 +111,7 @@ impl ProductionFactory {
 
     #[cfg(hl_retained_c)]
     fn c_unsupported(request: &RuntimeConstruction<'_>) -> Option<CUnsupported> {
-        if request.isa != crate::activation::GuestIsa::Aarch64 {
-            Some(CUnsupported::GuestIsa)
-        } else if request.plan.options.get("HL_CHECKPOINT").is_some() {
+        if request.plan.options.get("HL_CHECKPOINT").is_some() {
             Some(CUnsupported::Checkpoint)
         } else if request.plan.options.get("HL_RESTORE").is_some() {
             Some(CUnsupported::Restore)
@@ -224,11 +220,10 @@ mod tests {
     }
 
     #[test]
-    fn retained_backend_rejects_uncompiled_guest_isa_early() {
-        assert!(matches!(
-            Engine::from_plan(GuestIsa::X86_64, c_plan()),
-            Err(EngineError::LaunchFailed)
-        ));
+    fn retained_backend_constructs_both_compiled_guest_isas() {
+        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+            assert!(Engine::from_plan(isa, c_plan()).is_ok(), "failed to construct {isa:?}");
+        }
     }
 
     #[test]
@@ -251,49 +246,40 @@ mod tests {
     }
 
     #[test]
-    fn product_default_rejects_uncompiled_guest_isa() {
-        let mut plan = c_plan();
-        plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
-        assert!(matches!(
-            Engine::from_plan(GuestIsa::X86_64, plan),
-            Err(EngineError::LaunchFailed)
-        ));
+    fn product_default_constructs_both_compiled_guest_isas() {
+        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+            let mut plan = c_plan();
+            plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
+            assert!(Engine::from_plan(isa, plan).is_ok(), "failed to construct {isa:?}");
+        }
     }
 
     #[test]
     fn retained_backend_rejects_active_checkpoint_policy() {
-        for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
-            let mut plan = c_plan();
-            plan.options.set(option, "1", true).unwrap();
-            assert!(matches!(
-                Engine::with_checkpoint(
-                    GuestIsa::Aarch64,
-                    plan,
-                    StandardStreams::default(),
-                    Arc::new(Store),
-                    Arc::new(Store),
-                ),
-                Err(EngineError::LaunchFailed)
-            ));
+        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+            for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
+                let mut plan = c_plan();
+                plan.options.set(option, "1", true).unwrap();
+                assert!(matches!(
+                    Engine::with_checkpoint(isa, plan, StandardStreams::default(), Arc::new(Store), Arc::new(Store),),
+                    Err(EngineError::LaunchFailed)
+                ));
+            }
         }
     }
 
     #[test]
     fn product_default_rejects_checkpoint_policy() {
-        for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
-            let mut plan = c_plan();
-            plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
-            plan.options.set(option, "1", true).unwrap();
-            assert!(matches!(
-                Engine::with_checkpoint(
-                    GuestIsa::Aarch64,
-                    plan,
-                    StandardStreams::default(),
-                    Arc::new(Store),
-                    Arc::new(Store),
-                ),
-                Err(EngineError::LaunchFailed)
-            ));
+        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+            for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
+                let mut plan = c_plan();
+                plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
+                plan.options.set(option, "1", true).unwrap();
+                assert!(matches!(
+                    Engine::with_checkpoint(isa, plan, StandardStreams::default(), Arc::new(Store), Arc::new(Store),),
+                    Err(EngineError::LaunchFailed)
+                ));
+            }
         }
     }
 
