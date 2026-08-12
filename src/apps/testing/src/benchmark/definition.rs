@@ -152,7 +152,12 @@ impl Campaign {
 
 fn verify_artifact(label: &str, artifact: &Artifact, directory: bool) -> Result<(), Error> {
     let metadata = fs::symlink_metadata(&artifact.path)?;
-    if metadata.is_dir() != directory {
+    let expected_type = if directory {
+        metadata.is_dir()
+    } else {
+        metadata.is_file()
+    };
+    if !expected_type {
         return Err(format!("{label} has the wrong file type").into());
     }
     let observed = if directory {
@@ -168,6 +173,42 @@ fn verify_artifact(label: &str, artifact: &Artifact, directory: bool) -> Result<
         .into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Artifact, verify_artifact};
+    use crate::record::FramedIdentity;
+    use std::fs;
+
+    #[test]
+    fn regular_file_artifact_is_accepted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("engine");
+        fs::write(&path, b"engine").unwrap();
+        let artifact = Artifact {
+            path,
+            sha256: FramedIdentity::of(b"engine"),
+        };
+        verify_artifact("engine", &artifact, false).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_artifact_cannot_be_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("engine-real");
+        let path = directory.path().join("engine");
+        fs::write(&target, b"engine").unwrap();
+        symlink(&target, &path).unwrap();
+        let artifact = Artifact {
+            path,
+            sha256: FramedIdentity::of(b"engine"),
+        };
+        assert!(verify_artifact("engine", &artifact, false).is_err());
+    }
 }
 
 fn tree_hash(root: &Path) -> Result<String, Error> {
