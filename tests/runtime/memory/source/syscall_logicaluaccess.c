@@ -48,7 +48,103 @@ static int fill_pipe(int pipefd[2], unsigned char seed, size_t length) {
     return write(pipefd[1], bytes, length) == (ssize_t)length;
 }
 
-int main(void) {
+typedef struct {
+    size_t page;
+    int memfd;
+    unsigned char *reservation;
+    unsigned char *soft0;
+    unsigned char *direct;
+    unsigned char *soft1;
+} FixtureContext;
+
+typedef struct {
+    int cross;
+    int aliases;
+    int second_page_fault;
+    int zero_then_fault;
+    int time;
+    int signal;
+    int event;
+    int misc_seccomp;
+    int rare;
+} Results;
+
+typedef struct {
+    int event_pipe[2];
+    int ep;
+    int signal_fd;
+    int timer_fd;
+    int udp_receiver;
+    int udp_sender;
+    struct sockaddr_in *udp_destination;
+    struct sockaddr_in *udp_source;
+    socklen_t *udp_source_length;
+    int ctl_ok;
+    int write_ok;
+    int epoll_ok;
+    int ppoll_ok;
+    int pselect_ok;
+    int signal_fd_ok;
+    int timer_fd_ok;
+    int udp_ok;
+    int message_ok;
+    int mmsg_ok;
+    int netlink_ok;
+    int aio_ok;
+    int sysv_ok;
+    int semaphore_ok;
+    int shared_ok;
+    int queue_ok;
+} EventState;
+
+static int run_misc_and_rare(const FixtureContext *fixture, Results *results) {
+    unsigned char *soft0 = fixture->soft0;
+    unsigned char *soft1 = fixture->soft1;
+    unsigned char *direct = fixture->direct;
+    struct utsname *identity = (struct utsname *)(soft0 + 3000);
+    struct sysinfo *system = (struct sysinfo *)(soft1 + 3000);
+    unsigned char *random = soft0 + 3400;
+    uint32_t *action_available = (uint32_t *)(soft1 + 3400);
+    uint16_t *notification_sizes = (uint16_t *)(soft0 + 3440);
+    char *hostname = (char *)(soft1 + 3480);
+    memcpy(hostname, "logical", 7);
+    *action_available = SECCOMP_RET_ALLOW;
+    results->misc_seccomp = syscall(SYS_sethostname, hostname, 7) == 0 && syscall(SYS_uname, identity) == 0 &&
+                            strcmp(identity->nodename, "logical") == 0 && syscall(SYS_sysinfo, system) == 0 &&
+                            system->totalram > 0 && syscall(SYS_getrandom, random, 32, 0) == 32 &&
+                            syscall(SYS_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, action_available) == 0 &&
+                            syscall(SYS_seccomp, SECCOMP_GET_NOTIF_SIZES, 0, notification_sizes) == 0 &&
+                            notification_sizes[2] == 64;
+    struct sock_filter *filter = (struct sock_filter *)(soft1 + 3600);
+    struct sock_fprog *program = (struct sock_fprog *)(soft0 + 3600);
+    filter[0] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
+    *program = (struct sock_fprog){.len = 1, .filter = filter};
+    results->misc_seccomp = results->misc_seccomp && prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 &&
+                            syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, program) == 0;
+
+    unsigned *cpu_number = (unsigned *)(soft0 + 3760);
+    unsigned *numa_node = (unsigned *)(soft1 + 3760);
+    int *schedule_priority = (int *)(soft0 + 3776);
+    struct timespec *round_robin = (struct timespec *)(soft1 + 3776);
+    unsigned char *schedule_attr = soft0 + 3808;
+    struct rlimit *limit = (struct rlimit *)(soft1 + 3808);
+    struct itimerval *timer_value = (struct itimerval *)(soft0 + 3888);
+    void **move_pages = (void **)(soft1 + 3888);
+    int *move_status = (int *)(soft1 + 3920);
+    move_pages[0] = soft0;
+    move_pages[1] = direct;
+    results->rare = syscall(SYS_getcpu, cpu_number, numa_node, NULL) == 0 && *numa_node == 0 &&
+                    syscall(SYS_sched_getparam, 0, schedule_priority) == 0 && *schedule_priority == 0 &&
+                    syscall(SYS_sched_rr_get_interval, 0, round_robin) == 0 && round_robin->tv_nsec == 100000000L &&
+                    syscall(SYS_sched_getattr, 0, schedule_attr, 48, 0) == 0 && *(uint32_t *)schedule_attr == 48 &&
+                    getrlimit(RLIMIT_NOFILE, limit) == 0 && limit->rlim_cur > 0 &&
+                    getitimer(ITIMER_REAL, timer_value) == 0 &&
+                    syscall(SYS_move_pages, 0, 2, move_pages, NULL, move_status, 0) == 0 && move_status[0] == 0 &&
+                    move_status[1] == -ENOENT;
+    return results->misc_seccomp && results->rare;
+}
+
+static int initialize_fixture(FixtureContext *fixture, Results *results) {
     const size_t page = 4096;
     int memfd = (int)syscall(SYS_memfd_create, "logical-uaccess", 0u);
     if (memfd < 0 || ftruncate(memfd, 4 * (off_t)page) != 0) return 2;
@@ -149,6 +245,21 @@ int main(void) {
                     errno == EAGAIN && syscall(SYS_rt_sigaction, SIGUSR1, oldaction, NULL, 8) == 0 &&
                     syscall(SYS_rt_sigprocmask, SIG_SETMASK, oldset, NULL, 8) == 0;
 
+    *fixture = (FixtureContext){
+        .page = page, .memfd = memfd, .reservation = reservation, .soft0 = soft0, .direct = direct, .soft1 = soft1};
+    *results = (Results){.cross = cross_ok,
+                         .aliases = aliases_ok,
+                         .second_page_fault = fault_ok,
+                         .zero_then_fault = zero_fault_ok,
+                         .time = time_ok,
+                         .signal = signal_ok};
+    return 0;
+}
+
+static void run_event_network(const FixtureContext *fixture, EventState *state) {
+    unsigned char *soft0 = fixture->soft0;
+    unsigned char *direct = fixture->direct;
+    unsigned char *soft1 = fixture->soft1;
     int event_pipe[2];
     int ep = epoll_create1(0);
     struct epoll_event *ctl_event = (struct epoll_event *)(soft1 + 768);
@@ -158,7 +269,6 @@ int main(void) {
     struct timespec *event_timeout = (struct timespec *)(soft1 + 864);
     uint64_t *event_mask = (uint64_t *)(soft0 + 864);
     uint64_t *pselect_pair = (uint64_t *)(soft0 + 880);
-    int event_ok = 0;
     if (ep >= 0 && pipe(event_pipe) == 0) {
         memset(ctl_event, 0, sizeof(*ctl_event));
         ctl_event->events = EPOLLIN;
@@ -278,328 +388,341 @@ int main(void) {
                       recvmmsg(udp_receiver, receive_messages, 2, 0, NULL) == 2 && receive_messages[0].msg_len == 5 &&
                       receive_messages[1].msg_len == 5 && memcmp(message_receive, "one!!", 5) == 0 &&
                       memcmp(message_receive_alias, "two!!", 5) == 0;
-        unsigned char *netlink_request = soft1 + 1856;
-        struct sockaddr_nl *netlink_address = (struct sockaddr_nl *)(soft1 + 1920);
-        struct msghdr *netlink_send_header = (struct msghdr *)(soft1 + 1984);
-        struct iovec *netlink_send_vector = (struct iovec *)(soft1 + 2048);
-        struct msghdr *netlink_receive_header = (struct msghdr *)(soft0 + 1984);
-        struct iovec *netlink_receive_vector = (struct iovec *)(soft0 + 2048);
-        struct sockaddr_nl *netlink_source = (struct sockaddr_nl *)(soft0 + 2080);
-        socklen_t *netlink_source_length = (socklen_t *)(soft0 + 2120);
-        unsigned char *netlink_response = soft0 + 2304;
-        struct nlmsghdr *netlink_message = (struct nlmsghdr *)netlink_request;
-        struct ifinfomsg *netlink_info = (struct ifinfomsg *)(netlink_message + 1);
-        memset(netlink_request, 0, NLMSG_LENGTH(sizeof(*netlink_info)));
-        netlink_message->nlmsg_len = NLMSG_LENGTH(sizeof(*netlink_info));
-        netlink_message->nlmsg_type = RTM_GETLINK;
-        netlink_message->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-        *netlink_address = (struct sockaddr_nl){.nl_family = AF_NETLINK};
-        int netlink_fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
-        socklen_t netlink_address_length = sizeof(*netlink_address);
-        int netlink_ok = netlink_fd >= 0 &&
-                         bind(netlink_fd, (struct sockaddr *)netlink_address, sizeof(*netlink_address)) == 0 &&
-                         getsockname(netlink_fd, (struct sockaddr *)netlink_address, &netlink_address_length) == 0;
-        *netlink_send_vector = (struct iovec){netlink_request, netlink_message->nlmsg_len};
-        *netlink_send_header = (struct msghdr){.msg_name = netlink_address,
-                                               .msg_namelen = sizeof(*netlink_address),
-                                               .msg_iov = netlink_send_vector,
-                                               .msg_iovlen = 1};
-        *netlink_receive_vector = (struct iovec){netlink_response, 1024};
-        *netlink_receive_header = (struct msghdr){.msg_name = netlink_source,
-                                                  .msg_namelen = sizeof(*netlink_source),
-                                                  .msg_iov = netlink_receive_vector,
-                                                  .msg_iovlen = 1};
-        netlink_ok = netlink_ok && sendmsg(netlink_fd, netlink_send_header, 0) == (ssize_t)netlink_message->nlmsg_len &&
-                     recvmsg(netlink_fd, netlink_receive_header, 0) > 0 &&
-                     ((struct nlmsghdr *)netlink_response)->nlmsg_len >= sizeof(struct nlmsghdr) &&
-                     netlink_source->nl_family == AF_NETLINK;
-        *netlink_source_length = sizeof(*netlink_source);
-        netlink_ok =
-            netlink_ok &&
-            send(netlink_fd, netlink_request, netlink_message->nlmsg_len, 0) == (ssize_t)netlink_message->nlmsg_len &&
-            recvfrom(netlink_fd, netlink_response, 1024, 0, (struct sockaddr *)netlink_source, netlink_source_length) >
-                0 &&
-            netlink_source->nl_family == AF_NETLINK;
-        netlink_send_header->msg_control = direct;
-        netlink_send_header->msg_controllen = 16;
-        errno = 0;
-        netlink_ok = netlink_ok && sendmsg(netlink_fd, netlink_send_header, 0) < 0 && errno == EFAULT;
-        if (netlink_fd >= 0) close(netlink_fd);
-        aio_context_t *aio_context = (aio_context_t *)(soft0 + 3392);
-        struct iocb *aio_control = (struct iocb *)(soft1 + 3392);
-        struct iocb **aio_controls = (struct iocb **)(soft0 + 3472);
-        struct io_event *aio_event = (struct io_event *)(soft1 + 3472);
-        unsigned char *aio_buffer = soft0 + 3552;
-        struct timespec *aio_timeout = (struct timespec *)(soft1 + 3552);
-        *aio_context = 0;
-        memset(aio_control, 0, sizeof(*aio_control));
-        aio_control->aio_lio_opcode = IOCB_CMD_PREAD;
-        aio_control->aio_fildes = (uint32_t)memfd;
-        aio_control->aio_buf = (uint64_t)(uintptr_t)aio_buffer;
-        aio_control->aio_nbytes = 8;
-        aio_control->aio_offset = 0;
-        aio_control->aio_data = UINT64_C(0xa10a);
-        *aio_controls = aio_control;
-        *aio_timeout = (struct timespec){0};
-        int aio_ok = pwrite(memfd, "aio-data", 8, 0) == 8 && syscall(SYS_io_setup, 4, aio_context) == 0;
-        errno = 0;
-        aio_ok = aio_ok && syscall(SYS_io_submit, *aio_context, 1, direct) < 0 && errno == EFAULT &&
-                 syscall(SYS_io_submit, *aio_context, 1, aio_controls) == 1 &&
-                 syscall(SYS_io_getevents, *aio_context, 1, 1, aio_event, aio_timeout) == 1 &&
-                 aio_event->data == UINT64_C(0xa10a) && aio_event->res == 8 && memcmp(aio_buffer, "aio-data", 8) == 0 &&
-                 syscall(SYS_io_destroy, *aio_context) == 0;
-
-        struct {
-            long type;
-            char text[16];
-        } *message_send = (void *)(soft1 + 3648), *message_receive_sysv = (void *)(soft0 + 3648);
-        struct msqid_ds *message_status = (struct msqid_ds *)(soft1 + 3712);
-        message_send->type = 7;
-        memcpy(message_send->text, "sysv-message", 13);
-        int message_queue = msgget(IPC_PRIVATE, IPC_CREAT | 0600);
-        int sysv_ok = message_queue >= 0 && msgsnd(message_queue, message_send, 13, IPC_NOWAIT) == 0 &&
-                      msgrcv(message_queue, message_receive_sysv, 16, 7, IPC_NOWAIT) == 13 &&
-                      message_receive_sysv->type == 7 && memcmp(message_receive_sysv->text, "sysv-message", 13) == 0 &&
-                      msgctl(message_queue, IPC_STAT, message_status) == 0;
-        errno = 0;
-        sysv_ok = sysv_ok && msgsnd(message_queue, direct, 1, IPC_NOWAIT) < 0 && errno == EFAULT;
-        if (message_queue >= 0) msgctl(message_queue, IPC_RMID, NULL);
-        unsigned short *semaphore_values = (unsigned short *)(soft1 + 2304);
-        unsigned short *semaphore_readback = (unsigned short *)(soft0 + 3350);
-        struct sembuf *semaphore_operation = (struct sembuf *)(soft1 + 2336);
-        struct semid_ds *semaphore_status = (struct semid_ds *)(soft1 + 2400);
-
-        union {
-            int val;
-            unsigned short *array;
-            struct semid_ds *buf;
-        } semaphore_argument;
-
-        int semaphore = semget(IPC_PRIVATE, 2, IPC_CREAT | 0600);
-        semaphore_values[0] = 1;
-        semaphore_values[1] = 2;
-        semaphore_argument.array = semaphore_values;
-        *semaphore_operation = (struct sembuf){.sem_num = 0, .sem_op = -1, .sem_flg = IPC_NOWAIT};
-        int semaphore_ok = semaphore >= 0 && semctl(semaphore, 0, SETALL, semaphore_argument) == 0 &&
-                           semop(semaphore, semaphore_operation, 1) == 0;
-        semaphore_argument.array = semaphore_readback;
-        semaphore_ok = semaphore_ok && semctl(semaphore, 0, GETALL, semaphore_argument) == 0 &&
-                       semaphore_readback[0] == 0 && semaphore_readback[1] == 2;
-        semaphore_argument.buf = semaphore_status;
-        semaphore_ok = semaphore_ok && semctl(semaphore, 0, IPC_STAT, semaphore_argument) == 0;
-        errno = 0;
-        semaphore_ok = semaphore_ok && semop(semaphore, (struct sembuf *)direct, 1) < 0 && errno == EFAULT;
-        if (semaphore >= 0) semctl(semaphore, 0, IPC_RMID);
-
-        struct shmid_ds *shared_status = (struct shmid_ds *)(soft1 + 2528);
-        int shared_segment = shmget(IPC_PRIVATE, 4096, IPC_CREAT | 0600);
-        int shared_ok = shared_segment >= 0 && shmctl(shared_segment, IPC_STAT, shared_status) == 0 &&
-                        shared_status->shm_segsz == 4096;
-        errno = 0;
-        shared_ok = shared_ok && shmctl(shared_segment, IPC_STAT, (struct shmid_ds *)direct) < 0 && errno == EFAULT;
-        if (shared_segment >= 0) shmctl(shared_segment, IPC_RMID, NULL);
-        char *queue_name = (char *)(soft1 + 2784);
-        struct mq_attr *queue_attribute = (struct mq_attr *)(soft1 + 2848);
-        struct mq_attr *queue_old_attribute = (struct mq_attr *)(soft0 + 2784);
-        char *queue_send = (char *)(soft1 + 2944);
-        char *queue_receive = (char *)(soft0 + 2944);
-        unsigned *queue_priority = (unsigned *)(soft0 + 3008);
-        snprintf(queue_name, 48, "/hl-logical-%d", getpid());
-        *queue_attribute = (struct mq_attr){.mq_maxmsg = 4, .mq_msgsize = 32};
-        memcpy(queue_send, "queue-data", 10);
-        mqd_t queue = mq_open(queue_name, O_CREAT | O_EXCL | O_RDWR | O_NONBLOCK, 0600, queue_attribute);
-        int queue_ok = queue >= 0 && mq_getattr(queue, queue_old_attribute) == 0 &&
-                       mq_send(queue, queue_send, 10, 3) == 0 &&
-                       mq_receive(queue, queue_receive, 32, queue_priority) == 10 &&
-                       memcmp(queue_receive, "queue-data", 10) == 0 && *queue_priority == 3;
-        errno = 0;
-        queue_ok = queue_ok && mq_send(queue, direct, 1, 0) < 0 && errno == EFAULT;
-        if (queue >= 0) mq_close(queue);
-        mq_unlink(queue_name);
-
-        uint32_t *cap_header = (uint32_t *)(soft0 + 3072);
-        uint32_t *cap_data = (uint32_t *)(soft1 + 3072);
-        cap_header[0] = 0x20080522;
-        cap_header[1] = 0;
-        memset(cap_data, 0, 24);
-        int cap_ok = syscall(SYS_capget, cap_header, cap_data) == 0 && cap_data[1] != 0;
-        errno = 0;
-        cap_ok = cap_ok && syscall(SYS_capget, cap_header, direct) < 0 && errno == EFAULT;
-
-        unsigned char *cpu_mask = soft1 + 3136;
-        memset(cpu_mask, 0, 128);
-        long affinity_bytes = syscall(SYS_sched_getaffinity, 0, 128, cpu_mask);
-        int affinity_ok = affinity_bytes > 0 && syscall(SYS_sched_setaffinity, 0, 128, cpu_mask) == 0;
-        errno = 0;
-        affinity_ok =
-            affinity_ok && syscall(SYS_sched_getaffinity, 0, 128, direct) < 0 && errno == EFAULT;
-
-        struct sched_param *schedule = (struct sched_param *)(soft0 + 3136);
-        memset(schedule, 0, sizeof(*schedule));
-        int schedule_ok = syscall(SYS_sched_getparam, 0, schedule) == 0 &&
-                          syscall(SYS_sched_setparam, 0, schedule) == 0;
-        uint32_t *ruid = (uint32_t *)(soft0 + 3168);
-        uint32_t *euid = (uint32_t *)(soft1 + 3280);
-        uint32_t *suid = (uint32_t *)(soft0 + 3172);
-        int ids_ok = syscall(SYS_getresuid, ruid, euid, suid) == 0 && *ruid == getuid() && *euid == geteuid();
-
-        gid_t *groups = (gid_t *)(soft0 + 3328);
-        int group_count = (int)syscall(SYS_getgroups, 0, NULL);
-        int groups_ok = group_count >= 0 && group_count <= 128 &&
-                        syscall(SYS_getgroups, 128, groups) == group_count;
-
-        struct rusage *usage = (struct rusage *)(soft1 + 3328);
-        int usage_ok = syscall(SYS_getrusage, RUSAGE_SELF, usage) == 0;
-        pid_t wait_child = fork();
-        if (wait_child == 0) _exit(23);
-        int *wait_status = (int *)(soft0 + 3264);
-        struct rusage *wait_usage = (struct rusage *)(soft1 + 3520);
-        int wait_ok = wait_child > 0 && syscall(SYS_wait4, wait_child, wait_status, 0, wait_usage) == wait_child &&
-                      WIFEXITED(*wait_status) && WEXITSTATUS(*wait_status) == 23;
-        int proc_ok = cap_ok && affinity_ok && schedule_ok && ids_ok && groups_ok && usage_ok && wait_ok;
-
-        char *filesystem_path = (char *)(soft0 + 3904);
-        struct stat *filesystem_status = (struct stat *)(soft1 + 3800);
-        memcpy(filesystem_path, "/dev/null", 10);
-        int filesystem_fd = (int)syscall(SYS_openat, AT_FDCWD, filesystem_path, O_RDONLY, 0);
-        int filesystem_ok = filesystem_fd >= 0 && syscall(SYS_fstat, filesystem_fd, filesystem_status) == 0 &&
-                            S_ISCHR(filesystem_status->st_mode) &&
-                            syscall(SYS_newfstatat, AT_FDCWD, filesystem_path, filesystem_status, 0) == 0;
-        errno = 0;
-        filesystem_ok = filesystem_ok &&
-                        syscall(SYS_newfstatat, AT_FDCWD, filesystem_path, direct, 0) < 0 && errno == EFAULT;
-        errno = 0;
-        filesystem_ok =
-            filesystem_ok && syscall(SYS_openat, AT_FDCWD, direct, O_RDONLY, 0) < 0 && errno == EFAULT;
-        char *cwd_result = (char *)soft0;
-        filesystem_ok = filesystem_ok && syscall(SYS_getcwd, cwd_result, 512) > 0 && cwd_result[0] == '/';
-        memcpy(filesystem_path, "/proc/self", 11);
-        char *link_result = (char *)soft1;
-        filesystem_ok = filesystem_ok &&
-                        syscall(SYS_readlinkat, AT_FDCWD, filesystem_path, link_result, 64) > 0;
-        memcpy(filesystem_path, "/dev/null", 10);
-        struct statx *extended_status = (struct statx *)(soft1 + 256);
-        filesystem_ok = filesystem_ok &&
-                        syscall(SYS_statx, AT_FDCWD, filesystem_path, 0, STATX_BASIC_STATS, extended_status) == 0 &&
-                        S_ISCHR(extended_status->stx_mode);
-        struct open_how *how = (struct open_how *)(soft0 + 512);
-        *how = (struct open_how){.flags = O_RDONLY};
-        int openat2_fd = (int)syscall(SYS_openat2, AT_FDCWD, filesystem_path, how, sizeof(*how));
-        filesystem_ok = filesystem_ok && openat2_fd >= 0;
-        if (openat2_fd >= 0) close(openat2_fd);
-        memcpy(filesystem_path, "/tmp", 5);
-        int directory_fd = (int)syscall(SYS_openat, AT_FDCWD, filesystem_path, O_RDONLY | O_DIRECTORY, 0);
-        long directory_bytes = directory_fd >= 0 ? syscall(SYS_getdents64, directory_fd, soft1 + 1024, 1024) : -1;
-        filesystem_ok = filesystem_ok && directory_fd >= 0 && directory_bytes >= 0;
-        if (directory_fd >= 0) close(directory_fd);
-        struct statfs *filesystem_geometry = (struct statfs *)(soft0 + 2048);
-        filesystem_ok = filesystem_ok && syscall(SYS_fstatfs, filesystem_fd, filesystem_geometry) == 0 &&
-                        filesystem_geometry->f_bsize > 0;
-        int ioctl_pipe[2] = {-1, -1};
-        int *available = (int *)(soft1 + 2048);
-        char ioctl_byte = 'i';
-        filesystem_ok = filesystem_ok && pipe(ioctl_pipe) == 0 &&
-                        write(ioctl_pipe[1], &ioctl_byte, 1) == 1 &&
-                        syscall(SYS_ioctl, ioctl_pipe[0], FIONREAD, available) == 0 && *available == 1;
-        if (ioctl_pipe[0] >= 0) close(ioctl_pipe[0]);
-        if (ioctl_pipe[1] >= 0) close(ioctl_pipe[1]);
-        if (filesystem_fd >= 0) close(filesystem_fd);
-
-        int tcp_listener = socket(AF_INET, SOCK_STREAM, 0);
-        struct sockaddr_in tcp_bound = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-        socklen_t tcp_bound_length = sizeof(tcp_bound);
-        *udp_destination = tcp_bound;
-        int accept_ok = tcp_listener >= 0 &&
-                        bind(tcp_listener, (struct sockaddr *)udp_destination, sizeof(*udp_destination)) == 0 &&
-                        listen(tcp_listener, 4) == 0 &&
-                        getsockname(tcp_listener, (struct sockaddr *)&tcp_bound, &tcp_bound_length) == 0;
-        *udp_destination = tcp_bound;
-        int tcp_client = socket(AF_INET, SOCK_STREAM, 0);
-        accept_ok = accept_ok && tcp_client >= 0 &&
-                    connect(tcp_client, (struct sockaddr *)udp_destination, sizeof(*udp_destination)) == 0;
-        *udp_source_length = sizeof(*udp_source);
-        int accepted =
-            accept_ok ? accept4(tcp_listener, (struct sockaddr *)udp_source, udp_source_length, SOCK_CLOEXEC) : -1;
-        accept_ok = accept_ok && accepted >= 0 && udp_source->sin_family == AF_INET;
-        if (accepted >= 0) close(accepted);
-        if (tcp_client >= 0) close(tcp_client);
-
-        tcp_client = socket(AF_INET, SOCK_STREAM, 0);
-        accept_ok = accept_ok && tcp_client >= 0 &&
-                    connect(tcp_client, (struct sockaddr *)udp_destination, sizeof(*udp_destination)) == 0;
-        errno = 0;
-        int bad_length = accept4(tcp_listener, (struct sockaddr *)udp_source, (socklen_t *)direct, 0);
-        accept_ok = accept_ok && bad_length < 0 && errno == EFAULT;
-        if (tcp_client >= 0) close(tcp_client);
-
-        tcp_client = socket(AF_INET, SOCK_STREAM, 0);
-        accept_ok = accept_ok && tcp_client >= 0 &&
-                    connect(tcp_client, (struct sockaddr *)udp_destination, sizeof(*udp_destination)) == 0;
-        *udp_source_length = sizeof(*udp_source);
-        errno = 0;
-        int second_span =
-            accept4(tcp_listener, (struct sockaddr *)(soft0 + page - 8), udp_source_length, SOCK_NONBLOCK);
-        accept_ok = accept_ok && second_span < 0 && errno == EFAULT;
-        if (tcp_client >= 0) close(tcp_client);
-        if (tcp_listener >= 0) close(tcp_listener);
-        if (signal_fd >= 0) close(signal_fd);
-        if (timer_fd >= 0) close(timer_fd);
-        if (udp_receiver >= 0) close(udp_receiver);
-        if (udp_sender >= 0) close(udp_sender);
-        event_ok = ctl_ok && write_ok && epoll_ok && ppoll_ok && pselect_ok && signal_fd_ok && timer_fd_ok && udp_ok &&
-                   message_ok && mmsg_ok && netlink_ok && aio_ok && sysv_ok && semaphore_ok && shared_ok && queue_ok &&
-                   accept_ok && proc_ok && filesystem_ok;
-        close(event_pipe[0]);
-        close(event_pipe[1]);
+        *state = (EventState){.event_pipe = {event_pipe[0], event_pipe[1]},
+                              .ep = ep,
+                              .signal_fd = signal_fd,
+                              .timer_fd = timer_fd,
+                              .udp_receiver = udp_receiver,
+                              .udp_sender = udp_sender,
+                              .udp_destination = udp_destination,
+                              .udp_source = udp_source,
+                              .udp_source_length = udp_source_length,
+                              .ctl_ok = ctl_ok,
+                              .write_ok = write_ok,
+                              .epoll_ok = epoll_ok,
+                              .ppoll_ok = ppoll_ok,
+                              .pselect_ok = pselect_ok,
+                              .signal_fd_ok = signal_fd_ok,
+                              .timer_fd_ok = timer_fd_ok,
+                              .udp_ok = udp_ok,
+                              .message_ok = message_ok,
+                              .mmsg_ok = mmsg_ok};
+        return;
     }
-    if (ep >= 0) close(ep);
+    state->ep = ep;
+    state->event_pipe[0] = -1;
+    state->event_pipe[1] = -1;
+}
 
-    struct utsname *identity = (struct utsname *)(soft0 + 3000);
-    struct sysinfo *system = (struct sysinfo *)(soft1 + 3000);
-    unsigned char *random = soft0 + 3400;
-    uint32_t *action_available = (uint32_t *)(soft1 + 3400);
-    uint16_t *notification_sizes = (uint16_t *)(soft0 + 3440);
-    char *hostname = (char *)(soft1 + 3480);
-    memcpy(hostname, "logical", 7);
-    *action_available = SECCOMP_RET_ALLOW;
-    int misc_ok = syscall(SYS_sethostname, hostname, 7) == 0 && syscall(SYS_uname, identity) == 0 &&
-                  strcmp(identity->nodename, "logical") == 0 && syscall(SYS_sysinfo, system) == 0 &&
-                  system->totalram > 0 && syscall(SYS_getrandom, random, 32, 0) == 32 &&
-                  syscall(SYS_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, action_available) == 0 &&
-                  syscall(SYS_seccomp, SECCOMP_GET_NOTIF_SIZES, 0, notification_sizes) == 0 &&
-                  notification_sizes[2] == 64;
-    struct sock_filter *filter = (struct sock_filter *)(soft1 + 3600);
-    struct sock_fprog *program = (struct sock_fprog *)(soft0 + 3600);
-    filter[0] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
-    *program = (struct sock_fprog){.len = 1, .filter = filter};
-    misc_ok = misc_ok && prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 &&
-              syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, program) == 0;
+static void run_kernel_ipc(const FixtureContext *fixture, EventState *state) {
+    int memfd = fixture->memfd;
+    unsigned char *soft0 = fixture->soft0;
+    unsigned char *direct = fixture->direct;
+    unsigned char *soft1 = fixture->soft1;
+    unsigned char *netlink_request = soft1 + 1856;
+    struct sockaddr_nl *netlink_address = (struct sockaddr_nl *)(soft1 + 1920);
+    struct msghdr *netlink_send_header = (struct msghdr *)(soft1 + 1984);
+    struct iovec *netlink_send_vector = (struct iovec *)(soft1 + 2048);
+    struct msghdr *netlink_receive_header = (struct msghdr *)(soft0 + 1984);
+    struct iovec *netlink_receive_vector = (struct iovec *)(soft0 + 2048);
+    struct sockaddr_nl *netlink_source = (struct sockaddr_nl *)(soft0 + 2080);
+    socklen_t *netlink_source_length = (socklen_t *)(soft0 + 2120);
+    unsigned char *netlink_response = soft0 + 2304;
+    struct nlmsghdr *netlink_message = (struct nlmsghdr *)netlink_request;
+    struct ifinfomsg *netlink_info = (struct ifinfomsg *)(netlink_message + 1);
+    memset(netlink_request, 0, NLMSG_LENGTH(sizeof(*netlink_info)));
+    netlink_message->nlmsg_len = NLMSG_LENGTH(sizeof(*netlink_info));
+    netlink_message->nlmsg_type = RTM_GETLINK;
+    netlink_message->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    *netlink_address = (struct sockaddr_nl){.nl_family = AF_NETLINK};
+    int netlink_fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    socklen_t netlink_address_length = sizeof(*netlink_address);
+    int netlink_ok = netlink_fd >= 0 &&
+                     bind(netlink_fd, (struct sockaddr *)netlink_address, sizeof(*netlink_address)) == 0 &&
+                     getsockname(netlink_fd, (struct sockaddr *)netlink_address, &netlink_address_length) == 0;
+    *netlink_send_vector = (struct iovec){netlink_request, netlink_message->nlmsg_len};
+    *netlink_send_header = (struct msghdr){.msg_name = netlink_address,
+                                           .msg_namelen = sizeof(*netlink_address),
+                                           .msg_iov = netlink_send_vector,
+                                           .msg_iovlen = 1};
+    *netlink_receive_vector = (struct iovec){netlink_response, 1024};
+    *netlink_receive_header = (struct msghdr){.msg_name = netlink_source,
+                                              .msg_namelen = sizeof(*netlink_source),
+                                              .msg_iov = netlink_receive_vector,
+                                              .msg_iovlen = 1};
+    netlink_ok = netlink_ok && sendmsg(netlink_fd, netlink_send_header, 0) == (ssize_t)netlink_message->nlmsg_len &&
+                 recvmsg(netlink_fd, netlink_receive_header, 0) > 0 &&
+                 ((struct nlmsghdr *)netlink_response)->nlmsg_len >= sizeof(struct nlmsghdr) &&
+                 netlink_source->nl_family == AF_NETLINK;
+    *netlink_source_length = sizeof(*netlink_source);
+    netlink_ok =
+        netlink_ok &&
+        send(netlink_fd, netlink_request, netlink_message->nlmsg_len, 0) == (ssize_t)netlink_message->nlmsg_len &&
+        recvfrom(netlink_fd, netlink_response, 1024, 0, (struct sockaddr *)netlink_source, netlink_source_length) > 0 &&
+        netlink_source->nl_family == AF_NETLINK;
+    netlink_send_header->msg_control = direct;
+    netlink_send_header->msg_controllen = 16;
+    errno = 0;
+    netlink_ok = netlink_ok && sendmsg(netlink_fd, netlink_send_header, 0) < 0 && errno == EFAULT;
+    if (netlink_fd >= 0) close(netlink_fd);
+    aio_context_t *aio_context = (aio_context_t *)(soft0 + 3392);
+    struct iocb *aio_control = (struct iocb *)(soft1 + 3392);
+    struct iocb **aio_controls = (struct iocb **)(soft0 + 3472);
+    struct io_event *aio_event = (struct io_event *)(soft1 + 3472);
+    unsigned char *aio_buffer = soft0 + 3552;
+    struct timespec *aio_timeout = (struct timespec *)(soft1 + 3552);
+    *aio_context = 0;
+    memset(aio_control, 0, sizeof(*aio_control));
+    aio_control->aio_lio_opcode = IOCB_CMD_PREAD;
+    aio_control->aio_fildes = (uint32_t)memfd;
+    aio_control->aio_buf = (uint64_t)(uintptr_t)aio_buffer;
+    aio_control->aio_nbytes = 8;
+    aio_control->aio_offset = 0;
+    aio_control->aio_data = UINT64_C(0xa10a);
+    *aio_controls = aio_control;
+    *aio_timeout = (struct timespec){0};
+    int aio_ok = pwrite(memfd, "aio-data", 8, 0) == 8 && syscall(SYS_io_setup, 4, aio_context) == 0;
+    errno = 0;
+    aio_ok = aio_ok && syscall(SYS_io_submit, *aio_context, 1, direct) < 0 && errno == EFAULT &&
+             syscall(SYS_io_submit, *aio_context, 1, aio_controls) == 1 &&
+             syscall(SYS_io_getevents, *aio_context, 1, 1, aio_event, aio_timeout) == 1 &&
+             aio_event->data == UINT64_C(0xa10a) && aio_event->res == 8 && memcmp(aio_buffer, "aio-data", 8) == 0 &&
+             syscall(SYS_io_destroy, *aio_context) == 0;
 
-    unsigned *cpu_number = (unsigned *)(soft0 + 3760);
-    unsigned *numa_node = (unsigned *)(soft1 + 3760);
-    int *schedule_priority = (int *)(soft0 + 3776);
-    struct timespec *round_robin = (struct timespec *)(soft1 + 3776);
-    unsigned char *schedule_attr = soft0 + 3808;
-    struct rlimit *limit = (struct rlimit *)(soft1 + 3808);
-    struct itimerval *timer_value = (struct itimerval *)(soft0 + 3888);
-    void **move_pages = (void **)(soft1 + 3888);
-    int *move_status = (int *)(soft1 + 3920);
-    move_pages[0] = soft0;
-    move_pages[1] = direct;
-    int rare_ok = syscall(SYS_getcpu, cpu_number, numa_node, NULL) == 0 && *numa_node == 0 &&
-                  syscall(SYS_sched_getparam, 0, schedule_priority) == 0 && *schedule_priority == 0 &&
-                  syscall(SYS_sched_rr_get_interval, 0, round_robin) == 0 && round_robin->tv_nsec == 100000000L &&
-                  syscall(SYS_sched_getattr, 0, schedule_attr, 48, 0) == 0 &&
-                  *(uint32_t *)schedule_attr == 48 && getrlimit(RLIMIT_NOFILE, limit) == 0 &&
-                  limit->rlim_cur > 0 && getitimer(ITIMER_REAL, timer_value) == 0 &&
-                  syscall(SYS_move_pages, 0, 2, move_pages, NULL, move_status, 0) == 0 &&
-                  move_status[0] == 0 && move_status[1] == -ENOENT;
+    struct {
+        long type;
+        char text[16];
+    } *message_send = (void *)(soft1 + 3648), *message_receive_sysv = (void *)(soft0 + 3648);
+    struct msqid_ds *message_status = (struct msqid_ds *)(soft1 + 3712);
+    message_send->type = 7;
+    memcpy(message_send->text, "sysv-message", 13);
+    int message_queue = msgget(IPC_PRIVATE, IPC_CREAT | 0600);
+    int sysv_ok = message_queue >= 0 && msgsnd(message_queue, message_send, 13, IPC_NOWAIT) == 0 &&
+                  msgrcv(message_queue, message_receive_sysv, 16, 7, IPC_NOWAIT) == 13 &&
+                  message_receive_sysv->type == 7 && memcmp(message_receive_sysv->text, "sysv-message", 13) == 0 &&
+                  msgctl(message_queue, IPC_STAT, message_status) == 0;
+    errno = 0;
+    sysv_ok = sysv_ok && msgsnd(message_queue, direct, 1, IPC_NOWAIT) < 0 && errno == EFAULT;
+    if (message_queue >= 0) msgctl(message_queue, IPC_RMID, NULL);
+    unsigned short *semaphore_values = (unsigned short *)(soft1 + 2304);
+    unsigned short *semaphore_readback = (unsigned short *)(soft0 + 3350);
+    struct sembuf *semaphore_operation = (struct sembuf *)(soft1 + 2336);
+    struct semid_ds *semaphore_status = (struct semid_ds *)(soft1 + 2400);
+
+    union {
+        int val;
+        unsigned short *array;
+        struct semid_ds *buf;
+    } semaphore_argument;
+
+    int semaphore = semget(IPC_PRIVATE, 2, IPC_CREAT | 0600);
+    semaphore_values[0] = 1;
+    semaphore_values[1] = 2;
+    semaphore_argument.array = semaphore_values;
+    *semaphore_operation = (struct sembuf){.sem_num = 0, .sem_op = -1, .sem_flg = IPC_NOWAIT};
+    int semaphore_ok = semaphore >= 0 && semctl(semaphore, 0, SETALL, semaphore_argument) == 0 &&
+                       semop(semaphore, semaphore_operation, 1) == 0;
+    semaphore_argument.array = semaphore_readback;
+    semaphore_ok = semaphore_ok && semctl(semaphore, 0, GETALL, semaphore_argument) == 0 &&
+                   semaphore_readback[0] == 0 && semaphore_readback[1] == 2;
+    semaphore_argument.buf = semaphore_status;
+    semaphore_ok = semaphore_ok && semctl(semaphore, 0, IPC_STAT, semaphore_argument) == 0;
+    errno = 0;
+    semaphore_ok = semaphore_ok && semop(semaphore, (struct sembuf *)direct, 1) < 0 && errno == EFAULT;
+    if (semaphore >= 0) semctl(semaphore, 0, IPC_RMID);
+
+    struct shmid_ds *shared_status = (struct shmid_ds *)(soft1 + 2528);
+    int shared_segment = shmget(IPC_PRIVATE, 4096, IPC_CREAT | 0600);
+    int shared_ok =
+        shared_segment >= 0 && shmctl(shared_segment, IPC_STAT, shared_status) == 0 && shared_status->shm_segsz == 4096;
+    errno = 0;
+    shared_ok = shared_ok && shmctl(shared_segment, IPC_STAT, (struct shmid_ds *)direct) < 0 && errno == EFAULT;
+    if (shared_segment >= 0) shmctl(shared_segment, IPC_RMID, NULL);
+    char *queue_name = (char *)(soft1 + 2784);
+    struct mq_attr *queue_attribute = (struct mq_attr *)(soft1 + 2848);
+    struct mq_attr *queue_old_attribute = (struct mq_attr *)(soft0 + 2784);
+    char *queue_send = (char *)(soft1 + 2944);
+    char *queue_receive = (char *)(soft0 + 2944);
+    unsigned *queue_priority = (unsigned *)(soft0 + 3008);
+    snprintf(queue_name, 48, "/hl-logical-%d", getpid());
+    *queue_attribute = (struct mq_attr){.mq_maxmsg = 4, .mq_msgsize = 32};
+    memcpy(queue_send, "queue-data", 10);
+    mqd_t queue = mq_open(queue_name, O_CREAT | O_EXCL | O_RDWR | O_NONBLOCK, 0600, queue_attribute);
+    int queue_ok = queue >= 0 && mq_getattr(queue, queue_old_attribute) == 0 &&
+                   mq_send(queue, queue_send, 10, 3) == 0 &&
+                   mq_receive(queue, queue_receive, 32, queue_priority) == 10 &&
+                   memcmp(queue_receive, "queue-data", 10) == 0 && *queue_priority == 3;
+    errno = 0;
+    queue_ok = queue_ok && mq_send(queue, (const char *)direct, 1, 0) < 0 && errno == EFAULT;
+    if (queue >= 0) mq_close(queue);
+    mq_unlink(queue_name);
+
+    state->netlink_ok = netlink_ok;
+    state->aio_ok = aio_ok;
+    state->sysv_ok = sysv_ok;
+    state->semaphore_ok = semaphore_ok;
+    state->shared_ok = shared_ok;
+    state->queue_ok = queue_ok;
+}
+
+static int run_process_filesystem(const FixtureContext *fixture, EventState *state) {
+    size_t page = fixture->page;
+    unsigned char *soft0 = fixture->soft0;
+    unsigned char *soft1 = fixture->soft1;
+    unsigned char *direct = fixture->direct;
+    struct sockaddr_in *udp_destination = state->udp_destination;
+    struct sockaddr_in *udp_source = state->udp_source;
+    socklen_t *udp_source_length = state->udp_source_length;
+
+    uint32_t *cap_header = (uint32_t *)(soft0 + 3072);
+    uint32_t *cap_data = (uint32_t *)(soft1 + 3072);
+    cap_header[0] = 0x20080522;
+    cap_header[1] = 0;
+    memset(cap_data, 0, 24);
+    int cap_ok = syscall(SYS_capget, cap_header, cap_data) == 0 && cap_data[1] != 0;
+    errno = 0;
+    cap_ok = cap_ok && syscall(SYS_capget, cap_header, direct) < 0 && errno == EFAULT;
+
+    unsigned char *cpu_mask = soft1 + 3136;
+    memset(cpu_mask, 0, 128);
+    long affinity_bytes = syscall(SYS_sched_getaffinity, 0, 128, cpu_mask);
+    int affinity_ok = affinity_bytes > 0 && syscall(SYS_sched_setaffinity, 0, 128, cpu_mask) == 0;
+    errno = 0;
+    affinity_ok = affinity_ok && syscall(SYS_sched_getaffinity, 0, 128, direct) < 0 && errno == EFAULT;
+
+    struct sched_param *schedule = (struct sched_param *)(soft0 + 3136);
+    memset(schedule, 0, sizeof(*schedule));
+    int schedule_ok = syscall(SYS_sched_getparam, 0, schedule) == 0 && syscall(SYS_sched_setparam, 0, schedule) == 0;
+    uint32_t *ruid = (uint32_t *)(soft0 + 3168);
+    uint32_t *euid = (uint32_t *)(soft1 + 3280);
+    uint32_t *suid = (uint32_t *)(soft0 + 3172);
+    int ids_ok = syscall(SYS_getresuid, ruid, euid, suid) == 0 && *ruid == getuid() && *euid == geteuid();
+
+    gid_t *groups = (gid_t *)(soft0 + 3328);
+    int group_count = (int)syscall(SYS_getgroups, 0, NULL);
+    int groups_ok = group_count >= 0 && group_count <= 128 && syscall(SYS_getgroups, 128, groups) == group_count;
+
+    struct rusage *usage = (struct rusage *)(soft1 + 3328);
+    int usage_ok = syscall(SYS_getrusage, RUSAGE_SELF, usage) == 0;
+    pid_t wait_child = fork();
+    if (wait_child == 0) _exit(23);
+    int *wait_status = (int *)(soft0 + 3264);
+    struct rusage *wait_usage = (struct rusage *)(soft1 + 3520);
+    int wait_ok = wait_child > 0 && syscall(SYS_wait4, wait_child, wait_status, 0, wait_usage) == wait_child &&
+                  WIFEXITED(*wait_status) && WEXITSTATUS(*wait_status) == 23;
+    int proc_ok = cap_ok && affinity_ok && schedule_ok && ids_ok && groups_ok && usage_ok && wait_ok;
+
+    char *filesystem_path = (char *)(soft0 + 3904);
+    struct stat *filesystem_status = (struct stat *)(soft1 + 3800);
+    memcpy(filesystem_path, "/dev/null", 10);
+    int filesystem_fd = (int)syscall(SYS_openat, AT_FDCWD, filesystem_path, O_RDONLY, 0);
+    int filesystem_ok = filesystem_fd >= 0 && syscall(SYS_fstat, filesystem_fd, filesystem_status) == 0 &&
+                        S_ISCHR(filesystem_status->st_mode) &&
+                        syscall(SYS_newfstatat, AT_FDCWD, filesystem_path, filesystem_status, 0) == 0;
+    errno = 0;
+    filesystem_ok =
+        filesystem_ok && syscall(SYS_newfstatat, AT_FDCWD, filesystem_path, direct, 0) < 0 && errno == EFAULT;
+    errno = 0;
+    filesystem_ok = filesystem_ok && syscall(SYS_openat, AT_FDCWD, direct, O_RDONLY, 0) < 0 && errno == EFAULT;
+    char *cwd_result = (char *)soft0;
+    filesystem_ok = filesystem_ok && syscall(SYS_getcwd, cwd_result, 512) > 0 && cwd_result[0] == '/';
+    memcpy(filesystem_path, "/proc/self", 11);
+    char *link_result = (char *)soft1;
+    filesystem_ok = filesystem_ok && syscall(SYS_readlinkat, AT_FDCWD, filesystem_path, link_result, 64) > 0;
+    memcpy(filesystem_path, "/dev/null", 10);
+    struct statx *extended_status = (struct statx *)(soft1 + 256);
+    filesystem_ok = filesystem_ok &&
+                    syscall(SYS_statx, AT_FDCWD, filesystem_path, 0, STATX_BASIC_STATS, extended_status) == 0 &&
+                    S_ISCHR(extended_status->stx_mode);
+    struct open_how *how = (struct open_how *)(soft0 + 512);
+    *how = (struct open_how){.flags = O_RDONLY};
+    int openat2_fd = (int)syscall(SYS_openat2, AT_FDCWD, filesystem_path, how, sizeof(*how));
+    filesystem_ok = filesystem_ok && openat2_fd >= 0;
+    if (openat2_fd >= 0) close(openat2_fd);
+    memcpy(filesystem_path, "/tmp", 5);
+    int directory_fd = (int)syscall(SYS_openat, AT_FDCWD, filesystem_path, O_RDONLY | O_DIRECTORY, 0);
+    long directory_bytes = directory_fd >= 0 ? syscall(SYS_getdents64, directory_fd, soft1 + 1024, 1024) : -1;
+    filesystem_ok = filesystem_ok && directory_fd >= 0 && directory_bytes >= 0;
+    if (directory_fd >= 0) close(directory_fd);
+    struct statfs *filesystem_geometry = (struct statfs *)(soft0 + 2048);
+    filesystem_ok = filesystem_ok && syscall(SYS_fstatfs, filesystem_fd, filesystem_geometry) == 0 &&
+                    filesystem_geometry->f_bsize > 0;
+    int ioctl_pipe[2] = {-1, -1};
+    int *available = (int *)(soft1 + 2048);
+    char ioctl_byte = 'i';
+    filesystem_ok = filesystem_ok && pipe(ioctl_pipe) == 0 && write(ioctl_pipe[1], &ioctl_byte, 1) == 1 &&
+                    syscall(SYS_ioctl, ioctl_pipe[0], FIONREAD, available) == 0 && *available == 1;
+    if (ioctl_pipe[0] >= 0) close(ioctl_pipe[0]);
+    if (ioctl_pipe[1] >= 0) close(ioctl_pipe[1]);
+    if (filesystem_fd >= 0) close(filesystem_fd);
+
+    int tcp_listener = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in tcp_bound = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    socklen_t tcp_bound_length = sizeof(tcp_bound);
+    *udp_destination = tcp_bound;
+    int accept_ok = tcp_listener >= 0 &&
+                    bind(tcp_listener, (struct sockaddr *)udp_destination, sizeof(*udp_destination)) == 0 &&
+                    listen(tcp_listener, 4) == 0 &&
+                    getsockname(tcp_listener, (struct sockaddr *)&tcp_bound, &tcp_bound_length) == 0;
+    *udp_destination = tcp_bound;
+    int tcp_client = socket(AF_INET, SOCK_STREAM, 0);
+    accept_ok = accept_ok && tcp_client >= 0 &&
+                connect(tcp_client, (struct sockaddr *)udp_destination, sizeof(*udp_destination)) == 0;
+    *udp_source_length = sizeof(*udp_source);
+    int accepted =
+        accept_ok ? accept4(tcp_listener, (struct sockaddr *)udp_source, udp_source_length, SOCK_CLOEXEC) : -1;
+    accept_ok = accept_ok && accepted >= 0 && udp_source->sin_family == AF_INET;
+    if (accepted >= 0) close(accepted);
+    if (tcp_client >= 0) close(tcp_client);
+
+    tcp_client = socket(AF_INET, SOCK_STREAM, 0);
+    accept_ok = accept_ok && tcp_client >= 0 &&
+                connect(tcp_client, (struct sockaddr *)udp_destination, sizeof(*udp_destination)) == 0;
+    errno = 0;
+    int bad_length = accept4(tcp_listener, (struct sockaddr *)udp_source, (socklen_t *)direct, 0);
+    accept_ok = accept_ok && bad_length < 0 && errno == EFAULT;
+    if (tcp_client >= 0) close(tcp_client);
+
+    tcp_client = socket(AF_INET, SOCK_STREAM, 0);
+    accept_ok = accept_ok && tcp_client >= 0 &&
+                connect(tcp_client, (struct sockaddr *)udp_destination, sizeof(*udp_destination)) == 0;
+    *udp_source_length = sizeof(*udp_source);
+    errno = 0;
+    int second_span = accept4(tcp_listener, (struct sockaddr *)(soft0 + page - 8), udp_source_length, SOCK_NONBLOCK);
+    accept_ok = accept_ok && second_span < 0 && errno == EFAULT;
+    if (tcp_client >= 0) close(tcp_client);
+    if (tcp_listener >= 0) close(tcp_listener);
+    if (state->signal_fd >= 0) close(state->signal_fd);
+    if (state->timer_fd >= 0) close(state->timer_fd);
+    if (state->udp_receiver >= 0) close(state->udp_receiver);
+    if (state->udp_sender >= 0) close(state->udp_sender);
+    int event_ok = state->ctl_ok && state->write_ok && state->epoll_ok && state->ppoll_ok && state->pselect_ok &&
+                   state->signal_fd_ok && state->timer_fd_ok && state->udp_ok && state->message_ok && state->mmsg_ok &&
+                   state->netlink_ok && state->aio_ok && state->sysv_ok && state->semaphore_ok && state->shared_ok &&
+                   state->queue_ok && accept_ok && proc_ok && filesystem_ok;
+    close(state->event_pipe[0]);
+    close(state->event_pipe[1]);
+    if (state->ep >= 0) close(state->ep);
+    return event_ok;
+}
+
+int main(void) {
+    FixtureContext fixture;
+    Results results;
+    int initialization = initialize_fixture(&fixture, &results);
+    if (initialization != 0) return initialization;
+    EventState event = {0};
+    run_event_network(&fixture, &event);
+    run_kernel_ipc(&fixture, &event);
+    results.event = run_process_filesystem(&fixture, &event);
+    run_misc_and_rare(&fixture, &results);
 
     printf("syscall-logical-uaccess cross=%d aliases=%d second-page-fault=%d zero-then-fault=%d time=%d signal=%d "
            "event=%d misc-seccomp=%d rare=%d\n",
-           cross_ok, aliases_ok, fault_ok, zero_fault_ok, time_ok, signal_ok, event_ok, misc_ok, rare_ok);
-    return cross_ok && aliases_ok && fault_ok && zero_fault_ok && time_ok && signal_ok && event_ok && misc_ok &&
-                   rare_ok
+           results.cross, results.aliases, results.second_page_fault, results.zero_then_fault, results.time,
+           results.signal, results.event, results.misc_seccomp, results.rare);
+    return results.cross && results.aliases && results.second_page_fault && results.zero_then_fault && results.time &&
+                   results.signal && results.event && results.misc_seccomp && results.rare
                ? 0
                : 1;
 }
