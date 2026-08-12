@@ -244,6 +244,71 @@ static int translate_literal_load(uint64_t guest_pc, uint32_t instruction) {
     return 0;
 }
 
+static void translate_memory_or_fallback(uint64_t guest_pc, uint32_t instruction, int in_exclusive_region) {
+    if ((guestbase_on() || jit_guest_soft_active()) && !in_exclusive_region &&
+        (jit_guest_soft_active() || ((instruction >> 5) & 31) != 31)) {
+        if (is_foldable_mem(instruction)) {
+            if (jit_guest_bus_active()) emit_a64_bus_guard_instruction(instruction, guest_pc);
+            emit_fold_mem(instruction, 0);
+            return;
+        }
+        if (is_advsimd_struct(instruction)) {
+            emit_fold_advsimd_struct(instruction);
+            return;
+        }
+    }
+    if (jit_guest_bus_active()) {
+        if (!guestbase_on() && !in_exclusive_region && is_foldable_mem(instruction))
+            emit_a64_bus_guard_instruction(instruction, guest_pc);
+        if (!guestbase_on() && !in_exclusive_region && is_advsimd_struct(instruction))
+            emit_a64_bus_guard_base((instruction >> 5) & 31, 0, (uint64_t)advsimd_struct_bytes(instruction), guest_pc);
+        if ((instruction & 0x3A000000u) == 0x28000000u) {
+            int mode = (instruction >> 23) & 3;
+            if (mode == 1 || mode == 3) {
+                uint64_t bytes = a64_mem_bytes(instruction);
+                int64_t offset = sext((instruction >> 15) & 0x7f, 7) * (int64_t)(bytes / 2);
+                emit_a64_bus_guard_base((instruction >> 5) & 31, mode == 3 ? offset : 0, bytes, guest_pc);
+            }
+        }
+        if ((instruction & 0x3FC00000u) == 0x08400000u && !is_casp(instruction)) {
+            uint64_t bytes = UINT64_C(1) << ((instruction >> 30) & 3);
+            if ((instruction >> 21) & 1) bytes *= 2;
+            emit_a64_bus_guard_base((instruction >> 5) & 31, 0, bytes, guest_pc);
+        }
+    }
+    if (jit_guest_soft_active() && (((instruction & 0x3F000000u) == 0x08000000u) || is_casp(instruction))) {
+        emit_a64_soft_exclusive(instruction);
+        return;
+    }
+    if (is_casp(instruction)) {
+        if (casp_uses_stolen(instruction))
+            emit_casp_mangled(instruction, -1);
+        else
+            emit32(instruction);
+        return;
+    }
+    if ((instruction & 0x7FE0FFE0u) == 0x2A0003E0u) {
+        int destination = instruction & 31;
+        int source = (instruction >> 16) & 31;
+        if (destination != 31 && !is_stolen(destination) && is_stolen(source)) {
+            if (instruction >> 31)
+                e_ldr(destination, CPUREG, source * 8);
+            else
+                emit32(0xB9400000u | ((unsigned)(source * 2) << 10) | ((unsigned)CPUREG << 5) | (unsigned)destination);
+            return;
+        }
+    }
+    if (stealfast_on() && (instruction & 0x7FFFFFE0u) == 0x52800000u && is_stolen(instruction & 31)) {
+        e_str(31, CPUREG, (int)(instruction & 31) * 8);
+        return;
+    }
+    int register_fields = gpr_field_mask(instruction);
+    if (uses_x18(instruction, register_fields))
+        emit_mangled_x18(instruction, register_fields);
+    else
+        emit32(instruction);
+}
+
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
        an executable view backed by an emulated host-page snapshot. */
@@ -1005,91 +1070,7 @@ static void *translate_block(uint64_t gpc) {
             break;
         }
 
-        // guest_base bias-fold: a non-PIE image's LOW absolute load/store -> +bias (the high mapping), no
-        // fault. Only outside an exclusive monitor region (the fold spills scratch to memory, which would
-        // clear the monitor) and only for a non-SP base (the stack is always high). The AdvSIMD load/store
-        // structure family (ld1/st1.., ld1r) has no offset/index so is_foldable_mem omits it -- fold it via
-        // its own emitter (else glibc's NEON strlen/memcpy trap once per access on the image). Inert for PIE.
-        if ((guestbase_on() || jit_guest_soft_active()) && !in_excl &&
-            (jit_guest_soft_active() || ((in >> 5) & 31) != 31)) {
-            if (is_foldable_mem(in)) {
-                if (jit_guest_bus_active()) emit_a64_bus_guard_instruction(in, gpc);
-                emit_fold_mem(in, 0);
-                gpc += 4;
-                continue;
-            }
-            if (is_advsimd_struct(in)) {
-                emit_fold_advsimd_struct(in);
-                gpc += 4;
-                continue;
-            }
-        }
-        if (jit_guest_bus_active()) {
-            if (!guestbase_on() && !in_excl && is_foldable_mem(in)) emit_a64_bus_guard_instruction(in, gpc);
-            if (!guestbase_on() && !in_excl && is_advsimd_struct(in))
-                emit_a64_bus_guard_base((in >> 5) & 31, 0, (uint64_t)advsimd_struct_bytes(in), gpc);
-            /* Pair pre/post-index forms are deliberately not bias-folded.  Guard
-               their architectural access address, then preserve the native
-               writeback opcode verbatim below. */
-            if ((in & 0x3A000000u) == 0x28000000u) {
-                int mode = (in >> 23) & 3;
-                if (mode == 1 || mode == 3) {
-                    uint64_t total = a64_mem_bytes(in);
-                    int64_t imm = sext((in >> 15) & 0x7f, 7) * (int64_t)(total / 2);
-                    emit_a64_bus_guard_base((in >> 5) & 31, mode == 3 ? imm : 0, total, gpc);
-                }
-            }
-            /* Guard once at the load-exclusive edge.  No call is injected
-               between LDXR/LDXP and STXR/STXP, which would clear the host
-               exclusive monitor; activation cannot publish a new BUS range
-               until this thread reaches the dispatcher. */
-            if ((in & 0x3FC00000u) == 0x08400000u && !is_casp(in)) {
-                uint64_t bytes = UINT64_C(1) << ((in >> 30) & 3);
-                if ((in >> 21) & 1) bytes *= 2;
-                emit_a64_bus_guard_base((in >> 5) & 31, 0, bytes, gpc);
-            }
-        }
-        if (jit_guest_soft_active() && (((in & 0x3F000000u) == 0x08000000u) || is_casp(in))) {
-            emit_a64_soft_exclusive(in);
-            gpc += 4;
-            continue;
-        }
-        // CASP paired compare-and-swap: the mangle machinery only substitutes NAMED register fields, so a
-        // stolen pair partner (Xs+1 / Xt+1) would slip through verbatim. Relocate both pairs when any member
-        // is stolen; otherwise (the common case) emit verbatim -- byte-identical to before.
-        if (is_casp(in)) {
-            if (casp_uses_stolen(in))
-                emit_casp_mangled(in, -1);
-            else
-                emit32(in);
-            gpc += 4;
-            continue;
-        }
-        // Exact ORR-alias MOV from a stolen source into a live guest host reg.
-        if ((in & 0x7FE0FFE0u) == 0x2A0003E0u) {
-            int rd = in & 31, rm = (in >> 16) & 31;
-            if (rd != 31 && !is_stolen(rd) && is_stolen(rm)) {
-                if (in >> 31)
-                    e_ldr(rd, CPUREG, rm * 8);
-                else
-                    emit32(0xB9400000u | ((unsigned)(rm * 2) << 10) | ((unsigned)CPUREG << 5) | (unsigned)rd);
-                gpc += 4;
-                continue;
-            }
-        }
-        // Exact MOVZ Wd/Xd,#0,LSL#0.
-        if (stealfast_on() && (in & 0x7FFFFFE0u) == 0x52800000u && is_stolen(in & 31)) {
-            e_str(31, CPUREG, (int)(in & 31) * 8);
-            gpc += 4;
-            continue;
-        }
-        // everything else: verbatim,
-        int mask = gpr_field_mask(in);
-        if (uses_x18(in, mask))
-            // unless it names x18 -> mangle
-            emit_mangled_x18(in, mask);
-        else
-            emit32(in);
+        translate_memory_or_fallback(gpc, in, in_excl);
         gpc += 4;
     }
     finish_block(start, guest_start, guest_end, host, body, provenance_host, provenance_guest, provenance_fault_capable,
