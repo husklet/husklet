@@ -149,7 +149,7 @@ impl Campaign {
             let executable = Path::new(&arm.command[0]);
             if !executable.is_absolute()
                 || !executable.is_file()
-                || arm.smoke[0] != arm.command[0]
+                || !smoke_binds_profile(&arm.command, &arm.smoke)
                 || !arm.artifacts.values().any(|artifact| artifact.path == executable)
             {
                 return Err(format!("arm {label} command is not bound to a hashed artifact").into());
@@ -163,11 +163,11 @@ impl Campaign {
     }
 }
 
-fn workload_judgments_covered(
-    name: &str,
-    workload: &Workload,
-    layouts: &BTreeMap<String, Layout>,
-) -> bool {
+fn smoke_binds_profile(command: &[String], smoke: &[String]) -> bool {
+    !command.is_empty() && smoke.starts_with(command) && smoke.len() > command.len()
+}
+
+fn workload_judgments_covered(name: &str, workload: &Workload, layouts: &BTreeMap<String, Layout>) -> bool {
     name == "python"
         || workload.commands.keys().all(|layout| {
             workload
@@ -265,8 +265,8 @@ pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Artifact, Layout, Workload, guest_is_hashed, invariant_phases_valid, phase_names_valid, verify_artifact,
-        workload_judgments_covered,
+        Artifact, Layout, Workload, guest_is_hashed, invariant_phases_valid, phase_names_valid, smoke_binds_profile,
+        verify_artifact, workload_judgments_covered,
     };
     use crate::record::FramedIdentity;
     use std::fs;
@@ -281,6 +281,29 @@ mod tests {
             sha256: FramedIdentity::of(b"engine"),
         };
         verify_artifact("engine", &artifact, false).unwrap();
+    }
+
+    #[test]
+    fn smoke_executes_the_exact_measured_profile_prefix() {
+        let command = ["/engine".into(), "--profile".into(), "integrated".into()];
+        let smoke = [
+            "/engine".into(),
+            "--profile".into(),
+            "integrated".into(),
+            "/guest/smoke".into(),
+        ];
+        assert!(smoke_binds_profile(&command, &smoke));
+        assert!(!smoke_binds_profile(&command, &["/engine".into(), "--help".into()]));
+        assert!(!smoke_binds_profile(
+            &command,
+            &[
+                "/engine".into(),
+                "--profile".into(),
+                "retained".into(),
+                "/guest/smoke".into()
+            ]
+        ));
+        assert!(!smoke_binds_profile(&command, &command));
     }
 
     #[cfg(unix)]
@@ -337,7 +360,12 @@ mod tests {
     #[test]
     fn judged_phases_exist_in_every_workload_layout() {
         let layouts = [
-            ("plain".into(), Layout { phases: vec!["malloc".into()] }),
+            (
+                "plain".into(),
+                Layout {
+                    phases: vec!["malloc".into()],
+                },
+            ),
             (
                 "sqlite".into(),
                 Layout {
