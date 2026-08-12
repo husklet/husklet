@@ -386,6 +386,14 @@ unsafe extern "C" {
         storage_start: u64,
     ) -> c_int;
     #[cfg(test)]
+    fn hl_native_address_projection_init_elf(
+        projection: *mut CAddressProjection,
+        kind: u32,
+        link_start: u64,
+        link_end: u64,
+        storage_start: u64,
+    ) -> c_int;
+    #[cfg(test)]
     fn hl_native_address_projection_storage(
         projection: *const CAddressProjection,
         guest: u64,
@@ -890,7 +898,8 @@ mod tests {
         EVENT_CAPTURE_LOCK, SYSCALL_TRAP_ABI, SYSCALL_TRAP_CONTINUE, SYSCALL_TRAP_DECLINED, SYSCALL_TRAP_FAULT,
         StreamBridge, TASK_EVENT_CLONE_THREAD, TASK_EVENT_CREDENTIALS_CHANGED, TASK_EVENT_FORK_PROCESS,
         TASK_EVENT_PREPARE_FORK, c_file_volumes, c_main_image_plan, c_option, c_syscall_trap,
-        hl_native_address_projection_guest, hl_native_address_projection_init, hl_native_address_projection_storage,
+        hl_native_address_projection_guest, hl_native_address_projection_init,
+        hl_native_address_projection_init_elf, hl_native_address_projection_storage,
     };
     use crate::activation::GuestIsa;
     use crate::composition::{
@@ -964,6 +973,49 @@ mod tests {
         let mut output = 0;
         assert_ne!(
             unsafe { hl_native_address_projection_storage(&raw const projection, 0x4000, &raw mut output) },
+            0
+        );
+    }
+
+    #[test]
+    fn elf_kind_alone_selects_et_exec_or_position_independent_coordinates() {
+        let mut executable = CAddressProjection::default();
+        assert_eq!(
+            unsafe {
+                hl_native_address_projection_init_elf(
+                    &raw mut executable,
+                    1,
+                    0x40_0000,
+                    0x41_0000,
+                    0xa0_0000,
+                )
+            },
+            0
+        );
+        assert_eq!((executable.guest_start, executable.guest_end), (0x40_0000, 0x41_0000));
+        assert_eq!(executable.storage_bias, 0x60_0000);
+
+        // PT_INTERP presence distinguishes dynamic PIE from static PIE, but is
+        // deliberately absent from this ABI: both are ET_DYN identity mappings.
+        let mut dynamic_pie = CAddressProjection::default();
+        let mut static_pie = CAddressProjection::default();
+        for projection in [&raw mut dynamic_pie, &raw mut static_pie] {
+            assert_eq!(
+                unsafe {
+                    hl_native_address_projection_init_elf(projection, 2, 0, 0x10_0000, 0x70_0000_0000)
+                },
+                0
+            );
+        }
+        assert_eq!(dynamic_pie, static_pie);
+        assert_eq!(dynamic_pie.flags, 0);
+        assert_eq!(
+            (dynamic_pie.guest_start, dynamic_pie.guest_end, dynamic_pie.storage_bias),
+            (0x70_0000_0000, 0x70_0010_0000, 0)
+        );
+
+        assert_ne!(
+            unsafe { hl_native_address_projection_init_elf(&raw mut static_pie, 3, 0, 0x1000, 0x8000) },
             0
         );
     }

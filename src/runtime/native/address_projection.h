@@ -3,11 +3,15 @@
 #include <stdint.h>
 #define HL_NATIVE_ADDRESS_PROJECTION_ABI 1u
 #define HL_NATIVE_ADDRESS_PROJECTION_DISPLACED 1u
+#define HL_NATIVE_ELF_EXECUTABLE 1u
+#define HL_NATIVE_ELF_POSITION_INDEPENDENT 2u
 typedef struct hl_native_address_projection {
     uint32_t abi, size, flags, reserved;
     uint64_t guest_start, guest_end, storage_bias;
 } hl_native_address_projection;
 int32_t hl_native_address_projection_init(hl_native_address_projection *, uint64_t, uint64_t, uint64_t);
+int32_t hl_native_address_projection_init_elf(hl_native_address_projection *, uint32_t, uint64_t, uint64_t,
+                                              uint64_t);
 int32_t hl_native_address_projection_storage(const hl_native_address_projection *, uint64_t, uint64_t *);
 int32_t hl_native_address_projection_guest(const hl_native_address_projection *, uint64_t, uint64_t *);
 static inline int hl_native_address_projection_valid(const hl_native_address_projection *p) {

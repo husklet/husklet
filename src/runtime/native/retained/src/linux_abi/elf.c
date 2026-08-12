@@ -858,12 +858,21 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
     }
     hl_gmap_add((uint64_t)base, span);
     uint64_t bias = (uint64_t)base - basepage;
+    hl_native_address_projection image_projection;
+    uint32_t image_kind = etype == 2 ? HL_NATIVE_ELF_EXECUTABLE
+                                     : HL_NATIVE_ELF_POSITION_INDEPENDENT;
+    if (hl_native_address_projection_init_elf(
+            &image_projection, image_kind, basepage, basepage + span,
+            (uint64_t)base) != 0) {
+        fprintf(stderr, "hl-engine: invalid ELF image address projection\n");
+        exit(1);
+    }
     // Armed on `bias != 0`, not on `etype == 2`: a link-address placement has one coordinate system, and
     // leaving lo/hi set with bias 0 keeps the fold's whole workaround family reachable for no reason.
-    if (etype == 2 && bias != 0) {
-        g_nonpie_lo = basepage;
-        g_nonpie_hi = basepage + span;
-        g_nonpie_bias = bias;
+    if ((image_projection.flags & HL_NATIVE_ADDRESS_PROJECTION_DISPLACED) != 0) {
+        g_nonpie_lo = image_projection.guest_start;
+        g_nonpie_hi = image_projection.guest_end;
+        g_nonpie_bias = image_projection.storage_bias;
     }
     for (int i = 0; i < phnum; i++) {
         uint8_t *ph = f + phoff + (uint64_t)i * phentsize;

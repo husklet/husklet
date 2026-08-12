@@ -18,6 +18,24 @@ int32_t hl_native_address_projection_init(hl_native_address_projection *p,
       bias};
   return 0;
 }
+int32_t hl_native_address_projection_init_elf(hl_native_address_projection *p,
+                                              uint32_t kind,
+                                              uint64_t link_start,
+                                              uint64_t link_end,
+                                              uint64_t storage_start) {
+  if (link_end <= link_start)
+    return -1;
+  if (kind == HL_NATIVE_ELF_EXECUTABLE)
+    return hl_native_address_projection_init(p, link_start, link_end,
+                                             storage_start);
+  if (kind != HL_NATIVE_ELF_POSITION_INDEPENDENT)
+    return -1;
+  uint64_t span = link_end - link_start;
+  if (span > UINT64_MAX - storage_start)
+    return -1;
+  return hl_native_address_projection_init(p, storage_start,
+                                           storage_start + span, storage_start);
+}
 int32_t
 hl_native_address_projection_storage(const hl_native_address_projection *p,
                                      uint64_t address, uint64_t *output) {
