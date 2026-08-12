@@ -13,6 +13,46 @@ cases:
     artifact: { destination: /opt/husklet/python/exec-python-minimal }
     run: [-I, -u, -S, -c, "open('/tmp/husklet-cpython-proof', 'w').write('1\\n')"]
     expect: { exit: 0, stdout: golden/cpython_minimal.out }
+  - id: runtime/python/cpython-bigint
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-bigint, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-bigint }
+    run: [-I, -u, -S, -c, "open('/tmp/husklet-cpython-proof', 'w').write(str((1 << 130) + 12345) + '\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_bigint.out }
+  - id: runtime/python/cpython-hashlib
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-hashlib, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-hashlib }
+    run: [-I, -u, -S, -c, "import hashlib; open('/tmp/husklet-cpython-proof', 'w').write(hashlib.sha256(b'husklet').hexdigest() + '\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_hashlib.out }
+  - id: runtime/python/cpython-json
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-json, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-json }
+    run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w', encoding='utf-8').write(json.dumps({'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False) + '\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_json.out }
+  - id: runtime/python/cpython-generator
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-generator, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-generator }
+    run: [-I, -u, -S, -c, "open('/tmp/husklet-cpython-proof', 'w').write(str(sum(i*i for i in range(1000))) + '\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_generator.out }
+  - id: runtime/python/cpython-thread
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-thread, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-thread }
+    run: [-I, -u, -S, -c, "import threading; values=[]; t=threading.Thread(target=lambda: values.append(7)); t.start(); t.join(); open('/tmp/husklet-cpython-proof', 'w').write(str(values[0]) + '\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_thread.out }
   - id: runtime/python/cpython-standard-library
     status: active
     compat: { class: compatibility }
