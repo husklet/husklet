@@ -1870,19 +1870,11 @@ static void emit_pd2i32_pieces(int r, int m, int sd, int trunc, int c2p31d, int 
 
 // Returns 1 if the VEX insn was lowered inline (caller does gpc = next; continue), else 0 (fall through
 // to the R_AVX do_avx exit). Correctness-first: only a vetted, bit-exact-vs-qemu subset is claimed here.
-static int avx_lower(struct insn *I, uint64_t next) {
-    /*
-     * The C AVX/SSE emulator resolves logical mappings through the target
-     * memory callbacks.  Keep all memory-backed VEX/EVEX forms on that single
-     * audited path while soft mappings are active; register-only forms retain
-     * their inline fast path.
-     */
-    if (I->is_mem && emit_soft_memory_active()) return 0;
-    if (!I->vex || I->evex || I->vex_l > 1) return 0; // 512-bit / EVEX (masks, zmm16..31): leave to do_avx
+enum { AVX_LOWER_DECLINED = 0, AVX_LOWER_UNMATCHED = 2 };
+
+static int avx_lower_control_and_moves(struct insn *I, uint64_t next) {
     int l256 = (I->vex_l == 1);
     int d = I->reg, s1 = I->vvvv, s2r = I->rm_reg, pp = I->vex_pp, map = I->vex_map, op = I->op;
-    if (d > 15 || s1 > 15 || s2r > 15) return 0;
-
     // ---- VEX vldmxcsr (VEX.LZ.0F.WIG AE /2) / vstmxcsr (/3): semantically identical to the legacy
     // ldmxcsr/stmxcsr. Route to the same emit so a guest using the VEX encoding does not fall through to
     // the do_avx unimplemented path (which aborts the engine with exit 70). Memory operand, no vvvv. ----
@@ -2076,6 +2068,12 @@ static int avx_lower(struct insn *I, uint64_t next) {
         return 1;
     }
 
+    return 2;
+}
+
+static int avx_lower_fused_arithmetic(struct insn *I, uint64_t next) {
+    int l256 = (I->vex_l == 1);
+    int d = I->reg, s1 = I->vvvv, s2r = I->rm_reg, pp = I->vex_pp, map = I->vex_map, op = I->op;
     // ---- AVX2 FMA: 0F38 (map 2), 66 (pp 1), packed ps(W0)/pd(W1). Native FMLA/FMLS, fused = bit-exact.
     // Only the plain packed even opcodes (fmadd/fmsub/fnmadd/fnmsub x 132/213/231); the fmaddsub/fmsubadd
     // (0x96/97,A6/A7,B6/B7) and scalar ss/sd (odd opcodes) forms fall through to do_avx.
@@ -2296,6 +2294,12 @@ static int avx_lower(struct insn *I, uint64_t next) {
         avx_zero_upper(d, l256);
         return 1;
     }
+    return 2;
+}
+
+static int avx_lower_blend_and_compare(struct insn *I, uint64_t next) {
+    int l256 = (I->vex_l == 1);
+    int d = I->reg, s1 = I->vvvv, s2r = I->rm_reg, pp = I->vex_pp, map = I->vex_map, op = I->op;
 
     // ---- VPBLENDW (VEX.128/.256.66.0F3A.W0 0E /r ib): blend 16-bit words by imm8. 3-operand non-destructive:
     // dst=reg, src1=vvvv, src2=r/m. For each word i in 0..7: imm8 bit i set -> take src2.word[i] else
@@ -2522,6 +2526,12 @@ static int avx_lower(struct insn *I, uint64_t next) {
     //   rep  = base * 0x01010101   (MUL.4s)          -- replicate the byte across the dword (no carry, <256)
     //   idx  = rep + 0x03020100    (ADD.16b)         -- the 4 consecutive source bytes of that dword
     //   out  = TBL {data.lo,data.hi}, idx            -- gather. VEX.256 only (no 128-bit encoding). ----
+    return 2;
+}
+
+static int avx_lower_permute_and_convert(struct insn *I, uint64_t next) {
+    int l256 = (I->vex_l == 1);
+    int d = I->reg, s1 = I->vvvv, s2r = I->rm_reg, pp = I->vex_pp, map = I->vex_map, op = I->op;
     if (map == 2 && pp == 1 && (op == 0x36 || op == 0x16) && l256) {
         mark_vdirty();
         if (I->is_mem) {
@@ -2740,6 +2750,12 @@ static int avx_lower(struct insn *I, uint64_t next) {
     // (XTN/XTN2), with x86's 0x80000000 indefinite blended per emit_pd2i32_pieces. 2-operand (src=r/m).
     // Verified bit-exact vs qemu over the same corner set (incl overflow/NaN), 128 and 256, reg and mem.
     // (pp==0/NP is not a valid 0xE6 -> do_avx.)
+    return 2;
+}
+
+static int avx_lower_conversion_edges(struct insn *I, uint64_t next) {
+    int l256 = (I->vex_l == 1);
+    int d = I->reg, s1 = I->vvvv, s2r = I->rm_reg, pp = I->vex_pp, map = I->vex_map, op = I->op;
     if (map == 1 && op == 0xE6 && pp >= 1) {
         mark_vdirty();
         int src = s2r;
@@ -2926,6 +2942,12 @@ static int avx_lower(struct insn *I, uint64_t next) {
         avx_zero_upper(d, l256);
         return 1;
     }
+    return 2;
+}
+
+static int avx_lower_logical_arithmetic(struct insn *I, uint64_t next) {
+    int l256 = (I->vex_l == 1);
+    int d = I->reg, s1 = I->vvvv, s2r = I->rm_reg, pp = I->vex_pp, map = I->vex_map, op = I->op;
 
     // ---- 3-operand arithmetic / logical ----
     uint32_t base = 0;
@@ -3012,6 +3034,33 @@ static int avx_lower(struct insn *I, uint64_t next) {
     }
     avx_zero_upper(d, l256);
     return 1;
+}
+
+// Returns 1 if the VEX insn was lowered inline (caller does gpc = next; continue), else 0 (fall through
+// to the R_AVX do_avx exit). Correctness-first: only a vetted, bit-exact-vs-qemu subset is claimed here.
+static int avx_lower(struct insn *I, uint64_t next) {
+    /*
+     * The C AVX/SSE emulator resolves logical mappings through the target
+     * memory callbacks. Keep all memory-backed VEX/EVEX forms on that single
+     * audited path while soft mappings are active; register-only forms retain
+     * their inline fast path.
+     */
+    if (I->is_mem && emit_soft_memory_active()) return AVX_LOWER_DECLINED;
+    if (!I->vex || I->evex || I->vex_l > 1) return AVX_LOWER_DECLINED;
+    if (I->reg > 15 || I->vvvv > 15 || I->rm_reg > 15) return AVX_LOWER_DECLINED;
+
+    int result = avx_lower_control_and_moves(I, next);
+    if (result != AVX_LOWER_UNMATCHED) return result;
+    result = avx_lower_fused_arithmetic(I, next);
+    if (result != AVX_LOWER_UNMATCHED) return result;
+    result = avx_lower_blend_and_compare(I, next);
+    if (result != AVX_LOWER_UNMATCHED) return result;
+    result = avx_lower_permute_and_convert(I, next);
+    if (result != AVX_LOWER_UNMATCHED) return result;
+    result = avx_lower_conversion_edges(I, next);
+    if (result != AVX_LOWER_UNMATCHED) return result;
+    result = avx_lower_logical_arithmetic(I, next);
+    return result == AVX_LOWER_UNMATCHED ? AVX_LOWER_DECLINED : result;
 }
 
 // Emit the per-edge deferred-flag spill hl_x86_trace_jcc_flags requested for one Jcc edge stub:
