@@ -21,6 +21,7 @@
 #define g_stack_lo HL_TARGET_LOCAL(g_stack_lo)
 #define hl_run_linux_guest HL_TARGET_LOCAL(run_linux_guest)
 #define hl_run_linux_guest_status HL_TARGET_LOCAL(run_linux_guest_status)
+#define hl_run_linux_guest_translations HL_TARGET_LOCAL(run_linux_guest_translations)
 #define hl_target_register_backend HL_TARGET_LOCAL(target_register_backend)
 #define hl_target_runtime_init HL_TARGET_LOCAL(target_runtime_init)
 #define hl_target_syscall_trap_install HL_TARGET_LOCAL(target_syscall_trap_install)

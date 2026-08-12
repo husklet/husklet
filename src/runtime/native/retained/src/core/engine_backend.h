@@ -13,7 +13,7 @@ typedef struct hl_engine_backend {
                                void *syscall_context, hl_syscall_trap_fn syscall_dispatch, hl_host_handle *process,
                                hl_host_handle *result);
     hl_status (*finish_process)(const hl_host_services *host, hl_host_handle token, const hl_host_result *waited,
-                                hl_engine_exit *result);
+                                hl_engine_exit *result, uint64_t *translations);
     void (*release_process_result)(const hl_host_services *host, hl_host_handle token);
 } hl_engine_backend;
 
@@ -32,5 +32,6 @@ hl_status hl_engine_create_with_borrowed_options_and_syscall_trap(const hl_engin
                                                                   const hl_options *options, void *syscall_context,
                                                                   hl_syscall_trap_fn syscall_dispatch,
                                                                   hl_engine **out_engine);
+uint64_t hl_engine_translation_count(const hl_engine *engine);
 
 #endif

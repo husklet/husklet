@@ -380,6 +380,9 @@ int32_t hl_c_backend_exit_status(const hl_c_backend *backend) {
 uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend) {
   return backend == NULL ? 0 : backend->result.detail;
 }
+uint64_t hl_c_backend_translation_count(const hl_c_backend *backend) {
+  return backend == NULL ? 0 : hl_engine_translation_count(backend->engine);
+}
 
 void hl_c_backend_destroy(hl_c_backend *backend) {
   if (backend == NULL)

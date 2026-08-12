@@ -17,6 +17,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
                        const void *executable_image, size_t executable_size,
                        const hl_engine_main_image_plan *main_image_plan, uint32_t argc, char *const argv[]);
 hl_status hl_run_linux_guest_status(void);
+uint64_t hl_run_linux_guest_translations(void);
 
 typedef struct hl_production_result_state {
     hl_host_memory_mapping mapping;
@@ -38,7 +39,8 @@ static int hl_engine_child_result_claim(void) {
 
 void hl_engine_child_result_publish(int32_t guest_status, hl_status engine_status, uint64_t detail) {
     hl_engine_child_result record = {
-        0, HL_ENGINE_CHILD_RESULT_VERSION, guest_status, engine_status, HL_ENGINE_CHILD_RESULT_EXIT, 0, detail};
+        0,      HL_ENGINE_CHILD_RESULT_VERSION,   guest_status, engine_status, HL_ENGINE_CHILD_RESULT_EXIT, 0,
+        detail, hl_run_linux_guest_translations()};
     if (!hl_engine_child_result_claim()) return;
     memcpy(active_result, &record, sizeof(record));
     atomic_store_explicit((_Atomic uint32_t *)&active_result->magic, HL_ENGINE_CHILD_RESULT_MAGIC,
@@ -54,6 +56,7 @@ void hl_engine_child_result_publish_signal(int32_t guest_signal) {
     active_result->kind = HL_ENGINE_CHILD_RESULT_SIGNAL;
     active_result->reserved = 0;
     active_result->detail = 0;
+    active_result->translations = hl_run_linux_guest_translations();
     atomic_store_explicit((_Atomic uint32_t *)&active_result->magic, HL_ENGINE_CHILD_RESULT_MAGIC,
                           memory_order_release);
     atomic_store_explicit(&result_published, 2, memory_order_release);
@@ -546,7 +549,8 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
 }
 
 static hl_status hl_production_finish_process(const hl_host_services *host, hl_host_handle token,
-                                              const hl_host_result *waited, hl_engine_exit *result) {
+                                              const hl_host_result *waited, hl_engine_exit *result,
+                                              uint64_t *translations) {
     hl_production_result_state *state = (hl_production_result_state *)(uintptr_t)token;
     hl_engine_child_result record;
     if (waited->detail == HL_HOST_PROCESS_EXIT_SIGNAL) {
@@ -574,6 +578,7 @@ static hl_status hl_production_finish_process(const hl_host_services *host, hl_h
     if (record.magic != HL_ENGINE_CHILD_RESULT_MAGIC || record.version != HL_ENGINE_CHILD_RESULT_VERSION ||
         waited->detail != HL_HOST_PROCESS_EXIT_CODE)
         return HL_STATUS_CORRUPT;
+    if (translations != NULL) *translations = record.translations;
     if (record.engine_status != HL_STATUS_OK) {
         if (record.engine_status < HL_STATUS_INVALID_ARGUMENT || record.engine_status > HL_STATUS_ADDRESS_IN_USE)
             return HL_STATUS_CORRUPT;

@@ -275,6 +275,7 @@ unsafe extern "C" {
     fn hl_c_backend_exit_kind(backend: *const c_void) -> c_uint;
     fn hl_c_backend_exit_status(backend: *const c_void) -> c_int;
     fn hl_c_backend_exit_detail(backend: *const c_void) -> c_ulonglong;
+    fn hl_c_backend_translation_count(backend: *const c_void) -> c_ulonglong;
     fn hl_c_backend_destroy(backend: *mut c_void);
 }
 
@@ -1000,6 +1001,7 @@ mod tests {
         let executor = CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, None, [0, 1, 2], None).unwrap();
         executor.start_plan(&plan).unwrap();
         assert_eq!(executor.exit().guest_status, 0);
+        assert!(executor.translation_count() > 0);
     }
 
     #[test]
@@ -1011,6 +1013,7 @@ mod tests {
         let executor = CGuestExecutor::create_with_streams(GuestIsa::X86_64, &plan, None, [0, 1, 2], None).unwrap();
         executor.start_plan(&plan).unwrap();
         assert_eq!(executor.exit().guest_status, 37);
+        assert!(executor.translation_count() > 0);
     }
 
     #[test]

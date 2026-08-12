@@ -327,7 +327,7 @@ impl CWorker {
             report_worker_failure(stage, code);
             return Err(EngineError::WaitFailed);
         }
-        let Message::Exit(exit) = message else {
+        let Message::Exit(mut exit) = message else {
             hl_log::hl_error!(
                 hl_log::tag::EXEC,
                 "retained C worker failed while running: message={message:?}"
@@ -364,9 +364,9 @@ impl CWorker {
             );
             return Err(EngineError::WaitFailed);
         }
+        super::attestation::report_exit(&mut exit, self.diagnostics);
         *self.exit.lock().map_err(|_| EngineError::Synchronization)? = Some(exit);
         drop(self.streams.lock().map_err(|_| EngineError::Synchronization)?.take());
-        super::attestation::report_completed(self.diagnostics);
         hl_log::hl_event!(
             hl_log::tag::EXEC,
             hl_log::Level::Info,

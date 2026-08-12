@@ -1385,3 +1385,7 @@ void hl_target_runtime_init(void) {
     poslk_init();
     ipc_init();
 }
+
+uint64_t hl_run_linux_guest_translations(void) {
+    return g_dispatch_profile.translations;
+}

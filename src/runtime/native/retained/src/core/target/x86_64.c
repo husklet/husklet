@@ -1352,6 +1352,10 @@ void hl_target_runtime_init(void) {
     ipc_init();
 }
 
+uint64_t hl_run_linux_guest_translations(void) {
+    return g_dispatch_profile.translations;
+}
+
 #ifndef HL_ENGINE_NO_STANDALONE
 // The engine entry point uses the public HL prefix so the runtime can be linked as a library and launched
 // by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test

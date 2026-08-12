@@ -130,7 +130,12 @@ pub(crate) fn run(
         send_error(&mut control, FailureStage::Start, code);
         return Err(WorkerError::Start);
     }
-    let exit = executor.exit();
+    let mut exit = executor.exit();
+    if super::attestation::requested(&plan) && exit.kind == crate::engine::ExitKind::Code && exit.detail == 0 {
+        // Successful exits reserve detail=0. Borrow that otherwise-empty field
+        // only on the private worker wire; the parent consumes and clears it.
+        exit.detail = executor.translation_count();
+    }
     write_message(&mut control, Message::Exit(exit))?;
     Ok(exit.process_status())
 }

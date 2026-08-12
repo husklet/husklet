@@ -5,7 +5,7 @@
 
 enum {
     HL_ENGINE_CHILD_RESULT_MAGIC = 0x48524c54u,
-    HL_ENGINE_CHILD_RESULT_VERSION = 2u,
+    HL_ENGINE_CHILD_RESULT_VERSION = 3u,
     HL_ENGINE_CHILD_RESULT_EXIT = 1u,
     HL_ENGINE_CHILD_RESULT_SIGNAL = 2u
 };
@@ -18,6 +18,7 @@ typedef struct hl_engine_child_result {
     uint32_t kind;
     uint32_t reserved;
     uint64_t detail;
+    uint64_t translations;
 } hl_engine_child_result;
 
 void hl_engine_child_result_publish(int32_t guest_status, hl_status engine_status, uint64_t detail);

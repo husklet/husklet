@@ -10,6 +10,7 @@ use super::super::{
     REQUEST_FORCE_STOP, REQUEST_INTERRUPT, REQUEST_SIGNAL, RuntimeLaunchPlan, STATUS_OK, StopRequest, StreamBridge,
     c_file_volumes, c_main_image_plan, c_option, c_syscall_trap, hl_c_backend_create, hl_c_backend_destroy,
     hl_c_backend_exit_detail, hl_c_backend_exit_kind, hl_c_backend_exit_status, hl_c_backend_request, hl_c_backend_run,
+    hl_c_backend_translation_count,
 };
 
 // The C lifecycle contract explicitly permits request() from a second thread
@@ -199,6 +200,12 @@ impl CGuestExecutor {
             detail: unsafe { hl_c_backend_exit_detail(self.handle.as_ptr()) },
             fault: None,
         }
+    }
+
+    pub(crate) fn translation_count(&self) -> u64 {
+        // SAFETY: self owns a live backend handle whose completed engine state
+        // remains readable until Drop.
+        unsafe { hl_c_backend_translation_count(self.handle.as_ptr()) }
     }
 
     pub(in crate::execution) fn run_plan_status(&self, plan: &RuntimeLaunchPlan) -> Result<c_int, EngineError> {

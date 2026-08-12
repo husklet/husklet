@@ -46,6 +46,7 @@ struct hl_engine {
     hl_engine_executable executable_config;
     hl_engine_main_image_plan main_image_plan;
     unsigned char *owned_executable_image;
+    uint64_t translations;
 };
 
 enum {
@@ -78,6 +79,10 @@ uint32_t hl_engine_abi(void) {
 
 const char *hl_engine_version(void) {
     return "0.1.2";
+}
+
+uint64_t hl_engine_translation_count(const hl_engine *engine) {
+    return engine == NULL ? 0 : engine->translations;
 }
 
 enum { HL_ENGINE_STRING_LIMIT = 64 * 1024 * 1024 };
@@ -746,7 +751,8 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     } else if (closed.status != HL_STATUS_OK) {
         status = (hl_status)closed.status;
     } else if (engine->backend->finish_process != NULL && process_result != HL_HOST_HANDLE_INVALID) {
-        status = engine->backend->finish_process(&engine->host, process_result, &waited, out_exit);
+        status =
+            engine->backend->finish_process(&engine->host, process_result, &waited, out_exit, &engine->translations);
         process_result = HL_HOST_HANDLE_INVALID;
     } else {
         out_exit->detail = 0;

@@ -122,11 +122,12 @@ cases:
     artifact: { destination: /opt/husklet/regress/ldrsw_literal }
     run: []
     timeout: 120
-    # Measured runs=19 builds=24; floored well under that so the hot loop cannot silently go cold.
+    # Retained C's existing translation total is exactly 521 in repeated runs; >515 keeps the
+    # literal-load body load-bearing without enabling the engine's hot-path profiler.
     expect:
       exit: 0
       stdout: golden/ldrsw_literal.out
-      diagnostics: [{ counter: runs, greater-than: 5 }, { counter: builds, greater-than: 5 }]
+      diagnostics: [{ counter: builds, greater-than: 515 }]
   - id: runtime/regress/nonpie-v8blob
     status: active
     targets: [amd64]
