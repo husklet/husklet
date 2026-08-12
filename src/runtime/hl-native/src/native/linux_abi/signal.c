@@ -1,6 +1,6 @@
 // hl/linux_abi -- signal delivery (Linux<->macOS signal-number translation; sigframe build).
 #include "../host/native_context.h"
-#include "shared.h"
+#include "memory_arena.h"
 
 #ifndef HL_DISPATCH_FAULT_ADDRESS
 #define HL_DISPATCH_FAULT_ADDRESS(c) nonpie_unfold((c)->fault_addr)

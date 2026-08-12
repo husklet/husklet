@@ -108,7 +108,7 @@ static void fd_reset_emul(int fd);
 static void mq_fd_close(int fd);
 static void mq_fd_duplicate(int newfd, int oldfd);
 
-#include "../../core/provider/files.h"
+#include "../../engine/provider/files.h"
 #include "../object.h"
 #include "epoll_registry.h"
 static ep_provider_watch g_ep_provider_watches[EP_PROVIDER_WATCH_LIMIT];
@@ -197,7 +197,7 @@ static void ep_object_retire_endpoint(int fd) {
     g_ep_object_count[fd] = 0;
 }
 
-#include "helpers.c"
+#include "emulation_state.c"
 #include "guest_copy.c"
 // Included after the canonical guest-copy helpers and before proc/rare so all
 // seccomp user objects, including nested filter pointers, use the same access
@@ -212,7 +212,7 @@ static int bound_sentinel_vacate(int target);
 #include "aio.c"
 #include "net.c"
 #include "event.c"
-#include "misc.h"
+#include "system_information.h"
 // --- untrusted-guest isolation seam (subsystem #3: the sentry process-split) --------------------
 // The dispatcher's syscall boundary (run_guest -> service(c)) is the entire guest->host authority
 // crossing. We interpose a one-branch router so an UNTRUSTED guest's fs/net/proc syscalls can be

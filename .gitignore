@@ -1,8 +1,8 @@
 /target/
 **/target/
 # These are C source directories, not Cargo build output.
-!src/runtime/hl-native/src/native/core/target/
-!src/runtime/hl-native/src/native/core/target/**
+!src/runtime/hl-native/src/native/engine/target/
+!src/runtime/hl-native/src/native/engine/target/**
 /artifacts/
 *.o
 dd.sock

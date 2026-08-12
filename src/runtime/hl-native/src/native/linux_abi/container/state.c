@@ -2,7 +2,7 @@
 #include "../parse.h" // strict numeric parsing (the config trust boundary; see LAUNCH.md)
 #include "../xattr.h"
 #include "../readonly.h"
-#include "../shared.h"
+#include "../memory_arena.h"
 #include "../limits.h"
 #include "../../host/system.h"
 #include "key.h"

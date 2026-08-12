@@ -7,7 +7,7 @@
 #include "../host/clock.h"
 #include "../host/host_cpu.h"
 #include "../host/range.h"
-#include "../core/fatal.h"
+#include "../engine/fatal.h"
 #include "arena.h"
 #include "emit.h"
 #include "guest_fetch.h"
@@ -136,7 +136,7 @@ static int jit_cache_init(void) {
     return 0;
 }
 
-#include "../core/profile.h"
+#include "../engine/profile.h"
 
 // Dispatcher profiling is one state object. Compatibility aliases keep the wider profiling/reporting
 // code source-compatible while that ownership is progressively narrowed.

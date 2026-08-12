@@ -3,13 +3,13 @@
 
 #include "../open_plan.h"
 #include "../page.h" // hl_linux_host_page_size
-#include "../shared.h"
+#include "../memory_arena.h"
 #include "../../host/libc_compat.h" // hl_compat_mkdir: the UCRT's mkdir takes no mode
 #include "../../host/file.h"
 #include "../../host/resolve.h"
-#include "../../core/provider/files.h"
-#include "../../core/provider/namespace.h"
-#include "../../core/provider/tree_files.h"
+#include "../../engine/provider/files.h"
+#include "../../engine/provider/namespace.h"
+#include "../../engine/provider/tree_files.h"
 #if defined(__linux__)
 #include <sys/prctl.h>     // host PR_SET_NAME: mirror the guest comm onto this host task so a PEER's
                            // /proc/<pid>/{stat,status,comm} read (hl_host_process_read) reports the guest

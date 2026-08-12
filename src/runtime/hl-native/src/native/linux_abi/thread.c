@@ -5,7 +5,7 @@
 #include "../host/system.h"
 #include "bus.h"
 #include "logical_vma.h"
-#include "shared.h"
+#include "memory_arena.h"
 
 // ---------------- syscalls ----------------
 // ---------------- threads & futex ----------------

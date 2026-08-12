@@ -39,7 +39,7 @@
 #include "host_wait.h"
 #include <stdatomic.h>
 
-#include "shared.h"
+#include "memory_arena.h"
 #include "forwarded.h"
 
 static int g_untrusted = 0;      // HL_UNTRUSTED: route fs/net/proc syscalls through the sentry

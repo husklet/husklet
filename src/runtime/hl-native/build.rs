@@ -42,7 +42,7 @@ fn main() {
     compile("hl_c_backend_runtime", &runtime_source_refs, COMMON_DEFINITIONS, true);
     compile(
         "hl_c_backend_target_aarch64",
-        &["src/native/core/target/aarch64.c"],
+        &["src/native/engine/target/aarch64.c"],
         &[
             "HL_ENABLE_LOGGING=0",
             "HL_TRANSLIT_DEFAULT=0",
@@ -56,7 +56,7 @@ fn main() {
     );
     compile(
         "hl_c_backend_target_x86_64",
-        &["src/native/core/target/x86_64.c"],
+        &["src/native/engine/target/x86_64.c"],
         &[
             "HL_ENABLE_LOGGING=0",
             "HL_TRANSLIT_DEFAULT=0",
@@ -70,7 +70,7 @@ fn main() {
     );
     compile(
         "hl_c_backend_lifecycle_aarch64",
-        &["src/native/core/lifecycle.c"],
+        &["src/native/engine/lifecycle.c"],
         &[
             "HL_ENABLE_LOGGING=0",
             "HL_TRANSLIT_DEFAULT=0",
@@ -83,7 +83,7 @@ fn main() {
     );
     compile(
         "hl_c_backend_lifecycle_x86_64",
-        &["src/native/core/lifecycle.c"],
+        &["src/native/engine/lifecycle.c"],
         &[
             "HL_ENABLE_LOGGING=0",
             "HL_TRANSLIT_DEFAULT=0",
@@ -130,9 +130,9 @@ fn discover_runtime_roots(target_os: &str) -> Vec<String> {
         "src/native/bridge/shim.c",
         "src/native/bridge/executable_authority.c",
         "src/native/bridge/address_projection.c",
-        "src/native/core/lifecycle.c",
-        "src/native/core/target/aarch64.c",
-        "src/native/core/target/x86_64.c",
+        "src/native/engine/lifecycle.c",
+        "src/native/engine/target/aarch64.c",
+        "src/native/engine/target/x86_64.c",
     ];
     sources
         .into_iter()

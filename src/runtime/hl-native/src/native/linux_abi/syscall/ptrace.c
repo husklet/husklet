@@ -36,7 +36,7 @@
 //       threaded tracees are tracked at process (not per-tid) granularity for now.
 
 #include <limits.h>
-#include "../shared.h"
+#include "../memory_arena.h"
 
 // ---- ptrace request numbers (identical on x86-64 and aarch64 Linux) ----
 enum {

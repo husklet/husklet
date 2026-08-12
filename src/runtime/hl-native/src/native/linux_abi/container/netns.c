@@ -2,7 +2,7 @@
 
 #include "../host_socket.h" // container DNS: getaddrinfo/getnameinfo via the macOS host resolver (dns_* below)
 
-#include "../shared.h"
+#include "../memory_arena.h"
 #include "../../host/libc_compat.h" // hl_compat_mkdir: the UCRT's mkdir takes no mode
 #include "../checkpoint.h"
 #include "socket_identity.h"

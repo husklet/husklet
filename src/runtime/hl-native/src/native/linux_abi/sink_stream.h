@@ -17,7 +17,7 @@
 #define HL_LINUX_ABI_CKPT_SINK_STREAM_H
 
 #include "ckpt_sink.h"
-#include "../core/checkpoint_channel.h"
+#include "../engine/checkpoint_channel.h"
 
 static uint64_t g_ckpt_stream_next_id = 1;
 
