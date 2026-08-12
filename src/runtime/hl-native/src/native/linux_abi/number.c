@@ -7,7 +7,7 @@
 // os/linux/service.c switches on the aarch64 numbers; G_NR(c) runs the guest rax through this.
 // x86-only numbers (no aarch64 equivalent) map to themselves + a high bias so they hit the default.
 
-static uint64_t x86_number(uint64_t nr) {
+static uint64_t x86_number_through_199(uint64_t nr) {
     switch (nr) {
     case 0: return 63;   // read
     case 1: return 64;   // write
@@ -36,144 +36,150 @@ static uint64_t x86_number(uint64_t nr) {
     case 31: return 195; // shmctl
     case 32: return 23;  // dup
     case 33:
-        return 24;                                  // dup2 -> canonical dup3 (the legacy rewrite in
-                                                    // translator/guest/x86_64/legacy.c turns dup2 into dup3;
-                                                    // report it as canonical 24 so the shared post-dispatch
-                                                    // fd-publish switch (case 24) registers the target fd in
-                                                    // proc_fdvis. Without this a dup2'd fd (e.g. stdio
-                                                    // redirected onto a file) is invisible to checkpoint's
-                                                    // fd-table scan and is lost across restore.
-    case 35: return 101;                            // nanosleep
-    case 36: return 102;                            // getitimer
-    case 38: return 103;                            // setitimer
-    case 39: return 172;                            // getpid
-    case 40: return 71;                             // sendfile
-    case 41: return 198;                            // socket
-    case 42: return 203;                            // connect
-    case 43: return 202;                            // accept
-    case 44: return 206;                            // sendto
-    case 45: return 207;                            // recvfrom
-    case 46: return 211;                            // sendmsg
-    case 47: return 212;                            // recvmsg
-    case 48: return 210;                            // shutdown
-    case 49: return 200;                            // bind
-    case 50: return 201;                            // listen
-    case 51: return 204;                            // getsockname
-    case 52: return 205;                            // getpeername
-    case 53: return 199;                            // socketpair
-    case 54: return 208;                            // setsockopt
-    case 55: return 209;                            // getsockopt
-    case 56: return 220;                            // clone
-    case 59: return 221;                            // execve
-    case 60: return 93;                             // exit
-    case 61: return 260;                            // wait4
-    case 62: return 129;                            // kill
-    case 63: return 160;                            // uname
-    case 64: return 190;                            // semget
-    case 65: return 193;                            // semop
-    case 66: return 191;                            // semctl
-    case 67: return 197;                            // shmdt
-    case 68: return 186;                            // msgget
-    case 69: return 189;                            // msgsnd
-    case 70: return 188;                            // msgrcv
-    case 71: return 187;                            // msgctl
-    case 72: return 25;                             // fcntl
-    case 73: return 32;                             // flock
-    case 74: return 82;                             // fsync
-    case 75: return 83;                             // fdatasync
-    case 76: return 45;                             // truncate
-    case 77: return 46;                             // ftruncate
-    case 79: return 17;                             // getcwd
-    case 80: return 49;                             // chdir
-    case 81: return 50;                             // fchdir
-    case 91: return 52;                             // fchmod
-    case 93: return 55;                             // fchown
-    case 95: return 166;                            // umask
-    case 96: return 169;                            // gettimeofday
-    case 97: return 163;                            // getrlimit
-    case 98: return 165;                            // getrusage
-    case 99: return 179;                            // sysinfo
-    case 100: return 153;                           // times
-    case 101: return 117;                           // ptrace
-    case 102: return 174;                           // getuid
-    case 103: return 116;                           // syslog
-    case 104: return 176;                           // getgid
-    case 105: return 146;                           // setuid
-    case 106: return 144;                           // setgid
-    case 107: return 175;                           // geteuid
-    case 108: return 177;                           // getegid
-    case 109: return 154;                           // setpgid
-    case 110: return 173;                           // getppid
-    case 112: return 157;                           // setsid
-    case 113: return 145;                           // setreuid
-    case 114: return 143;                           // setregid
-    case 115: return 158;                           // getgroups
-    case 116: return 159;                           // setgroups
-    case 117: return 147;                           // setresuid
-    case 118: return 148;                           // getresuid
-    case 119: return 149;                           // setresgid
-    case 120: return 150;                           // getresgid
-    case 121: return 155;                           // getpgid
-    case 122: return 151;                           // setfsuid
-    case 123: return 152;                           // setfsgid
-    case 124: return 156;                           // getsid
-    case 125: return 90;                            // capget
-    case 126: return 91;                            // capset
-    case 127: return 136;                           // rt_sigpending
-    case 128: return 137;                           // rt_sigtimedwait
-    case 129: return 138;                           // rt_sigqueueinfo
-    case 130: return 133;                           // rt_sigsuspend
-    case 131: return 132;                           // sigaltstack
-    case 135: return 92;                            // personality
-    case 137: return 43;                            // statfs
-    case 138: return 44;                            // fstatfs
-    case 140: return 141;                           // getpriority
-    case 141: return 140;                           // setpriority
-    case 142: return 118;                           // sched_setparam
-    case 143: return 121;                           // sched_getparam
-    case 144: return 119;                           // sched_setscheduler
-    case 145: return 120;                           // sched_getscheduler
-    case 146: return 125;                           // sched_get_priority_max
-    case 147: return 126;                           // sched_get_priority_min
-    case 148: return 127;                           // sched_rr_get_interval
-    case 149: return 228;                           // mlock
-    case 150: return 229;                           // munlock
-    case 151: return 230;                           // mlockall
-    case 152: return 231;                           // munlockall
-    case 153: return 58;                            // vhangup
-    case 155: return 41;                            // pivot_root
-    case 157: return 167;                           // prctl
-    case 159: return 171;                           // adjtimex
-    case 160: return 164;                           // setrlimit
-    case 161: return 51;                            // chroot
-    case 162: return 81;                            // sync
-    case 163: return 89;                            // acct
-    case 164: return 170;                           // settimeofday
-    case 165: return 40;                            // mount
-    case 166: return 39;                            // umount2
-    case 167: return 224;                           // swapon
-    case 168: return 225;                           // swapoff
-    case 169: return 142;                           // reboot
-    case 170: return 161;                           // sethostname
-    case 171: return 162;                           // setdomainname
-    case 175: return 105;                           // init_module
-    case 176: return 106;                           // delete_module
-    case 179: return 60;                            // quotactl
-    case 180: return 42;                            // nfsservctl
-    case 186: return 178;                           // gettid
-    case 187: return 213;                           // readahead
-    case 188: return 5;                             // setxattr
-    case 189: return 6;                             // lsetxattr
-    case 190: return 7;                             // fsetxattr
-    case 191: return 8;                             // getxattr
-    case 192: return 9;                             // lgetxattr
-    case 193: return 10;                            // fgetxattr
-    case 194: return 11;                            // listxattr
-    case 195: return 12;                            // llistxattr
-    case 196: return 13;                            // flistxattr
-    case 197: return 14;                            // removexattr
-    case 198: return 15;                            // lremovexattr
-    case 199: return 16;                            // fremovexattr
+        return 24;        // dup2 -> canonical dup3 (the legacy rewrite in
+                          // translator/guest/x86_64/legacy.c turns dup2 into dup3;
+                          // report it as canonical 24 so the shared post-dispatch
+                          // fd-publish switch (case 24) registers the target fd in
+                          // proc_fdvis. Without this a dup2'd fd (e.g. stdio
+                          // redirected onto a file) is invisible to checkpoint's
+                          // fd-table scan and is lost across restore.
+    case 35: return 101;  // nanosleep
+    case 36: return 102;  // getitimer
+    case 38: return 103;  // setitimer
+    case 39: return 172;  // getpid
+    case 40: return 71;   // sendfile
+    case 41: return 198;  // socket
+    case 42: return 203;  // connect
+    case 43: return 202;  // accept
+    case 44: return 206;  // sendto
+    case 45: return 207;  // recvfrom
+    case 46: return 211;  // sendmsg
+    case 47: return 212;  // recvmsg
+    case 48: return 210;  // shutdown
+    case 49: return 200;  // bind
+    case 50: return 201;  // listen
+    case 51: return 204;  // getsockname
+    case 52: return 205;  // getpeername
+    case 53: return 199;  // socketpair
+    case 54: return 208;  // setsockopt
+    case 55: return 209;  // getsockopt
+    case 56: return 220;  // clone
+    case 59: return 221;  // execve
+    case 60: return 93;   // exit
+    case 61: return 260;  // wait4
+    case 62: return 129;  // kill
+    case 63: return 160;  // uname
+    case 64: return 190;  // semget
+    case 65: return 193;  // semop
+    case 66: return 191;  // semctl
+    case 67: return 197;  // shmdt
+    case 68: return 186;  // msgget
+    case 69: return 189;  // msgsnd
+    case 70: return 188;  // msgrcv
+    case 71: return 187;  // msgctl
+    case 72: return 25;   // fcntl
+    case 73: return 32;   // flock
+    case 74: return 82;   // fsync
+    case 75: return 83;   // fdatasync
+    case 76: return 45;   // truncate
+    case 77: return 46;   // ftruncate
+    case 79: return 17;   // getcwd
+    case 80: return 49;   // chdir
+    case 81: return 50;   // fchdir
+    case 91: return 52;   // fchmod
+    case 93: return 55;   // fchown
+    case 95: return 166;  // umask
+    case 96: return 169;  // gettimeofday
+    case 97: return 163;  // getrlimit
+    case 98: return 165;  // getrusage
+    case 99: return 179;  // sysinfo
+    case 100: return 153; // times
+    case 101: return 117; // ptrace
+    case 102: return 174; // getuid
+    case 103: return 116; // syslog
+    case 104: return 176; // getgid
+    case 105: return 146; // setuid
+    case 106: return 144; // setgid
+    case 107: return 175; // geteuid
+    case 108: return 177; // getegid
+    case 109: return 154; // setpgid
+    case 110: return 173; // getppid
+    case 112: return 157; // setsid
+    case 113: return 145; // setreuid
+    case 114: return 143; // setregid
+    case 115: return 158; // getgroups
+    case 116: return 159; // setgroups
+    case 117: return 147; // setresuid
+    case 118: return 148; // getresuid
+    case 119: return 149; // setresgid
+    case 120: return 150; // getresgid
+    case 121: return 155; // getpgid
+    case 122: return 151; // setfsuid
+    case 123: return 152; // setfsgid
+    case 124: return 156; // getsid
+    case 125: return 90;  // capget
+    case 126: return 91;  // capset
+    case 127: return 136; // rt_sigpending
+    case 128: return 137; // rt_sigtimedwait
+    case 129: return 138; // rt_sigqueueinfo
+    case 130: return 133; // rt_sigsuspend
+    case 131: return 132; // sigaltstack
+    case 135: return 92;  // personality
+    case 137: return 43;  // statfs
+    case 138: return 44;  // fstatfs
+    case 140: return 141; // getpriority
+    case 141: return 140; // setpriority
+    case 142: return 118; // sched_setparam
+    case 143: return 121; // sched_getparam
+    case 144: return 119; // sched_setscheduler
+    case 145: return 120; // sched_getscheduler
+    case 146: return 125; // sched_get_priority_max
+    case 147: return 126; // sched_get_priority_min
+    case 148: return 127; // sched_rr_get_interval
+    case 149: return 228; // mlock
+    case 150: return 229; // munlock
+    case 151: return 230; // mlockall
+    case 152: return 231; // munlockall
+    case 153: return 58;  // vhangup
+    case 155: return 41;  // pivot_root
+    case 157: return 167; // prctl
+    case 159: return 171; // adjtimex
+    case 160: return 164; // setrlimit
+    case 161: return 51;  // chroot
+    case 162: return 81;  // sync
+    case 163: return 89;  // acct
+    case 164: return 170; // settimeofday
+    case 165: return 40;  // mount
+    case 166: return 39;  // umount2
+    case 167: return 224; // swapon
+    case 168: return 225; // swapoff
+    case 169: return 142; // reboot
+    case 170: return 161; // sethostname
+    case 171: return 162; // setdomainname
+    case 175: return 105; // init_module
+    case 176: return 106; // delete_module
+    case 179: return 60;  // quotactl
+    case 180: return 42;  // nfsservctl
+    case 186: return 178; // gettid
+    case 187: return 213; // readahead
+    case 188: return 5;   // setxattr
+    case 189: return 6;   // lsetxattr
+    case 190: return 7;   // fsetxattr
+    case 191: return 8;   // getxattr
+    case 192: return 9;   // lgetxattr
+    case 193: return 10;  // fgetxattr
+    case 194: return 11;  // listxattr
+    case 195: return 12;  // llistxattr
+    case 196: return 13;  // flistxattr
+    case 197: return 14;  // removexattr
+    case 198: return 15;  // lremovexattr
+    case 199: return 16;  // fremovexattr
+    default: return nr | HL_LINUX_SYSCALL_X86_ONLY;
+    }
+}
+
+static uint64_t x86_number_after_199(uint64_t nr) {
+    switch (nr) {
     case 200: return 130;                           // tkill
     case 202: return 98;                            // futex
     case 203: return 122;                           // sched_setaffinity
@@ -346,6 +352,10 @@ static uint64_t x86_number(uint64_t nr) {
     case 471: return 471;                           // rseq_slice_yield
     default: return nr | HL_LINUX_SYSCALL_X86_ONLY; // x86-only / unknown -> shared service default
     }
+}
+
+static uint64_t x86_number(uint64_t nr) {
+    return nr <= 199 ? x86_number_through_199(nr) : x86_number_after_199(nr);
 }
 
 #define HL_LINUX_CANONICAL_MAX 471u
