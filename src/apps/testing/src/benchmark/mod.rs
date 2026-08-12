@@ -9,7 +9,6 @@ use crate::suite::Error;
 use clap::Args;
 use definition::Campaign;
 use evidence::{Ledger, Measurement};
-use schedule::Step;
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -91,5 +90,3 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
         Err("benchmark acceptance limit exceeded".into())
     }
 }
-
-fn _step_type(_: Step) {}
