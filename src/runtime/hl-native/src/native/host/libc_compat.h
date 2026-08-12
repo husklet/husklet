@@ -49,16 +49,4 @@ static inline int hl_compat_mkdir(const char *path, unsigned mode) {
 #endif
 }
 
-/* unsetenv(3) is POSIX-only; the UCRT offers no direct equivalent. Assigning a
- * variable the empty string removes its entry from the environment block
- * outright, so a later getenv() returns NULL exactly as it would after
- * unsetenv(). Returns 0 on success and -1 otherwise, matching POSIX. */
-static inline int hl_compat_unsetenv(const char *name) {
-#if defined(_WIN32)
-    return _putenv_s(name, "") == 0 ? 0 : -1;
-#else
-    return unsetenv(name);
-#endif
-}
-
 #endif
