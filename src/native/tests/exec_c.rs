@@ -31,10 +31,29 @@ enum Outcome {
     Broken(String),
 }
 
-fn workspace(directory: &Path) -> PathBuf {
-    let scratch = directory.join("exec_c");
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).expect("remove test scratch directory");
+    }
+}
+
+fn workspace(directory: &Path) -> Scratch {
+    // OUT_DIR is shared by concurrent invocations of the same test binary. A
+    // fixed subdirectory lets one invocation overwrite an executable while
+    // another is running it, which fails on Linux with ETXTBSY. Keep every
+    // invocation isolated while retaining all scratch files under Cargo's
+    // disposable output tree.
+    let scratch = directory.join(format!("exec_c-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).expect("create test scratch directory");
-    scratch
+    Scratch(scratch)
 }
 
 fn compiler() -> String {
@@ -126,7 +145,7 @@ fn exec_c_programs_pass() {
         return;
     }
     let scratch = workspace(Path::new(env!("OUT_DIR")));
-    let helpers = assemble(&scratch);
+    let helpers = assemble(scratch.path());
     let sources = discover();
     assert!(!sources.is_empty(), "no C tests discovered in {SOURCES}");
 
@@ -134,7 +153,7 @@ fn exec_c_programs_pass() {
         let handles = sources
             .iter()
             .map(|source| {
-                let scratch = &scratch;
+                let scratch = scratch.path();
                 let helpers = &helpers;
                 scope.spawn(move || {
                     let name = source.file_stem().expect("test name").to_string_lossy().into_owned();
