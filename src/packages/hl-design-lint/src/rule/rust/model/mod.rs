@@ -36,7 +36,7 @@ impl Rule for Duplication {
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut database = Database::default();
         for source in workspace.production() {
-            database.dependencies.extend(local_dependencies(&source.path));
+            database.dependencies.extend(local_dependencies(&source.path)?);
             let mut aliases = AliasCollector::default();
             aliases.visit_file(&source.syntax);
             let mut collector = Collector::new(source, aliases.aliases);
