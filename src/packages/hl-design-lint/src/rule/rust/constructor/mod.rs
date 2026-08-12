@@ -36,24 +36,19 @@ impl Rule for Ownership {
 }
 
 fn declarations(items: &[Item]) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    for item in items {
-        match item {
-            Item::Struct(item) => {
-                names.insert(item.ident.to_string());
-            }
-            Item::Enum(item) => {
-                names.insert(item.ident.to_string());
-            }
-            Item::Mod(module) => {
-                if let Some((_, nested)) = &module.content {
-                    names.extend(declarations(nested));
-                }
-            }
-            _ => {}
-        }
+    items.iter().flat_map(declared_names).collect()
+}
+
+fn declared_names(item: &Item) -> BTreeSet<String> {
+    match item {
+        Item::Struct(item) => BTreeSet::from([item.ident.to_string()]),
+        Item::Enum(item) => BTreeSet::from([item.ident.to_string()]),
+        Item::Mod(module) => module
+            .content
+            .as_ref()
+            .map_or_else(BTreeSet::new, |(_, nested)| declarations(nested)),
+        _ => BTreeSet::new(),
     }
-    names
 }
 
 fn inspect_items(
