@@ -648,6 +648,16 @@ static struct hl_sentry_binding *binding_lookup_locked(pid_t wpid, uint32_t toke
 }
 
 static void sentry_real_close(int descriptor) {
+    hl_linux_fd_snapshot snapshot;
+    // Native sentry descriptors are already host descriptors.  Feeding them back through service_local()
+    // re-enters the injected logical-fd router, which may consume the request without closing this host fd;
+    // the table is then cleared and the descriptor becomes an untracked pipe writer that suppresses EOF.
+    // Bound descriptors still require the canonical service path so their provider object is retired.
+    if (!bound_snapshot((uint64_t)(uint32_t)descriptor, &snapshot)) {
+        fd_reset_emul(descriptor);
+        (void)close(descriptor);
+        return;
+    }
     struct cpu tmp;
     memset(&tmp, 0, sizeof tmp);
     if (!sentry_cpu_set_canonical(&tmp, 57)) abort();
