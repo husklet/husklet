@@ -1,3 +1,342 @@
+enum ckpt_fd_capture_result {
+    CKPT_FD_CAPTURE_ERROR = -1,
+    CKPT_FD_CAPTURE_NEXT = 0,
+    CKPT_FD_CAPTURED = 1,
+};
+
+static int ckpt_fd_was_captured(const struct ckpt_fd *records, int count, int fd) {
+    for (int prior = 0; prior < count; ++prior)
+        if (records[prior].gfd == fd) return 1;
+    return 0;
+}
+
+static int ckpt_capture_early_emulated_fd(struct ckpt_fd *records, int *count, int fd) {
+    struct ckpt_fd r;
+    memset(&r, 0, sizeof r);
+    r.gfd = fd;
+    const char *early_emulated = ckpt_guest_kernel_fd(fd);
+    if (early_emulated && strcmp(early_emulated, "socket") == 0 && fd >= 0 && fd < HL_NFD && g_sock_object[fd] != 0) {
+        if (g_sock_peer_object[fd] == 0) {
+            r.kind = CKF_SOCKET;
+            r.flags = fcntl(fd, F_GETFL);
+            r.descriptor_flags = fcntl(fd, F_GETFD);
+            r.object_id = g_sock_object[fd];
+            r.ofd_id = r.object_id;
+            snprintf(r.path, sizeof r.path, "socket-state.%016llx", (unsigned long long)r.object_id);
+            if (r.flags < 0 || r.descriptor_flags < 0 || ckpt_capture_socket_state(fd, r.object_id, 1) != 0) return -1;
+            records[(*count)++] = r;
+            return CKPT_FD_CAPTURED;
+        }
+        int type = g_sock_seqpacket[fd] ? SOCK_SEQPACKET : g_sock_dgram[fd] ? SOCK_DGRAM : SOCK_STREAM;
+        r.kind = CKF_SOCKETPAIR;
+        r.flags = fcntl(fd, F_GETFL);
+        r.descriptor_flags = fcntl(fd, F_GETFD);
+        r.object_id = g_sock_object[fd];
+        r.ofd_id = r.object_id;
+        r.auxiliary = g_sock_peer_object[fd];
+        r.offset = type;
+        snprintf(r.path, sizeof r.path, "socket.%016llx", (unsigned long long)r.object_id);
+        if (r.flags < 0 || r.descriptor_flags < 0 || r.auxiliary == 0 ||
+            ckpt_capture_socket_state(fd, r.object_id, 0) != 0 ||
+            ckpt_capture_socket_queue(fd, r.object_id, (uint32_t)type) != 0)
+            return -1;
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    if (early_emulated && strcmp(early_emulated, "epoll") == 0) {
+        r.kind = CKF_EPOLL;
+        r.descriptor_flags = fcntl(fd, F_GETFD);
+        r.object_id = ckpt_epoll_identity(fd);
+        r.ofd_id = r.object_id;
+        if (r.descriptor_flags < 0 || !r.object_id) return -1;
+        snprintf(r.path, sizeof r.path, "epoll.%016llx", (unsigned long long)r.object_id);
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    if (early_emulated && strcmp(early_emulated, "inotify") == 0) {
+        inotify_object_assign(fd);
+        r.kind = CKF_INOTIFY;
+        r.flags = g_inotify_nb[fd] ? O_NONBLOCK : 0;
+        r.descriptor_flags = fcntl(fd, F_GETFD);
+        r.object_id = g_inotify_object[fd];
+        r.ofd_id = r.object_id;
+        if (r.descriptor_flags < 0 || !r.object_id) return -1;
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    return CKPT_FD_CAPTURE_NEXT;
+}
+
+static int ckpt_capture_typed_fd(struct ckpt_fd *records, int *count, int fd) {
+    hl_linux_fd_snapshot snapshot;
+    if (g_linux_box == NULL || hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)fd, &snapshot) != HL_STATUS_OK)
+        return CKPT_FD_CAPTURE_NEXT;
+    struct ckpt_fd r;
+    memset(&r, 0, sizeof r);
+    r.gfd = fd;
+    hl_host_file_metadata metadata;
+    if (snapshot.kind == HL_LINUX_OBJECT_INOTIFY) {
+        r.kind = CKF_INOTIFY;
+        r.flags = (int32_t)snapshot.status_flags;
+        r.descriptor_flags = (int32_t)snapshot.descriptor_flags;
+        r.object_id = UINT64_C(0x9000000000000000) | (uint64_t)snapshot.ofd;
+        r.ofd_id = r.object_id;
+        snprintf(r.path, sizeof r.path, "inotify.%016llx", (unsigned long long)r.object_id);
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    if (g_linux_box->host == NULL || g_linux_box->host->file == NULL || g_linux_box->host->file->metadata == NULL ||
+        g_linux_box->host->file->metadata(g_linux_box->host->context, snapshot.host_handle, &metadata).status !=
+            HL_STATUS_OK) {
+        if (fcntl(fd, F_GETFD) < 0 && errno == EBADF) {
+            proc_fdvis_close(fd);
+            return CKPT_FD_CAPTURED;
+        }
+        fprintf(stderr, "[ckpt] refuse: cannot inspect typed guest fd %d (inotify=%u owner=%d watch=%s)\n", fd,
+                (unsigned)((fd >= 0 && fd < HL_NFD) ? g_inotify[fd] : 0),
+                (fd >= 0 && fd < HL_NFD) ? g_inotify_owner[fd] : 0,
+                (fd >= 0 && fd < HL_NFD && g_inotify_wpath[fd][0]) ? g_inotify_wpath[fd] : "-");
+        return -1;
+    }
+    r.flags = (int32_t)snapshot.status_flags;
+    r.descriptor_flags = (int32_t)snapshot.descriptor_flags;
+    r.offset = (int64_t)snapshot.offset;
+    r.object_id = metadata.stable_object ? metadata.stable_object : (uint64_t)snapshot.host_handle;
+    r.ofd_id = UINT64_C(0x8000000000000000) | (uint64_t)snapshot.ofd;
+    if (snapshot.kind == HL_LINUX_OBJECT_PIPE || metadata.type == HL_HOST_FILE_TYPE_FIFO) {
+        fprintf(stderr, "[ckpt] refuse: guest fd %d is a pipe -- shared pipe restore is not yet supported\n", fd);
+        return -1;
+    }
+    if (metadata.type == HL_HOST_FILE_TYPE_SOCKET) {
+        fprintf(stderr, "[ckpt] refuse: guest fd %d is a socket -- socket restore is not yet supported\n", fd);
+        return -1;
+    }
+    if (metadata.type == HL_HOST_FILE_TYPE_CHARACTER || metadata.type == HL_HOST_FILE_TYPE_BLOCK) {
+        char fp[512];
+        hl_host_result device_path = g_linux_box->host->file->path(g_linux_box->host->context, snapshot.host_handle,
+                                                                   (hl_host_bytes){fp, sizeof(fp) - 1});
+        if (metadata.type == HL_HOST_FILE_TYPE_CHARACTER && isatty(fd)) {
+            r.kind = CKF_TTY;
+            r.offset = 0;
+        } else if (device_path.status == HL_STATUS_OK && device_path.value < sizeof fp) {
+            fp[device_path.value] = 0;
+            if (metadata.type == HL_HOST_FILE_TYPE_CHARACTER && ckpt_path_is_ctty(fp)) {
+                r.kind = CKF_TTY;
+                r.offset = 0;
+            } else {
+                r.kind = CKF_DEVICE;
+                if (path_copy(r.path, sizeof r.path, fp) != 0) return -1;
+            }
+        } else {
+            fprintf(stderr, "[ckpt] refuse: device fd %d has no recoverable path\n", fd);
+            return -1;
+        }
+    } else if (metadata.type == HL_HOST_FILE_TYPE_REGULAR || metadata.type == HL_HOST_FILE_TYPE_DIRECTORY) {
+        char fp[512];
+        hl_host_result path = g_linux_box->host->file->path(g_linux_box->host->context, snapshot.host_handle,
+                                                            (hl_host_bytes){fp, sizeof(fp) - 1});
+        if (path.status != HL_STATUS_OK || path.value >= sizeof fp) {
+            fprintf(stderr, "[ckpt] refuse: fd %d has no recoverable path\n", fd);
+            return -1;
+        }
+        fp[path.value] = '\0';
+        if (ckpt_normalize_reopen_path(fp) != 0 ||
+            (metadata.type == HL_HOST_FILE_TYPE_REGULAR && access(fp, F_OK) != 0)) {
+            if (metadata.type != HL_HOST_FILE_TYPE_REGULAR || ckpt_capture_file_blob(fd, r.path, sizeof r.path) != 0) {
+                fprintf(stderr, "[ckpt] refuse: cannot persist deleted fd %d\n", fd);
+                return -1;
+            }
+            r.kind = CKF_BLOB;
+        } else {
+            r.kind = CKF_FILE;
+            if (metadata.type == HL_HOST_FILE_TYPE_DIRECTORY) r.auxiliary |= CKFA_DIRECTORY;
+            if (path_copy(r.path, sizeof r.path, fp) != 0) return -1;
+        }
+    } else {
+        fprintf(stderr, "[ckpt] refuse: typed guest fd %d has unsupported type %u\n", fd, metadata.type);
+        return -1;
+    }
+    records[(*count)++] = r;
+    return CKPT_FD_CAPTURED;
+}
+
+static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const struct fdvis_view *view) {
+    int fd = view->guest_fd;
+    struct ckpt_fd r;
+    memset(&r, 0, sizeof r);
+    r.gfd = fd;
+    hl_host_process_fd detail;
+    char path[512];
+    size_t path_size = 0;
+    if (!hl_host_process_fd_read(getpid(), fd, &detail, path, sizeof(path) - 1, &path_size) ||
+        (detail.flags & HL_HOST_PROCESS_FD_ENGINE_PRIVATE) != 0) {
+        if (fcntl(fd, F_GETFD) < 0 && errno == EBADF) {
+            proc_fdvis_close(fd);
+            return CKPT_FD_CAPTURED;
+        }
+        fprintf(stderr, "[ckpt] refuse: cannot inspect native guest fd %d\n", fd);
+        return -1;
+    }
+    const char *emulated = ckpt_guest_kernel_fd(fd);
+    if (emulated && strcmp(emulated, "signalfd") == 0) {
+        int slot = g_sigfd_slot[fd] - 1;
+        uint64_t identity = ofd_identity_ensure(fd);
+        if (slot < 0 || slot >= HL_SFD_MAX || !identity) return -1;
+        r.kind = CKF_SIGNALFD;
+        r.flags = fcntl(fd, F_GETFL);
+        r.descriptor_flags = fcntl(fd, F_GETFD);
+        r.object_id = identity;
+        r.ofd_id = identity;
+        r.auxiliary = g_sfd[slot].mask;
+        snprintf(r.path, sizeof r.path, "signalfd.%016llx", (unsigned long long)identity);
+        if (r.flags < 0 || r.descriptor_flags < 0 || ckpt_capture_signalfd(fd, identity) != 0) return -1;
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    if (emulated && strcmp(emulated, "eventfd") == 0) {
+        int slot = eventfd_counter_slot(fd);
+        if (slot < 0 || slot >= HL_NFD || !g_eventfd_count) return -1;
+        r.kind = CKF_EVENTFD;
+        r.flags = eventfd_guest_nb(fd) ? O_NONBLOCK : 0;
+        r.descriptor_flags = fcntl(fd, F_GETFD);
+        if (r.descriptor_flags < 0) return -1;
+        r.object_id = UINT64_C(0x2000000000000000) | (uint64_t)(unsigned)(slot + 1);
+        r.ofd_id = r.object_id;
+        r.auxiliary = g_eventfd_count[slot];
+        r.offset = g_eventfd_sema[fd] ? 1 : 0;
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    if (emulated && strcmp(emulated, "timerfd") == 0) {
+        int slot = timerfd_slot(fd);
+        if (slot < 0 || slot >= HL_NFD) return -1;
+        timerfd_object_assign(fd);
+        r.kind = CKF_TIMERFD;
+        r.flags = g_tfd_nb[fd] ? O_NONBLOCK : 0;
+        r.descriptor_flags = fcntl(fd, F_GETFD);
+        if (r.flags < 0 || r.descriptor_flags < 0 || !g_tfd_object[fd]) return -1;
+        r.object_id = g_tfd_object[fd];
+        r.ofd_id = r.object_id;
+        r.offset = g_tfd_deadline[slot];
+        r.auxiliary = (uint64_t)g_tfd_interval[slot];
+        uint64_t pending = g_tfd_pending[slot];
+        int copied = 0;
+        for (int prior = 0; prior < *count; prior++)
+            if (records[prior].kind == CKF_TIMERFD && records[prior].object_id == r.object_id) {
+                pending = strtoull(records[prior].path + strcspn(records[prior].path, " ") + 1, NULL, 10);
+                copied = 1;
+                break;
+            }
+        if (!copied) {
+            struct kevent event;
+            struct timespec zero = {0, 0};
+            int ready = kevent(fd, NULL, 0, &event, 1, &zero);
+            if (ready < 0) return -1;
+            if (ready > 0) pending += g_tfd_interval[slot] == 0 ? 1 : (uint64_t)event.data;
+        }
+        struct timespec captured;
+        hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &captured);
+        int64_t captured_ns = (int64_t)captured.tv_sec * 1000000000LL + captured.tv_nsec;
+        snprintf(r.path, sizeof r.path, "%d %llu %u %lld", g_tfd_clock[slot], (unsigned long long)pending,
+                 (unsigned)g_tfd_first_oneshot[slot], (long long)captured_ns);
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    if (emulated && strcmp(emulated, "inotify") == 0) {
+        inotify_object_assign(fd);
+        r.kind = CKF_INOTIFY;
+        r.flags = g_inotify_nb[fd] ? O_NONBLOCK : 0;
+        r.descriptor_flags = fcntl(fd, F_GETFD);
+        r.object_id = g_inotify_object[fd];
+        r.ofd_id = r.object_id;
+        if (r.descriptor_flags < 0 || !r.object_id) return -1;
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    if (detail.kind == HL_HOST_FD_PIPE) {
+        int flags = fcntl(fd, F_GETFL);
+        int descriptor_flags = fcntl(fd, F_GETFD);
+        uint64_t identity = view->object ? view->object : g_pipe_identity[fd];
+        if (flags < 0 || descriptor_flags < 0 || identity == 0) return -1;
+        if ((flags & O_ACCMODE) != O_WRONLY && ckpt_capture_pipe(fd, identity) != 0) return -1;
+        r.kind = CKF_PIPE;
+        r.flags = flags;
+        r.descriptor_flags = descriptor_flags;
+        r.offset = (int64_t)identity;
+        snprintf(r.path, sizeof r.path, "%d", (fd >= 0 && fd < HL_NFD) ? g_pipesz[fd] : 0);
+        if ((r.flags & O_ACCMODE) == O_RDONLY && ckpt_capture_pipe(fd, identity) != 0) return -1;
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    if (detail.kind == HL_HOST_FD_SOCKET) {
+        fprintf(stderr, "[ckpt] refuse: guest fd %d is a socket -- socket restore is not yet supported\n", fd);
+        return -1;
+    }
+    if (emulated && strcmp(emulated, "memfd") == 0) {
+        struct stat status;
+        if (fstat(fd, &status) != 0) return -1;
+        r.flags = fcntl(fd, F_GETFL);
+        r.descriptor_flags = fcntl(fd, F_GETFD);
+        r.offset = lseek(fd, 0, SEEK_CUR);
+        if (r.flags < 0 || r.descriptor_flags < 0 || r.offset < 0 ||
+            ckpt_capture_file_blob(fd, r.path, sizeof r.path) != 0)
+            return -1;
+        r.kind = CKF_MEMFD;
+        r.object_id = ckpt_backing_id(&status);
+        r.ofd_id = ckpt_native_ofd_id(records, *count, fd, r.object_id);
+        int seals = g_memfd_seal[fd];
+        (void)memfd_reg_get_fd(fd, &seals);
+        r.auxiliary = (uint64_t)(unsigned)seals;
+        records[(*count)++] = r;
+        return CKPT_FD_CAPTURED;
+    }
+    if (emulated) {
+        fprintf(stderr, "[ckpt] refuse: guest fd %d is a %s -- restore is not yet supported\n", fd, emulated);
+        return -1;
+    }
+    struct stat status;
+    if (fstat(fd, &status) != 0) return -1;
+    r.flags = fcntl(fd, F_GETFL);
+    r.descriptor_flags = fcntl(fd, F_GETFD);
+    if (r.flags < 0 || r.descriptor_flags < 0) return -1;
+    r.offset = lseek(fd, 0, SEEK_CUR);
+    r.object_id = ckpt_backing_id(&status);
+    r.ofd_id = ckpt_native_ofd_id(records, *count, fd, r.object_id);
+    if (S_ISCHR(status.st_mode) && isatty(fd)) {
+        r.kind = CKF_TTY;
+        r.offset = 0;
+    } else if (S_ISCHR(status.st_mode) || S_ISBLK(status.st_mode)) {
+        if (path_size >= sizeof path) return -1;
+        path[path_size] = '\0';
+        if (S_ISCHR(status.st_mode) && ckpt_path_is_ctty(path)) {
+            r.kind = CKF_TTY;
+            r.offset = 0;
+        } else {
+            r.kind = CKF_DEVICE;
+            if (path_copy(r.path, sizeof r.path, path) != 0) return -1;
+        }
+    } else if (S_ISREG(status.st_mode) || S_ISDIR(status.st_mode)) {
+        if (path_size >= sizeof path) return -1;
+        path[path_size] = '\0';
+        if (ckpt_normalize_reopen_path(path) != 0 || (S_ISREG(status.st_mode) && access(path, F_OK) != 0)) {
+            if (!S_ISREG(status.st_mode) || ckpt_capture_file_blob(fd, r.path, sizeof r.path) != 0) {
+                fprintf(stderr, "[ckpt] refuse: cannot persist deleted fd %d\n", fd);
+                return -1;
+            }
+            r.kind = CKF_BLOB;
+        } else {
+            r.kind = CKF_FILE;
+            if (S_ISDIR(status.st_mode)) r.auxiliary |= CKFA_DIRECTORY;
+            if (path_copy(r.path, sizeof r.path, path) != 0) return -1;
+        }
+    } else {
+        fprintf(stderr, "[ckpt] refuse: native guest fd %d has unsupported mode %o\n", fd, (unsigned)status.st_mode);
+        return -1;
+    }
+    records[(*count)++] = r;
+    return CKPT_FD_CAPTURED;
+}
+
 static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
     static struct fdvis_view views[HL_NFD];
     int n = 0;
@@ -12,327 +351,14 @@ static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
     }
     for (size_t index = 0; index < visible; index++) {
         int fd = views[index].guest_fd;
-        int already_captured = 0;
-        for (int prior = 0; prior < n; ++prior)
-            if (recs[prior].gfd == fd) {
-                already_captured = 1;
-                break;
-            }
-        if (already_captured) continue;
-        hl_linux_fd_snapshot snapshot;
-        struct ckpt_fd r;
-        memset(&r, 0, sizeof r);
-        r.gfd = fd;
-        const char *early_emulated = ckpt_guest_kernel_fd(fd);
-        if (early_emulated && strcmp(early_emulated, "socket") == 0 && fd >= 0 && fd < HL_NFD &&
-            g_sock_object[fd] != 0) {
-            if (g_sock_peer_object[fd] == 0) {
-                r.kind = CKF_SOCKET;
-                r.flags = fcntl(fd, F_GETFL);
-                r.descriptor_flags = fcntl(fd, F_GETFD);
-                r.object_id = g_sock_object[fd];
-                r.ofd_id = r.object_id;
-                snprintf(r.path, sizeof r.path, "socket-state.%016llx", (unsigned long long)r.object_id);
-                if (r.flags < 0 || r.descriptor_flags < 0 || ckpt_capture_socket_state(fd, r.object_id, 1) != 0)
-                    return -1;
-                recs[n++] = r;
-                continue;
-            }
-            int type = g_sock_seqpacket[fd] ? SOCK_SEQPACKET : g_sock_dgram[fd] ? SOCK_DGRAM : SOCK_STREAM;
-            r.kind = CKF_SOCKETPAIR;
-            r.flags = fcntl(fd, F_GETFL);
-            r.descriptor_flags = fcntl(fd, F_GETFD);
-            r.object_id = g_sock_object[fd];
-            r.ofd_id = r.object_id;
-            r.auxiliary = g_sock_peer_object[fd];
-            r.offset = type;
-            snprintf(r.path, sizeof r.path, "socket.%016llx", (unsigned long long)r.object_id);
-            if (r.flags < 0 || r.descriptor_flags < 0 || r.auxiliary == 0 ||
-                ckpt_capture_socket_state(fd, r.object_id, 0) != 0 ||
-                ckpt_capture_socket_queue(fd, r.object_id, (uint32_t)type) != 0)
-                return -1;
-            recs[n++] = r;
-            continue;
-        }
-        if (early_emulated && strcmp(early_emulated, "epoll") == 0) {
-            r.kind = CKF_EPOLL;
-            r.descriptor_flags = fcntl(fd, F_GETFD);
-            r.object_id = ckpt_epoll_identity(fd);
-            r.ofd_id = r.object_id;
-            if (r.descriptor_flags < 0 || !r.object_id) return -1;
-            snprintf(r.path, sizeof r.path, "epoll.%016llx", (unsigned long long)r.object_id);
-            recs[n++] = r;
-            continue;
-        }
-        if (early_emulated && strcmp(early_emulated, "inotify") == 0) {
-            inotify_object_assign(fd);
-            r.kind = CKF_INOTIFY;
-            r.flags = g_inotify_nb[fd] ? O_NONBLOCK : 0;
-            r.descriptor_flags = fcntl(fd, F_GETFD);
-            r.object_id = g_inotify_object[fd];
-            r.ofd_id = r.object_id;
-            if (r.descriptor_flags < 0 || !r.object_id) return -1;
-            recs[n++] = r;
-            continue;
-        }
-        if (g_linux_box != NULL && hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)fd, &snapshot) == HL_STATUS_OK) {
-            hl_host_file_metadata metadata;
-            if (snapshot.kind == HL_LINUX_OBJECT_INOTIFY) {
-                r.kind = CKF_INOTIFY;
-                r.flags = (int32_t)snapshot.status_flags;
-                r.descriptor_flags = (int32_t)snapshot.descriptor_flags;
-                r.object_id = UINT64_C(0x9000000000000000) | (uint64_t)snapshot.ofd;
-                r.ofd_id = r.object_id;
-                snprintf(r.path, sizeof r.path, "inotify.%016llx", (unsigned long long)r.object_id);
-                recs[n++] = r;
-                continue;
-            }
-            if (g_linux_box->host == NULL || g_linux_box->host->file == NULL ||
-                g_linux_box->host->file->metadata == NULL ||
-                g_linux_box->host->file->metadata(g_linux_box->host->context, snapshot.host_handle, &metadata).status !=
-                    HL_STATUS_OK) {
-                if (fcntl(fd, F_GETFD) < 0 && errno == EBADF) {
-                    proc_fdvis_close(fd);
-                    continue;
-                }
-                fprintf(stderr, "[ckpt] refuse: cannot inspect typed guest fd %d (inotify=%u owner=%d watch=%s)\n", fd,
-                        (unsigned)((fd >= 0 && fd < HL_NFD) ? g_inotify[fd] : 0),
-                        (fd >= 0 && fd < HL_NFD) ? g_inotify_owner[fd] : 0,
-                        (fd >= 0 && fd < HL_NFD && g_inotify_wpath[fd][0]) ? g_inotify_wpath[fd] : "-");
-                return -1;
-            }
-            r.flags = (int32_t)snapshot.status_flags;
-            r.descriptor_flags = (int32_t)snapshot.descriptor_flags;
-            r.offset = (int64_t)snapshot.offset;
-            r.object_id = metadata.stable_object ? metadata.stable_object : (uint64_t)snapshot.host_handle;
-            r.ofd_id = UINT64_C(0x8000000000000000) | (uint64_t)snapshot.ofd;
-            if (snapshot.kind == HL_LINUX_OBJECT_PIPE || metadata.type == HL_HOST_FILE_TYPE_FIFO) {
-                fprintf(stderr, "[ckpt] refuse: guest fd %d is a pipe -- shared pipe restore is not yet supported\n",
-                        fd);
-                return -1;
-            }
-            if (metadata.type == HL_HOST_FILE_TYPE_SOCKET) {
-                fprintf(stderr, "[ckpt] refuse: guest fd %d is a socket -- socket restore is not yet supported\n", fd);
-                return -1;
-            }
-            if (metadata.type == HL_HOST_FILE_TYPE_CHARACTER || metadata.type == HL_HOST_FILE_TYPE_BLOCK) {
-                char fp[512];
-                hl_host_result device_path = g_linux_box->host->file->path(
-                    g_linux_box->host->context, snapshot.host_handle, (hl_host_bytes){fp, sizeof(fp) - 1});
-                if (metadata.type == HL_HOST_FILE_TYPE_CHARACTER && isatty(fd)) {
-                    r.kind = CKF_TTY;
-                    r.offset = 0;
-                } else if (device_path.status == HL_STATUS_OK && device_path.value < sizeof fp) {
-                    fp[device_path.value] = 0;
-                    if (metadata.type == HL_HOST_FILE_TYPE_CHARACTER && ckpt_path_is_ctty(fp)) {
-                        r.kind = CKF_TTY;
-                        r.offset = 0;
-                    } else {
-                        r.kind = CKF_DEVICE;
-                        if (path_copy(r.path, sizeof r.path, fp) != 0) return -1;
-                    }
-                } else {
-                    fprintf(stderr, "[ckpt] refuse: device fd %d has no recoverable path\n", fd);
-                    return -1;
-                }
-            } else if (metadata.type == HL_HOST_FILE_TYPE_REGULAR || metadata.type == HL_HOST_FILE_TYPE_DIRECTORY) {
-                char fp[512];
-                hl_host_result path = g_linux_box->host->file->path(g_linux_box->host->context, snapshot.host_handle,
-                                                                    (hl_host_bytes){fp, sizeof(fp) - 1});
-                if (path.status != HL_STATUS_OK || path.value >= sizeof fp) {
-                    fprintf(stderr, "[ckpt] refuse: fd %d has no recoverable path\n", fd);
-                    return -1;
-                }
-                fp[path.value] = '\0';
-                if (ckpt_normalize_reopen_path(fp) != 0 ||
-                    (metadata.type == HL_HOST_FILE_TYPE_REGULAR && access(fp, F_OK) != 0)) {
-                    if (metadata.type != HL_HOST_FILE_TYPE_REGULAR ||
-                        ckpt_capture_file_blob(fd, r.path, sizeof r.path) != 0) {
-                        fprintf(stderr, "[ckpt] refuse: cannot persist deleted fd %d\n", fd);
-                        return -1;
-                    }
-                    r.kind = CKF_BLOB;
-                } else {
-                    r.kind = CKF_FILE;
-                    if (metadata.type == HL_HOST_FILE_TYPE_DIRECTORY) r.auxiliary |= CKFA_DIRECTORY;
-                    if (path_copy(r.path, sizeof r.path, fp) != 0) return -1;
-                }
-            } else {
-                fprintf(stderr, "[ckpt] refuse: typed guest fd %d has unsupported type %u\n", fd, metadata.type);
-                return -1;
-            }
-        } else {
-            hl_host_process_fd detail;
-            char path[512];
-            size_t path_size = 0;
-            if (!hl_host_process_fd_read(getpid(), fd, &detail, path, sizeof(path) - 1, &path_size) ||
-                (detail.flags & HL_HOST_PROCESS_FD_ENGINE_PRIVATE) != 0) {
-                if (fcntl(fd, F_GETFD) < 0 && errno == EBADF) {
-                    proc_fdvis_close(fd);
-                    continue;
-                }
-                fprintf(stderr, "[ckpt] refuse: cannot inspect native guest fd %d\n", fd);
-                return -1;
-            }
-            const char *emulated = ckpt_guest_kernel_fd(fd);
-            if (emulated && strcmp(emulated, "signalfd") == 0) {
-                int slot = g_sigfd_slot[fd] - 1;
-                uint64_t identity = ofd_identity_ensure(fd);
-                if (slot < 0 || slot >= HL_SFD_MAX || !identity) return -1;
-                r.kind = CKF_SIGNALFD;
-                r.flags = fcntl(fd, F_GETFL);
-                r.descriptor_flags = fcntl(fd, F_GETFD);
-                r.object_id = identity;
-                r.ofd_id = identity;
-                r.auxiliary = g_sfd[slot].mask;
-                snprintf(r.path, sizeof r.path, "signalfd.%016llx", (unsigned long long)identity);
-                if (r.flags < 0 || r.descriptor_flags < 0 || ckpt_capture_signalfd(fd, identity) != 0) return -1;
-                recs[n++] = r;
-                continue;
-            }
-            if (emulated && strcmp(emulated, "eventfd") == 0) {
-                int slot = eventfd_counter_slot(fd);
-                if (slot < 0 || slot >= HL_NFD || !g_eventfd_count) return -1;
-                r.kind = CKF_EVENTFD;
-                r.flags = eventfd_guest_nb(fd) ? O_NONBLOCK : 0;
-                r.descriptor_flags = fcntl(fd, F_GETFD);
-                if (r.descriptor_flags < 0) return -1;
-                r.object_id = UINT64_C(0x2000000000000000) | (uint64_t)(unsigned)(slot + 1);
-                r.ofd_id = r.object_id;
-                r.auxiliary = g_eventfd_count[slot];
-                r.offset = g_eventfd_sema[fd] ? 1 : 0;
-                recs[n++] = r;
-                continue;
-            }
-            if (emulated && strcmp(emulated, "timerfd") == 0) {
-                int slot = timerfd_slot(fd);
-                if (slot < 0 || slot >= HL_NFD) return -1;
-                timerfd_object_assign(fd);
-                r.kind = CKF_TIMERFD;
-                r.flags = g_tfd_nb[fd] ? O_NONBLOCK : 0;
-                r.descriptor_flags = fcntl(fd, F_GETFD);
-                if (r.flags < 0 || r.descriptor_flags < 0 || !g_tfd_object[fd]) return -1;
-                r.object_id = g_tfd_object[fd];
-                r.ofd_id = r.object_id;
-                r.offset = g_tfd_deadline[slot];
-                r.auxiliary = (uint64_t)g_tfd_interval[slot];
-                uint64_t pending = g_tfd_pending[slot];
-                int copied = 0;
-                for (int prior = 0; prior < n; prior++)
-                    if (recs[prior].kind == CKF_TIMERFD && recs[prior].object_id == r.object_id) {
-                        pending = strtoull(recs[prior].path + strcspn(recs[prior].path, " ") + 1, NULL, 10);
-                        copied = 1;
-                        break;
-                    }
-                if (!copied) {
-                    struct kevent event;
-                    struct timespec zero = {0, 0};
-                    int ready = kevent(fd, NULL, 0, &event, 1, &zero);
-                    if (ready < 0) return -1;
-                    if (ready > 0) pending += g_tfd_interval[slot] == 0 ? 1 : (uint64_t)event.data;
-                }
-                struct timespec captured;
-                hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &captured);
-                int64_t captured_ns = (int64_t)captured.tv_sec * 1000000000LL + captured.tv_nsec;
-                snprintf(r.path, sizeof r.path, "%d %llu %u %lld", g_tfd_clock[slot], (unsigned long long)pending,
-                         (unsigned)g_tfd_first_oneshot[slot], (long long)captured_ns);
-                recs[n++] = r;
-                continue;
-            }
-            if (emulated && strcmp(emulated, "inotify") == 0) {
-                inotify_object_assign(fd);
-                r.kind = CKF_INOTIFY;
-                r.flags = g_inotify_nb[fd] ? O_NONBLOCK : 0;
-                r.descriptor_flags = fcntl(fd, F_GETFD);
-                r.object_id = g_inotify_object[fd];
-                r.ofd_id = r.object_id;
-                if (r.descriptor_flags < 0 || !r.object_id) return -1;
-                recs[n++] = r;
-                continue;
-            }
-            if (detail.kind == HL_HOST_FD_PIPE) {
-                int flags = fcntl(fd, F_GETFL);
-                int descriptor_flags = fcntl(fd, F_GETFD);
-                uint64_t identity = views[index].object ? views[index].object : g_pipe_identity[fd];
-                if (flags < 0 || descriptor_flags < 0 || identity == 0) return -1;
-                if ((flags & O_ACCMODE) != O_WRONLY && ckpt_capture_pipe(fd, identity) != 0) return -1;
-                r.kind = CKF_PIPE;
-                r.flags = flags;
-                r.descriptor_flags = descriptor_flags;
-                r.offset = (int64_t)identity;
-                snprintf(r.path, sizeof r.path, "%d", (fd >= 0 && fd < HL_NFD) ? g_pipesz[fd] : 0);
-                if ((r.flags & O_ACCMODE) == O_RDONLY && ckpt_capture_pipe(fd, identity) != 0) return -1;
-                recs[n++] = r;
-                continue;
-            }
-            if (detail.kind == HL_HOST_FD_SOCKET) {
-                fprintf(stderr, "[ckpt] refuse: guest fd %d is a socket -- socket restore is not yet supported\n", fd);
-                return -1;
-            }
-            if (emulated && strcmp(emulated, "memfd") == 0) {
-                struct stat status;
-                if (fstat(fd, &status) != 0) return -1;
-                r.flags = fcntl(fd, F_GETFL);
-                r.descriptor_flags = fcntl(fd, F_GETFD);
-                r.offset = lseek(fd, 0, SEEK_CUR);
-                if (r.flags < 0 || r.descriptor_flags < 0 || r.offset < 0 ||
-                    ckpt_capture_file_blob(fd, r.path, sizeof r.path) != 0)
-                    return -1;
-                r.kind = CKF_MEMFD;
-                r.object_id = ckpt_backing_id(&status);
-                r.ofd_id = ckpt_native_ofd_id(recs, n, fd, r.object_id);
-                int seals = g_memfd_seal[fd];
-                (void)memfd_reg_get_fd(fd, &seals);
-                r.auxiliary = (uint64_t)(unsigned)seals;
-                recs[n++] = r;
-                continue;
-            }
-            if (emulated) {
-                fprintf(stderr, "[ckpt] refuse: guest fd %d is a %s -- restore is not yet supported\n", fd, emulated);
-                return -1;
-            }
-            struct stat status;
-            if (fstat(fd, &status) != 0) return -1;
-            r.flags = fcntl(fd, F_GETFL);
-            r.descriptor_flags = fcntl(fd, F_GETFD);
-            if (r.flags < 0 || r.descriptor_flags < 0) return -1;
-            r.offset = lseek(fd, 0, SEEK_CUR);
-            r.object_id = ckpt_backing_id(&status);
-            r.ofd_id = ckpt_native_ofd_id(recs, n, fd, r.object_id);
-            if (S_ISCHR(status.st_mode) && isatty(fd)) {
-                r.kind = CKF_TTY;
-                r.offset = 0;
-            } else if (S_ISCHR(status.st_mode) || S_ISBLK(status.st_mode)) {
-                if (path_size >= sizeof path) return -1;
-                path[path_size] = '\0';
-                if (S_ISCHR(status.st_mode) && ckpt_path_is_ctty(path)) {
-                    r.kind = CKF_TTY;
-                    r.offset = 0;
-                } else {
-                    r.kind = CKF_DEVICE;
-                    if (path_copy(r.path, sizeof r.path, path) != 0) return -1;
-                }
-            } else if (S_ISREG(status.st_mode) || S_ISDIR(status.st_mode)) {
-                if (path_size >= sizeof path) return -1;
-                path[path_size] = '\0';
-                if (ckpt_normalize_reopen_path(path) != 0 || (S_ISREG(status.st_mode) && access(path, F_OK) != 0)) {
-                    if (!S_ISREG(status.st_mode) || ckpt_capture_file_blob(fd, r.path, sizeof r.path) != 0) {
-                        fprintf(stderr, "[ckpt] refuse: cannot persist deleted fd %d\n", fd);
-                        return -1;
-                    }
-                    r.kind = CKF_BLOB;
-                } else {
-                    r.kind = CKF_FILE;
-                    if (S_ISDIR(status.st_mode)) r.auxiliary |= CKFA_DIRECTORY;
-                    if (path_copy(r.path, sizeof r.path, path) != 0) return -1;
-                }
-            } else {
-                fprintf(stderr, "[ckpt] refuse: native guest fd %d has unsupported mode %o\n", fd,
-                        (unsigned)status.st_mode);
-                return -1;
-            }
-        }
-        recs[n++] = r;
+        if (ckpt_fd_was_captured(recs, n, fd)) continue;
+        int result = ckpt_capture_early_emulated_fd(recs, &n, fd);
+        if (result == CKPT_FD_CAPTURE_ERROR) return -1;
+        if (result == CKPT_FD_CAPTURED) continue;
+        result = ckpt_capture_typed_fd(recs, &n, fd);
+        if (result == CKPT_FD_CAPTURE_ERROR) return -1;
+        if (result == CKPT_FD_CAPTURED) continue;
+        if (ckpt_capture_native_fd(recs, &n, &views[index]) == CKPT_FD_CAPTURE_ERROR) return -1;
     }
     *out_n = n;
     return 0;
@@ -946,4 +972,3 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
 }
 
 // ================================= RESTORE =================================
-
