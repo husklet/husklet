@@ -2004,7 +2004,14 @@ static void sentry_process_release(void) {
 // can still publish the sentry lifecycle request needed to close a fork child's duplicated descriptors.
 static void sentry_trapped_exit(void) {
     if (!g_untrusted) return;
-    int process_exit = atomic_fetch_sub(&g_worker_threads, 1) == 1;
+    int threads = atomic_load_explicit(&g_worker_threads, memory_order_acquire);
+    while (threads > 0 && !atomic_compare_exchange_weak_explicit(&g_worker_threads, &threads, threads - 1,
+                                                                 memory_order_acq_rel, memory_order_acquire)) {}
+    if (threads <= 0) {
+        ring_release();
+        return;
+    }
+    int process_exit = threads == 1;
     if (process_exit) {
         if (getpid() != g_sentry_owner_pid) sentry_process_release();
     } else if (t_ring >= 0) {
