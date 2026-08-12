@@ -1295,6 +1295,28 @@ static int interp_one_byte_string(struct cpu *cpu, struct insn *insn, uint64_t n
     return STEP_NEXT;
 }
 
+static int interp_one_byte_flags(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op == 0x9C) {
+        interp_push(cpu, interp_read_rflags(cpu), interp_stack_width(insn));
+    } else if (op == 0x9D) {
+        interp_write_rflags(cpu, interp_pop(cpu, interp_stack_width(insn)));
+    } else if (op == 0x9E) {
+        uint64_t ah = (cpu->r[RAX] >> 8) & 0xff;
+        unsigned of = (unsigned)((cpu->nzcv >> 28) & 1);
+        interp_flags_nzcv(cpu, (unsigned)((ah >> 7) & 1), (unsigned)((ah >> 6) & 1), (unsigned)(ah & 1), of);
+        cpu->pf = ((ah >> 2) & 1) ^ 1u;
+        cpu->af = ((ah >> 4) & 1) << 4;
+    } else if (op == 0x9F) {
+        uint64_t flags = interp_read_rflags(cpu);
+        cpu->r[RAX] = (cpu->r[RAX] & ~UINT64_C(0xff00)) | ((flags & 0xd5) | 0x02) << 8;
+    } else {
+        return -1;
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_one_byte_alu(cpu, insn, next);
@@ -1306,6 +1328,8 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     delegated = interp_one_byte_relative_control(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_one_byte_string(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_one_byte_flags(cpu, insn, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -1399,32 +1423,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
 
     // FWAIT: no x87 exception is ever pending here
     case 0x9B: cpu->rip = next; return STEP_NEXT;
-
-    // PUSHFQ / POPFQ / SAHF / LAHF
-    case 0x9C:
-        interp_push(cpu, interp_read_rflags(cpu), interp_stack_width(insn));
-        cpu->rip = next;
-        return STEP_NEXT;
-    case 0x9D:
-        interp_write_rflags(cpu, interp_pop(cpu, interp_stack_width(insn)));
-        cpu->rip = next;
-        return STEP_NEXT;
-    case 0x9E: { // SAHF: AH -> SF,ZF,AF,PF,CF (the reserved bits are ignored)
-        uint64_t ah = (cpu->r[RAX] >> 8) & 0xff;
-        // Preserve OF: SAHF writes only the low byte; OF is bit 11.
-        unsigned of = (unsigned)((cpu->nzcv >> 28) & 1);
-        interp_flags_nzcv(cpu, (unsigned)((ah >> 7) & 1), (unsigned)((ah >> 6) & 1), (unsigned)(ah & 1), of);
-        cpu->pf = ((ah >> 2) & 1) ^ 1u; // PF lane holds a byte whose EVEN parity is PF
-        cpu->af = ((ah >> 4) & 1) << 4;
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-    case 0x9F: { // LAHF: SF,ZF,0,AF,0,PF,1,CF -> AH
-        uint64_t flags = interp_read_rflags(cpu);
-        cpu->r[RAX] = (cpu->r[RAX] & ~UINT64_C(0xff00)) | ((flags & 0xd5) | 0x02) << 8;
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
 
     // MOV to/from a moffs address
     case 0xA0:
