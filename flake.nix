@@ -1,5 +1,5 @@
 {
-  description = "Husklet with the integrated Rust execution engine";
+  description = "Husklet with the integrated C execution engine";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
   inputs.rust-overlay = {
