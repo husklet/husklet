@@ -137,6 +137,19 @@ pub const SUPPORTED_HOSTS: &[HostTarget] = &[
     HostTarget { os: HostOs::Windows, arch: HostArch::X86_64 },
 ];
 
+/// Returns whether a native source belongs to the selected host operating
+/// system. Sources outside `host/<platform>/` are portable engine sources and
+/// remain selected on every host.
+pub fn source_matches(target_os: &str, source: &str) -> bool {
+    const HOST_PREFIX: &str = "src/native/host/";
+    let Some(host_relative) = source.strip_prefix(HOST_PREFIX) else {
+        return true;
+    };
+    let Some((platform, _)) = host_relative.split_once('/') else {
+        return true;
+    };
+    !matches!(platform, "linux" | "macos" | "windows") || platform == target_os
+}
 #[cfg(test)]
 mod tests {
     use super::{ExecutionMode, GuestIsa, HostArch, HostOs, HostTarget, SUPPORTED_HOSTS};
@@ -186,5 +199,17 @@ mod tests {
     fn unsupported_pair_is_not_constructed() {
         assert_eq!(HostTarget::from_cfg("macos", "x86_64"), None);
         assert!(!HostTarget { os: HostOs::Windows, arch: HostArch::Aarch64 }.supported());
+    }
+
+    #[test]
+    fn platform_source_closures_do_not_mix_host_implementations() {
+        for target in ["linux", "macos", "windows"] {
+            for platform in ["linux", "macos", "windows"] {
+                let source = format!("src/native/host/{platform}/host.c");
+                assert_eq!(super::source_matches(target, &source), target == platform);
+            }
+            assert!(super::source_matches(target, "src/native/engine/runtime.c"));
+            assert!(super::source_matches(target, "src/native/host/sync.c"));
+        }
     }
 }

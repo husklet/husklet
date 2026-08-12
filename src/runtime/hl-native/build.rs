@@ -142,14 +142,7 @@ fn discover_runtime_roots(target_os: &str) -> Vec<String> {
         .into_iter()
         .filter(|source| !included.contains(source))
         .filter(|source| !special.contains(&source.to_string_lossy().as_ref()))
-        .filter(|source| {
-            let value = source.to_string_lossy();
-            if target_os == "macos" {
-                !value.starts_with("src/native/host/linux/")
-            } else {
-                !value.starts_with("src/native/host/macos/")
-            }
-        })
+        .filter(|source| platform::source_matches(target_os, &source.to_string_lossy()))
         .map(|source| source.to_string_lossy().into_owned())
         .collect()
 }
