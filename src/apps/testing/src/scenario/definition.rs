@@ -10,13 +10,13 @@ use std::{
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ScenarioDefinition {
-    cases: Vec<ScenarioSpecification>,
+struct Definition {
+    cases: Vec<Specification>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ScenarioSpecification {
+struct Specification {
     id: String,
     image: String,
     #[serde(default)]
@@ -267,7 +267,7 @@ impl Sample {
 
 impl Scenario {
     pub fn load(directory: &Path, definition: &Path) -> Result<Self, Error> {
-        let document: ScenarioDefinition = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
+        let document: Definition = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
         let name = directory
             .file_name()
             .and_then(|value| value.to_str())
@@ -294,7 +294,7 @@ impl Scenario {
 fn load_case(
     directory: &Path,
     definition: &Path,
-    case: ScenarioSpecification,
+    case: Specification,
     ids: &mut BTreeSet<String>,
 ) -> Result<Sample, Error> {
     if !ids.insert(case.id.clone())
