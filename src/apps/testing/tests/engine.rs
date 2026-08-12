@@ -5,6 +5,7 @@ pub struct EngineBinaryPaths {
 }
 
 impl EngineBinaryPaths {
+    #[must_use]
     pub fn required() -> Self {
         let root = std::env::var_os("HL_TEST_ENGINE_APP_BIN_DIR").unwrap_or_else(|| {
             panic!("HL_TEST_ENGINE_APP_BIN_DIR must name the absolute directory containing engine app binaries")
@@ -14,6 +15,7 @@ impl EngineBinaryPaths {
         Self { root }
     }
 
+    #[must_use]
     pub fn named(&self, name: &str) -> PathBuf {
         let path = self.root.join(name);
         assert!(

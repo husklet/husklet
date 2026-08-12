@@ -281,6 +281,7 @@ unsafe extern "C" {
 }
 
 pub(crate) fn leak_check_nonvacuity() -> i32 {
+    // SAFETY: the linked C shim exposes this argument-free probe with the declared ABI.
     unsafe { hl_c_backend_leak_check_nonvacuity() }
 }
 

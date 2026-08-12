@@ -35,6 +35,7 @@
 pub mod activation;
 
 #[doc(hidden)]
+#[must_use]
 pub fn leak_check_nonvacuity() -> i32 {
     execution::leak_check_nonvacuity()
 }

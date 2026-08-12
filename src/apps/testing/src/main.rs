@@ -16,7 +16,6 @@
 mod journal;
 mod leaks;
 mod nested;
-#[cfg(target_os = "macos")]
 mod platform;
 mod pool;
 mod record;

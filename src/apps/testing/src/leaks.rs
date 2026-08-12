@@ -4,7 +4,7 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
+    process::{ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -26,8 +26,8 @@ pub(crate) struct Options {
     /// Hard limit for each workload and for the deliberate-leak probe.
     #[arg(long, default_value_t = 180)]
     timeout_seconds: u64,
-    /// LSan suppression file. Every suppression must be reviewed and checked in.
-    #[arg(long, default_value = "tests/leaks/lsan.supp")]
+    /// `LSan` suppression file. Every suppression must be reviewed and checked in.
+    #[arg(long, default_value = "tests/lsan.supp")]
     suppressions: PathBuf,
 }
 
@@ -85,7 +85,7 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let stdout = File::create(artifacts.join("non-vacuity.stdout"))?;
     let stderr = File::create(artifacts.join("non-vacuity.stderr"))?;
     let log = artifacts.join("non-vacuity.sanitizer");
-    let mut probe = Command::new(&executable);
+    let mut probe = crate::platform::HostProcess::standard(&executable);
     probe
         .arg("leak-probe")
         .env(
@@ -123,7 +123,7 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn Error>> {
 }
 
 fn sqlite_available() -> bool {
-    Command::new("aarch64-linux-gnu-gcc")
+    crate::platform::HostProcess::standard("aarch64-linux-gnu-gcc")
         .args(["-E", "-include", "sqlite3.h", "-x", "c", "/dev/null"])
         .env_remove("LD_PRELOAD")
         .env("ASAN_OPTIONS", "detect_leaks=0")
@@ -165,12 +165,12 @@ fn run_case(
     let ledger = artifacts.join(format!("{label}.tsv"));
     let log = artifacts.join(format!("{label}.sanitizer"));
     let mut command = if cfg!(target_os = "macos") {
-        let mut command = Command::new("leaks");
+        let mut command = crate::platform::HostProcess::standard("leaks");
         command.args(["--atExit", "--"]);
         command.arg(executable);
         command
     } else {
-        Command::new(executable)
+        crate::platform::HostProcess::standard(executable)
     };
     command
         .current_dir(workspace)
