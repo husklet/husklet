@@ -90,106 +90,84 @@ void hl_x86_legacy_restore_fork(struct cpu *c) {
     g_x86_forksave_on = 0;
 }
 
-int hl_x86_legacy_normalize(struct cpu *c, const hl_x86_legacy_context *context) {
-    uint64_t *r = c->r;
-    g_x86_dup2_compat = (r[0] == 33); // legacy dup2 -> canonical dup3; cleared for every other syscall
+enum x86_legacy_result {
+    X86_LEGACY_REWRITE = 0,
+    X86_LEGACY_DONE = 1,
+    X86_LEGACY_UNHANDLED = 2,
+};
+
+static int x86_normalize_path(uint64_t *r) {
     switch (r[0]) {
-    case 158: // arch_prctl(code, addr): x86 segment-base TLS register; no aarch64 equivalent
-        if (r[7] == 0x1002) {
-            c->fs_base = r[6];
-            r[0] = 0;
-            return 1;
-        } // ARCH_SET_FS
-        if (r[7] == 0x1001) {
-            c->gs_base = r[6];
-            r[0] = 0;
-            return 1;
-        } // ARCH_SET_GS
-        // ARCH_GET_FS/GS store the base THROUGH a guest pointer: fold it (a non-PIE's .bss slot is a low link
-        // vaddr) and prove it writable (Linux answers EFAULT; the raw store killed the engine on every linkage).
-        if (r[7] == 0x1003 || r[7] == 0x1004) {
-            uint64_t *slot;
-            if (!x86_deref(context, r[6], sizeof(uint64_t), 1, (void **)&slot)) {
-                r[0] = EFAULT_RET;
-                return 1;
-            }
-            *slot = r[7] == 0x1003 ? c->fs_base : c->gs_base;
-            r[0] = 0;
-            return 1;
-        }
-        r[0] = (uint64_t)-22;
-        return 1; // EINVAL
-    // --- path ops: prepend AT_FDCWD, shift the rest ---
     case 2: // open(path,flags,mode) -> openat(AT_FDCWD,path,flags,mode)
         r[10] = r[2];
         r[2] = r[6];
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 257;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 4: // stat(path,buf) -> newfstatat(AT_FDCWD,path,buf,0)
         r[10] = 0;
         r[2] = r[6];
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 262;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 6: // lstat -> newfstatat(...,AT_SYMLINK_NOFOLLOW)
         r[10] = 0x100;
         r[2] = r[6];
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 262;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 21: // access(path,mode) -> faccessat(AT_FDCWD,path,mode)
         r[2] = r[6];
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 269;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 83: // mkdir(path,mode) -> mkdirat
         r[2] = r[6];
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 258;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 84: // rmdir(path) -> unlinkat(...,AT_REMOVEDIR)
         r[2] = 0x200;
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 263;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 87: // unlink(path) -> unlinkat(...,0)
         r[2] = 0;
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 263;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 85: // creat(path,mode) -> openat(...,O_CREAT|O_WRONLY|O_TRUNC,mode)
         r[10] = r[6];
         r[2] = 0x241;
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 257;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 89: // readlink(path,buf,sz) -> readlinkat(AT_FDCWD,path,buf,sz)
         r[10] = r[2];
         r[2] = r[6];
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 267;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 90: // chmod(path,mode) -> fchmodat(AT_FDCWD,path,mode)
         r[2] = r[6];
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 268;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 88: // symlink(target,link) -> symlinkat(target,AT_FDCWD,link)
         r[2] = r[6];
         r[6] = ATFD;
         r[0] = 266;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 92: // chown(path,uid,gid) -> fchownat(AT_FDCWD,path,uid,gid,0)
         r[8] = 0;
         r[10] = r[2];
@@ -197,7 +175,7 @@ int hl_x86_legacy_normalize(struct cpu *c, const hl_x86_legacy_context *context)
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 260;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 94: // lchown -> fchownat(...,AT_SYMLINK_NOFOLLOW)
         r[8] = 0x100;
         r[10] = r[2];
@@ -205,14 +183,65 @@ int hl_x86_legacy_normalize(struct cpu *c, const hl_x86_legacy_context *context)
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 260;
-        return 0;
+        return X86_LEGACY_REWRITE;
     case 133: // mknod(path,mode,dev) -> mknodat(AT_FDCWD,path,mode,dev)
         r[10] = r[2];
         r[2] = r[6];
         r[6] = r[7];
         r[7] = ATFD;
         r[0] = 259;
-        return 0;
+        return X86_LEGACY_REWRITE;
+    case 82: // rename(old,new) -> renameat(AT_FDCWD,old,AT_FDCWD,new)
+        r[10] = r[6];
+        r[2] = ATFD;
+        r[6] = r[7];
+        r[7] = ATFD;
+        r[0] = 264;
+        return X86_LEGACY_REWRITE;
+    case 86: // link(old,new) -> linkat(AT_FDCWD,old,AT_FDCWD,new,0)
+        r[8] = 0;
+        r[10] = r[6];
+        r[2] = ATFD;
+        r[6] = r[7];
+        r[7] = ATFD;
+        r[0] = 265;
+        return X86_LEGACY_REWRITE;
+    default: return X86_LEGACY_UNHANDLED;
+    }
+}
+
+static int x86_arch_prctl(struct cpu *c, const hl_x86_legacy_context *context) {
+    uint64_t *r = c->r;
+    if (r[7] == 0x1002 || r[7] == 0x1001) {
+        if (r[7] == 0x1002)
+            c->fs_base = r[6];
+        else
+            c->gs_base = r[6];
+        r[0] = 0;
+        return X86_LEGACY_DONE;
+    }
+    if (r[7] == 0x1003 || r[7] == 0x1004) {
+        uint64_t *slot;
+        if (!x86_deref(context, r[6], sizeof(uint64_t), 1, (void **)&slot)) {
+            r[0] = EFAULT_RET;
+            return X86_LEGACY_DONE;
+        }
+        *slot = r[7] == 0x1003 ? c->fs_base : c->gs_base;
+        r[0] = 0;
+        return X86_LEGACY_DONE;
+    }
+    r[0] = (uint64_t)-22;
+    return X86_LEGACY_DONE;
+}
+
+int hl_x86_legacy_normalize(struct cpu *c, const hl_x86_legacy_context *context) {
+    uint64_t *r = c->r;
+    g_x86_dup2_compat = (r[0] == 33); // legacy dup2 -> canonical dup3; cleared for every other syscall
+    int path_result = x86_normalize_path(r);
+    if (path_result != X86_LEGACY_UNHANDLED) return path_result;
+    switch (r[0]) {
+    case 158: // arch_prctl(code, addr): x86 segment-base TLS register; no aarch64 equivalent
+        return x86_arch_prctl(c, context);
     // --- legacy time-setters: no aarch64 canonical form (arm64 261 is prlimit64, 132/235 are absent), so
     //     number mapping biases them into the x86-only range and they returned ENOSYS-by-normalization. Rewrite
     //     each to x86 utimensat(280) [-> canonical 88], converting the legacy struct utimbuf / struct
@@ -295,21 +324,6 @@ int hl_x86_legacy_normalize(struct cpu *c, const hl_x86_legacy_context *context)
         r[2] = 0;
         r[10] = 0;
         r[0] = 271;
-        return 0;
-    case 82: // rename(old,new) -> renameat(AT_FDCWD,old,AT_FDCWD,new)
-        r[10] = r[6];
-        r[2] = ATFD;
-        r[6] = r[7];
-        r[7] = ATFD;
-        r[0] = 264;
-        return 0;
-    case 86: // link(old,new) -> linkat(AT_FDCWD,old,AT_FDCWD,new,0)
-        r[8] = 0;
-        r[10] = r[6];
-        r[2] = ATFD;
-        r[6] = r[7];
-        r[7] = ATFD;
-        r[0] = 265;
         return 0;
     // poll(fds, nfds, timeout_ms) -> ppoll(fds, nfds, &timespec | NULL, NULL): the canonical handler reads
     // arg2 as a timespec*, but x86 poll's arg2 is an int ms, so synthesize the timespec here.
