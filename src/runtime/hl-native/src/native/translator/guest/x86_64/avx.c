@@ -1053,6 +1053,42 @@ static enum avx_dispatch_result avx_dispatch_map2_widen(const hl_x86_avx_state *
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_variable_permutation(const hl_x86_avx_state *state, struct cpu *c,
+                                                                      struct insn *instruction, uint64_t next,
+                                                                      int map, int op, int destination,
+                                                                      int data_register, int width) {
+    if (map != 2 || (op != 0x0C && op != 0x0D && op != 0x16 && op != 0x36))
+        return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t data[64], control[64], output[64];
+    avx_get(c, data_register, data);
+    avx_get_rm(state, c, instruction, next, width, control);
+    if (op == 0x16 || op == 0x36) { // vpermps/vpermd, full-width dword selection
+        for (int offset = 0; offset < width; offset += 4) {
+            uint32_t index;
+            memcpy(&index, data + offset, 4);
+            memcpy(output + offset, control + 4 * (index & 7), 4);
+        }
+    } else if (op == 0x0C) { // vpermilps, per-128-lane dword selection
+        for (int lane = 0; lane < width; lane += 16)
+            for (int element = 0; element < 4; element++) {
+                uint32_t index;
+                memcpy(&index, control + lane + 4 * element, 4);
+                memcpy(output + lane + 4 * element, data + lane + 4 * (index & 3), 4);
+            }
+    } else { // vpermilpd, per-128-lane qword selection
+        for (int lane = 0; lane < width; lane += 16)
+            for (int element = 0; element < 2; element++) {
+                uint64_t index;
+                memcpy(&index, control + lane + 8 * element, 8);
+                memcpy(output + lane + 8 * element, data + lane + 8 * ((index >> 1) & 1), 8);
+            }
+    }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1092,8 +1128,7 @@ static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_stat
         avx_get(c, instruction->vvvv, result);
         if (op == 0x20) {
             uint8_t value = (uint8_t)c->r[instruction->rm_reg];
-            if (instruction->is_mem)
-                (void)avx_memory_read(state, avx_ea(state, c, instruction, next, 1), &value, 1);
+            if (instruction->is_mem) (void)avx_memory_read(state, avx_ea(state, c, instruction, next, 1), &value, 1);
             result[immediate & 15] = value;
         } else if (op == 0x22) {
             int bytes = instruction->vex_w ? 8 : 4;
@@ -1496,6 +1531,8 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_crypto(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_memory(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_widen(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map2_variable_permutation(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
+        return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2440,42 +2477,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 float f = avx_f16_to_f32(h);
                 memcpy(d + 4 * i, &f, 4);
             }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x16:   // vpermps: identical to vpermd but float lanes -- ctrl=vvvv, data=rm, full-256 dword select
-        case 0x36: { // vpermd: dst.dword[i] = rm.dword[ vvvv.dword[i] & 7 ] (across full 256)
-            avx_get(c, vv, a); // control indices
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += 4) {
-                uint32_t idx;
-                memcpy(&idx, a + i, 4);
-                memcpy(d + i, b + 4 * (idx & 7), 4);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x0C: { // vpermilps (variable): per-128-lane dword select; data=vvvv, control=rm (imm[1:0] per dword)
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16)
-                for (int j = 0; j < 4; j++) {
-                    uint32_t ctl;
-                    memcpy(&ctl, b + lane + 4 * j, 4);
-                    memcpy(d + lane + 4 * j, a + lane + 4 * (ctl & 3), 4);
-                }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x0D: { // vpermilpd (variable): per-128-lane qword select; data=vvvv, control=rm (bit 1 per qword)
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16)
-                for (int k = 0; k < 2; k++) {
-                    uint64_t ctl;
-                    memcpy(&ctl, b + lane + 8 * k, 8);
-                    memcpy(d + lane + 8 * k, a + lane + 8 * ((ctl >> 1) & 1), 8);
-                }
             avx_put(c, rd, d, W);
             goto done;
         }
