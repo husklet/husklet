@@ -1,0 +1,20 @@
+targets: [arm64, amd64]
+image: python:3.12-alpine
+execution: { native: true, diagnostics: true }
+diagnostics-floor: [{ counter: runs, greater-than: 0 }]
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2]
+cases:
+  - id: runtime/python/cpython-standard-library
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python }
+    run:
+      - -I
+      - -S
+      - -c
+      - "import hashlib, json, sys, threading; values=[]; t=threading.Thread(target=lambda: values.append(sum(i*i for i in range(1000)))); t.start(); t.join(); print(sys.implementation.name); print((1 << 130) + 12345); print(hashlib.sha256(b'husklet').hexdigest()); print(json.dumps({'thread_sum': values[0], 'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False))"
+    expect: { exit: 0, stdout: golden/cpython_standard_library.out }
