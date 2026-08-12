@@ -4872,6 +4872,53 @@ static int lower_scalar_two_byte(struct insn *instruction, uint64_t guest_pc, ui
     return TX_NEXT;
 }
 
+static int lower_one_byte_signal_and_lookup(struct insn *instruction, uint64_t next) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0xCC) {
+        emit_guest_signal(next, 5, 0x80);
+        return TX_BREAK;
+    }
+    if (opcode == 0xF1) {
+        emit_guest_signal(next, 5, 1);
+        return TX_BREAK;
+    }
+    if (opcode != 0xD7) return TX_FALL;
+    e_uxt(19, RAX, 1);
+    struct insn base = *instruction;
+    base.is_mem = 1;
+    base.m_hasbase = 1;
+    base.m_base = RBX;
+    base.m_hasindex = 0;
+    base.rip_rel = 0;
+    base.disp = 0;
+    base.imm = 0;
+    emit_ea(&base, next);
+    e_rrr(A_ADD, 17, 17, 19, 1, 0);
+    if (instruction->addr32) e_uxt(17, 17, 4);
+    emit_bus_guard(17, 1, next - (uint64_t)instruction->len);
+    e_load(1, 16, 17);
+    byte_wb(instruction, RAX, 16);
+    return TX_NEXT;
+}
+
+static int lower_two_byte_boundary(const struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0x05) {
+        if (g_fastsys) {
+            emit_fast_syscall(next);
+            emit_chain_exit(next);
+        } else {
+            emit_exit_const(next, R_SYSCALL);
+        }
+        return TX_BREAK;
+    }
+    if (opcode == 0x0B || opcode == 0xB9 || opcode == 0xFF) {
+        emit_sigill(guest_pc);
+        return TX_BREAK;
+    }
+    return TX_FALL;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -5288,59 +5335,16 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // ---- int3 (CC): software breakpoint -> #BP, a TRAP delivered as SIGTRAP. rip points PAST
-            // the int3 (trap semantics). Emit a host BRK so the SIGTRAP guard runs the guest handler (or
-            // default-terminates); previously this fell through to report_unimpl -> engine abort (70).
-            if (op == 0xCC) {
-                emit_guest_signal(next, 5, 0x80); // int3 -> SIGTRAP (si_code SI_KERNEL), rip past the int3
-                break;
-            }
-            if (op == 0xF1) { // ICEBP/INT1 (#DB): userspace delivery is SIGTRAP with si_code TRAP_BRKPT (Linux
-                emit_guest_signal(next, 5, 1); // send_sigtrap), rip past the insn (a trap, not a fault, not an abort)
-                break;
-            }
-            // ---- XLATB (D7): AL = [ (seg:) RBX + zero-extended AL ]. The table index is the *8-bit*
-            // AL (bits 63:8 of RAX never participate), so it cannot ride the ModRM index path. Build
-            // the base (RBX, with segment base + non-PIE bias + addr-size applied) through the shared
-            // EA emitter, add the zero-extended AL, then load one byte back into AL (bits 63:8 kept).
-            if (op == 0xD7) {
-                e_uxt(19, RAX, 1); // x19 = zero-extended AL (callee-saved; survives emit_ea's x16 clobber)
-                struct insn base = I;
-                base.is_mem = 1;
-                base.m_hasbase = 1;
-                base.m_base = RBX;
-                base.m_hasindex = 0;
-                base.rip_rel = 0;
-                base.disp = 0;
-                base.imm = 0;
-                emit_ea(&base, next);           // x17 = base address (seg base + bias + addr32 applied)
-                e_rrr(A_ADD, 17, 17, 19, 1, 0); // x17 += zero-extended AL
-                if (I.addr32) e_uxt(17, 17, 4); // 0x67: effective address wraps at 32 bits
-                emit_bus_guard(17, 1, next - (uint64_t)I.len);
-                e_load(1, 16, 17);
-                byte_wb(&I, RAX, 16); // AL = [table + AL]
+            int one_byte_boundary_result = lower_one_byte_signal_and_lookup(&I, next);
+            if (one_byte_boundary_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
+            if (one_byte_boundary_result == TX_BREAK) break;
         } else {
             // ===== two-byte (0F xx) =====
-            if (op == 0x05) {
-                if (g_fastsys) { // S1: inline time fast path (no service round-trip for clock_gettime/gettimeofday)
-                    emit_fast_syscall(next);
-                    // The inline-served path falls through here; end the block with a chained branch to
-                    // `next` (regs stay live, no spill) instead of decoding inline -- decoding past the
-                    // syscall would run the decoder off the end of guest .text (SIGBUS). The slow path
-                    // inside emit_fast_syscall already ended the block via emit_exit_const(next,R_SYSCALL).
-                    emit_chain_exit(next);
-                    break;
-                }
-                emit_exit_const(next, R_SYSCALL);
-                break;
-            } // syscall
-            if (op == 0x0B || op == 0xB9 || op == 0xFF) {
-                emit_sigill(gpc);
-                break;
-            } // UD1/UD2 and reserved 0F FF -> guest #UD/SIGILL, not an engine abort
+            int two_byte_boundary_result = lower_two_byte_boundary(&I, gpc, next);
+            if (two_byte_boundary_result == TX_BREAK) break;
             // ===== SSE / SSE2 (guest xmm0..15 == host v0..v15) =====
             // mandatory prefix selects the variant: 66=packed-int/double, F3=scalar-single,
             // F2=scalar-double, none=packed-single. reg/rm fields index xmm directly.
