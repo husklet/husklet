@@ -1205,6 +1205,32 @@ static enum avx_dispatch_result avx_dispatch_immediate_blend(const hl_x86_avx_st
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_immediate_permutation(const hl_x86_avx_state *state, struct cpu *c,
+                                                                   struct insn *instruction, uint64_t next, int map,
+                                                                   int op, int destination, int width) {
+    if (map != 3 || (op != 0x04 && op != 0x05)) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t input[64], output[64];
+    avx_get_rm(state, c, instruction, next, width, input);
+    if (op == 0x04) { // vpermilps: two immediate bits per output dword
+        for (int lane = 0; lane < width; lane += 16)
+            for (int element = 0; element < 4; element++) {
+                int index = (instruction->imm >> (2 * element)) & 3;
+                memcpy(output + lane + 4 * element, input + lane + 4 * index, 4);
+            }
+    } else { // vpermilpd: consecutive immediate bits select qwords
+        int immediate_bit = 0;
+        for (int lane = 0; lane < width; lane += 16)
+            for (int element = 0; element < 2; element++, immediate_bit++) {
+                int index = (instruction->imm >> immediate_bit) & 1;
+                memcpy(output + lane + 8 * element, input + lane + 8 * index, 8);
+            }
+    }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1653,6 +1679,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map2_test(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_fp16_conversion(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_immediate_blend(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_immediate_permutation(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2657,25 +2684,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
         if (avx_dispatch_lane_transfer(state, c, &I, next) == AVX_DISPATCH_HANDLED) goto done;
         if (avx_dispatch_lane_permutation(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
         if (avx_dispatch_immediate_floating(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
-        int imm = (int)I.imm;
         switch (op) {
-        case 0x04: { // vpermilps imm: per-128-lane, dword j <- src.dword[imm[2j+1:2j]] (single src=rm)
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16)
-                for (int j = 0; j < 4; j++)
-                    memcpy(d + lane + 4 * j, b + lane + 4 * ((imm >> (2 * j)) & 3), 4);
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x05: { // vpermilpd imm: per-128-lane, qword k <- src.qword[imm bit]; consecutive imm bits
-            avx_get_rm(state, c, &I, next, W, b);
-            int q = 0;
-            for (int lane = 0; lane < W; lane += 16)
-                for (int k = 0; k < 2; k++, q++)
-                    memcpy(d + lane + 8 * k, b + lane + 8 * ((imm >> q) & 1), 8);
-            avx_put(c, rd, d, W);
-            goto done;
-        }
         case 0x0F: { // vpalignr imm8: per-128-lane byte concat(src1:src2) >> imm
             avx_get(c, vv, a);
             avx_get_rm(state, c, &I, next, W, b);
