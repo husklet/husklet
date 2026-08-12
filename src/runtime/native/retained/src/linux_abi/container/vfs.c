@@ -3726,13 +3726,16 @@ static void launch_reg_unlink(void) {
  * exits.  Each retained-C launch is one such guest domain even though its host
  * processes may escape the initial session with setsid().  Kill only members
  * whose recorded birth identity still matches the live host process, so a
- * recycled host pid can never inherit authority from a stale record.  Two
- * scans close the child-publication race: fork publishes the birth record in
- * the parent before returning to guest code. */
+ * recycled host pid can never inherit authority from a stale record.  Repeat
+ * until two scans are empty (bounded at two seconds) to close the child-
+ * publication race: fork publishes the birth record in the parent before
+ * returning to guest code. */
 static void launch_reg_terminate_peers(void) {
     char directory[80];
+    unsigned empty = 0;
     if (!g_init_hostpid || getpid() != g_init_hostpid || !launch_reg_key(directory, sizeof directory)) return;
-    for (unsigned round = 0; round < 2; ++round) {
+    for (unsigned round = 0; round < 200; ++round) {
+        unsigned live = 0;
         DIR *entries = opendir(directory);
         if (entries == NULL) return;
         struct dirent *entry;
@@ -3749,23 +3752,42 @@ static void launch_reg_terminate_peers(void) {
             if (errno != 0 || *end != 0 || raw <= 0 || raw > INT32_MAX || raw == (long)getpid()) continue;
             snprintf(path, sizeof path, "%s/b%ld", directory, raw);
             int descriptor = open(path, O_RDONLY | O_CLOEXEC);
-            if (descriptor < 0) continue;
+            if (descriptor < 0) {
+                (void)unlink(path);
+                continue;
+            }
             ssize_t count;
             do {
                 count = read(descriptor, text, sizeof text - 1);
             } while (count < 0 && errno == EINTR);
             (void)close(descriptor);
-            if (count <= 0) continue;
+            if (count <= 0) {
+                (void)unlink(path);
+                continue;
+            }
             text[count] = 0;
             errno = 0;
             char *birth_end;
             expected = strtoull(text, &birth_end, 10);
-            if (errno != 0 || birth_end == text || (*birth_end != '\n' && *birth_end != 0) || expected == 0) continue;
-            if (!hl_host_process_read(raw, &process) || process.start_time_ns != expected) continue;
+            if (errno != 0 || birth_end == text || (*birth_end != '\n' && *birth_end != 0) || expected == 0 ||
+                !hl_host_process_read(raw, &process) || process.start_time_ns != expected) {
+                (void)unlink(path);
+                continue;
+            }
+            ++live;
             (void)kill((pid_t)raw, SIGKILL);
+            (void)unlink(path);
         }
         (void)closedir(entries);
-        if (round == 0) (void)poll(NULL, 0, 10);
+        if (live == 0) {
+            if (++empty == 2) {
+                (void)rmdir(directory);
+                return;
+            }
+        } else {
+            empty = 0;
+        }
+        (void)poll(NULL, 0, 10);
     }
 }
 
