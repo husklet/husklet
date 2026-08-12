@@ -64,6 +64,9 @@ fn walk(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) {
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
+            if matches!(entry.file_name().to_str(), Some("target" | ".git")) {
+                continue;
+            }
             walk(root, &path, output);
         } else {
             output.push(path.strip_prefix(root).expect("repository path").to_owned());
@@ -128,57 +131,33 @@ fn every_production_input_is_independent_of_sibling_engines() {
         Vec::<PathBuf>::new(),
         "production manifests, build scripts, packaging scripts, and workflows must be repository-local"
     );
-
-    let makefile = fs::read_to_string(root.join("Makefile")).expect("read Makefile");
-    for (line_number, line) in makefile.lines().enumerate() {
-        assert!(
-            !line.contains("../engine") && !line.contains("../engine_rust"),
-            "Makefile:{} gives a target a sibling-engine dependency: {line}",
-            line_number + 1
-        );
-        if line.contains("BENCH_C_BUILD") {
-            assert!(
-                line.starts_with("BENCH_C_BUILD ?=") || line.contains("test -n \"$(BENCH_C_BUILD)\""),
-                "Makefile:{} exposes the optional C oracle outside its benchmark adapter: {line}",
-                line_number + 1
-            );
-        }
-    }
 }
 
 #[test]
-fn repository_gates_keep_native_and_compatibility_coverage() {
+fn repository_build_frontends_are_cargo_and_nix() {
     let root = repository_root();
-    let makefile = fs::read_to_string(root.join("Makefile")).expect("read Makefile");
-    assert!(
-        !makefile.contains("runtime/native/exec"),
-        "the normal gate must not resurrect the retired replacement executor"
-    );
-    for required in [
-        ".PHONY: all check design-lint gate gate-app gate-compat gate-fixture",
-        "gate-compat:",
-        "cargo build --release -p engine -p testing --bins --locked --offline",
-        "HL_TEST_ENGINE_APP_BIN_DIR=\"$(CURDIR)/target/release\"",
-        "--backend-receipt",
-        "\"backend\":\"retained-c\"",
-        "mktemp -d \"$(CURDIR)/target/testing/runtime/gate.XXXXXX\"",
-        "test ! -e \"$$results\"",
-        "--baseline tests/runtime/baseline.tsv",
-        "--engine-profile release",
-    ] {
+    for required in ["Cargo.toml", "Cargo.lock", "flake.nix"] {
         assert!(
-            makefile.contains(required),
-            "compatibility gate lost required contract: {required}"
+            root.join(required).is_file(),
+            "repository build input is missing: {required}"
         );
     }
-    let flake = fs::read_to_string(root.join("flake.nix")).expect("read flake");
+
     assert!(
-        flake.contains("`make gate-app`"),
-        "flake must name the real application gate"
+        !root.join("Makefile").exists(),
+        "the repository must expose Cargo and Nix directly, not a Make frontend"
     );
-    assert!(
-        !flake.contains("gate-gui"),
-        "flake references the nonexistent gate-gui target"
+
+    let mut sources = Vec::new();
+    walk(&root, &root.join("src"), &mut sources);
+    let cmake_projects = sources
+        .into_iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == "CMakeLists.txt"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cmake_projects,
+        Vec::<PathBuf>::new(),
+        "C packages must be compiled by their Cargo build scripts, not nested CMake projects"
     );
 }
 
