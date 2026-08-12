@@ -26,18 +26,14 @@ _Static_assert(sizeof(hl_engine_exit) == 24, "LP64 engine-exit layout changed");
 _Static_assert(offsetof(hl_engine_config, payload) == 32, "LP64 engine payload offset changed");
 _Static_assert(offsetof(hl_engine_config, main_image_plan) == 88, "LP64 engine plan offset changed");
 
-static void hl_ci_signatures(void) {
-    uint32_t (*engine_abi)(void) = hl_engine_abi;
-    hl_status (*host_create)(hl_ci_host **, hl_host_services *) = HL_CI_HOST_CREATE;
-    hl_host_result (*host_import)(hl_ci_host *, int) = HL_CI_HOST_IMPORT;
-    void (*host_destroy)(hl_ci_host *) = HL_CI_HOST_DESTROY;
-    (void)engine_abi;
-    (void)host_create;
-    (void)host_import;
-    (void)host_destroy;
-}
+#define HL_CI_SIGNATURE(value, type) _Generic((value), type: 1, default: 0)
+_Static_assert(HL_CI_SIGNATURE(&hl_engine_abi, uint32_t (*)(void)), "engine ABI signature changed");
+_Static_assert(HL_CI_SIGNATURE(&HL_CI_HOST_CREATE, hl_status (*)(hl_ci_host **, hl_host_services *)),
+               "host create signature changed");
+_Static_assert(HL_CI_SIGNATURE(&HL_CI_HOST_IMPORT, hl_host_result (*)(hl_ci_host *, int)),
+               "host import signature changed");
+_Static_assert(HL_CI_SIGNATURE(&HL_CI_HOST_DESTROY, void (*)(hl_ci_host *)), "host destroy signature changed");
 
 int main(void) {
-    hl_ci_signatures();
     return hl_engine_abi() == HL_ENGINE_ABI ? 0 : 1;
 }

@@ -862,10 +862,28 @@
             otool -L "$binary" | grep -F '@rpath/libhl_native_engine.dylib' >/dev/null
             otool -l "$binary" | grep -A2 LC_RPATH | grep -F '@loader_path/../lib' >/dev/null
             env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
-              "$binary" --backend-receipt | grep -F '"backend":"retained-c"' >/dev/null
+              "$binary" --backend-receipt > "$TMPDIR/$name.receipt"
+            env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
+              "$binary" --backend-receipt > "$TMPDIR/$name.receipt-repeat"
+            cmp "$TMPDIR/$name.receipt" "$TMPDIR/$name.receipt-repeat"
+            grep -F '"backend":"retained-c"' "$TMPDIR/$name.receipt" >/dev/null
+            expected_hash=$(sha256sum "$binary" | cut -d' ' -f1)
+            grep -F "\"engine_sha256\":\"$expected_hash\"" "$TMPDIR/$name.receipt" >/dev/null
           done
+
+          chmod u+w "$prefix/lib"
+          mv "$library" "$TMPDIR/libhl_native_engine.dylib"
+          if env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
+            "$prefix/bin/hl-engine" --backend-receipt \
+            > "$TMPDIR/missing-library.stdout" 2> "$TMPDIR/missing-library.stderr"; then
+            printf '%s\n' 'engine started without its packaged sibling native library' >&2
+            exit 1
+          fi
+          test ! -s "$TMPDIR/missing-library.stdout"
+          grep -F 'libhl_native_engine.dylib' "$TMPDIR/missing-library.stderr" >/dev/null
+          mv "$TMPDIR/libhl_native_engine.dylib" "$library"
           mkdir -p "$out"
-          printf '%s\n' 'native Darwin copied-prefix exact ARM64 architecture, install name, exports, rpath, and backend receipts passed' > "$out/evidence"
+          printf '%s\n' 'native Darwin copied-prefix exact ARM64 architecture, install name, exports, rpath, deterministic hash-bound backend receipts, and sibling-library isolation passed' > "$out/evidence"
           '';
 
       darwinHostAbiFor =
