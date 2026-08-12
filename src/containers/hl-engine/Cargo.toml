@@ -50,5 +50,5 @@ path = "src/lib.rs"
 default = ["c-execution"]
 # Counts host heap allocations per native crossing; see `native::allocations`.
 alloc-count = []
-# Production Linux/AArch64 execution backend. Other targets compile the Rust path.
+# Production retained-C execution backend; build.rs admits only source-complete targets.
 c-execution = ["hl-native/c-coexist"]

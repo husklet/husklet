@@ -34,8 +34,7 @@ rustix = { version = "1", features = ["fs"] }
 
 [features]
 default = ["c-execution"]
-# The product container path owns the retained-C execution capability explicitly;
-# Rust execution remains available only to differential tooling that requests it.
+# The product container path owns the retained-C execution capability explicitly.
 c-execution = ["hl-engine/c-execution"]
 
 [lints]
