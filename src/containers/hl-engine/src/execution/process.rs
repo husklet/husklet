@@ -528,8 +528,8 @@ impl Drop for CWorker {
 #[cfg(test)]
 mod tests {
     use super::{
-        CWorker, ChildGuard, Startup, process_status_matches, read_message, report_worker_failure, worker_executable,
-        write_message,
+        CWorker, ChildGuard, Startup, process_status_matches, read_message, report_worker_failure,
+        signal_process_group, worker_executable, write_message,
     };
     use crate::activation::GuestIsa;
     use crate::engine::StopRequest;
@@ -554,9 +554,15 @@ mod tests {
     fn capture_events(run: impl FnOnce()) -> String {
         let _guard = crate::execution::EVENT_CAPTURE_LOCK.lock().unwrap();
         let output = Arc::new(Mutex::new(String::new()));
+        let tags = hl_log::Logging::global().tags();
+        let level = hl_log::Logging::global().level();
+        hl_log::Logging::global().enable(hl_log::tag::EXEC);
+        hl_log::Logging::global().set_level(hl_log::Level::Info);
         hl_log::Events::global().set(Box::new(Capture(Arc::clone(&output))));
         run();
         hl_log::Events::global().reset();
+        hl_log::Logging::global().set(tags);
+        hl_log::Logging::global().set_level(level);
         Arc::try_unwrap(output).unwrap().into_inner().unwrap()
     }
 
@@ -607,6 +613,46 @@ mod tests {
         ] {
             assert!(events.contains(field), "missing {field} in {events}");
         }
+    }
+
+    #[test]
+    fn successful_start_reports_each_supervisor_boundary() {
+        let child = session_child("exec sleep 60", Stdio::null());
+        let process = child.id();
+        let (control, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let reader = control.try_clone().unwrap();
+        let worker = CWorker {
+            child: Mutex::new(Some(child)),
+            reader: Mutex::new(reader),
+            writer: Arc::new(Mutex::new(control)),
+            streams: Mutex::new(Some(StreamBridge::inherited())),
+            exit: Mutex::new(None),
+            startup: Mutex::new(Startup::Starting),
+            startup_changed: Condvar::new(),
+            provider_broker: None,
+            checkpoint: None,
+            diagnostics: false,
+        };
+        let peer_thread = std::thread::spawn(move || {
+            write_message(&mut peer, Message::Ready).unwrap();
+            assert_eq!(read_message(&mut peer).unwrap(), Message::Start);
+            write_message(&mut peer, Message::Started).unwrap();
+        });
+
+        let events = capture_events(|| worker.start().unwrap());
+
+        peer_thread.join().unwrap();
+        for boundary in [
+            "retained_c.worker.ready",
+            "retained_c.worker.start_requested",
+            "retained_c.worker.started",
+        ] {
+            assert!(events.contains(boundary), "missing {boundary} in {events}");
+        }
+        signal_process_group(process, libc::SIGKILL).unwrap();
+        worker.child.lock().unwrap().as_mut().unwrap().wait().unwrap();
+        drop(worker);
+        assert_group_gone(process);
     }
 
     #[test]
