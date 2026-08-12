@@ -12,7 +12,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Remove `tests/runtime/legacy` and its stale/generated compatibility corpus.
 - [x] Remove all tracked Python tooling and Python build dependencies. Python remains only as a guest workload to test compatibility.
 - [x] Remove Make and CMake build frontends. Cargo is primary; Nix pins the toolchain and system dependencies.
-- [x] Keep only intentional Markdown: `AGENTS.md`, `README.md`, this checklist, `tests/PIPELINE.md`, and the positive/negative lint examples.
+- [x] Keep only intentional Markdown: `AGENTS.md`, `README.md`, this checklist, and the positive/negative lint examples; fold the former pipeline proposal into this checklist.
 - [x] Restore and update root `AGENTS.md` for the Cargo-owned C architecture.
 - [x] Restore `lint/examples/positive.md` and `lint/examples/negative.md` as executable design documentation.
 - [ ] Run a final unused-file, unused-package, reachability, and generated-artifact audit on the merged tip.
