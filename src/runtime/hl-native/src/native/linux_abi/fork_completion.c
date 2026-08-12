@@ -1,3 +1,5 @@
+#include "process_output.h"
+
 hl_status hl_linux_abi_fork_host_completed(hl_linux_fork_plan *plan) {
     if (plan == NULL || plan->abi != HL_LINUX_ABI_VERSION || plan->size < sizeof(*plan) || plan->armed == 0 ||
         plan->host_completed != 0)
@@ -152,14 +154,14 @@ hl_status hl_linux_abi_spawn(hl_linux_abi *linux_abi, hl_host_process_entry entr
     hl_linux_spawn_context context;
     hl_host_result spawned;
     hl_status completed;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || entry == NULL || out_process == NULL)
+    if (!hl_linux_process_output_prepare(out_process)) return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || entry == NULL)
         return HL_STATUS_INVALID_ARGUMENT;
     processes = linux_abi->host == NULL ? NULL : linux_abi->host->process;
     if (linux_abi->host == NULL || (linux_abi->host->capabilities & HL_HOST_CAP_PROCESS) == 0 || processes == NULL ||
         processes->abi != HL_HOST_PROCESS_ABI || processes->size < sizeof(*processes) ||
         processes->spawn_prepared == NULL)
         return HL_STATUS_NOT_SUPPORTED;
-    *out_process = HL_HOST_HANDLE_INVALID;
     plan.abi = HL_LINUX_ABI_VERSION;
     plan.size = sizeof(plan);
     plan.capacity = linux_abi->ofd_capacity;
@@ -181,4 +183,3 @@ hl_status hl_linux_abi_spawn(hl_linux_abi *linux_abi, hl_host_process_entry entr
     *out_process = spawned.value;
     return HL_STATUS_OK;
 }
-

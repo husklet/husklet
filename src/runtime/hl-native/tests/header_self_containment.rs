@@ -421,6 +421,44 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove descriptor output probe directory");
 }
 
+#[test]
+fn linux_spawn_failure_clears_stale_process_handle() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-process-output-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("process output probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "linux_abi/process_output.h"
+
+int main(void) {
+    hl_host_handle output = 42;
+    if (!hl_linux_process_output_prepare(&output)) return 1;
+    if (output != HL_HOST_HANDLE_INVALID) return 2;
+    return hl_linux_process_output_prepare(0) == 0 ? 0 : 3;
+}
+"#,
+    )
+    .expect("process output probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("process output probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("process output probe execution");
+    assert!(run.success(), "process output probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove process output probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {

@@ -241,7 +241,8 @@ HL_API hl_status hl_linux_abi_fork_child(hl_linux_abi *linux_abi, hl_linux_fork_
 /*
  * Spawn an entry in a host-cloned process while preserving this Linux fd table.
  * The operation owns the fork plan and completes the host fork bracket in both
- * branches. On success, out_process is an opaque host process handle.
+ * branches. out_process is required and becomes HL_HOST_HANDLE_INVALID before other validation;
+ * on success it is an opaque host process handle.
  */
 HL_API hl_status hl_linux_abi_spawn(hl_linux_abi *linux_abi, hl_host_process_entry entry, void *entry_context,
                                     hl_host_handle *out_process);
