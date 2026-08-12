@@ -1,3 +1,5 @@
+#include "../../host_errno.h"
+
 static uint32_t br_parse_ip(const char *s) {
     unsigned a = 0, b = 0, cc = 0, d = 0;
     if (sscanf(s, "%u.%u.%u.%u", &a, &b, &cc, &d) != 4) return 0;
@@ -356,7 +358,7 @@ static int switch_dead_on_arrival(int fd) {
     char b[1];
     ssize_t n = recv(fd, b, 1, MSG_PEEK | MSG_DONTWAIT);
     if (n == 0) return 1;                                             // clean EOF, no data -> dead
-    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0; // spurious wake, live
+    if (n < 0 && HL_HOST_ERRNO_WOULD_BLOCK(errno)) return 0; // spurious wake, live
     if (n < 0) return 1;                                              // ECONNRESET/ECONNREFUSED -> dead
     return 0;                                                         // real data pending -> live
 }

@@ -1,4 +1,5 @@
 // hl/linux_abi -- native checkpoint/restore ("CRIU-equivalent"), MULTI-PROCESS.
+#include "../host_errno.h"
 #include "../pipe.h"
 //
 // Freezes a running guest -- a WHOLE process tree (multiple shells, background jobs, their children) -- to an
@@ -542,7 +543,7 @@ static int ckpt_capture_pipe(int fd, uint64_t identity) {
             }
             continue;
         }
-        if (count == 0 || errno == EAGAIN || errno == EWOULDBLOCK) break;
+        if (count == 0 || HL_HOST_ERRNO_WOULD_BLOCK(errno)) break;
         if (errno == EINTR) continue;
         failed = 1;
         break;
@@ -576,7 +577,7 @@ static int ckpt_capture_signalfd(int fd, uint64_t identity) {
             if (failed) break;
             continue;
         }
-        if (count == 0 || errno == EAGAIN || errno == EWOULDBLOCK) break;
+        if (count == 0 || HL_HOST_ERRNO_WOULD_BLOCK(errno)) break;
         if (errno == EINTR) continue;
         failed = 1;
         break;
@@ -612,7 +613,7 @@ static int ckpt_capture_socket_queue(int fd, uint64_t identity, uint32_t type) {
         message.msg_controllen = sizeof control;
         ssize_t received = recvmsg(fd, &message, MSG_DONTWAIT);
         if (received < 0 && errno == EINTR) continue;
-        if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+        if (received < 0 && HL_HOST_ERRNO_WOULD_BLOCK(errno)) break;
         if (received < 0 && errno == ECONNRESET && type != SOCK_STREAM) {
             header.peer_closed = 1;
             break;

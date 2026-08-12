@@ -1,3 +1,5 @@
+#include "../../host_errno.h"
+
 static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void *arg, uint64_t a2,
                                   int tfd, int is_master) {
     switch (rq) {
@@ -188,7 +190,7 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
                         G_RET(c) = 0;
                         break;
                     }
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    if (HL_HOST_ERRNO_WOULD_BLOCK(errno)) {
                         *(int *)arg = 0; // nothing queued (no readable bytes) -> 0, like TCP SIOCINQ
                         G_RET(c) = 0;
                         break;
