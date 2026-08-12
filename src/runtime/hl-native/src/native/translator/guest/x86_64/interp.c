@@ -1175,46 +1175,42 @@ static int interp_one_byte_alu(struct cpu *cpu, struct insn *insn, uint64_t next
     return STEP_NEXT;
 }
 
-static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+static int interp_one_byte_stack(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
-    int delegated = interp_one_byte_alu(cpu, insn, next);
-    if (delegated >= 0) return delegated;
-
-    switch (op) {
-    // PUSH / POP register
-    case 0x50:
-    case 0x51:
-    case 0x52:
-    case 0x53:
-    case 0x54:
-    case 0x55:
-    case 0x56:
-    case 0x57: {
+    if (op >= 0x50 && op <= 0x57) {
         int width = interp_stack_width(insn);
         interp_push(cpu, cpu->r[(op & 7) | (insn->rexB << 3)], width);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-    case 0x58:
-    case 0x59:
-    case 0x5A:
-    case 0x5B:
-    case 0x5C:
-    case 0x5D:
-    case 0x5E:
-    case 0x5F: {
+    } else if (op >= 0x58 && op <= 0x5F) {
         int width = interp_stack_width(insn);
         int number = (op & 7) | (insn->rexB << 3);
         uint64_t value = interp_pop(cpu, width);
-        // `pop rsp` must take the POPPED value: write the register after interp_pop advanced rsp.
         if (width == 2)
             cpu->r[number] = (cpu->r[number] & ~UINT64_C(0xffff)) | (value & 0xffff);
         else
             cpu->r[number] = value;
-        cpu->rip = next;
-        return STEP_NEXT;
+    } else if (op == 0x68 || op == 0x6A) {
+        interp_push(cpu, (uint64_t)insn->imm, interp_stack_width(insn));
+    } else if (op == 0x8F) {
+        if ((insn->reg & 7) != 0) return interp_undefined(cpu, insn, pc, "group 1A opcode other than POP r/m");
+        int width = interp_stack_width(insn);
+        uint64_t value = interp_pop(cpu, width);
+        interp_operand operand = interp_rm(cpu, insn, next);
+        interp_rm_write(cpu, insn, &operand, width, value);
+    } else {
+        return -1;
     }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
 
+static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    int delegated = interp_one_byte_alu(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_one_byte_stack(cpu, insn, pc, next);
+    if (delegated >= 0) return delegated;
+
+    switch (op) {
     // MOVSXD
     case 0x63: {
         interp_operand operand = interp_rm(cpu, insn, next);
@@ -1224,13 +1220,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         cpu->rip = next;
         return STEP_NEXT;
     }
-
-    // PUSH imm, sign-extended
-    case 0x68:
-    case 0x6A:
-        interp_push(cpu, (uint64_t)insn->imm, interp_stack_width(insn));
-        cpu->rip = next;
-        return STEP_NEXT;
 
     // IMUL r, r/m, imm
     case 0x69:
@@ -1347,17 +1336,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         // LEA is an ADDRESS computation, never interp_load, and stays in the GUEST's pointer domain: a
         // rip-relative LEA in a biased ET_EXEC must yield the LOW link address (findings 3.11).
         interp_reg_write(cpu, insn, insn->reg, insn->opsize, interp_lea_value(cpu, insn, next));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // POP r/m
-    case 0x8F: {
-        int width = interp_stack_width(insn);
-        if ((insn->reg & 7) != 0) return interp_undefined(cpu, insn, pc, "group 1A opcode other than POP r/m");
-        uint64_t value = interp_pop(cpu, width);
-        interp_operand operand = interp_rm(cpu, insn, next);
-        interp_rm_write(cpu, insn, &operand, width, value);
         cpu->rip = next;
         return STEP_NEXT;
     }
