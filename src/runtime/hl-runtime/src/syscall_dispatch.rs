@@ -1,6 +1,6 @@
 //! Trap dispatch entry point for the runtime syscall router.
 
-use hl_execution::ExecutionCpuSnapshot;
+use crate::cpu::ExecutionCpuSnapshot;
 use hl_isa::{CoreRegister, GuestArchitecture};
 use hl_linux::{RegisterView, SyscallDispatcher, SyscallDisposition, SyscallFrameDecoder, SyscallPorts};
 

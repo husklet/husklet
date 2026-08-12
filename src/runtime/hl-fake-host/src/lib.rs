@@ -13,7 +13,10 @@ mod vfs;
 
 pub use clock::VirtualClock;
 pub use mapping::MappingAdapter;
-pub use page::{GuestPageStore, PAGE_SIZE, Protection as PageProtection, WriteReservation};
+pub use page::{
+    FetchError, GuestOperandMemory, GuestPageStore, InstructionFetch, PAGE_SIZE, Protection as PageProtection,
+    WriteReservation,
+};
 pub use process::{ProcessAdapter, ProcessExit, ProcessToken};
 pub use state::{Call, FakeHost, FakeHostError, Fault, ResourceCounts, ResourceKind};
 pub use storage::{FileToken, StorageAdapter};

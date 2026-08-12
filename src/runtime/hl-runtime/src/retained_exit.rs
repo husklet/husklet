@@ -1,4 +1,4 @@
-use hl_execution::ExecutionCpuSnapshot;
+use crate::cpu::ExecutionCpuSnapshot;
 use hl_isa::GuestArchitecture;
 
 use crate::{RuntimeSyscallTrap, RuntimeTrapOutcome};
@@ -33,8 +33,8 @@ impl RuntimeSyscallTrap for RetainedExitTrap {
 #[cfg(test)]
 mod tests {
     use super::RetainedExitTrap;
+    use crate::cpu::{Aarch64CpuState, ExecutionCpuSnapshot};
     use crate::{RuntimeSyscallTrap, RuntimeTrapOutcome};
-    use hl_execution::{Aarch64CpuState, ExecutionCpuSnapshot};
     use hl_isa::GuestArchitecture;
 
     #[test]

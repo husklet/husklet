@@ -1,4 +1,4 @@
-use hl_execution::ExecutionCpuSnapshot;
+use crate::cpu::ExecutionCpuSnapshot;
 use hl_linux::{ClonePlan, Errno, GuestAccess, GuestMemory, LinuxResult, ProcessAbi};
 use hl_task::{ProcessId, ThreadId};
 

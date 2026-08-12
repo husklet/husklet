@@ -1,6 +1,6 @@
-use crate::{
+use super::{
     Aarch64CpuState, AccessKind, CpuState, ExclusiveReservation, ExecutionCpuSnapshot, ExecutionSnapshot,
-    ExecutionStateError, ExtendedClass, FlagState, MappingGeneration, MemoryFault, Nzcv,
+    ExecutionStateError, ExtendedClass, ExtendedReal, FlagState, MappingGeneration, MemoryFault, Nzcv,
 };
 
 pub(super) struct SnapshotCodec;
@@ -174,7 +174,7 @@ impl SnapshotCodec {
         cpu.x87_control = input.u16()?;
         cpu.x87_status = input.u16()?;
         for value in &mut cpu.x87_values {
-            *value = crate::ExtendedReal::from_bits(input.u128()?);
+            *value = ExtendedReal::from_bits(input.u128()?);
         }
         for class in &mut cpu.x87_classes {
             *class = Self::decode_x87(input.u8()?)?;
@@ -276,19 +276,35 @@ impl Input<'_> {
     }
 
     fn u16(&mut self) -> Result<u16, ExecutionStateError> {
-        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+        Ok(u16::from_le_bytes(
+            self.take(2)?
+                .try_into()
+                .map_err(|_| ExecutionStateError::InvalidSnapshot)?,
+        ))
     }
 
     fn u32(&mut self) -> Result<u32, ExecutionStateError> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+        Ok(u32::from_le_bytes(
+            self.take(4)?
+                .try_into()
+                .map_err(|_| ExecutionStateError::InvalidSnapshot)?,
+        ))
     }
 
     fn u64(&mut self) -> Result<u64, ExecutionStateError> {
-        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+        Ok(u64::from_le_bytes(
+            self.take(8)?
+                .try_into()
+                .map_err(|_| ExecutionStateError::InvalidSnapshot)?,
+        ))
     }
 
     fn u128(&mut self) -> Result<u128, ExecutionStateError> {
-        Ok(u128::from_le_bytes(self.take(16)?.try_into().unwrap()))
+        Ok(u128::from_le_bytes(
+            self.take(16)?
+                .try_into()
+                .map_err(|_| ExecutionStateError::InvalidSnapshot)?,
+        ))
     }
 
     fn zeroes(&mut self, count: usize) -> Result<(), ExecutionStateError> {

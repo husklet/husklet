@@ -191,17 +191,17 @@ unsafe extern "C" fn c_syscall_trap(
     if architecture != GuestIsa::Aarch64 as c_uint {
         return -1;
     }
-    let mut state = hl_execution::Aarch64CpuState {
+    let mut state = hl_runtime::Aarch64CpuState {
         registers: cpu.x,
         sp: cpu.sp,
         pc: cpu.pc,
         tls: cpu.tls,
-        nzcv: hl_execution::Nzcv::from_bits(cpu.nzcv as u32),
+        nzcv: hl_runtime::Nzcv::from_bits(cpu.nzcv as u32),
         ..Default::default()
     };
-    let mut snapshot = hl_execution::ExecutionCpuSnapshot::Aarch64(state.clone());
+    let mut snapshot = hl_runtime::ExecutionCpuSnapshot::Aarch64(state.clone());
     let outcome = trap.dispatch(hl_isa::GuestArchitecture::Aarch64, &mut snapshot);
-    let hl_execution::ExecutionCpuSnapshot::Aarch64(updated) = snapshot else {
+    let hl_runtime::ExecutionCpuSnapshot::Aarch64(updated) = snapshot else {
         return -1;
     };
     state = updated;

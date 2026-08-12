@@ -114,7 +114,7 @@ fn application_layer_owns_environment_capture() {
         "an application composition root captures the environment wherever its modules live"
     );
     assert_eq!(
-        findings_under("src/runtime", "hl-execution", capture, "src/paths.rs").len(),
+        findings_under("src/runtime", "hl-memory", capture, "src/paths.rs").len(),
         1,
         "a reusable runtime library still may not read ambient process state"
     );

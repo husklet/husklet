@@ -12,7 +12,6 @@ workspace = true
 [dependencies]
 hl-descriptor = { path = "../hl-descriptor" }
 hl-isa = { path = "../hl-isa" }
-hl-execution = { path = "../hl-execution" }
 hl-linux = { path = "../hl-linux" }
 hl-memory = { path = "../hl-memory" }
 hl-network = { path = "../hl-network" }

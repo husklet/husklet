@@ -1169,7 +1169,6 @@ dependencies = [
  "hl-checkpoint",
  "hl-descriptor",
  "hl-event",
- "hl-execution",
  "hl-fake-host",
  "hl-fs",
  "hl-ipc",
@@ -1201,20 +1200,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "hl-execution"
-version = "0.1.0"
-dependencies = [
- "hl-isa",
- "hl-log",
- "hl-softfloat",
-]
-
-[[package]]
 name = "hl-fake-host"
 version = "0.1.0"
 dependencies = [
  "hl-descriptor",
- "hl-execution",
  "hl-isa",
  "hl-linux",
  "hl-memory",
@@ -1353,7 +1342,6 @@ dependencies = [
  "hl-checkpoint",
  "hl-descriptor",
  "hl-event",
- "hl-execution",
  "hl-ipc",
  "hl-isa",
  "hl-linux",
@@ -1370,10 +1358,6 @@ dependencies = [
  "serde",
  "serde_json",
 ]
-
-[[package]]
-name = "hl-softfloat"
-version = "0.1.0"
 
 [[package]]
 name = "hl-sync"

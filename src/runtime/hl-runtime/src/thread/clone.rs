@@ -1,4 +1,4 @@
-use hl_execution::{EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionSnapshot};
+use crate::cpu::{EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionSnapshot};
 use hl_linux::ClonePlan;
 use hl_linux::{GuestAccess, GuestMemory, LinuxResult};
 use hl_task::{TaskError, TaskRegistry, ThreadId};
@@ -271,7 +271,7 @@ impl Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hl_execution::{Aarch64CpuState, CpuState};
+    use crate::cpu::{Aarch64CpuState, CpuState};
     use hl_task::{InterruptSink, ProcessCredentials, ProcessLimits, RegistryConfig};
     use std::collections::BTreeMap;
     use std::sync::Mutex;

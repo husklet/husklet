@@ -1,4 +1,4 @@
-use hl_execution::ExecutionCpuSnapshot;
+use crate::cpu::ExecutionCpuSnapshot;
 use hl_linux::{Errno, GuestAccess, GuestMemory, LinuxResult};
 
 const ARCH_SET_GS: u64 = 0x1001;

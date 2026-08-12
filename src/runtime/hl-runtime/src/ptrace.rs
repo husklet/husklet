@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use hl_execution::{ExecutionCpuSnapshot, StoppedRegisterImage, StoppedRegisters, TraceSafepointPort};
+use crate::cpu::{ExecutionCpuSnapshot, StoppedRegisterImage, StoppedRegisters, TraceSafepointPort};
 use hl_linux::{
     Errno, GuestMarshaller, GuestMemory, LinuxResult, PtraceOptions, PtracePlan, PtraceRequest, PtraceResume,
 };
@@ -182,12 +182,8 @@ impl RuntimeSafepoint {
 
     fn publish(&self, cpu: &ExecutionCpuSnapshot, original: u64) -> Result<(), TraceError> {
         let registers = match cpu {
-            ExecutionCpuSnapshot::X86_64(cpu) => {
-                StoppedRegisters::X86(hl_execution::X86Prstatus::capture(cpu, original))
-            }
-            ExecutionCpuSnapshot::Aarch64(cpu) => {
-                StoppedRegisters::Aarch64(hl_execution::Aarch64Prstatus::capture(cpu))
-            }
+            ExecutionCpuSnapshot::X86_64(cpu) => StoppedRegisters::X86(crate::cpu::X86Prstatus::capture(cpu, original)),
+            ExecutionCpuSnapshot::Aarch64(cpu) => StoppedRegisters::Aarch64(crate::cpu::Aarch64Prstatus::capture(cpu)),
         };
         self.exchange
             .publish(StoppedRegisterImage::new(registers))
@@ -376,8 +372,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
 
     fn copy_registers(&self, source: u64) -> Result<StoppedRegisterImage, TraceError> {
         let length = match self.architecture {
-            hl_linux::GuestArchitecture::X86_64 => hl_execution::X86Prstatus::BYTES,
-            hl_linux::GuestArchitecture::Aarch64 => hl_execution::Aarch64Prstatus::BYTES,
+            hl_linux::GuestArchitecture::X86_64 => crate::cpu::X86Prstatus::BYTES,
+            hl_linux::GuestArchitecture::Aarch64 => crate::cpu::Aarch64Prstatus::BYTES,
         };
         let mut bytes = vec![0; length];
         let marshaller = GuestMarshaller::new(&self.memory, self.architecture);
@@ -389,11 +385,11 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
 
     fn decode_registers(&self, bytes: &[u8]) -> Result<StoppedRegisterImage, TraceError> {
         let registers = match self.architecture {
-            hl_linux::GuestArchitecture::X86_64 => hl_execution::StoppedRegisters::X86(
-                hl_execution::X86Prstatus::decode(bytes).map_err(|_| TraceError::InvalidSnapshot)?,
+            hl_linux::GuestArchitecture::X86_64 => crate::cpu::StoppedRegisters::X86(
+                crate::cpu::X86Prstatus::decode(bytes).map_err(|_| TraceError::InvalidSnapshot)?,
             ),
-            hl_linux::GuestArchitecture::Aarch64 => hl_execution::StoppedRegisters::Aarch64(
-                hl_execution::Aarch64Prstatus::decode(bytes).map_err(|_| TraceError::InvalidSnapshot)?,
+            hl_linux::GuestArchitecture::Aarch64 => crate::cpu::StoppedRegisters::Aarch64(
+                crate::cpu::Aarch64Prstatus::decode(bytes).map_err(|_| TraceError::InvalidSnapshot)?,
             ),
         };
         Ok(StoppedRegisterImage::new(registers))
@@ -401,8 +397,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
 
     fn register_bytes(image: StoppedRegisterImage) -> Result<Vec<u8>, TraceError> {
         match image.restore().map_err(|_| TraceError::InvalidSnapshot)? {
-            hl_execution::StoppedRegisters::X86(value) => Ok(value.encode()),
-            hl_execution::StoppedRegisters::Aarch64(value) => Ok(value.encode()),
+            crate::cpu::StoppedRegisters::X86(value) => Ok(value.encode()),
+            crate::cpu::StoppedRegisters::Aarch64(value) => Ok(value.encode()),
         }
     }
 

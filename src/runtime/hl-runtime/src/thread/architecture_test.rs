@@ -2,7 +2,7 @@
 
 use std::sync::Mutex;
 
-use hl_execution::{Aarch64CpuState, CpuState, ExecutionCpuSnapshot};
+use crate::cpu::{Aarch64CpuState, CpuState, ExecutionCpuSnapshot};
 use hl_linux::{Errno, GuestAccess, GuestFault, GuestMemory, LinuxResult};
 
 use crate::architecture_thread::arch_prctl;

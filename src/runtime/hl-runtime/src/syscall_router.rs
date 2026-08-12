@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use hl_execution::ExecutionCpuSnapshot;
+use crate::cpu::ExecutionCpuSnapshot;
 use hl_isa::GuestArchitecture;
 use hl_linux::{
     AioSyscalls, DescriptorIoSyscalls, EventSyscalls, FilesystemSyscalls, GuestMemory, IpcSyscalls, MemorySyscalls,
@@ -12,6 +12,18 @@ use hl_linux::{
 mod dispatch;
 
 use dispatch::CpuRegisters;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeTrapOutcome {
+    Continue,
+    ReplaceImage { generation: u64 },
+    Exit(i32),
+    Fault,
+}
+
+pub trait RuntimeSyscallTrap: Send + Sync {
+    fn dispatch(&self, architecture: GuestArchitecture, cpu: &mut ExecutionCpuSnapshot) -> RuntimeTrapOutcome;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SignalBoundaryOutcome {

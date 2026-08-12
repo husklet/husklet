@@ -2,4 +2,6 @@
 
 mod memory;
 
-pub use memory::{GuestPageStore, PAGE_SIZE, Protection, WriteReservation};
+pub use memory::{
+    FetchError, GuestOperandMemory, GuestPageStore, InstructionFetch, PAGE_SIZE, Protection, WriteReservation,
+};

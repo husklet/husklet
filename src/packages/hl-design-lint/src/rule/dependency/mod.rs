@@ -350,7 +350,6 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                     | "hl-ipc"
                     | "hl-descriptor"
                     | "hl-terminal"
-                    | "hl-execution"
                     | "hl-linux"
                     | "hl-memory"
                     | "hl-task"
@@ -371,7 +370,6 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                     | "hl-event"
                     | "hl-network"
                     | "hl-linux"
-                    | "hl-execution"
                     | "hl-fs"
                     | "hl-isa"
                     | "hl-loader"
@@ -416,7 +414,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                 "hl-time"
             )
             | (
-                "hl-memory" | "hl-loader" | "hl-execution" | "hl-linux" | "hl-runtime" | "hl-fake-host",
+                "hl-memory" | "hl-loader" | "hl-linux" | "hl-runtime" | "hl-fake-host",
                 "hl-isa"
             )
             | (
@@ -424,7 +422,6 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                     | "hl-ipc"
                     | "hl-task"
                     | "hl-loader"
-                    | "hl-execution"
                     | "hl-linux"
                     | "hl-checkpoint"
                     | "hl-runtime"
@@ -439,15 +436,11 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                 "hl-loader" | "hl-linux" | "hl-checkpoint" | "hl-runtime" | "hl-fake-host",
                 "hl-vfs"
             )
-            | ("hl-execution", "hl-softfloat")
             | (
                 "hl-linux" | "hl-checkpoint" | "hl-runtime",
                 "hl-event" | "hl-ipc" | "hl-task"
             )
-            | (
-                "hl-checkpoint" | "hl-runtime" | "hl-fake-host",
-                "hl-provider" | "hl-execution"
-            )
+            | ("hl-checkpoint" | "hl-runtime" | "hl-fake-host", "hl-provider")
             | ("hl-runtime", "hl-aio" | "hl-linux" | "hl-loader" | "hl-terminal")
             | ("hl-fake-host", "hl-linux")
     )

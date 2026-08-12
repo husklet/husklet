@@ -1,9 +1,26 @@
-use hl_execution::{FetchError, GuestOperandMemory, InstructionFetch};
 use hl_linux::{GuestAccess, GuestFault, GuestMemory};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub const PAGE_SIZE: u64 = 4096;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FetchError;
+
+pub trait InstructionFetch {
+    fn fetch(&self, address: u64, destination: &mut [u8]) -> Result<(), FetchError>;
+}
+
+pub trait GuestOperandMemory {
+    type Reservation;
+    type BatchReservation;
+
+    fn read(&self, address: u64, bytes: u8) -> Result<u64, ()>;
+    fn reserve_write(&self, address: u64, bytes: u8) -> Result<Self::Reservation, ()>;
+    fn commit_write(&mut self, reservation: Self::Reservation, value: u64) -> Result<(), ()>;
+    fn reserve_write_batch(&self, writes: &[(u64, u8)]) -> Result<Self::BatchReservation, u64>;
+    fn commit_write_batch(&mut self, reservation: Self::BatchReservation, values: &[u64]) -> Result<(), ()>;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Protection(u8);

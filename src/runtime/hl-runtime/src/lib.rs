@@ -30,6 +30,7 @@ mod aio;
 mod assembly;
 mod atomic_read;
 mod checkpoint;
+mod cpu;
 mod epoll;
 mod event;
 mod filesystem;
@@ -64,7 +65,6 @@ pub use namespace_handle::{NamespaceHandle, NamespaceHandleError, NamespaceHandl
 mod architecture_thread;
 mod descriptor;
 mod exec;
-mod execution;
 #[path = "lifecycle_assembly.rs"]
 mod exit_assembly;
 #[path = "exit_runtime.rs"]
@@ -120,6 +120,12 @@ mod runtime_socket;
 mod syscall_router;
 mod task_exec;
 mod thread;
+pub use cpu::{
+    Aarch64CpuState, Aarch64Prstatus, AccessKind as ExecutionAccessKind, CpuState, EXECUTION_SNAPSHOT_VERSION,
+    ExclusiveReservation, ExecutionCpuSnapshot, ExecutionMachine, ExecutionSnapshot, ExecutionStateError, FlagState,
+    MappingGeneration, MemoryFault as ExecutionMemoryFault, Nzcv, StoppedRegisterImage, StoppedRegisters,
+    TraceRegisterError, TraceSafepointPort, X86Prstatus,
+};
 pub use descriptor::Exit as DescriptorExit;
 pub use descriptor::{Exec as DescriptorExec, ImageSlot as DescriptorImageSlot, PreparedDescriptorExec};
 pub use exec::{CurrentDescriptorTable, VfsImageSource, VfsSourceFactory, VfsSourceFactory as VfsImageSourceFactory};
@@ -127,9 +133,6 @@ pub use exec::{
     Role as ExecRole, Runtime as ExecRuntime, RuntimeDependencies as ExecRuntimeDependencies,
     RuntimeDependenciesBuilder as ExecRuntimeDependenciesBuilder,
 };
-pub use execution::RuntimeExecutionMemory;
-pub use execution::{RuntimeExecutionLoop, RuntimeExecutionOutcome};
-pub use execution::{RuntimeSyscallTrap, RuntimeTrapOutcome, dispatch_runtime_syscall};
 pub use exit_assembly::ExitRuntimeDependencies;
 pub use exit_runtime::{
     ExitParticipant, ExitRuntime, ExitRuntimeError, PreparedExitParticipant, RegistryExitFinalizer, TaskExitFinalizer,
@@ -174,7 +177,8 @@ pub use runtime_socket::RuntimeSocketRegistry;
 pub(crate) use runtime_socket::{RuntimeSocket, RuntimeSocketKind};
 pub use signal::{FramePort, PreparedFramePublication};
 pub use syscall_router::{
-    RouterDependencies, RuntimeSyscallRouter, RuntimeTerminal, SignalBoundaryOutcome, SignalBoundaryPort, SyscallRecord,
+    RouterDependencies, RuntimeSyscallRouter, RuntimeSyscallTrap, RuntimeTerminal, RuntimeTrapOutcome,
+    SignalBoundaryOutcome, SignalBoundaryPort, SyscallRecord,
 };
 pub use task_exec::TaskExecParticipant;
 pub use thread::{

@@ -1,5 +1,64 @@
 use hl_vfs::{ProcfsCpuModel, ProcfsCpuTicks};
 
+#[derive(Clone, Copy, Debug, Default)]
+struct CpuidRegisters {
+    eax: u32,
+    ebx: u32,
+    ecx: u32,
+    edx: u32,
+}
+
+/// Stable x86 userspace feature surface exposed by the retained engine.
+#[derive(Clone, Copy)]
+struct GuestFeaturePolicy;
+
+impl GuestFeaturePolicy {
+    const fn interpreter() -> Self {
+        Self
+    }
+
+    fn cpuid(self, leaf: u32, subleaf: u32) -> CpuidRegisters {
+        let mut registers = CpuidRegisters::default();
+        match leaf {
+            0 => {
+                registers = CpuidRegisters {
+                    eax: 7,
+                    ebx: 0x756e_6547,
+                    ecx: 0x6c65_746e,
+                    edx: 0x4965_6e69,
+                };
+            }
+            1 => {
+                registers.eax = 0x0002_06c2;
+                registers.ecx = 0x0298_2203;
+                registers.edx = 0x0788_a911;
+            }
+            7 if subleaf == 0 => {
+                registers.ebx = 0x2000_0308;
+                registers.edx = 1 << 4;
+            }
+            0x8000_0000 => registers.eax = 0x8000_0008,
+            0x8000_0001 => {
+                registers.ecx = 1;
+                registers.edx = (1 << 11) | (1 << 20) | (1 << 27) | (1 << 29);
+            }
+            0x8000_0007 => registers.edx = 1 << 8,
+            0x8000_0002..=0x8000_0004 => {
+                let mut brand = [0_u8; 48];
+                brand[..23].copy_from_slice(b"hl JIT x86-64 processor");
+                let offset = ((leaf - 0x8000_0002) * 16) as usize;
+                registers.eax = u32::from_le_bytes(brand[offset..offset + 4].try_into().unwrap());
+                registers.ebx = u32::from_le_bytes(brand[offset + 4..offset + 8].try_into().unwrap());
+                registers.ecx = u32::from_le_bytes(brand[offset + 8..offset + 12].try_into().unwrap());
+                registers.edx = u32::from_le_bytes(brand[offset + 12..offset + 16].try_into().unwrap());
+            }
+            0x8000_0008 => registers.eax = 0x3027,
+            _ => {}
+        }
+        registers
+    }
+}
+
 pub trait CpuPort: Send + Sync {
     fn ticks(&self, online: usize) -> Vec<ProcfsCpuTicks>;
 }
@@ -20,7 +79,7 @@ impl CpuPolicy {
     }
 
     fn x86() -> ProcfsCpuModel {
-        let policy = hl_execution::GuestFeaturePolicy::interpreter();
+        let policy = GuestFeaturePolicy::interpreter();
         let root = policy.cpuid(0, 0);
         let leaf = policy.cpuid(1, 0);
         let mut vendor = Vec::with_capacity(12);
@@ -100,14 +159,14 @@ impl CpuPolicy {
 
 #[cfg(test)]
 mod test {
-    use super::CpuPolicy;
+    use super::{CpuPolicy, GuestFeaturePolicy};
 
     #[test]
     fn x86_flags_follow_cpuid() {
         let hl_vfs::ProcfsCpuModel::X86_64 { flags, .. } = CpuPolicy::x86() else {
             panic!("x86 policy returned another architecture");
         };
-        let policy = hl_execution::GuestFeaturePolicy::interpreter();
+        let policy = GuestFeaturePolicy::interpreter();
         for (leaf, register, bit, name) in [(1, 2, 22, "movbe"), (0x8000_0001, 2, 0, "lahf_lm")] {
             let value = policy.cpuid(leaf, 0);
             let registers = [value.eax, value.ebx, value.ecx, value.edx];

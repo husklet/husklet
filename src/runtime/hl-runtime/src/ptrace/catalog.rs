@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use hl_execution::{StoppedRegisterImage, TraceRegisterError, TraceSafepointPort};
+use crate::cpu::{StoppedRegisterImage, TraceRegisterError, TraceSafepointPort};
 use hl_linux::{GuestMemory, PtraceOptions};
 use hl_task::{LinkFault, ProcessId, TraceError, TraceEvent, TraceLinkId, TracePermission, TraceStop, TraceSubject};
 

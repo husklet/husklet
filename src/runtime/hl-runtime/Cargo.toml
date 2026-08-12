@@ -25,7 +25,6 @@ hl-ipc = { path = "../hl-ipc" }
 hl-vfs = { path = "../hl-vfs" }
 hl-isa = { path = "../hl-isa" }
 hl-time = { path = "../hl-time" }
-hl-execution = { path = "../hl-execution" }
 hl-sync = { path = "../hl-sync" }
 hl-terminal = { path = "../hl-terminal" }
 serde = { version = "1", features = ["derive"] }

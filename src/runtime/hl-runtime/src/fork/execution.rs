@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use hl_execution::{ExecutionMachine, ExecutionSnapshot};
+use crate::cpu::{ExecutionMachine, ExecutionSnapshot};
 
 use crate::{ForkContext, ForkParticipant, ForkParticipantRole};
 

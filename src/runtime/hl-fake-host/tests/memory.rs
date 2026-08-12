@@ -1,5 +1,4 @@
-use hl_execution::InstructionFetch;
-use hl_fake_host::{GuestPageStore, PAGE_SIZE, PageProtection};
+use hl_fake_host::{GuestPageStore, InstructionFetch, PAGE_SIZE, PageProtection};
 use hl_linux::{GuestAccess, GuestMemory};
 
 #[test]

@@ -115,8 +115,5 @@ panic = "abort"
 panic = "abort"
 incremental = false
 
-[profile.dev.package.hl-execution]
-opt-level = 2
-
 [profile.test]
 incremental = false

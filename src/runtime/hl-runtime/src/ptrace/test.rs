@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use hl_execution::{CpuState, StoppedRegisterImage, StoppedRegisters, TraceSafepointPort, X86Prstatus};
+use crate::cpu::{CpuState, StoppedRegisterImage, StoppedRegisters, TraceSafepointPort, X86Prstatus};
 use hl_linux::{GuestAccess, GuestArchitecture, GuestFault, GuestMemory, LinuxResult};
 use hl_task::{
     PendingTarget, ProcessCredentials, ProcessLimits, RegistryConfig, SignalAction, SignalDisposition, SignalInfo,

@@ -1,4 +1,4 @@
-use hl_execution::ExecutionSnapshot;
+use crate::cpu::ExecutionSnapshot;
 use hl_task::ThreadId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

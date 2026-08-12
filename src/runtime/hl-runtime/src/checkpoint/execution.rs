@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::cpu::{EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionMachine, ExecutionSnapshot};
 use hl_checkpoint::{CheckpointImage, Section};
-use hl_execution::{EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionMachine, ExecutionSnapshot};
 
 use crate::{CheckpointParticipant, CheckpointRole};
 

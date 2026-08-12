@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use crate::cpu::ExecutionMachine;
 use hl_event::EventCatalog;
-use hl_execution::ExecutionMachine;
 use hl_memory::{MappingCoordinator, MappingHost};
 use hl_network::NetworkCatalog;
 use hl_provider::HandleNamespace;

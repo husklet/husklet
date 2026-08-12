@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use hl_execution::{Aarch64CpuState, CpuState, ExecutionCpuSnapshot};
+use crate::cpu::{Aarch64CpuState, CpuState, ExecutionCpuSnapshot};
 use hl_isa::GuestArchitecture;
 use hl_linux::{
     AioSyscalls, DescriptorIoSyscalls, EventSyscalls, FilesystemSyscalls, GuestAccess, GuestFault, GuestMemory,
