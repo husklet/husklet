@@ -129,8 +129,8 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
     let durable = containers.inspect(&created.id).await.unwrap();
     assert_eq!(durable.spec.process.program, "/bin/echo");
     assert_eq!(durable.spec.process.args, vec!["overridden"]);
-    assert_eq!(durable.spec.process.env.get("IMAGE").unwrap(), "yes");
-    assert_eq!(durable.spec.process.env.get("REQUEST").unwrap(), "yes");
+    assert_eq!(durable.spec.process.env.get_text("IMAGE").unwrap(), "yes");
+    assert_eq!(durable.spec.process.env.get_text("REQUEST").unwrap(), "yes");
     assert_eq!(durable.spec.process.working_dir.to_str().unwrap(), "/work");
     assert_eq!(durable.spec.publish.len(), 1);
     assert_eq!(durable.spec.publish[0].host, 49152);

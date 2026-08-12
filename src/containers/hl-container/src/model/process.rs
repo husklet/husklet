@@ -134,12 +134,6 @@ impl Environment {
         }
     }
 
-    /// Returns a UTF-8 value by name, preserving the former text-map API.
-    #[must_use]
-    pub fn get(&self, name: &str) -> Option<&str> {
-        self.get_text(name)
-    }
-
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.records()

@@ -82,7 +82,7 @@ impl Spec {
             .collect::<Vec<_>>();
         Self::search_path(
             &launch.process.program,
-            launch.process.env.get("PATH").unwrap_or(Self::DEFAULT_PATH),
+            launch.process.env.get_text("PATH").unwrap_or(Self::DEFAULT_PATH),
             &roots,
         )
     }
