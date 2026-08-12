@@ -93,7 +93,7 @@ pub struct Control {
 
 impl Control {
     /// Performs the non-mutating descriptor admission for `epoll_ctl`.
-    pub fn admit_control(
+    pub fn admit(
         &self,
         table: &RuntimeDescriptorTable,
         epoll_number: i32,

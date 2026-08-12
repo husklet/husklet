@@ -16,7 +16,7 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             Ok(event) => event,
             Err(error) => return LinuxResult::Error(ErrorMap::marshal(error)),
         };
-        if let Err(error) = control.admit_control(table, arguments[0] as i32, target_number) {
+        if let Err(error) = control.admit(table, arguments[0] as i32, target_number) {
             return LinuxResult::Error(Self::control_errno(error));
         }
         let plan = match EventAbi::<M>::epoll_control_plan(operation, target_number, event) {
