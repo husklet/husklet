@@ -3073,6 +3073,85 @@ static void emit_jcc_edge_spill(int kind) {
         e_nzcv_save();
 }
 
+// Handles vector encodings before the legacy flag pipeline. TX_FALL means the
+// instruction is not a vector-family encoding; TX_NEXT advances the decode
+// loop; TX_BREAK ends the translated block after emitting its exit.
+static int lower_vector_family(struct insn *instruction, uint64_t guest_pc, uint64_t next,
+                               hl_x86_crypto_state *crypto_state) {
+    if (instruction->vex) {
+        // EVEX map zero is reserved (and legacy BOUND is invalid in 64-bit mode).
+        if (instruction->evex && instruction->vex_map == 0) {
+            emit_guest_signal(guest_pc, 4, 2);
+            return TX_BREAK;
+        }
+        if (g_fl_pending) flags_materialize();
+        if (!nosseopt() && avx_lower(instruction, next)) return TX_NEXT;
+        emit_exit_const(guest_pc, R_AVX);
+        return TX_BREAK;
+    }
+    if (!instruction->map3) return TX_FALL;
+
+    if (g_fl_pending) flags_materialize();
+    if (hl_x86_lower_crypto(instruction, next, crypto_state) == TX_NEXT) {
+        // Inline crypto and shuffle lowering writes guest XMM state.
+        mark_vdirty();
+        return TX_NEXT;
+    }
+    const hl_x86_sse4x_state sse4x_state = {.optimize = !nosseopt()};
+    if (hl_x86_lower_sse4x(instruction, next, &sse4x_state) == TX_NEXT) return TX_NEXT;
+
+    // PCMPISTRI equal-each byte is the SSE4.2 strcmp hot loop. Other forms use
+    // the correctness-first C softmulator below.
+    if (instruction->map3 == 3 && instruction->op == 0x63 && !nosseopt() &&
+        (instruction->imm & 0x0D) == 0x08) {
+        int right = 16;
+        if (instruction->is_mem)
+            g_ldr_q_ea(16, instruction, next);
+        else
+            right = instruction->rm_reg;
+        emit_pcmpistri_eqeach_byte(instruction->reg, right, (int)instruction->imm);
+        return TX_NEXT;
+    }
+    emit_exit_const(guest_pc, R_SSE3B);
+    return TX_BREAK;
+}
+
+// Resolves deferred NZCV/PF/AF state before a legacy instruction is emitted.
+// Vector families return before this boundary because their emulators own no
+// legacy flag effects represented by this pipeline.
+static void prepare_legacy_flags(const struct insn *instruction, uint64_t guest_pc, uint64_t next,
+                                 const hl_x86_trace_state *trace_state) {
+    uint8_t opcode = instruction->op;
+    int conditional = (!instruction->two && opcode >= 0x70 && opcode <= 0x7F) ||
+                      (instruction->two && (opcode & 0xF0) == 0x80);
+    int transparent_edge = trace_state->flag_elision && !instruction->two &&
+                           (opcode == 0xE9 || opcode == 0xEB || opcode == 0xE8);
+    if (g_fl_pending && !conditional && !transparent_edge) {
+        int lazy = lazyflags_on();
+        if (lazy && insn_is_carry_consumer(instruction)) {
+            // ADC/SBB consumes the live producer carry directly.
+        } else if (lazy && insn_is_flagkill(instruction)) {
+            g_fl_pending = FL_NONE;
+        } else if (lazy && trace_state->flag_elision &&
+                   !(hl_x86_trace_flags_livein(trace_state, guest_pc, guest_pc) & HL_X86_FLAG_NZCV)) {
+            g_fl_pending = FL_NONE;
+        } else {
+            flags_materialize();
+        }
+    }
+
+    g_pfaf_dead = 0;
+    if (!pfaf_elim_on() || !insn_writes_pfaf(instruction)) return;
+    struct insn following;
+    if (hl_x86_decode(next, &following) < 0) memset(&following, 0, sizeof following);
+    g_pfaf_dead = insn_kills_pfaf(&following);
+    if (!g_pfaf_dead && trace_state->flag_elision && following.len > 0)
+        g_pfaf_dead = hl_x86_trace_pfaf_dead(trace_state, &following, next, guest_pc);
+    if (!g_pfaf_dead && trace_state->flag_elision)
+        g_pfaf_dead =
+            !(hl_x86_trace_flags_livein(trace_state, next, guest_pc) & (HL_X86_FLAG_PF | HL_X86_FLAG_AF));
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -3156,141 +3235,18 @@ static void *translate_block(uint64_t gpc) {
         prov_mem = I.is_mem; // a memory operand -> this insn can raise a synchronous guest fault
         uint8_t op = I.op;
         int sf = I.opsize == 8;
-        // VEX/EVEX (AVX/AVX2/AVX-512): not lowered to NEON. Exit the block and emulate this single insn in C
-        // (do_avx), which owns the full v[]/vhi/vz/vx/kreg register file + memory. rip := gpc so do_avx
-        // decodes the insn at rip and advances past it. Done BEFORE the lazy-flag classifier (which only
-        // knows legacy opcodes) -- AVX touches no EFLAGS we model, so just spill any pending flags first.
-        if (I.vex) {
-            // An EVEX prefix (0x62) whose map field mm==0 is a RESERVED/invalid encoding -> x86 raises #UD.
-            // (0x62 is also the legacy BOUND opcode, invalid in 64-bit mode -> #UD.) Deliver SIGILL to the
-            // guest instead of aborting the engine as "UNIMPLEMENTED EVEX".
-            if (I.evex && I.vex_map == 0) {
-                emit_guest_signal(gpc, 4, 2); // #UD -> SIGILL (si_code ILL_ILLOPN), rip = the faulting insn
-                break;
-            }
-            if (g_fl_pending) flags_materialize();
-            // perf: lower the common VEX.128/.256 AVX2 ops (moves, packed int/fp arith, logical, compare)
-            // to native NEON inline instead of the per-instruction do_avx dispatcher round-trip. Only a
-            // vetted bit-exact-vs-qemu subset is claimed; everything else falls through to R_AVX.
-            if (!nosseopt() && avx_lower(&I, next)) {
-                gpc = next;
-                continue;
-            }
-            emit_exit_const(gpc, R_AVX);
-            break;
+        int vector_result = lower_vector_family(&I, gpc, next, &crypto_state);
+        if (vector_result == TX_NEXT) {
+            gpc = next;
+            continue;
         }
-        // Legacy (non-VEX) 0F38/0F3A SSSE3/SSE4/AES/SHA/PCLMUL/CRC32/MOVBE: emulate this single insn in C
-        // (do_sse3b) -- correctness-first, mirroring the AVX path. These touch no EFLAGS we lazily defer
-        // (cmp-string sets flags but writes them through cpu->nzcv in C), so just spill any pending flags.
-        if (I.map3) {
-            if (g_fl_pending) flags_materialize();
-            // map the AES-NI / PCLMULQDQ / SHA-NI (SHA-1 + SHA-256, via the hardware ARM SHA
-            // extension) crypto opcodes to inline ARM crypto (near-native); everything else
-            // (SSSE3/SSE4/CRC32/MOVBE/aeskeygenassist) still exits to do_sse3b.
-            if (hl_x86_lower_crypto(&I, next, &crypto_state) == TX_NEXT) {
-                // (missed in v0.9.19-as-shipped): the inline crypto/shuffle glue WRITES guest xmm
-                // (pshufb->TBL, palignr->EXT, AESENC, PCLMUL, ...) without passing the SSE region's mark, so
-                // a following slim R_SYSCALL exit could skip the xmm save with cpu->V stale. Mark here.
-                // (Marking after emission is fine: the latch/mark are translate-time; any exit emitted
-                // before this point ends the region, and translate_crypto emits no exits on TX_NEXT.)
-                mark_vdirty();
-                gpc = next;
-                continue;
-            }
-            // perf wave 2: MOVBE/CRC32 + PINSR/PEXTR/INSERTPS lowered inline -- the residual
-            // per-block exits in openssl's stitched CTR loop. AESKEYGENASSIST is handled by crypto.c.
-            const hl_x86_sse4x_state sse4x_state = {.optimize = !nosseopt()};
-            if (hl_x86_lower_sse4x(&I, next, &sse4x_state) == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            // perf: PCMPISTRI (0F3A 63) in its implicit-length EQUAL-EACH byte form is the SSE4.2 strcmp
-            // hot loop (one `pcmpistri` per 16 bytes). The generic R_SSE3B exit below softmulates it via a
-            // full dispatcher round-trip PER INSTRUCTION -- measured ~20x slower than glibc's SSE2 fallback
-            // on identical data (the single biggest x86 string pathology). Emit it inline instead (native
-            // NEON cmeq + movemask + bit math), bit-for-bit identical to the C reference. Only this exact
-            // shape is lowered (agg==equal-each, byte, implicit length); every other PCMP*STR* form falls
-            // through to the correctness-first C path. imm[0]=0 (byte), imm[3:2]=10b (equal-each); imm[1]
-            // (signed/unsigned) is masked out -- it does not affect an equality comparison.
-            if (I.map3 == 3 && I.op == 0x63 && !nosseopt() && (I.imm & 0x0D) == 0x08) {
-                int bv = 16;
-                if (I.is_mem) {
-                    g_ldr_q_ea(16, &I, next); // op2 (r/m128) -> v16
-                } else
-                    bv = I.rm_reg; // op2 = guest xmm (host v)
-                emit_pcmpistri_eqeach_byte(I.reg, bv, (int)I.imm);
-                gpc = next;
-                continue;
-            }
-            emit_exit_const(gpc, R_SSE3B);
-            break;
-        }
+        if (vector_result == TX_BREAK) break;
         if (g_trace)
             fprintf(stderr, "[dec] %llx %s%02x len=%d mod%d rm%d reg%d mem%d base%d idx%d disp=%lld imm=%lld\n",
                     (unsigned long long)gpc, I.two ? "0F " : "", op, I.len, I.mod, I.rm_reg, I.reg, I.is_mem,
                     I.m_hasbase ? I.m_base : -1, I.m_hasindex ? I.m_index : -1, (long long)I.disp, (long long)I.imm);
 
-        // Lazy flags: a pending width-4/8 producer left its result flags live in NZCV instead of
-        // spilling to cpu->nzcv. The ONLY consumer allowed to read them live is an immediately-
-        // following Jcc (rel8 70-7F / rel32 0F 80-8F). For every other instruction:
-        //   - opt3 dead-flag elimination: if this instruction fully overwrites NZCV and reads no
-        //     flags (insn_is_flagkill), the pending flags are dead -- drop them, emitting nothing;
-        //   - otherwise (a non-Jcc flag reader/consumer or a block-ender): materialize to membank
-        //     NOW, before it emits anything, with the exact finalizer the producer would have used.
-        // Both keep the cross-block cpu->nzcv ABI byte-identical (intra-block only). NOLAZY disables
-        // dead-flag elimination, so the pending sub/cmp always materializes (PR1 behavior).
-        int is_jcc = (!I.two && op >= 0x70 && op <= 0x7F) || (I.two && (op & 0xF0) == 0x80);
-        // x86-xflags: jmp rel (E9/EB) and call rel (E8) are flag-transparent block enders whose
-        // handlers do the edge-aware flag handling themselves (stitch keeps the deferral alive;
-        // a chained edge consults the successor's live-in set via flags_edge). Everything else
-        // keeps the eager top-of-loop materialization below.
-        int is_xedge = trace_state.flag_elision && !I.two && (op == 0xE9 || op == 0xEB || op == 0xE8);
-        if (g_fl_pending && !is_jcc && !is_xedge) {
-            int lazy = lazyflags_on();
-            if (lazy && insn_is_carry_consumer(&I)) {
-                // opt3 carry-flow: leave the producer's flags LIVE; do_alu's adc/sbb pulls its x86 CF
-                // carry-in straight from them (FL_SUB/FL_ADD/FL_LOGIC) -- no eager materialize.
-            } else if (lazy && insn_is_flagkill(&I))
-                g_fl_pending = FL_NONE; // dead: next op fully overwrites the flags before any read
-            // x86-xflags: the 1-insn insn_is_flagkill peephole only catches an *immediately* following
-            // full-NZCV writer. In real integer chains the producer is separated from the next flag op by
-            // value-only movs/immediate-shifts (e.g. an LCG mix: add; mov; shr; xor; ...). Generalize with
-            // the same guest-byte liveness scan the shift/edge paths already trust: if this producer's NZCV
-            // is provably overwritten before any read across the block (following unconditional jmps), it is
-            // dead -- drop it, emitting NOTHING (same as the flagkill path; the live ARM NZCV need not be
-            // canonicalized because no consumer observes it). PF/AF are handled independently below.
-            else if (lazy && trace_state.flag_elision &&
-                     !(hl_x86_trace_flags_livein(&trace_state, gpc, gpc) & HL_X86_FLAG_NZCV))
-                g_fl_pending = FL_NONE;
-            else
-                flags_materialize();
-        }
-
-        // PF/AF dead-flag elimination: decide, one step ahead, whether THIS instruction's PF/AF
-        // substrate is dead. It is dead iff I is a PF/AF producer AND the immediately-following insn at
-        // `next` fully overwrites both PF and AF while reading neither (insn_kills_pfaf) -- then no
-        // consumer can observe I's PF/AF. Gating on insn_writes_pfaf(&I) both scopes the work to
-        // producers and guarantees `next` is a real fall-through (producers never terminate a block), so
-        // the lookahead decode reads only bytes the successor iteration would decode anyway. Reset every
-        // iteration so a stale value never reaches a non-producer; the e_pf_save/e_af_addsub emitters and
-        // the do_alu e_af_save sites no-op when it is set. VEX/0F38-3A/x87 already `continue`d above.
-        g_pfaf_dead = 0;
-        if (pfaf_elim_on() && insn_writes_pfaf(&I)) {
-            struct insn NI;
-            if (hl_x86_decode(next, &NI) < 0) memset(&NI, 0, sizeof NI);
-            g_pfaf_dead = insn_kills_pfaf(&NI);
-            // x86-xflags: the producer is the LAST flag op before a direct branch (cmp/test + jcc is
-            // THE hot pattern) -> its PF/AF are still dead if EVERY successor entry provably
-            // overwrites both before any read (guest-byte liveness scan, translate/trace.c).
-            if (!g_pfaf_dead && trace_state.flag_elision && NI.len > 0)
-                g_pfaf_dead = hl_x86_trace_pfaf_dead(&trace_state, &NI, next, gpc);
-            // x86-xflags: generalize past the 1-insn / direct-branch cases -- in real integer chains the
-            // next PF/AF writer sits a few value-only movs/immediate-shifts downstream. The same block
-            // liveness scan proves both PF and AF overwritten-before-read from `next`; if so, drop the
-            // whole PF/AF substrate for I (e_pf_save/e_af_save no-op on g_pfaf_dead).
-            if (!g_pfaf_dead && trace_state.flag_elision)
-                g_pfaf_dead = !(hl_x86_trace_flags_livein(&trace_state, next, gpc) & (HL_X86_FLAG_PF | HL_X86_FLAG_AF));
-        }
+        prepare_legacy_flags(&I, gpc, next, &trace_state);
 
         // x87 static-top tracking ends at any non-x87 instruction: spill the shadow top to
         // cpu->fptop and drop to the runtime-top model (the run only spans consecutive x87 ops, so
