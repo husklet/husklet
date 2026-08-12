@@ -56,5 +56,8 @@ int main(void) {
     unlink(path); // cleanup (unlinkat stays worker-local; harmless with HL_JIT_SANDBOX off)
 
     printf("sentry_fs sum=%lu size=%lld found=%d\n", sum, (long long)st.st_size, found);
+    // This write is deliberate evidence that removing host sentry teardown chatter does not suppress
+    // the guest's own stderr stream.  Both sentry modes assert the exact line in their manifests.
+    fprintf(stderr, "guest-sentry-stderr\n");
     return 0;
 }

@@ -352,7 +352,7 @@ cases:
     build: { source: source/sentry_fs.c, output: sentry_fs, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/filesystem-sentry_fs }
     run: []
-    expect: { exit: 0, stdout: golden/sentry_fs.out }
+    expect: { exit: 0, stdout: golden/sentry_fs.out, stderr: ["guest-sentry-stderr"] }
   - id: runtime/filesystem/scratch-exec
     status: !unsupported
       reason: "The canonical runtime runner does not yet provide this case’s isolated scratch-rootfs staging contract"
@@ -379,7 +379,7 @@ cases:
     artifact: { destination: /opt/husklet/filesystem-sentry-fs-untrusted }
     environment: { HL_UNTRUSTED: "1" }
     run: []
-    expect: { exit: 0, stdout: golden/sentry_fs.out }
+    expect: { exit: 0, stdout: golden/sentry_fs.out, stderr: ["guest-sentry-stderr"] }
   - id: runtime/filesystem/sentry-fs-sandbox
     status: active
     compat: { class: compatibility }
@@ -387,7 +387,7 @@ cases:
     artifact: { destination: /opt/husklet/filesystem-sentry-fs-sandbox }
     environment: { HL_SANDBOX: "1" }
     run: []
-    expect: { exit: 0, stdout: golden/sentry_fs.out }
+    expect: { exit: 0, stdout: golden/sentry_fs.out, stderr: ["guest-sentry-stderr"] }
   - id: runtime/filesystem/absolute-symlink
     status: active
     compat: { class: compatibility }

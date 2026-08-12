@@ -2063,14 +2063,10 @@ static void sentry_shutdown(void) {
     atomic_store_explicit(&g_shm->quit, 1, memory_order_release);
     int st;
     waitpid(g_sentry_pid, &st, 0);
-    uint64_t total = 0;
-    for (int i = 0; i < SENTRY_NRINGS; i++)
-        total += g_shm->ring[i].nserved;
-    char message[96];
-    int length = snprintf(message, sizeof message, "[sentry] forwarded %llu syscalls; sentry reaped\n",
-                          (unsigned long long)total);
-    if (length > 0 && (size_t)length < sizeof message)
-        (void)hl_sentry_pipe_write(STDERR_FILENO, message, (size_t)length);
+    // This is a host lifecycle boundary, not a guest write.  In particular, fd 2 is the captured
+    // guest stderr pipe here: publishing sentry statistics through it makes a silent guest appear to
+    // have written diagnostics and violates the stdout/stderr contract.  Sentry teardown is therefore
+    // intentionally silent; genuine guest writes still cross the ring through service_local().
     g_sentry_pid = 0; // idempotent: the exit-path shutdown + the post-run_guest teardown must not double-reap
 }
 
