@@ -3184,6 +3184,111 @@ static int lower_primary_string(struct insn *instruction, uint64_t next, hl_x86_
     return result;
 }
 
+static int lower_group3_unary(struct insn *instruction, uint64_t next) {
+    if (instruction->op != 0xF6 && instruction->op != 0xF7) return TX_FALL;
+    int operation = instruction->reg & 7;
+    int width = instruction->op == 0xF6 ? 1 : instruction->opsize;
+    int memory;
+    if (operation == 0) {
+        int value = rm_load(instruction, next, width, &memory);
+        e_movconst(19, (uint64_t)instruction->imm);
+        do_alu(4, -1, value, 19, width);
+        return TX_NEXT;
+    }
+    if (operation == 2) {
+        int value = rm_load(instruction, next, width, &memory);
+        emit32(0xAA2003E0u | (value << 16) | 16);
+        rm_store(instruction, width, 16);
+        return TX_NEXT;
+    }
+    if (operation != 3) return TX_FALL;
+
+    int value = rm_load(instruction, next, width, &memory);
+    if (width < 4) {
+        do_alu(5, 16, 31, value, width);
+    } else {
+        e_rrr(A_SUBS, 16, 31, value, width == 8, 0);
+        e_nzcv_save();
+        e_pf_save(16);
+        e_af_addsub(31, value, 16, 19);
+    }
+    rm_store(instruction, width, 16);
+    return TX_NEXT;
+}
+
+static int lower_group3_narrow_muldiv(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    if (instruction->op != 0xF6 && instruction->op != 0xF7) return TX_FALL;
+    int operation = instruction->reg & 7;
+    int width = instruction->op == 0xF6 ? 1 : instruction->opsize;
+    if (operation < 4 || width > 2) return TX_FALL;
+
+    int memory;
+    int value = rm_load(instruction, next, width, &memory);
+    if (width == 1) {
+        if (operation == 4 || operation == 5) {
+            if (operation == 4) {
+                e_uxt(19, RAX, 1);
+                e_uxt(20, value, 1);
+            } else {
+                e_sxt(19, RAX, 1);
+                e_sxt(20, value, 1);
+            }
+            e_mul(21, 19, 20, 0);
+            e_mul_oc_narrow(21, operation, 1);
+            e_bfi(RAX, 21, 0, 16, 1);
+        } else {
+            if (operation == 6) {
+                e_uxt(19, RAX, 2);
+                e_uxt(20, value, 1);
+                emit_div_zero_check(20, guest_pc, 0);
+                e_udiv(21, 19, 20, 0);
+            } else {
+                e_sxt(19, RAX, 2);
+                e_sxt(20, value, 1);
+                emit_div_zero_check(20, guest_pc, 1);
+                e_sdiv(21, 19, 20, 0);
+            }
+            e_msub(22, 21, 20, 19, 0);
+            emit_div_ovf_check(21, 23, 1, operation == 7, guest_pc, operation == 7);
+            e_bfi(RAX, 21, 0, 8, 1);
+            e_bfi(RAX, 22, 8, 8, 1);
+        }
+        return TX_NEXT;
+    }
+
+    if (operation == 4 || operation == 5) {
+        if (operation == 4) {
+            e_uxt(19, RAX, 2);
+            e_uxt(20, value, 2);
+        } else {
+            e_sxt(19, RAX, 2);
+            e_sxt(20, value, 2);
+        }
+        e_mul(21, 19, 20, 0);
+        e_mul_oc_narrow(21, operation, 2);
+        e_bfi(RAX, 21, 0, 16, 1);
+        e_lsr_i(21, 21, 16, 0);
+        e_bfi(RDX, 21, 0, 16, 1);
+    } else {
+        e_uxt(19, RAX, 2);
+        e_bfi(19, RDX, 16, 16, 0);
+        if (operation == 6) {
+            e_uxt(20, value, 2);
+            emit_div_zero_check(20, guest_pc, 0);
+            e_udiv(21, 19, 20, 0);
+        } else {
+            e_sxt(20, value, 2);
+            emit_div_zero_check(20, guest_pc, 1);
+            e_sdiv(21, 19, 20, 0);
+        }
+        e_msub(22, 21, 20, 19, 0);
+        emit_div_ovf_check(21, 23, 2, operation == 7, guest_pc, operation == 7);
+        e_bfi(RAX, 21, 0, 16, 1);
+        e_bfi(RDX, 22, 0, 16, 1);
+    }
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -3292,115 +3397,19 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             if (primary_result == TX_BREAK) break;
+            int unary_result = lower_group3_unary(&I, next);
+            if (unary_result == TX_NEXT) {
+                gpc = next;
+                continue;
+            }
+            int narrow_result = lower_group3_narrow_muldiv(&I, gpc, next);
+            if (narrow_result == TX_NEXT) {
+                gpc = next;
+                continue;
+            }
             // ---- group3 (F6/F7): /0 test /2 not /3 neg /4 mul /5 imul /6 div /7 idiv ----
             if (op == 0xF6 || op == 0xF7) {
                 int k = I.reg & 7, w = op == 0xF6 ? 1 : I.opsize, mem;
-                if (k == 0) {
-                    int rmv = rm_load(&I, next, w, &mem);
-                    e_movconst(19, (uint64_t)I.imm);
-                    do_alu(4, -1, rmv, 19, w);
-                    gpc = next;
-                    continue;
-                } // test r/m, imm
-                if (k == 2) {
-                    int rmv = rm_load(&I, next, w, &mem); // not -> x16, then rm_store
-                    emit32(0xAA2003E0u | (rmv << 16) | 16);
-                    rm_store(&I, w, 16);
-                    gpc = next;
-                    continue;
-                }
-                if (k == 3) {
-                    // neg r/m == 0 - r/m. For byte/word, a raw 32-bit SUBS got OF wrong for negb 0x80 /
-                    // negw 0x8000 (the INT_MIN overflow case) -- e.g. icu_locid's Option-niche PartialEq does
-                    // `negb; jno` on the 0x80 None marker. do_alu shifts byte/word operands into the ARM high
-                    // bits so N/Z/V are width-correct. For 32/64-bit the direct SUBS flags are already exact,
-                    // and do_alu's deferred (FL_SUB) path would let flags_materialize clobber the x16 result
-                    // before rm_store (it broke `neg ebx`), so keep the original inline path there.
-                    int rmv = rm_load(&I, next, w, &mem); // neg -> x16
-                    if (w < 4) {
-                        do_alu(5, 16, 31, rmv, w); // x16 = 0 - rmv, x86 SUB flags at width w (sets PF too)
-                    } else {
-                        e_rrr(A_SUBS, 16, 31, rmv, w == 8, 0);
-                        e_nzcv_save();
-                        e_pf_save(16);                // x86 PF source = result low byte (do_alu handles the w<4 path)
-                        e_af_addsub(31, rmv, 16, 19); // x86 AF = bit 4 of (0 ^ rmv ^ result)
-                    }
-                    rm_store(&I, w, 16);
-                    gpc = next;
-                    continue;
-                }
-                if (w == 1 && k >= 4) { // 8-bit mul/div (0xF6 /4../7) -- were UNIMPL (glibc inet_ntoa aborts)
-                    int rmv = rm_load(&I, next, 1, &mem);
-                    if (k == 4 || k == 5) { // mul/imul r/m8: AX = AL * r/m8 (16-bit result)
-                        if (k == 4) {
-                            e_uxt(19, RAX, 1);
-                            e_uxt(20, rmv, 1);
-                        } // zero-extend AL + src (uxtb)
-                        else {
-                            e_sxt(19, RAX, 1);
-                            e_sxt(20, rmv, 1);
-                        } // sign-extend (sxtb)
-                        e_mul(21, 19, 20, 0);
-                        e_mul_oc_narrow(21, k, 1); // CF=OF: AX doesn't fit AL (uses the full product in x21)
-                        e_bfi(RAX, 21, 0, 16, 1);  // write AX (low 16), preserve upper RAX (x86 8/16-bit semantics)
-                    } else {                       // div/idiv r/m8: AL = AX / r/m8, AH = AX % r/m8
-                        if (k == 6) {
-                            e_uxt(19, RAX, 2);
-                            e_uxt(20, rmv, 1);
-                            emit_div_zero_check(20, gpc, 0); // #DE on /0 (rip = the div insn)
-                            e_udiv(21, 19, 20, 0);
-                        } // AX uxth, src uxtb
-                        else {
-                            e_sxt(19, RAX, 2);
-                            e_sxt(20, rmv, 1);
-                            emit_div_zero_check(20, gpc, 1);
-                            e_sdiv(21, 19, 20, 0);
-                        } // AX sxth, src sxtb
-                        e_msub(22, 21, 20, 19, 0);                          // rem = dividend - quot*divisor
-                        emit_div_ovf_check(21, 23, 1, k == 7, gpc, k == 7); // AL overflow -> #DE
-                        e_bfi(RAX, 21, 0, 8, 1);                            // AL = quotient
-                        e_bfi(RAX, 22, 8, 8, 1);                            // AH = remainder
-                    }
-                    gpc = next;
-                    continue;
-                }
-                if (w == 2 && k >= 4) { // 16-bit mul/div (66 F7 /4../7) -- e.g. uutils `date` does `div si`
-                    int rmv = rm_load(&I, next, 2, &mem);
-                    if (k == 4 || k == 5) { // mul/imul r/m16: DX:AX = AX * r/m16 (32-bit product)
-                        if (k == 4) {
-                            e_uxt(19, RAX, 2);
-                            e_uxt(20, rmv, 2);
-                        } // AX + src zero-extended (uxth)
-                        else {
-                            e_sxt(19, RAX, 2);
-                            e_sxt(20, rmv, 2);
-                        } // sign-extended (sxth)
-                        e_mul(21, 19, 20, 0);
-                        e_mul_oc_narrow(21, k, 2); // CF=OF: product doesn't fit AX (uses full product in x21)
-                        e_bfi(RAX, 21, 0, 16, 1);  // AX = low 16
-                        e_lsr_i(21, 21, 16, 0);
-                        e_bfi(RDX, 21, 0, 16, 1); // DX = high 16
-                    } else {                      // div/idiv r/m16: AX = (DX:AX)/r/m16, DX = remainder
-                        e_uxt(19, RAX, 2);
-                        e_bfi(19, RDX, 16, 16, 0); // x19 = (DX<<16)|AX -- the 32-bit dividend
-                        if (k == 6) {
-                            e_uxt(20, rmv, 2);
-                            emit_div_zero_check(20, gpc, 0); // #DE on /0
-                            e_udiv(21, 19, 20, 0);
-                        } // unsigned: divisor uxth
-                        else {
-                            e_sxt(20, rmv, 2);
-                            emit_div_zero_check(20, gpc, 1);
-                            e_sdiv(21, 19, 20, 0);
-                        } // signed: x19 already the 32-bit pattern
-                        e_msub(22, 21, 20, 19, 0);                          // rem = dividend - quot*divisor
-                        emit_div_ovf_check(21, 23, 2, k == 7, gpc, k == 7); // AX overflow -> #DE
-                        e_bfi(RAX, 21, 0, 16, 1);                           // AX = quotient
-                        e_bfi(RDX, 22, 0, 16, 1);                           // DX = remainder
-                    }
-                    gpc = next;
-                    continue;
-                }
                 if (w == 4 || w == 8) {
                     if (k == 4 || k == 5) { // mul / imul (rdx:rax = rax * r/m)
                         int rmv = rm_load(&I, next, w, &mem);
