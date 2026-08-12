@@ -33,7 +33,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Split Linux’s 5,000-line host implementation into capability-owned files.
 - [x] Organize Linux under `context`, `handles`, `fs`, `process`, `io`, `memory`, `network`, `time`, `sync`, and logging owners.
 - [x] Keep Linux `host.c` limited to registration/assembly.
-- [ ] Integrate the completed macOS capability hierarchy onto the current native layout and rerun macOS compilation.
+- [x] Integrate the macOS capability hierarchy onto the current native layout and verify its source/build selection on the merged tip.
+- [ ] Obtain authoritative macOS ARM64 compilation and runtime evidence from macOS CI.
 - [ ] Integrate the Windows AMD64 backend onto the current native layout.
 - [ ] Prove Windows runtime behavior; previous oracle evidence was incomplete and is not production evidence. (Windows implementation is only priority if you are on windows and have powershell and tools.)
 - [ ] Eliminate the five remaining single-file-directory findings without undoing meaningful capability ownership.
