@@ -9,7 +9,7 @@ pub enum Endianness {
 
 /// Linux guest architecture selected by the public engine configuration.
 ///
-/// Values are pinned to `hl_guest_isa` in `include/hl/engine.h`.
+/// Values are pinned to `hl_guest_isa` in `hl-native/src/include/hl/engine.h`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u32)]
 pub enum GuestArchitecture {

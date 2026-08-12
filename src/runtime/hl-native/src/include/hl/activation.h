@@ -88,7 +88,7 @@ HL_API hl_status hl_activation_start_terminal_with_transport(const char *executa
                                                              int32_t transport, int32_t *out_master,
                                                              hl_activation_process **out_process);
 /* General activation entry point: any combination of process streams OR a controlling terminal, an optional
- * provider transport, and an optional checkpoint broker (include/hl/checkpoint_stream.h). Every descriptor
+ * provider transport, and an optional checkpoint broker (hl/checkpoint_stream.h). Every descriptor
  * is borrowed and transferred with SCM_RIGHTS; none of them is a guest descriptor. `size` non-NULL selects
  * the terminal form and requires `out_master`; `streams` and `size` are mutually exclusive. `transport`,
  * `checkpoint` and `trigger` are HL_ACTIVATION_DESCRIPTOR_NONE when not requested. `out_master` receives the

@@ -1,7 +1,7 @@
 // hl/linux_abi -- the implementation of the checkpoint sink (see ckpt_sink.h).
 //
 // Every operation becomes one request/response round trip on this process's private channel
-// (include/hl/checkpoint_stream.h, src/core/checkpoint_channel.c). No filesystem is involved anywhere: the
+// (hl/checkpoint_stream.h, src/core/checkpoint_channel.c). No filesystem is involved anywhere: the
 // sink hands the bytes to the embedder and lets the embedder decide what "durable" and "visible" mean.
 //
 // STAGING AND ATOMICITY are the server's job, not this file's: the ordering contract (an object is complete

@@ -1,4 +1,4 @@
-/* hl/core -- the engine-process side of the checkpoint stream transport (include/hl/checkpoint_stream.h).
+/* hl/core -- the engine-process side of the checkpoint stream transport (hl/checkpoint_stream.h).
  *
  * Lives in core rather than in linux_abi because two separately linked translation units need it: the
  * activation child (src/core/activation.c), which receives the broker descriptor over SCM_RIGHTS and

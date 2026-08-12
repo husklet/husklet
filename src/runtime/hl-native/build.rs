@@ -1,18 +1,14 @@
-use std::{env, fs, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 #[path = "src/platform.rs"]
 mod platform;
 
 const NATIVE_ROOT: &str = ".";
-const TU_MANIFEST: &str = "COMPILED_TUS.tsv";
-const SOURCE_MANIFEST: &str = "RUNTIME_SOURCES.manifest";
-
-#[derive(Debug)]
-struct TranslationUnit<'a> {
-    group: &'a str,
-    source: &'a str,
-    definitions: &'a str,
-}
+const COMMON_DEFINITIONS: &[&str] = &["HL_ENABLE_LOGGING=0", "HL_TRANSLIT_DEFAULT=0"];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -24,26 +20,9 @@ fn main() {
         return;
     }
 
-    for source in [
-        "src/shim.c",
-        "src/executable_authority.c",
-        "src/executable_authority.h",
-        "src/address_projection.c",
-        "src/address_projection.h",
-        TU_MANIFEST,
-        SOURCE_MANIFEST,
-    ] {
-        println!("cargo:rerun-if-changed={source}");
-    }
-    let source_manifest = fs::read_to_string(SOURCE_MANIFEST).expect("read native C source manifest");
-    for source in source_manifest.lines().filter(|line| !line.is_empty()) {
-        println!("cargo:rerun-if-changed={source}");
-    }
-    let manifest = fs::read_to_string(TU_MANIFEST).expect("read native C translation-unit manifest");
-    let units = parse_manifest(&manifest);
-    for unit in &units {
-        println!("cargo:rerun-if-changed={}", unit.source);
-    }
+    println!("cargo:rerun-if-changed=src");
+    let runtime_sources = discover_runtime_roots(&target_os);
+    let runtime_source_refs = runtime_sources.iter().map(String::as_str).collect::<Vec<_>>();
 
     let platform_definition = if target_os == "macos" {
         "_DARWIN_C_SOURCE"
@@ -56,34 +35,60 @@ fn main() {
         &[platform_definition],
         false,
     );
-    compile_group("hl_c_backend_runtime", "normal_archive", &units, true, &target_os);
-    compile_group(
+    compile("hl_c_backend_runtime", &runtime_source_refs, COMMON_DEFINITIONS, true);
+    compile(
         "hl_c_backend_target_aarch64",
-        "target_aarch64_direct",
-        &units,
+        &["src/core/target/aarch64.c"],
+        &[
+            "HL_ENABLE_LOGGING=0",
+            "HL_TRANSLIT_DEFAULT=0",
+            "_GNU_SOURCE",
+            "HL_EMBEDDED_BUILD=1",
+            "HL_ENGINE_NO_MAIN=1",
+            "HL_ENGINE_NO_STANDALONE=1",
+            "HL_TARGET_NAMESPACE=aarch64",
+        ],
         false,
-        &target_os,
     );
-    compile_group(
+    compile(
         "hl_c_backend_target_x86_64",
-        "target_x86_64_direct",
-        &units,
+        &["src/core/target/x86_64.c"],
+        &[
+            "HL_ENABLE_LOGGING=0",
+            "HL_TRANSLIT_DEFAULT=0",
+            "_GNU_SOURCE",
+            "HL_EMBEDDED_BUILD=1",
+            "HL_ENGINE_NO_MAIN=1",
+            "HL_ENGINE_NO_STANDALONE=1",
+            "HL_TARGET_NAMESPACE=x86_64",
+        ],
         false,
-        &target_os,
     );
-    compile_group(
+    compile(
         "hl_c_backend_lifecycle_aarch64",
-        "lifecycle_aarch64_direct",
-        &units,
+        &["src/core/lifecycle.c"],
+        &[
+            "HL_ENABLE_LOGGING=0",
+            "HL_TRANSLIT_DEFAULT=0",
+            "_GNU_SOURCE",
+            "HL_EMBEDDED_BUILD=1",
+            "HL_TARGET_NAMESPACE=aarch64",
+            "HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_AARCH64",
+        ],
         false,
-        &target_os,
     );
-    compile_group(
+    compile(
         "hl_c_backend_lifecycle_x86_64",
-        "lifecycle_x86_64_direct",
-        &units,
+        &["src/core/lifecycle.c"],
+        &[
+            "HL_ENABLE_LOGGING=0",
+            "HL_TRANSLIT_DEFAULT=0",
+            "_GNU_SOURCE",
+            "HL_EMBEDDED_BUILD=1",
+            "HL_TARGET_NAMESPACE=x86_64",
+            "HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_X86_64",
+        ],
         false,
-        &target_os,
     );
 
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
@@ -110,63 +115,79 @@ fn main() {
     }
 }
 
-fn parse_manifest(manifest: &str) -> Vec<TranslationUnit<'_>> {
-    manifest
-        .lines()
-        .skip(1)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            let mut columns = line.split('\t');
-            let group = columns.next().expect("translation-unit group");
-            let _target = columns.next().expect("translation-unit target");
-            let source = columns.next().expect("translation-unit source");
-            let definitions = columns.next().expect("translation-unit definitions");
-            assert_eq!(
-                columns.next(),
-                Some("include"),
-                "native include directory must be package-relative"
-            );
-            assert!(columns.next().is_none(), "unexpected translation-unit manifest column");
-            TranslationUnit {
-                group,
-                source,
-                definitions,
+fn discover_runtime_roots(target_os: &str) -> Vec<String> {
+    let root = Path::new("src");
+    let mut sources = BTreeSet::new();
+    collect_c_sources(root, root, &mut sources);
+    let included = sources
+        .iter()
+        .flat_map(|source| included_c_sources(source))
+        .collect::<BTreeSet<_>>();
+    let special = [
+        "src/shim.c",
+        "src/executable_authority.c",
+        "src/address_projection.c",
+        "src/core/lifecycle.c",
+        "src/core/target/aarch64.c",
+        "src/core/target/x86_64.c",
+    ];
+    sources
+        .into_iter()
+        .filter(|source| !included.contains(source))
+        .filter(|source| !special.contains(&source.to_string_lossy().as_ref()))
+        .filter(|source| {
+            let value = source.to_string_lossy();
+            if target_os == "macos" {
+                !value.starts_with("src/host/linux/")
+            } else {
+                !value.starts_with("src/host/macos/")
             }
         })
+        .map(|source| source.to_string_lossy().into_owned())
         .collect()
 }
 
-fn compile_group(name: &str, group: &str, units: &[TranslationUnit<'_>], strict: bool, target_os: &str) {
-    let selected = units.iter().filter(|unit| unit.group == group).collect::<Vec<_>>();
-    assert!(!selected.is_empty(), "native C group {group} is empty");
-    let definitions = selected[0].definitions;
-    assert!(
-        selected.iter().all(|unit| unit.definitions == definitions),
-        "native C group {group} has inconsistent definitions"
-    );
-    assert!(
-        definitions.split(';').any(|value| value == "HL_ENABLE_LOGGING=0"),
-        "native C group {group} must not write host diagnostics into inherited guest stderr"
-    );
-    let platform_sources = selected
-        .iter()
-        .map(|unit| platform_source(unit.source, target_os))
-        .collect::<Vec<_>>();
-    let sources = platform_sources.iter().map(String::as_str).collect::<Vec<_>>();
-    let definitions = definitions
-        .split(';')
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    compile(name, &sources, &definitions, strict);
+fn collect_c_sources(root: &Path, directory: &Path, output: &mut BTreeSet<PathBuf>) {
+    let mut entries = fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|error| panic!("enumerate {}: {error}", directory.display()));
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_c_sources(root, &path, output);
+        } else if path.extension().and_then(|value| value.to_str()) == Some("c") {
+            output.insert(
+                path.strip_prefix(root.parent().expect("src parent"))
+                    .expect("package source")
+                    .to_owned(),
+            );
+        }
+    }
 }
 
-fn platform_source(source: &str, target_os: &str) -> String {
-    if target_os == "macos"
-        && let Some(name) = source.strip_prefix("src/host/linux/")
-    {
-        return format!("src/host/macos/{name}");
-    }
-    source.to_owned()
+fn included_c_sources(source: &Path) -> Vec<PathBuf> {
+    let text = fs::read_to_string(source).unwrap_or_else(|error| panic!("read {}: {error}", source.display()));
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let include = line.strip_prefix("#include \"")?.split('"').next()?;
+            include.ends_with(".c").then(|| {
+                let relative = source.parent().expect("source parent").join(include);
+                relative
+                    .canonicalize()
+                    .unwrap_or_else(|error| panic!("resolve C include {include} from {}: {error}", source.display()))
+            })
+        })
+        .map(|path| {
+            let package = env::current_dir()
+                .expect("current package")
+                .canonicalize()
+                .expect("canonical package");
+            path.strip_prefix(package).expect("package-local C include").to_owned()
+        })
+        .collect()
 }
 
 fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
@@ -174,7 +195,7 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
     build
         .cargo_metadata(false)
         .include(NATIVE_ROOT)
-        .include("include")
+        .include("src/include")
         .include("src")
         .opt_level(2)
         .debug(true)

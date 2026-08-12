@@ -3,7 +3,7 @@
 
 // ---------------- JIT code cache ----------------
 #include "../linux_abi/host_mman.h"
-#include "../../include/hl/log.h"
+#include "../include/hl/log.h"
 #include "../host/clock.h"
 #include "../host/host_cpu.h"
 #include "../host/range.h"

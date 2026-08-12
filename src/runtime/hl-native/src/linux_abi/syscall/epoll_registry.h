@@ -4,7 +4,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 
-#include "../../../include/hl/host_services.h"
+#include "../../include/hl/host_services.h"
 
 #define EP_PROVIDER_WATCH_LIMIT 4096u
 

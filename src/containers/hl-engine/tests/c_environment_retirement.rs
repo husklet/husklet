@@ -7,25 +7,16 @@ const RETIRED: &str = "src/core/environment.h";
 
 #[test]
 fn retained_environment_boundary_is_physically_absent() {
-    let source_manifest = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../runtime/hl-native/RUNTIME_SOURCES.manifest"
-    ))
-    .unwrap();
     let options = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../runtime/hl-native/src/core/options.c"
     ))
     .unwrap();
 
-    assert!(source_manifest.contains("src/core/options.c"));
+    assert!(std::path::Path::new(RETAINED_ROOT).join("src/core/options.c").is_file());
     assert!(
         !std::path::Path::new(RETAINED_ROOT).join(RETIRED).exists(),
         "retired ambient environment boundary returned"
-    );
-    assert!(
-        !source_manifest.contains(RETIRED),
-        "retired ambient environment boundary returned to the source manifest"
     );
     assert!(
         !options.contains("#include \"environment.h\""),

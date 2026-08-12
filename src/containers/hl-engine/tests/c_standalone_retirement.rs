@@ -217,51 +217,39 @@ fn retired_rust_differential_executor_stays_deleted() {
 
 #[test]
 fn product_manifest_excludes_the_retired_standalone_path() {
-    let manifest = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../runtime/hl-native/COMPILED_TUS.tsv"
-    ))
-    .unwrap();
     assert!(
-        manifest.contains("src/core/engine.c"),
-        "manifest fixture lost the product engine"
+        Path::new(RETAINED_ROOT).join("src/core/engine.c").is_file(),
+        "native package lost the product engine"
     );
     for path in RETIRED_PATHS {
         assert!(
             !std::path::Path::new(RETAINED_ROOT).join(path).exists(),
             "retired standalone configuration path returned to the retained tree: {path}"
         );
-        assert!(
-            !manifest.contains(path),
-            "retired standalone configuration path returned to product build: {path}"
-        );
     }
-    let closure = fs::read_to_string(format!("{RETAINED_ROOT}RUNTIME_SOURCES.manifest")).unwrap();
-    for path in closure.lines().filter(|path| !path.is_empty()) {
-        let source = fs::read_to_string(format!("{RETAINED_ROOT}{path}"))
-            .unwrap_or_else(|error| panic!("read retained closure path {path}: {error}"));
+    let native = Path::new(RETAINED_ROOT);
+    let mut closure = Vec::new();
+    walk(native, &native.join("src"), &mut closure);
+    for path in closure {
+        if !matches!(path.extension().and_then(|value| value.to_str()), Some("c" | "h")) {
+            continue;
+        }
+        let source = fs::read_to_string(native.join(&path))
+            .unwrap_or_else(|error| panic!("read native source {}: {error}", path.display()));
         for token in RETIRED_CONFIG_TOKENS {
             assert!(
                 !source.contains(token),
-                "retired launch configuration token {token} returned in {path}"
+                "retired launch configuration token {token} returned in {}",
+                path.display()
             );
         }
     }
-    for group in ["target_aarch64_direct", "target_x86_64_direct"] {
-        let target = manifest
-            .lines()
-            .find(|line| line.starts_with(&format!("{group}\t")))
-            .unwrap_or_else(|| panic!("missing {group} translation unit"));
-        assert!(
-            target
-                .split('\t')
-                .nth(3)
-                .unwrap_or_default()
-                .split(';')
-                .any(|value| value == "HL_ENGINE_NO_STANDALONE=1"),
-            "{group} must compile out hl_engine_entry"
-        );
-    }
+    let build = fs::read_to_string(native.join("build.rs")).expect("read native Cargo build script");
+    assert_eq!(
+        build.matches("\"HL_ENGINE_NO_STANDALONE=1\"").count(),
+        2,
+        "both guest target translation units must compile out hl_engine_entry"
+    );
 }
 
 #[test]
