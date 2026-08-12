@@ -23,11 +23,11 @@ pub use policy::{
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CCallPolicy, CPolicy, CStructure, CatchAllModule,
-    CatchAllSourcePath, CeremonialStructure, DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName,
-    FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate,
-    ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory,
-    ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory, StructNaming, SuffixRole,
-    TestDependency, TestDirectory, TestName, UnsafeBoundary,
+    CatchAllSourcePath, CeremonialStructure, DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
+    FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
+    IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand,
+    PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory,
+    StructNaming, SuffixRole, TestDependency, TestDirectory, TestName, UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 
@@ -248,6 +248,25 @@ mod tests {
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "maximum-nesting");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn standard_registry_executes_embedded_c_rules() {
+        let root = temporary("standard-c");
+        let path = root.join("src/oversized.c");
+        let mut source = String::from("int oversized(void) {\n");
+        for _ in 0..=200 {
+            source.push_str("  value += 1;\n");
+        }
+        source.push_str("  return value;\n}\n");
+        fs::write(&path, source).unwrap();
+        let mut reporter = Memory(Vec::new());
+        Linter::standard().run([path], &mut reporter).unwrap();
+        assert!(
+            reporter.0.iter().any(|finding| finding.rule == "c-function-length"),
+            "the normal registry must execute C analysis"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
