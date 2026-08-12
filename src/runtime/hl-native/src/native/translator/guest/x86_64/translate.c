@@ -4039,6 +4039,14 @@ static int lower_extended_state(struct insn *instruction, uint64_t guest_pc, uin
     return TX_BREAK;
 }
 
+static int lower_multibyte_hint(const struct insn *instruction) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0x1E && instruction->imm_bytes == 0) return TX_NEXT;
+    if (opcode == 0x1F || opcode == 0x18 || opcode == 0x0D || (opcode >= 0x19 && opcode <= 0x1D))
+        return TX_NEXT;
+    return TX_FALL;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6079,18 +6087,11 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             if (wide_compare_result == TX_BREAK) break;
-            if (op == 0x1E && I.imm_bytes == 0) {
+            int hint_result = lower_multibyte_hint(&I);
+            if (hint_result == TX_NEXT) {
                 gpc = next;
                 continue;
-            } // endbr (modrm consumed)
-            if (op == 0x1F) {
-                gpc = next;
-                continue;
-            } // nop r/m
-            if (op == 0x18 || op == 0x0D || (op >= 0x19 && op <= 0x1D)) {
-                gpc = next;
-                continue;
-            } // prefetch{nta,t0,t1,t2} (0F 18) / prefetchw (0F 0D) / reserved multi-byte NOP hints — hint only -> NOP
+            }
             // shld/shrd (0F A4 imm8, 0F A5 cl, 0F AC imm8, 0F AD cl):  dst=r/m, src=reg, count
             if (op == 0xA4 || op == 0xA5 || op == 0xAC || op == 0xAD) {
                 int isleft = (op == 0xA4 || op == 0xA5), bycl = (op == 0xA5 || op == 0xAD);
