@@ -3152,6 +3152,38 @@ static void prepare_legacy_flags(const struct insn *instruction, uint64_t guest_
             !(hl_x86_trace_flags_livein(trace_state, next, guest_pc) & (HL_X86_FLAG_PF | HL_X86_FLAG_AF));
 }
 
+// Tries the independent primary-opcode lowerers in their established order.
+// TX_FALL preserves dispatch to the specialized handlers below; TX_NEXT and
+// TX_BREAK are consumed by the translation loop without reinterpretation.
+static int lower_primary_fast(struct insn *instruction, uint64_t guest_pc, uint64_t next,
+                              const hl_x86_trace_state *trace_state) {
+    const hl_x86_move_image image = {g_nonpie_lo, g_nonpie_hi, g_nonpie_bias};
+    int result = hl_x86_lower_mov(instruction, next, &image);
+    if (result != TX_FALL) return result;
+    result = hl_x86_lower_alu(instruction, next);
+    if (result != TX_FALL) return result;
+
+    const hl_x86_shift_state shift_state = {
+        .parity_aux_dead = g_pfaf_dead,
+        .output_flags_dead = trace_state->flag_elision &&
+                             !(hl_x86_trace_flags_livein(trace_state, next, guest_pc) &
+                               (HL_X86_FLAG_ALL & ~HL_X86_FLAG_AF)),
+        .direct_registers = 1,
+    };
+    return hl_x86_lower_shift(instruction, next, &shift_state);
+}
+
+static int lower_primary_string(struct insn *instruction, uint64_t next, hl_x86_crypto_state *crypto_state) {
+    hl_x86_repstr_state state = {.direction = g_df, .optimize = 1};
+    int result = hl_x86_lower_repstr(instruction, next, &state);
+    g_df = state.direction;
+    if (result == TX_NEXT) {
+        // The ERMS funnel can clobber v16..v31, including hoisted constants.
+        crypto_state->zero_ready = crypto_state->mask_ready = 0;
+    }
+    return result;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -3254,42 +3286,12 @@ static void *translate_block(uint64_t gpc) {
         if (hl_x86_x87_known() && !(!I.two && op >= 0xD8 && op <= 0xDF)) hl_x86_x87_drop();
 
         if (!I.two) {
-            // ---- data-move class (mov B0-BF/C6/C7/88-8B, lea 8D, push/pop 50-5F, movsxd 63) ----
-            // Lowered in translate/mov.c translate_mov(); no EFLAGS interaction.
-            {
-                const hl_x86_move_image image = {g_nonpie_lo, g_nonpie_hi, g_nonpie_bias};
-                int s = hl_x86_lower_mov(&I, next, &image);
-                if (s == TX_NEXT) {
-                    gpc = next;
-                    continue;
-                }
+            int primary_result = lower_primary_fast(&I, gpc, next, &trace_state);
+            if (primary_result == TX_NEXT) {
+                gpc = next;
+                continue;
             }
-            // ---- integer ALU class (primary 00..3D, acc imm, group1 80/81/83, test 84/85 A8/A9) ----
-            // Lowered in lower/alu.c; flag deferral is unchanged (do_alu drives it).
-            {
-                int s = hl_x86_lower_alu(&I, next);
-                if (s == TX_NEXT) {
-                    gpc = next;
-                    continue;
-                }
-            }
-            // ---- shift/rotate class (group2: C0/C1/D0/D1/D2/D3 -> SHL/SHR/SAR/ROL/ROR/RCL/RCR) ----
-            // Lowered in lower/shift.c.
-            {
-                const hl_x86_shift_state shift_state = {
-                    .parity_aux_dead = g_pfaf_dead,
-                    .output_flags_dead =
-                        trace_state.flag_elision &&
-                        !(hl_x86_trace_flags_livein(&trace_state, next, gpc) & (HL_X86_FLAG_ALL & ~HL_X86_FLAG_AF)),
-                    .direct_registers = 1,
-                };
-                int s = hl_x86_lower_shift(&I, next, &shift_state);
-                if (s == TX_NEXT) {
-                    gpc = next;
-                    continue;
-                }
-                if (s == TX_BREAK) break;
-            }
+            if (primary_result == TX_BREAK) break;
             // ---- group3 (F6/F7): /0 test /2 not /3 neg /4 mul /5 imul /6 div /7 idiv ----
             if (op == 0xF6 || op == 0xF7) {
                 int k = I.reg & 7, w = op == 0xF6 ? 1 : I.opsize, mem;
@@ -3655,22 +3657,12 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // ---- string ops: stos/movs/lods (AA/AB/A4/A5/AC/AD), cmps/scas (A6/A7/AE/AF), cld/std (FC/FD).
-            // The independent repstr lowering returns how to steer this translate loop
-            // (TX_NEXT -> gpc=next;continue, TX_BREAK -> end the block, TX_FALL -> not a string op).
-            {
-                hl_x86_repstr_state repstr_state = {.direction = g_df, .optimize = 1};
-                int s = hl_x86_lower_repstr(&I, next, &repstr_state);
-                g_df = repstr_state.direction;
-                if (s == TX_NEXT) {
-                    // A string idiom was emitted; its ERMS funnel may `blr` a host helper, which can
-                    // clobber ALL of v16..v31 -- drop the crypto constant-hoist claims (v26/v27).
-                    crypto_state.zero_ready = crypto_state.mask_ready = 0;
-                    gpc = next;
-                    continue;
-                }
-                if (s == TX_BREAK) break;
+            int string_result = lower_primary_string(&I, next, &crypto_state);
+            if (string_result == TX_NEXT) {
+                gpc = next;
+                continue;
             }
+            if (string_result == TX_BREAK) break;
             // ---- jmp rel (E9/EB) ----
             if (op == 0xE9 || op == 0xEB) {
                 uint64_t tgt = next + (uint64_t)I.imm;
