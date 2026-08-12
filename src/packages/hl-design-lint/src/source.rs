@@ -384,9 +384,12 @@ fn directory_shapes(
 
     let mut entries = fs::read_dir(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
     entries.sort_by_key(std::fs::DirEntry::path);
+    // Repository shape is based on repository-owned entries. Placeholders and
+    // configured generated/external subtrees neither justify their parent nor
+    // produce findings from inside the excluded tree.
     let substantive = entries
         .iter()
-        .filter(|entry| !placeholder(&entry.path()))
+        .filter(|entry| substantive_entry(&entry.path(), include_linter, policy))
         .collect::<Vec<_>>();
     if substantive.is_empty() {
         empty.push(path.to_owned());
@@ -399,6 +402,10 @@ fn directory_shapes(
         }
     }
     Ok(())
+}
+
+fn substantive_entry(path: &Path, include_linter: bool, policy: &crate::policy::SourcePolicy) -> bool {
+    !placeholder(path) && !excluded(path, include_linter, policy)
 }
 
 fn conventional_single_directory(path: &Path) -> bool {
@@ -522,7 +529,7 @@ mod tests {
             ..Default::default()
         };
         let workspace = Workspace::load_with_policy([root.clone()], &policy).unwrap();
-        assert!(workspace.empty_directories().is_empty());
+        assert_eq!(workspace.empty_directories(), &[root.clone()]);
         fs::remove_dir_all(root).unwrap();
     }
 }

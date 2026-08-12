@@ -5,7 +5,14 @@ use crate::{
     source::{Workspace, domain, package},
 };
 
-/// Rejects repository structure that names a directory without giving it content.
+#[cfg(test)]
+#[path = "test.rs"]
+mod tests;
+
+/// Rejects repository structure that names a directory without owned content.
+///
+/// Placeholder files and configured generated or externally owned subtrees do
+/// not make a directory substantive. Excluded subtrees are not inspected.
 pub struct Directory;
 
 impl Rule for Directory {

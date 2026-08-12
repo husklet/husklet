@@ -102,10 +102,14 @@ pub struct OwnershipPolicy {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourcePolicy {
-    /// Directory names omitted during traversal.
+    /// Generated or externally owned directory names omitted during traversal.
+    ///
+    /// An ignored directory is opaque: the linter does not inspect it, and it
+    /// does not count as repository-owned content that can justify its parent.
     #[serde(default = "default_ignored_directories")]
     pub ignored_directories: Vec<String>,
     /// Marker files whose ancestor subtree is externally owned or generated.
+    /// Marked subtrees are opaque and do not count as content of their parent.
     #[serde(default)]
     pub ignored_markers: Vec<String>,
     /// Package directories omitted unless explicitly requested.

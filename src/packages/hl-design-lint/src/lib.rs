@@ -779,7 +779,9 @@ const PROSE: &str = "mod misc {}";
         };
         let workspace = Workspace::load_with_policy([root.clone()], &policy).unwrap();
 
-        assert!(EmptyDirectory.check(&workspace).unwrap().is_empty());
+        let findings = EmptyDirectory.check(&workspace).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].location.path, root.join("src/packages"));
         fs::remove_dir_all(root).unwrap();
     }
 
