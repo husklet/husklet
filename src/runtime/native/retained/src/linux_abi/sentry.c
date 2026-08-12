@@ -647,7 +647,12 @@ static struct hl_sentry_binding *binding_lookup_locked(pid_t wpid, uint32_t toke
     return hl_sentry_binding_find(g_binding, SENTRY_NBIND, wpid, token);
 }
 
-static void sentry_real_close(int descriptor) {
+static void sentry_native_close(int descriptor) {
+    fd_reset_emul(descriptor);
+    (void)close(descriptor);
+}
+
+static void sentry_bound_close(int descriptor) {
     struct cpu tmp;
     memset(&tmp, 0, sizeof tmp);
     if (!sentry_cpu_set_canonical(&tmp, 57)) abort();
@@ -655,11 +660,23 @@ static void sentry_real_close(int descriptor) {
     service_local(&tmp);
 }
 
+static void sentry_owned_close(int descriptor, int typed) {
+    if (typed)
+        sentry_bound_close(descriptor);
+    else
+        sentry_native_close(descriptor);
+}
+
+static void sentry_created_close(int descriptor) {
+    hl_linux_fd_snapshot snapshot;
+    sentry_owned_close(descriptor, bound_snapshot((uint64_t)(uint32_t)descriptor, &snapshot));
+}
+
 static void table_release_locked(uint16_t index) {
     struct sentry_proc *table = &g_table[index];
     if (table->refs == 0 || --table->refs != 0) return;
     for (uint32_t v = 0; v < SENTRY_VFD_MAX; v++)
-        if (table->real[v] >= 0 && !table->borrowed[v]) sentry_real_close(table->real[v]);
+        if (table->real[v] >= 0 && !table->borrowed[v]) sentry_owned_close(table->real[v], table->typed[v]);
     memset(table, 0, sizeof *table);
 }
 
@@ -933,8 +950,9 @@ static int sentry_proc_exec_sweep(pid_t wpid, uint32_t token) {
     if (p)
         for (uint32_t v = 0; v < SENTRY_VFD_MAX; v++)
             if (p->real[v] >= 0 && p->cloexec[v]) {
+                int typed = p->typed[v];
                 int rfd = vfd_drop(p, (int)v);
-                if (rfd >= 0) sentry_real_close(rfd);
+                if (rfd >= 0) sentry_owned_close(rfd, typed);
             }
     pthread_mutex_unlock(&g_fd_lock);
     return 0;
@@ -982,7 +1000,7 @@ static void sentry_cmsg_translate_in(struct sentry_proc *p, uint8_t *ctl, size_t
                 int *slot = (int *)(ctl + o + 16u + i * sizeof(int));
                 int v = vfd_alloc(p, *slot, 0);
                 if (v < 0) {
-                    sentry_real_close(*slot);
+                    sentry_native_close(*slot);
                     *slot = -1;
                 } else {
                     *slot = v;
@@ -1082,7 +1100,7 @@ static void sentry_service_one(struct sentry_ring *R) {
         if (v >= 0) p->cloexec[v] = (uint8_t)(R->a[0] != 0);
         pthread_mutex_unlock(&g_fd_lock);
         if (v < 0) {
-            sentry_real_close(rfd);
+            sentry_native_close(rfd);
             R->ret = -EMFILE;
         } else {
             R->ret = v;
@@ -1176,8 +1194,9 @@ static void sentry_service_one(struct sentry_ring *R) {
                     if ((flags & 4u) != 0) {
                         p->cloexec[v] = 1;
                     } else {
+                        int typed = p->typed[v];
                         int real = vfd_drop(p, (int)v);
-                        if (real >= 0) sentry_real_close(real);
+                        if (real >= 0) sentry_owned_close(real, typed);
                     }
                 }
             pthread_mutex_unlock(&g_fd_lock);
@@ -1599,8 +1618,9 @@ static void sentry_service_one(struct sentry_ring *R) {
                     local_ret = -errno;
                     break;
                 }
+                int prev_typed = p->typed[newv];
                 int prev = vfd_drop(p, newv);
-                if (prev >= 0) sentry_real_close(prev);
+                if (prev >= 0) sentry_owned_close(prev, prev_typed);
                 p->real[newv] = rnew;
                 p->borrowed[newv] = 0;
                 p->typed[newv] = p->typed[oldv];
@@ -1731,7 +1751,7 @@ static void sentry_service_one(struct sentry_ring *R) {
                 if (ret >= 0) {
                     int v = vfd_alloc(p, (int)ret, 0);
                     if (v < 0) {
-                        sentry_real_close((int)ret);
+                        sentry_created_close((int)ret);
                         R->ret = -EMFILE;
                     } else {
                         // Track the guest's FD_CLOEXEC intent so a later guest execve sweeps this fd. The
@@ -1762,7 +1782,7 @@ static void sentry_service_one(struct sentry_ring *R) {
                     uint32_t minv = (uint32_t)R->a[2];
                     int v = vfd_alloc(p, (int)ret, minv < SENTRY_VFD_MAX ? minv : 0);
                     if (v < 0) {
-                        sentry_real_close((int)ret);
+                        sentry_created_close((int)ret);
                         R->ret = -EMFILE;
                     } else {
                         p->cloexec[v] = (G_A1(&tmp) == 1030); // F_DUPFD_CLOEXEC sets FD_CLOEXEC on the new fd
@@ -1794,8 +1814,8 @@ static void sentry_service_one(struct sentry_ring *R) {
                     int v0 = vfd_alloc(p, r0, 0), v1 = (v0 >= 0) ? vfd_alloc(p, r1, 0) : -1;
                     if (v0 < 0 || v1 < 0) {
                         if (v0 >= 0) vfd_drop(p, v0);
-                        sentry_real_close(r0);
-                        sentry_real_close(r1);
+                        sentry_native_close(r0);
+                        sentry_native_close(r1);
                         R->ret = -EMFILE;
                     } else {
                         // pipe2(fds,flags): flags=a1; socketpair(dom,type,proto,fds): SOCK_CLOEXEC rides type=a1.
@@ -2271,7 +2291,7 @@ static void syscall_route(struct cpu *c) {
         if (nr == 56 && (int64_t)G_RET(c) >= 0) {
             int rfd = (int)G_RET(c);
             int64_t v = sentry_adopt_fd(rfd, (G_A2(c) & LX_O_CLOEXEC) != 0);
-            sentry_real_close(rfd);
+            sentry_native_close(rfd);
             G_RET(c) = (uint64_t)v;
         }
         return;
