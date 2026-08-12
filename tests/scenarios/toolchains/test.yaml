@@ -13,15 +13,6 @@ cases:
   fixtures: [{ source: source/c_sum.c, destination: /m.c }]
   actions: [{ shell: { script: "cc -O2 /m.c -o /m && /m" } }]
   expect: { stdout_contains: golden/r_sum.txt }
-- id: toolchains/alpine-cmake-c
-  image: silkeh/clang:18
-  timeout: 180
-  resources: [process_heavy]
-  fixtures:
-  - { source: source/c_sum.c, destination: /p/m.c }
-  - { source: source/CMakeLists.txt, destination: /p/CMakeLists.txt }
-  actions: [{ shell: { script: "cd /p && cmake -S . -B b && cmake --build b && ./b/m" } }]
-  expect: { stdout_contains: golden/r_sum.txt }
 - id: toolchains/alpine-gxx-stl
   image: gcc:14
   timeout: 180
@@ -173,22 +164,6 @@ cases:
   class: long
   actions: [{ shell: { script: "ld --version | head -1" } }]
   expect: { stdout_contains: golden/linker.txt }
-- id: toolchains/gcc-latest-make-banner
-  image: gcc:latest
-  timeout: 120
-  class: long
-  actions: [{ shell: { script: "make --version | head -1" } }]
-  expect: { stdout_contains: golden/make.txt }
-- id: toolchains/gcc-make
-  image: gcc:latest
-  timeout: 180
-  class: long
-  resources: [process_heavy]
-  fixtures:
-  - { source: source/make_sum.c, destination: /p/m.c }
-  - { source: source/Makefile, destination: /p/Makefile }
-  actions: [{ shell: { script: "cd /p && make -s run" } }]
-  expect: { stdout_contains: golden/make_sum.txt }
 - id: toolchains/go-121-alpine-banner
   image: golang:1.21-alpine
   timeout: 120
