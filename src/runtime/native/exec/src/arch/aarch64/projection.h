@@ -16,7 +16,8 @@ typedef hl_native_projection hl_a64_projection;
 
 int hl_a64_projection_validate(const hl_a64_projection *);
 int hl_a64_dirty_can_archive(const hl_native_aarch64_cpu *);
-int hl_a64_projection_resolve(const hl_a64_projection *, hl_native_aarch64_cpu *,
-                              uint64_t, uint64_t, uint32_t);
+int hl_a64_projection_resolve(const hl_a64_projection *,
+                              hl_native_aarch64_cpu *, uint64_t, uint64_t,
+                              uint32_t);
 
 #endif

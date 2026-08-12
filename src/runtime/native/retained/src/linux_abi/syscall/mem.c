@@ -1355,7 +1355,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     break;
                 }
             }
-            int r = mincore((void *)a0, len, (char *)vec);
+            int r = mincore((void *)a0, len, (unsigned char *)vec);
             if (r == 0)
                 for (size_t i = 0; i < npages; i++)
                     vec[i] &= 1u;
@@ -1384,7 +1384,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 break;
             }
         }
-        int r = mincore((void *)a0, len, (char *)hv);
+        int r = mincore((void *)a0, len, (unsigned char *)hv);
         if (r == 0 && a2) {
             // The host mincore filled our scratch `hv`; the guest vector at a2 is written DIRECTLY by the
             // engine (one byte per guest page). Validate it before the projection loop so a bad/unmapped

@@ -13,6 +13,14 @@ set(HL_RUNTIME_C
     "${CMAKE_CURRENT_SOURCE_DIR}/shim.c")
 add_library(hl_lint_native_objects OBJECT EXCLUDE_FROM_ALL ${HL_EXEC_C} ${HL_RUNTIME_C})
 target_compile_features(hl_lint_native_objects PRIVATE c_std_11)
+set(HL_STRICT_C_WARNINGS
+    -Werror -Werror=implicit-function-declaration -Werror=implicit-int
+    -Werror=incompatible-pointer-types -Werror=return-type)
+set(HL_HARDENED_C_WARNINGS
+    -Wall -Wextra
+    -Wstrict-prototypes)
+target_compile_options(hl_lint_native_objects PRIVATE ${HL_STRICT_C_WARNINGS})
+target_compile_options(hl_lint_native_objects PRIVATE ${HL_HARDENED_C_WARNINGS})
 set_source_files_properties(${HL_RUNTIME_C} PROPERTIES COMPILE_DEFINITIONS _GNU_SOURCE)
 target_include_directories(hl_lint_native_objects PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/retained/include" "${CMAKE_CURRENT_SOURCE_DIR}/retained/src" "${CMAKE_CURRENT_SOURCE_DIR}/exec/include" "${CMAKE_CURRENT_SOURCE_DIR}/exec/src" "${CMAKE_CURRENT_SOURCE_DIR}/cpu/include")
 
@@ -50,8 +58,9 @@ foreach(group IN LISTS HL_RETAINED_GROUPS)
   elseif(group STREQUAL "lifecycle_x86_64_direct")
     target_compile_definitions(${target} PRIVATE HL_EMBEDDED_BUILD=1 HL_TARGET_NAMESPACE=x86_64 HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_X86_64)
   else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror=implicit-function-declaration -Werror=implicit-int)
+    target_compile_options(${target} PRIVATE ${HL_HARDENED_C_WARNINGS})
   endif()
+  target_compile_options(${target} PRIVATE ${HL_STRICT_C_WARNINGS})
   target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/retained/include" "${CMAKE_CURRENT_SOURCE_DIR}/retained/src")
   list(APPEND HL_RETAINED_TUS ${HL_RETAINED_${group}_SOURCES})
   list(APPEND HL_STRICT_WARNING_TARGETS ${target})
@@ -65,16 +74,29 @@ add_dependencies(hl_lint source-manifest-check)
 find_program(HL_CLANG_FORMAT clang-format REQUIRED)
 find_program(HL_CLANG_TIDY clang-tidy REQUIRED)
 find_program(HL_CPPCHECK cppcheck REQUIRED)
-set(HL_CLANG_TIDY_CHECKS "clang-analyzer-*,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.MmapWriteExec,-clang-analyzer-unix.BlockInCriticalSection,bugprone-assignment-in-if-condition,bugprone-branch-clone,bugprone-inc-dec-in-conditions,bugprone-infinite-loop,bugprone-not-null-terminated-result,bugprone-posix-return,bugprone-signal-handler,bugprone-sizeof-expression,bugprone-suspicious-memory-comparison,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation")
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/retained/RUNTIME_SOURCES.manifest" HL_RETAINED_SOURCE_ROWS)
-set(HL_RETAINED_SOURCES)
-foreach(source IN LISTS HL_RETAINED_SOURCE_ROWS)
-  if(source MATCHES "[.](c|h)$")
-    list(APPEND HL_RETAINED_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/retained/${source}")
+set(HL_CLANG_TIDY_CHECKS "-*,clang-analyzer-*,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.MmapWriteExec,-clang-analyzer-unix.BlockInCriticalSection,bugprone-assignment-in-if-condition,bugprone-branch-clone,bugprone-inc-dec-in-conditions,bugprone-infinite-loop,bugprone-not-null-terminated-result,bugprone-posix-return,bugprone-signal-handler,bugprone-sizeof-expression,bugprone-suspicious-memory-comparison,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation")
+set(HL_AMALGAMATED_TIDY_CHECKS "-*,bugprone-inc-dec-in-conditions,bugprone-infinite-loop,bugprone-posix-return,bugprone-signal-handler,bugprone-sizeof-expression,bugprone-suspicious-memory-comparison,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation")
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/lint-sources.manifest" HL_NATIVE_SOURCE_ROWS)
+set(HL_LINT_SOURCES)
+foreach(row IN LISTS HL_NATIVE_SOURCE_ROWS)
+  string(REPLACE "\t" ";" columns "${row}")
+  list(GET columns 0 classification)
+  list(GET columns 1 source)
+  if(classification STREQUAL "source" AND source MATCHES "[.](c|h)$")
+    list(APPEND HL_LINT_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
   endif()
 endforeach()
-set(HL_LINT_SOURCES ${HL_EXEC_C} ${HL_RUNTIME_C} ${HL_RETAINED_SOURCES})
+set(HL_PRODUCTION_TUS ${HL_RUNTIME_C} ${HL_RETAINED_normal_archive_SOURCES})
+list(REMOVE_DUPLICATES HL_PRODUCTION_TUS)
+set(HL_AMALGAMATED_TUS
+    ${HL_EXEC_C}
+    ${HL_RETAINED_target_aarch64_direct_SOURCES}
+    ${HL_RETAINED_target_x86_64_direct_SOURCES}
+    ${HL_RETAINED_lifecycle_aarch64_direct_SOURCES}
+    ${HL_RETAINED_lifecycle_x86_64_direct_SOURCES})
+list(REMOVE_DUPLICATES HL_AMALGAMATED_TUS)
 set(HL_TIDY_ARGS)
+set(HL_AMALGAMATED_TIDY_ARGS)
 set(HL_SOURCE_ARGS)
 set(HL_ALLOW_STDIO
     src/core/target/aarch64.c
@@ -101,8 +123,18 @@ set(HL_ALLOW_STDIO
     src/translator/guest/x86_64/signal.c
     src/translator/guest/x86_64/translate.c
     tools/lifecycle_runner.c)
-foreach(source IN LISTS HL_RETAINED_normal_archive_SOURCES)
+set(HL_ALLOW_STDIO_NATIVE
+    linter/src/analyzers.c
+    linter/src/cli.c
+    linter/src/hl_lint.c
+    linter/src/policy.c
+    linter/src/sources.c)
+foreach(source IN LISTS HL_PRODUCTION_TUS)
   list(APPEND HL_TIDY_ARGS --clang-tidy-source-file "${source}")
+endforeach()
+foreach(source IN LISTS HL_AMALGAMATED_TUS)
+  list(APPEND HL_AMALGAMATED_TIDY_ARGS --clang-tidy-source-file "${source}")
+  list(APPEND HL_AMALGAMATED_TIDY_ARGS --source-file "${source}")
 endforeach()
 foreach(source IN LISTS HL_LINT_SOURCES)
   list(APPEND HL_SOURCE_ARGS --source-file "${source}")
@@ -110,6 +142,10 @@ endforeach()
 foreach(source IN LISTS HL_ALLOW_STDIO)
   list(APPEND HL_SOURCE_ARGS --allow-stdio-file "runtime/native/retained/${source}")
 endforeach()
-add_custom_target(lint-c COMMAND $<TARGET_FILE:hl_lint> --strict --compile-commands-dir "${CMAKE_BINARY_DIR}" --clang-format-bin "${HL_CLANG_FORMAT}" --clang-tidy-bin "${HL_CLANG_TIDY}" --cppcheck-bin "${HL_CPPCHECK}" --clang-tidy-checks "${HL_CLANG_TIDY_CHECKS}" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}/retained/include" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}/retained/src" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}/exec/include" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}/exec/src" --clang-format-check --clang-tidy-check --cppcheck-check ${HL_SOURCE_ARGS} ${HL_TIDY_ARGS} DEPENDS hl_lint source-manifest-check strict-warnings-c WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.." USES_TERMINAL COMMAND_EXPAND_LISTS)
+foreach(source IN LISTS HL_ALLOW_STDIO_NATIVE)
+  list(APPEND HL_SOURCE_ARGS --allow-stdio-file "runtime/native/${source}")
+endforeach()
+add_custom_target(lint-c-amalgamated-tidy COMMAND $<TARGET_FILE:hl_lint> --strict --compile-commands-dir "${CMAKE_BINARY_DIR}" --clang-tidy-bin "${HL_CLANG_TIDY}" --clang-tidy-checks "${HL_AMALGAMATED_TIDY_CHECKS}" --skip-clang-format --clang-tidy-check --skip-cppcheck --skip-custom ${HL_AMALGAMATED_TIDY_ARGS} DEPENDS hl_lint strict-warnings-c WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.." USES_TERMINAL COMMAND_EXPAND_LISTS)
+add_custom_target(lint-c COMMAND $<TARGET_FILE:hl_lint> --strict --compile-commands-dir "${CMAKE_BINARY_DIR}" --clang-format-bin "${HL_CLANG_FORMAT}" --clang-tidy-bin "${HL_CLANG_TIDY}" --cppcheck-bin "${HL_CPPCHECK}" --clang-tidy-checks "${HL_CLANG_TIDY_CHECKS}" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}/retained/include" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}/retained/src" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}/exec/include" --include-dir "${CMAKE_CURRENT_SOURCE_DIR}/exec/src" --clang-format-check --clang-tidy-check --cppcheck-check ${HL_SOURCE_ARGS} ${HL_TIDY_ARGS} DEPENDS hl_lint source-manifest-check strict-warnings-c lint-c-amalgamated-tidy WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.." USES_TERMINAL COMMAND_EXPAND_LISTS)
 add_custom_target(fmt-c COMMAND "${HL_CLANG_FORMAT}" -i ${HL_LINT_SOURCES} USES_TERMINAL COMMAND_EXPAND_LISTS)
 add_custom_target(fmt-c-check COMMAND "${HL_CLANG_FORMAT}" --dry-run --Werror ${HL_LINT_SOURCES} USES_TERMINAL COMMAND_EXPAND_LISTS)

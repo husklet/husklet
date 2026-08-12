@@ -6,18 +6,16 @@
 #include "../word.h"
 #include "cpu.h"
 
-static void branch(uint32_t *instruction, uint32_t *target,
-                   unsigned condition) {
-  int64_t distance = target - instruction;
-  *instruction = UINT32_C(0x54000000) |
-                 ((uint32_t)distance & UINT32_C(0x7ffff)) << 5 | condition;
+static void branch(uint32_t *word, uint32_t *target, unsigned condition) {
+  int64_t distance = target - word;
+  *word = UINT32_C(0x54000000) | ((uint32_t)distance & UINT32_C(0x7ffff)) << 5 |
+          condition;
 }
 
-static void test(uint32_t *instruction, uint32_t *target, unsigned bit) {
-  int64_t distance = target - instruction;
-  *instruction = UINT32_C(0x36000000) | (bit & 0x20u) << 26 |
-                 (bit & 31u) << 19 |
-                 ((uint32_t)distance & UINT32_C(0x3fff)) << 5 | 17u;
+static void test(uint32_t *word, uint32_t *target, unsigned bit) {
+  int64_t distance = target - word;
+  *word = UINT32_C(0x36000000) | (bit & 0x20u) << 26 | (bit & 31u) << 19 |
+          ((uint32_t)distance & UINT32_C(0x3fff)) << 5 | 17u;
 }
 
 /* Checked load with no architectural mutation before all guards pass. */

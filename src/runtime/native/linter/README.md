@@ -8,7 +8,7 @@ and merge analyzer output in emission order.
 Run the repository check:
 
 ```sh
-nix build .#checks.$(nix eval --impure --raw --expr builtins.currentSystem).lint
+make lint-c
 ```
 
 Engine code must read environment variables through the central configuration

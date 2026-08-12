@@ -8,6 +8,7 @@
 #define HL_A64_STRUCTURE_MAX_BYTES HL_A64_GUARDED_MAX_BYTES
 
 int hl_a64_structure_emit(hl_a64_assembler *, uint32_t, uint64_t);
-int hl_a64_structure_body(hl_a64_assembler *, uint32_t, uint64_t, hl_a64_guard *, hl_a64_memory_sites *);
+int hl_a64_structure_body(hl_a64_assembler *, uint32_t, uint64_t,
+                          hl_a64_guard *, hl_a64_memory_sites *);
 
 #endif

@@ -4,9 +4,9 @@
 #include "lint.h"
 
 typedef enum {
-    HL_LINT_CLI_RUN,
-    HL_LINT_CLI_EXIT_SUCCESS,
-    HL_LINT_CLI_EXIT_ERROR,
+  HL_LINT_CLI_RUN,
+  HL_LINT_CLI_EXIT_SUCCESS,
+  HL_LINT_CLI_EXIT_ERROR,
 } HlLintCliResult;
 
 void hl_lint_list_init(StringList *list);

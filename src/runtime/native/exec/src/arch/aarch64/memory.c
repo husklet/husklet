@@ -74,7 +74,7 @@ static uint64_t structure_bytes(uint32_t word) {
   }
   int opcode = (word >> 13) & 7u;
   int scale = (opcode >> 1) & 3;
-  int elements = (((opcode & 1) << 1) | ((word >> 21) & 1)) + 1;
+  int elements = (int)((((opcode & 1) << 1) | ((word >> 21) & 1)) + 1);
   if (scale == 3)
     scale = (word >> 10) & 3u;
   return (uint64_t)elements << scale;

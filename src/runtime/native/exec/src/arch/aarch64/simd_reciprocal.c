@@ -13,12 +13,12 @@ static int valid(uint32_t word) {
       return !scalar && size == 2u;
     if (opcode != 0x1du || size < 2u)
       return 0;
-    return scalar ? q : (size == 2u || q);
+    return scalar ? q != 0u : (size == 2u || q != 0u);
   }
   if ((word & UINT32_C(0x8f200400)) != UINT32_C(0x0e200400) ||
       ((word >> 11) & 31u) != 0x1fu || u)
     return 0;
-  return scalar ? q : ((size & 1u) == 0u || q);
+  return scalar ? q != 0u : ((size & 1u) == 0u || q != 0u);
 }
 
 int hl_a64_simd_reciprocal_body(hl_a64_assembler *assembler, uint32_t word) {

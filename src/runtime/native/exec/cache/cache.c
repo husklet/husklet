@@ -456,7 +456,8 @@ hl_native_cache_publish_map(hl_native_cache *cache, hl_native_block *block,
       used == 0 || used > block->code_size || body_offset >= used ||
       block->admitted_offset < block->code_offset ||
       block->admitted_offset >= block->code_offset + used || records == NULL ||
-      record_count == 0 || record_count > cache->provenance_capacity)
+      record_count == 0 || record_count > cache->provenance_capacity ||
+      block->relocation_count > UINT16_MAX || block->decoded_count > UINT16_MAX)
     return HL_NATIVE_ARGUMENT;
   uint64_t previous_end = 0;
   for (uint32_t index = 0; index < record_count; index++) {
@@ -510,10 +511,10 @@ hl_native_cache_publish_map(hl_native_cache *cache, hl_native_block *block,
   entry->admitted_offset = block->admitted_offset;
   entry->instruction_count =
       block->instruction_count != 0 ? block->instruction_count : 1u;
-  entry->relocation_count = block->relocation_count;
+  entry->relocation_count = (uint16_t)block->relocation_count;
   entry->conditional_self_loop = block->conditional_self_loop;
   entry->cycle_safe = block->cycle_safe;
-  entry->decoded_count = block->decoded_count;
+  entry->decoded_count = (uint16_t)block->decoded_count;
   entry->loop_pc = block->loop_pc;
   /* Publication makes bytes executable first. Provenance is then complete
    * before the live identity can be observed by a dispatcher lookup. */

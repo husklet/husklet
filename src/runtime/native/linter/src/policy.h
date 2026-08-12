@@ -3,6 +3,7 @@
 
 #include "lint.h"
 
-void hl_lint_policy_run(const LintConfig *config, const StringList *files, LintStats *stats);
+void hl_lint_policy_run(const LintConfig *config, const StringList *files,
+                        LintStats *stats);
 
 #endif

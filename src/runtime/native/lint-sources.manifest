@@ -1,91 +1,618 @@
-runtime/native/exec/cache/cache.c
-runtime/native/exec/cache/relocation.c
-runtime/native/exec/src/arch/aarch64/add.c
-runtime/native/exec/src/arch/aarch64/arithmetic.c
-runtime/native/exec/src/arch/aarch64/assembler.c
-runtime/native/exec/src/arch/aarch64/atomic.c
-runtime/native/exec/src/arch/aarch64/bitwise.c
-runtime/native/exec/src/arch/aarch64/block.c
-runtime/native/exec/src/arch/aarch64/broadcast.c
-runtime/native/exec/src/arch/aarch64/compare.c
-runtime/native/exec/src/arch/aarch64/conditional.c
-runtime/native/exec/src/arch/aarch64/crypto.c
-runtime/native/exec/src/arch/aarch64/direct.c
-runtime/native/exec/src/arch/aarch64/divide.c
-runtime/native/exec/src/arch/aarch64/fault.c
-runtime/native/exec/src/arch/aarch64/fault_darwin.c
-runtime/native/exec/src/arch/aarch64/field.c
-runtime/native/exec/src/arch/aarch64/floating.c
-runtime/native/exec/src/arch/aarch64/fp_convert.c
-runtime/native/exec/src/arch/aarch64/fp_move.c
-runtime/native/exec/src/arch/aarch64/fp_reduce.c
-runtime/native/exec/src/arch/aarch64/frontend.c
-runtime/native/exec/src/arch/aarch64/guard.c
-runtime/native/exec/src/arch/aarch64/indirect.c
-runtime/native/exec/src/arch/aarch64/logical.c
-runtime/native/exec/src/arch/aarch64/memory.c
-runtime/native/exec/src/arch/aarch64/move.c
-runtime/native/exec/src/arch/aarch64/multiply.c
-runtime/native/exec/src/arch/aarch64/narrow_arithmetic.c
-runtime/native/exec/src/arch/aarch64/narrow_move.c
-runtime/native/exec/src/arch/aarch64/ordered.c
-runtime/native/exec/src/arch/aarch64/pair.c
-runtime/native/exec/src/arch/aarch64/pair_arithmetic.c
-runtime/native/exec/src/arch/aarch64/pcrel.c
-runtime/native/exec/src/arch/aarch64/projection.c
-runtime/native/exec/src/arch/aarch64/reverse.c
-runtime/native/exec/src/arch/aarch64/saturating_narrow.c
-runtime/native/exec/src/arch/aarch64/select.c
-runtime/native/exec/src/arch/aarch64/shift.c
-runtime/native/exec/src/arch/aarch64/simd_compare.c
-runtime/native/exec/src/arch/aarch64/simd_difference.c
-runtime/native/exec/src/arch/aarch64/simd_float.c
-runtime/native/exec/src/arch/aarch64/simd_immediate.c
-runtime/native/exec/src/arch/aarch64/simd_integer.c
-runtime/native/exec/src/arch/aarch64/simd_logic.c
-runtime/native/exec/src/arch/aarch64/simd_narrow.c
-runtime/native/exec/src/arch/aarch64/simd_pairwise.c
-runtime/native/exec/src/arch/aarch64/simd_permute.c
-runtime/native/exec/src/arch/aarch64/simd_reciprocal.c
-runtime/native/exec/src/arch/aarch64/simd_reduce.c
-runtime/native/exec/src/arch/aarch64/simd_saturating.c
-runtime/native/exec/src/arch/aarch64/simd_widening.c
-runtime/native/exec/src/arch/aarch64/single.c
-runtime/native/exec/src/arch/aarch64/source.c
-runtime/native/exec/src/arch/aarch64/structure.c
-runtime/native/exec/src/arch/aarch64/stub.c
-runtime/native/exec/src/arch/aarch64/system.c
-runtime/native/exec/src/arch/aarch64/terminator.c
-runtime/native/exec/src/arch/aarch64/trace.c
-runtime/native/exec/src/arch/aarch64/zero.c
-runtime/native/exec/src/arch/x86_64/flags.c
-runtime/native/exec/src/arch/x86_64/frontend.c
-runtime/native/exec/src/arch/x86_64/frontend/address.c
-runtime/native/exec/src/arch/x86_64/frontend/arithmetic.c
-runtime/native/exec/src/arch/x86_64/frontend/bit.c
-runtime/native/exec/src/arch/x86_64/frontend/conditional.c
-runtime/native/exec/src/arch/x86_64/frontend/control.c
-runtime/native/exec/src/arch/x86_64/frontend/double_shift.c
-runtime/native/exec/src/arch/x86_64/frontend/immediate.c
-runtime/native/exec/src/arch/x86_64/frontend/memory.c
-runtime/native/exec/src/arch/x86_64/frontend/multiply.c
-runtime/native/exec/src/arch/x86_64/frontend/nop.c
-runtime/native/exec/src/arch/x86_64/frontend/output.c
-runtime/native/exec/src/arch/x86_64/frontend/request.c
-runtime/native/exec/src/arch/x86_64/frontend/rotate.c
-runtime/native/exec/src/arch/x86_64/frontend/shift.c
-runtime/native/exec/src/arch/x86_64/frontend/test.c
-runtime/native/exec/src/arch/x86_64/projection.c
-runtime/native/exec/src/arch/x86_64/run.c
-runtime/native/exec/src/arena.c
-runtime/native/exec/src/dispatch/exit.c
-runtime/native/exec/src/executor.c
-runtime/native/exec/src/fault/coordinator.c
-runtime/native/exec/src/fault/provenance.c
-runtime/native/exec/src/fault/thread.c
-runtime/native/exec/src/ibtc/storage.c
-runtime/native/exec/src/state.c
-runtime/native/exec/src/translation.c
-runtime/native/address_projection.c
-runtime/native/executable_authority.c
-runtime/native/shim.c
+source	address_projection.c
+source	address_projection.h
+source	cpu/include/layout.h
+fixture	cpu/test/layout.c
+source	exec/cache/cache.c
+source	exec/cache/cache.h
+source	exec/cache/private.h
+source	exec/cache/relocation.c
+source	exec/include/cpu.h
+source	exec/include/executor.h
+source	exec/include/toolchain.h
+source	exec/src/arch/aarch64/add.c
+source	exec/src/arch/aarch64/add.h
+source	exec/src/arch/aarch64/arithmetic.c
+source	exec/src/arch/aarch64/arithmetic.h
+source	exec/src/arch/aarch64/assembler.c
+source	exec/src/arch/aarch64/assembler.h
+source	exec/src/arch/aarch64/atomic.c
+source	exec/src/arch/aarch64/atomic.h
+source	exec/src/arch/aarch64/bitwise.c
+source	exec/src/arch/aarch64/bitwise.h
+source	exec/src/arch/aarch64/block.c
+source	exec/src/arch/aarch64/block.h
+source	exec/src/arch/aarch64/broadcast.c
+source	exec/src/arch/aarch64/broadcast.h
+source	exec/src/arch/aarch64/compare.c
+source	exec/src/arch/aarch64/compare.h
+source	exec/src/arch/aarch64/conditional.c
+source	exec/src/arch/aarch64/conditional.h
+source	exec/src/arch/aarch64/crypto.c
+source	exec/src/arch/aarch64/crypto.h
+source	exec/src/arch/aarch64/direct.c
+source	exec/src/arch/aarch64/direct.h
+source	exec/src/arch/aarch64/divide.c
+source	exec/src/arch/aarch64/divide.h
+assembly	exec/src/arch/aarch64/entry.S
+source	exec/src/arch/aarch64/entry.h
+source	exec/src/arch/aarch64/fault.c
+source	exec/src/arch/aarch64/fault.h
+source	exec/src/arch/aarch64/fault_darwin.c
+source	exec/src/arch/aarch64/field.c
+source	exec/src/arch/aarch64/field.h
+source	exec/src/arch/aarch64/floating.c
+source	exec/src/arch/aarch64/floating.h
+source	exec/src/arch/aarch64/fp_convert.c
+source	exec/src/arch/aarch64/fp_convert.h
+source	exec/src/arch/aarch64/fp_move.c
+source	exec/src/arch/aarch64/fp_move.h
+source	exec/src/arch/aarch64/fp_reduce.c
+source	exec/src/arch/aarch64/fp_reduce.h
+source	exec/src/arch/aarch64/frontend.c
+source	exec/src/arch/aarch64/frontend.h
+source	exec/src/arch/aarch64/guard.c
+source	exec/src/arch/aarch64/guard.h
+source	exec/src/arch/aarch64/indirect.c
+source	exec/src/arch/aarch64/indirect.h
+source	exec/src/arch/aarch64/logical.c
+source	exec/src/arch/aarch64/logical.h
+source	exec/src/arch/aarch64/memory.c
+source	exec/src/arch/aarch64/memory.h
+source	exec/src/arch/aarch64/move.c
+source	exec/src/arch/aarch64/move.h
+source	exec/src/arch/aarch64/multiply.c
+source	exec/src/arch/aarch64/multiply.h
+source	exec/src/arch/aarch64/narrow_arithmetic.c
+source	exec/src/arch/aarch64/narrow_arithmetic.h
+source	exec/src/arch/aarch64/narrow_move.c
+source	exec/src/arch/aarch64/narrow_move.h
+source	exec/src/arch/aarch64/ordered.c
+source	exec/src/arch/aarch64/ordered.h
+source	exec/src/arch/aarch64/pair.c
+source	exec/src/arch/aarch64/pair.h
+source	exec/src/arch/aarch64/pair_arithmetic.c
+source	exec/src/arch/aarch64/pair_arithmetic.h
+source	exec/src/arch/aarch64/pcrel.c
+source	exec/src/arch/aarch64/pcrel.h
+source	exec/src/arch/aarch64/projection.c
+source	exec/src/arch/aarch64/projection.h
+source	exec/src/arch/aarch64/reverse.c
+source	exec/src/arch/aarch64/reverse.h
+source	exec/src/arch/aarch64/saturating_narrow.c
+source	exec/src/arch/aarch64/saturating_narrow.h
+source	exec/src/arch/aarch64/select.c
+source	exec/src/arch/aarch64/select.h
+source	exec/src/arch/aarch64/shift.c
+source	exec/src/arch/aarch64/shift.h
+source	exec/src/arch/aarch64/simd_compare.c
+source	exec/src/arch/aarch64/simd_compare.h
+source	exec/src/arch/aarch64/simd_difference.c
+source	exec/src/arch/aarch64/simd_difference.h
+source	exec/src/arch/aarch64/simd_float.c
+source	exec/src/arch/aarch64/simd_float.h
+source	exec/src/arch/aarch64/simd_immediate.c
+source	exec/src/arch/aarch64/simd_immediate.h
+source	exec/src/arch/aarch64/simd_integer.c
+source	exec/src/arch/aarch64/simd_integer.h
+source	exec/src/arch/aarch64/simd_logic.c
+source	exec/src/arch/aarch64/simd_logic.h
+source	exec/src/arch/aarch64/simd_narrow.c
+source	exec/src/arch/aarch64/simd_narrow.h
+source	exec/src/arch/aarch64/simd_pairwise.c
+source	exec/src/arch/aarch64/simd_pairwise.h
+source	exec/src/arch/aarch64/simd_permute.c
+source	exec/src/arch/aarch64/simd_permute.h
+source	exec/src/arch/aarch64/simd_reciprocal.c
+source	exec/src/arch/aarch64/simd_reciprocal.h
+source	exec/src/arch/aarch64/simd_reduce.c
+source	exec/src/arch/aarch64/simd_reduce.h
+source	exec/src/arch/aarch64/simd_saturating.c
+source	exec/src/arch/aarch64/simd_saturating.h
+source	exec/src/arch/aarch64/simd_widening.c
+source	exec/src/arch/aarch64/simd_widening.h
+source	exec/src/arch/aarch64/single.c
+source	exec/src/arch/aarch64/single.h
+source	exec/src/arch/aarch64/source.c
+source	exec/src/arch/aarch64/source.h
+source	exec/src/arch/aarch64/structure.c
+source	exec/src/arch/aarch64/structure.h
+source	exec/src/arch/aarch64/stub.c
+source	exec/src/arch/aarch64/stub.h
+source	exec/src/arch/aarch64/system.c
+source	exec/src/arch/aarch64/system.h
+source	exec/src/arch/aarch64/terminator.c
+source	exec/src/arch/aarch64/terminator.h
+source	exec/src/arch/aarch64/trace.c
+source	exec/src/arch/aarch64/trace.h
+source	exec/src/arch/aarch64/zero.c
+source	exec/src/arch/aarch64/zero.h
+source	exec/src/arch/x86_64/decode.h
+assembly	exec/src/arch/x86_64/entry.S
+source	exec/src/arch/x86_64/entry.h
+source	exec/src/arch/x86_64/flags.c
+source	exec/src/arch/x86_64/flags.h
+source	exec/src/arch/x86_64/frontend.c
+source	exec/src/arch/x86_64/frontend.h
+source	exec/src/arch/x86_64/frontend/address.c
+source	exec/src/arch/x86_64/frontend/arithmetic.c
+source	exec/src/arch/x86_64/frontend/bit.c
+source	exec/src/arch/x86_64/frontend/conditional.c
+source	exec/src/arch/x86_64/frontend/control.c
+source	exec/src/arch/x86_64/frontend/double_shift.c
+source	exec/src/arch/x86_64/frontend/immediate.c
+source	exec/src/arch/x86_64/frontend/memory.c
+source	exec/src/arch/x86_64/frontend/multiply.c
+source	exec/src/arch/x86_64/frontend/nop.c
+source	exec/src/arch/x86_64/frontend/output.c
+source	exec/src/arch/x86_64/frontend/private.h
+source	exec/src/arch/x86_64/frontend/request.c
+source	exec/src/arch/x86_64/frontend/rotate.c
+source	exec/src/arch/x86_64/frontend/shift.c
+source	exec/src/arch/x86_64/frontend/test.c
+source	exec/src/arch/x86_64/projection.c
+source	exec/src/arch/x86_64/projection.h
+source	exec/src/arch/x86_64/run.c
+source	exec/src/arch/x86_64/run.h
+source	exec/src/arch/x86_64/word.h
+source	exec/src/arena.c
+source	exec/src/arena.h
+source	exec/src/dispatch/exit.c
+source	exec/src/dispatch/exit.h
+source	exec/src/executor.c
+source	exec/src/executor.h
+source	exec/src/fault/coordinator.c
+source	exec/src/fault/provenance.c
+source	exec/src/fault/provenance.h
+source	exec/src/fault/thread.c
+source	exec/src/ibtc/storage.c
+source	exec/src/ibtc/storage.h
+source	exec/src/state.c
+source	exec/src/state.h
+source	exec/src/translation.c
+source	exec/src/translation.h
+fixture	exec/test/a64_cycles.c
+fixture	exec/test/aarch64_add.c
+fixture	exec/test/aarch64_addressing.c
+fixture	exec/test/aarch64_arithmetic.c
+fixture	exec/test/aarch64_assembler.c
+fixture	exec/test/aarch64_atomic.c
+fixture	exec/test/aarch64_bitwise.c
+fixture	exec/test/aarch64_block.c
+fixture	exec/test/aarch64_broadcast.c
+fixture	exec/test/aarch64_compare.c
+fixture	exec/test/aarch64_conditional.c
+fixture	exec/test/aarch64_counter.c
+fixture	exec/test/aarch64_crypto.c
+fixture	exec/test/aarch64_cycle.c
+fixture	exec/test/aarch64_difference.c
+fixture	exec/test/aarch64_direct.c
+fixture	exec/test/aarch64_dirty_bound.c
+fixture	exec/test/aarch64_divide.c
+fixture	exec/test/aarch64_entry.c
+fixture	exec/test/aarch64_fault.c
+fixture	exec/test/aarch64_field.c
+fixture	exec/test/aarch64_fp.c
+fixture	exec/test/aarch64_fpreduce.c
+fixture	exec/test/aarch64_frontend.c
+fixture	exec/test/aarch64_indirect.c
+fixture	exec/test/aarch64_integer.c
+fixture	exec/test/aarch64_logical.c
+fixture	exec/test/aarch64_memory.c
+fixture	exec/test/aarch64_move.c
+fixture	exec/test/aarch64_multiply.c
+fixture	exec/test/aarch64_narrow.c
+fixture	exec/test/aarch64_narrowarith.c
+fixture	exec/test/aarch64_narrowmove.c
+fixture	exec/test/aarch64_ordered.c
+fixture	exec/test/aarch64_pair.c
+fixture	exec/test/aarch64_pairarith.c
+fixture	exec/test/aarch64_pairwise.c
+fixture	exec/test/aarch64_pcrel.c
+fixture	exec/test/aarch64_permute.c
+fixture	exec/test/aarch64_projection.c
+fixture	exec/test/aarch64_provenance.c
+fixture	exec/test/aarch64_read_cache.c
+fixture	exec/test/aarch64_reciprocal.c
+fixture	exec/test/aarch64_reduce.c
+fixture	exec/test/aarch64_reverse.c
+fixture	exec/test/aarch64_satnarrow.c
+fixture	exec/test/aarch64_saturating.c
+fixture	exec/test/aarch64_select.c
+fixture	exec/test/aarch64_shift.c
+fixture	exec/test/aarch64_single.c
+fixture	exec/test/aarch64_source.c
+assembly	exec/test/aarch64_spill.S
+fixture	exec/test/aarch64_stale_site.c
+fixture	exec/test/aarch64_stitch.c
+fixture	exec/test/aarch64_store_cache.c
+fixture	exec/test/aarch64_structure.c
+fixture	exec/test/aarch64_structures.c
+fixture	exec/test/aarch64_stub.c
+fixture	exec/test/aarch64_system.c
+fixture	exec/test/aarch64_terminator.c
+fixture	exec/test/aarch64_trace.c
+fixture	exec/test/aarch64_vector.c
+fixture	exec/test/aarch64_view_hygiene.c
+fixture	exec/test/aarch64_widening.c
+fixture	exec/test/allocation.c
+fixture	exec/test/allocation.h
+fixture	exec/test/cache.c
+fixture	exec/test/control_metadata.c
+fixture	exec/test/direct.c
+fixture	exec/test/double_shift.c
+fixture	exec/test/exit.c
+fixture	exec/test/fault_coordinator.c
+fixture	exec/test/fault_thread.c
+fixture	exec/test/gate.c
+fixture	exec/test/ibtc_rollover.c
+fixture	exec/test/indirect_metadata.c
+fixture	exec/test/integration.c
+fixture	exec/test/lifecycle.c
+fixture	exec/test/lock_prefix.c
+fixture	exec/test/memory_lifecycle.c
+fixture	exec/test/pcrel_materialization.c
+fixture	exec/test/predicate_metadata.c
+fixture	exec/test/provenance.c
+fixture	exec/test/run.c
+fixture	exec/test/simd_immediate.c
+fixture	exec/test/state_tally.c
+fixture	exec/test/support.h
+fixture	exec/test/translation.c
+fixture	exec/test/x86_bits.c
+fixture	exec/test/x86_budget.c
+fixture	exec/test/x86_chain.c
+fixture	exec/test/x86_continue.c
+fixture	exec/test/x86_diagnostics.c
+fixture	exec/test/x86_flag_elision.c
+fixture	exec/test/x86_fork_gap.c
+fixture	exec/test/x86_loop_accounting.c
+fixture	exec/test/x86_movnti.c
+fixture	exec/test/x86_projection.c
+fixture	exec/test/x86_rep.c
+fixture	exec/test/x86_request_flags.c
+assembly	exec/test/x86_run.S
+fixture	exec/test/x86_translation.c
+fixture	exec/test/x86_view_dedup.c
+fixture	exec/test/x86_word_budget.c
+fixture	exec/test/x86_word_counts.c
+fixture	exec/test/x86_write_counters.c
+fixture	exec/test/xadd.c
+source	executable_authority.c
+source	executable_authority.h
+fixture	fixtures/testing/projected_directory.c
+fixture	fixtures/testing/projected_read.c
+fixture	fixtures/testing/projected_spin.c
+fixture	fixtures/testing/projected_static.c
+fixture	fixtures/testing/projected_write.c
+source	linter/src/analyzers.c
+source	linter/src/analyzers.h
+source	linter/src/cli.c
+source	linter/src/cli.h
+source	linter/src/hl_lint.c
+source	linter/src/lint.h
+source	linter/src/policy.c
+source	linter/src/policy.h
+source	linter/src/process.h
+source	linter/src/process_posix.c
+source	linter/src/process_windows.c
+source	linter/src/sources.c
+source	linter/src/sources.h
+fixture	linter/tests/environment_extended_fixture.c
+fixture	linter/tests/fake_analyzer.c
+fixture	linter/tests/fixture.c
+fixture	linter/tests/getenv_fixture.c
+fixture	linter/tests/process_helper.c
+fixture	linter/tests/shell_fixture.c
+fixture	linter/tests/stdio_extended_fixture.c
+fixture	linter/tests/stdio_fixture.c
+fixture	linter/tests/test_process.c
+source	main_plan.h
+source	retained/include/hl/activation.h
+source	retained/include/hl/base.h
+source	retained/include/hl/checkpoint_stream.h
+source	retained/include/hl/engine.h
+source	retained/include/hl/host_services.h
+source	retained/include/hl/linux.h
+source	retained/include/hl/linux_abi.h
+source	retained/include/hl/log.h
+source	retained/include/hl/macos.h
+source	retained/include/hl/network.h
+source	retained/include/hl/syscall_trap.h
+source	retained/src/core/bus.c
+source	retained/src/core/bus.h
+source	retained/src/core/checkpoint_channel.c
+source	retained/src/core/checkpoint_channel.h
+source	retained/src/core/dispatch.c
+source	retained/src/core/engine.c
+source	retained/src/core/engine_backend.h
+source	retained/src/core/engine_result.h
+source	retained/src/core/fatal.c
+source	retained/src/core/fatal.h
+source	retained/src/core/host_services.c
+source	retained/src/core/lifecycle.c
+source	retained/src/core/log.c
+source	retained/src/core/options.c
+source	retained/src/core/options.h
+source	retained/src/core/profile.h
+source	retained/src/core/provider/client.c
+source	retained/src/core/provider/client.h
+source	retained/src/core/provider/demux.c
+source	retained/src/core/provider/demux.h
+source	retained/src/core/provider/files.c
+source	retained/src/core/provider/files.h
+source	retained/src/core/provider/handles.c
+source	retained/src/core/provider/handles.h
+source	retained/src/core/provider/namespace.c
+source	retained/src/core/provider/namespace.h
+source	retained/src/core/provider/tree_files.c
+source	retained/src/core/provider/tree_files.h
+source	retained/src/core/target/aarch64.c
+source	retained/src/core/target/bus.c
+source	retained/src/core/target/bus.h
+source	retained/src/core/target/dual.c
+source	retained/src/core/target/namespace.h
+source	retained/src/core/target/native.c
+source	retained/src/core/target/native.h
+source	retained/src/core/target/services.c
+source	retained/src/core/target/services.h
+source	retained/src/core/target/x86_64.c
+source	retained/src/host/child.c
+source	retained/src/host/child.h
+source	retained/src/host/clock.c
+source	retained/src/host/clock.h
+source	retained/src/host/directory.h
+source	retained/src/host/file.c
+source	retained/src/host/file.h
+source	retained/src/host/fork_wire.c
+source	retained/src/host/fork_wire.h
+source	retained/src/host/host_cpu.h
+source	retained/src/host/libc_compat.h
+source	retained/src/host/linux/directory.c
+source	retained/src/host/linux/host.c
+source	retained/src/host/linux/probe.h
+source	retained/src/host/linux/process.c
+source	retained/src/host/linux/range.c
+source	retained/src/host/linux/system.c
+source	retained/src/host/macos/directory.c
+source	retained/src/host/macos/host.c
+source	retained/src/host/macos/probe.h
+source	retained/src/host/macos/process.c
+source	retained/src/host/macos/range.c
+source	retained/src/host/macos/system.c
+source	retained/src/host/native_compat.h
+source	retained/src/host/native_context.h
+source	retained/src/host/private.c
+source	retained/src/host/process.h
+source	retained/src/host/range.c
+source	retained/src/host/range.h
+source	retained/src/host/resolve.c
+source	retained/src/host/resolve.h
+source	retained/src/host/sync.c
+source	retained/src/host/sync.h
+source	retained/src/host/system.h
+source	retained/src/linux_abi/affinity.c
+source	retained/src/linux_abi/affinity.h
+source	retained/src/linux_abi/bus.h
+source	retained/src/linux_abi/checkpoint.c
+source	retained/src/linux_abi/checkpoint.h
+source	retained/src/linux_abi/ckpt_sink.h
+source	retained/src/linux_abi/ckpt_source.h
+source	retained/src/linux_abi/container/key.c
+source	retained/src/linux_abi/container/key.h
+source	retained/src/linux_abi/container/namespace.h
+source	retained/src/linux_abi/container/netns.c
+source	retained/src/linux_abi/container/owner.h
+source	retained/src/linux_abi/container/pidmap.c
+source	retained/src/linux_abi/container/pidmap.h
+source	retained/src/linux_abi/container/ports.c
+source	retained/src/linux_abi/container/ports.h
+source	retained/src/linux_abi/container/route.c
+source	retained/src/linux_abi/container/route.h
+source	retained/src/linux_abi/container/shm.c
+source	retained/src/linux_abi/container/shm.h
+source	retained/src/linux_abi/container/snapshot.c
+source	retained/src/linux_abi/container/snapshot.h
+source	retained/src/linux_abi/container/socket_identity.h
+source	retained/src/linux_abi/container/state.c
+source	retained/src/linux_abi/container/vfs.c
+source	retained/src/linux_abi/container/vfs/gmap.c
+source	retained/src/linux_abi/container/vfs/gmap.h
+source	retained/src/linux_abi/container/vfs/overlay.c
+source	retained/src/linux_abi/container/vfs/resolve.c
+source	retained/src/linux_abi/device.c
+source	retained/src/linux_abi/device.h
+source	retained/src/linux_abi/dns.c
+source	retained/src/linux_abi/dns.h
+source	retained/src/linux_abi/elf.c
+source	retained/src/linux_abi/elf_protect.h
+source	retained/src/linux_abi/encode.h
+source	retained/src/linux_abi/epoll.c
+source	retained/src/linux_abi/epoll.h
+source	retained/src/linux_abi/errno.c
+source	retained/src/linux_abi/errno.h
+source	retained/src/linux_abi/eventfd.c
+source	retained/src/linux_abi/eventfd.h
+source	retained/src/linux_abi/fdcache.c
+source	retained/src/linux_abi/fdcache.h
+source	retained/src/linux_abi/fdhandle.c
+source	retained/src/linux_abi/fdhandle.h
+source	retained/src/linux_abi/fork.c
+source	retained/src/linux_abi/fork_codec.c
+source	retained/src/linux_abi/fork_codec.h
+source	retained/src/linux_abi/forwarded.h
+source	retained/src/linux_abi/goimage.h
+source	retained/src/linux_abi/guest_stat.h
+source	retained/src/linux_abi/host_dirent.h
+source	retained/src/linux_abi/host_fd.h
+source	retained/src/linux_abi/host_fs.h
+source	retained/src/linux_abi/host_mman.h
+source	retained/src/linux_abi/host_poll.h
+source	retained/src/linux_abi/host_proc.h
+source	retained/src/linux_abi/host_signal.h
+source	retained/src/linux_abi/host_socket.h
+source	retained/src/linux_abi/host_stat.h
+source	retained/src/linux_abi/host_system.h
+source	retained/src/linux_abi/host_sysv.h
+source	retained/src/linux_abi/host_tty.h
+source	retained/src/linux_abi/host_uio.h
+source	retained/src/linux_abi/host_wait.h
+source	retained/src/linux_abi/image.c
+source	retained/src/linux_abi/image.h
+source	retained/src/linux_abi/inotify.c
+source	retained/src/linux_abi/inotify.h
+source	retained/src/linux_abi/limits.c
+source	retained/src/linux_abi/limits.h
+source	retained/src/linux_abi/linux_abi.c
+source	retained/src/linux_abi/logical_vma.c
+source	retained/src/linux_abi/logical_vma.h
+source	retained/src/linux_abi/number.c
+source	retained/src/linux_abi/number.h
+source	retained/src/linux_abi/object.h
+source	retained/src/linux_abi/open_plan.c
+source	retained/src/linux_abi/open_plan.h
+source	retained/src/linux_abi/page.h
+source	retained/src/linux_abi/parse.c
+source	retained/src/linux_abi/parse.h
+source	retained/src/linux_abi/pipe.c
+source	retained/src/linux_abi/pipe.h
+source	retained/src/linux_abi/placement.c
+source	retained/src/linux_abi/placement.h
+source	retained/src/linux_abi/readonly.c
+source	retained/src/linux_abi/readonly.h
+source	retained/src/linux_abi/seccomp.c
+source	retained/src/linux_abi/seccomp_vm.c
+source	retained/src/linux_abi/seccomp_vm.h
+source	retained/src/linux_abi/sentry.c
+source	retained/src/linux_abi/sentry_authority.h
+source	retained/src/linux_abi/sentry_binding.h
+source	retained/src/linux_abi/sentry_pipe.h
+source	retained/src/linux_abi/sentry_snapshot.h
+source	retained/src/linux_abi/sentry_start.h
+source	retained/src/linux_abi/sentry_token.h
+source	retained/src/linux_abi/shared.c
+source	retained/src/linux_abi/shared.h
+source	retained/src/linux_abi/signal.c
+source	retained/src/linux_abi/sink_stream.h
+source	retained/src/linux_abi/stat.c
+source	retained/src/linux_abi/syscall/aio.c
+source	retained/src/linux_abi/syscall/binding.c
+source	retained/src/linux_abi/syscall/dispatch.c
+source	retained/src/linux_abi/syscall/epoll_registry.h
+source	retained/src/linux_abi/syscall/event.c
+source	retained/src/linux_abi/syscall/fs.c
+source	retained/src/linux_abi/syscall/guest_copy.c
+source	retained/src/linux_abi/syscall/helpers.c
+source	retained/src/linux_abi/syscall/inotify.c
+source	retained/src/linux_abi/syscall/io.c
+source	retained/src/linux_abi/syscall/mem.c
+source	retained/src/linux_abi/syscall/misc.c
+source	retained/src/linux_abi/syscall/misc.h
+source	retained/src/linux_abi/syscall/net.c
+source	retained/src/linux_abi/syscall/nonpie_args.h
+source	retained/src/linux_abi/syscall/proc.c
+source	retained/src/linux_abi/syscall/ptrace.c
+source	retained/src/linux_abi/syscall/rare.c
+source	retained/src/linux_abi/syscall/signal.c
+source	retained/src/linux_abi/syscall/sysv.c
+source	retained/src/linux_abi/syscall/time.c
+source	retained/src/linux_abi/thread.c
+source	retained/src/linux_abi/watch.c
+source	retained/src/linux_abi/watch.h
+source	retained/src/linux_abi/x86.c
+source	retained/src/linux_abi/xattr.c
+source	retained/src/linux_abi/xattr.h
+source	retained/src/translator/arena.c
+source	retained/src/translator/arena.h
+source	retained/src/translator/cache.c
+source	retained/src/translator/cache_abi.h
+source	retained/src/translator/digest.c
+source	retained/src/translator/digest.h
+source	retained/src/translator/emit.h
+source	retained/src/translator/guest/aarch64/abi.h
+source	retained/src/translator/guest/aarch64/cache.c
+source	retained/src/translator/guest/aarch64/cpu.h
+source	retained/src/translator/guest/aarch64/dispatch.h
+source	retained/src/translator/guest/aarch64/interp.c
+source	retained/src/translator/guest/aarch64/interp_dispatch.h
+source	retained/src/translator/guest/aarch64/signal.c
+source	retained/src/translator/guest/aarch64/signal.h
+source	retained/src/translator/guest/aarch64/stubs.c
+source	retained/src/translator/guest/aarch64/translate.c
+source	retained/src/translator/guest/x86_64/abi.h
+source	retained/src/translator/guest/x86_64/address.c
+source	retained/src/translator/guest/x86_64/address.h
+source	retained/src/translator/guest/x86_64/avx.c
+source	retained/src/translator/guest/x86_64/avx.h
+source	retained/src/translator/guest/x86_64/cache.c
+source	retained/src/translator/guest/x86_64/cmpxchg.c
+source	retained/src/translator/guest/x86_64/cmpxchg.h
+source	retained/src/translator/guest/x86_64/cpu.h
+source	retained/src/translator/guest/x86_64/cpuid.c
+source	retained/src/translator/guest/x86_64/cpuid.h
+source	retained/src/translator/guest/x86_64/decode.c
+source	retained/src/translator/guest/x86_64/decoder.h
+source	retained/src/translator/guest/x86_64/dispatch.h
+source	retained/src/translator/guest/x86_64/emit.c
+source	retained/src/translator/guest/x86_64/encoding.h
+source	retained/src/translator/guest/x86_64/flags.c
+source	retained/src/translator/guest/x86_64/flags.h
+source	retained/src/translator/guest/x86_64/frame.h
+source	retained/src/translator/guest/x86_64/glue.c
+source	retained/src/translator/guest/x86_64/glue.h
+source	retained/src/translator/guest/x86_64/interp.c
+source	retained/src/translator/guest/x86_64/interp_dispatch.h
+source	retained/src/translator/guest/x86_64/legacy.c
+source	retained/src/translator/guest/x86_64/legacy.h
+source	retained/src/translator/guest/x86_64/lower/alu.c
+source	retained/src/translator/guest/x86_64/lower/alu.h
+source	retained/src/translator/guest/x86_64/lower/crypto.c
+source	retained/src/translator/guest/x86_64/lower/crypto.h
+source	retained/src/translator/guest/x86_64/lower/mov.c
+source	retained/src/translator/guest/x86_64/lower/mov.h
+source	retained/src/translator/guest/x86_64/lower/primitives.h
+source	retained/src/translator/guest/x86_64/lower/repstr.c
+source	retained/src/translator/guest/x86_64/lower/repstr.h
+source	retained/src/translator/guest/x86_64/lower/shift.c
+source	retained/src/translator/guest/x86_64/lower/shift.h
+source	retained/src/translator/guest/x86_64/lower/sse4x.c
+source	retained/src/translator/guest/x86_64/lower/sse4x.h
+source	retained/src/translator/guest/x86_64/lower/trace.c
+source	retained/src/translator/guest/x86_64/lower/trace.h
+source	retained/src/translator/guest/x86_64/lower/x87.c
+source	retained/src/translator/guest/x86_64/lower/x87.h
+source	retained/src/translator/guest/x86_64/lower/x87_stack.c
+source	retained/src/translator/guest/x86_64/lower/x87_stack.h
+source	retained/src/translator/guest/x86_64/operand.c
+source	retained/src/translator/guest/x86_64/operand.h
+source	retained/src/translator/guest/x86_64/rep.c
+source	retained/src/translator/guest/x86_64/rep.h
+source	retained/src/translator/guest/x86_64/rep_runtime.c
+source	retained/src/translator/guest/x86_64/rep_runtime.h
+source	retained/src/translator/guest/x86_64/rotate.c
+source	retained/src/translator/guest/x86_64/rotate.h
+source	retained/src/translator/guest/x86_64/signal.c
+source	retained/src/translator/guest/x86_64/translate.c
+source	retained/src/translator/guest/x86_64/translit/translit.c
+source	retained/src/translator/guest/x86_64/x87math.c
+source	retained/src/translator/guest/x86_64/x87math.h
+source	retained/src/translator/guest/x86_64/x87state.c
+source	retained/src/translator/guest/x86_64/x87state.h
+source	retained/src/translator/guest_fetch.c
+source	retained/src/translator/guest_fetch.h
+source	retained/src/translator/guest_memory.c
+source	retained/src/translator/guest_memory.h
+source	retained/src/translator/host/aarch64/asm.c
+source	retained/src/translator/host/aarch64/asm.h
+source	retained/src/translator/host/x86_64/asm.h
+source	retained/src/translator/identity.c
+source	retained/src/translator/identity.h
+source	retained/src/translator/persist.c
+source	retained/src/translator/persist.h
+source	retained/src/translator/reloc.c
+source	retained/src/translator/reloc.h
+source	retained/src/translator/window.c
+source	retained/src/translator/window.h
+fixture	retained/tests/aarch64_interpreter_link_smoke.c
+fixture	retained/tests/options_contract.c
+source	retained/tools/lifecycle_runner.c
+source	shim.c

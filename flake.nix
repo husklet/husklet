@@ -166,6 +166,10 @@
       };
 
       commonNativeInputs = pkgs: [
+        pkgs.clang-tools
+        pkgs.cmake
+        pkgs.cppcheck
+        pkgs.gnumake
         pkgs.pkg-config
         pkgs.python3
       ];
@@ -318,6 +322,7 @@
               fi
 
               cargo fmt --all --check --message-format short
+              make lint-c-inner
               cargo run --locked --offline -q -p hl-design-lint -- src tests
               cargo run --locked --offline -q -p hl-design-lint -- --cases lint src tests
               cargo build -p engine -p testing --bins --locked --offline
