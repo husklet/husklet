@@ -1231,6 +1231,27 @@ static enum avx_dispatch_result avx_dispatch_immediate_permutation(const hl_x86_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_qword_comparison(const hl_x86_avx_state *state, struct cpu *c,
+                                                                  struct insn *instruction, uint64_t next, int map,
+                                                                  int op, int destination, int first_register,
+                                                                  int width) {
+    if (map != 2 || (op != 0x29 && op != 0x37)) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t first[64], second[64], output[64];
+    avx_get(c, first_register, first);
+    avx_get_rm(state, c, instruction, next, width, second);
+    for (int offset = 0; offset < width; offset += 8) {
+        int64_t left, right;
+        memcpy(&left, first + offset, 8);
+        memcpy(&right, second + offset, 8);
+        uint64_t result = op == 0x29 ? (left == right ? UINT64_MAX : 0) : (left > right ? UINT64_MAX : 0);
+        memcpy(output + offset, &result, 8);
+    }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1680,6 +1701,8 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_fp16_conversion(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_immediate_blend(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_immediate_permutation(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map2_qword_comparison(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
+        return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2491,35 +2514,9 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             avx_put(c, rd, d, W);
             goto done;
         }
-        case 0x29: { // vpcmpeqq: per-qword equality -> all-ones/zero
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += 8) {
-                uint64_t x, y;
-                memcpy(&x, a + i, 8);
-                memcpy(&y, b + i, 8);
-                uint64_t o = (x == y) ? ~0ull : 0;
-                memcpy(d + i, &o, 8);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
         case 0x2A: { // vmovntdqa: streaming aligned load m128/m256 -> reg
             avx_get_rm(state, c, &I, next, W, b);
             avx_put(c, rd, b, W);
-            goto done;
-        }
-        case 0x37: { // vpcmpgtq: per-qword signed greater-than -> all-ones/zero
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += 8) {
-                int64_t x, y;
-                memcpy(&x, a + i, 8);
-                memcpy(&y, b + i, 8);
-                uint64_t o = (x > y) ? ~0ull : 0;
-                memcpy(d + i, &o, 8);
-            }
-            avx_put(c, rd, d, W);
             goto done;
         }
         case 0x38: // vpminsb/vpmaxsb (byte), vpminsd/vpmaxsd (dword),
