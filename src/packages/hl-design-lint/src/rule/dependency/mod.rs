@@ -322,6 +322,9 @@ impl Graph {
 /// exact dependency direction. Normal, build, development, target-specific,
 /// renamed, and workspace-inherited local dependencies all resolve to this
 /// same source/target pair before reaching this check.
+// The graph is intentionally written as one flat, reviewable edge inventory;
+// nesting coincident source or target spellings would obscure individual edges.
+#[allow(clippy::unnested_or_patterns)]
 fn allowed_edge(source: &str, target: &str) -> bool {
     matches!(
         (source, target),
