@@ -68,7 +68,7 @@ impl StdError for ProductArmError {
     }
 }
 
-fn product_arm_error(
+pub(super) fn product_arm_error(
     round: u32,
     position: usize,
     backend: ProductBackend,
@@ -229,7 +229,7 @@ fn preserve_product_identity(
     observed: &str,
     round: u32,
     position: usize,
-) -> Result<(), Error> {
+) -> std::result::Result<(), Error> {
     match expected {
         Some(expected) if expected != observed => {
             Err(format!("product A/B output changed at round {round} position {position}").into())
@@ -250,7 +250,7 @@ fn lifecycle_sum(values: &[(String, u128)], names: &[&str]) -> u128 {
         .sum()
 }
 
-fn product_order(round: u32) -> [ProductBackend; 2] {
+pub(super) fn product_order(round: u32) -> [ProductBackend; 2] {
     if round.is_multiple_of(2) {
         [ProductBackend::ExplicitC, ProductBackend::DefaultC]
     } else {

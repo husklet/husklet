@@ -1,4 +1,4 @@
-use super::{ProductBackend, product_arm_error, product_order};
+use super::product::{ProductBackend, product_arm_error, product_order};
 
 #[test]
 fn product_pair_order_balances_first_position() {

@@ -1,3 +1,4 @@
+use super::{Benchmark, Capture, DIAGNOSTIC_OUTPUT, capture_size, output_excerpt, parse_phases, stdout_contains};
 use crate::suite::BoundedCapture as _;
 use hl_container::{Entry, Stream};
 

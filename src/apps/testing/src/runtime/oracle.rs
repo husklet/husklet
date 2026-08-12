@@ -36,7 +36,7 @@ pub fn oracle(options: OracleOptions) -> Result<(), Error> {
     }
 }
 
-fn validate_case_ids(apps: &[App]) -> Result<(), Error> {
+pub(super) fn validate_case_ids(apps: &[App]) -> Result<(), Error> {
     let mut ids = std::collections::BTreeSet::new();
     for case in apps.iter().flat_map(|app| &app.cases) {
         if !ids.insert(&case.id) {
@@ -46,7 +46,7 @@ fn validate_case_ids(apps: &[App]) -> Result<(), Error> {
     Ok(())
 }
 
-fn apps(options: &Options) -> Result<Vec<App>, Error> {
+pub(super) fn apps(options: &Options) -> Result<Vec<App>, Error> {
     let root = workspace()?.join("tests/runtime");
     let mut directories = std::fs::read_dir(&root)?
         .map(|entry| entry.map(|value| value.path()))

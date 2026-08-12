@@ -415,7 +415,7 @@ fn plan_app(app: &Arc<App>, options: &Options, host: EngineHost, work: &mut Vec<
         if !app.supports(target) {
             continue;
         }
-        for (case_index, case) in app.cases.iter().enumerate() {
+        for case_index in 0..app.cases.len() {
             plan_case(app, case_index, target, options, host, work, skipped);
         }
     }
@@ -490,6 +490,7 @@ fn display_attempt(id: &str, attempt: Option<u16>) -> String {
 
 mod oracle;
 pub(crate) use oracle::{OracleOptions, oracle};
+use oracle::{apps, validate_case_ids};
 
 pub(super) fn workspace() -> Result<PathBuf, Error> {
     let mut path = Path::new(env!("CARGO_MANIFEST_DIR"));

@@ -9,9 +9,9 @@ use crate::{
 use hl_container::{Config, ContainerSpec, Entry, ExitStatus, Isolation, Process, Sandbox, Session};
 use std::{
     collections::BTreeMap,
-    error::Error as StdError,
-    fmt, fs,
+    fs,
     os::unix::fs::PermissionsExt,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -55,7 +55,7 @@ pub struct Preparation {
 }
 
 mod product;
-pub use product::{ProductBackend, ProductRun, ProductSample, run_product_ab};
+pub use product::{ProductSample, run_product_ab};
 pub struct Measurement {
     pub cold: u128,
     pub samples: Vec<u128>,
