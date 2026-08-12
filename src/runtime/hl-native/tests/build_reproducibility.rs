@@ -41,7 +41,7 @@ fn find_artifact(directory: &Path, filename: &str) -> Option<PathBuf> {
 }
 
 #[test]
-#[ignore = "expensive independent-build reproducibility gate"]
+#[ignore = "expensive independent-build gate run by the release workflow"]
 fn native_shared_library_is_reproducible_across_out_directories() {
     let package = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = package.ancestors().nth(3).expect("workspace root");

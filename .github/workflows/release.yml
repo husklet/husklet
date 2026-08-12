@@ -103,6 +103,15 @@ jobs:
         with:
           shared-key: husklet-release
 
+      # This expensive package gate intentionally stays out of the default test suite.
+      # Releases must prove that two independent OUT_DIR trees produce the same dylib.
+      - name: Verify native shared-library reproducibility
+        timeout-minutes: 10
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test --locked --offline -p hl-native --test build_reproducibility --
+          --ignored --exact native_shared_library_is_reproducible_across_out_directories
+
       - name: Configure Developer ID signing and notarization
         env:
           P12_B64: ${{ secrets.HL_SIGN_P12_BASE64 }}
