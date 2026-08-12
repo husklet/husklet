@@ -85,19 +85,23 @@ impl Declarations {
             .iter()
             .map(|source| source.path.clone())
             .collect::<BTreeSet<_>>();
-        let mut values = Vec::new();
-        for source in workspace.sources() {
-            for item in &source.syntax.items {
-                let Item::Mod(module) = item else { continue };
-                if let Some(target) = module_target(source, module, &paths) {
-                    values.push(Declaration {
-                        name: module.ident.to_string(),
-                        target,
-                        test: requires_test(&module.attrs),
-                    });
-                }
-            }
-        }
+        let values = workspace
+            .sources()
+            .iter()
+            .flat_map(|source| {
+                source.syntax.items.iter().filter_map(move |item| {
+                    let Item::Mod(module) = item else { return None };
+                    Some((source, module))
+                })
+            })
+            .filter_map(|(source, module)| {
+                module_target(source, module, &paths).map(|target| Declaration {
+                    name: module.ident.to_string(),
+                    target,
+                    test: requires_test(&module.attrs),
+                })
+            })
+            .collect();
         Self { values }
     }
 
