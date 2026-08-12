@@ -15,6 +15,7 @@
 
 mod journal;
 mod nested;
+#[cfg(target_os = "macos")]
 mod platform;
 mod pool;
 mod record;

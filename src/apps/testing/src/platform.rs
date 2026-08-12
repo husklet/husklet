@@ -10,7 +10,4 @@ impl HostProcess {
         std::process::Command::new(program)
     }
 
-    pub(crate) fn asynchronous(program: impl AsRef<OsStr>) -> tokio::process::Command {
-        tokio::process::Command::new(program)
-    }
 }
