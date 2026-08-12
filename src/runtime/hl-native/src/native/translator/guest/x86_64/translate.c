@@ -4009,6 +4009,36 @@ static int lower_bit_test_modify(struct insn *instruction, uint64_t guest_pc, ui
     return TX_NEXT;
 }
 
+static int lower_extended_state(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    if (instruction->op == 0x77) return TX_NEXT;
+    if (instruction->op != 0xAE) return TX_FALL;
+    int operation = instruction->reg & 7;
+    if (operation >= 5) {
+        emit32(0xD5033BBFu);
+        return TX_NEXT;
+    }
+    if (operation == 2) {
+        emit_ldmxcsr(instruction, next);
+        return TX_NEXT;
+    }
+    if (operation == 3) {
+        emit_stmxcsr(instruction, next);
+        return TX_NEXT;
+    }
+    if ((operation != 0 && operation != 1) || !instruction->is_mem) return TX_FALL;
+    emit_ea(instruction, next);
+    emit_memory_guard(17, 512, guest_pc, operation == 0 ? X86_SOFT_WRITE : X86_SOFT_READ);
+    if (operation == 0 && emit_soft_memory_active()) {
+        emit_soft_store_commit(512);
+        e_ldr(17, 28, OFF_BUS_EA);
+    }
+    e_str(17, 28, OFF_X87EA);
+    if (g_fl_pending) flags_materialize();
+    if (hl_x86_x87_known()) hl_x86_x87_drop();
+    emit_exit_const(next, operation == 0 ? R_FXSAVE : R_FXRSTOR);
+    return TX_BREAK;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6203,41 +6233,12 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             // 0F AE: fences (lfence/mfence/sfence -> dmb), ldmxcsr/stmxcsr, fxsave/fxrstor (xmm area)
-            if (op == 0x77) { // emms: empty MMX state. MMX registers map to the NEON file here (they do not
-                gpc = next;   // alias the x87 stack in this model), so there is no tag word to reset -> no-op.
+            int extended_state_result = lower_extended_state(&I, gpc, next);
+            if (extended_state_result == TX_NEXT) {
+                gpc = next;
                 continue;
             }
-            if (op == 0xAE) {
-                int sub = I.reg & 7;
-                if (sub >= 5) {
-                    emit32(0xD5033BBFu);
-                    gpc = next;
-                    continue;
-                } // *fence -> dmb ish
-                if (sub == 2) { // ldmxcsr
-                    emit_ldmxcsr(&I, next);
-                    gpc = next;
-                    continue;
-                }
-                if (sub == 3) { // stmxcsr
-                    emit_stmxcsr(&I, next);
-                    gpc = next;
-                    continue;
-                }
-                if ((sub == 0 || sub == 1) && I.is_mem) { // fxsave / fxrstor
-                    emit_ea(&I, next);                    // x17 = base of the 512-byte FXSAVE area
-                    emit_memory_guard(17, 512, gpc, sub == 0 ? X86_SOFT_WRITE : X86_SOFT_READ);
-                    if (sub == 0 && emit_soft_memory_active()) {
-                        emit_soft_store_commit(512);
-                        e_ldr(17, 28, OFF_BUS_EA);
-                    }
-                    e_str(17, 28, OFF_X87EA); // preserve EA across BUS guards and scratch lowering
-                    if (g_fl_pending) flags_materialize();
-                    if (hl_x86_x87_known()) hl_x86_x87_drop();
-                    emit_exit_const(next, sub == 0 ? R_FXSAVE : R_FXRSTOR);
-                    break;
-                }
-            }
+            if (extended_state_result == TX_BREAK) break;
             int bit_scan_result = lower_bit_scan(&I, next, sf);
             if (bit_scan_result == TX_NEXT) {
                 gpc = next;
