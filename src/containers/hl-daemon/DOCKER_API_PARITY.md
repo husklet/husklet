@@ -91,7 +91,7 @@ not the engine, therefore owns this shape and version projection.
 | null for unselected collections | daemon `DiskUsageProjection` wire type | implemented |
 | legacy v1.24-v1.41 query compatibility | request-version projection | implemented |
 | bounded accounting and typed store errors | existing container/image/volume services | implemented |
-| activation ownership, blocking, cancellation and teardown | retained C / Rust engine composition | separate, unchanged |
+| activation ownership, blocking, cancellation and teardown | production C engine composition | separate, unchanged |
 
 ## Selected domain: versioned daemon negotiation
 
@@ -164,7 +164,7 @@ protocol domain.
 | truthful implemented and minimum version report | `http::system::{ping,version}` | implemented (1.43/1.24) |
 | malformed/unknown operation refusal | Axum routing and `ApiError` | implemented |
 | instance-owned lifecycle and teardown | `Server`, `SocketGuard`, and `Containers` | implemented |
-| POSIX/Windows launch mechanism and ISA selection | Rust engine activation/composition | separate owner; no HTTP divergence |
+| POSIX/Windows launch mechanism and ISA selection | engine activation/composition | separate owner; no HTTP divergence |
 
 The coherent change routes the same truthful version report through every
 already-supported prefix.  It does not admit API 1.44 or later, alter response
@@ -242,7 +242,7 @@ readiness/lifecycle oracle is `/Users/x/dd/engine/src/core/activation.c`:
   only the inode it published. `system::ping` is the protocol commit point: it
   reports readiness only after a connection reached the bound router and now
   returns explicit, truthful daemon capabilities. The retained nonce handshake
-  has no HTTP analogue and remains owned by the Rust engine activation adapter.
+  has no HTTP analogue and remains owned by the engine activation adapter.
 
 There are no locking, errno, partial-I/O, or guest-architecture branches inside
 the ping response itself; those stay in the listener and transport owners.

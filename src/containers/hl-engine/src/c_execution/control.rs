@@ -1,4 +1,4 @@
-//! Fixed, bounded control wire between the Rust engine owner and one retained-C worker.
+//! Fixed, bounded control wire between the Rust product frontend and one C engine worker.
 //!
 //! Every message occupies exactly one frame. Keeping framing outside the payload makes a
 //! truncated stream, an oversized datagram, and an ABI mismatch fail closed before any command

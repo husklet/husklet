@@ -113,7 +113,7 @@ The statement above is valid only for the repository-owned `hl-process` test
 worker. It does not describe the integrated engine/container lifecycle. An
 engine guest may legitimately call `setsid`, outlive its initial process, and be
 reparented. The retained engine therefore uses a launch domain in addition to a
-process group. The Rust engine currently carries only the opaque identity in
+process group. The retired Rust executor carried only the opaque identity in
 `hl-engine/src/domain.rs` and the launch wire. `ProcessSyscalls` can spawn, wait,
 and signal a pid or process group, but cannot publish or enumerate membership,
 read a process birth identity, terminate a domain, or remove domain state.

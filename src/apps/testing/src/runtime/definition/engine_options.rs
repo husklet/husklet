@@ -99,8 +99,7 @@ impl EngineOptions {
             "HL_EXECUTION_BACKEND" => {
                 self.execution_backend = Some(match value {
                     "c" => ExecutionBackend::RetainedC,
-                    "rust" => ExecutionBackend::Rust,
-                    _ => return Err(format!("HL_EXECUTION_BACKEND is not c or rust: {value:?}").into()),
+                    _ => return Err(format!("HL_EXECUTION_BACKEND only supports c: {value:?}").into()),
                 });
             }
             "HL_SECCOMP_BASELINE" => {
@@ -154,16 +153,11 @@ impl EngineOptions {
         self.translation_cache.as_deref()
     }
 
-    /// Applies an explicit backend selection without changing whether the case
-    /// requested interpreted or generated-native Rust execution.
+    /// Applies the explicit C-backend spelling retained for compatibility.
     pub(crate) const fn execution(&self, base: Execution) -> Execution {
         match self.execution_backend {
             None => base,
             Some(ExecutionBackend::RetainedC) => Execution::RetainedC,
-            Some(ExecutionBackend::Rust) if base.is_native() => Execution::RustNative {
-                diagnostics: base.diagnostics(),
-            },
-            Some(ExecutionBackend::Rust) => Execution::RustInterpreted,
         }
     }
 
@@ -237,7 +231,6 @@ impl EngineOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExecutionBackend {
     RetainedC,
-    Rust,
 }
 
 /// One option's raw text, kept beside its name so every parse failure can say which option failed.
@@ -402,14 +395,12 @@ mod tests {
 
     #[test]
     fn backend_option_selects_product_arm_without_entering_the_guest() {
-        let (guest, rust) = EngineOptions::split(&entries(&[("HL_EXECUTION_BACKEND", "rust")])).unwrap();
-        assert!(guest.is_empty());
-        assert_eq!(
-            rust.execution(Execution::Native { diagnostics: true }),
-            Execution::RustNative { diagnostics: true }
-        );
+        assert!(EngineOptions::split(&entries(&[("HL_EXECUTION_BACKEND", "rust")])).is_err());
         let (_, retained) = EngineOptions::split(&entries(&[("HL_EXECUTION_BACKEND", "c")])).unwrap();
-        assert_eq!(retained.execution(Execution::Native { diagnostics: true }), Execution::RetainedC);
+        assert_eq!(
+            retained.execution(Execution::Native { diagnostics: true }),
+            Execution::RetainedC
+        );
         assert!(EngineOptions::split(&entries(&[("HL_EXECUTION_BACKEND", "other")])).is_err());
     }
 }

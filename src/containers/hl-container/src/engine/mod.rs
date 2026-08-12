@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_container_plan_uses_the_rust_engine() {
+    fn resolved_container_plan_uses_the_production_engine() {
         let launch = launch();
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.rootfs.as_deref(), Some(b"/rootfs".as_slice()));
@@ -451,22 +451,6 @@ mod tests {
         assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), Some("c"));
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
-    }
-
-    #[test]
-    fn explicit_rust_modes_reach_the_engine_launch_plan() {
-        let mut launch = launch();
-        launch.execution = crate::Execution::rust_interpreted();
-        let interpreted = Spec::try_from(&launch).unwrap();
-        assert_eq!(interpreted.plan.options.get("HL_EXECUTION_BACKEND"), Some("rust"));
-        assert_eq!(interpreted.plan.options.get("HL_NATIVE_EXECUTION"), None);
-        assert_eq!(interpreted.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
-
-        launch.execution = crate::Execution::rust_native(true);
-        let native = Spec::try_from(&launch).unwrap();
-        assert_eq!(native.plan.options.get("HL_EXECUTION_BACKEND"), Some("rust"));
-        assert_eq!(native.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
-        assert_eq!(native.plan.options.get("HL_NATIVE_DIAGNOSTICS"), Some("1"));
     }
 
     #[test]

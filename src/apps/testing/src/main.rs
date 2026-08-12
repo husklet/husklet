@@ -53,7 +53,7 @@ enum Command {
     Bench(bench::Options),
     /// Compare two engine arms over one guest binary, serialized and order-balanced.
     Ab(ab::Options),
-    /// Compare the retained C and Rust product backends with balanced order.
+    /// Compare explicit and default selection of the C product backend with balanced order.
     ProductAb(bench::product_ab::Options),
     /// Build and freeze one runner/worker pair for later product A/B measurements.
     ProductAbPrepare(bench::product_ab::PrepareOptions),

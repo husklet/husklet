@@ -31,7 +31,7 @@ and signal-context repair; none changes guest-visible ELF addresses.
 Fail-first production evidence used the flake-pinned
 `alpine-minirootfs-3.24.1-aarch64.tar.gz`, SHA-256
 `f55a90f69052c5bd6f92cb09a8f47065970830b194c917a006fb94028e721259`, through
-`Containers` and the non-fake Rust engine. Command:
+`Containers` and the production engine frontend. Command:
 `nix develop -c cargo test -p hl-container --test run_options process_run_options -- --ignored --nocapture`.
 The first `runflags/env-e` execution completes as `Fault { status: -1, detail: 0 }` with empty output in about
 0.17 seconds. The failure occurs before `hl-container::engine::Process::wait` obtains an `EngineExit` (temporary

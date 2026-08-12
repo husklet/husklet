@@ -191,15 +191,6 @@ cases:
     run: []
     environment: [{ name: HL_EXECUTION_BACKEND, value: c }]
     expect: { exit: 0, stdout: golden/go_preempt.out, diagnostics: [] }
-  - id: runtime/signals/sigurg-go-preempt-rust
-    status: active
-    compat: { class: compatibility }
-    targets: [arm64]
-    build: { source: go_preempt.c, output: sigurg-go-preempt-rust, flags: [-static-pie, -O2, -pthread, -lm] }
-    artifact: { destination: /opt/husklet/signals-sigurg-go-preempt-rust }
-    run: []
-    environment: [{ name: HL_EXECUTION_BACKEND, value: rust }]
-    expect: { exit: 0, stdout: golden/go_preempt.out }
   - id: runtime/signals/sa-nodefer
     status: active
     compat: { class: compatibility }

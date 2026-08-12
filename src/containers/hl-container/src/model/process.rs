@@ -598,15 +598,9 @@ pub enum Execution {
     Native {
         diagnostics: bool,
     },
-    /// Selects the temporary retained-C engine explicitly.
+    /// Selects the production C engine explicitly.
     RetainedC,
     RetainedCDiagnostics,
-    /// Selects the Rust engine with its interpreter only.
-    RustInterpreted,
-    /// Selects the Rust engine with generated native execution enabled.
-    RustNative {
-        diagnostics: bool,
-    },
 }
 
 impl Execution {
@@ -627,28 +621,16 @@ impl Execution {
         Self::RetainedCDiagnostics
     }
 
-    /// Selects the Rust interpreter independently of the product default.
-    #[must_use]
-    pub const fn rust_interpreted() -> Self {
-        Self::RustInterpreted
-    }
-
-    /// Selects the Rust engine's generated native execution independently of the product default.
-    #[must_use]
-    pub const fn rust_native(diagnostics: bool) -> Self {
-        Self::RustNative { diagnostics }
-    }
-
     #[must_use]
     pub const fn is_native(self) -> bool {
-        matches!(self, Self::Native { .. } | Self::RetainedC | Self::RetainedCDiagnostics | Self::RustNative { .. })
+        matches!(self, Self::Native { .. } | Self::RetainedC | Self::RetainedCDiagnostics)
     }
 
     #[must_use]
     pub const fn diagnostics(self) -> bool {
         match self {
-            Self::Interpreted | Self::RetainedC | Self::RetainedCDiagnostics | Self::RustInterpreted => false,
-            Self::Native { diagnostics } | Self::RustNative { diagnostics } => diagnostics,
+            Self::Interpreted | Self::RetainedC | Self::RetainedCDiagnostics => false,
+            Self::Native { diagnostics } => diagnostics,
         }
     }
 
@@ -656,7 +638,6 @@ impl Execution {
         match self {
             Self::Interpreted | Self::Native { .. } => None,
             Self::RetainedC | Self::RetainedCDiagnostics => Some("c"),
-            Self::RustInterpreted | Self::RustNative { .. } => Some("rust"),
         }
     }
 
@@ -687,14 +668,11 @@ mod execution_tests {
 
     #[test]
     fn explicit_engine_encodings_round_trip() {
-        for execution in [
-            Execution::retained_c(),
-            Execution::rust_interpreted(),
-            Execution::rust_native(false),
-            Execution::rust_native(true),
-        ] {
+        for execution in [Execution::retained_c(), Execution::retained_c_diagnostics()] {
             let encoded = serde_json::to_vec(&execution).unwrap();
             assert_eq!(serde_json::from_slice::<Execution>(&encoded).unwrap(), execution);
         }
+        assert!(serde_json::from_str::<Execution>(r#"{"backend":"rust_interpreted"}"#).is_err());
+        assert!(serde_json::from_str::<Execution>(r#"{"backend":"rust_native","diagnostics":true}"#).is_err());
     }
 }

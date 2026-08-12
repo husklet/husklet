@@ -41,8 +41,8 @@ shared.
 | Capture an empty or internally reconstructable network without an external socket-retention broker | engine `network::Native` checkpoint host | Implemented by making the external authority optional when no retained authority lease is present |
 | Preserve live listening sockets through an external owner | `AuthorityWorker` network transaction and `ObjectBindings` | Implemented; capture still fails closed when a listener needs retention but no authority exists |
 | Restore created/bound sockets without a retained external descriptor | `Native::recreate` | Implemented; an authority-less restore rejects images containing retained authority leases |
-| Capture a live process concurrently with execution | Rust engine lifecycle/composition | Missing: `RustRuntimeMachine::start` is synchronous and returns only after execution reaches a terminal result |
-| Whole-process-tree checkpoint coordination | Rust engine lifecycle/composition | Missing |
+| Capture a live process concurrently with execution | Historical Rust lifecycle/composition oracle | Historical gap; the retired `RustRuntimeMachine::start` was synchronous and returned only after execution reached a terminal result |
+| Whole-process-tree checkpoint coordination | Production C lifecycle/composition | Missing |
 
 The `network_checkpoint_role` regression was not an exit race: the synchronous
 start had already cached the guest exit before capture. Capture failed in the

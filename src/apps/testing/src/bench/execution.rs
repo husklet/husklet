@@ -56,22 +56,22 @@ pub struct Preparation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductBackend {
-    C,
-    Rust,
+    ExplicitC,
+    DefaultC,
 }
 
 impl ProductBackend {
     pub const fn name(self) -> &'static str {
         match self {
-            Self::C => "c",
-            Self::Rust => "rust",
+            Self::ExplicitC => "explicit-c",
+            Self::DefaultC => "default-c",
         }
     }
 
     fn execution(self) -> hl_container::Execution {
         match self {
-            Self::C => hl_container::Execution::retained_c(),
-            Self::Rust => hl_container::Execution::rust_native(false),
+            Self::ExplicitC => hl_container::Execution::retained_c(),
+            Self::DefaultC => hl_container::Execution::native(false),
         }
     }
 }
@@ -307,9 +307,9 @@ fn lifecycle_sum(values: &[(String, u128)], names: &[&str]) -> u128 {
 
 fn product_order(round: u32) -> [ProductBackend; 2] {
     if round % 2 == 0 {
-        [ProductBackend::C, ProductBackend::Rust]
+        [ProductBackend::ExplicitC, ProductBackend::DefaultC]
     } else {
-        [ProductBackend::Rust, ProductBackend::C]
+        [ProductBackend::DefaultC, ProductBackend::ExplicitC]
     }
 }
 
@@ -778,10 +778,10 @@ mod product_tests {
 
     #[test]
     fn product_pair_order_balances_first_position() {
-        assert_eq!(product_order(0), [ProductBackend::C, ProductBackend::Rust]);
-        assert_eq!(product_order(1), [ProductBackend::Rust, ProductBackend::C]);
-        assert_eq!(product_order(2), [ProductBackend::C, ProductBackend::Rust]);
-        assert_eq!(product_order(3), [ProductBackend::Rust, ProductBackend::C]);
+        assert_eq!(product_order(0), [ProductBackend::ExplicitC, ProductBackend::DefaultC]);
+        assert_eq!(product_order(1), [ProductBackend::DefaultC, ProductBackend::ExplicitC]);
+        assert_eq!(product_order(2), [ProductBackend::ExplicitC, ProductBackend::DefaultC]);
+        assert_eq!(product_order(3), [ProductBackend::DefaultC, ProductBackend::ExplicitC]);
     }
 
     #[test]
@@ -789,13 +789,13 @@ mod product_tests {
         let error = product_arm_error(
             3,
             1,
-            ProductBackend::Rust,
+            ProductBackend::DefaultC,
             "execution",
             std::io::Error::other("Construction(Start)"),
         );
         assert_eq!(
             error.to_string(),
-            "product A/B round 3 position 1 backend rust execution: Construction(Start)"
+            "product A/B round 3 position 1 backend default-c execution: Construction(Start)"
         );
         assert_eq!(error.source().unwrap().to_string(), "Construction(Start)");
     }

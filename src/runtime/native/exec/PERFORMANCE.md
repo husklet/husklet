@@ -2,11 +2,11 @@
 
 ## Entry-point scope
 
-“Current Rust” and “Rust production” below name the Rust/native execution arm,
-not every packaged command's default. Linux/AArch64 `dockerd` and ordinary
-`testing runtime` launches currently default to retained C through
-`ProductionFactory`; forcing `HL_EXECUTION_BACKEND=rust` selects this arm. The
-packaged raw `hl-engine` family and signed macOS Husklet GUI use Rust.
+The entries below are historical investigations of the retired Rust/native
+execution arm. They do not describe a selectable production backend. All
+packaged commands, container launches, the testing application, and the GUI
+runtime now construct the retained C engine; `HL_EXECUTION_BACKEND=rust` is
+rejected.
 
 ## 2026-08-05 AArch64 source-window fallthrough
 

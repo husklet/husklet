@@ -374,21 +374,7 @@ const fn default_columns() -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{Clock, Metric, record};
-    use std::{cell::Cell, sync::OnceLock, time::Instant};
-
-    fn lifecycle(boundary: &'static str) {
-        static STARTED: OnceLock<Instant> = OnceLock::new();
-        let elapsed_us = STARTED
-            .get_or_init(Instant::now)
-            .elapsed()
-            .as_micros()
-            .min(u128::from(u64::MAX));
-        let lane = std::env::var("HL_PTY_LANE").unwrap_or_else(|_| "single".to_owned());
-        eprintln!(
-            "HL_PTY_EVENT lane={lane} boundary={boundary} elapsed_us={elapsed_us} pid={}",
-            std::process::id()
-        );
-    }
+    use std::cell::Cell;
 
     struct FakeClock(Cell<u64>);
 
@@ -413,102 +399,5 @@ mod tests {
                 succeeded: true,
             }]
         );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn alpine_terminal_flows_through_public_container_session_apis() {
-        use crate::{runtime::image::TestImage, suite::Target};
-        use hl_container::{Config, Console, ContainerSpec, ExecSpec, Execution, ExitStatus, Process, Size, Streams};
-
-        lifecycle("image.begin");
-        let image = TestImage::materialize("alpine", &Target::Arm64.platform())
-            .await
-            .unwrap();
-        lifecycle("image.end");
-        let state = tempfile::tempdir().unwrap();
-        lifecycle("provider.begin");
-        let containers = hl_container::Containers::builder(Config::new(state.path()))
-            .build()
-            .await
-            .unwrap();
-        lifecycle("provider.end");
-        let initial = Process::new("/bin/sh").args(["-c", "while :; do sleep 3600; done"]);
-        lifecycle("container_create.begin");
-        containers
-            .create(
-                ContainerSpec::from_directory(image.path(), initial)
-                    .name("terminal-public-api")
-                    .guest(Target::Arm64.guest())
-                    .execution(Execution::rust_interpreted()),
-            )
-            .await
-            .unwrap();
-        lifecycle("container_create.end");
-        assert_eq!(
-            containers.inspect("terminal-public-api").await.unwrap().spec.execution,
-            Execution::rust_interpreted()
-        );
-        lifecycle("container_start.begin");
-        containers.start("terminal-public-api").await.unwrap();
-        lifecycle("container_start.end");
-        let process = Process::new("/bin/sh")
-            .args(["-c", "printf READY; IFS= read -r line; printf 'GOT=%s' \"$line\""])
-            .console(Console {
-                stdin: true,
-                terminal: Some(Size::new(24, 80).unwrap()),
-            });
-        lifecycle("execution_create.begin");
-        let execution = containers
-            .executions()
-            .create(
-                "terminal-public-api",
-                ExecSpec::new(process).streams(Streams {
-                    stdin: true,
-                    stdout: true,
-                    stderr: true,
-                }),
-            )
-            .await
-            .unwrap();
-        lifecycle("execution_create.end");
-        lifecycle("execution_start.begin");
-        let mut session = containers
-            .executions()
-            .start_at(&execution.id, Size::new(24, 80).unwrap())
-            .await
-            .unwrap();
-        lifecycle("execution_start.end");
-        lifecycle("input_write.begin");
-        session.write(b"hello\r".to_vec()).await.unwrap();
-        lifecycle("input_write.end");
-        lifecycle("input_close.begin");
-        session.close().await;
-        lifecycle("input_close.end");
-        let mut transcript = Vec::new();
-        lifecycle("transcript_drain.begin");
-        while let Some(entry) = session.next().await.unwrap() {
-            transcript.extend(entry.bytes);
-        }
-        lifecycle("transcript_drain.end");
-        lifecycle("execution_wait.begin");
-        assert_eq!(
-            containers.executions().wait(&execution.id).await.unwrap(),
-            ExitStatus::Code(0)
-        );
-        lifecycle("execution_wait.end");
-        assert!(transcript.windows(5).any(|bytes| bytes == b"READY"));
-        assert!(transcript.windows(9).any(|bytes| bytes == b"GOT=hello"));
-        lifecycle("remove_force.begin");
-        containers.remove_force("terminal-public-api").await.unwrap();
-        lifecycle("remove_force.end");
-        assert!(matches!(
-            containers.inspect("terminal-public-api").await,
-            Err(hl_container::Error::NotFound(_))
-        ));
-        assert!(containers.executions().list().await.unwrap().is_empty());
-        lifecycle("image_release.begin");
-        image.release().unwrap();
-        lifecycle("image_release.end");
     }
 }
