@@ -5,6 +5,7 @@ mod coordinator;
 mod exit;
 mod model;
 mod passthrough;
+mod snapshot;
 
 pub use coordinator::LockCoordinator;
 pub use exit::PreparedLockExit;
