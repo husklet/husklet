@@ -31,8 +31,5 @@ path = "src/bin/aarch64.rs"
 name = "hl-x86_64"
 path = "src/bin/x86.rs"
 
-[features]
-alloc-count = ["hl-engine/alloc-count"]
-
 [dev-dependencies]
 serde_json.workspace = true

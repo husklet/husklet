@@ -77,38 +77,8 @@ impl Worker {
             "engine.process.starting",
             isa = isa
         );
-        if arguments.get(1).map(String::as_str) == Some("--c-worker") {
-            let descriptor = |name: &str| {
-                let value = std::env::var(name).ok()?;
-                (!value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit()))
-                    .then(|| value.parse::<i32>().ok())
-                    .flatten()
-                    .filter(|value| *value >= 3)
-            };
-            let status = match (
-                descriptor("HL_C_PLAN_FD"),
-                descriptor("HL_C_CONTROL_FD"),
-                descriptor("HL_C_PROVIDER_FD"),
-            ) {
-                (Some(plan), Some(control), provider)
-                    if plan != control && provider.is_none_or(|provider| provider != plan && provider != control) =>
-                {
-                    hl_engine::retained_worker::run_with_provider(plan, control, provider).unwrap_or_else(|error| {
-                        eprintln!("{}: retained worker failed: {error:?}", guest.program());
-                        error.status()
-                    })
-                }
-                _ => {
-                    eprintln!("{}: retained worker descriptors are invalid", guest.program());
-                    64
-                }
-            };
-            std::process::exit(status);
-        }
-        let mut environment = hl_engine::environment::BootstrapEnvironment::capture(std::env::vars());
-        let authority = descriptor(environment.take_authority_descriptor());
-        let health = descriptor(environment.take_authority_health());
-        let result = hl_engine::program::Program::run_authorized(arguments, authority, health);
+        let report = arguments.iter().any(|argument| argument == "--report-exit");
+        let result = execute(guest, &arguments);
         if let Err(error) = result {
             hl_log::hl_error!(hl_log::tag::EXEC, "engine process failed isa={isa} reason={error:?}");
             hl_log::hl_event!(
@@ -123,10 +93,10 @@ impl Worker {
                 eprintln!("{error:?}");
             }
         }
-        let status = result.map_or_else(
-            hl_engine::program::ProgramError::status,
-            hl_engine::program::Program::exit_status,
-        );
+        let status = result.map_or(125, hl_engine::engine::EngineExit::process_status);
+        if report && let Ok(exit) = result {
+            eprintln!("[hl-exit]\t{:?}\t{}\t{:#x}", exit.kind, exit.guest_status, exit.detail);
+        }
         if result.is_ok() {
             hl_log::hl_info!(hl_log::tag::EXEC, "engine process exited isa={isa} status={status}");
             hl_log::hl_event!(
@@ -139,6 +109,32 @@ impl Worker {
         }
         std::process::exit(status);
     }
+}
+
+fn execute(
+    guest: Guest,
+    arguments: &[String],
+) -> Result<hl_engine::engine::EngineExit, hl_engine::engine::EngineError> {
+    let mut launch = arguments[1..].iter();
+    let executable = loop {
+        let argument = launch.next().ok_or(hl_engine::engine::EngineError::LaunchFailed)?;
+        match argument.as_str() {
+            "--guest-isa" => {
+                launch.next().ok_or(hl_engine::engine::EngineError::LaunchFailed)?;
+            }
+            "--report-exit" => {}
+            _ => break argument,
+        }
+    };
+    let mut builder = hl_engine::runtime::Builder::new(guest.isa(), executable);
+    for argument in launch {
+        builder = builder.with_argument(argument.as_bytes().to_vec());
+    }
+    let engine = builder.build()?;
+    engine.start()?;
+    let exit = engine.wait()?;
+    engine.destroy()?;
+    Ok(exit)
 }
 
 #[cfg(target_os = "linux")]
@@ -199,13 +195,6 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
 #[cfg(not(target_os = "linux"))]
 pub fn backend_receipt(_: &[String], _: Option<Guest>) -> Result<String, ()> {
     Err(())
-}
-
-fn descriptor(value: hl_engine::environment::AuthorityDescriptor) -> Option<i32> {
-    match value {
-        hl_engine::environment::AuthorityDescriptor::Present(value) => i32::try_from(value).ok(),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
