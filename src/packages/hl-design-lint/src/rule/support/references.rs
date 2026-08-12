@@ -97,12 +97,7 @@ impl<'a> References<'a> {
                     dotted = false;
                 }
                 proc_macro2::TokenTree::Group(group) => {
-                    if let Some(ident) = pending.take()
-                        && group.delimiter() == proc_macro2::Delimiter::Parenthesis
-                    {
-                        self.push(ident.to_string(), ident.span(), None);
-                    }
-                    self.tokens(group.stream());
+                    self.group(pending.take(), group);
                     dotted = false;
                 }
                 proc_macro2::TokenTree::Punct(punct) => {
@@ -117,18 +112,31 @@ impl<'a> References<'a> {
         }
     }
 
+    fn group(&mut self, pending: Option<proc_macro2::Ident>, group: proc_macro2::Group) {
+        if group.delimiter() == proc_macro2::Delimiter::Parenthesis
+            && let Some(ident) = pending
+        {
+            self.push(ident.to_string(), ident.span(), None);
+        }
+        self.tokens(group.stream());
+    }
+
     /// Walks `key = value` pairs of an attribute; a bare path is a macro flag, not a use.
     fn meta(&mut self, meta: &Meta) {
         match meta {
             Meta::Path(_) => {}
             Meta::List(list) => {
                 if let Ok(nested) = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(list.tokens.clone()) {
-                    for meta in &nested {
-                        self.meta(meta);
-                    }
+                    self.nested_meta(&nested);
                 }
             }
             Meta::NameValue(pair) => self.value(pair),
+        }
+    }
+
+    fn nested_meta(&mut self, nested: &Punctuated<Meta, Token![,]>) {
+        for meta in nested {
+            self.meta(meta);
         }
     }
 
