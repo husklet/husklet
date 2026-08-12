@@ -4594,6 +4594,145 @@ static int interp_two_byte_bit_count(struct cpu *cpu, struct insn *insn, uint64_
     return STEP_NEXT;
 }
 
+static int interp_two_byte_compare_exchange(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op != 0xB0 && op != 0xB1) return -1;
+    int width = (op & 1) ? insn->opsize : 1;
+    interp_operand operand = interp_rm(cpu, insn, next);
+    uint64_t accumulator = interp_reg_read(cpu, insn, RAX, width);
+    uint64_t source = interp_reg_read(cpu, insn, insn->reg, width);
+    uint64_t observed;
+    if (operand.is_memory && insn->lock) {
+        uint64_t host_address = hl_x86_guest_pointer(operand.address);
+        void *pointer = (void *)(uintptr_t)host_address;
+        int swapped = 0;
+        interp_access_begin(operand.address, (uint64_t)width);
+        if ((host_address & (uint64_t)(width - 1)) == 0) {
+            switch (width) {
+            case 1: {
+                unsigned char expected = (unsigned char)accumulator;
+                swapped = __atomic_compare_exchange_n((unsigned char *)pointer, &expected, (unsigned char)source, 0,
+                                                      __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+                observed = expected;
+                break;
+            }
+            case 2: {
+                unsigned short expected = (unsigned short)accumulator;
+                swapped = __atomic_compare_exchange_n((unsigned short *)pointer, &expected, (unsigned short)source, 0,
+                                                      __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+                observed = expected;
+                break;
+            }
+            case 4: {
+                uint32_t expected = (uint32_t)accumulator;
+                swapped = __atomic_compare_exchange_n((uint32_t *)pointer, &expected, (uint32_t)source, 0,
+                                                      __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+                observed = expected;
+                break;
+            }
+            default: {
+                uint64_t expected = accumulator;
+                swapped = __atomic_compare_exchange_n((uint64_t *)pointer, &expected, source, 0, __ATOMIC_SEQ_CST,
+                                                      __ATOMIC_SEQ_CST);
+                observed = expected;
+                break;
+            }
+            }
+        } else {
+            unsigned hash = (unsigned)((host_address >> 3) & (INTERP_SPLIT_LOCKS - 1));
+            _Atomic unsigned *lock = &g_interp_split_lock[hash];
+            while (atomic_exchange_explicit(lock, 1u, memory_order_acquire))
+                ;
+            observed = 0;
+            interp_copy_indivisible(&observed, pointer, (unsigned)width);
+            if ((observed & interp_mask(width)) == (accumulator & interp_mask(width))) {
+                interp_copy_indivisible(pointer, &source, (unsigned)width);
+                swapped = 1;
+            }
+            atomic_store_explicit(lock, 0u, memory_order_release);
+        }
+        interp_access_end();
+        if (swapped && jit86_store_alias_observation_active())
+            jit86_store_alias_changed(operand.address, (uint64_t)width);
+    } else {
+        observed = interp_rm_read(cpu, insn, &operand, width);
+        if ((observed & interp_mask(width)) == (accumulator & interp_mask(width)))
+            interp_rm_write(cpu, insn, &operand, width, source);
+    }
+    (void)interp_alu_sub(cpu, accumulator, observed, 0, width);
+    if ((observed & interp_mask(width)) != (accumulator & interp_mask(width)))
+        interp_reg_write(cpu, insn, RAX, width, observed);
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
+static int interp_two_byte_exchange(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op == 0xC3) {
+        if (!insn->is_mem) return interp_undefined(cpu, insn, pc, "MOVNTI with a register destination (#UD)");
+        interp_operand operand = interp_rm(cpu, insn, next);
+        interp_store(operand.address, insn->opsize, interp_reg_read(cpu, insn, insn->reg, insn->opsize));
+        cpu->rip = next;
+        return STEP_NEXT;
+    }
+    if (op != 0xC0 && op != 0xC1) return -1;
+    int width = (op & 1) ? insn->opsize : 1;
+    interp_operand operand = interp_rm(cpu, insn, next);
+    uint64_t source = interp_reg_read(cpu, insn, insn->reg, width);
+    uint64_t old;
+    if (operand.is_memory && insn->lock) {
+        old = interp_locked_rmw(operand.address, width, RMW_ADD, source, 0);
+        (void)interp_alu_add(cpu, old, source, 0, width);
+        interp_reg_write(cpu, insn, insn->reg, width, old);
+    } else {
+        old = interp_rm_read(cpu, insn, &operand, width);
+        uint64_t sum = interp_alu_add(cpu, old, source, 0, width);
+        interp_reg_write(cpu, insn, insn->reg, width, old);
+        interp_rm_write(cpu, insn, &operand, width, sum);
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
+static int interp_two_byte_compare_exchange_pair(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    if (insn->op != 0xC7) return -1;
+    if ((insn->reg & 7) != 1 || !insn->is_mem)
+        return interp_undefined(cpu, insn, pc, "0F C7 group (RDRAND/RDSEED/VMPTRLD)");
+    interp_operand operand = interp_rm(cpu, insn, next);
+    if (insn->opsize == 8) {
+        cpu->x87_ea = hl_x86_guest_pointer(operand.address);
+        return interp_exit(cpu, next, R_CMPXCHG16);
+    }
+    uint64_t expected = ((cpu->r[RDX] & UINT64_C(0xffffffff)) << 32) | (cpu->r[RAX] & UINT64_C(0xffffffff));
+    uint64_t desired = ((cpu->r[RCX] & UINT64_C(0xffffffff)) << 32) | (cpu->r[RBX] & UINT64_C(0xffffffff));
+    uint64_t observed;
+    int equal;
+    if (insn->lock) {
+        uint64_t host_address = hl_x86_guest_pointer(operand.address);
+        uint64_t probe = expected;
+        interp_access_begin(operand.address, 8);
+        equal = __atomic_compare_exchange_n((uint64_t *)(uintptr_t)host_address, &probe, desired, 0, __ATOMIC_SEQ_CST,
+                                            __ATOMIC_SEQ_CST);
+        interp_access_end();
+        observed = probe;
+        if (equal && jit86_store_alias_observation_active()) jit86_store_alias_changed(operand.address, 8);
+    } else {
+        observed = interp_load(operand.address, 8);
+        equal = observed == expected;
+        if (equal) interp_store(operand.address, 8, desired);
+    }
+    if (!equal) {
+        interp_reg_write(cpu, insn, RAX, 4, observed & UINT64_C(0xffffffff));
+        interp_reg_write(cpu, insn, RDX, 4, observed >> 32);
+    }
+    if (equal)
+        cpu->nzcv |= NZ_Z;
+    else
+        cpu->nzcv &= ~NZ_Z;
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_two_byte_condition(cpu, insn, next);
@@ -4609,6 +4748,12 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     delegated = interp_two_byte_bit_modify(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
     delegated = interp_two_byte_bit_count(cpu, insn, pc, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_two_byte_compare_exchange(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_two_byte_exchange(cpu, insn, pc, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_two_byte_compare_exchange_pair(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -4640,151 +4785,6 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         interp_reg_write(
             cpu, insn, insn->reg, insn->opsize,
             interp_imul_truncating(cpu, interp_reg_read(cpu, insn, insn->reg, insn->opsize), source, insn->opsize));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    case 0xB0:
-    case 0xB1: {
-        int width = (op & 1) ? insn->opsize : 1;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t accumulator = interp_reg_read(cpu, insn, RAX, width);
-        uint64_t source = interp_reg_read(cpu, insn, insn->reg, width);
-        uint64_t observed;
-        if (operand.is_memory && insn->lock) {
-            // interp_locked_rmw cannot express "swap only if equal".
-            uint64_t host_address = hl_x86_guest_pointer(operand.address);
-            void *pointer = (void *)(uintptr_t)host_address;
-            int swapped = 0;
-            interp_access_begin(operand.address, (uint64_t)width);
-            if ((host_address & (uint64_t)(width - 1)) == 0) {
-                switch (width) {
-                case 1: {
-                    unsigned char expected = (unsigned char)accumulator;
-                    swapped = __atomic_compare_exchange_n((unsigned char *)pointer, &expected, (unsigned char)source, 0,
-                                                          __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-                    observed = expected;
-                    break;
-                }
-                case 2: {
-                    unsigned short expected = (unsigned short)accumulator;
-                    swapped = __atomic_compare_exchange_n((unsigned short *)pointer, &expected, (unsigned short)source,
-                                                          0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-                    observed = expected;
-                    break;
-                }
-                case 4: {
-                    uint32_t expected = (uint32_t)accumulator;
-                    swapped = __atomic_compare_exchange_n((uint32_t *)pointer, &expected, (uint32_t)source, 0,
-                                                          __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-                    observed = expected;
-                    break;
-                }
-                default: {
-                    uint64_t expected = accumulator;
-                    swapped = __atomic_compare_exchange_n((uint64_t *)pointer, &expected, source, 0, __ATOMIC_SEQ_CST,
-                                                          __ATOMIC_SEQ_CST);
-                    observed = expected;
-                    break;
-                }
-                }
-            } else { // split lock: hashed spinlock
-                unsigned hash = (unsigned)((host_address >> 3) & (INTERP_SPLIT_LOCKS - 1));
-                _Atomic unsigned *lock = &g_interp_split_lock[hash];
-                while (atomic_exchange_explicit(lock, 1u, memory_order_acquire))
-                    ;
-                observed = 0;
-                interp_copy_indivisible(&observed, pointer, (unsigned)width);
-                if ((observed & interp_mask(width)) == (accumulator & interp_mask(width))) {
-                    interp_copy_indivisible(pointer, &source, (unsigned)width);
-                    swapped = 1;
-                }
-                atomic_store_explicit(lock, 0u, memory_order_release);
-            }
-            interp_access_end();
-            if (swapped && jit86_store_alias_observation_active())
-                jit86_store_alias_changed(operand.address, (uint64_t)width);
-        } else {
-            observed = interp_rm_read(cpu, insn, &operand, width);
-            if ((observed & interp_mask(width)) == (accumulator & interp_mask(width)))
-                interp_rm_write(cpu, insn, &operand, width, source);
-        }
-        // Flags are the full CMP(accumulator, destination), not just ZF.
-        (void)interp_alu_sub(cpu, accumulator, observed, 0, width);
-        if ((observed & interp_mask(width)) != (accumulator & interp_mask(width)))
-            interp_reg_write(cpu, insn, RAX, width, observed); // Intel: on mismatch the accumulator reloads
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    case 0xC0:
-    case 0xC1: {
-        int width = (op & 1) ? insn->opsize : 1;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t source = interp_reg_read(cpu, insn, insn->reg, width);
-        uint64_t old;
-        if (operand.is_memory && insn->lock) {
-            old = interp_locked_rmw(operand.address, width, RMW_ADD, source, 0);
-            (void)interp_alu_add(cpu, old, source, 0, width);
-            interp_reg_write(cpu, insn, insn->reg, width, old); // the register receives the PRE-image
-        } else {
-            uint64_t sum;
-            old = interp_rm_read(cpu, insn, &operand, width);
-            sum = interp_alu_add(cpu, old, source, 0, width);
-            // WRITE ORDER: the SUM lands last, so `xadd %ax, %ax` (SRC == DEST) leaves the SUM, not the
-            // pre-image.
-            interp_reg_write(cpu, insn, insn->reg, width, old);
-            interp_rm_write(cpu, insn, &operand, width, sum);
-        }
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // MOVNTI (0F C3): architecturally an ordinary store
-    case 0xC3: {
-        if (!insn->is_mem) return interp_undefined(cpu, insn, pc, "MOVNTI with a register destination (#UD)");
-        interp_operand operand = interp_rm(cpu, insn, next);
-        interp_store(operand.address, insn->opsize, interp_reg_read(cpu, insn, insn->reg, insn->opsize));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    case 0xC7: {
-        if ((insn->reg & 7) != 1 || !insn->is_mem)
-            return interp_undefined(cpu, insn, pc, "0F C7 group (RDRAND/RDSEED/VMPTRLD)");
-        interp_operand operand = interp_rm(cpu, insn, next);
-        if (insn->opsize == 8) {
-            // cmpxchg16b: the REBASED address goes to the shared helper.
-            cpu->x87_ea = hl_x86_guest_pointer(operand.address);
-            return interp_exit(cpu, next, R_CMPXCHG16);
-        }
-        // cmpxchg8b: EDX:EAX vs m64, ECX:EBX on match; only ZF is affected.
-        uint64_t expected = ((cpu->r[RDX] & UINT64_C(0xffffffff)) << 32) | (cpu->r[RAX] & UINT64_C(0xffffffff));
-        uint64_t desired = ((cpu->r[RCX] & UINT64_C(0xffffffff)) << 32) | (cpu->r[RBX] & UINT64_C(0xffffffff));
-        uint64_t observed;
-        int equal;
-        if (insn->lock) {
-            uint64_t host_address = hl_x86_guest_pointer(operand.address);
-            uint64_t probe = expected;
-            interp_access_begin(operand.address, 8);
-            equal = __atomic_compare_exchange_n((uint64_t *)(uintptr_t)host_address, &probe, desired, 0,
-                                                __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-            interp_access_end();
-            observed = probe;
-            if (equal && jit86_store_alias_observation_active()) jit86_store_alias_changed(operand.address, 8);
-        } else {
-            observed = interp_load(operand.address, 8);
-            equal = observed == expected;
-            if (equal) interp_store(operand.address, 8, desired);
-        }
-        if (!equal) {
-            interp_reg_write(cpu, insn, RAX, 4, observed & UINT64_C(0xffffffff));
-            interp_reg_write(cpu, insn, RDX, 4, observed >> 32);
-        }
-        if (equal)
-            cpu->nzcv |= NZ_Z;
-        else
-            cpu->nzcv &= ~NZ_Z;
         cpu->rip = next;
         return STEP_NEXT;
     }
