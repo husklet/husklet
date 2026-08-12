@@ -143,9 +143,20 @@ fn translation_units(database: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>,
         let file = if command.file.is_absolute() {
             command.file
         } else {
-            command.directory.join(command.file)
+            let directory = command
+                .directory
+                .canonicalize()
+                .map_err(|error| format!("resolve compilation directory {}: {error}", command.directory.display()))?;
+            directory.join(command.file)
         };
-        let Ok(file) = file.canonicalize() else { continue };
+        let requested = roots.iter().any(|root| file.starts_with(root));
+        let file = match file.canonicalize() {
+            Ok(file) => file,
+            Err(error) if requested => {
+                return Err(format!("resolve compiled unit {}: {error}", file.display()));
+            }
+            Err(_) => continue,
+        };
         if file.extension().and_then(|value| value.to_str()) == Some("c")
             && roots.iter().any(|root| file.starts_with(root))
         {
@@ -233,6 +244,24 @@ mod tests {
         fs::write(root.join("compile_commands.json"), "[]").unwrap();
         let files = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap();
         assert!(files.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_compiled_unit_below_requested_root() {
+        let root = fixture("missing-compiled-unit");
+        fs::write(root.join("src/a.c"), "int a;\n").unwrap();
+        fs::write(
+            root.join("compile_commands.json"),
+            format!(
+                "[{{\"directory\":{0:?},\"file\":\"src/a.c\"}},\
+                  {{\"directory\":{0:?},\"file\":\"src/missing.c\"}}]",
+                root.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let error = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap_err();
+        assert!(error.contains("src/missing.c"));
         fs::remove_dir_all(root).unwrap();
     }
 }
