@@ -315,10 +315,16 @@ fn filesystem_modules(source: &Source) -> Vec<String> {
     let Some(src) = components.iter().rposition(|component| *component == "src") else {
         return Vec::new();
     };
-    components[src + 1..components.len().saturating_sub(1)]
+    let mut modules = components[src + 1..components.len().saturating_sub(1)]
         .iter()
         .map(|component| (*component).to_owned())
-        .collect()
+        .collect::<Vec<_>>();
+    if let Some(stem) = source.path.file_stem().and_then(|stem| stem.to_str())
+        && !matches!(stem, "lib" | "main" | "mod")
+    {
+        modules.push(stem.to_owned());
+    }
+    modules
 }
 
 fn shell_chain(expression: &ExprMethodCall, commands: &Commands<'_>) -> Option<String> {

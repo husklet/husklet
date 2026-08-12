@@ -1,3 +1,4 @@
+#[path = "delivery_queue.rs"]
 mod queue;
 
 use super::{State, TaskRegistry};

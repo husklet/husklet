@@ -4,6 +4,7 @@ use super::{
 };
 use std::collections::BTreeMap;
 
+#[path = "test_metadata.rs"]
 mod metadata;
 #[test]
 fn parses_build_arguments_and_runtime_config() {

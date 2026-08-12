@@ -86,6 +86,14 @@ mod adapters {
     use std::process::Command as HostCommand;
     fn run() { let _ = HostCommand::new("git"); }
 }
+
+#[test]
+fn flattened_adapter_files_are_boundaries() {
+    for file in ["src/adapter.rs", "src/platform.rs", "src/host.rs"] {
+        let values = findings("fn run() { let _ = std::process::Command::new(\"git\"); }", file);
+        assert!(values.is_empty(), "{file} must remain an explicit process boundary");
+    }
+}
 mod model {
     fn run() { let _ = std::process::Command::new("git"); }
 }
