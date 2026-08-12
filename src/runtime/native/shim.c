@@ -5,7 +5,7 @@
 #include "hl/linux.h"
 #include "hl/linux_abi.h"
 #include "hl/syscall_trap.h"
-#include "main_image_plan.h"
+#include "main_plan.h"
 
 #include <fcntl.h>
 #include <stdint.h>

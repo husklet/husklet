@@ -116,7 +116,7 @@ work.
 
 The retained C call path was inspected read-only in:
 
-- `tools/lifecycle_e2e_runner.c`, the host-service owner and direct
+- `tools/lifecycle_runner.c`, the host-service owner and direct
   `hl_run_linux_guest` caller;
 - `src/core/target/aarch64.c`: `hl_run_linux_guest`, `container_init`,
   `engine_global_init`, `load_program`, and `run_loaded`;

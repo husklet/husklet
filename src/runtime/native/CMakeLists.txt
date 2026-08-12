@@ -100,7 +100,7 @@ set(HL_ALLOW_STDIO
     src/translator/guest/x86_64/dispatch.h
     src/translator/guest/x86_64/signal.c
     src/translator/guest/x86_64/translate.c
-    tools/lifecycle_e2e_runner.c)
+    tools/lifecycle_runner.c)
 foreach(source IN LISTS HL_RETAINED_normal_archive_SOURCES)
   list(APPEND HL_TIDY_ARGS --clang-tidy-source-file "${source}")
 endforeach()

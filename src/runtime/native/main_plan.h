@@ -1,5 +1,5 @@
-#ifndef HL_C_MAIN_IMAGE_PLAN_H
-#define HL_C_MAIN_IMAGE_PLAN_H
+#ifndef HL_C_MAIN_PLAN_H
+#define HL_C_MAIN_PLAN_H
 #include <stdint.h>
 #define HL_C_MAIN_IMAGE_PLAN_ABI HL_ENGINE_MAIN_IMAGE_PLAN_ABI
 #define HL_C_IMAGE_EXECUTABLE 1u

@@ -110,7 +110,7 @@ static void mq_fd_duplicate(int newfd, int oldfd);
 
 #include "../../core/provider/files.h"
 #include "../object.h"
-#include "provider_epoll_registry.h"
+#include "epoll_registry.h"
 static ep_provider_watch g_ep_provider_watches[EP_PROVIDER_WATCH_LIMIT];
 static uint32_t g_ep_provider_generations[HL_NFD];
 static uint32_t g_ep_provider_serial;

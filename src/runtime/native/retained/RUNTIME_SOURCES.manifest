@@ -85,7 +85,7 @@ src/linux_abi/bus.h
 src/linux_abi/checkpoint.c
 src/linux_abi/checkpoint.h
 src/linux_abi/ckpt_sink.h
-src/linux_abi/ckpt_sink_stream.h
+src/linux_abi/sink_stream.h
 src/linux_abi/ckpt_source.h
 src/linux_abi/container/key.c
 src/linux_abi/container/key.h
@@ -198,7 +198,7 @@ src/linux_abi/syscall/misc.h
 src/linux_abi/syscall/net.c
 src/linux_abi/syscall/nonpie_args.h
 src/linux_abi/syscall/proc.c
-src/linux_abi/syscall/provider_epoll_registry.h
+src/linux_abi/syscall/epoll_registry.h
 src/linux_abi/syscall/ptrace.c
 src/linux_abi/syscall/rare.c
 src/linux_abi/syscall/signal.c
@@ -302,4 +302,4 @@ src/translator/reloc.h
 src/translator/window.c
 src/translator/window.h
 tests/aarch64_interpreter_link_smoke.c
-tools/lifecycle_e2e_runner.c
+tools/lifecycle_runner.c

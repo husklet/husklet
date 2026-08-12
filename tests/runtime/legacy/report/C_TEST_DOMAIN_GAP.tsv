@@ -122,7 +122,7 @@ linter-analyzer-argv	integration	linter/tests/fake_analyzer.c	linter/CMakeLists.
 linter-exit-cases	parameterized	linter/tests/assert_exit.cmake	linter/CMakeLists.txt:91-103	six fixture-driven exit cases	missing	-	P1
 package-consumer	integration	tests/integration/package.c	cmake/PackageTest.cmake:7-173	main; staged public C API consumer	missing	-	P1
 package-activation	platform-parameterized	tests/integration/activation_package.c;tests/integration/activation_objc_package.m	cmake/PackageTest.cmake:122-173	C/Objective-C activation entry variants	missing	-	P1
-lifecycle-runner	parameterized	tools/lifecycle_e2e_runner.c	cmake/Phase3Gates.cmake:267-310;cmake/Phase4Mac.cmake:81-90,214-235	ISA × signal/control lifecycle cases	partial	src/app/hl-engine/tests/program_linux.rs	P2
+lifecycle-runner	parameterized	tools/lifecycle_runner.c	cmake/Phase3Gates.cmake:267-310;cmake/Phase4Mac.cmake:81-90,214-235	ISA × signal/control lifecycle cases	partial	src/app/hl-engine/tests/program_linux.rs	P2
 binding-runners	parameterized	tools/binding_e2e_runner.c;tools/stdio_e2e_runner.c;tools/dir_e2e_runner.c;tools/pty_binding_e2e_runner.c	cmake/Phase4Mac.cmake:82-93,228-235	FD, stdio, directory, PTY binding variants	partial	src/app/hl-engine/tests/projection_linux.rs	P2
 config-runner	parameterized	tools/config_e2e_runner.c	cmake/Phase3Gates.cmake:361-369;cmake/Phase4Mac.cmake:268-276	environment, supervisor, exit-status routes	partial	src/app/hl-engine/tests/program_linux.rs	P2
 remote-supervisor	integration	tools/remote_supervisor.c;tests/integration/remote_supervisor.c	cmake/Phase3Gates.cmake:402;cmake/Phase3Compat.cmake:441-452	remote launch and containment protocol	partial	src/app/hl-engine/tests/authority_linux.rs	P2

@@ -1,6 +1,6 @@
 // hl/linux_abi -- checkpoint SINK: the only way the checkpoint writer is allowed to emit image bytes.
 //
-// There is exactly one implementation (ckpt_sink_stream.h): every byte leaves the engine over the socket
+// There is exactly one implementation (sink_stream.h): every byte leaves the engine over the socket
 // activation handed it, and the embedder decides what it is written to. The vtable stays because the writer
 // is large and this is the seam that keeps "what a checkpoint is" out of it.
 //
