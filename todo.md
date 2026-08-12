@@ -77,7 +77,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Split `container/vfs.c` into capability-owned unity fragments below the file threshold and decompose its synthetic-stat/proc-content hotspots.
 - [x] Split `syscall/binding.c` into capability fragments and reduce `bound_route` to an ordered family router below all limits.
 - [x] Split sentry service, lifecycle, marshalling, copy-back, and worker routing below all configured C structure limits.
-- [ ] Split remaining oversized syscall domains: memory, network, process, rare, signal, SysV, and time.
+- [x] Split memory, network, process, rare, signal, SysV, and time syscall domains below all configured C structure limits.
 - [ ] Split remaining oversized Linux ABI sources: ELF and thread support.
 - [x] Split Linux ABI context, fork monitoring, socket ABI vocabulary, and number translation below the configured limits.
 - [ ] Split ARM64 interpreter/translator units and oversized functions.
