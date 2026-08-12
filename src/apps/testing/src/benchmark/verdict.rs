@@ -23,56 +23,13 @@ pub(super) fn evaluate(campaign: &Campaign, rows: &[Row], limit: f64) -> Result<
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
     for (workload, definition) in &campaign.workloads {
-        for layout in definition.commands.keys() {
-            for arm in ["E", "R", "I"] {
-                let cell = format!("{arm}{arm}");
-                let phases = if workload == "python" {
-                    &definition.phases
-                } else {
-                    &campaign.layouts[layout].phases
-                };
-                for phase in phases {
-                    let ratios = paired(&by_key, workload, layout, &cell, arm, arm, phase, campaign.rounds)?;
-                    nulls.insert(
-                        (workload.as_str(), layout.as_str(), arm, phase.as_str()),
-                        qualify_null(&ratios, invariant.contains(phase.as_str()))?,
-                    );
-                }
-            }
-        }
+        collect_nulls(campaign, &by_key, &invariant, workload, definition, &mut nulls)?;
     }
     let mut verdict = "PASS";
     let mut lines = vec!["workload\tlayout\tcell\tphase\tratio\tnull_floor\tupper\tverdict".to_owned()];
     for (workload, definition) in &campaign.workloads {
-        for layout in definition.commands.keys() {
-            for &(left, right) in &CELLS[3..] {
-                let cell = format!("{left}{right}");
-                let phases = if workload == "python" {
-                    &definition.phases
-                } else {
-                    &campaign.layouts[layout].phases
-                };
-                for phase in phases {
-                    let mut ratios = paired(&by_key, workload, layout, &cell, left, right, phase, campaign.rounds)?;
-                    let ratio = median(&mut ratios);
-                    let floor = nulls[&(workload.as_str(), layout.as_str(), left, phase.as_str())]
-                        .max(nulls[&(workload.as_str(), layout.as_str(), right, phase.as_str())]);
-                    let upper = ratio * (1.0 + floor);
-                    let judged = right == "I";
-                    let required = definition.phases.iter().any(|item| item == phase);
-                    let result = if judged && required && upper > limit {
-                        verdict = "FAIL";
-                        "FAIL"
-                    } else if judged && required {
-                        "PASS"
-                    } else {
-                        "INFO"
-                    };
-                    lines.push(format!(
-                        "{workload}\t{layout}\t{cell}\t{phase}\t{ratio:.6}\t{floor:.6}\t{upper:.6}\t{result}"
-                    ));
-                }
-            }
+        if append_comparisons(campaign, &by_key, &nulls, workload, definition, limit, &mut lines)? {
+            verdict = "FAIL";
         }
     }
     lines.push("artifact\tsha256".to_owned());
@@ -90,6 +47,92 @@ pub(super) fn evaluate(campaign: &Campaign, rows: &[Row], limit: f64) -> Result<
         verdict,
         text: lines.join("\n") + "\n",
     })
+}
+
+type NullKey<'a> = (&'a str, &'a str, &'a str, &'a str);
+
+fn phases<'a>(campaign: &'a Campaign, workload: &str, layout: &str) -> &'a [String] {
+    if workload == "python" {
+        &campaign.workloads[workload].phases
+    } else {
+        &campaign.layouts[layout].phases
+    }
+}
+
+fn collect_nulls<'a>(
+    campaign: &'a Campaign,
+    rows: &BTreeMap<&str, &Row>,
+    invariant: &BTreeSet<&str>,
+    workload: &'a str,
+    definition: &'a super::definition::Workload,
+    nulls: &mut BTreeMap<NullKey<'a>, f64>,
+) -> Result<(), Error> {
+    for layout in definition.commands.keys() {
+        for arm in ["E", "R", "I"] {
+            let cell = format!("{arm}{arm}");
+            for phase in phases(campaign, workload, layout) {
+                let ratios = paired(rows, workload, layout, &cell, arm, arm, phase, campaign.rounds)?;
+                nulls.insert(
+                    (workload, layout, arm, phase),
+                    qualify_null(&ratios, invariant.contains(phase.as_str()))?,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn append_comparisons(
+    campaign: &Campaign,
+    rows: &BTreeMap<&str, &Row>,
+    nulls: &BTreeMap<NullKey<'_>, f64>,
+    workload: &str,
+    definition: &super::definition::Workload,
+    limit: f64,
+    lines: &mut Vec<String>,
+) -> Result<bool, Error> {
+    let mut failed = false;
+    for layout in definition.commands.keys() {
+        for &(left, right) in &CELLS[3..] {
+            failed |= append_cell(campaign, rows, nulls, workload, layout, left, right, limit, lines)?;
+        }
+    }
+    Ok(failed)
+}
+
+fn append_cell(
+    campaign: &Campaign,
+    rows: &BTreeMap<&str, &Row>,
+    nulls: &BTreeMap<NullKey<'_>, f64>,
+    workload: &str,
+    layout: &str,
+    left: &str,
+    right: &str,
+    limit: f64,
+    lines: &mut Vec<String>,
+) -> Result<bool, Error> {
+    let cell = format!("{left}{right}");
+    let mut failed = false;
+    for phase in phases(campaign, workload, layout) {
+        let mut ratios = paired(rows, workload, layout, &cell, left, right, phase, campaign.rounds)?;
+        let ratio = median(&mut ratios);
+        let phase_name = phase.as_str();
+        let floor = nulls[&(workload, layout, left, phase_name)].max(nulls[&(workload, layout, right, phase_name)]);
+        let upper = ratio * (1.0 + floor);
+        let judged = right == "I" && campaign.workloads[workload].phases.iter().any(|item| item == phase);
+        let result = if judged && upper > limit {
+            failed = true;
+            "FAIL"
+        } else if judged {
+            "PASS"
+        } else {
+            "INFO"
+        };
+        lines.push(format!(
+            "{workload}\t{layout}\t{cell}\t{phase}\t{ratio:.6}\t{floor:.6}\t{upper:.6}\t{result}"
+        ));
+    }
+    Ok(failed)
 }
 
 fn verify_outputs(rows: &[Row]) -> Result<(), Error> {

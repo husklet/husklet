@@ -32,27 +32,36 @@ pub(super) fn measurements(campaign: &Campaign) -> Vec<Step> {
 }
 
 fn plan(campaign: &Campaign, rounds: u32) -> Vec<Step> {
-    let mut steps = Vec::new();
-    for (workload, definition) in &campaign.workloads {
-        for layout in definition.commands.keys() {
-            for &(left, right) in &CELLS {
-                let arms = [left, right];
-                for round in 0..rounds {
-                    for (position, index) in ORDER[round as usize % ORDER.len()].into_iter().enumerate() {
-                        steps.push(Step {
-                            workload: workload.clone(),
-                            layout: layout.clone(),
-                            cell: format!("{left}{right}"),
-                            round,
-                            position,
-                            arm: arms[index].to_owned(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-    steps
+    campaign
+        .workloads
+        .iter()
+        .flat_map(|(workload, definition)| {
+            definition.commands.keys().flat_map(move |layout| {
+                CELLS
+                    .into_iter()
+                    .flat_map(move |cell| cell_steps(workload, layout, cell, rounds))
+            })
+        })
+        .collect()
+}
+
+fn cell_steps(workload: &str, layout: &str, (left, right): (&str, &str), rounds: u32) -> Vec<Step> {
+    let arms = [left, right];
+    (0..rounds)
+        .flat_map(|round| {
+            ORDER[round as usize % ORDER.len()]
+                .into_iter()
+                .enumerate()
+                .map(move |(position, index)| Step {
+                    workload: workload.to_owned(),
+                    layout: layout.to_owned(),
+                    cell: format!("{left}{right}"),
+                    round,
+                    position,
+                    arm: arms[index].to_owned(),
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]

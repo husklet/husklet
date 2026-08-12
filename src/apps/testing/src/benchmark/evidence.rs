@@ -70,49 +70,15 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     let mut canonical = Vec::new();
     let mut metadata_seen = false;
     for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("PHASE ") {
-            let mut words = rest.split_ascii_whitespace();
-            let name = words.next().ok_or("PHASE omitted its name")?;
-            let mut micros = None;
-            let mut ok = None;
-            for word in words {
-                if let Some(value) = word.strip_prefix("us=") {
-                    micros = Some(value.parse::<u64>()?);
-                } else if let Some(value) = word.strip_prefix("ok=") {
-                    ok = Some(value.to_owned());
-                } else {
-                    return Err(format!("unaccounted PHASE field {word:?}").into());
-                }
-            }
-            let mut us = micros.ok_or("PHASE omitted us")?;
-            if campaign.workloads[&step.workload].wall_time
-                && campaign.workloads[&step.workload]
-                    .phases
-                    .iter()
-                    .any(|phase| phase == name)
-            {
-                us = wall_us;
-            }
-            let ok = ok.ok_or("PHASE omitted ok")?;
-            if phases.insert(name.to_owned(), Phase { us, ok: ok.clone() }).is_some() {
-                return Err(format!("duplicate PHASE {name}").into());
-            }
-            canonical.push(format!("PHASE {name} us=<time> ok={ok}"));
-        } else if line.starts_with("META ") {
-            if metadata_seen {
-                return Err("duplicate benchmark metadata".into());
-            }
-            metadata_seen = true;
-            canonical.push(line.to_owned());
-        } else if let Some(metadata) = counter_metadata(line) {
-            if metadata_seen {
-                return Err("duplicate benchmark metadata".into());
-            }
-            metadata_seen = true;
-            canonical.push(metadata?);
-        } else {
-            return Err(format!("unaccounted benchmark output {line:?}").into());
-        }
+        parse_output_line(
+            campaign,
+            step,
+            wall_us,
+            line,
+            &mut phases,
+            &mut canonical,
+            &mut metadata_seen,
+        )?;
     }
     let expected = if step.workload == "python" {
         &campaign.workloads[&step.workload].phases
@@ -124,6 +90,65 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     }
     let identity = FramedIdentity::of(canonical.join("\n").as_bytes());
     Ok((phases, identity))
+}
+
+fn parse_output_line(
+    campaign: &Campaign,
+    step: &Step,
+    wall_us: u64,
+    line: &str,
+    phases: &mut BTreeMap<String, Phase>,
+    canonical: &mut Vec<String>,
+    metadata_seen: &mut bool,
+) -> Result<(), Error> {
+    if let Some(rest) = line.strip_prefix("PHASE ") {
+        return parse_phase(campaign, step, wall_us, rest, phases, canonical);
+    }
+    let metadata = line
+        .strip_prefix("META ")
+        .map(|_| Ok(line.to_owned()))
+        .or_else(|| counter_metadata(line))
+        .ok_or_else(|| format!("unaccounted benchmark output {line:?}"))??;
+    if *metadata_seen {
+        return Err("duplicate benchmark metadata".into());
+    }
+    *metadata_seen = true;
+    canonical.push(metadata);
+    Ok(())
+}
+
+fn parse_phase(
+    campaign: &Campaign,
+    step: &Step,
+    wall_us: u64,
+    rest: &str,
+    phases: &mut BTreeMap<String, Phase>,
+    canonical: &mut Vec<String>,
+) -> Result<(), Error> {
+    let mut words = rest.split_ascii_whitespace();
+    let name = words.next().ok_or("PHASE omitted its name")?;
+    let mut micros = None;
+    let mut ok = None;
+    for word in words {
+        match word.split_once('=') {
+            Some(("us", value)) => micros = Some(value.parse::<u64>()?),
+            Some(("ok", value)) => ok = Some(value.to_owned()),
+            _ => return Err(format!("unaccounted PHASE field {word:?}").into()),
+        }
+    }
+    let measured = micros.ok_or("PHASE omitted us")?;
+    let timed_by_wall = campaign.workloads[&step.workload].wall_time
+        && campaign.workloads[&step.workload]
+            .phases
+            .iter()
+            .any(|phase| phase == name);
+    let us = if timed_by_wall { wall_us } else { measured };
+    let ok = ok.ok_or("PHASE omitted ok")?;
+    if phases.insert(name.to_owned(), Phase { us, ok: ok.clone() }).is_some() {
+        return Err(format!("duplicate PHASE {name}").into());
+    }
+    canonical.push(format!("PHASE {name} us=<time> ok={ok}"));
+    Ok(())
 }
 
 fn counter_metadata(line: &str) -> Option<Result<String, Error>> {
