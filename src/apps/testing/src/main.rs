@@ -13,9 +13,6 @@
 )]
 #![forbid(unsafe_code)]
 
-mod ab;
-mod bench;
-mod benchmark;
 mod journal;
 mod nested;
 mod platform;
@@ -50,19 +47,6 @@ enum Command {
     ScenarioProvenance(scenario::ProvenanceOptions),
     /// Verify that every selected scenario image exists in the exact offline cache.
     ScenarioCachePreflight(scenario::CachePreflightOptions),
-    /// Run repository benchmark definitions.
-    Bench(bench::Options),
-    /// Compare two engine arms over one guest binary, serialized and order-balanced.
-    Ab(ab::Options),
-    /// Compare explicit and default selection of the C product backend with balanced order.
-    ProductAb(bench::product_ab::Options),
-    /// Build and freeze one runner/worker pair for later product A/B measurements.
-    ProductAbPrepare(bench::product_ab::PrepareOptions),
-    /// Run or report a direct provider benchmark.
-    Benchmark {
-        #[command(subcommand)]
-        command: benchmark::Command,
-    },
     /// Run nested-engine chains.
     Nested(nested::Options),
 }
@@ -94,13 +78,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::ScenarioInventory => scenario::inventory(),
         Command::ScenarioProvenance(options) => scenario::provenance(options),
         Command::ScenarioCachePreflight(options) => scenario::cache_preflight(options),
-        Command::Bench(options) => bench::run(options).await,
-        Command::Ab(options) => ab::run(options),
-        Command::ProductAb(options) => bench::product_ab::run(options).await,
-        Command::ProductAbPrepare(options) => bench::product_ab::prepare(options).await,
-        Command::Benchmark { command } => benchmark::Application::new(std::env::var_os("PATH"))
-            .execute(command)
-            .map_err(Into::into),
         Command::Nested(options) => nested::run(options),
     }
 }
@@ -120,11 +97,6 @@ mod cli_tests {
             "scenario-inventory",
             "scenario-provenance",
             "scenario-cache-preflight",
-            "ab",
-            "product-ab",
-            "product-ab-prepare",
-            "bench",
-            "benchmark",
             "nested",
         ] {
             assert!(help.contains(command), "missing {command} from help");
@@ -134,39 +106,6 @@ mod cli_tests {
     #[test]
     fn runtime_selection_parses() {
         assert!(Cli::try_parse_from(["testing", "runtime", "core", "--isa", "arm64"]).is_ok());
-    }
-
-    #[test]
-    fn product_ab_requires_a_unique_result_destination() {
-        assert!(
-            Cli::try_parse_from([
-                "testing",
-                "product-ab",
-                "lifecycle",
-                "lifecycle",
-                "--results",
-                "target/testing/product-ab/run-1.tsv",
-                "--artifacts",
-                "target/testing/product-ab/artifacts/run-1",
-            ])
-            .is_ok()
-        );
-        assert!(Cli::try_parse_from(["testing", "product-ab"]).is_err());
-        assert!(
-            Cli::try_parse_from([
-                "testing",
-                "product-ab",
-                "lifecycle",
-                "lifecycle",
-                "--rounds",
-                "3",
-                "--results",
-                "target/testing/product-ab/run-2.tsv",
-                "--artifacts",
-                "target/testing/product-ab/artifacts/run-2",
-            ])
-            .is_err()
-        );
     }
 
     #[test]
@@ -195,77 +134,5 @@ mod cli_tests {
     fn missing_and_unknown_commands_are_usage_errors() {
         assert!(Cli::try_parse_from(["testing"]).is_err());
         assert!(Cli::try_parse_from(["testing", "unknown"]).is_err());
-    }
-
-    #[test]
-    fn benchmark_guest_arguments_are_trailing() {
-        assert!(
-            Cli::try_parse_from([
-                "testing",
-                "benchmark",
-                "run",
-                "--provider",
-                "native",
-                "--arch",
-                "amd64",
-                "--binary",
-                "/guest",
-                "--",
-                "--phase",
-                "compute"
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "testing",
-                "benchmark",
-                "run",
-                "--provider",
-                "native",
-                "--arch",
-                "amd64",
-                "--binary",
-                "/guest",
-                "--phase",
-                "compute"
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn benchmark_architecture_spellings_are_explicit() {
-        for isa in ["arm64", "amd64", "aarch64", "x86_64"] {
-            assert!(
-                Cli::try_parse_from([
-                    "testing",
-                    "benchmark",
-                    "run",
-                    "--provider",
-                    "native",
-                    "--arch",
-                    isa,
-                    "--binary",
-                    "/guest"
-                ])
-                .is_ok(),
-                "{isa}"
-            );
-        }
-        assert!(
-            Cli::try_parse_from([
-                "testing",
-                "benchmark",
-                "run",
-                "--provider",
-                "native",
-                "--arch",
-                "x86",
-                "--binary",
-                "/guest"
-            ])
-            .is_err()
-        );
     }
 }

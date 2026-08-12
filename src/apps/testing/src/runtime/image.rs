@@ -57,17 +57,6 @@ pub struct TestImage {
 }
 
 impl TestImage {
-    /// Resolve the immutable image identity without creating a writable root filesystem.
-    ///
-    /// # Errors
-    /// Returns image lookup, pull, or platform validation failures.
-    pub async fn resolve_identity(name: &str, platform: &Platform) -> Result<String, Error> {
-        let cache = ImageCache::for_platform(platform)?;
-        let (images, image) = cache.resolve(name).await?;
-        images.details(&image, platform)?;
-        Ok(image.target.digest().to_string())
-    }
-
     /// Concurrent workers share one on-disk snapshot store, so a lost race there is transient.
     pub async fn materialize(name: &str, platform: &Platform) -> Result<Self, Error> {
         Self::materialize_with(name, platform, Materialization::Copy).await
@@ -188,11 +177,6 @@ impl TestImage {
     /// The shared image store, so a container service resolves the same snapshots.
     pub fn images(&self) -> Images {
         self.images.clone()
-    }
-
-    /// Immutable manifest identity selected for this platform.
-    pub fn identity(&self) -> &str {
-        &self.identity
     }
 
     pub fn runtime(&self) -> &RuntimeConfig {

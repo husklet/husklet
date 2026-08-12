@@ -103,10 +103,10 @@ a nonzero storage bias while exercising PC identity, static data and pointers,
 direct calls, indirect calls, and syscall output on both guest ISAs. Production
 C no longer inspects Go metadata or V8 symbols to make that path work.
 
-Performance work uses `make bench-product-ab-prepare PRODUCT_AB_RUN=<new-id>`
-followed by `make bench-product-ab PRODUCT_AB_RUN=<same-id>`. The harness refuses
-reused artifact directories and results paths. Historical Rust-vs-C benchmark
-records are not current product baselines.
+Performance work uses `tests/bench/eri_matrix.py` to compare the external C
+oracle, explicit C selection, and the integrated product default with immutable
+artifacts, null arms, exact output, and unique resumable ledgers. Historical
+Rust-vs-C records are not current product baselines.
 
 ## Contact
 

@@ -90,21 +90,6 @@ impl FramedIdentity {
         Self::hex(Sha256::digest(bytes).as_ref())
     }
 
-    /// The identity of a file's contents.
-    pub(crate) fn of_file(path: &Path) -> Result<String, Error> {
-        Ok(Self::of(&fs::read(path)?))
-    }
-
-    /// The framed identity of a domain tag followed by its fields.
-    pub(crate) fn over(fields: &[&[u8]]) -> Result<String, Error> {
-        let (domain, rest) = fields.split_first().ok_or("framed identity needs a domain")?;
-        let mut identity = Self::new(domain)?;
-        for field in rest {
-            identity.field(field)?;
-        }
-        Ok(identity.finish())
-    }
-
     pub(crate) fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }

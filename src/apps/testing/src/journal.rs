@@ -71,54 +71,11 @@ impl<S: Schema> Ledger<S> {
         keys: &BTreeSet<S::Key>,
         resume: bool,
     ) -> Result<Resumption<S>, Error> {
-        Self::open_with_policy(report, stamp, keys, resume, false)
-    }
-
-    /// Opens a measurement ledger whose result path must never be reused.
-    ///
-    /// The existence checks happen after acquiring the per-result lock so two
-    /// fresh measurements cannot both admit the same destination.
-    pub(crate) fn open_unique(
-        report: &Path,
-        stamp: &str,
-        keys: &BTreeSet<S::Key>,
-        resume: bool,
-    ) -> Result<Resumption<S>, Error> {
-        Self::open_with_policy(report, stamp, keys, resume, true)
-    }
-
-    fn open_with_policy(
-        report: &Path,
-        stamp: &str,
-        keys: &BTreeSet<S::Key>,
-        resume: bool,
-        unique: bool,
-    ) -> Result<Resumption<S>, Error> {
         let partial = report.with_extension("partial.tsv");
         if let Some(parent) = report.parent() {
             fs::create_dir_all(parent)?;
         }
         let lock = hl_engine::native::FileLock::acquire(report.with_extension("lock"))?;
-        if unique {
-            let report_exists = report.exists();
-            let partial_exists = partial.exists();
-            if resume && !partial_exists {
-                return Err(format!(
-                    "cannot resume {} result without partial ledger {}",
-                    S::KIND,
-                    partial.display()
-                )
-                .into());
-            }
-            if !resume && (report_exists || partial_exists) {
-                return Err(format!(
-                    "refusing to reuse {} result path {}; choose a new --results path",
-                    S::KIND,
-                    report.display()
-                )
-                .into());
-            }
-        }
         let prior = if resume && partial.exists() {
             Self::load(&partial, stamp, keys)?
         } else {
