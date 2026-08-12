@@ -137,9 +137,7 @@ fn every_production_input_is_independent_of_sibling_engines() {
         );
         if line.contains("BENCH_C_BUILD") {
             assert!(
-                line.starts_with("BENCH_C_BUILD ?=")
-                    || line.contains("test -n \"$(BENCH_C_BUILD)\"")
-                    || line.trim() == "--c-build $(BENCH_C_BUILD) --rust-engine $(CURDIR)/target/release/hl-engine \\",
+                line.starts_with("BENCH_C_BUILD ?=") || line.contains("test -n \"$(BENCH_C_BUILD)\""),
                 "Makefile:{} exposes the optional C oracle outside its benchmark adapter: {line}",
                 line_number + 1
             );
