@@ -770,12 +770,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #ifdef PCACHE_SAVE_HOOK
         PCACHE_SAVE_HOOK; // persist the translated arena before one-shot exit when HL_PCACHE is active
 #endif
-        futex_robust_exit(c);   // robust mutexes still held by the calling thread -> OWNER_DIED + wake waiters
+        futex_robust_exit(c);         // robust mutexes still held by the calling thread -> OWNER_DIED + wake waiters
         launch_reg_terminate_peers(); // PID-namespace init exit kills every launch-owned descendant, even setsid peers
-        udp_ref_process_exit(); // unlink AF_UNIX rendezvous inodes whose last owner is this exiting process
-        acct_proc_leave();      // release this process's cgroup accounting slot (_exit bypasses atexit)
-        proc_reg_unlink();      // drop our /proc process-table entry (_exit bypasses the atexit handler)
-        proc_fdvis_cleanup();   // retire typed logical-fd identities (_exit bypasses the atexit handler)
+        udp_ref_process_exit();       // unlink AF_UNIX rendezvous inodes whose last owner is this exiting process
+        acct_proc_leave();            // release this process's cgroup accounting slot (_exit bypasses atexit)
+        proc_reg_unlink();            // drop our /proc process-table entry (_exit bypasses the atexit handler)
+        proc_fdvis_cleanup();         // retire typed logical-fd identities (_exit bypasses the atexit handler)
         hl_host_process_fd_private_cleanup(); // retire provider-private descriptors for this process identity
         poslk_on_exit();                      // release this process's in-engine fcntl advisory locks
         sysv_on_exit();                       // apply SEM_UNDO + GC this container's SysV objects (_exit skips atexit)
