@@ -29,7 +29,7 @@ pub struct EngineConfig<'a> {
     pub syscall_dispatch: Option<SyscallDispatch>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 struct Plan {
     abi: u32,
@@ -141,12 +141,17 @@ impl Engine {
 impl Plan {
     fn inspect(config: &EngineConfig<'_>) -> Result<Self, i32> {
         let mut file = open_main_image(config)?;
+        let image_length = file.metadata().map_err(|_| 1)?.len();
+        if image_length < 64 {
+            return Err(1);
+        }
         let mut header = [0_u8; 64];
         file.read_exact(&mut header).map_err(|_| 1)?;
-        if &header[..6] != b"\x7fELF\x02\x01" {
+        if &header[..7] != b"\x7fELF\x02\x01\x01" || !matches!(header[7], 0 | 3) {
             return Err(1);
         }
         let word16 = |offset| u16::from_le_bytes(header[offset..offset + 2].try_into().expect("fixed header"));
+        let word32 = |offset| u32::from_le_bytes(header[offset..offset + 4].try_into().expect("fixed header"));
         let word64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().expect("fixed header"));
         let kind = match word16(16) {
             2 => 1,
@@ -161,8 +166,24 @@ impl Plan {
         if word16(18) != machine {
             return Err(1);
         }
-        let (first, last, interpreter) =
-            inspect_program_headers(&mut file, word64(32), u64::from(word16(54)), word16(56))?;
+        if word32(20) != 1 || word16(52) != 64 {
+            return Err(1);
+        }
+        let entry = word64(24);
+        if config.isa == 1 && !entry.is_multiple_of(4) {
+            return Err(1);
+        }
+        let (first, last, interpreter, entry_is_executable) = inspect_program_headers(
+            &mut file,
+            image_length,
+            entry,
+            word64(32),
+            u64::from(word16(54)),
+            word16(56),
+        )?;
+        if !entry_is_executable {
+            return Err(1);
+        }
         let link_start = first & !0xfff;
         let span = last.checked_sub(link_start).ok_or(1)?;
         let link_end = link_start
@@ -217,37 +238,71 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
 
 fn inspect_program_headers(
     file: &mut File,
+    image_length: u64,
+    entry: u64,
     phoff: u64,
     phentsize: u64,
     phnum: u16,
-) -> Result<(u64, u64, Option<Vec<u8>>), i32> {
-    if phentsize < 56 || phnum == 0 {
+) -> Result<(u64, u64, Option<Vec<u8>>, bool), i32> {
+    const PROGRAM_HEADER_SIZE: u64 = 56;
+    const MAX_PROGRAM_HEADERS: u16 = 1024;
+    const MAX_LOAD_SEGMENTS: u16 = 128;
+    if phentsize != PROGRAM_HEADER_SIZE || phnum == 0 || phnum > MAX_PROGRAM_HEADERS {
+        return Err(1);
+    }
+    let table_size = phentsize.checked_mul(u64::from(phnum)).ok_or(1)?;
+    if phoff.checked_add(table_size).is_none_or(|end| end > image_length) {
         return Err(1);
     }
     let mut first = u64::MAX;
     let mut last = 0_u64;
     let mut interpreter = None;
+    let mut loads = 0_u16;
+    let mut entry_is_executable = false;
     for index in 0..phnum {
-        file.seek(SeekFrom::Start(phoff + u64::from(index) * phentsize))
-            .map_err(|_| 1)?;
+        let offset = phoff
+            .checked_add(u64::from(index).checked_mul(phentsize).ok_or(1)?)
+            .ok_or(1)?;
+        file.seek(SeekFrom::Start(offset)).map_err(|_| 1)?;
         let mut program = [0_u8; 56];
         file.read_exact(&mut program).map_err(|_| 1)?;
         let u32_at = |offset| u32::from_le_bytes(program[offset..offset + 4].try_into().expect("program header"));
         let u64_at = |offset| u64::from_le_bytes(program[offset..offset + 8].try_into().expect("program header"));
         match u32_at(0) {
             1 => {
+                loads = loads.checked_add(1).ok_or(1)?;
+                if loads > MAX_LOAD_SEGMENTS {
+                    return Err(1);
+                }
+                let file_offset = u64_at(8);
                 let start = u64_at(16);
-                let end = start.checked_add(u64_at(40)).ok_or(1)?;
+                let file_size = u64_at(32);
+                let memory_size = u64_at(40);
+                let alignment = u64_at(48);
+                if file_size > memory_size
+                    || (file_size != 0 && file_offset.checked_add(file_size).is_none_or(|end| end > image_length))
+                    || (alignment > 1 && (!alignment.is_power_of_two() || start % alignment != file_offset % alignment))
+                {
+                    return Err(1);
+                }
+                let end = start.checked_add(memory_size).ok_or(1)?;
                 first = first.min(start);
                 last = last.max(end);
+                entry_is_executable |= u32_at(4) & 1 != 0 && entry >= start && entry < end;
             }
             3 => {
+                if interpreter.is_some() {
+                    return Err(1);
+                }
                 interpreter = Some(read_interpreter(file, u64_at(8), u64_at(32))?);
             }
             _ => {}
         }
     }
-    Ok((first, last, interpreter))
+    if first == u64::MAX {
+        return Err(1);
+    }
+    Ok((first, last, interpreter, entry_is_executable))
 }
 
 fn read_interpreter(file: &mut File, offset: u64, encoded_size: u64) -> Result<Vec<u8>, i32> {
@@ -258,9 +313,10 @@ fn read_interpreter(file: &mut File, offset: u64, encoded_size: u64) -> Result<V
     let mut path = vec![0; size];
     file.seek(SeekFrom::Start(offset)).map_err(|_| 1)?;
     file.read_exact(&mut path).map_err(|_| 1)?;
-    if path.last() == Some(&0) {
-        path.pop();
+    if path.last() != Some(&0) || path[..path.len() - 1].contains(&0) {
+        return Err(1);
     }
+    path.pop();
     Ok(path)
 }
 
@@ -269,5 +325,112 @@ impl Drop for Engine {
         // SAFETY: `Engine` is the unique owner of this live backend pointer and
         // Drop runs exactly once; destroy also joins any active run.
         unsafe { bindings::hl_c_backend_destroy(self.0.as_ptr()) };
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::{EngineConfig, Plan};
+    use std::{
+        ffi::c_void,
+        fs::OpenOptions,
+        io::{Seek, SeekFrom, Write},
+        os::fd::AsRawFd,
+        path::PathBuf,
+    };
+
+    fn put16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put64(bytes: &mut [u8], offset: usize, value: u64) {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn image() -> Vec<u8> {
+        let mut bytes = vec![0; 4096];
+        bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        put16(&mut bytes, 16, 2);
+        put16(&mut bytes, 18, 0xb7);
+        put32(&mut bytes, 20, 1);
+        put64(&mut bytes, 24, 0x40_0100);
+        put64(&mut bytes, 32, 64);
+        put16(&mut bytes, 52, 64);
+        put16(&mut bytes, 54, 56);
+        put16(&mut bytes, 56, 1);
+        put32(&mut bytes, 64, 1);
+        put32(&mut bytes, 68, 5);
+        put64(&mut bytes, 72, 0);
+        put64(&mut bytes, 80, 0x40_0000);
+        put64(&mut bytes, 88, 0x40_0000);
+        put64(&mut bytes, 96, 4096);
+        put64(&mut bytes, 104, 4096);
+        put64(&mut bytes, 112, 4096);
+        bytes
+    }
+
+    fn inspect(bytes: &[u8]) -> Result<Plan, i32> {
+        let path = PathBuf::from(format!(
+            "/var/tmp/hl-native-elf-inspect-{}-{:x}",
+            std::process::id(),
+            bytes.as_ptr() as usize
+        ));
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(bytes).unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let config = EngineConfig {
+            isa: 1,
+            rootfs: None,
+            executable_host: None,
+            executable_fd: file.as_raw_fd(),
+            option_names: &[],
+            option_values: &[],
+            standard_fds: [-1; 3],
+            provider_fd: -1,
+            syscall_context: std::ptr::null_mut::<c_void>(),
+            syscall_dispatch: None,
+        };
+        let result = Plan::inspect(&config);
+        std::fs::remove_file(path).unwrap();
+        result
+    }
+
+    #[test]
+    fn executable_markers_cannot_change_generic_plan() {
+        let plain = image();
+        let mut marked = plain.clone();
+        marked[0x260..0x26e].copy_from_slice(b"\xff Go buildinf:");
+        marked[0x340..0x348].copy_from_slice(b"v8_blob_");
+        assert_eq!(inspect(&plain), inspect(&marked));
+    }
+
+    #[test]
+    fn malformed_load_segment_is_rejected_before_native_loader() {
+        let mut bytes = image();
+        put64(&mut bytes, 96, 4097);
+        assert!(inspect(&bytes).is_err(), "p_filesz larger than p_memsz was accepted");
+
+        let mut bytes = image();
+        put64(&mut bytes, 72, 4096);
+        assert!(
+            inspect(&bytes).is_err(),
+            "PT_LOAD bytes outside the image were accepted"
+        );
+
+        let mut bytes = image();
+        put64(&mut bytes, 24, 0x40_1000);
+        assert!(
+            inspect(&bytes).is_err(),
+            "entry outside an executable segment was accepted"
+        );
     }
 }

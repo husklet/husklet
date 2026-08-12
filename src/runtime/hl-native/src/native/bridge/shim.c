@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* Explicitly anchors the lifecycle object when the retained backend is linked
@@ -131,26 +132,42 @@ static uint32_t hl_c_backend_status_flags(uint64_t detail) {
 
 static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *plan) {
     uint8_t header[64];
+    struct stat metadata;
     if (plan == NULL || plan->abi != HL_C_MAIN_IMAGE_PLAN_ABI || plan->size < sizeof(*plan) ||
         plan->architecture == 0 || (plan->flags & ~HL_ENGINE_MAIN_IMAGE_PLAN_FORCE_DISPLACED) != 0 ||
         plan->link_end <= plan->link_start || (plan->flags != 0 && plan->kind != HL_C_IMAGE_EXECUTABLE))
         return 0;
-    if (pread(fd, header, sizeof(header), 0) != (ssize_t)sizeof(header)) return 0;
-    if (memcmp(header, "\177ELF", 4) != 0 || header[4] != 2 || header[5] != 1) return 0;
+    if (fstat(fd, &metadata) != 0 || metadata.st_size < (off_t)sizeof(header) ||
+        pread(fd, header, sizeof(header), 0) != (ssize_t)sizeof(header))
+        return 0;
+    if (memcmp(header, "\177ELF", 4) != 0 || header[4] != 2 || header[5] != 1 || header[6] != 1 ||
+        (header[7] != 0 && header[7] != 3))
+        return 0;
     uint16_t type, machine;
+    uint32_t version;
     memcpy(&type, header + 16, sizeof(type));
     memcpy(&machine, header + 18, sizeof(machine));
+    memcpy(&version, header + 20, sizeof(version));
     uint32_t kind = type == 2 ? HL_C_IMAGE_EXECUTABLE : type == 3 ? HL_C_IMAGE_POSITION_INDEPENDENT : 0;
     uint16_t expected_machine = plan->architecture == 1 ? 0xb7 : plan->architecture == 2 ? 0x3e : 0;
-    uint64_t phoff;
-    uint16_t phentsize, phnum;
+    uint64_t entry, phoff;
+    uint16_t ehsize, phentsize, phnum;
+    memcpy(&entry, header + 24, sizeof(entry));
     memcpy(&phoff, header + 32, sizeof(phoff));
+    memcpy(&ehsize, header + 52, sizeof(ehsize));
     memcpy(&phentsize, header + 54, sizeof(phentsize));
     memcpy(&phnum, header + 56, sizeof(phnum));
-    if (kind != plan->kind || machine != expected_machine || phentsize < 56 || phnum == 0) return 0;
+    uint64_t image_length = (uint64_t)metadata.st_size;
+    uint64_t table_size = (uint64_t)phentsize * phnum;
+    if (kind != plan->kind || machine != expected_machine || version != 1 || ehsize != 64 || phentsize != 56 ||
+        phnum == 0 || phnum > 1024 || phoff > image_length || table_size > image_length - phoff ||
+        (plan->architecture == 1 && (entry & 3) != 0))
+        return 0;
     uint64_t first = UINT64_MAX, last = 0;
     uint32_t has_interpreter = 0;
     uint64_t interpreter_identity = 0;
+    uint16_t load_count = 0;
+    int entry_is_executable = 0;
     for (uint16_t index = 0; index < phnum; ++index) {
         uint8_t ph[56];
         uint64_t offset = phoff + (uint64_t)index * phentsize;
@@ -159,27 +176,41 @@ static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *pla
         memcpy(&ph_type, ph, sizeof(ph_type));
         if (ph_type == 3) {
             uint64_t file_offset, file_size;
+            if (has_interpreter) return 0;
             memcpy(&file_offset, ph + 8, sizeof(file_offset));
             memcpy(&file_size, ph + 32, sizeof(file_size));
-            if (file_size == 0 || file_size > 4096) return 0;
+            if (file_size == 0 || file_size > 4096 || file_offset > image_length ||
+                file_size > image_length - file_offset)
+                return 0;
             uint8_t interpreter[4096];
             if (pread(fd, interpreter, (size_t)file_size, (off_t)file_offset) != (ssize_t)file_size) return 0;
-            size_t length = (size_t)file_size;
-            if (length != 0 && interpreter[length - 1] == 0) length--;
+            size_t length = (size_t)file_size - 1;
+            if (interpreter[length] != 0 || memchr(interpreter, 0, length) != NULL) return 0;
             interpreter_identity = UINT64_C(0xcbf29ce484222325);
             for (size_t byte = 0; byte < length; ++byte)
                 interpreter_identity = (interpreter_identity ^ interpreter[byte]) * UINT64_C(0x100000001b3);
             has_interpreter = 1;
         }
         if (ph_type != 1) continue;
-        uint64_t address, size;
+        uint32_t flags;
+        uint64_t file_offset, address, file_size, size, alignment;
+        if (++load_count > 128) return 0;
+        memcpy(&flags, ph + 4, sizeof(flags));
+        memcpy(&file_offset, ph + 8, sizeof(file_offset));
         memcpy(&address, ph + 16, sizeof(address));
+        memcpy(&file_size, ph + 32, sizeof(file_size));
         memcpy(&size, ph + 40, sizeof(size));
-        if (address + size < address) return 0;
+        memcpy(&alignment, ph + 48, sizeof(alignment));
+        if (file_size > size ||
+            (file_size != 0 && (file_offset > image_length || file_size > image_length - file_offset)) ||
+            (alignment > 1 && ((alignment & (alignment - 1)) != 0 || address % alignment != file_offset % alignment)) ||
+            address + size < address)
+            return 0;
         if (address < first) first = address;
         if (address + size > last) last = address + size;
+        if ((flags & 1) != 0 && entry >= address && entry < address + size) entry_is_executable = 1;
     }
-    if (first == UINT64_MAX) return 0;
+    if (first == UINT64_MAX || !entry_is_executable) return 0;
     uint64_t start = first & ~UINT64_C(0xfff);
     if (last < start || last - start > UINT64_MAX - UINT64_C(0xffff)) return 0;
     uint64_t end = start + ((last - start + UINT64_C(0xffff)) & ~UINT64_C(0xffff));
