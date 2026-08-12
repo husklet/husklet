@@ -278,7 +278,8 @@ HL_API hl_status hl_linux_fd_snapshot_get(const hl_linux_abi *linux_abi, hl_linu
 /*
  * Map an ordinary typed file while its open-file-description is pinned. Closing
  * the guest descriptor concurrently cannot retire the opaque host file until
- * map_file has returned. The returned mapping owns its independent host handle.
+ * map_file has returned. A valid mapping record has its payload cleared before
+ * other validation; on success it owns its independent host handle.
  */
 HL_API int64_t hl_linux_map_file(hl_linux_abi *linux_abi, hl_linux_fd fd, uint64_t address, uint64_t offset,
                                  uint64_t size, uint32_t protection, uint32_t flags, hl_host_file_mapping *mapping);

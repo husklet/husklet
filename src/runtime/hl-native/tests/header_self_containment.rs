@@ -459,6 +459,47 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove process output probe directory");
 }
 
+#[test]
+fn linux_file_map_failure_clears_stale_mapping() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-map-output-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("mapping output probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "linux_abi/mapping_output.h"
+
+int main(void) {
+    hl_host_file_mapping output = {HL_HOST_FILE_MAPPING_ABI, sizeof(output), 42, 0x1000, 0x2000, 7};
+    if (!hl_linux_file_mapping_output_prepare(&output)) return 1;
+    if (output.handle != HL_HOST_HANDLE_INVALID || output.address != 0 || output.mapped_size != 0 ||
+        output.reserved != 0) return 2;
+    output = (hl_host_file_mapping){0, sizeof(output), 42, 0x1000, 0x2000, 7};
+    if (hl_linux_file_mapping_output_prepare(&output) != 0) return 3;
+    return output.handle == 42 && output.address == 0x1000 ? 0 : 4;
+}
+"#,
+    )
+    .expect("mapping output probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("mapping output probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("mapping output probe execution");
+    assert!(run.success(), "mapping output probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove mapping output probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {

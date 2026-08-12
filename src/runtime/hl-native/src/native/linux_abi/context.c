@@ -3,6 +3,7 @@
 #include "../engine/provider/files.h"
 #endif
 #include "object.h"
+#include "mapping_output.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -156,8 +157,8 @@ int64_t hl_linux_map_file(hl_linux_abi *linux_abi, hl_linux_fd fd, uint64_t addr
     const hl_host_memory_services *memory;
     hl_host_result result;
     hl_status status;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || linux_abi->size < sizeof(*linux_abi) ||
-        mapping == NULL || mapping->abi != HL_HOST_FILE_MAPPING_ABI || mapping->size < sizeof(*mapping))
+    if (!hl_linux_file_mapping_output_prepare(mapping)) return -HL_LINUX_EINVAL;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || linux_abi->size < sizeof(*linux_abi))
         return -HL_LINUX_EINVAL;
     memory = linux_abi->host != NULL ? linux_abi->host->memory : NULL;
     if (memory == NULL || memory->map_file == NULL) return -HL_LINUX_ENOSYS;
