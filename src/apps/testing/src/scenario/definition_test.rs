@@ -1,5 +1,5 @@
 use super::{Class, Resource, Scenario, Step};
-use crate::scenario::terminal::Step;
+use crate::scenario::terminal::Step as TerminalStep;
 use std::{collections::BTreeSet, fs, path::Path};
 
 fn load(document: &str) -> Result<Scenario, Box<dyn std::error::Error>> {
@@ -105,14 +105,14 @@ fn terminal_action_preserves_ordered_bounded_operations() {
     assert_eq!(
         action.steps,
         [
-            Step::AwaitOutput {
+            TerminalStep::AwaitOutput {
                 contains: b"ready".to_vec(),
                 timeout_ms: 250,
             },
-            Step::Write(b"abc\r".to_vec()),
-            Step::Resize { rows: 40, columns: 120 },
-            Step::RejectOutput(vec![0x7f]),
-            Step::Close,
+            TerminalStep::Write(b"abc\r".to_vec()),
+            TerminalStep::Resize { rows: 40, columns: 120 },
+            TerminalStep::RejectOutput(vec![0x7f]),
+            TerminalStep::Close,
         ]
     );
 }
