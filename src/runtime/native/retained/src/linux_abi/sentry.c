@@ -235,6 +235,7 @@ static pid_t g_worker_pid;            // this worker process's pid (changes in a
 static pid_t g_sentry_owner_pid;      // ONLY the process that forked the sentry may signal-quit + reap it
 static _Atomic int g_guest_children;  // live guest-forked child WORKER processes owned by THIS worker proc
 static _Atomic int g_worker_threads;  // live guest threads in this worker; the initial thread contributes one
+static _Atomic int g_sentry_process_released; // child process table has been released exactly once
 static __thread int t_ring = -1;      // this worker thread's claimed ring index (claimed lazily on first use)
 static __thread uint32_t t_token = 0; // this worker thread's unique nonzero ring-ownership token
 static int64_t sentry_ctl_op(uint32_t op, uint64_t a0, uint64_t a1);
@@ -341,6 +342,7 @@ static void sentry_fork_child(void) {
     t_token = 0;             // mint a fresh ownership token on the next claim
     g_guest_children = 0;    // the child starts with no children of its own
     g_worker_threads = 1;    // only the calling thread survives fork()
+    g_sentry_process_released = 0;
     memset(g_thread_start, 0, sizeof g_thread_start);
     pthread_mutex_init(&g_thread_start_lock, NULL);
 }
@@ -1951,6 +1953,7 @@ static void sentry_init(void) {
     g_sentry_owner_pid = getpid(); // only this process may signal-quit + reap the sentry
     g_guest_children = 0;
     g_worker_threads = 1;
+    g_sentry_process_released = 0;
     // The authoritative ABI box and the host implementation both own process-local locks and handles.
     // Bracket the sentry helper fork exactly like a guest fork so the parent releases the speculative
     // child handles and the helper repairs its inherited host state. The helper retains its forked ABI box:
@@ -1987,11 +1990,25 @@ static void sentry_init(void) {
     if (g_sentry_sandbox) worker_sandbox(); // confine the worker (scoped; see k_worker_sbpl note)
 }
 
+static void sentry_process_release(void) {
+    // exit_group can race another guest thread reaching the final unwind boundary.  Publish ownership before
+    // the synchronous control round-trip so exactly one thread releases the table and its ring; that round-trip
+    // completes before its caller enters the non-returning host exit path.
+    if (atomic_exchange_explicit(&g_sentry_process_released, 1, memory_order_acq_rel) != 0) return;
+    sentry_ctl_op(SENTRY_OP_EXIT, 0, 0);
+    ring_release();
+}
+
 static void sentry_shutdown(void) {
     if (!g_shm || !g_sentry_pid) return;
     // A forked-CHILD worker inherited g_sentry_pid but does NOT own the shared sentry: it must never set
     // quit (that would tear the sentry down under the still-live parent + sibling workers) or reap it.
     if (getpid() != g_sentry_owner_pid) {
+        // Rust may intercept exit(93) before syscall_route sees it.  run_guest still unwinds here, so this
+        // is the final process-lifecycle boundary that must release the child's cloned descriptor table.
+        // Without it, a command-substitution child leaves its duplicated pipe writer in the sentry and the
+        // parent shell blocks forever waiting for EOF before it can reap that child.
+        sentry_process_release();
         g_sentry_pid = 0;
         return;
     }
@@ -2119,7 +2136,7 @@ static void syscall_route(struct cpu *c) {
         if (process_exit) {
             // exit_group ends the PROCESS. A forked CHILD worker releases its OWN sentry-side fd table (closing
             // its inherited/owned real fds); the OWNER tears the whole sentry down (reclaiming everything).
-            if (getpid() != g_sentry_owner_pid) sentry_ctl_op(SENTRY_OP_EXIT, 0, 0);
+            if (getpid() != g_sentry_owner_pid) sentry_process_release();
             sentry_shutdown();
         } else if (t_ring >= 0) {
             sentry_ctl_op(SENTRY_OP_THREAD_EXIT, 0, 0);
