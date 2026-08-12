@@ -1,250 +1,144 @@
 use crate::composition::{CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory};
-use crate::engine::{EngineError, EngineExit, StopRequest};
-use std::sync::Arc;
-#[cfg(hl_retained_c)]
-use std::sync::Mutex;
+use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
+use std::ffi::CString;
+use std::sync::{Arc, Mutex};
 
-pub(crate) enum ProductionMachine {
-    #[cfg(hl_retained_c)]
-    C(Box<CMachine>),
-}
+const REQUEST_INTERRUPT: u32 = 1;
+const REQUEST_FORCE_STOP: u32 = 2;
+const REQUEST_SIGNAL: u32 = 3;
 
-#[cfg(hl_retained_c)]
-pub(crate) struct CMachine {
+pub(crate) struct ProductionMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launch_plan::RuntimeLaunchPlan,
-    services: crate::composition::RuntimeServices,
-    execution: Mutex<CExecutionState>,
-}
-
-#[cfg(hl_retained_c)]
-struct CExecutionState {
-    prepared: Option<Arc<crate::execution::process::CWorker>>,
-    current: Option<Arc<crate::execution::process::CWorker>>,
-}
-
-#[cfg(hl_retained_c)]
-impl CMachine {
-    fn start(&self) -> Result<(), EngineError> {
-        let execution = {
-            let mut state = self.execution.lock().map_err(|_| EngineError::Synchronization)?;
-            let execution = match state.prepared.take() {
-                Some(execution) => execution,
-                None => Arc::new(crate::execution::process::CWorker::create(
-                    self.isa,
-                    &self.plan,
-                    &self.services,
-                )?),
-            };
-            state.current = Some(Arc::clone(&execution));
-            execution
-        };
-        execution.start()
-    }
-
-    fn current(&self) -> Result<Arc<crate::execution::process::CWorker>, EngineError> {
-        self.execution
-            .lock()
-            .map_err(|_| EngineError::Synchronization)?
-            .current
-            .clone()
-            .ok_or(EngineError::NotStarted)
-    }
+    engine: Mutex<Option<Arc<hl_native::Engine>>>,
 }
 
 pub(crate) struct ProductionFactory;
-
-impl ProductionFactory {
-    #[cfg(hl_retained_c)]
-    fn c(request: RuntimeConstruction<'_>) -> Result<ProductionMachine, CompositionError> {
-        hl_log::hl_event!(
-            hl_log::tag::EXEC,
-            hl_log::Level::Info,
-            "execution.backend.selected",
-            backend = "c",
-            isa = ?request.isa
-        );
-        hl_log::hl_log!(
-            hl_log::tag::EXEC,
-            hl_log::Level::Info,
-            "execution.backend.selected=c isa={:?}",
-            request.isa
-        );
-        Ok(ProductionMachine::C(Box::new(CMachine {
-            isa: request.isa,
-            plan: request.plan.clone(),
-            services: request.services.clone(),
-            execution: Mutex::new(CExecutionState {
-                prepared: None,
-                current: None,
-            }),
-        })))
-    }
-}
 
 impl RuntimeFactory for ProductionFactory {
     type Machine = ProductionMachine;
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
-        #[cfg(hl_retained_c)]
-        return Self::c(request);
+        Ok(ProductionMachine {
+            isa: request.isa,
+            plan: request.plan.clone(),
+            engine: Mutex::new(None),
+        })
+    }
+}
 
-        #[cfg(not(hl_retained_c))]
-        Err(CompositionError::RuntimeConstruction)
+impl ProductionMachine {
+    fn encode_environment(&self) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        for (index, record) in self.plan.environment.iter().enumerate() {
+            if index != 0 {
+                encoded.push(b'\n');
+            }
+            for byte in record {
+                match byte {
+                    b'\\' => encoded.extend_from_slice(b"\\\\"),
+                    b'\n' => encoded.extend_from_slice(b"\\n"),
+                    byte => encoded.push(*byte),
+                }
+            }
+        }
+        encoded
+    }
+
+    fn create(&self) -> Result<hl_native::Engine, EngineError> {
+        let rootfs = self
+            .plan
+            .rootfs
+            .as_deref()
+            .map(CString::new)
+            .transpose()
+            .map_err(|_| EngineError::LaunchFailed)?;
+        let executable = self
+            .plan
+            .executable_host
+            .as_deref()
+            .map(CString::new)
+            .transpose()
+            .map_err(|_| EngineError::LaunchFailed)?;
+        let mut options = self
+            .plan
+            .options
+            .iter()
+            .map(|(name, value)| Ok((CString::new(name)?, CString::new(value)?)))
+            .collect::<Result<Vec<_>, std::ffi::NulError>>()
+            .map_err(|_| EngineError::LaunchFailed)?;
+        options.push((CString::new("HL_GUEST_ENV").expect("literal"), CString::new(self.encode_environment()).map_err(|_| EngineError::LaunchFailed)?));
+        options.push((CString::new("HL_GUEST_ENV_ESC").expect("literal"), CString::new("1").expect("literal")));
+        options.push((CString::new("HL_GUEST_ENV_EXACT").expect("literal"), CString::new("1").expect("literal")));
+        let names = options.iter().map(|(name, _)| name.as_ptr()).collect::<Vec<_>>();
+        let values = options.iter().map(|(_, value)| value.as_ptr()).collect::<Vec<_>>();
+        let config = hl_native::Create {
+            isa: match self.isa {
+                crate::activation::GuestIsa::Aarch64 => 1,
+                crate::activation::GuestIsa::X86_64 => 2,
+            },
+            rootfs: rootfs.as_deref(),
+            executable_host: executable.as_deref(),
+            executable_fd: -1,
+            option_names: &names,
+            option_values: &values,
+            standard_fds: [0, 1, 2],
+            provider_fd: -1,
+            syscall_context: std::ptr::null_mut(),
+            syscall_dispatch: None,
+        };
+        // SAFETY: all pointers in config remain live for this call and there is no callback state.
+        unsafe { hl_native::Engine::create(config) }.map_err(|_| EngineError::LaunchFailed)
+    }
+
+    fn current(&self) -> Result<Arc<hl_native::Engine>, EngineError> {
+        self.engine
+            .lock()
+            .map_err(|_| EngineError::Synchronization)?
+            .clone()
+            .ok_or(EngineError::NotStarted)
+    }
+
+    fn exit(engine: &hl_native::Engine) -> EngineExit {
+        let exit = engine.exit();
+        EngineExit {
+            kind: match exit.kind {
+                1 => ExitKind::Code,
+                2 => ExitKind::Signal,
+                3 => ExitKind::Fault,
+                _ => ExitKind::EngineError,
+            },
+            guest_status: exit.status,
+            detail: exit.detail,
+            fault: None,
+        }
     }
 }
 
 impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
-        match self {
-            #[cfg(hl_retained_c)]
-            Self::C(machine) => machine.start(),
-        }
+        let engine = Arc::new(self.create()?);
+        *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
+        let arguments = self
+            .plan
+            .arguments
+            .iter()
+            .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
+            .collect::<Result<Vec<_>, _>>()?;
+        let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
+        engine.run(&pointers).map_err(|_| EngineError::LaunchFailed)
     }
 
     fn wait(&self) -> Result<EngineExit, EngineError> {
-        match self {
-            #[cfg(hl_retained_c)]
-            Self::C(machine) => machine.current()?.wait(),
-        }
+        Ok(Self::exit(&self.current()?))
     }
 
     fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
-        match self {
-            #[cfg(hl_retained_c)]
-            Self::C(machine) => machine.current()?.stop(request),
-        }
-    }
-
-    fn checkpoint_supported(&self) -> Result<(), EngineError> {
-        match self {
-            #[cfg(hl_retained_c)]
-            Self::C(machine) => machine.current()?.checkpoint_supported(),
-        }
-    }
-
-    fn capture_checkpoint(&self) -> Result<(), EngineError> {
-        match self {
-            #[cfg(hl_retained_c)]
-            Self::C(machine) => machine.current()?.capture_checkpoint(),
-        }
-    }
-}
-
-#[cfg(all(test, hl_retained_c))]
-mod tests {
-    use crate::{
-        activation::GuestIsa,
-        composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStreams},
-        launch_plan::RuntimePlan,
-        options::Options,
-        runtime::Engine,
-    };
-    use std::sync::{Arc, Mutex};
-
-    struct LogCapture(Arc<Mutex<String>>);
-
-    impl hl_log::Sink for LogCapture {
-        fn write_line(&self, line: &str) {
-            self.0.lock().unwrap().push_str(line);
-        }
-    }
-
-    fn c_plan() -> RuntimePlan {
-        RuntimePlan {
-            rootfs: None,
-            executable_host: None,
-            arguments: vec![b"guest".to_vec()],
-            environment: Vec::new(),
-            result_path: None,
-            options: Options::default(),
-        }
-    }
-
-    struct Store;
-
-    impl CheckpointSink for Store {
-        fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
-            Ok(())
-        }
-    }
-
-    impl CheckpointSource for Store {
-        fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
-            Ok(Vec::new())
-        }
-    }
-
-    #[test]
-    fn retained_backend_constructs_both_compiled_guest_isas() {
-        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-            assert!(Engine::from_plan(isa, c_plan()).is_ok(), "failed to construct {isa:?}");
-        }
-    }
-
-    #[test]
-    fn retained_backend_selection_is_operator_visible() {
-        let _guard = crate::execution::EVENT_CAPTURE_LOCK.lock().unwrap();
-        let output = Arc::new(Mutex::new(String::new()));
-        let tags = hl_log::Logging::global().tags();
-        let level = hl_log::Logging::global().level();
-        hl_log::Output::global().set(Box::new(LogCapture(Arc::clone(&output))));
-        hl_log::Logging::global().set(hl_log::tag::EXEC);
-        hl_log::Logging::global().set_level(hl_log::Level::Info);
-
-        assert!(Engine::from_plan(GuestIsa::Aarch64, c_plan()).is_ok());
-
-        hl_log::Logging::global().set(tags);
-        hl_log::Logging::global().set_level(level);
-        hl_log::Output::global().reset();
-        assert!(
-            output
-                .lock()
-                .unwrap()
-                .contains("execution.backend.selected=c isa=Aarch64")
-        );
-    }
-
-    #[test]
-    fn product_default_constructs_both_compiled_guest_isas() {
-        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-            assert!(Engine::from_plan(isa, c_plan()).is_ok(), "failed to construct {isa:?}");
-        }
-    }
-
-    #[test]
-    fn retained_backend_constructs_active_checkpoint_policy() {
-        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-            for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
-                let mut plan = c_plan();
-                plan.options.set(option, "1", true).unwrap();
-                assert!(
-                    Engine::with_checkpoint(isa, plan, StandardStreams::default(), Arc::new(Store), Arc::new(Store),)
-                        .is_ok()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn product_default_constructs_checkpoint_policy() {
-        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-            for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
-                let mut plan = c_plan();
-                plan.options.set(option, "1", true).unwrap();
-                assert!(
-                    Engine::with_checkpoint(isa, plan, StandardStreams::default(), Arc::new(Store), Arc::new(Store),)
-                        .is_ok()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn production_build_has_no_backend_selector() {
-        let mut plan = c_plan();
-        assert!(plan.options.set("HL_EXECUTION_BACKEND", "rust", true).is_err());
-        assert_eq!(plan.options.get("HL_EXECUTION_BACKEND"), None);
-        assert!(Engine::from_plan(GuestIsa::Aarch64, plan).is_ok());
+        let (kind, signal) = match request {
+            StopRequest::Interrupt => (REQUEST_INTERRUPT, request.signal()),
+            StopRequest::Force => (REQUEST_FORCE_STOP, request.signal()),
+            StopRequest::Signal(signal) => (REQUEST_SIGNAL, signal),
+        };
+        self.current()?.request(kind, signal).map_err(|_| EngineError::StopFailed)
     }
 }

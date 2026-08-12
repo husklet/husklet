@@ -231,7 +231,6 @@ impl Options {
     ///
     /// This is the lossless handoff used by alternate execution backends; absent
     /// options remain absent instead of being confused with empty values.
-    #[cfg(hl_retained_c)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&'static str, &[u8])> {
         DEFINITIONS
             .iter()
