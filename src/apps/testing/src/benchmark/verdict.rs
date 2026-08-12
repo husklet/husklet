@@ -17,6 +17,7 @@ impl Report {
             return Err("benchmark limit must be finite and at least 1".into());
         }
         let plan = schedule::measurements(campaign);
+        verify_complete_plan(campaign, &plan)?;
         verify_balanced_order(&plan)?;
         verify_plan(campaign, &plan, rows)?;
         verify_outputs(rows)?;
@@ -56,6 +57,57 @@ impl Report {
             text: lines.join("\n") + "\n",
         })
     }
+}
+
+fn verify_complete_plan(campaign: &Campaign, plan: &[Step]) -> Result<(), Error> {
+    let contexts = campaign
+        .workloads
+        .iter()
+        .flat_map(|(workload, definition)| {
+            definition
+                .commands
+                .keys()
+                .map(move |layout| (workload.as_str(), layout.as_str()))
+        })
+        .collect::<Vec<_>>();
+    verify_context_plan(&contexts, campaign.rounds, plan)
+}
+
+fn verify_context_plan(contexts: &[(&str, &str)], rounds: u32, plan: &[Step]) -> Result<(), Error> {
+    let expected = contexts
+        .iter()
+        .flat_map(|&(workload, layout)| {
+            CELLS.into_iter().flat_map(move |(left, right)| {
+                (0..rounds).flat_map(move |round| {
+                    [left, right]
+                        .into_iter()
+                        .map(move |arm| (workload, layout, format!("{left}{right}"), round, arm))
+                })
+            })
+        })
+        .fold(BTreeMap::new(), |mut counts, key| {
+            *counts.entry(key).or_insert(0_u8) += 1;
+            counts
+        });
+    let observed = plan.iter().fold(BTreeMap::new(), |mut counts, step| {
+        *counts
+            .entry((
+                step.workload.as_str(),
+                step.layout.as_str(),
+                step.cell.clone(),
+                step.round,
+                step.arm.as_str(),
+            ))
+            .or_insert(0_u8) += 1;
+        counts
+    });
+    if observed != expected {
+        return Err(
+            "benchmark schedule does not cover every campaign arm, layout, workload, cell, and round exactly once"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn verify_balanced_order(plan: &[Step]) -> Result<(), Error> {
@@ -548,5 +600,29 @@ mod tests {
         super::verify_balanced_order(&steps(["E", "I", "I", "E"])).unwrap();
         assert!(super::verify_balanced_order(&steps(["E", "E", "E", "E"])).is_err());
         assert!(super::verify_balanced_order(&steps(["E", "I", "E", "I"])).is_err());
+    }
+
+    #[test]
+    fn campaign_coverage_is_independent_of_the_scheduler() {
+        let mut plan = super::CELLS
+            .into_iter()
+            .flat_map(|(left, right)| {
+                (0..4).flat_map(move |round| {
+                    [left, right].into_iter().enumerate().map(move |(position, arm)| Step {
+                        workload: "malloc".into(),
+                        layout: "plain".into(),
+                        cell: format!("{left}{right}"),
+                        round,
+                        position,
+                        arm: arm.into(),
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        super::verify_context_plan(&[("malloc", "plain")], 4, &plan).unwrap();
+        plan.pop();
+        assert!(super::verify_context_plan(&[("malloc", "plain")], 4, &plan).is_err());
+        plan.push(plan[0].clone());
+        assert!(super::verify_context_plan(&[("malloc", "plain")], 4, &plan).is_err());
     }
 }
