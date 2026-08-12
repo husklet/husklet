@@ -167,12 +167,15 @@
         ];
       };
 
-      commonNativeInputs = pkgs: [
-        pkgs.bear
-        pkgs.clang-tools
-        pkgs.cppcheck
-        pkgs.pkg-config
-      ] ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.valgrind ];
+      commonNativeInputs =
+        pkgs:
+        [
+          pkgs.bear
+          pkgs.clang-tools
+          pkgs.cppcheck
+          pkgs.pkg-config
+        ]
+        ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.valgrind ];
 
       lintCasesFor =
         pkgs:
@@ -286,9 +289,7 @@
           src = workspaceSource;
           cargoLock.lockFile = ./Cargo.lock;
           strictDeps = true;
-          nativeBuildInputs =
-            commonNativeInputs pkgs
-            ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
+          nativeBuildInputs = commonNativeInputs pkgs ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
           doCheck = false;
           buildPhase = ''
             runHook preBuild
@@ -448,7 +449,10 @@
         pkgs: engine:
         pkgs.runCommand "hl-engine-installed-product"
           {
-            nativeBuildInputs = [ pkgs.binutils pkgs.patchelf ];
+            nativeBuildInputs = [
+              pkgs.binutils
+              pkgs.patchelf
+            ];
           }
           ''
             set -euo pipefail
@@ -548,6 +552,51 @@
           '';
         };
 
+      nativeScanBuildFor =
+        pkgs: architecture:
+        let
+          native =
+            pkgs.stdenv.hostPlatform.isLinux && pkgs.stdenv.hostPlatform.parsed.cpu.name == architecture;
+          crossAttr = if architecture == "aarch64" then "aarch64-multiplatform" else "gnu64";
+          targetPkgs = if native then pkgs else pkgs.pkgsCross.${crossAttr};
+          compiler =
+            if native then
+              "${pkgs.stdenv.cc}/bin/cc"
+            else
+              "${targetPkgs.stdenv.cc}/bin/${targetPkgs.stdenv.cc.targetPrefix}cc";
+        in
+        pkgs.runCommand "hl-native-${architecture}-scan-build"
+          {
+            src = workspaceSource;
+            nativeBuildInputs = [
+              pkgs.clang-analyzer
+              pkgs.coreutils
+              targetPkgs.stdenv.cc
+            ];
+          }
+          ''
+            cp -R "$src" source
+            chmod -R u+w source
+            cd source
+            mkdir reports
+            timeout 10m scan-build --status-bugs -o reports \
+              ${lib.escapeShellArg compiler} \
+              -O2 -fPIC -g -fno-omit-frame-pointer -std=c11 \
+              -Isrc/runtime/hl-native/src/native \
+              -Isrc/runtime/hl-native/src/native/include \
+              -w -fvisibility=hidden \
+              -DHL_SHARED -DHL_BUILDING_ENGINE -DHL_ENABLE_LOGGING=0 \
+              -DHL_TRANSLIT_DEFAULT=0 -D_GNU_SOURCE -DHL_EMBEDDED_BUILD=1 \
+              -DHL_ENGINE_NO_MAIN=1 -DHL_ENGINE_NO_STANDALONE=1 \
+              -DHL_TARGET_NAMESPACE=${architecture} \
+              -c src/runtime/hl-native/src/native/engine/target/${architecture}.c \
+              -o engine.o
+            mkdir -p "$out"
+            printf '%s\n' \
+              ${lib.escapeShellArg "scan-build --status-bugs passed for the ${architecture} Linux unity translation unit"} \
+              > "$out/evidence"
+          '';
+
       windowsGnuSmokeFor =
         pkgs:
         let
@@ -634,6 +683,8 @@
           "installed-product" = installedProductFor pkgs engine;
           "host-linux-aarch64" = linuxHostCompileFor pkgs "aarch64";
           "host-linux-x86_64" = linuxHostCompileFor pkgs "x86_64";
+          "scan-build-linux-aarch64" = nativeScanBuildFor pkgs "aarch64";
+          "scan-build-linux-x86_64" = nativeScanBuildFor pkgs "x86_64";
           "host-windows-x86_64-gnu-smoke" = windowsGnuSmokeFor pkgs;
           "host-darwin-cross-contract" = darwinCrossContractFor pkgs;
         }
