@@ -1,15 +1,17 @@
 use crate::suite::SafePath as _;
 use clap::{Args, Subcommand};
-use hl_process::{Capture, Command as ProcessCommand, Outcome as ProcessOutcome};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     fs,
     os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
     time::Duration,
 };
+
+mod adapter;
+
+use adapter::{build_artifact, capture, environment, hash_tool, materialize};
 
 type Error = Box<dyn std::error::Error>;
 const DEFAULT_CAPTURE_LIMIT: usize = 1024 * 1024;
@@ -245,130 +247,10 @@ struct BuildIdentity {
     cargo: String,
 }
 
-fn environment(name: &str) -> Option<String> {
-    std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
-}
-
 fn hash_source_named(digest: &mut crate::record::FramedIdentity, name: &[u8], path: &Path) -> Result<(), Error> {
     digest.field(name)?;
     digest.field(path.as_os_str().as_encoded_bytes())?;
     digest.field(&fs::read(path)?)
-}
-
-fn hash_tool(
-    digest: &mut crate::record::FramedIdentity,
-    name: &str,
-    program: &str,
-    arguments: &[&str],
-) -> Result<(), Error> {
-    let mut command = vec![program.to_owned()];
-    command.extend(arguments.iter().map(|value| (*value).to_owned()));
-    let output = capture(&command, Duration::from_secs(30), 128 * 1024)
-        .map_err(|error| format!("cannot identify {name}: {error}"))?;
-    if output.status != Some(0) {
-        return Err(format!("{name} identity command exited {:?}", output.status).into());
-    }
-    digest.field(name.as_bytes())?;
-    digest.field(program.as_bytes())?;
-    digest.field(&output.stdout)?;
-    digest.field(&output.stderr)
-}
-
-fn build_artifact(
-    root: &Path,
-    build: &Build,
-    cargo: &str,
-    record: &crate::record::ArtifactRecord,
-) -> Result<(), Error> {
-    let arguments = vec![
-        cargo.into(),
-        "rustc".into(),
-        "--locked".into(),
-        "--offline".into(),
-        "--manifest-path".into(),
-        root.join("Cargo.toml").display().to_string(),
-        "--package".into(),
-        build.package.clone(),
-        "--target".into(),
-        build.target.clone(),
-        "--profile".into(),
-        build.profile.clone(),
-        "--bin".into(),
-        build.binary.clone(),
-    ];
-    let mut arguments = arguments;
-    if !build.rustflags.is_empty() {
-        arguments.push("--".into());
-        arguments.extend(build.rustflags.iter().cloned());
-    }
-    let output = capture(&arguments, Duration::from_secs(3600), 16 * 1024 * 1024)
-        .map_err(|error| format!("nested Cargo build failed: {error}"))?;
-    if output.status != Some(0) {
-        return Err(format!(
-            "nested Cargo build exited {:?}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-    let produced = root
-        .join("target")
-        .join(&build.target)
-        .join(&build.profile)
-        .join(&build.binary);
-    let bytes = fs::read(&produced)
-        .map_err(|error| format!("cannot read built nested artifact {}: {error}", produced.display()))?;
-    record.publish(&bytes, true)
-}
-
-fn materialize(source: &Path, destination: &Path) -> Result<(), Error> {
-    fs::create_dir_all(
-        destination
-            .parent()
-            .ok_or("nested artifact destination has no parent")?,
-    )?;
-    let temporary = destination.with_extension(format!("prepare-{}", std::process::id()));
-    if temporary.exists() {
-        fs::remove_file(&temporary)?;
-    }
-    // The runnable destination needs owner-write mode for atomic replacement,
-    // while cache objects remain immutable and can back several receipts.
-    fs::copy(source, &temporary)?;
-    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))?;
-    fs::rename(temporary, destination)?;
-    Ok(())
-}
-
-#[derive(Debug)]
-struct ProcessOutput {
-    status: Option<i32>,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
-fn capture(arguments: &[String], timeout: Duration, limit: usize) -> Result<ProcessOutput, String> {
-    let (program, guest) = arguments.split_first().ok_or("empty nested command")?;
-    let output = tempfile::tempdir().map_err(|error| format!("capture directory failed: {error}"))?;
-    let capture = Capture {
-        stdout: output.path().join("stdout"),
-        stderr: output.path().join("stderr"),
-        stdout_limit: u64::try_from(limit).map_err(|_| "capture limit exceeds u64")?,
-        stderr_limit: u64::try_from(limit).map_err(|_| "capture limit exceeds u64")?,
-    };
-    let mut command = ProcessCommand::new(program);
-    command.args(guest);
-    let outcome = hl_process::run(&command, &capture, timeout, &AtomicBool::new(false))
-        .map_err(|error| format!("nested process failed: {error}"))?;
-    let status = match outcome {
-        ProcessOutcome::Exited(status) => status,
-        ProcessOutcome::Signaled(_) => None,
-        ProcessOutcome::TimedOut => return Err(format!("timed out after {} seconds", timeout.as_secs())),
-        ProcessOutcome::Cancelled => return Err("nested process was cancelled".into()),
-        ProcessOutcome::OutputLimit => return Err(format!("output exceeded {limit} bytes")),
-    };
-    let stdout = fs::read(&capture.stdout).map_err(|error| format!("stdout capture failed: {error}"))?;
-    let stderr = fs::read(&capture.stderr).map_err(|error| format!("stderr capture failed: {error}"))?;
-    Ok(ProcessOutput { status, stdout, stderr })
 }
 
 /// The repository tree a nested chain run reads its artifacts and builds from.
