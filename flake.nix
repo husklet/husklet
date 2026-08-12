@@ -531,8 +531,14 @@
               ! patchelf --print-rpath "$binary" | tr : '\n' |
                 grep -Fx ${engine}/lib >/dev/null
               env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
-                "$binary" --backend-receipt |
-                grep -F '"backend":"retained-c"' >/dev/null
+                "$binary" --backend-receipt > "$TMPDIR/$name.receipt"
+              env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
+                "$binary" --backend-receipt > "$TMPDIR/$name.receipt-repeat"
+              cmp "$TMPDIR/$name.receipt" "$TMPDIR/$name.receipt-repeat"
+              grep -F '"backend":"retained-c"' "$TMPDIR/$name.receipt" >/dev/null
+              expected_hash=$(sha256sum "$binary" | cut -d' ' -f1)
+              grep -F "\"engine_sha256\":\"$expected_hash\"" \
+                "$TMPDIR/$name.receipt" >/dev/null
             done
 
             LD_DEBUG=libs "$prefix/bin/hl-engine" --backend-receipt \
@@ -544,6 +550,8 @@
 
             mkdir -p "$out"
             cp "$TMPDIR/receipt.json" "$out/backend-receipt.json"
+            (cd "$prefix" && sha256sum bin/hl-engine bin/hl-aarch64 bin/hl-x86_64 \
+              lib/libhl_native_engine.so) > "$out/SHA256SUMS"
             printf '%s\n' \
               'copied-prefix RUNPATH, NEEDED, backend ABI, and sibling-library loader selection passed' \
               > "$out/evidence"
