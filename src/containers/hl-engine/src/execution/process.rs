@@ -1,12 +1,13 @@
 #![allow(unsafe_code)]
 
-use super::checkpoint_broker::{Broker, Server as CheckpointServer, Trigger};
+use super::checkpoint_broker::Server as CheckpointServer;
 use super::control::{FRAME_SIZE, FailureStage, Message};
 use super::environment::worker_environment;
 use super::{StreamBridge, wire};
 use crate::activation::GuestIsa;
 use crate::composition::{CompositionError, NativeTerminalWindowNotification, RuntimeServices};
 use crate::engine::{EngineError, EngineExit, StopRequest};
+use crate::ffi::checkpoint::{Broker, Trigger};
 use crate::launch_plan::RuntimeLaunchPlan;
 use std::ffi::CString;
 use std::ffi::OsString;

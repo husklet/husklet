@@ -5,6 +5,7 @@
 //! partially wired product path from advertising checkpoint support.
 
 use crate::composition::{CheckpointSink, CheckpointSource};
+use crate::ffi::checkpoint::Broker;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     io::{Read, Write},
@@ -14,125 +15,12 @@ use std::{
     },
 };
 
-const ABI: u32 = 1;
-const MAGIC_REQUEST: u32 = 0x484b_4351;
-const MAGIC_REPLY: u32 = 0x484b_4353;
-const NAME_MAX: usize = 512;
-const PAYLOAD_MAX: usize = 4 * 1024 * 1024;
-const REQUEST_BYTES: usize = 48;
-const REPLY_BYTES: usize = 32;
-const STATUS_OK: i32 = 0;
-const STATUS_ERROR: i32 = -1;
-const STATUS_ALREADY: i32 = 1;
-
-const OBJECT_BEGIN: u32 = 1;
-const OBJECT_WRITE: u32 = 2;
-const OBJECT_WRITE_AT: u32 = 3;
-const OBJECT_TELL: u32 = 4;
-const OBJECT_FINISH: u32 = 5;
-const OBJECT_ABORT: u32 = 6;
-const GROUP_BEGIN: u32 = 7;
-const GROUP_COMMIT: u32 = 8;
-const GROUP_ABORT: u32 = 9;
-const CLAIM: u32 = 10;
-const UNCLAIM: u32 = 11;
-const COMMIT: u32 = 12;
-const GROUP_PRESENT: u32 = 13;
-const GROUP_COUNT: u32 = 14;
-const DIGEST: u32 = 15;
-const SOURCE_LIST: u32 = 16;
-const SOURCE_SIZE: u32 = 17;
-const SOURCE_READ: u32 = 18;
+#[path = "broker/protocol.rs"]
+mod protocol;
+use protocol::*;
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
 const HASH_PRIME: u64 = 1_099_511_628_211;
-
-#[derive(Debug)]
-struct Request {
-    op: u32,
-    stream: u64,
-    offset: u64,
-    length: u64,
-    name_size: usize,
-}
-
-impl Request {
-    fn decode(bytes: &[u8; REQUEST_BYTES]) -> Option<Self> {
-        let word = |at| u32::from_ne_bytes(bytes[at..at + 4].try_into().expect("fixed request layout"));
-        let long = |at| u64::from_ne_bytes(bytes[at..at + 8].try_into().expect("fixed request layout"));
-        if word(0) != MAGIC_REQUEST || word(4) != ABI {
-            return None;
-        }
-        let name_size = usize::try_from(word(40)).ok()?;
-        let length = long(32);
-        if name_size > NAME_MAX || length > PAYLOAD_MAX as u64 {
-            return None;
-        }
-        Some(Self {
-            op: word(8),
-            stream: long(16),
-            offset: long(24),
-            length,
-            name_size,
-        })
-    }
-
-    fn carries_payload(&self) -> bool {
-        self.length != 0 && self.op != SOURCE_READ
-    }
-}
-
-struct Reply {
-    status: i32,
-    value: u64,
-    payload: Vec<u8>,
-}
-
-impl Reply {
-    const fn status(status: i32) -> Self {
-        Self {
-            status,
-            value: 0,
-            payload: Vec::new(),
-        }
-    }
-
-    const fn ok() -> Self {
-        Self::status(STATUS_OK)
-    }
-
-    const fn error() -> Self {
-        Self::status(STATUS_ERROR)
-    }
-
-    const fn value(value: u64) -> Self {
-        Self {
-            status: STATUS_OK,
-            value,
-            payload: Vec::new(),
-        }
-    }
-
-    const fn payload(payload: Vec<u8>) -> Self {
-        Self {
-            status: STATUS_OK,
-            value: 0,
-            payload,
-        }
-    }
-
-    fn write(&self, channel: &mut impl Write) -> std::io::Result<()> {
-        let mut header = [0_u8; REPLY_BYTES];
-        header[0..4].copy_from_slice(&MAGIC_REPLY.to_ne_bytes());
-        header[4..8].copy_from_slice(&ABI.to_ne_bytes());
-        header[8..12].copy_from_slice(&self.status.to_ne_bytes());
-        header[16..24].copy_from_slice(&self.value.to_ne_bytes());
-        header[24..32].copy_from_slice(&(self.payload.len() as u64).to_ne_bytes());
-        channel.write_all(&header)?;
-        channel.write_all(&self.payload)?;
-        channel.flush()
-    }
-}
 
 struct Object {
     name: String,
@@ -359,9 +247,8 @@ impl Server {
                 .and_then(|state| state.open.get(&key).map(|object| object.bytes.len() as u64))
                 .map_or_else(Reply::error, Reply::value),
             OBJECT_FINISH => {
-                let object = match self.state.lock().ok().and_then(|mut state| state.open.remove(&key)) {
-                    Some(object) => object,
-                    None => return Reply::error(),
+                let Some(object) = self.state.lock().ok().and_then(|mut state| state.open.remove(&key)) else {
+                    return Reply::error();
                 };
                 if let Some(group) = object.name.split_once('/').map(|(group, _)| group.to_owned())
                     && let Ok(mut state) = self.state.lock()
@@ -417,16 +304,7 @@ impl Server {
                 }
                 Reply::ok()
             }
-            CLAIM => self.state.lock().map_or_else(
-                |_| Reply::error(),
-                |mut state| {
-                    if state.claims.insert(name.into()) {
-                        Reply::ok()
-                    } else {
-                        Reply::status(STATUS_ALREADY)
-                    }
-                },
-            ),
+            CLAIM => self.claim(name),
             UNCLAIM => {
                 if let Ok(mut state) = self.state.lock() {
                     state.claims.remove(name);
@@ -460,38 +338,15 @@ impl Server {
                 payload.extend_from_slice(&bytes.to_ne_bytes());
                 Reply::payload(payload)
             }
-            COMMIT => match self.sink.commit(payload) {
-                Ok(()) => {
-                    self.committed.store(true, Ordering::Release);
-                    Reply::ok()
-                }
-                Err(_) => {
+            COMMIT => {
+                if self.sink.commit(payload).is_err() {
                     self.fail("checkpoint store rejected manifest".into());
-                    Reply::error()
-                }
-            },
-            SOURCE_LIST => {
-                let Ok(names) = self.source.list() else {
                     return Reply::error();
-                };
-                let mut seen = Vec::new();
-                for full in names {
-                    let entry = full.split_once('/').map_or(full.as_str(), |(head, _)| head);
-                    if entry.starts_with(name) && !seen.iter().any(|held| held == entry) {
-                        seen.push(entry.to_owned());
-                    }
                 }
-                let mut payload = Vec::new();
-                for entry in &seen {
-                    payload.extend_from_slice(entry.as_bytes());
-                    payload.push(0);
-                }
-                Reply {
-                    status: STATUS_OK,
-                    value: seen.len() as u64,
-                    payload,
-                }
+                self.committed.store(true, Ordering::Release);
+                Reply::ok()
             }
+            SOURCE_LIST => self.source_list(name),
             SOURCE_SIZE => self.source.get(name).map_or_else(
                 |_| Reply::status(STATUS_ALREADY),
                 |bytes| Reply::value(bytes.len() as u64),
@@ -512,275 +367,42 @@ impl Server {
             _ => Reply::error(),
         }
     }
-}
 
-pub(crate) struct Broker(std::os::fd::OwnedFd);
-
-impl Broker {
-    pub(crate) fn pair() -> std::io::Result<(Self, std::os::fd::OwnedFd)> {
-        use std::os::fd::FromRawFd as _;
-        let mut parent = 0_u64;
-        let mut child = 0_u64;
-        // SAFETY: successful creation returns two uniquely owned descriptors.
-        if unsafe { super::hl_ckpt_broker_pair(&raw mut parent, &raw mut child) } != 0
-            || parent == 0
-            || child == 0
-            || parent > i32::MAX as u64
-            || child > i32::MAX as u64
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: ownership was transferred by the successful C call above.
-        unsafe {
-            Ok((
-                Self(std::os::fd::OwnedFd::from_raw_fd(parent as i32)),
-                std::os::fd::OwnedFd::from_raw_fd(child as i32),
-            ))
+    fn claim(&self, name: &str) -> Reply {
+        let Ok(mut state) = self.state.lock() else {
+            return Reply::error();
+        };
+        if state.claims.insert(name.into()) {
+            Reply::ok()
+        } else {
+            Reply::status(STATUS_ALREADY)
         }
     }
 
-    fn accept(&self, timeout: std::time::Duration) -> Option<(std::os::unix::net::UnixStream, u64)> {
-        use std::os::fd::{AsRawFd as _, FromRawFd as _};
-        let timeout = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
-        let mut host_pid = 0;
-        // SAFETY: self keeps the broker live; a nonzero result is a newly owned stream descriptor.
-        let channel = unsafe { super::hl_ckpt_broker_accept(self.0.as_raw_fd() as u64, timeout, &raw mut host_pid) };
-        if channel == 0 || channel > i32::MAX as u64 {
-            return None;
+    fn source_list(&self, prefix: &str) -> Reply {
+        let Ok(names) = self.source.list() else {
+            return Reply::error();
+        };
+        let mut seen = Vec::new();
+        for full in names {
+            let entry = full.split_once('/').map_or(full.as_str(), |(head, _)| head);
+            if entry.starts_with(prefix) && !seen.iter().any(|held| held == entry) {
+                seen.push(entry.to_owned());
+            }
         }
-        // SAFETY: the accept call transferred unique ownership.
-        Some((
-            unsafe { std::os::unix::net::UnixStream::from_raw_fd(channel as i32) },
-            host_pid,
-        ))
-    }
-}
-
-pub(crate) struct Trigger {
-    descriptor: i32,
-    mapping: *mut std::ffi::c_void,
-}
-
-// SAFETY: C owns the one-word shared mapping protocol; bump is the only access.
-unsafe impl Send for Trigger {}
-// SAFETY: capture is serialized by the machine lifecycle; bump is one generation update.
-unsafe impl Sync for Trigger {}
-
-impl Trigger {
-    pub(crate) fn create() -> std::io::Result<Self> {
-        let mut descriptor = 0_u64;
-        let mut mapping = std::ptr::null_mut();
-        // SAFETY: output pointers are valid and initialized by C on success.
-        if unsafe { super::hl_ckpt_trigger_create(&raw mut descriptor, &raw mut mapping) } != 0
-            || descriptor == 0
-            || descriptor > i32::MAX as u64
-            || mapping.is_null()
-        {
-            return Err(std::io::Error::last_os_error());
+        let mut payload = Vec::new();
+        for entry in &seen {
+            payload.extend_from_slice(entry.as_bytes());
+            payload.push(0);
         }
-        Ok(Self {
-            descriptor: descriptor as i32,
-            mapping,
-        })
-    }
-
-    pub(crate) const fn descriptor(&self) -> i32 {
-        self.descriptor
-    }
-
-    pub(crate) fn bump(&self) -> u32 {
-        // SAFETY: mapping remains live for self's lifetime.
-        unsafe { super::hl_ckpt_trigger_bump(self.mapping) }
-    }
-}
-
-impl Drop for Trigger {
-    fn drop(&mut self) {
-        // SAFETY: this type owns both resources and drops them exactly once.
-        unsafe { super::hl_ckpt_trigger_destroy(self.mapping, self.descriptor as u64) };
-        self.mapping = std::ptr::null_mut();
-        self.descriptor = -1;
+        Reply {
+            status: STATUS_OK,
+            value: seen.len() as u64,
+            payload,
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::composition::CompositionError;
-
-    #[derive(Default)]
-    struct Store(Mutex<BTreeMap<String, Vec<u8>>>);
-
-    impl CheckpointSink for Store {
-        fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
-            Err(CompositionError::RuntimeConstruction)
-        }
-        fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CompositionError> {
-            self.0.lock().unwrap().insert(name.into(), bytes.into());
-            Ok(())
-        }
-        fn commit(&self, manifest: &[u8]) -> Result<(), CompositionError> {
-            self.put("MANIFEST", manifest)
-        }
-    }
-
-    impl CheckpointSource for Store {
-        fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
-            Err(CompositionError::RuntimeConstruction)
-        }
-        fn get(&self, name: &str) -> Result<Vec<u8>, CompositionError> {
-            self.0
-                .lock()
-                .unwrap()
-                .get(name)
-                .cloned()
-                .ok_or(CompositionError::RuntimeConstruction)
-        }
-        fn list(&self) -> Result<Vec<String>, CompositionError> {
-            Ok(self.0.lock().unwrap().keys().cloned().collect())
-        }
-    }
-
-    fn request(op: u32, stream: u64, name: &str, payload: &[u8]) -> Vec<u8> {
-        let mut header = [0; REQUEST_BYTES];
-        header[0..4].copy_from_slice(&MAGIC_REQUEST.to_ne_bytes());
-        header[4..8].copy_from_slice(&ABI.to_ne_bytes());
-        header[8..12].copy_from_slice(&op.to_ne_bytes());
-        header[16..24].copy_from_slice(&stream.to_ne_bytes());
-        header[32..40].copy_from_slice(&(payload.len() as u64).to_ne_bytes());
-        header[40..44].copy_from_slice(&((name.len() + 1) as u32).to_ne_bytes());
-        let mut frame = header.to_vec();
-        frame.extend_from_slice(name.as_bytes());
-        frame.push(0);
-        frame.extend_from_slice(payload);
-        frame
-    }
-
-    #[test]
-    fn object_group_commit_and_manifest_are_transactional() {
-        let store = Arc::new(Store::default());
-        let server = Server::new(store.clone(), store.clone());
-        assert_eq!(
-            server
-                .dispatch(
-                    1,
-                    &Request {
-                        op: GROUP_BEGIN,
-                        stream: 0,
-                        offset: 0,
-                        length: 0,
-                        name_size: 7
-                    },
-                    "proc.1",
-                    &[]
-                )
-                .status,
-            STATUS_OK
-        );
-        assert_eq!(
-            server
-                .dispatch(
-                    1,
-                    &Request {
-                        op: OBJECT_BEGIN,
-                        stream: 4,
-                        offset: 0,
-                        length: 0,
-                        name_size: 12
-                    },
-                    "proc.1/meta",
-                    &[]
-                )
-                .status,
-            STATUS_OK
-        );
-        assert_eq!(
-            server
-                .dispatch(
-                    1,
-                    &Request {
-                        op: OBJECT_WRITE,
-                        stream: 4,
-                        offset: 0,
-                        length: 5,
-                        name_size: 0
-                    },
-                    "",
-                    b"state"
-                )
-                .status,
-            STATUS_OK
-        );
-        assert_eq!(
-            server
-                .dispatch(
-                    1,
-                    &Request {
-                        op: OBJECT_FINISH,
-                        stream: 4,
-                        offset: 0,
-                        length: 0,
-                        name_size: 0
-                    },
-                    "",
-                    &[]
-                )
-                .status,
-            STATUS_OK
-        );
-        assert!(store.get("proc.1/meta").is_err());
-        assert_eq!(
-            server
-                .dispatch(
-                    1,
-                    &Request {
-                        op: GROUP_COMMIT,
-                        stream: 0,
-                        offset: 0,
-                        length: 0,
-                        name_size: 7
-                    },
-                    "proc.1",
-                    &[]
-                )
-                .status,
-            STATUS_OK
-        );
-        assert_eq!(store.get("proc.1/meta").unwrap(), b"state");
-        assert_eq!(
-            server
-                .dispatch(
-                    1,
-                    &Request {
-                        op: COMMIT,
-                        stream: 0,
-                        offset: 0,
-                        length: 8,
-                        name_size: 0
-                    },
-                    "",
-                    b"manifest"
-                )
-                .status,
-            STATUS_OK
-        );
-        assert!(server.committed());
-    }
-
-    #[test]
-    fn wire_server_rejects_non_terminated_names() {
-        let store = Arc::new(Store::default());
-        let server = Arc::new(Server::new(store.clone(), store));
-        let (mut client, mut host) = std::os::unix::net::UnixStream::pair().unwrap();
-        let worker = {
-            let server = server.clone();
-            std::thread::spawn(move || server.serve(&mut host, 1))
-        };
-        let mut frame = request(OBJECT_BEGIN, 1, "safe", &[]);
-        frame[REQUEST_BYTES + 4] = b'x';
-        client.write_all(&frame).unwrap();
-        drop(client);
-        worker.join().unwrap();
-        assert!(!server.committed());
-    }
-}
+#[path = "broker/test.rs"]
+mod tests;

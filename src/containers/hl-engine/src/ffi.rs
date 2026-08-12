@@ -2,6 +2,8 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(hl_retained_c)]
+pub(crate) mod checkpoint;
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
 #[cfg(target_os = "macos")]

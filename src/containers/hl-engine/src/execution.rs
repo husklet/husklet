@@ -250,11 +250,6 @@ unsafe extern "C" {
     fn hl_c_backend_checkpoint_adopt(broker: c_int, trigger: c_int) -> c_int;
     fn hl_c_backend_checkpoint_interrupt_signal() -> c_int;
     fn hl_c_backend_private_descriptor_add(descriptor: c_int) -> c_int;
-    fn hl_ckpt_broker_pair(parent: *mut u64, child: *mut u64) -> c_int;
-    fn hl_ckpt_broker_accept(broker: u64, timeout_ms: c_int, host_pid: *mut u64) -> u64;
-    fn hl_ckpt_trigger_create(descriptor: *mut u64, mapping: *mut *mut c_void) -> c_int;
-    fn hl_ckpt_trigger_bump(mapping: *mut c_void) -> c_uint;
-    fn hl_ckpt_trigger_destroy(mapping: *mut c_void, descriptor: u64);
     fn hl_c_backend_create(
         isa: c_uint,
         rootfs: *const c_char,
