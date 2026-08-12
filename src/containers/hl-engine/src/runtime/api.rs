@@ -7,7 +7,6 @@ use std::sync::Arc;
 mod execution;
 pub(crate) use execution::{ProductionFactory, ProductionMachine};
 
-
 use crate::activation::GuestIsa;
 use crate::composition::{ActivationChannel, CompositionError, EngineBackend, RuntimeServices};
 use crate::engine::{EngineError, EngineExit, StopRequest};

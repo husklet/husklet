@@ -87,10 +87,10 @@ fn emit_test_environment(root: &Path, allocation_test: bool) {
             root.join("src"),
             PathBuf::from("../runtime/native/cpu/include"),
         ]
-            .into_iter()
-            .map(|path| display(manifest.join(path)))
-            .collect::<Vec<_>>()
-            .join(":")
+        .into_iter()
+        .map(|path| display(manifest.join(path)))
+        .collect::<Vec<_>>()
+        .join(":")
     );
     println!(
         "cargo:rustc-env=HL_NATIVE_TEST_ARCH={}",

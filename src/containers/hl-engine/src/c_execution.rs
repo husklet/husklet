@@ -521,8 +521,7 @@ impl StreamBridge {
         for descriptor in [&pair.0, &pair.1] {
             // F_GETFD/F_SETFD operate on the live descriptor and retain no pointer.
             let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
-            if flags < 0
-                || unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } != 0
+            if flags < 0 || unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } != 0
             {
                 return Err(EngineError::LaunchFailed);
             }
@@ -892,8 +891,8 @@ mod tests {
         EVENT_CAPTURE_LOCK, SYSCALL_TRAP_ABI, SYSCALL_TRAP_CONTINUE, SYSCALL_TRAP_DECLINED, SYSCALL_TRAP_FAULT,
         StreamBridge, TASK_EVENT_CLONE_THREAD, TASK_EVENT_CREDENTIALS_CHANGED, TASK_EVENT_FORK_PROCESS,
         TASK_EVENT_PREPARE_FORK, c_file_volumes, c_main_image_plan, c_option, c_syscall_trap,
-        hl_native_address_projection_guest, hl_native_address_projection_init,
-        hl_native_address_projection_init_elf, hl_native_address_projection_storage,
+        hl_native_address_projection_guest, hl_native_address_projection_init, hl_native_address_projection_init_elf,
+        hl_native_address_projection_storage,
     };
     use crate::activation::GuestIsa;
     use crate::composition::{
@@ -975,15 +974,7 @@ mod tests {
     fn elf_kind_alone_selects_et_exec_or_position_independent_coordinates() {
         let mut executable = CAddressProjection::default();
         assert_eq!(
-            unsafe {
-                hl_native_address_projection_init_elf(
-                    &raw mut executable,
-                    1,
-                    0x40_0000,
-                    0x41_0000,
-                    0xa0_0000,
-                )
-            },
+            unsafe { hl_native_address_projection_init_elf(&raw mut executable, 1, 0x40_0000, 0x41_0000, 0xa0_0000,) },
             0
         );
         assert_eq!((executable.guest_start, executable.guest_end), (0x40_0000, 0x41_0000));
@@ -995,9 +986,7 @@ mod tests {
         let mut static_pie = CAddressProjection::default();
         for projection in [&raw mut dynamic_pie, &raw mut static_pie] {
             assert_eq!(
-                unsafe {
-                    hl_native_address_projection_init_elf(projection, 2, 0, 0x10_0000, 0x70_0000_0000)
-                },
+                unsafe { hl_native_address_projection_init_elf(projection, 2, 0, 0x10_0000, 0x70_0000_0000) },
                 0
             );
         }
@@ -1286,9 +1275,18 @@ mod tests {
         put_u64(&mut bytes, 104, image_length);
         put_u64(&mut bytes, 112, 4096);
         let code = [
-            0xb8, 60, 0, 0, 0, // mov eax, SYS_exit
-            0xbf, status as u8, 0, 0, 0, // mov edi, status
-            0x0f, 0x05, // syscall
+            0xb8,
+            60,
+            0,
+            0,
+            0, // mov eax, SYS_exit
+            0xbf,
+            status as u8,
+            0,
+            0,
+            0, // mov edi, status
+            0x0f,
+            0x05, // syscall
         ];
         bytes[ENTRY_OFFSET..ENTRY_OFFSET + code.len()].copy_from_slice(&code);
         bytes
@@ -1345,8 +1343,7 @@ mod tests {
         let path = directory.path().join("guest-x86_64");
         std::fs::write(&path, exiting_x86_64(37)).unwrap();
         let plan = executable_plan(&path);
-        let executor =
-            CGuestExecutor::create_with_streams(GuestIsa::X86_64, &plan, None, [0, 1, 2], None).unwrap();
+        let executor = CGuestExecutor::create_with_streams(GuestIsa::X86_64, &plan, None, [0, 1, 2], None).unwrap();
         executor.start_plan(&plan).unwrap();
         assert_eq!(executor.exit().guest_status, 37);
     }

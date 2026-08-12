@@ -38,7 +38,10 @@ mod tests {
             "src/host/macos/range.c",
             "src/host/macos/system.c",
         ] {
-            assert!(manifest.lines().any(|entry| entry == source), "missing retained source {source}");
+            assert!(
+                manifest.lines().any(|entry| entry == source),
+                "missing retained source {source}"
+            );
             assert!(root.join(source).is_file(), "missing retained file {source}");
         }
     }

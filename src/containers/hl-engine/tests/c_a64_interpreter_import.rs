@@ -20,7 +20,10 @@ fn sha256(path: &Path) -> String {
 #[test]
 fn imported_x86_closure_is_pinned_and_inventoried() {
     let retained = Path::new(RETAINED);
-    assert_eq!(sha256(&retained.join("src/translator/guest/x86_64/decode.c")), X86_DECODE_SHA256);
+    assert_eq!(
+        sha256(&retained.join("src/translator/guest/x86_64/decode.c")),
+        X86_DECODE_SHA256
+    );
     assert_eq!(
         sha256(&retained.join("src/translator/guest/x86_64/interp_dispatch.h")),
         X86_DISPATCH_SHA256
@@ -43,8 +46,7 @@ fn imported_x86_closure_is_pinned_and_inventoried() {
             && line.contains("src/core/target/x86_64.c")
     }));
     assert!(units.lines().any(|line| {
-        line.starts_with("lifecycle_x86_64_direct\t")
-            && line.contains("HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_X86_64")
+        line.starts_with("lifecycle_x86_64_direct\t") && line.contains("HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_X86_64")
     }));
 }
 
@@ -71,9 +73,11 @@ fn imported_interpreter_is_pinned_licensed_and_inventoried() {
     }
 
     let units = fs::read_to_string(retained.join("COMPILED_TUS.tsv")).expect("TU manifest");
-    assert!(units.lines().any(|line| {
-        line.starts_with("unity_include\t") && line.contains("src/translator/guest/aarch64/interp.c")
-    }));
+    assert!(
+        units.lines().any(|line| {
+            line.starts_with("unity_include\t") && line.contains("src/translator/guest/aarch64/interp.c")
+        })
+    );
     assert!(units.lines().any(|line| {
         line.starts_with("interpreter_link_smoke\t") && line.contains("tests/aarch64_interpreter_link_smoke.c")
     }));

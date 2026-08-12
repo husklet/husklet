@@ -51,10 +51,10 @@ fn retained_environment_symbols_are_not_linked() {
         symbols.contains("hl_engine_run"),
         "retained engine symbols were not linked"
     );
-    for retired in [
-        "hl_environment_debug_log",
-        "hl_environment_take_activation_descriptor",
-    ] {
-        assert!(!symbols.contains(retired), "retired environment symbol returned: {retired}");
+    for retired in ["hl_environment_debug_log", "hl_environment_take_activation_descriptor"] {
+        assert!(
+            !symbols.contains(retired),
+            "retired environment symbol returned: {retired}"
+        );
     }
 }
