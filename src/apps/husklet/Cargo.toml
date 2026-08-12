@@ -73,11 +73,9 @@ runtime = [
 gui = [
     "runtime",
     "dep:hl-gui",
-    "dep:libc",
     "dep:gtk",
     "dep:vte4",
     "dep:serde",
-    "dep:serde_json",
     "dep:objc2",
     "dep:objc2-foundation",
     "dep:objc2-app-kit",
