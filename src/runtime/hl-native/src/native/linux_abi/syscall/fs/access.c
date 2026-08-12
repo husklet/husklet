@@ -787,6 +787,33 @@ if (jail_routed_at((int)a0, (const char *)a1)) {
     return 0;
 }
 
+static uint64_t open_anonymous_tmpfile(uint64_t a0, uint64_t a1, uint64_t a3) {
+    char path_buffer[4200];
+    const char *directory = atpath((int)a0, (const char *)a1, path_buffer, sizeof path_buffer, 0);
+    int directory_fd = open(directory, O_RDONLY | O_DIRECTORY);
+    if (directory_fd < 0) return (uint64_t)(-errno);
+
+    int fd = -1;
+    int error = ENOENT;
+    for (int attempt = 0; attempt < 64; attempt++) {
+        char name[40];
+        snprintf(name, sizeof name, ".hl-tmpfile-%d-%d", (int)getpid(), rand());
+        fd = openat(directory_fd, name, O_CREAT | O_EXCL | O_RDWR, (mode_t)(a3 ? a3 : 0600));
+        error = errno;
+        if (fd >= 0) {
+            unlinkat(directory_fd, name, 0);
+            break;
+        }
+        if (error != EEXIST) break;
+    }
+    close(directory_fd);
+    if (fd >= 0 && fd < HL_NFD) {
+        g_fdpath[fd][0] = 0;
+        memf_attach(fd, 0, 0);
+    }
+    return fd < 0 ? (uint64_t)(-(int64_t)error) : (uint64_t)fd;
+}
+
 static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                              uint64_t a4, uint64_t a5) {
     switch (nr) {
@@ -843,31 +870,7 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         // regular file inside the named directory by making one + immediately unlinking it (macOS has no
         // O_TMPFILE). The fd is a normal RW file with link count 0.
         if (lf & 0x400000) {
-            char pb[4200];
-            const char *dir = atpath((int)a0, (const char *)a1, pb, sizeof pb, 0);
-            int dfd = open(dir, O_RDONLY | O_DIRECTORY);
-            if (dfd < 0) {
-                G_RET(c) = (uint64_t)(-errno);
-                break;
-            }
-            int fd = -1, e = ENOENT;
-            for (int t = 0; t < 64; t++) {
-                char nm[40];
-                snprintf(nm, sizeof nm, ".hl-tmpfile-%d-%d", (int)getpid(), rand());
-                fd = openat(dfd, nm, O_CREAT | O_EXCL | O_RDWR, (mode_t)(a3 ? a3 : 0600));
-                e = errno;
-                if (fd >= 0) {
-                    unlinkat(dfd, nm, 0);
-                    break;
-                }
-                if (e != EEXIST) break;
-            }
-            close(dfd);
-            if (fd >= 0 && fd < HL_NFD) {
-                g_fdpath[fd][0] = 0;   // anonymous: no tracked path
-                memf_attach(fd, 0, 0); // O_TMPFILE is unambiguously private scratch -> back it with RAM
-            }
-            G_RET(c) = fd < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)fd;
+            G_RET(c) = open_anonymous_tmpfile(a0, a1, a3);
             break;
         }
         if (open_synthetic_path(c, a0, a1, lf, mf, is_opath)) break;
