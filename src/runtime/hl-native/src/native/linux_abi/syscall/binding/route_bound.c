@@ -994,7 +994,7 @@ static int bound_route_unsupported(struct cpu *c, uint64_t nr, uint64_t a0, uint
 }
 
 static int bound_route(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
-    hl_linux_fd_snapshot source;
+    hl_linux_fd_snapshot source = {0};
     int source_bound = !g_bound_source_native && bound_snapshot(a0, &source);
     if (bound_route_platform(c, nr, a0, a1, a2, a3, a4, source, source_bound)) return 1;
     if (bound_route_inotify(c, nr, a0, a1, a2, a3, a4, source, source_bound)) return 1;

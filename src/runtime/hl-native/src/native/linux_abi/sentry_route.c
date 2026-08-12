@@ -574,7 +574,7 @@ static int sentry_import_socket(struct sentry_marshal *M) {
     }
     case 209: {        // getsockopt(fd, a1=level, a2=optname, a3=optval_out, a4=optlen_inout)
         if (G_A4(c)) { // in/out optlen: ship the guest cap (clamped so the kernel can't overrun the window)
-            socklen_t cap;
+            socklen_t cap = 0;
             SENTRY_IMPORT_EXACT(&cap, G_A4(c), sizeof cap);
             M->worker_socklen = cap;
             M->worker_socklen_valid = 1;

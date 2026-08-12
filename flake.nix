@@ -670,6 +670,25 @@
               "${pkgs.stdenv.cc}/bin/cc"
             else
               "${targetPkgs.stdenv.cc}/bin/${targetPkgs.stdenv.cc.targetPrefix}cc";
+          portableWarnings = [
+              "-Werror=implicit-function-declaration"
+              "-Werror=incompatible-pointer-types"
+              "-Werror=int-conversion"
+              "-Werror=return-type"
+              "-Werror=type-limits"
+              "-Werror=null-dereference"
+              "-Werror=uninitialized"
+              "-Werror=switch-default"
+            ];
+          strictWarnings =
+            portableWarnings
+            ++ lib.optionals targetPkgs.stdenv.cc.isGNU [
+              "-Werror=maybe-uninitialized"
+              "-Werror=restrict"
+              "-Werror=logical-op"
+              "-Werror=duplicated-branches"
+              "-Werror=stack-usage=262144"
+            ];
         in
         pkgs.runCommand "hl-native-${architecture}-scan-build"
           {
@@ -685,22 +704,30 @@
             chmod -R u+w source
             cd source
             mkdir reports
+            if printf '%s\n' 'int warning_probe(unsigned value) { return value < 0; }' \
+              | ${lib.escapeShellArg compiler} -x c -fsyntax-only -Werror=type-limits -
+            then
+              printf '%s\n' 'strict C warning probe unexpectedly compiled' >&2
+              exit 1
+            fi
+            ${lib.escapeShellArg compiler} \
+              -O2 -fPIC -g -fno-omit-frame-pointer -std=c11 \
+              -Isrc/runtime/hl-native/src/native \
+              -Isrc/runtime/hl-native/src/native/include \
+              -fvisibility=hidden \
+              ${lib.escapeShellArgs strictWarnings} \
+              -DHL_SHARED -DHL_BUILDING_ENGINE -DHL_ENABLE_LOGGING=0 \
+              -DHL_TRANSLIT_DEFAULT=0 -D_GNU_SOURCE -DHL_EMBEDDED_BUILD=1 \
+              -DHL_ENGINE_NO_MAIN=1 -DHL_ENGINE_NO_STANDALONE=1 \
+              -DHL_TARGET_NAMESPACE=${architecture} \
+              -fsyntax-only src/runtime/hl-native/src/native/engine/target/${architecture}.c
             timeout 10m scan-build --status-bugs -o reports \
               ${lib.escapeShellArg compiler} \
               -O2 -fPIC -g -fno-omit-frame-pointer -std=c11 \
               -Isrc/runtime/hl-native/src/native \
               -Isrc/runtime/hl-native/src/native/include \
-              -w -fvisibility=hidden \
-              -Werror=implicit-function-declaration \
-              -Werror=incompatible-pointer-types \
-              -Werror=int-conversion -Werror=return-type -Werror=type-limits \
-              -Werror=null-dereference \
-              -Werror=maybe-uninitialized -Werror=uninitialized \
-              -Werror=restrict \
-              -Werror=switch-default \
-              -Werror=logical-op \
-              -Werror=duplicated-branches \
-              -Werror=stack-usage=262144 \
+              -fvisibility=hidden \
+              ${lib.escapeShellArgs portableWarnings} \
               -DHL_SHARED -DHL_BUILDING_ENGINE -DHL_ENABLE_LOGGING=0 \
               -DHL_TRANSLIT_DEFAULT=0 -D_GNU_SOURCE -DHL_EMBEDDED_BUILD=1 \
               -DHL_ENGINE_NO_MAIN=1 -DHL_ENGINE_NO_STANDALONE=1 \
