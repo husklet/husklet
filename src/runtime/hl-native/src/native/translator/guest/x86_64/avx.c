@@ -3618,6 +3618,26 @@ static enum avx_dispatch_result sse_dispatch_minmax(const hl_x86_avx_state *stat
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result sse_dispatch_implicit_blend(const hl_x86_avx_state *state, struct cpu *c,
+                                                            struct insn *I, uint64_t next, uint8_t destination[16]) {
+    int op = I->op;
+    if (I->map3 != 2 || (op != 0x10 && op != 0x14 && op != 0x15)) return AVX_DISPATCH_UNMATCHED;
+    uint8_t source[16];
+    uint8_t mask[16];
+    sse_get_rm(state, c, I, next, source);
+    memcpy(mask, &c->v[0], 16);
+    if (op == 0x10) {
+        for (int lane = 0; lane < 16; lane++)
+            if (mask[lane] & 0x80) destination[lane] = source[lane];
+    } else {
+        int lane_width = op == 0x14 ? 4 : 8;
+        for (int offset = 0; offset < 16; offset += lane_width)
+            if (mask[offset + lane_width - 1] & 0x80) memcpy(destination + offset, source + offset, (size_t)lane_width);
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3639,6 +3659,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     if (sse_dispatch_aes(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_absolute(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_minmax(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
+    if (sse_dispatch_implicit_blend(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     // ---- the remaining ops are xmm-destructive: load the r/m source, compute into r, write to D -----
     sse_get_rm(state, c, &I, next, s);
@@ -3720,22 +3741,6 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
                 }
             uint16_t o[8] = {best, (uint16_t)idx, 0, 0, 0, 0, 0, 0};
             memcpy(r, o, 16);
-            break;
-        }
-        case 0x10:
-        case 0x14:
-        case 0x15: { // pblendvb / blendvps / blendvpd -- mask is implicit xmm0
-            uint8_t *mask = (uint8_t *)&c->v[0];
-            if (op == 0x10) { // pblendvb: per-byte, mask = top bit of each byte
-                for (int i = 0; i < 16; i++)
-                    r[i] = (mask[i] & 0x80) ? s[i] : D[i];
-            } else if (op == 0x14) { // blendvps: per dword, top bit
-                for (int i = 0; i < 4; i++)
-                    memcpy(r + 4 * i, (mask[4 * i + 3] & 0x80) ? s + 4 * i : D + 4 * i, 4);
-            } else { // blendvpd: per qword
-                for (int i = 0; i < 2; i++)
-                    memcpy(r + 8 * i, (mask[8 * i + 7] & 0x80) ? s + 8 * i : D + 8 * i, 8);
-            }
             break;
         }
         case 0xC8: { // sha1nexte: dst.dw3 = src.dw3 + ROL(dst.dw3,30); dst.dw0..2 = src.dw0..2 (passthrough)
