@@ -187,15 +187,22 @@ pub fn package(path: &Path) -> Option<String> {
         let Ok(manifest) = fs::read_to_string(directory.join("Cargo.toml")) else {
             continue;
         };
-        let mut in_package = false;
-        for line in manifest.lines().map(str::trim) {
-            if line.starts_with('[') {
-                in_package = line == "[package]";
-            } else if in_package && line.starts_with("name") {
-                return line
-                    .split_once('=')
-                    .map(|(_, name)| name.trim().trim_matches('"').to_owned());
-            }
+        if let Some(name) = manifest_package(&manifest) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn manifest_package(manifest: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+        } else if in_package && line.starts_with("name") {
+            return line
+                .split_once('=')
+                .map(|(_, name)| name.trim().trim_matches('"').to_owned());
         }
     }
     None
@@ -493,7 +500,7 @@ pub(crate) fn test_source(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Workspace, snake_case};
+    use super::{Workspace, package, snake_case};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -537,5 +544,20 @@ mod tests {
         assert_eq!(snake_case("r#HTTPServer-value"), "h_t_t_p_server_value");
         assert_eq!(snake_case("GuestPath"), "guest_path");
         assert_eq!(snake_case("__already_snake__"), "already_snake");
+    }
+
+    #[test]
+    fn nearest_package_manifest_owns_source() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("hl-lint-package-{nonce}"));
+        let source = root.join("src/nested/module.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\n\n[package]\nname = \"portable-lint\"\n",
+        )
+        .unwrap();
+        assert_eq!(package(&source).as_deref(), Some("portable-lint"));
+        fs::remove_dir_all(root).unwrap();
     }
 }
