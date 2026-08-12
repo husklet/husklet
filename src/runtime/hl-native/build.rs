@@ -6,21 +6,13 @@ use std::{
 
 #[path = "src/artifact.rs"]
 mod artifact;
+#[path = "src/build_support.rs"]
+mod build_support;
 #[path = "src/platform.rs"]
 mod platform;
 
 const NATIVE_ROOT: &str = "src/native";
 const COMMON_DEFINITIONS: &[&str] = &["HL_ENABLE_LOGGING=0", "HL_TRANSLIT_DEFAULT=0"];
-const WINDOWS_SYSTEM_LIBRARIES: &[&str] = &[
-    "kernel32",
-    "ntdll",
-    "advapi32",
-    "bcrypt",
-    "ws2_32",
-    "synchronization",
-    "userenv",
-];
-
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=HL_C_SANITIZER");
@@ -33,8 +25,14 @@ fn main() {
     };
     if !target.supported() {
         println!("cargo:supported=0");
-        println!("cargo:rustc-env=HL_NATIVE_LIBRARY_NAME={}", artifact::filename(&target_os));
-        println!("cargo:rustc-env=HL_NATIVE_LIBRARY_PATH={}", artifact::filename(&target_os));
+        println!(
+            "cargo:rustc-env=HL_NATIVE_LIBRARY_NAME={}",
+            artifact::filename(&target_os)
+        );
+        println!(
+            "cargo:rustc-env=HL_NATIVE_LIBRARY_PATH={}",
+            artifact::filename(&target_os)
+        );
         println!("cargo:warning=native C engine planned but not yet verified for {target_arch}-{target_os}");
         return;
     }
@@ -129,7 +127,7 @@ fn main() {
     ];
     let system_libraries = match target_os.as_str() {
         "macos" => &["m", "pthread"][..],
-        "windows" => WINDOWS_SYSTEM_LIBRARIES,
+        "windows" => build_support::WINDOWS_SYSTEM_LIBRARIES,
         _ => &["atomic", "dl", "m", "pthread"][..],
     };
     link_shared_engine(&output, &target_os, &archives, system_libraries);
@@ -162,12 +160,9 @@ fn discover_runtime_roots(target_os: &str, target_arch: &str) -> Vec<String> {
         .into_iter()
         .filter(|source| !included.contains(source))
         .filter(|source| !special.contains(&source.to_string_lossy().as_ref()))
-        .filter(|source| source_matches(target_os, &source.to_string_lossy()))
+        .filter(|source| build_support::source_matches(target_os, &source.to_string_lossy()))
         .filter(|source| {
-            target_arch == "aarch64"
-                || !source
-                    .to_string_lossy()
-                    .contains("/translator/guest/x86_64/lower/")
+            target_arch == "aarch64" || !source.to_string_lossy().contains("/translator/guest/x86_64/lower/")
         })
         .map(|source| source.to_string_lossy().into_owned())
         .collect()
@@ -213,38 +208,6 @@ fn included_c_sources(source: &Path) -> Vec<PathBuf> {
             path.strip_prefix(package).expect("package-local C include").to_owned()
         })
         .collect()
-}
-
-fn source_matches(target_os: &str, source: &str) -> bool {
-    if target_os == "windows"
-        && matches!(
-            source,
-            "src/native/host/child.c"
-                | "src/native/host/fork_wire.c"
-                | "src/native/host/private.c"
-                | "src/native/host/resolve.c"
-        )
-    {
-        return false;
-    }
-    if source.starts_with("src/native/toolchain/msvc-posix/") {
-        return target_os == "windows";
-    }
-    let Some(host_relative) = source.strip_prefix("src/native/host/") else {
-        return true;
-    };
-    let Some((platform, _)) = host_relative.split_once('/') else {
-        return true;
-    };
-    !matches!(platform, "linux" | "macos" | "windows") || platform == target_os
-}
-
-fn static_archive_filename(target_os: &str, name: &str) -> String {
-    if target_os == "windows" {
-        format!("{name}.lib")
-    } else {
-        format!("lib{name}.a")
-    }
 }
 
 fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
@@ -339,7 +302,9 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
         for archive in archives {
             command.arg(format!(
                 "-Wl,/WHOLEARCHIVE:{}",
-                output.join(static_archive_filename(target_os, archive)).display()
+                output
+                    .join(build_support::static_archive_filename(target_os, archive))
+                    .display()
             ));
         }
     } else {

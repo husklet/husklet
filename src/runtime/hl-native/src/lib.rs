@@ -5,6 +5,8 @@
 //! individual service groups can later move to Rust without changing callers.
 
 mod bindings;
+#[cfg(test)]
+mod build_support;
 mod engine;
 mod provider;
 
