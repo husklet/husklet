@@ -174,7 +174,29 @@ fn verify_plan(campaign: &Campaign, expected: &[Step], rows: &[Row]) -> Result<(
             .ok_or_else(|| format!("missing benchmark evidence key {key}"))?;
         verify_row_provenance(step, row)?;
         verify_phase_coverage(row, phases(campaign, &step.workload, &step.layout))?;
+        verify_phase_frame(row)?;
         verify_host_load(row)?;
+    }
+    Ok(())
+}
+
+fn verify_phase_frame(row: &Row) -> Result<(), Error> {
+    let framed = row
+        .output_frame
+        .lines()
+        .filter(|line| line.starts_with("PHASE "))
+        .collect::<BTreeSet<_>>();
+    let expected = row
+        .phases
+        .iter()
+        .map(|(name, phase)| format!("PHASE {name} us=<time> ok={}", phase.ok))
+        .collect::<BTreeSet<_>>();
+    if framed.len() != row.phases.len() || expected.iter().any(|line| !framed.contains(line.as_str())) {
+        return Err(format!(
+            "benchmark phase evidence differs from exact-output frame for {}",
+            row.key
+        )
+        .into());
     }
     Ok(())
 }
@@ -616,6 +638,18 @@ mod tests {
         super::verify_outputs(std::slice::from_ref(&evidence)).unwrap();
         evidence.output_frame.push('x');
         assert!(super::verify_outputs(&[evidence]).is_err());
+    }
+
+    #[test]
+    fn phase_checksums_are_bound_to_the_exact_output_frame() {
+        let mut evidence = row("malloc|plain|EE|0|0", "E", 1);
+        evidence.output_frame = "META guest=plain\nPHASE malloc us=<time> ok=same".into();
+        super::verify_phase_frame(&evidence).unwrap();
+        evidence.phases.get_mut("malloc").unwrap().ok = "corrupt".into();
+        assert!(super::verify_phase_frame(&evidence).is_err());
+        evidence.phases.get_mut("malloc").unwrap().ok = "same".into();
+        evidence.output_frame.push_str("\nPHASE extra us=<time> ok=same");
+        assert!(super::verify_phase_frame(&evidence).is_err());
     }
 
     #[test]
