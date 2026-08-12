@@ -4,7 +4,7 @@
 
 #include "hl/linux.h"
 #include "probe.h"
-#include "../host_cpu.h"
+#include "../cpu.h"
 #include "../range.h"
 #include "../system.h"
 #include "../resolve.h"

@@ -1,7 +1,7 @@
 // translator/guest/x86_64 -- the x86-64 -> arm64 translator (flag synthesis, SSE/x87 lowering, the
 // big translate_block) + host entry trampolines.
 
-#include "../../../host/host_cpu.h" // HL_HOST_CPU_*: the host entry trampolines at the end are AArch64-only
+#include "../../../host/cpu.h" // HL_HOST_CPU_*: the host entry trampolines at the end are AArch64-only
 #include "lower/primitives.h"
 #include "lower/alu.h"
 #include "lower/crypto.h"

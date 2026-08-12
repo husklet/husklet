@@ -3,7 +3,7 @@
 
 #include "hl/engine.h"
 #include "hl/host_services.h"
-#include "../engine_backend.h"
+#include "../backend.h"
 
 #if defined(__APPLE__)
 #define HL_NATIVE_HOST_NAME "macos"

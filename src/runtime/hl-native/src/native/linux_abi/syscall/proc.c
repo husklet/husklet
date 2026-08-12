@@ -247,7 +247,7 @@ static void exec_close_cloexec(void) {
     free(fds);
 }
 
-#include "../../engine/engine_result.h"
+#include "../../engine/result.h"
 
 // CLONE_VFORK suspends the calling parent thread until the child either
 // commits an exec or exits. The engine implements process clones with host

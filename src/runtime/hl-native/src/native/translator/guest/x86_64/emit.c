@@ -2,7 +2,7 @@
 // (ST(i) at double precision) + prologue/spill/exits.
 // ---------------- ARM64 instruction emitters ----------------
 #include "encoding.h"
-#include "../../../host/host_cpu.h" // HL_HOST_CPU_*: the host-feature probes here are AArch64-only
+#include "../../../host/cpu.h" // HL_HOST_CPU_*: the host-feature probes here are AArch64-only
 // (the same-ISA-independent half: these emit HOST code, copied from jit.c +
 //  a few width-typed loads/stores the x86 front-end needs.)
 

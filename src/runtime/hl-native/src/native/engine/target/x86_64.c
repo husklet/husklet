@@ -70,7 +70,7 @@
 #include "native.h"
 #include "services.h"
 #include "../bus.h"
-#include "../engine_result.h"
+#include "../result.h"
 #include "../../linux_abi/bus.h"
 
 /* Instance-scoped host seam supplied by hl_engine. CLI launches retain their native-host path with NULL. */
@@ -121,7 +121,7 @@ static int jit_guest_soft_active(void);
 #include "../../translator/guest/x86_64/frame.h"
 #include "../../translator/guest/x86_64/abi.h" // cpu-interface seam (G_* contract + sysmap + normalize)
 // The dispatch seam is per (guest ISA, HOST CPU): dispatch.h patches AArch64 branch encodings.
-#include "../../host/host_cpu.h"
+#include "../../host/cpu.h"
 #if defined(HL_HOST_CPU_AARCH64)
 #include "../../translator/guest/x86_64/dispatch.h" // x86 dispatch seam for the SHARED engine/dispatch.c
 #else

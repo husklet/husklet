@@ -8,7 +8,7 @@
  * on every (OS, CPU) pair and are the only ones portable code may use;
  * CPU-shaped accessors sit behind HL_HOST_HAS_{A64,X64}_CONTEXT. */
 
-#include "host_cpu.h"
+#include "cpu.h"
 
 /* macOS / AArch64 */
 #if defined(__APPLE__) && defined(HL_HOST_CPU_AARCH64)

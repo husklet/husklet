@@ -160,8 +160,8 @@ static int g_host_i8mm, g_host_bf16;
 // Both probes ask the HOST CPU for the extension, so both are gated on an AArch64 host: AT_HWCAP2 exists
 // everywhere and its bits are architecture-defined, so on x86_64 bit 13 is not HWCAP2_I8MM and the translator
 // would copy I8MM/BF16 opcodes verbatim on the strength of it. 0 selects baseline lowerings. Include
-// host_cpu.h rather than trusting the unity TU: an undefined macro drops the probe on a REAL host.
-#include "../../../host/host_cpu.h"
+// cpu.h rather than trusting the unity TU: an undefined macro drops the probe on a REAL host.
+#include "../../../host/cpu.h"
 #if defined(__linux__) && defined(HL_HOST_CPU_AARCH64)
 #include <sys/auxv.h>
 #ifndef HWCAP2_I8MM

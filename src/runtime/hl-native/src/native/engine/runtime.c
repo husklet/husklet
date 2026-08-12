@@ -1,6 +1,6 @@
 #include "hl/engine.h"
 #include "hl/linux_abi.h"
-#include "engine_backend.h"
+#include "backend.h"
 #include "options.h"
 
 #include <stdlib.h>

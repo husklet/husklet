@@ -18,7 +18,7 @@
 #include "../../guest_fetch.h"
 #include "../../identity.h"
 #include "../../digest.h"
-#include "../../../host/host_cpu.h"
+#include "../../../host/cpu.h"
 #include "../../../host/native_context.h" // ucontext_t: the fault path restores uc_sigmask by hand
 #include "../../../host/range.h"
 #include "../../../linux_abi/logical_vma.h"

@@ -1,7 +1,7 @@
 #ifndef HL_TRANSLATOR_GUEST_X86_64_X87STATE_H
 #define HL_TRANSLATOR_GUEST_X86_64_X87STATE_H
 
-#include "../../../host/host_cpu.h" // HL_HOST_CPU_*: which backend maintains the tag bits below
+#include "../../../host/cpu.h" // HL_HOST_CPU_*: which backend maintains the tag bits below
 #include <stdint.h>
 
 struct cpu;

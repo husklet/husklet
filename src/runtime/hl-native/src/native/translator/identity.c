@@ -1,15 +1,15 @@
 #include "identity.h"
 
-#include "../host/host_cpu.h"
+#include "../host/cpu.h"
 
 #include <stddef.h>
 #include <string.h>
 
-/* host_cpu.h duplicates the hl_host_isa numbering as literal macros because callers must name the host ISA at
+/* cpu.h duplicates the hl_host_isa numbering as literal macros because callers must name the host ISA at
  * PREPROCESSOR time, from emitters that cannot include this header. Drift is not a compile error but a
  * cache-identity hash that stops distinguishing hosts -- one host executing another's machine code. */
-_Static_assert(HL_HOST_CPU_ISA_AARCH64 == HL_HOST_ISA_AARCH64, "host_cpu.h and hl_host_isa disagree on aarch64");
-_Static_assert(HL_HOST_CPU_ISA_X86_64 == HL_HOST_ISA_X86_64, "host_cpu.h and hl_host_isa disagree on x86_64");
+_Static_assert(HL_HOST_CPU_ISA_AARCH64 == HL_HOST_ISA_AARCH64, "cpu.h and hl_host_isa disagree on aarch64");
+_Static_assert(HL_HOST_CPU_ISA_X86_64 == HL_HOST_ISA_X86_64, "cpu.h and hl_host_isa disagree on x86_64");
 
 #define HL_IDENTITY_SEED 1469598103934665603ull
 #define HL_IDENTITY_PRIME 1099511628211ull

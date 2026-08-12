@@ -51,7 +51,7 @@
 #include "native.h"
 #include "services.h"
 #include "../bus.h"
-#include "../engine_result.h"
+#include "../result.h"
 #include "../../linux_abi/bus.h"
 #include "../../host/range.h"
 
@@ -237,7 +237,7 @@ static void emit_crash_diagnostic(const char *message, size_t size) {
 
 // Host-CPU fork: an AArch64 host takes the same-ISA transliterating JIT below; any other takes interp.c,
 // which supplies the same seam by decoding AArch64. Both share struct cpu: it is the checkpoint format.
-#include "../../host/host_cpu.h"
+#include "../../host/cpu.h"
 #if defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE)
 // Keep the unity consumers' compact encoder vocabulary while the assembler itself is an independently
 // compiled, explicitly-stateful translator component.

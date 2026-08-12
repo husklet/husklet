@@ -1,6 +1,6 @@
 #include "target/namespace.h"
-#include "engine_backend.h"
-#include "engine_result.h"
+#include "backend.h"
+#include "result.h"
 #include "options.h"
 #include "hl/syscall_trap.h"
 
@@ -264,7 +264,7 @@ static hl_status hl_production_launch_options(hl_options *options, const unsigne
 /*
  * The box the cold child runs with, and the two tables it indexes.
  *
- * The tables are heap rather than static for the reason engine.c allocates the
+ * The tables are heap rather than static for the reason runtime.c allocates the
  * same pair that way: together they are several megabytes, almost all of which
  * a typical guest never touches, and a calloc leaves the untouched pages
  * demand-zero. hl_linux_abi_init requires them zeroed and deliberately does not

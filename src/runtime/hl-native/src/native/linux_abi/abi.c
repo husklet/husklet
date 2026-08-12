@@ -239,7 +239,7 @@ hl_status hl_linux_abi_init(hl_linux_abi *linux_abi, const hl_host_services *hos
         return HL_STATUS_INVALID_ARGUMENT;
     memset(linux_abi, 0, sizeof(*linux_abi));
     /* fd_storage/ofd_storage must be supplied zero-initialized by the caller
-       (its sole caller calloc()s them, engine.c). Re-zeroing here would write
+       (its sole caller calloc()s them, runtime.c). Re-zeroing here would write
        every byte of the ~5MB descriptor tables, faulting in all HL_LINUX_FD_LIMIT
        pages at startup even though a typical guest touches only a handful of fds;
        leaving them demand-zero keeps untouched slots off the resident set. */

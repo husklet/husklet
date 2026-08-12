@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "../../../../host/host_cpu.h"
+#include "../../../../host/cpu.h"
 #include "../decoder.h"
 #include "../rep_runtime.h" // X86_SOFT_*, shared with the run-time half of the string ops
 

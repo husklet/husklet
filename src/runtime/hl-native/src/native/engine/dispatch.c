@@ -109,12 +109,12 @@ void jit_guest_bus_transition_end(void *opaque) {
 // G_OWN_TRAMPOLINES to suppress these aarch64 ones. (engine-dedup §B.1/§B.3: the register model is the
 // one irreducible divergence; the shared loop only CALLS run_block, never bakes its offsets.)
 //
-// Hand-written ARM64: the HOST-CPU axis. HL_HOST_CPU_AARCH64 (src/host/host_cpu.h) decides whether an ARM64
+// Hand-written ARM64: the HOST-CPU axis. HL_HOST_CPU_AARCH64 (src/host/cpu.h) decides whether an ARM64
 // boundary exists; only inside it does the compiler pick the spelling. One combined `__aarch64__` test handed
 // ARM64 mnemonics to the x86 assembler. guest/aarch64/{stubs,cache}.c and guest/x86_64/emit.c must match this
 // pair exactly.
 #ifndef G_OWN_TRAMPOLINES
-#include "../host/host_cpu.h"
+#include "../host/cpu.h"
 #if defined(HL_HOST_CPU_AARCH64)
 #if defined(__GNUC__) && !defined(__clang__)
 /* GCC has no AArch64 naked-function implementation.  Assembly symbols keep

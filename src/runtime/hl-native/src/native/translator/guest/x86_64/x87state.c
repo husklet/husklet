@@ -1,6 +1,6 @@
 #include "x87state.h"
 #include "cpu.h"
-#include "../../../host/host_cpu.h" // HL_HOST_CPU_*: MXCSR is projected onto the host FP control
+#include "../../../host/cpu.h" // HL_HOST_CPU_*: MXCSR is projected onto the host FP control
 
 #include <string.h>
 

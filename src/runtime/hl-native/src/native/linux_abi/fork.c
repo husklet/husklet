@@ -1,6 +1,6 @@
 // linux_abi/fork.c -- W3D: resident engine server fork-server, SHARED by both Linux engines.
 
-#include "../engine/engine_result.h"
+#include "../engine/result.h"
 
 #include <errno.h>
 #include <fcntl.h>

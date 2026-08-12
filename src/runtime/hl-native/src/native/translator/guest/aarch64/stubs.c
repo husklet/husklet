@@ -6,7 +6,7 @@
 // can bake its address. The two forms are not interchangeable at link time, so the condition MUST be
 // character-for-character dispatch.c's: an __asm__-block global under GCC (no AArch64 naked function), a
 // naked static under clang. The HOST decides it, hence HL_HOST_CPU_AARCH64.
-#include "../../../host/host_cpu.h"
+#include "../../../host/cpu.h"
 #if defined(__GNUC__) && !defined(__clang__) && defined(HL_HOST_CPU_AARCH64)
 extern void block_return(void) __attribute__((visibility("hidden")));
 #else

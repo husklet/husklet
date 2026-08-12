@@ -10,7 +10,7 @@
  * that header and the IR lowering pipeline behind it were deleted (they had no caller in src/); the numbering
  * is preserved because it is baked into every cache artifact already on disk.
  *
- * src/host/host_cpu.h duplicates these values as literal macros for emitters that must name the host ISA at
+ * src/host/cpu.h duplicates these values as literal macros for emitters that must name the host ISA at
  * PREPROCESSOR time; the _Static_asserts in identity.c pin the two together. */
 typedef enum hl_host_isa { HL_HOST_ISA_AARCH64 = 1, HL_HOST_ISA_X86_64 = 2 } hl_host_isa;
 
