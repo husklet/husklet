@@ -497,8 +497,16 @@ static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
     // bit is set. (A realtime signal keeps every instance via sigq_push and is unaffected.)
     int chld_keep_first = (ls == 17) && ((__atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) >> 17) & 1);
     if (si && si->si_pid > 0 && !chld_keep_first) {
-        g_sigpid[ls] = (int)si->si_pid;
-        g_siguid[ls] = (int)si->si_uid;
+        // Host-backed mq_notify delivers SI_MESGQ from this engine process.  Its host pid/uid are an
+        // implementation detail: the guest sees the container identity returned by getpid/getuid.
+        // Preserve real sender credentials for every other host-delivered signal.
+        if (si->si_code == SI_MESGQ && si->si_pid == getpid()) {
+            g_sigpid[ls] = container_pid();
+            g_siguid[ls] = cuid();
+        } else {
+            g_sigpid[ls] = (int)si->si_pid;
+            g_siguid[ls] = (int)si->si_uid;
+        }
     }
 #if defined(__linux__)
     // A Linux host delivers the real Linux si_code, so forward it (and, for the queued sources that carry a
@@ -510,6 +518,12 @@ static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
     // copy si_value (its union slot is meaningful only then); a plain kill stays SI_USER/0.
     if (si && ls != 17) {
         g_sigcode[ls] = si->si_code;
+        // Linux does not expose a useful sender identity for every SI_MESGQ delivery.  The notification
+        // is caused by this guest process's mq_timedsend, so project the same identity getpid/getuid expose.
+        if (si->si_code == SI_MESGQ) {
+            g_sigpid[ls] = container_pid();
+            g_siguid[ls] = cuid();
+        }
         if (si->si_code == SI_QUEUE || si->si_code == SI_TIMER || si->si_code == SI_MESGQ || si->si_code == SI_ASYNCIO)
             g_sigval[ls] = (uint64_t)(uintptr_t)si->si_value.sival_ptr;
     }
