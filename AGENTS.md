@@ -742,8 +742,8 @@ husklet -> workspaces + containers -> runtime -> packages -> std
 
 - Production libraries in `packages/` must make sense without an engine, guest,
   syscall, emulator, or container.
-- `runtime/` packages each own one coherent engine domain.
-- `containers/hl-engine` selects concrete engine adapters and glues runtime domains together.
+- `runtime/hl-native` owns the integrated C execution engine and its narrow Rust FFI boundary.
+- `containers/hl-engine` owns validated plans, lifecycle supervision, and product-facing engine composition.
 - `apps/husklet` selects product adapters and composes containers, workspaces, terminal, and GUI.
 - No package depends on `apps/husklet`.
 - Repository tools live as packages under `src/packages/`, but remain build-time
@@ -779,11 +779,13 @@ Ask these questions in order:
 2. Does the code extend ordinary logging, filesystem, byte I/O, encoding, or
    another standard-library mechanism without engine vocabulary? Put it in
    `packages/`.
-3. Does it own a Linux-engine entity, lifecycle, state machine, or invariant? Put
-   it in the corresponding package under `runtime/`.
-4. Does it connect two runtime domains or select a concrete platform adapter? Put
-   the integration in `runtime/hl-runtime`.
-5. Does it validate engine configuration, expose the engine API/CLI/C ABI, or
+3. Does it implement guest execution, Linux ABI behavior, translation, or a
+   host adapter for the integrated engine? Put C implementation in the owning
+   capability below `runtime/hl-native/src/native`; keep the Rust surface to FFI
+   bindings and safe wrappers.
+4. Does it connect engine capabilities or select a concrete host adapter? Keep
+   that integration inside the C engine below `runtime/hl-native/src/native`.
+5. Does it validate engine configuration, expose the engine API/CLI, or
    construct the complete engine? Put it in `containers/hl-engine`.
 6. Does it own product configuration, screens, commands, navigation, or cross-domain
    composition? Put it in `apps/husklet`.
@@ -793,12 +795,13 @@ Do not add catch-all packages or modules named `core`, `common`, `shared`, `type
 external mechanism it owns.
 
 Do not create an outer directory containing one crate. The source layers are the
-meaningful grouping. Runtime concepts such as ISA, memory, networking, tasks,
-and execution are sibling packages under `src/runtime/`.
+meaningful grouping. Engine concepts such as ISA, memory, networking, tasks,
+and execution are capability-owned C subtrees inside
+`src/runtime/hl-native/src/native/`; they do not become sibling Rust runtime packages.
 
 ## Domain ownership
 
-Each runtime package owns:
+Each native engine capability owns:
 
 - its entities and value types;
 - valid-state construction;
@@ -808,10 +811,10 @@ Each runtime package owns:
 - pointer-free, bounded snapshot values;
 - platform adapters only when the mechanism belongs solely to that domain.
 
-Each domain exposes a small public surface from its crate root. Other packages must
-not import private modules or reproduce its models.
+The C engine exposes one small, versioned boundary through `hl-native`; other
+packages must not import native implementation headers or reproduce its models.
 
-Cross-domain operations live in `hl-runtime`:
+Cross-capability operations remain inside the integrated C engine:
 
 | Operation | Domains joined |
 |---|---|

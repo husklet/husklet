@@ -41,6 +41,16 @@ fn rejects_path_leaving_the_repository() {
 }
 
 #[test]
+fn rejects_cargo_dependency_leaving_the_repository() {
+    let values = findings(
+        "Cargo.toml",
+        "[dependencies]\nexternal-engine = { path = \"../../../../external-engine\" }\n",
+    );
+    assert_eq!(values.len(), 1);
+    assert!(values[0].message.contains("outside the repository root"));
+}
+
+#[test]
 fn rejects_include_of_another_directory() {
     let values = findings(
         "src/native/executor.rs",

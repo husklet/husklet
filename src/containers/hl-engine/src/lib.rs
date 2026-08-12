@@ -1,6 +1,6 @@
 //! Supported Rust API and engine composition root.
 
-// The FFI layer mirrors hl-runtime: handlers consume the request and plan structs they are
+// The FFI layer mirrors the integrated native ABI: handlers consume the request and plan structs they are
 // handed, keep their receiver so a syscall family reads uniformly, and carry the plan and route
 // tuples the ABI defines rather than types worth naming. Checkpoint wire Debug impls print the
 // identifying fields only, matching the record they serialize.

@@ -193,7 +193,7 @@ impl OwnedWorkspace {
     pub(super) fn create() -> Result<Self, EngineError> {
         for attempt in 0..16 {
             let root = std::env::temp_dir().join(format!(
-                "hl-runtime-{}-{}-{attempt}",
+                "husklet-engine-{}-{}-{attempt}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed),
             ));
