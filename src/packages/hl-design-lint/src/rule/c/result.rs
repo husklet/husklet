@@ -65,7 +65,7 @@ fn analyze(path: &Path, source: &str, functions: &BTreeSet<String>) -> Result<Ve
 
 fn collect(node: Node<'_>, source: &str, functions: &BTreeSet<String>, path: &Path, output: &mut Vec<Finding>) {
     if node.kind() == "expression_statement"
-        && let Some(call) = node.named_child(0).filter(|child| child.kind() == "call_expression")
+        && let Some(call) = node.named_child(0).and_then(discarded_call)
         && let Some(function) = call
             .child_by_field_name("function")
             .filter(|child| child.kind() == "identifier")
@@ -79,6 +79,13 @@ fn collect(node: Node<'_>, source: &str, functions: &BTreeSet<String>, path: &Pa
     for child in node.named_children(&mut cursor) {
         collect(child, source, functions, path, output);
     }
+}
+
+fn discarded_call(mut expression: Node<'_>) -> Option<Node<'_>> {
+    while expression.kind() == "parenthesized_expression" {
+        expression = expression.named_child(0)?;
+    }
+    (expression.kind() == "call_expression").then_some(expression)
 }
 
 fn finding(path: &Path, node: Node<'_>, name: &str) -> Finding {
