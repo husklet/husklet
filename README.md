@@ -95,6 +95,10 @@ Run `nix flake check -L` for the complete pinned repository gate, including
 Rust and C compilation, formatting, static analysis, repository policy, and
 tests. Direct Cargo commands remain the primary build and test interface; Nix
 provides the pinned compilers, analyzers, system libraries, and release tooling.
+Regenerate the transient design-lint review queues with
+`nix run .#lint-cases`; findings are written under `lint/errors` and
+`lint/check`, replacing the previous queue contents. Pass paths after `--` to
+scan something other than the default `src tests`.
 
 ELF inspection and the main-image placement plan are generic for `ET_EXEC` and
 `ET_DYN` (PIE and static PIE), and both workers consume that typed plan. When an

@@ -174,6 +174,26 @@
         pkgs.pkg-config
       ];
 
+      lintCasesFor =
+        pkgs:
+        pkgs.writeShellApplication {
+          name = "husklet-lint-cases";
+          runtimeInputs = [ (rustFor pkgs) ];
+          text = ''
+            if [ ! -f Cargo.toml ] || [ ! -f lint.toml ]; then
+              echo 'error: run this command from the Husklet repository root' >&2
+              exit 2
+            fi
+
+            paths=(src tests)
+            if [ "$#" -gt 0 ]; then
+              paths=("$@")
+            fi
+            exec cargo run --locked --offline -q -p hl-design-lint -- \
+              --policy lint.toml --cases lint "''${paths[@]}"
+          '';
+        };
+
       macBaseFor =
         pkgs:
         pkgs.buildEnv {
@@ -483,6 +503,13 @@
           "host-darwin-aarch64-native" = verification;
         }
       );
+
+      apps = forAllSystems (pkgs: {
+        lint-cases = {
+          type = "app";
+          program = "${lintCasesFor pkgs}/bin/husklet-lint-cases";
+        };
+      });
 
       devShells = forAllSystems (
         pkgs:

@@ -39,7 +39,7 @@ pclib_blob_*.bin
 # Scenario runs write per-run logs and result streams here; they are run output, not sources.
 **/.cache/scenario-runs/
 
-# `make lint-cases` regenerates these Markdown review queues from scratch; they are tool output.
+# `nix run .#lint-cases` regenerates these review queues from scratch; they are tool output.
 /lint/errors/
 /lint/check/
 
