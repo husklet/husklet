@@ -133,7 +133,7 @@ impl Graph {
             if policy.ignored_packages.iter().any(|ignored| ignored == name) {
                 continue;
             }
-            let dependencies = dependencies(&document, &manifest, &workspace_dependencies);
+            let dependencies = dependencies(&document, &manifest, &workspace_dependencies)?;
             packages.insert(
                 name.to_owned(),
                 Package {
@@ -366,16 +366,16 @@ impl Graph {
     }
 }
 
-fn dependencies(document: &toml::Value, manifest: &Path, workspace: &WorkspaceDependencies) -> Vec<Dependency> {
+fn dependencies(document: &toml::Value, manifest: &Path, workspace: &WorkspaceDependencies) -> Result<Vec<Dependency>> {
     let mut output = Vec::new();
     let Some(root) = document.as_table() else {
-        return output;
+        return Ok(output);
     };
-    tables(root, None, manifest, workspace, &mut output);
+    tables(root, None, manifest, workspace, &mut output)?;
     for (target, table) in target_tables(root) {
-        tables(table, Some(target.clone()), manifest, workspace, &mut output);
+        tables(table, Some(target.clone()), manifest, workspace, &mut output)?;
     }
-    output
+    Ok(output)
 }
 
 fn target_tables(
@@ -396,7 +396,7 @@ fn tables(
     manifest: &Path,
     workspace: &WorkspaceDependencies,
     output: &mut Vec<Dependency>,
-) {
+) -> Result<()> {
     for (section, kind) in [
         ("dependencies", Kind::Normal),
         ("dev-dependencies", Kind::Development),
@@ -406,12 +406,21 @@ fn tables(
             continue;
         };
         for (alias, specification) in values {
-            let inherited = specification
+            let inherits = specification
                 .as_table()
                 .and_then(|value| value.get("workspace"))
                 .and_then(toml::Value::as_bool)
-                .filter(|enabled| *enabled)
-                .and_then(|_| workspace.get(manifest, alias));
+                == Some(true);
+            let inherited = if inherits {
+                Some(workspace.get(manifest, alias).ok_or_else(|| {
+                    LintError::configuration(format!(
+                        "{} inherits dependency {alias:?}, but it is absent from [workspace.dependencies]",
+                        manifest.display()
+                    ))
+                })?)
+            } else {
+                None
+            };
             let local_manifest = specification
                 .as_table()
                 .and_then(|value| value.get("path"))
@@ -426,6 +435,7 @@ fn tables(
             });
         }
     }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]

@@ -81,6 +81,21 @@ fn rejects_missing_local_package_manifest_inside_requested_roots() {
 }
 
 #[test]
+fn rejects_unresolved_inherited_dependency() {
+    let root = fixture();
+    package(
+        &root,
+        "services",
+        "scheduler",
+        "[dependencies]\nmissing.workspace = true\n",
+    );
+    let workspace = Workspace::load([root.join("src")]).unwrap();
+    let error = Direction::new(policy()).check(&workspace).unwrap_err();
+    assert!(error.to_string().contains("absent from [workspace.dependencies]"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn accepts_dependency_permitted_by_layer_policy() {
     let root = fixture();
     package(&root, "foundation", "clock", "");
