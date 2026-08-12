@@ -443,7 +443,7 @@ fn signal_process_group(process: u32, signal: i32) -> Result<(), EngineError> {
 }
 
 fn process_status_matches(status: &std::process::ExitStatus, exit: EngineExit) -> bool {
-    status.code() == Some(crate::program::Program::exit_status(exit))
+    status.code() == Some(exit.process_status())
 }
 
 fn sealed_plan(bytes: &[u8]) -> Result<std::fs::File, EngineError> {

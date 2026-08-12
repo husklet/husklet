@@ -52,3 +52,7 @@ default = ["c-execution"]
 alloc-count = []
 # Production Linux/AArch64 execution backend. Other targets compile the Rust path.
 c-execution = ["hl-native/c-coexist"]
+# Temporary compatibility boundary for the retired Rust guest executor.  The
+# production container path does not enable this feature; only legacy engine
+# binaries and differential test tools may opt in while their callers migrate.
+rust-execution = []

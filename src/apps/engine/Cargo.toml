@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
-hl-engine = { path = "../../containers/hl-engine" }
+hl-engine = { path = "../../containers/hl-engine", features = ["rust-execution"] }
 hl-log = { path = "../../packages/hl-log" }
 
 [[bin]]

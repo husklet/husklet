@@ -2,7 +2,9 @@
 
 use crate::activation::{ActivationStreams, GuestIsa};
 use crate::composition::{ActivationChannel, CompositionError, EngineBackend, GuestMachine, RuntimeServices};
-use crate::engine::{EngineError, EngineExit, ExitKind, Workspace, WorkspaceId};
+use crate::engine::{EngineError, EngineExit, Workspace, WorkspaceId};
+#[cfg(test)]
+use crate::engine::ExitKind;
 use crate::launch_plan::{ConfigOrigin, DiagnosticsMode, Material, MaterialError, RuntimePlan};
 use crate::options::Options;
 use crate::runtime_machine::{HostServices, RustRuntimeFactory};
@@ -166,11 +168,7 @@ impl Program {
 
     #[must_use]
     pub const fn exit_status(exit: EngineExit) -> i32 {
-        match exit.kind {
-            ExitKind::Code => exit.guest_status,
-            ExitKind::Signal => 128_i32.saturating_add(exit.guest_status),
-            ExitKind::Fault | ExitKind::EngineError => 125,
-        }
+        exit.process_status()
     }
 }
 

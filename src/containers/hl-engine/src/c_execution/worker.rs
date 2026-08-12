@@ -69,7 +69,7 @@ pub(crate) fn run(plan_descriptor: RawFd, control_descriptor: RawFd) -> Result<i
     }
     let exit = executor.exit();
     write_message(&mut control, Message::Exit(exit))?;
-    Ok(crate::program::Program::exit_status(exit))
+    Ok(exit.process_status())
 }
 
 fn serve_requests(mut control: std::os::unix::net::UnixStream, executor: Arc<CGuestExecutor>) {

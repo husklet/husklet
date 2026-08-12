@@ -48,6 +48,18 @@ pub struct EngineExit {
     pub fault: Option<FaultDiagnostic>,
 }
 
+impl EngineExit {
+    /// Process status used by both engine frontends and the C worker protocol.
+    #[must_use]
+    pub const fn process_status(self) -> i32 {
+        match self.kind {
+            ExitKind::Code => self.guest_status,
+            ExitKind::Signal => 128_i32.saturating_add(self.guest_status),
+            ExitKind::Fault | ExitKind::EngineError => 125,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FaultReason {
     Fetch,
