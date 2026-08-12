@@ -4351,6 +4351,32 @@ static int lower_sse_packed_binary(struct insn *instruction, uint64_t next, int 
     return TX_NEXT;
 }
 
+static int lower_sse_widening_multiply(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0xE5 && opcode != 0xE4 && opcode != 0xF5) return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    if (opcode == 0xF5) { // PMADDWD: signed products followed by adjacent pair addition.
+        emit32(0x0E60C000u | (source << 16) | (vd << 5) | 18);
+        int high = mmx ? 18 : 19;
+        if (!mmx) emit32(0x4E60C000u | (source << 16) | (vd << 5) | 19);
+        emit32(0x4EA0BC00u | (high << 16) | (18 << 5) | vd);
+        return TX_NEXT;
+    }
+    // PMULHW/PMULHUW widen each half independently; UZP2 selects the upper
+    // word of each 32-bit product. MMX has only the low four input words.
+    uint32_t low = opcode == 0xE5 ? 0x0E60C000u : 0x2E60C000u;
+    uint32_t high = opcode == 0xE5 ? 0x4E60C000u : 0x6E60C000u;
+    emit32(low | (source << 16) | (vd << 5) | 18);
+    if (mmx) {
+        emit32(0x0F108400u | (18 << 5) | vd);
+    } else {
+        emit32(high | (source << 16) | (vd << 5) | 19);
+        emit32(0x4E405800u | (19 << 16) | (18 << 5) | vd);
+    }
+    return TX_NEXT;
+}
+
 static int lower_double_shift(struct insn *instruction, uint64_t next) {
     uint8_t opcode = instruction->op;
     if (opcode != 0xA4 && opcode != 0xA5 && opcode != 0xAC && opcode != 0xAD) return TX_FALL;
@@ -5716,28 +5742,8 @@ static void *translate_block(uint64_t gpc) {
                     e_vmov(vd, 17);
                 } else if (lower_sse_packed_binary(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted the complete lane-wise operation.
-                } else if (op == 0xE5 || op == 0xE4) { // pmulhw(signed)/pmulhuw(unsigned): 16x16 -> high 16 bits
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    // widen-multiply the low/high 4 lanes to 32-bit products, then UZP2 picks the high 16 of each.
-                    uint32_t lo = op == 0xE5 ? 0x0E60C000u : 0x2E60C000u; // SMULL/UMULL  v18.4s, vd.4h, s.4h
-                    uint32_t hi = op == 0xE5 ? 0x4E60C000u : 0x6E60C000u; // SMULL2/UMULL2 v19.4s, vd.8h, s.8h
-                    emit32(lo | (s << 16) | (vd << 5) | 18);
-                    if (mmx) { // 4 words in, 4 words out: the SMULL2 half has no MMX operand to multiply
-                        emit32(0x0F108400u | (18 << 5) | vd); // shrn vd.4h, v18.4s, #16
-                    } else {
-                        emit32(hi | (s << 16) | (vd << 5) | 19);
-                        emit32(0x4E405800u | (19 << 16) | (18 << 5) | vd); // uzp2 vd.8h, v18.8h, v19.8h
-                    }
-                } else if (op == 0xF5) { // pmaddwd: signed 16x16, add adjacent pairs -> 32-bit lanes
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    emit32(0x0E60C000u | (s << 16) | (vd << 5) | 18); // smull  v18.4s, vd.4h, s.4h
-                    // MMX has only the 4 low words, so the pair-sums come from v18 alone; ADDP's own second
-                    // operand repeats them into the high 64, which the write-back narrow then drops.
-                    int p = mmx ? 18 : 19;
-                    if (!mmx) emit32(0x4E60C000u | (s << 16) | (vd << 5) | 19); // smull2 v19.4s, vd.8h, s.8h
-                    emit32(0x4EA0BC00u | (p << 16) | (18 << 5) | vd);           // addp  vd.4s, v18.4s, vP.4s
+                } else if (lower_sse_widening_multiply(&I, next, vd, vm, mmx) == TX_NEXT) {
+                    // The helper emitted the complete widening multiply operation.
                 } else if (op == 0xF1 || op == 0xF2 || op == 0xF3 || op == 0xD1 || op == 0xD2 || op == 0xD3 ||
                            op == 0xE1 || op == 0xE2) { // psll/psrl/psra w/d/q by xmm/m (variable count)
                     int s = I.is_mem ? 16 : vm;
