@@ -43,6 +43,15 @@ struct Plan {
     interpreter_identity: u64,
 }
 
+/// Validated information derived from an ELF program-header table before it
+/// is projected into the stable native ABI plan.
+struct ProgramLayout {
+    load_start: u64,
+    load_end: u64,
+    interpreter: Option<Vec<u8>>,
+    entry_is_executable: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Exit {
     pub kind: u32,
@@ -173,7 +182,7 @@ impl Plan {
         if config.isa == 1 && !entry.is_multiple_of(4) {
             return Err(1);
         }
-        let (first, last, interpreter, entry_is_executable) = inspect_program_headers(
+        let layout = inspect_program_headers(
             &mut file,
             image_length,
             entry,
@@ -181,15 +190,15 @@ impl Plan {
             u64::from(word16(54)),
             word16(56),
         )?;
-        if !entry_is_executable {
+        if !layout.entry_is_executable {
             return Err(1);
         }
-        let link_start = first & !0xfff;
-        let span = last.checked_sub(link_start).ok_or(1)?;
+        let link_start = layout.load_start & !0xfff;
+        let span = layout.load_end.checked_sub(link_start).ok_or(1)?;
         let link_end = link_start
             .checked_add(span.checked_add(0xffff).ok_or(1)? & !0xffff)
             .ok_or(1)?;
-        let interpreter_identity = interpreter.as_deref().map_or(0, |path| {
+        let interpreter_identity = layout.interpreter.as_deref().map_or(0, |path| {
             path.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
                 (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
             })
@@ -201,7 +210,7 @@ impl Plan {
             kind,
             link_start,
             link_end,
-            has_interpreter: u32::from(interpreter.is_some()),
+            has_interpreter: u32::from(layout.interpreter.is_some()),
             flags: 0,
             interpreter_identity,
         })
@@ -243,7 +252,7 @@ fn inspect_program_headers(
     phoff: u64,
     phentsize: u64,
     phnum: u16,
-) -> Result<(u64, u64, Option<Vec<u8>>, bool), i32> {
+) -> Result<ProgramLayout, i32> {
     const PROGRAM_HEADER_SIZE: u64 = 56;
     const MAX_PROGRAM_HEADERS: u16 = 1024;
     const MAX_LOAD_SEGMENTS: u16 = 128;
@@ -302,7 +311,12 @@ fn inspect_program_headers(
     if first == u64::MAX {
         return Err(1);
     }
-    Ok((first, last, interpreter, entry_is_executable))
+    Ok(ProgramLayout {
+        load_start: first,
+        load_end: last,
+        interpreter,
+        entry_is_executable,
+    })
 }
 
 fn read_interpreter(file: &mut File, offset: u64, encoded_size: u64) -> Result<Vec<u8>, i32> {
