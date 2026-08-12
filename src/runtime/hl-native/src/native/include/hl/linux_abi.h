@@ -343,6 +343,7 @@ HL_API int64_t hl_linux_dup3(hl_linux_abi *linux_abi, hl_linux_fd source, hl_lin
 HL_API int64_t hl_linux_fcntl(hl_linux_abi *linux_abi, hl_linux_fd fd, int32_t command, uint64_t argument);
 /* lseek changes the shared OFD offset. SEEK_END and fstat use normalized host metadata. */
 HL_API int64_t hl_linux_lseek(hl_linux_abi *linux_abi, hl_linux_fd fd, int64_t offset, int32_t whence);
+/* output is required and is zeroed before descriptor lookup; failure never preserves stale file identity. */
 HL_API int64_t hl_linux_fstat(hl_linux_abi *linux_abi, hl_linux_fd fd, hl_linux_file_status *output);
 
 /* Encode host-neutral metadata into exact little-endian Linux stat records; unavailable fields are zero. */

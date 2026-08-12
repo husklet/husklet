@@ -1,3 +1,5 @@
+#include "status_output.h"
+
 static uint32_t hl_linux_mode_type(uint32_t host_type) {
     switch (host_type) {
     case HL_HOST_FILE_TYPE_REGULAR: return HL_LINUX_S_IFREG;
@@ -42,8 +44,8 @@ int64_t hl_linux_fstat(hl_linux_abi *linux_abi, hl_linux_fd fd, hl_linux_file_st
     hl_status status;
     int64_t result;
     int metadata_from_object = 0;
+    if (!hl_linux_file_status_output_prepare(output)) return -HL_LINUX_EINVAL;
     if (linux_abi == NULL) return -HL_LINUX_EBADF;
-    if (output == NULL) return -HL_LINUX_EINVAL;
     hl_linux_lock(linux_abi);
     status = hl_linux_fd_get_unlocked(linux_abi, fd, NULL, &found);
     if (status != HL_STATUS_OK) {

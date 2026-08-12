@@ -698,6 +698,42 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove fork output probe directory");
 }
 
+#[test]
+fn file_status_failure_clears_stale_identity() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-status-output-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("status output probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "linux_abi/status_output.h"
+
+int main(void) {
+    hl_linux_file_status output = {.device = 7, .object = 42, .size = 99, .mode = 0777, .user = 5};
+    if (!hl_linux_file_status_output_prepare(&output)) return 1;
+    if (output.device != 0 || output.object != 0 || output.size != 0 || output.mode != 0 || output.user != 0) return 2;
+    return hl_linux_file_status_output_prepare(0) == 0 ? 0 : 3;
+}
+"#,
+    )
+    .expect("status output probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("status output probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("status output probe execution");
+    assert!(run.success(), "status output probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove status output probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {
