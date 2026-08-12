@@ -51,7 +51,9 @@ static void futex_wake(uint32_t *address) {
     syscall(SYS_futex, address, FUTEX_WAKE, INT32_MAX, NULL, NULL, 0);
 }
 
-static void caught(int signal) { (void)signal; }
+static void caught(int signal) {
+    (void)signal;
+}
 
 static int copy_self(const char *path) {
     char bytes[65536];
@@ -152,18 +154,18 @@ static int image_state(struct shared_state *shared) {
     int woke = 0;
     while (__atomic_load_n(&shared->clear_tid, __ATOMIC_ACQUIRE) != 0) {
         uint32_t value = shared->clear_tid;
-        if (futex_wait_timed(&shared->clear_tid, value) == 0) woke = 1;
-        else if (errno != EAGAIN && errno != EINTR) break;
+        if (futex_wait_timed(&shared->clear_tid, value) == 0)
+            woke = 1;
+        else if (errno != EAGAIN && errno != EINTR)
+            break;
     }
     int status = 0;
     waitpid(child, &status, 0);
     int probe = WIFEXITED(status) ? WEXITSTATUS(status) : 0;
-    int robust = (shared->node.futex & (FUTEX_OWNER_DIED | FUTEX_WAITERS))
-        == (FUTEX_OWNER_DIED | FUTEX_WAITERS);
+    int robust = (shared->node.futex & (FUTEX_OWNER_DIED | FUTEX_WAITERS)) == (FUTEX_OWNER_DIED | FUTEX_WAITERS);
     int clear = shared->clear_tid == 0;
-    printf("robust=%d clear=%d wake=%d pending=%d caught=%d ignored=%d altstack=%d\n",
-           robust, clear, woke, !!(probe & 1), !!(probe & 2),
-           !!(probe & 4), !!(probe & 8));
+    printf("robust=%d clear=%d wake=%d pending=%d caught=%d ignored=%d altstack=%d\n", robust, clear, woke,
+           !!(probe & 1), !!(probe & 2), !!(probe & 4), !!(probe & 8));
     return probe == 79 && robust && clear && woke;
 }
 
@@ -173,8 +175,7 @@ static struct shared_state *shared_mapping(void) {
         if (fd >= 0) close(fd);
         return MAP_FAILED;
     }
-    struct shared_state *shared = mmap(NULL, sizeof *shared,
-        PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    struct shared_state *shared = mmap(NULL, sizeof *shared, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     return shared;
 }
@@ -182,8 +183,10 @@ static struct shared_state *shared_mapping(void) {
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "probe") == 0) return probe_state();
     ssize_t length = readlink("/proc/self/exe", self, sizeof self - 1);
-    if (length <= 0) snprintf(self, sizeof self, "%s", argv[0]);
-    else self[length] = 0;
+    if (length <= 0)
+        snprintf(self, sizeof self, "%s", argv[0]);
+    else
+        self[length] = 0;
     char root[128], writable[160], malformed[160], scripts[6][160];
     snprintf(root, sizeof root, "/tmp/hl_exec_edges_%d", (int)getpid());
     mkdir(root, 0755);
@@ -194,8 +197,7 @@ int main(int argc, char **argv) {
     char *plain[] = {writable, NULL};
     int etxtbsy = copied && lease >= 0 && failed_exec(writable, plain) == ETXTBSY;
     close(lease);
-    int malformed_ok = write_file(malformed, "#!\n", 3)
-        && failed_exec(malformed, plain) == ENOEXEC;
+    int malformed_ok = write_file(malformed, "#!\n", 3) && failed_exec(malformed, plain) == ENOEXEC;
     for (int index = 0; index < 6; ++index)
         snprintf(scripts[index], sizeof scripts[index], "%s/s%d", root, index);
     int chain = 1;
@@ -208,19 +210,25 @@ int main(int argc, char **argv) {
     int efault = failed_raw(self, 1) == EFAULT;
     int precedence = failed_raw("/no/such/exec-edge", 1) == ENOENT;
     char *huge = malloc(140000);
-    memset(huge, 'x', 139999); huge[139999] = 0;
-    char *large_arguments[] = {self, huge, NULL};
-    int e2big = failed_exec(self, large_arguments) == E2BIG;
+    int e2big = 0;
+    if (huge) {
+        memset(huge, 'x', 139999);
+        huge[139999] = 0;
+        char *large_arguments[] = {self, huge, NULL};
+        e2big = failed_exec(self, large_arguments) == E2BIG;
+    }
     free(huge);
-    printf("etxtbsy=%d malformed=%d recursion=%d efault=%d precedence=%d e2big=%d\n",
-           etxtbsy, malformed_ok, recursion, efault, precedence, e2big);
+    printf("etxtbsy=%d malformed=%d recursion=%d efault=%d precedence=%d e2big=%d\n", etxtbsy, malformed_ok, recursion,
+           efault, precedence, e2big);
     fflush(stdout);
     struct shared_state *shared = shared_mapping();
     int state = shared != MAP_FAILED && image_state(shared);
-    if (shared == MAP_FAILED)
-        printf("robust=0 clear=0 wake=0 pending=0 caught=0 ignored=0 altstack=0\n");
+    if (shared == MAP_FAILED) printf("robust=0 clear=0 wake=0 pending=0 caught=0 ignored=0 altstack=0\n");
     if (shared != MAP_FAILED) munmap(shared, sizeof *shared);
-    for (int index = 0; index < 6; ++index) unlink(scripts[index]);
-    unlink(malformed); unlink(writable); rmdir(root);
+    for (int index = 0; index < 6; ++index)
+        unlink(scripts[index]);
+    unlink(malformed);
+    unlink(writable);
+    rmdir(root);
     return !(etxtbsy && malformed_ok && recursion && efault && precedence && e2big && state);
 }
