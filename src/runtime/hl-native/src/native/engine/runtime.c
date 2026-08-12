@@ -706,6 +706,17 @@ hl_status hl_engine_create(const hl_engine_config *config, const hl_host_service
     return hl_engine_create_with_options(config, host, NULL, out_engine);
 }
 
+static hl_status hl_engine_run_validate(hl_engine *engine, int argc, const char *const argv[],
+                                        hl_engine_exit *out_exit) {
+    if (out_exit == NULL) return HL_STATUS_INVALID_ARGUMENT;
+    if (out_exit->abi != HL_ENGINE_ABI || out_exit->size < sizeof(*out_exit)) return HL_STATUS_ABI_MISMATCH;
+    out_exit->kind = HL_ENGINE_EXIT_NONE;
+    out_exit->guest_status = 0;
+    out_exit->detail = 0;
+    if (engine == NULL || argc < 0 || (argc != 0 && argv == NULL)) return HL_STATUS_INVALID_ARGUMENT;
+    return HL_STATUS_OK;
+}
+
 hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], hl_engine_exit *out_exit) {
     hl_host_result waited;
     hl_host_result closed;
@@ -713,9 +724,8 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     hl_host_handle process_result = HL_HOST_HANDLE_INVALID;
     uint32_t pending;
     hl_status status;
-    if (engine == NULL || argc < 0 || (argc != 0 && argv == NULL) || out_exit == NULL)
-        return HL_STATUS_INVALID_ARGUMENT;
-    if (out_exit->abi != HL_ENGINE_ABI || out_exit->size < sizeof(*out_exit)) return HL_STATUS_ABI_MISMATCH;
+    status = hl_engine_run_validate(engine, argc, argv, out_exit);
+    if (status != HL_STATUS_OK) return status;
     hl_engine_lock(engine);
     if (engine->state != HL_ENGINE_CREATED) {
         hl_engine_unlock(engine);

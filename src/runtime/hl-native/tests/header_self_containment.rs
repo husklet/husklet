@@ -332,6 +332,57 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove engine output probe directory");
 }
 
+#[test]
+fn engine_run_validation_clears_stale_exit_payload() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-run-output-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("run output probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "engine/runtime.c"
+
+int main(void) {
+    hl_engine_exit output = {HL_ENGINE_ABI, sizeof(output), HL_ENGINE_EXIT_SIGNAL, 99, 123};
+    if (hl_engine_run_validate(0, 0, 0, &output) != HL_STATUS_INVALID_ARGUMENT) return 1;
+    if (output.kind != HL_ENGINE_EXIT_NONE || output.guest_status != 0 || output.detail != 0) return 2;
+
+    output = (hl_engine_exit){HL_ENGINE_ABI, sizeof(output), HL_ENGINE_EXIT_CODE, 88, 456};
+    if (hl_engine_run_validate((hl_engine *)(uintptr_t)1, 1, 0, &output) != HL_STATUS_INVALID_ARGUMENT) return 3;
+    if (output.kind != HL_ENGINE_EXIT_NONE || output.guest_status != 0 || output.detail != 0) return 4;
+
+    output = (hl_engine_exit){0, sizeof(output), HL_ENGINE_EXIT_CODE, 77, 789};
+    if (hl_engine_run_validate(0, 0, 0, &output) != HL_STATUS_ABI_MISMATCH) return 5;
+    return output.kind == HL_ENGINE_EXIT_CODE && output.guest_status == 77 && output.detail == 789 ? 0 : 6;
+}
+"#,
+    )
+    .expect("run output probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args([
+            "-std=c11",
+            "-D_GNU_SOURCE",
+            "-ffunction-sections",
+            "-fdata-sections",
+            "-Wl,--gc-sections",
+        ])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("engine/host_services.c"))
+        .arg(native.join("engine/options.c"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("run output probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("run output probe execution");
+    assert!(run.success(), "run output probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove run output probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {
