@@ -1,5 +1,5 @@
-#ifndef HL_LINUX_ABI_HOST_SOCKET_ABI_H
-#define HL_LINUX_ABI_HOST_SOCKET_ABI_H
+#ifndef HL_LINUX_ABI_SOCKET_GUEST_H
+#define HL_LINUX_ABI_SOCKET_GUEST_H
 
 /* ---- SHAPE: the scalar types the rest of the vocabulary is written in. ---
  *

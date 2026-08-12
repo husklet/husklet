@@ -126,7 +126,7 @@ static inline int hl_linux_socket_apply_type_flags(int descriptor, int type) {
 #include <sys/types.h>
 
 /* Guest-visible Linux socket vocabulary and address text codecs. */
-#include "host_socket_abi.h"
+#include "socket_guest.h"
 
 /* =========================================================================
  * REAL -- everything that starts from, or produces, a descriptor.
