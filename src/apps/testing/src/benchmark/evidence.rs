@@ -235,9 +235,28 @@ pub(super) struct Measurement {
 
 impl Measurement {
     pub fn acquire(quiet: u64, timeout: u64, max_load: f64) -> Result<Self, Error> {
-        let intent = lock("/var/tmp/husklet-box.wanted", timeout)?;
-        sustained_quiet(quiet, timeout, max_load)?;
-        let box_lock = lock("/var/tmp/husklet-box.lock", timeout)?;
+        Self::acquire_with(
+            Path::new("/var/tmp/husklet-box.wanted"),
+            Path::new("/var/tmp/husklet-box.lock"),
+            quiet,
+            timeout,
+            || host_quiet(max_load),
+        )
+    }
+
+    fn acquire_with(
+        intent_path: &Path,
+        box_path: &Path,
+        quiet: u64,
+        timeout: u64,
+        mut probe: impl FnMut() -> Result<bool, Error>,
+    ) -> Result<Self, Error> {
+        let intent = lock(intent_path, timeout)?;
+        sustained_quiet(quiet, timeout, &mut probe)?;
+        let box_lock = lock(box_path, timeout)?;
+        if !probe()? {
+            return Err("box became busy while acquiring the measurement lock".into());
+        }
         Ok(Self {
             _intent: intent,
             _box_lock: box_lock,
@@ -245,7 +264,7 @@ impl Measurement {
     }
 }
 
-fn lock(path: &str, timeout: u64) -> Result<File, Error> {
+fn lock(path: &Path, timeout: u64) -> Result<File, Error> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -255,27 +274,21 @@ fn lock(path: &str, timeout: u64) -> Result<File, Error> {
     let deadline = Instant::now() + Duration::from_secs(timeout);
     while file.try_lock_exclusive().is_err() {
         if Instant::now() >= deadline {
-            return Err(format!("timed out acquiring {path}").into());
+            return Err(format!("timed out acquiring {}", path.display()).into());
         }
         std::thread::sleep(Duration::from_secs(1));
     }
     Ok(file)
 }
 
-fn sustained_quiet(seconds: u64, timeout: u64, max_load: f64) -> Result<(), Error> {
+fn sustained_quiet(seconds: u64, timeout: u64, probe: &mut impl FnMut() -> Result<bool, Error>) -> Result<(), Error> {
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut quiet_since = None;
     while Instant::now() < deadline {
-        let load = fs::read_to_string("/proc/loadavg")
-            .ok()
-            .and_then(|v| v.split_ascii_whitespace().next()?.parse::<f64>().ok())
-            .unwrap_or(f64::INFINITY);
-        let mut busy = false;
-        for (name, allowance) in [("testing", 1_u64), ("cargo", 0), ("hl-aarch64", 0), ("hl-x86_64", 0)] {
-            busy |= HostProcess::exact_process_count(name)? > allowance;
-        }
-        if busy || load > max_load {
+        if !probe()? {
             quiet_since = None;
+        } else if seconds == 0 {
+            return Ok(());
         } else if quiet_since.is_none() {
             quiet_since = Some(Instant::now());
         } else if quiet_since.is_some_and(|start| start.elapsed() >= Duration::from_secs(seconds)) {
@@ -284,6 +297,46 @@ fn sustained_quiet(seconds: u64, timeout: u64, max_load: f64) -> Result<(), Erro
         std::thread::sleep(Duration::from_secs(5.min(seconds.max(1))));
     }
     Err("box did not remain quiet before measurement timeout".into())
+}
+
+fn host_quiet(max_load: f64) -> Result<bool, Error> {
+    let load = fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|value| value.split_ascii_whitespace().next()?.parse::<f64>().ok())
+        .unwrap_or(f64::INFINITY);
+    let mut busy = false;
+    for (name, allowance) in [("testing", 1_u64), ("cargo", 0), ("hl-aarch64", 0), ("hl-x86_64", 0)] {
+        busy |= HostProcess::exact_process_count(name)? > allowance;
+    }
+    Ok(!busy && load <= max_load)
+}
+
+#[cfg(test)]
+mod measurement_tests {
+    use super::Measurement;
+    use std::{cell::Cell, fs::OpenOptions};
+
+    #[test]
+    fn quiet_is_rechecked_while_the_box_lock_is_held() {
+        let directory = tempfile::tempdir().unwrap();
+        let intent = directory.path().join("wanted");
+        let box_lock = directory.path().join("box");
+        let probes = Cell::new(0);
+        let result = Measurement::acquire_with(&intent, &box_lock, 0, 1, || {
+            probes.set(probes.get() + 1);
+            if probes.get() == 1 {
+                return Ok(true);
+            }
+            let competing = OpenOptions::new().read(true).write(true).open(&box_lock).unwrap();
+            assert!(fs2::FileExt::try_lock_shared(&competing).is_err());
+            Ok(false)
+        });
+        let Err(error) = result else {
+            panic!("measurement accepted a busy post-lock probe");
+        };
+        assert!(error.to_string().contains("became busy"));
+        assert_eq!(probes.get(), 2);
+    }
 }
 
 pub(super) struct Ledger {
