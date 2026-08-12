@@ -79,14 +79,17 @@ Path shorthand in the tables is deliberate: retained `translator/...` and
 
 Rust's loader is the authoritative image inspector at the product boundary. It
 classifies `ET_EXEC` and `ET_DYN`, validates image bounds and interpreter
-metadata, and supplies the retained x86 loader with a bounded main-image plan.
-The worker consumes that plan for both displaced `ET_EXEC` and PIE placement.
+metadata, and supplies each retained loader with a bounded main-image plan. A
+shared native address projection records the guest link interval and storage
+bias for a displaced executable.
 
-This boundary is generic; the complete x86 implementation is not yet. Biased
-`ET_EXEC` execution still contains Go metadata rebasing and a V8 embedded-blob
-repair in retained production C. Those branches are explicit open migration
-debt. Current tests prove plan consumption and named compatibility cases, not
-that application-specific detection has been eliminated.
+x86 translated control flow now remains in canonical low guest coordinates;
+execution and memory boundaries project those addresses to storage. The former
+Go module metadata rebasing and V8 embedded-symbol repair have been removed.
+`displaced_et_exec_linux.rs` forces a nonzero bias on both ISAs and checks low
+PC/data identity, static pointers, direct and indirect calls, and exact syscall
+output. This closes the executable-specific residue in the mechanism; broader
+third-party non-PIE compatibility remains gated by the compatibility suite.
 
 ## Translation manifest
 

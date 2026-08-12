@@ -29,11 +29,19 @@ that have not moved into C.  This directory contains C only; Cargo explicitly
 excludes it from the `src/runtime/*` workspace member glob.
 
 The Rust loader classifies `ET_EXEC` and `ET_DYN` images and sends a bounded
-main-image placement plan to the x86 retained loader. That removes ELF parsing
-from the worker boundary, but it has not yet removed all executable-specific
-non-PIE repair from production C: Go metadata and a V8 embedded-blob path are
-still named there. Generic non-PIE compatibility therefore remains migration
-work; PIE and static PIE use the ordinary `ET_DYN` path.
+main-image placement plan to the retained loader. For displaced `ET_EXEC`, the
+shared `address_projection` boundary maps canonical guest link addresses to
+their storage interval and back. x86 translated control flow now keeps PCs and
+return addresses canonical-low and performs projection only at execution or
+memory access; it does not inspect Go metadata or V8 symbols. PIE and static PIE
+continue through the ordinary `ET_DYN` path.
+
+`src/apps/testing/tests/displaced_et_exec_linux.rs` forces displacement for
+both guest ISAs, requires a reported nonzero bias, and verifies low PC/data
+identity, static pointers, direct and indirect calls, and exact syscall output.
+This proves the generic projection path under forced displacement; it does not
+claim that every third-party non-PIE workload has completed compatibility
+coverage.
 
 Build workers from the repository root with `make engine`. On Linux,
 `target/release/hl-aarch64 --backend-receipt` and

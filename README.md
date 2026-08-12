@@ -95,9 +95,13 @@ headless repository gate. `make gate-fixture` is optional and requires the
 documented Alpine fixture and a static-capable host C compiler.
 
 ELF inspection and the main-image placement plan are generic for `ET_EXEC` and
-`ET_DYN` (PIE and static PIE), and the x86 worker consumes that typed plan. The
-remaining biased x86 `ET_EXEC` implementation still contains Go- and V8-specific
-repair paths, however, so executable-independent non-PIE support is unfinished.
+`ET_DYN` (PIE and static PIE), and both workers consume that typed plan. When an
+`ET_EXEC` image cannot occupy its link address, the shared projection keeps
+guest-visible PCs and pointers in canonical low coordinates while translating
+accesses to displaced storage. The permanent forced-displacement fixture proves
+a nonzero storage bias while exercising PC identity, static data and pointers,
+direct calls, indirect calls, and syscall output on both guest ISAs. Production
+C no longer inspects Go metadata or V8 symbols to make that path work.
 
 Performance work uses `make bench-product-ab-prepare PRODUCT_AB_RUN=<new-id>`
 followed by `make bench-product-ab PRODUCT_AB_RUN=<same-id>`. The harness refuses

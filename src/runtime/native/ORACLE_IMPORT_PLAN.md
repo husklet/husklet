@@ -55,11 +55,16 @@ embedded source and guarded by `hl-engine`'s `c_standalone_retirement`
 integration test. Oracle-floor measurements use separately preserved binaries;
 standalone launch code must never become the application or daemon path.
 
-The generic Rust ELF inspector now supplies a typed `ET_EXEC`/`ET_DYN`
-main-image plan to the x86 worker. This is only the placement boundary: the
-retained x86 loader and translator still contain Go metadata rebasing and a V8
-embedded-blob repair for biased `ET_EXEC`. Removing those executable-specific
-branches without losing compatibility remains open.
+The generic Rust ELF inspector supplies a typed `ET_EXEC`/`ET_DYN` main-image
+plan to both workers. A shared address projection represents the guest link
+interval and displaced storage bias. The x86 translator keeps guest-visible PCs
+canonical-low and applies that projection at execution and memory-access
+boundaries, replacing the former Go metadata and V8-symbol repairs.
+
+The permanent forced-displacement test requires nonzero bias and exact output
+on both ISAs while covering low PC identity, static data and pointers, direct
+and indirect calls. That is evidence for the generic mechanism, not a claim
+that the full external non-PIE compatibility matrix is complete.
 
 ## Conflict map
 
