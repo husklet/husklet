@@ -16,7 +16,9 @@ impl Report {
         if !limit.is_finite() || limit < 1.0 {
             return Err("benchmark limit must be finite and at least 1".into());
         }
-        verify_plan(campaign, &schedule::measurements(campaign), rows)?;
+        let plan = schedule::measurements(campaign);
+        verify_balanced_order(&plan)?;
+        verify_plan(campaign, &plan, rows)?;
         verify_outputs(rows)?;
         let by_key = rows
             .iter()
@@ -54,6 +56,48 @@ impl Report {
             text: lines.join("\n") + "\n",
         })
     }
+}
+
+fn verify_balanced_order(plan: &[Step]) -> Result<(), Error> {
+    let mut cells = BTreeMap::<(&str, &str, &str), Vec<&Step>>::new();
+    for step in plan {
+        if step.cell.len() != 2 {
+            return Err("benchmark schedule has an invalid cell".into());
+        }
+        let (left, right) = step.cell.split_at(1);
+        if left != right {
+            cells
+                .entry((&step.workload, &step.layout, &step.cell))
+                .or_default()
+                .push(step);
+        }
+    }
+    for ((workload, layout, cell), steps) in cells {
+        if !steps.len().is_multiple_of(8) {
+            return Err(format!("benchmark schedule is not four-round balanced for {workload}/{layout}/{cell}").into());
+        }
+        for block in steps.chunks_exact(8) {
+            let first = block
+                .chunks_exact(2)
+                .map(|pair| {
+                    if pair[0].round != pair[1].round
+                        || pair[0].position != 0
+                        || pair[1].position != 1
+                        || pair[0].arm == pair[1].arm
+                    {
+                        return Err("benchmark pair does not contain both arms in two positions");
+                    }
+                    Ok(pair[0].arm.as_str())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if first[0] == first[1] || first[2] == first[3] || first[0] != first[3] || first[1] != first[2] {
+                return Err(
+                    format!("benchmark schedule has unbalanced order strata for {workload}/{layout}/{cell}").into(),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn verify_plan(campaign: &Campaign, expected: &[Step], rows: &[Row]) -> Result<(), Error> {
@@ -470,5 +514,32 @@ mod tests {
         }
         evidence.host_load = "0.25".into();
         super::verify_host_load(&evidence).unwrap();
+    }
+
+    #[test]
+    fn crossed_schedule_balance_is_independently_validated() {
+        let steps = |first: [&str; 4]| {
+            first
+                .into_iter()
+                .enumerate()
+                .flat_map(|(round, first)| {
+                    let second = if first == "E" { "I" } else { "E" };
+                    [first, second]
+                        .into_iter()
+                        .enumerate()
+                        .map(move |(position, arm)| Step {
+                            workload: "malloc".into(),
+                            layout: "plain".into(),
+                            cell: "EI".into(),
+                            round: round as u32,
+                            position,
+                            arm: arm.into(),
+                        })
+                })
+                .collect::<Vec<_>>()
+        };
+        super::verify_balanced_order(&steps(["E", "I", "I", "E"])).unwrap();
+        assert!(super::verify_balanced_order(&steps(["E", "E", "E", "E"])).is_err());
+        assert!(super::verify_balanced_order(&steps(["E", "I", "E", "I"])).is_err());
     }
 }
