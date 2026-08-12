@@ -140,9 +140,19 @@ fn launch_domain() -> Result<String, std::io::Error> {
         let mut identity = [0_u8; 16];
         std::fs::File::open("/dev/urandom")?.read_exact(&mut identity)?;
         if identity.iter().any(|byte| *byte != 0) {
-            return Ok(identity.iter().map(|byte| format!("{byte:02x}")).collect());
+            return Ok(hex_identity(&identity));
         }
     }
+}
+
+fn hex_identity(identity: &[u8; 16]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(identity.len() * 2);
+    for byte in identity {
+        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn inherited_descriptor(name: &str) -> Option<RawFd> {
@@ -211,7 +221,7 @@ fn start_result(result: Result<i32, EngineError>) -> Result<(), i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::start_result;
+    use super::{hex_identity, start_result};
     use crate::engine::EngineError;
 
     #[test]
@@ -220,5 +230,13 @@ mod tests {
         assert_eq!(start_result(Ok(6)), Err(6));
         assert_eq!(start_result(Ok(13)), Err(13));
         assert_eq!(start_result(Err(EngineError::LaunchFailed)), Err(-1));
+    }
+
+    #[test]
+    fn launch_domain_identity_is_fixed_width_lowercase_hex() {
+        let identity = [
+            0x00, 0x01, 0x09, 0x0a, 0x0f, 0x10, 0x7f, 0x80, 0xab, 0xcd, 0xef, 0xf0, 2, 3, 4, 5,
+        ];
+        assert_eq!(hex_identity(&identity), "0001090a0f107f80abcdeff002030405");
     }
 }
