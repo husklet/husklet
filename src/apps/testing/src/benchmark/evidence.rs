@@ -427,6 +427,7 @@ fn follows_schedule(row: &Row, step: &Step) -> bool {
 
 impl Ledger {
     pub fn open(directory: &Path, campaign: &Campaign, resume: bool) -> Result<Self, Error> {
+        admit_destination(directory, resume)?;
         let manifest = directory.join("manifest.json");
         let raw = directory.join("raw.jsonl");
         let identity = campaign.identity()?;
@@ -514,9 +515,20 @@ impl Ledger {
     }
 }
 
+fn admit_destination(directory: &Path, resume: bool) -> Result<(), Error> {
+    if resume
+        && ["report.tsv", "verdict.txt"]
+            .iter()
+            .any(|name| directory.join(name).exists())
+    {
+        return Err("benchmark result directory is already published; use a unique path for a new run".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod ledger_tests {
-    use super::{Ledger, Phase, Row, Step};
+    use super::{Ledger, Phase, Row, Step, admit_destination};
     use std::{
         collections::BTreeMap,
         fs::{self, File},
@@ -612,6 +624,17 @@ mod ledger_tests {
             panic!("incomplete ledger was accepted");
         };
         assert!(error.to_string().contains("incomplete"));
+    }
+
+    #[test]
+    fn completed_result_directory_cannot_be_replayed_as_resume() {
+        let directory = tempfile::tempdir().unwrap();
+        admit_destination(directory.path(), true).unwrap();
+        fs::write(directory.path().join("report.tsv"), "PASS\n").unwrap();
+        let error = admit_destination(directory.path(), true).unwrap_err();
+        assert!(error.to_string().contains("already published"), "{error}");
+        // A non-resume run still reaches create_dir, which independently enforces uniqueness.
+        admit_destination(directory.path(), false).unwrap();
     }
 }
 
