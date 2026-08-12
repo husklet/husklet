@@ -5,6 +5,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::thread;
 
+struct TerminalPort;
+
+impl super::TerminalPort for TerminalPort {
+    fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
+        Ok(0)
+    }
+
+    fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+        Ok(input.len())
+    }
+
+    fn close(&self) {}
+}
+
 #[derive(Default)]
 struct Channel {
     messages: Mutex<Vec<Vec<u8>>>,
@@ -228,6 +242,28 @@ fn validates_required_checkpoint() {
     };
     let result = EngineBackend::construct(GuestIsa::Aarch64, plan, services, &factory, WorkspacePort);
     assert!(matches!(result, Err(CompositionError::MissingCheckpointSink)));
+    assert!(factory.state.lock().unwrap().observed.is_empty());
+}
+
+#[test]
+fn rejects_terminal_before_native_construction() {
+    let factory = Factory::new(Machine::default());
+    let terminal = Terminal::new(Arc::new(TerminalPort), 24, 80).unwrap();
+    let services = RuntimeServices {
+        activation: Arc::new(Channel::default()),
+        executable_authority: None,
+        checkpoint_sink: None,
+        checkpoint_source: None,
+        streams: StandardStreams::default().with_terminal(terminal),
+    };
+    let result = EngineBackend::construct(
+        GuestIsa::Aarch64,
+        Fixture::plan(&[b"guest"]),
+        services,
+        &factory,
+        WorkspacePort,
+    );
+    assert!(matches!(result, Err(CompositionError::UnsupportedTerminal)));
     assert!(factory.state.lock().unwrap().observed.is_empty());
 }
 

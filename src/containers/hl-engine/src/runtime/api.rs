@@ -253,7 +253,10 @@ impl Engine {
         Self::with_streams(isa, plan, crate::composition::StandardStreams::default())
     }
 
-    /// Constructs a runtime whose Linux descriptors 0, 1, and 2 use the supplied process streams.
+    /// Constructs a runtime with optional standard-stream policy.
+    ///
+    /// A terminal request currently returns [`EngineError::Unsupported`]
+    /// rather than silently inheriting the supervisor's descriptors.
     pub fn with_streams(
         isa: GuestIsa,
         plan: RuntimePlan,
@@ -303,8 +306,13 @@ impl Engine {
             hl_log::hl_error!(hl_log::tag::EXEC, "engine workspace creation failed: error={error:?}");
         })?;
         let factory = ProductionFactory;
-        let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())
-            .map_err(|_| EngineError::LaunchFailed)?;
+        let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone()).map_err(|error| {
+            if error == CompositionError::UnsupportedTerminal {
+                EngineError::Unsupported
+            } else {
+                EngineError::LaunchFailed
+            }
+        })?;
         Ok(Self {
             backend,
             workspace,

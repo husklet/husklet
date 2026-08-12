@@ -23,6 +23,8 @@ pub enum ConstructionError {
 pub enum CompositionError {
     MissingCheckpointSink,
     MissingCheckpointSource,
+    /// Native execution does not yet own a PTY/stdio bridge for the requested terminal.
+    UnsupportedTerminal,
     RuntimeConstruction,
     Construction(ConstructionError),
 }
@@ -119,7 +121,11 @@ impl Drop for Terminal {
     }
 }
 
-/// Optional terminal control retained beside a native-engine execution.
+/// Optional terminal request retained for the native PTY boundary.
+///
+/// Construction rejects a populated request until the runtime can bind its
+/// master transport and resize operations to native descriptors. This keeps a
+/// terminal from silently using the supervisor's standard descriptors.
 #[derive(Clone)]
 pub struct StandardStreams {
     terminal: Option<Arc<Terminal>>,
@@ -134,6 +140,10 @@ impl StandardStreams {
 
     pub(crate) fn terminal(&self) -> Option<Arc<Terminal>> {
         self.terminal.clone()
+    }
+
+    fn requests_terminal(&self) -> bool {
+        self.terminal.is_some()
     }
 }
 
@@ -302,6 +312,9 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
     }
 
     fn validate_services(plan: &RuntimeLaunchPlan, services: &RuntimeServices) -> Result<(), CompositionError> {
+        if services.streams.requests_terminal() {
+            return Err(CompositionError::UnsupportedTerminal);
+        }
         if plan.options.get("HL_CHECKPOINT").is_some() && services.checkpoint_sink.is_none() {
             return Err(CompositionError::MissingCheckpointSink);
         }
