@@ -53,7 +53,7 @@ impl Worker {
                     println!("{receipt}");
                     std::process::exit(0);
                 }
-                Err(_) => std::process::exit(125),
+                Err(()) => std::process::exit(125),
             }
         }
         let logging = hl_log::EnvironmentConfig::parse(hl_log::Config::default(), std::env::vars());
@@ -174,7 +174,7 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
     let executable = std::env::current_exe().map_err(|_| ())?;
     let mut file = std::fs::File::open(executable).map_err(|_| ())?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024];
     loop {
         let count = file.read(&mut buffer).map_err(|_| ())?;
         if count == 0 {

@@ -113,7 +113,11 @@ fn receipt_is_machine_readable_and_hash_bound() {
     assert_eq!(receipt["schema"], "husklet-engine-backend-v1");
     assert_eq!(receipt["backend"], "retained-c");
     let expected = sha2::Sha256::digest(fs::read(binary).unwrap());
-    let expected = expected.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let expected = expected.iter().fold(String::new(), |mut output, byte| {
+        use std::fmt::Write as _;
+        write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+        output
+    });
     assert_eq!(receipt["engine_sha256"], expected);
 }
 

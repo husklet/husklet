@@ -14,7 +14,7 @@ fn main() {
                 println!("{receipt}");
                 std::process::exit(0);
             }
-            Err(_) => std::process::exit(125),
+            Err(()) => std::process::exit(125),
         }
     }
     if let Some(worker) = CWorker::capture(&arguments) {
@@ -22,10 +22,9 @@ fn main() {
         // supervising parent and travel over the bounded control protocol.
         hl_log::Output::global().set(Box::new(hl_log::DiscardSink));
         let status = match worker {
-            Ok(worker) => {
-                hl_engine::retained_worker::run(worker.plan, worker.control).unwrap_or_else(|error| error.status())
-            }
-            Err(error) => error.status(),
+            Ok(worker) => hl_engine::retained_worker::run(worker.plan, worker.control)
+                .unwrap_or_else(hl_engine::retained_worker::RetainedWorkerError::status),
+            Err(_) => CWorkerConfigurationError::status(),
         };
         std::process::exit(status);
     }
@@ -127,7 +126,7 @@ fn descriptor(value: &OsStr) -> Option<i32> {
 }
 
 impl CWorkerConfigurationError {
-    const fn status(self) -> i32 {
+    const fn status() -> i32 {
         64
     }
 }
