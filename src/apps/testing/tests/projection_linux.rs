@@ -320,6 +320,58 @@ fn write_arm() {
     projected_write("aarch64", &engine_binary("hl-aarch64"));
 }
 
+fn authority_death_stops_worker(isa: &str, engine: &str) {
+    let root = std::env::temp_dir().join(format!("hl-authority-death-{isa}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let guest = root.join("guest");
+    guest::projection("projected_spin.c", isa, &guest);
+    let authority = ProcessAuthority::projected_root(
+        std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
+        &root,
+        &guest,
+        Arc::new(LinuxHost),
+    )
+    .unwrap();
+    let channel = authority.open([17, 18]).unwrap();
+    let descriptor = channel.descriptor();
+    let health = channel.health();
+    let token = channel.session()[0];
+    let request = SpawnRequest {
+        program: CString::new(engine).unwrap(),
+        arguments: vec![
+            CString::new("--guest-isa").unwrap(),
+            CString::new(isa).unwrap(),
+            CString::new("/guest").unwrap(),
+        ],
+        environment: vec![
+            CString::new(format!("HL_AUTHORITY_FD={}", descriptor.get())).unwrap(),
+            CString::new(format!("HL_AUTHORITY_HEALTH_FD={}", health.get())).unwrap(),
+        ],
+        process_group: ProcessGroup::New,
+        file_actions: vec![FileAction::Inherit(descriptor), FileAction::Inherit(health)],
+    };
+    let worker = ProcessHandle::spawn(Arc::new(LinuxHost), &request).unwrap();
+    authority.commit(channel).unwrap();
+    assert!(authority.healthy(token).unwrap());
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(authority.cleanup(token).unwrap().is_some());
+    let (worker_exit, worker_timeout) = Bounded::worker(&worker);
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(!worker_timeout, "worker survived authority death: {worker_exit:?}");
+    assert_ne!(worker_exit, ChildExit::Code(0));
+}
+
+#[test]
+fn authority_death_x86() {
+    authority_death_stops_worker("x86_64", &engine_binary("hl-x86_64"));
+}
+
+#[test]
+fn authority_death_arm() {
+    authority_death_stops_worker("aarch64", &engine_binary("hl-aarch64"));
+}
+
 #[test]
 fn timeout_cleanup() {
     let request = SpawnRequest {
