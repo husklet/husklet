@@ -80,6 +80,330 @@ static int ckpt_prepare_restore_pipes(void) {
     return 0;
 }
 
+static int ckpt_restore_right_epoll(const struct ckpt_fd *record) {
+    // Any open descriptor will do as the placeholder, but it must not stay where open(2) put it: it is
+    // closed AFTER the guest's own descriptors are dup2'd into place, so a low number destroys whichever
+    // guest descriptor now owns it (it landed on 4, a socketpair endpoint). Hoist it into the private
+    // high band, like every other queued right.
+    int placeholder = open(HL_LINUX_HOST_NULL_DEVICE, O_RDONLY | O_CLOEXEC);
+    if (placeholder < 0) return -1;
+    int fd = hl_host_process_fd_private_adopt(placeholder);
+    if (fd < 0) {
+        close(placeholder);
+        return -1;
+    }
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, fd, 1};
+    return fd;
+}
+
+static int ckpt_restore_right_inotify(const struct ckpt_fd *record) {
+    char image_path[1400];
+    snprintf(image_path, sizeof image_path, "%s", record->path);
+    int64_t stored = ckpt_source_object_size(image_path);
+    if (g_linux_box == NULL || stored <= 0 || (uint64_t)stored > 64u * 1024u * 1024u) return -1;
+    size_t size = (size_t)stored;
+    void *image = malloc(size);
+    int shadow = bound_shadow_reserve(0);
+    if (image == NULL || shadow < 0 || ckpt_source_load(image_path, image, size) != 0) {
+        free(image);
+        if (shadow >= 0) close(shadow);
+        return -1;
+    }
+    void *provider = bound_inotify_provider_create(g_host_services);
+    int64_t imported =
+        provider == NULL
+            ? -HL_LINUX_ENOMEM
+            : hl_linux_inotify_import_at(g_linux_box, (hl_linux_fd)shadow, &bound_inotify_ops, provider,
+                                         (uint32_t)record->descriptor_flags, (uint32_t)record->flags, image, size);
+    free(image);
+    if (imported < 0) {
+        close(shadow);
+        return -1;
+    }
+    hl_linux_fd_snapshot snapshot;
+    if (!bound_snapshot((uint64_t)(uint32_t)shadow, &snapshot) ||
+        bound_fdvis_publish_snapshot(shadow, &snapshot) != 0) {
+        (void)hl_linux_close(g_linux_box, (hl_linux_fd)shadow);
+        close(shadow);
+        return -1;
+    }
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, shadow, 2};
+    return shadow;
+}
+
+static int ckpt_restore_right_signalfd(const struct ckpt_fd *record) {
+    struct ckpt_restore_signalfd *object = ckpt_restore_signalfd_find(record->object_id);
+    if (object == NULL) {
+        if (!record->object_id || ckpt_vector_reserve((void **)&g_restore_signalfds, &g_restore_signalfds_capacity,
+                                                      sizeof *g_restore_signalfds, g_nrestore_signalfds + 1) != 0)
+            return -1;
+        int pair[2];
+        if (pipe(pair) != 0) return -1;
+        int seed_reader = fcntl(pair[0], F_DUPFD_CLOEXEC, HL_NFD);
+        int seed_writer = fcntl(pair[1], F_DUPFD_CLOEXEC, HL_NFD);
+        close(pair[0]);
+        close(pair[1]);
+        if (seed_reader < 0 || seed_writer < 0) {
+            if (seed_reader >= 0) close(seed_reader);
+            if (seed_writer >= 0) close(seed_writer);
+            return -1;
+        }
+        int reader = hl_host_process_fd_private_adopt(seed_reader);
+        int writer = reader >= 0 ? hl_host_process_fd_private_adopt(seed_writer) : -1;
+        if (reader < 0 || writer < 0) {
+            if (reader >= 0) {
+                hl_host_process_fd_private_remove(reader);
+                close(reader);
+            } else
+                close(seed_reader);
+            if (writer >= 0) {
+                hl_host_process_fd_private_remove(writer);
+                close(writer);
+            } else
+                close(seed_writer);
+            return -1;
+        }
+        int writer_flags = fcntl(writer, F_GETFL);
+        if (writer_flags < 0 || fcntl(writer, F_SETFL, writer_flags | O_NONBLOCK) != 0) return -1;
+        object = &g_restore_signalfds[g_nrestore_signalfds++];
+        *object = (struct ckpt_restore_signalfd){record->object_id, record->auxiliary, reader, writer};
+        char queue_path[1300];
+        snprintf(queue_path, sizeof queue_path, "%s", record->path);
+        FILE *queue = ckpt_source_fopen(queue_path);
+        if (queue != NULL) {
+            unsigned char bytes[4096];
+            size_t count;
+            while ((count = fread(bytes, 1, sizeof bytes, queue)) != 0) {
+                size_t offset = 0;
+                while (offset < count) {
+                    ssize_t written = write(writer, bytes + offset, count - offset);
+                    if (written > 0)
+                        offset += (size_t)written;
+                    else if (written < 0 && errno == EINTR)
+                        continue;
+                    else {
+                        ckpt_source_fclose(queue);
+                        return -1;
+                    }
+                }
+            }
+            if (ferror(queue)) {
+                ckpt_source_fclose(queue);
+                return -1;
+            }
+            ckpt_source_fclose(queue);
+        }
+    } else if (object->mask != record->auxiliary) {
+        return -1;
+    }
+    g_restore_rights[g_nrestore_rights++] =
+        (struct ckpt_restore_right){record->ofd_id, record->object_id, object->reader, 0};
+    return object->reader;
+}
+
+static int ckpt_restore_right_pipe(const struct ckpt_fd *record) {
+    uint64_t identity = (uint64_t)record->offset;
+    struct ckpt_restore_pipe *pipe_object = ckpt_restore_pipe_find(identity);
+    if (pipe_object == NULL) {
+        if (!identity || ckpt_vector_reserve((void **)&g_restore_pipes, &g_restore_pipes_capacity,
+                                             sizeof *g_restore_pipes, g_nrestore_pipes + 1) != 0)
+            return -1;
+        pipe_object = &g_restore_pipes[g_nrestore_pipes++];
+        *pipe_object =
+            (struct ckpt_restore_pipe){.identity = identity, .reader = -1, .writer = -1, .size = atoi(record->path)};
+        int pair[2];
+        if (pipe(pair) != 0) return -1;
+        if (fcntl(pair[0], F_SETFD, FD_CLOEXEC) != 0 || fcntl(pair[1], F_SETFD, FD_CLOEXEC) != 0) {
+            close(pair[0]);
+            close(pair[1]);
+            return -1;
+        }
+#ifdef F_SETPIPE_SZ
+        if (pipe_object->size > 0) (void)fcntl(pair[1], F_SETPIPE_SZ, pipe_object->size);
+#endif
+        pipe_object->reader = hl_host_process_fd_private_adopt(pair[0]);
+        pipe_object->writer = pipe_object->reader >= 0 ? hl_host_process_fd_private_adopt(pair[1]) : -1;
+        if (pipe_object->reader < 0 || pipe_object->writer < 0) {
+            if (pipe_object->reader >= 0) {
+                hl_host_process_fd_private_remove(pipe_object->reader);
+                close(pipe_object->reader);
+            } else
+                close(pair[0]);
+            if (pipe_object->writer >= 0) {
+                hl_host_process_fd_private_remove(pipe_object->writer);
+                close(pipe_object->writer);
+            } else
+                close(pair[1]);
+            return -1;
+        }
+        int writer_flags = fcntl(pipe_object->writer, F_GETFL);
+        if (writer_flags < 0 || fcntl(pipe_object->writer, F_SETFL, writer_flags | O_NONBLOCK) != 0) return -1;
+        char data_path[1300];
+        snprintf(data_path, sizeof data_path, "pipe.%016llx", (unsigned long long)identity);
+        FILE *data = ckpt_source_fopen(data_path);
+        if (data != NULL) {
+            unsigned char buffer[65536];
+            size_t count;
+            while ((count = fread(buffer, 1, sizeof buffer, data)) != 0) {
+                size_t offset = 0;
+                while (offset < count) {
+                    ssize_t written = write(pipe_object->writer, buffer + offset, count - offset);
+                    if (written > 0)
+                        offset += (size_t)written;
+                    else if (written < 0 && errno == EINTR)
+                        continue;
+                    else {
+                        ckpt_source_fclose(data);
+                        return -1;
+                    }
+                }
+            }
+            if (ferror(data)) {
+                ckpt_source_fclose(data);
+                return -1;
+            }
+            ckpt_source_fclose(data);
+        }
+    }
+    fd = ((record->flags & O_ACCMODE) == O_WRONLY) ? pipe_object->writer : pipe_object->reader;
+    if (fd < 0) return -1;
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, fd, 0};
+    return fd;
+}
+
+static int ckpt_restore_right_eventfd(const struct ckpt_fd *record) {
+    struct ckpt_restore_eventfd *eventfd = ckpt_restore_eventfd_find(record->object_id);
+    if (eventfd == NULL) {
+        if (ckpt_vector_reserve((void **)&g_restore_eventfds, &g_restore_eventfds_capacity, sizeof *g_restore_eventfds,
+                                g_nrestore_eventfds + 1) != 0)
+            return -1;
+        int slot = (int)((record->object_id & UINT64_C(0xffffffff)) - 1);
+        if (slot < 0 || slot >= HL_NFD) return -1;
+        int pair[2];
+        if (pipe(pair) != 0) return -1;
+        int flags = fcntl(pair[0], F_GETFL);
+        if (flags < 0 || fcntl(pair[0], F_SETFL, flags | O_NONBLOCK) != 0) {
+            close(pair[0]);
+            close(pair[1]);
+            return -1;
+        }
+        int reader = hl_host_process_fd_private_adopt(pair[0]);
+        int writer = reader >= 0 ? hl_host_process_fd_private_adopt(pair[1]) : -1;
+        if (reader < 0 || writer < 0) {
+            if (reader >= 0) {
+                hl_host_process_fd_private_remove(reader);
+                close(reader);
+            } else
+                close(pair[0]);
+            if (writer >= 0) {
+                hl_host_process_fd_private_remove(writer);
+                close(writer);
+            } else
+                close(pair[1]);
+            return -1;
+        }
+        eventfd = &g_restore_eventfds[g_nrestore_eventfds++];
+        *eventfd = (struct ckpt_restore_eventfd){
+            .identity = record->object_id,
+            .count = record->auxiliary,
+            .reader = reader,
+            .writer = writer,
+            .slot = slot,
+            .semaphore = record->offset != 0,
+            .guest_nonblock = (record->flags & O_NONBLOCK) != 0,
+        };
+        if (eventfd->count != 0) {
+            char byte = 1;
+            if (write(writer, &byte, 1) != 1) return -1;
+        }
+    } else if (eventfd->count != record->auxiliary || eventfd->semaphore != (record->offset != 0) ||
+               eventfd->guest_nonblock != ((record->flags & O_NONBLOCK) != 0)) {
+        return -1;
+    }
+    g_restore_rights[g_nrestore_rights++] =
+        (struct ckpt_restore_right){record->ofd_id, record->object_id, eventfd->reader, 0};
+    return eventfd->reader;
+}
+
+static int ckpt_restore_right_timerfd(const struct ckpt_fd *record) {
+    struct ckpt_restore_timerfd *timerfd = ckpt_restore_timerfd_find(record->object_id);
+    if (timerfd == NULL) {
+        int clock_id = 0;
+        unsigned first = 0;
+        unsigned long long pending = 0;
+        long long captured_ns = 0;
+        if (!record->object_id ||
+            ckpt_vector_reserve((void **)&g_restore_timerfds, &g_restore_timerfds_capacity, sizeof *g_restore_timerfds,
+                                g_nrestore_timerfds + 1) != 0 ||
+            sscanf(record->path, "%d %llu %u %lld", &clock_id, &pending, &first, &captured_ns) != 4)
+            return -1;
+        struct timerfd_shared_state *state =
+            mmap(NULL, sizeof *state, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
+        if (state == MAP_FAILED) return -1;
+        memset(state, 0, sizeof *state);
+        struct timespec now;
+        hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
+        int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+        int64_t deadline = record->offset;
+        int64_t interval = (int64_t)record->auxiliary;
+        int64_t next = deadline;
+        uint64_t accumulated = (uint64_t)pending;
+        if (deadline > 0 && interval > 0) {
+            if (next <= captured_ns) next += ((captured_ns - next) / interval + 1) * interval;
+            if (now_ns >= next) {
+                accumulated += 1 + (uint64_t)((now_ns - next) / interval);
+                next += ((now_ns - next) / interval + 1) * interval;
+            }
+        } else if (deadline > 0 && now_ns >= deadline) {
+            accumulated = 1;
+            next = 0;
+        }
+        state->deadline = next;
+        state->interval = interval;
+        state->pending = accumulated;
+        g_restore_timerfds[g_nrestore_timerfds++] = (struct ckpt_restore_timerfd){
+            .identity = record->object_id,
+            .state = state,
+            .clock_id = clock_id,
+            .fd = -1,
+            .slot = -1,
+            .first_oneshot = (uint8_t)(first != 0),
+        };
+        timerfd = &g_restore_timerfds[g_nrestore_timerfds - 1];
+    }
+    if (timerfd->state == NULL) return -1;
+    if (timerfd->fd < 0) {
+        int timer = kqueue();
+        if (timer < 0) return -1;
+        timerfd->fd = hl_host_process_fd_private_adopt(timer);
+        if (timerfd->fd < 0) {
+            hl_native_kqueue_close(timer);
+            close(timer);
+            return -1;
+        }
+        // adopt() moves the descriptor and closes the original, so a number-keyed shim kqueue must move
+        // with it or the arming kevent() below is EBADF.
+        hl_native_kqueue_relocate(timer, timerfd->fd);
+        timerfd->slot = timerfd->fd;
+        struct timespec now;
+        hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
+        int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+        timerfd_shared_lock(timerfd->state);
+        int64_t next = timerfd->state->deadline;
+        uint64_t pending = timerfd->state->pending;
+        timerfd_shared_unlock(timerfd->state);
+        if (pending != 0 || next > now_ns) {
+            struct kevent event;
+            int64_t delay = pending != 0 ? 1 : next - now_ns;
+            EV_SET(&event, 1, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_NSECONDS, delay, NULL);
+            if (kevent(timerfd->fd, &event, 1, NULL, 0, NULL) < 0) return -1;
+        }
+    }
+    g_restore_rights[g_nrestore_rights++] =
+        (struct ckpt_restore_right){record->ofd_id, record->object_id, timerfd->fd, 0};
+    return timerfd->fd;
+}
+
 static int ckpt_restore_right_prepare(const struct ckpt_fd *record) {
     struct ckpt_restore_right *existing = ckpt_restore_right_find(record->ofd_id);
     if (existing != NULL) return existing->object_id == record->object_id ? existing->fd : -1;
@@ -94,325 +418,12 @@ static int ckpt_restore_right_prepare(const struct ckpt_fd *record) {
                        (unsigned long long)record->ofd_id),
                -1;
     int fd = -1;
-    if (record->kind == CKF_EPOLL) {
-        // Any open descriptor will do as the placeholder, but it must not stay where open(2) put it: it is
-        // closed AFTER the guest's own descriptors are dup2'd into place, so a low number destroys whichever
-        // guest descriptor now owns it (it landed on 4, a socketpair endpoint). Hoist it into the private
-        // high band, like every other queued right.
-        int placeholder = open(HL_LINUX_HOST_NULL_DEVICE, O_RDONLY | O_CLOEXEC);
-        if (placeholder < 0) return -1;
-        fd = hl_host_process_fd_private_adopt(placeholder);
-        if (fd < 0) {
-            close(placeholder);
-            return -1;
-        }
-        g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, fd, 1};
-        return fd;
-    }
-    if (record->kind == CKF_INOTIFY) {
-        char image_path[1400];
-        snprintf(image_path, sizeof image_path, "%s", record->path);
-        int64_t stored = ckpt_source_object_size(image_path);
-        if (g_linux_box == NULL || stored <= 0 || (uint64_t)stored > 64u * 1024u * 1024u) return -1;
-        size_t size = (size_t)stored;
-        void *image = malloc(size);
-        int shadow = bound_shadow_reserve(0);
-        if (image == NULL || shadow < 0 || ckpt_source_load(image_path, image, size) != 0) {
-            free(image);
-            if (shadow >= 0) close(shadow);
-            return -1;
-        }
-        void *provider = bound_inotify_provider_create(g_host_services);
-        int64_t imported =
-            provider == NULL
-                ? -HL_LINUX_ENOMEM
-                : hl_linux_inotify_import_at(g_linux_box, (hl_linux_fd)shadow, &bound_inotify_ops, provider,
-                                             (uint32_t)record->descriptor_flags, (uint32_t)record->flags, image, size);
-        free(image);
-        if (imported < 0) {
-            close(shadow);
-            return -1;
-        }
-        hl_linux_fd_snapshot snapshot;
-        if (!bound_snapshot((uint64_t)(uint32_t)shadow, &snapshot) ||
-            bound_fdvis_publish_snapshot(shadow, &snapshot) != 0) {
-            (void)hl_linux_close(g_linux_box, (hl_linux_fd)shadow);
-            close(shadow);
-            return -1;
-        }
-        g_restore_rights[g_nrestore_rights++] =
-            (struct ckpt_restore_right){record->ofd_id, record->object_id, shadow, 2};
-        return shadow;
-    }
-    if (record->kind == CKF_SIGNALFD) {
-        struct ckpt_restore_signalfd *object = ckpt_restore_signalfd_find(record->object_id);
-        if (object == NULL) {
-            if (!record->object_id || ckpt_vector_reserve((void **)&g_restore_signalfds, &g_restore_signalfds_capacity,
-                                                          sizeof *g_restore_signalfds, g_nrestore_signalfds + 1) != 0)
-                return -1;
-            int pair[2];
-            if (pipe(pair) != 0) return -1;
-            int seed_reader = fcntl(pair[0], F_DUPFD_CLOEXEC, HL_NFD);
-            int seed_writer = fcntl(pair[1], F_DUPFD_CLOEXEC, HL_NFD);
-            close(pair[0]);
-            close(pair[1]);
-            if (seed_reader < 0 || seed_writer < 0) {
-                if (seed_reader >= 0) close(seed_reader);
-                if (seed_writer >= 0) close(seed_writer);
-                return -1;
-            }
-            int reader = hl_host_process_fd_private_adopt(seed_reader);
-            int writer = reader >= 0 ? hl_host_process_fd_private_adopt(seed_writer) : -1;
-            if (reader < 0 || writer < 0) {
-                if (reader >= 0) {
-                    hl_host_process_fd_private_remove(reader);
-                    close(reader);
-                } else
-                    close(seed_reader);
-                if (writer >= 0) {
-                    hl_host_process_fd_private_remove(writer);
-                    close(writer);
-                } else
-                    close(seed_writer);
-                return -1;
-            }
-            int writer_flags = fcntl(writer, F_GETFL);
-            if (writer_flags < 0 || fcntl(writer, F_SETFL, writer_flags | O_NONBLOCK) != 0) return -1;
-            object = &g_restore_signalfds[g_nrestore_signalfds++];
-            *object = (struct ckpt_restore_signalfd){record->object_id, record->auxiliary, reader, writer};
-            char queue_path[1300];
-            snprintf(queue_path, sizeof queue_path, "%s", record->path);
-            FILE *queue = ckpt_source_fopen(queue_path);
-            if (queue != NULL) {
-                unsigned char bytes[4096];
-                size_t count;
-                while ((count = fread(bytes, 1, sizeof bytes, queue)) != 0) {
-                    size_t offset = 0;
-                    while (offset < count) {
-                        ssize_t written = write(writer, bytes + offset, count - offset);
-                        if (written > 0)
-                            offset += (size_t)written;
-                        else if (written < 0 && errno == EINTR)
-                            continue;
-                        else {
-                            ckpt_source_fclose(queue);
-                            return -1;
-                        }
-                    }
-                }
-                if (ferror(queue)) {
-                    ckpt_source_fclose(queue);
-                    return -1;
-                }
-                ckpt_source_fclose(queue);
-            }
-        } else if (object->mask != record->auxiliary) {
-            return -1;
-        }
-        g_restore_rights[g_nrestore_rights++] =
-            (struct ckpt_restore_right){record->ofd_id, record->object_id, object->reader, 0};
-        return object->reader;
-    }
-    if (record->kind == CKF_PIPE) {
-        uint64_t identity = (uint64_t)record->offset;
-        struct ckpt_restore_pipe *pipe_object = ckpt_restore_pipe_find(identity);
-        if (pipe_object == NULL) {
-            if (!identity || ckpt_vector_reserve((void **)&g_restore_pipes, &g_restore_pipes_capacity,
-                                                 sizeof *g_restore_pipes, g_nrestore_pipes + 1) != 0)
-                return -1;
-            pipe_object = &g_restore_pipes[g_nrestore_pipes++];
-            *pipe_object = (struct ckpt_restore_pipe){
-                .identity = identity, .reader = -1, .writer = -1, .size = atoi(record->path)};
-            int pair[2];
-            if (pipe(pair) != 0) return -1;
-            if (fcntl(pair[0], F_SETFD, FD_CLOEXEC) != 0 || fcntl(pair[1], F_SETFD, FD_CLOEXEC) != 0) {
-                close(pair[0]);
-                close(pair[1]);
-                return -1;
-            }
-#ifdef F_SETPIPE_SZ
-            if (pipe_object->size > 0) (void)fcntl(pair[1], F_SETPIPE_SZ, pipe_object->size);
-#endif
-            pipe_object->reader = hl_host_process_fd_private_adopt(pair[0]);
-            pipe_object->writer = pipe_object->reader >= 0 ? hl_host_process_fd_private_adopt(pair[1]) : -1;
-            if (pipe_object->reader < 0 || pipe_object->writer < 0) {
-                if (pipe_object->reader >= 0) {
-                    hl_host_process_fd_private_remove(pipe_object->reader);
-                    close(pipe_object->reader);
-                } else
-                    close(pair[0]);
-                if (pipe_object->writer >= 0) {
-                    hl_host_process_fd_private_remove(pipe_object->writer);
-                    close(pipe_object->writer);
-                } else
-                    close(pair[1]);
-                return -1;
-            }
-            int writer_flags = fcntl(pipe_object->writer, F_GETFL);
-            if (writer_flags < 0 || fcntl(pipe_object->writer, F_SETFL, writer_flags | O_NONBLOCK) != 0) return -1;
-            char data_path[1300];
-            snprintf(data_path, sizeof data_path, "pipe.%016llx", (unsigned long long)identity);
-            FILE *data = ckpt_source_fopen(data_path);
-            if (data != NULL) {
-                unsigned char buffer[65536];
-                size_t count;
-                while ((count = fread(buffer, 1, sizeof buffer, data)) != 0) {
-                    size_t offset = 0;
-                    while (offset < count) {
-                        ssize_t written = write(pipe_object->writer, buffer + offset, count - offset);
-                        if (written > 0)
-                            offset += (size_t)written;
-                        else if (written < 0 && errno == EINTR)
-                            continue;
-                        else {
-                            ckpt_source_fclose(data);
-                            return -1;
-                        }
-                    }
-                }
-                if (ferror(data)) {
-                    ckpt_source_fclose(data);
-                    return -1;
-                }
-                ckpt_source_fclose(data);
-            }
-        }
-        fd = ((record->flags & O_ACCMODE) == O_WRONLY) ? pipe_object->writer : pipe_object->reader;
-        if (fd < 0) return -1;
-        g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, fd, 0};
-        return fd;
-    }
-    if (record->kind == CKF_EVENTFD) {
-        struct ckpt_restore_eventfd *eventfd = ckpt_restore_eventfd_find(record->object_id);
-        if (eventfd == NULL) {
-            if (ckpt_vector_reserve((void **)&g_restore_eventfds, &g_restore_eventfds_capacity,
-                                    sizeof *g_restore_eventfds, g_nrestore_eventfds + 1) != 0)
-                return -1;
-            int slot = (int)((record->object_id & UINT64_C(0xffffffff)) - 1);
-            if (slot < 0 || slot >= HL_NFD) return -1;
-            int pair[2];
-            if (pipe(pair) != 0) return -1;
-            int flags = fcntl(pair[0], F_GETFL);
-            if (flags < 0 || fcntl(pair[0], F_SETFL, flags | O_NONBLOCK) != 0) {
-                close(pair[0]);
-                close(pair[1]);
-                return -1;
-            }
-            int reader = hl_host_process_fd_private_adopt(pair[0]);
-            int writer = reader >= 0 ? hl_host_process_fd_private_adopt(pair[1]) : -1;
-            if (reader < 0 || writer < 0) {
-                if (reader >= 0) {
-                    hl_host_process_fd_private_remove(reader);
-                    close(reader);
-                } else
-                    close(pair[0]);
-                if (writer >= 0) {
-                    hl_host_process_fd_private_remove(writer);
-                    close(writer);
-                } else
-                    close(pair[1]);
-                return -1;
-            }
-            eventfd = &g_restore_eventfds[g_nrestore_eventfds++];
-            *eventfd = (struct ckpt_restore_eventfd){
-                .identity = record->object_id,
-                .count = record->auxiliary,
-                .reader = reader,
-                .writer = writer,
-                .slot = slot,
-                .semaphore = record->offset != 0,
-                .guest_nonblock = (record->flags & O_NONBLOCK) != 0,
-            };
-            if (eventfd->count != 0) {
-                char byte = 1;
-                if (write(writer, &byte, 1) != 1) return -1;
-            }
-        } else if (eventfd->count != record->auxiliary || eventfd->semaphore != (record->offset != 0) ||
-                   eventfd->guest_nonblock != ((record->flags & O_NONBLOCK) != 0)) {
-            return -1;
-        }
-        g_restore_rights[g_nrestore_rights++] =
-            (struct ckpt_restore_right){record->ofd_id, record->object_id, eventfd->reader, 0};
-        return eventfd->reader;
-    }
-    if (record->kind == CKF_TIMERFD) {
-        struct ckpt_restore_timerfd *timerfd = ckpt_restore_timerfd_find(record->object_id);
-        if (timerfd == NULL) {
-            int clock_id = 0;
-            unsigned first = 0;
-            unsigned long long pending = 0;
-            long long captured_ns = 0;
-            if (!record->object_id ||
-                ckpt_vector_reserve((void **)&g_restore_timerfds, &g_restore_timerfds_capacity,
-                                    sizeof *g_restore_timerfds, g_nrestore_timerfds + 1) != 0 ||
-                sscanf(record->path, "%d %llu %u %lld", &clock_id, &pending, &first, &captured_ns) != 4)
-                return -1;
-            struct timerfd_shared_state *state =
-                mmap(NULL, sizeof *state, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
-            if (state == MAP_FAILED) return -1;
-            memset(state, 0, sizeof *state);
-            struct timespec now;
-            hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
-            int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
-            int64_t deadline = record->offset;
-            int64_t interval = (int64_t)record->auxiliary;
-            int64_t next = deadline;
-            uint64_t accumulated = (uint64_t)pending;
-            if (deadline > 0 && interval > 0) {
-                if (next <= captured_ns) next += ((captured_ns - next) / interval + 1) * interval;
-                if (now_ns >= next) {
-                    accumulated += 1 + (uint64_t)((now_ns - next) / interval);
-                    next += ((now_ns - next) / interval + 1) * interval;
-                }
-            } else if (deadline > 0 && now_ns >= deadline) {
-                accumulated = 1;
-                next = 0;
-            }
-            state->deadline = next;
-            state->interval = interval;
-            state->pending = accumulated;
-            g_restore_timerfds[g_nrestore_timerfds++] = (struct ckpt_restore_timerfd){
-                .identity = record->object_id,
-                .state = state,
-                .clock_id = clock_id,
-                .fd = -1,
-                .slot = -1,
-                .first_oneshot = (uint8_t)(first != 0),
-            };
-            timerfd = &g_restore_timerfds[g_nrestore_timerfds - 1];
-        }
-        if (timerfd->state == NULL) return -1;
-        if (timerfd->fd < 0) {
-            int timer = kqueue();
-            if (timer < 0) return -1;
-            timerfd->fd = hl_host_process_fd_private_adopt(timer);
-            if (timerfd->fd < 0) {
-                hl_native_kqueue_close(timer);
-                close(timer);
-                return -1;
-            }
-            // adopt() moves the descriptor and closes the original, so a number-keyed shim kqueue must move
-            // with it or the arming kevent() below is EBADF.
-            hl_native_kqueue_relocate(timer, timerfd->fd);
-            timerfd->slot = timerfd->fd;
-            struct timespec now;
-            hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
-            int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
-            timerfd_shared_lock(timerfd->state);
-            int64_t next = timerfd->state->deadline;
-            uint64_t pending = timerfd->state->pending;
-            timerfd_shared_unlock(timerfd->state);
-            if (pending != 0 || next > now_ns) {
-                struct kevent event;
-                int64_t delay = pending != 0 ? 1 : next - now_ns;
-                EV_SET(&event, 1, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_NSECONDS, delay, NULL);
-                if (kevent(timerfd->fd, &event, 1, NULL, 0, NULL) < 0) return -1;
-            }
-        }
-        g_restore_rights[g_nrestore_rights++] =
-            (struct ckpt_restore_right){record->ofd_id, record->object_id, timerfd->fd, 0};
-        return timerfd->fd;
-    }
+    if (record->kind == CKF_EPOLL) return ckpt_restore_right_epoll(record);
+    if (record->kind == CKF_INOTIFY) return ckpt_restore_right_inotify(record);
+    if (record->kind == CKF_SIGNALFD) return ckpt_restore_right_signalfd(record);
+    if (record->kind == CKF_PIPE) return ckpt_restore_right_pipe(record);
+    if (record->kind == CKF_EVENTFD) return ckpt_restore_right_eventfd(record);
+    if (record->kind == CKF_TIMERFD) return ckpt_restore_right_timerfd(record);
     if (record->kind == CKF_FILE || record->kind == CKF_DEVICE) {
         int open_flags = record->flags & (O_ACCMODE | O_APPEND | O_NONBLOCK);
         fd = open(record->path, open_flags);
@@ -450,6 +461,180 @@ static int ckpt_restore_right_prepare(const struct ckpt_fd *record) {
     }
     g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, adopted, 1};
     return adopted;
+}
+
+static int ckpt_restore_socket_right_markers(const struct ckpt_fd *rights, const int *right_fds, uint32_t rights_count,
+                                             int *combo, int *combo_count_out, unsigned char *payload, FILE *file) {
+    int combo_count = *combo_count_out;
+    for (uint32_t index = 0; index < rights_count; ++index) {
+        if (rights[index].kind == CKF_EVENTFD) {
+            struct ckpt_restore_eventfd *eventfd = ckpt_restore_eventfd_find(rights[index].object_id);
+            if (eventfd == NULL || combo_count + 2 > 253 * 4) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            struct hl_cmsg_eventfd_meta metadata = {
+                .magic = HL_CMSG_EVENTFD_MAGIC,
+                .ordinal = index,
+                .slot = (uint32_t)eventfd->slot,
+                .sema = (uint32_t)eventfd->semaphore,
+                .nb = (uint32_t)eventfd->guest_nonblock,
+            };
+            int writer_flags = fcntl(eventfd->writer, F_GETFL);
+            if (writer_flags < 0 || fcntl(eventfd->writer, F_SETFL, writer_flags | O_NONBLOCK) != 0 ||
+                fcntl(eventfd->writer, F_SETFD, FD_CLOEXEC) != 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            int marker = cmsg_eventfd_marker(&metadata);
+            if (marker < 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            combo[combo_count++] = eventfd->writer;
+            combo[combo_count++] = marker;
+        }
+        if (rights[index].kind == CKF_TIMERFD) {
+            struct ckpt_restore_timerfd *timerfd = ckpt_restore_timerfd_find(rights[index].object_id);
+            if (timerfd == NULL || timerfd->state == NULL || combo_count + 1 > 253 * 4) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            struct hl_cmsg_timerfd_meta metadata = {
+                .magic = HL_CMSG_TIMERFD_MAGIC,
+                .ordinal = index,
+                .first_oneshot = timerfd->first_oneshot,
+                .clock = timerfd->clock_id,
+                .deadline = timerfd->state->deadline,
+                .interval = timerfd->state->interval,
+                .source_fd = timerfd->fd,
+                .source_pid = (int32_t)getpid(),
+                .nb = (rights[index].flags & O_NONBLOCK) != 0,
+                .portable = 1,
+                .restore_shared = 1,
+                .object = timerfd->identity,
+                .shared_state = (uint64_t)(uintptr_t)timerfd->state,
+            };
+            struct hl_cmsg_timerfd_meta placeholder_metadata;
+            memset(&placeholder_metadata, 0, sizeof placeholder_metadata);
+            int placeholder = cmsg_timerfd_marker(&placeholder_metadata);
+            if (placeholder < 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            combo[index] = placeholder;
+            int marker = cmsg_timerfd_marker(&metadata);
+            if (marker < 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            combo[combo_count++] = marker;
+        }
+        if (rights[index].kind == CKF_PIPE) {
+            uint64_t identity = (uint64_t)rights[index].offset;
+            if (!identity || combo_count + 1 > 253 * 4) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            struct hl_cmsg_pipe_meta metadata = {
+                .magic = UINT32_C(0x484c5049),
+                .ordinal = index,
+                .identity = identity,
+                .size = atoi(rights[index].path),
+            };
+            int marker = cmsg_pipe_marker(&metadata);
+            if (marker < 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            combo[combo_count++] = marker;
+        }
+        if (rights[index].kind == CKF_SIGNALFD) {
+            struct ckpt_restore_signalfd *object = ckpt_restore_signalfd_find(rights[index].object_id);
+            if (object == NULL || combo_count + 2 > 253 * 4) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            struct hl_cmsg_signalfd_meta metadata = {
+                .magic = UINT32_C(0x484c5346),
+                .ordinal = index,
+                .source_pid = (int32_t)getpid(),
+                .source_slot = -1,
+                .mask = object->mask,
+            };
+            int marker = cmsg_signalfd_marker(&metadata);
+            if (marker < 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            combo[combo_count++] = object->writer;
+            combo[combo_count++] = marker;
+        }
+        if (rights[index].kind == CKF_INOTIFY) {
+            if (combo_count + 1 > 253 * 4) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            struct hl_cmsg_kqueue_meta metadata = {
+                .magic = UINT32_C(0x484c4b51),
+                .ordinal = index,
+                .source_pid = (int32_t)getpid(),
+                .source_fd = right_fds[index],
+                .kind = 3,
+                .nonblock = (rights[index].flags & O_NONBLOCK) != 0,
+                .object_id = rights[index].object_id,
+                .descriptor_flags = (uint32_t)rights[index].descriptor_flags,
+            };
+            int placeholder = cmsg_kqueue_placeholder();
+            if (placeholder < 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            combo[index] = placeholder;
+            int marker = cmsg_kqueue_marker(&metadata);
+            if (marker < 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            combo[combo_count++] = marker;
+        }
+        if (rights[index].kind == CKF_EPOLL) {
+            if (combo_count + 1 > 253 * 4) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            int placeholder = cmsg_kqueue_placeholder();
+            if (placeholder < 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            combo[index] = placeholder;
+            int marker = ckpt_restore_epoll_marker(&rights[index], index);
+            if (marker < 0) {
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            combo[combo_count++] = marker;
+        }
+    }
+    *combo_count_out = combo_count;
+    return 0;
 }
 
 static int ckpt_restore_socket_queue_load(struct ckpt_restore_socket_endpoint *endpoint) {
@@ -507,174 +692,9 @@ static int ckpt_restore_socket_queue_load(struct ckpt_restore_socket_endpoint *e
             cmsg_tmpfds_close();
             for (uint32_t index = 0; index < frame.rights_count; ++index)
                 combo[combo_count++] = right_fds[index];
-            for (uint32_t index = 0; index < frame.rights_count; ++index) {
-                if (rights[index].kind == CKF_EVENTFD) {
-                    struct ckpt_restore_eventfd *eventfd = ckpt_restore_eventfd_find(rights[index].object_id);
-                    if (eventfd == NULL || combo_count + 2 > (int)(sizeof combo / sizeof combo[0])) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    struct hl_cmsg_eventfd_meta metadata = {
-                        .magic = HL_CMSG_EVENTFD_MAGIC,
-                        .ordinal = index,
-                        .slot = (uint32_t)eventfd->slot,
-                        .sema = (uint32_t)eventfd->semaphore,
-                        .nb = (uint32_t)eventfd->guest_nonblock,
-                    };
-                    int writer_flags = fcntl(eventfd->writer, F_GETFL);
-                    if (writer_flags < 0 || fcntl(eventfd->writer, F_SETFL, writer_flags | O_NONBLOCK) != 0 ||
-                        fcntl(eventfd->writer, F_SETFD, FD_CLOEXEC) != 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    int marker = cmsg_eventfd_marker(&metadata);
-                    if (marker < 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    combo[combo_count++] = eventfd->writer;
-                    combo[combo_count++] = marker;
-                }
-                if (rights[index].kind == CKF_TIMERFD) {
-                    struct ckpt_restore_timerfd *timerfd = ckpt_restore_timerfd_find(rights[index].object_id);
-                    if (timerfd == NULL || timerfd->state == NULL ||
-                        combo_count + 1 > (int)(sizeof combo / sizeof combo[0])) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    struct hl_cmsg_timerfd_meta metadata = {
-                        .magic = HL_CMSG_TIMERFD_MAGIC,
-                        .ordinal = index,
-                        .first_oneshot = timerfd->first_oneshot,
-                        .clock = timerfd->clock_id,
-                        .deadline = timerfd->state->deadline,
-                        .interval = timerfd->state->interval,
-                        .source_fd = timerfd->fd,
-                        .source_pid = (int32_t)getpid(),
-                        .nb = (rights[index].flags & O_NONBLOCK) != 0,
-                        .portable = 1,
-                        .restore_shared = 1,
-                        .object = timerfd->identity,
-                        .shared_state = (uint64_t)(uintptr_t)timerfd->state,
-                    };
-                    struct hl_cmsg_timerfd_meta placeholder_metadata;
-                    memset(&placeholder_metadata, 0, sizeof placeholder_metadata);
-                    int placeholder = cmsg_timerfd_marker(&placeholder_metadata);
-                    if (placeholder < 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    combo[index] = placeholder;
-                    int marker = cmsg_timerfd_marker(&metadata);
-                    if (marker < 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    combo[combo_count++] = marker;
-                }
-                if (rights[index].kind == CKF_PIPE) {
-                    uint64_t identity = (uint64_t)rights[index].offset;
-                    if (!identity || combo_count + 1 > (int)(sizeof combo / sizeof combo[0])) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    struct hl_cmsg_pipe_meta metadata = {
-                        .magic = UINT32_C(0x484c5049),
-                        .ordinal = index,
-                        .identity = identity,
-                        .size = atoi(rights[index].path),
-                    };
-                    int marker = cmsg_pipe_marker(&metadata);
-                    if (marker < 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    combo[combo_count++] = marker;
-                }
-                if (rights[index].kind == CKF_SIGNALFD) {
-                    struct ckpt_restore_signalfd *object = ckpt_restore_signalfd_find(rights[index].object_id);
-                    if (object == NULL || combo_count + 2 > (int)(sizeof combo / sizeof combo[0])) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    struct hl_cmsg_signalfd_meta metadata = {
-                        .magic = UINT32_C(0x484c5346),
-                        .ordinal = index,
-                        .source_pid = (int32_t)getpid(),
-                        .source_slot = -1,
-                        .mask = object->mask,
-                    };
-                    int marker = cmsg_signalfd_marker(&metadata);
-                    if (marker < 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    combo[combo_count++] = object->writer;
-                    combo[combo_count++] = marker;
-                }
-                if (rights[index].kind == CKF_INOTIFY) {
-                    if (combo_count + 1 > (int)(sizeof combo / sizeof combo[0])) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    struct hl_cmsg_kqueue_meta metadata = {
-                        .magic = UINT32_C(0x484c4b51),
-                        .ordinal = index,
-                        .source_pid = (int32_t)getpid(),
-                        .source_fd = right_fds[index],
-                        .kind = 3,
-                        .nonblock = (rights[index].flags & O_NONBLOCK) != 0,
-                        .object_id = rights[index].object_id,
-                        .descriptor_flags = (uint32_t)rights[index].descriptor_flags,
-                    };
-                    int placeholder = cmsg_kqueue_placeholder();
-                    if (placeholder < 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    combo[index] = placeholder;
-                    int marker = cmsg_kqueue_marker(&metadata);
-                    if (marker < 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    combo[combo_count++] = marker;
-                }
-                if (rights[index].kind == CKF_EPOLL) {
-                    if (combo_count + 1 > (int)(sizeof combo / sizeof combo[0])) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    int placeholder = cmsg_kqueue_placeholder();
-                    if (placeholder < 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    combo[index] = placeholder;
-                    int marker = ckpt_restore_epoll_marker(&rights[index], index);
-                    if (marker < 0) {
-                        free(payload);
-                        ckpt_source_fclose(file);
-                        return -1;
-                    }
-                    combo[combo_count++] = marker;
-                }
-            }
+            if (ckpt_restore_socket_right_markers(rights, right_fds, frame.rights_count, combo, &combo_count, payload,
+                                                  file) != 0)
+                return -1;
             for (uint32_t index = 0; index < frame.rights_count; ++index) {
                 if (combo_count == (int)(sizeof combo / sizeof combo[0])) {
                     cmsg_tmpfds_close();
@@ -780,4 +800,3 @@ static int ckpt_restore_socket_options(int fd, const struct ckpt_socket_state *s
 #undef CKPT_RESTORE_SOCKET_OPTION
     return 0;
 }
-
