@@ -3764,6 +3764,34 @@ static int lower_bit_scan(struct insn *instruction, uint64_t next, int sf) {
     return TX_NEXT;
 }
 
+static int lower_population_count(struct insn *instruction, uint64_t next, int sf) {
+    if (instruction->op != 0xB8 || !instruction->rep) return TX_FALL;
+    int mem;
+    int rmv = rm_load(instruction, next, instruction->opsize, &mem);
+    int source = rmv;
+    if (!mem && instruction->reg == rmv) {
+        e_mov_rr(23, rmv, sf);
+        source = 23;
+    }
+    int word_form = instruction->opsize == 2;
+    if (word_form) {
+        e_movconst(19, 0xffff);
+        e_rrr(A_AND, 23, source, 19, 0, 0);
+        source = 23;
+    }
+    if (sf)
+        e_fmov_to_d(16, source);
+    else
+        e_fmov_to_s(16, source);
+    emit32(0x0E205800u | (16 << 5) | 16);
+    emit32(0x0E31B800u | (16 << 5) | 16);
+    e_fmov_from_s(word_form ? 21 : instruction->reg, 16);
+    if (word_form) e_bfi(instruction->reg, 21, 0, 16, 1);
+    e_rrr(A_ANDS, 31, source, source, sf, 0);
+    e_nzcv_save_popcnt();
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6065,36 +6093,8 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // popcnt (F3 0F B8): dest = popcount(src). x86 sets ZF=(src==0) and clears CF/OF/SF/AF/PF.
-            // (Without F3, 0F B8 is the reserved JMPE -> falls through to report_unimpl.)
-            if (op == 0xB8 && I.rep) {
-                int mem;
-                int rmv = rm_load(&I, next, I.opsize, &mem);
-                // dest==src (e.g. `popcnt %rax,%rax`): the result write clobbers the source before the
-                // ZF computation reads it, so preserve the source in a scratch first (mirrors bsf above).
-                int src = rmv;
-                if (!mem && I.reg == rmv) {
-                    e_mov_rr(23, rmv, sf);
-                    src = 23;
-                }
-                // POPCNT r16 counts ONLY bits 15:0 and writes ONLY bits 15:0 of the destination.
-                int w16 = (I.opsize == 2);
-                if (w16) {
-                    e_movconst(19, 0xffff);
-                    e_rrr(A_AND, 23, src, 19, 0, 0);
-                    src = 23;
-                }
-                // NEON popcount: move src into scratch v16 (upper lanes zeroed), per-byte CNT, sum via ADDV.
-                if (sf)
-                    e_fmov_to_d(16, src); // fmov d16, x[src]  (zeroes bits[64:128])
-                else
-                    e_fmov_to_s(16, src);             // fmov s16, w[src] (zeroes bits[32:128])
-                emit32(0x0E205800u | (16 << 5) | 16); // cnt v16.8b, v16.8b  (per-byte popcount)
-                emit32(0x0E31B800u | (16 << 5) | 16); // addv b16, v16.8b    (sum the 8 byte counts -> 0..64)
-                e_fmov_from_s(w16 ? 21 : I.reg, 16);  // dest = count; the W-write zero-extends
-                if (w16) e_bfi(I.reg, 21, 0, 16, 1);
-                e_rrr(A_ANDS, 31, src, src, sf, 0); // Z = (src == 0)
-                e_nzcv_save_popcnt();               // ZF from the source; SF/OF/AF/CF/PF all cleared
+            int population_result = lower_population_count(&I, next, sf);
+            if (population_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
