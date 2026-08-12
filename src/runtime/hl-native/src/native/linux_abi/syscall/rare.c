@@ -54,8 +54,8 @@ static int mq_block_wait(int have_dl, const struct timespec *dl) {
     return 0;
 }
 
-static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                    uint64_t a5) {
+static int svc_rare_security_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
     switch (nr) {
     // ===================== seccomp / sandboxing parity =====================
     // Docker's default seccomp profile BLOCKS these with EPERM (they need elevated caps the container
@@ -237,6 +237,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     // pidfd_open(pid, flags): no macOS pidfd -> back it with a real fd and record the target pid.
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_rare_process_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    switch (nr) {
     case 434: {
         pid_t pid = (pid_t)a0;
         // Linux validates flags before the pid: only PIDFD_NONBLOCK(0x800, O_NONBLOCK) is defined; any
@@ -343,6 +351,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // mq_open(name, oflag, mode, attr): find-or-create the named queue, hand back a real fd bound to it.
     // (glibc already rejects a name that lacks a leading '/' or is empty with EINVAL before the syscall,
     // so the raw-syscall path only has to police ENAMETOOLONG, EFAULT, ENOENT, EEXIST, ENOSPC + a bad attr.)
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_rare_message_queue_open(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    switch (nr) {
     case 180: {
 #if defined(__linux__)
         // Host-passthrough: a real POSIX mqueue is a kernel object — pollable via poll/select, shared
@@ -486,6 +502,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // until space or the abs_timeout expires (-> ETIMEDOUT) / a signal (-> EINTR). Real cross-PROCESS blocking
     // is not emulated (queues aren't shared across fork); a full queue with a blocking descriptor and a NULL
     // timeout therefore blocks forever exactly as Linux would when nothing can drain it.
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_rare_message_queue_send(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    switch (nr) {
     case 182: {
 #if defined(__linux__)
         // Host-passthrough: the kernel enforces prio<MQ_PRIO_MAX, EBADF (fd + access mode), EMSGSIZE, the
@@ -610,6 +634,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // mq_timedreceive(mqdes, msg, len, prio*, abs_timeout): pop the head (highest priority, oldest first).
     // Same errno order as mq_timedsend: abs_timeout EFAULT/EINVAL, EBADF, EMSGSIZE (buffer < mq_msgsize),
     // then empty-queue handling: O_NONBLOCK -> EAGAIN, else block until a message / deadline / signal.
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_rare_message_queue_receive(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    switch (nr) {
     case 183: {
 #if defined(__linux__)
         // Host-passthrough: the kernel pops the highest-priority-oldest message, writes it + the priority,
@@ -706,6 +738,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // removes this process's registration (always 0). SIGEV_THREAD is accepted like the kernel but its glibc
     // helper-thread/netlink callback is not driven in-process, so only the registration/EBUSY semantics hold
     // for it (SIGEV_SIGNAL and SIGEV_NONE are fully emulated).
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_rare_message_queue_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    switch (nr) {
     case 184: {
 #if defined(__linux__)
         // Host-passthrough: the kernel owns the one-shot registration and delivers the notification. For
@@ -827,6 +867,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #endif
     }
     // setsid(): new session / process-group leader
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_rare_scheduler_memory(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    switch (nr) {
     case 157: {
         pid_t s = setsid();
         G_RET(c) = s < 0 ? (uint64_t)(-errno) : (uint64_t)s;
@@ -994,6 +1042,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // clock_settime: validate the clock id BEFORE the privilege check, as Linux does. An unknown or
     // non-settable clock id (e.g. CLOCK_MONOTONIC) is -EINVAL; only the settable wall clocks
     // CLOCK_REALTIME(0)/CLOCK_TAI(11) reach the CAP_SYS_TIME gate the container lacks -> -EPERM.
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_rare_identity_system(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    switch (nr) {
     case 112:
         G_RET(c) = ((int)a0 == 0 || (int)a0 == 11) ? (uint64_t)(int64_t)(-EPERM) : (uint64_t)(int64_t)(-EINVAL);
         break;
@@ -1163,130 +1219,144 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     }
     // waitid(idtype, id, infop, options): host waitid into a macOS siginfo, then hand-build the guest's
     // Linux siginfo (layout + signal/status numbers differ). idtype P_ALL/P_PID/P_PGID (0/1/2) match.
-    case 95: {
-        siginfo_t si;
-        memset(&si, 0, sizeof si);
-        // Linux validates waitid() arguments BEFORE any child lookup (waitid02), in this order:
-        //   1. reject option bits outside WNOHANG|WNOWAIT|WEXITED|WSTOPPED|WCONTINUED -> EINVAL;
-        //   2. require at least one of WEXITED|WSTOPPED|WCONTINUED -> else EINVAL (a bare WNOHANG, as
-        //      waitid02 passes, is invalid; the host would instead report ECHILD after finding no child);
-        //   3. reject an idtype outside P_ALL/P_PID/P_PGID/P_PIDFD (0/1/2/3) -> EINVAL;
-        //   4. a non-NULL infop that isn't writable -> EFAULT (the kernel copies the siginfo out).
-        {
-            int lo = (int)a3;
-            if (lo & ~(1 | 2 | 4 | 8 | 0x01000000)) {
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                break;
-            }
-            if (!(lo & (2 | 4 | 8))) {
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                break;
-            }
-            int id0 = (int)a0;
-            if (id0 != 0 && id0 != 1 && id0 != 2 && id0 != 3) {
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                break;
-            }
-            if (a2 && guest_accessible_prefix(a2, 128, HL_LOGICAL_VMA_WRITE) != 128) {
-                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                break;
-            }
-            // Raw waitid(2) also copies out arg 5 (struct rusage *) when non-NULL; a bad pointer is EFAULT.
-            if (a4 && guest_accessible_prefix(a4, 144, HL_LOGICAL_VMA_WRITE) != 144) {
-                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                break;
-            }
-        }
-        // P_PIDFD (Linux idtype 3): macOS has no pidfd, so resolve the emulated pidfd back to its pid and
-        // wait on P_PID. Go's os.(*Process).pidfdWait reaps a CLONE_PIDFD child exactly this way.
-        int idt = (int)a0;
-        id_t idv = (id_t)a1;
-        if (idt == 3) {
-            pid_t tp;
-            if (pidfd_lookup((int)a1, &tp) < 0) {
-                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                break;
-            }
-            idt = P_PID;
-            idv = (id_t)tp;
-        }
-        int lopt = (int)a3, mopt = 0;
-        // Linux wait-option bits -> macOS bits (only WNOHANG/WEXITED share a value)
-        if (lopt & 0x00000001) mopt |= WNOHANG;    // WNOHANG
-        if (lopt & 0x00000002) mopt |= WSTOPPED;   // Linux WSTOPPED(2) -> macOS WSTOPPED
-        if (lopt & 0x00000004) mopt |= WEXITED;    // WEXITED
-        if (lopt & 0x00000008) mopt |= WCONTINUED; // Linux WCONTINUED(8) -> macOS WCONTINUED
-        if (lopt & 0x01000000) mopt |= WNOWAIT;    // Linux WNOWAIT -> macOS WNOWAIT
-        int r = waitid((idtype_t)idt, idv, &si, mopt);
-        if (r < 0) {
-            G_RET(c) = (uint64_t)(-errno);
-            break;
-        }
-        uint8_t linux_siginfo[128] = {0};
-        uint8_t *gi = linux_siginfo;
-        if (a2) {
-            // Linux siginfo_t is 128 bytes; zero it (also the WNOHANG "no child" case -> si_pid stays 0)
-            if (si.si_pid != 0) {
-                int code = si.si_code, status = si.si_status;
-                int gsig, gcore;
-                // the child relayed a guest signal death (it _exitd after recording its Linux signo in
-                // the shared table because no faithful fatal host mapping exists). The host reports CLD_EXITED;
-                // rebuild the CLD_KILLED/CLD_DUMPED siginfo. WNOWAIT (does not reap) must NOT consume the slot.
-                if (code == CLD_EXITED && sigexit_lookup((int)si.si_pid, &gsig, &gcore, !(lopt & 0x01000000))) {
-                    code = gcore ? CLD_DUMPED : CLD_KILLED;
-                    status = gsig;
-                }
-                // si_status carries a signal number for kill/dump/stop/cont -> translate macOS->Linux
-                else if (code == CLD_STOPPED) {
-                    int guest_stop;
-                    status = sigstop_lookup((int)si.si_pid, &guest_stop, 0) ? guest_stop : sig_m2l(status);
-                } else if (code == CLD_CONTINUED) {
-                    int ignored_stop;
-                    (void)sigstop_lookup((int)si.si_pid, &ignored_stop, 1);
-                    status = sig_m2l(status);
-                } else if (code == CLD_KILLED || code == CLD_DUMPED)
-                    status = sig_m2l(status);
-                // Linux reports CLD_DUMPED (not CLD_KILLED) when a core-dumping signal killed the child with
-                // cores enabled. macOS rarely dumps the host child, so synthesize it the way wait4 encodes
-                // WCOREDUMP: core-dumping signal AND the guest's RLIMIT_CORE soft limit > 0. (status is now the
-                // translated Linux signo.)
-                if (code == CLD_KILLED && sig_coredumps(status) && svc_core_rlimit_cur() > 0) code = CLD_DUMPED;
-                *(int *)(gi + 0) = 17;   // si_signo = Linux SIGCHLD
-                *(int *)(gi + 4) = 0;    // si_errno
-                *(int *)(gi + 8) = code; // si_code (CLD_* values match Linux<->macOS)
-                *(int *)(gi + 16) = (int)si.si_pid;
-                *(int *)(gi + 20) = (int)si.si_uid;
-                *(int *)(gi + 24) = status; // si_status
-            }
-            if (guest_copy_to(a2, linux_siginfo, sizeof linux_siginfo) != sizeof linux_siginfo) {
-                G_RET(c) = (uint64_t)(int64_t)-EFAULT;
-                break;
-            }
-        }
-        // guest-pid namespace: on an ACTUAL reap of a TERMINATED child (not a WNOWAIT peek, not a stop/
-        // continue report), drop its container-registry record -- see wait4 (case 260) -- so a signal-killed
-        // child leaves no stale membership marker a recycled host pid could inherit.
-        if (si.si_pid != 0 && !(lopt & 0x01000000) &&
-            (si.si_code == CLD_EXITED || si.si_code == CLD_KILLED || si.si_code == CLD_DUMPED))
-            proc_reg_reap((int)si.si_pid);
-        // Raw waitid(2) fills arg 5 (struct rusage *) when non-NULL (glibc's wrapper passes NULL, but the
-        // raw syscall and some runtimes use it). macOS waitid has no rusage variant, so report the reaped
-        // child's accounting best-effort from RUSAGE_CHILDREN in the guest's Linux layout -- leaving the
-        // buffer untouched exposed sentinel garbage (a wild ru_maxrss). Only on an actual reap (si_pid set).
-        if (a4 && si.si_pid != 0) {
-            struct rusage cru;
-            uint8_t linux_ru[144] = {0};
-            if (getrusage(RUSAGE_CHILDREN, &cru) == 0) rusage_to_linux(linux_ru, &cru);
-            if (guest_copy_to(a4, linux_ru, sizeof linux_ru) != sizeof linux_ru) {
-                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                break;
-            }
-        }
-        G_RET(c) = 0;
-        break;
+    default: return 0;
     }
-    // truncate(path, length): resolve the guest path through the overlay (same helper execve uses), then
-    // truncate by host path. Evict the stat cache so the new size is observed.
+    return 1;
+}
+
+static void svc_rare_waitid(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
+    siginfo_t si;
+    memset(&si, 0, sizeof si);
+    // Linux validates waitid() arguments BEFORE any child lookup (waitid02), in this order:
+    //   1. reject option bits outside WNOHANG|WNOWAIT|WEXITED|WSTOPPED|WCONTINUED -> EINVAL;
+    //   2. require at least one of WEXITED|WSTOPPED|WCONTINUED -> else EINVAL (a bare WNOHANG, as
+    //      waitid02 passes, is invalid; the host would instead report ECHILD after finding no child);
+    //   3. reject an idtype outside P_ALL/P_PID/P_PGID/P_PIDFD (0/1/2/3) -> EINVAL;
+    //   4. a non-NULL infop that isn't writable -> EFAULT (the kernel copies the siginfo out).
+    {
+        int lo = (int)a3;
+        if (lo & ~(1 | 2 | 4 | 8 | 0x01000000)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            return;
+        }
+        if (!(lo & (2 | 4 | 8))) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            return;
+        }
+        int id0 = (int)a0;
+        if (id0 != 0 && id0 != 1 && id0 != 2 && id0 != 3) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            return;
+        }
+        if (a2 && guest_accessible_prefix(a2, 128, HL_LOGICAL_VMA_WRITE) != 128) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            return;
+        }
+        // Raw waitid(2) also copies out arg 5 (struct rusage *) when non-NULL; a bad pointer is EFAULT.
+        if (a4 && guest_accessible_prefix(a4, 144, HL_LOGICAL_VMA_WRITE) != 144) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            return;
+        }
+    }
+    // P_PIDFD (Linux idtype 3): macOS has no pidfd, so resolve the emulated pidfd back to its pid and
+    // wait on P_PID. Go's os.(*Process).pidfdWait reaps a CLONE_PIDFD child exactly this way.
+    int idt = (int)a0;
+    id_t idv = (id_t)a1;
+    if (idt == 3) {
+        pid_t tp;
+        if (pidfd_lookup((int)a1, &tp) < 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+            return;
+        }
+        idt = P_PID;
+        idv = (id_t)tp;
+    }
+    int lopt = (int)a3, mopt = 0;
+    // Linux wait-option bits -> macOS bits (only WNOHANG/WEXITED share a value)
+    if (lopt & 0x00000001) mopt |= WNOHANG;    // WNOHANG
+    if (lopt & 0x00000002) mopt |= WSTOPPED;   // Linux WSTOPPED(2) -> macOS WSTOPPED
+    if (lopt & 0x00000004) mopt |= WEXITED;    // WEXITED
+    if (lopt & 0x00000008) mopt |= WCONTINUED; // Linux WCONTINUED(8) -> macOS WCONTINUED
+    if (lopt & 0x01000000) mopt |= WNOWAIT;    // Linux WNOWAIT -> macOS WNOWAIT
+    int r = waitid((idtype_t)idt, idv, &si, mopt);
+    if (r < 0) {
+        G_RET(c) = (uint64_t)(-errno);
+        return;
+    }
+    uint8_t linux_siginfo[128] = {0};
+    uint8_t *gi = linux_siginfo;
+    if (a2) {
+        // Linux siginfo_t is 128 bytes; zero it (also the WNOHANG "no child" case -> si_pid stays 0)
+        if (si.si_pid != 0) {
+            int code = si.si_code, status = si.si_status;
+            int gsig, gcore;
+            // the child relayed a guest signal death (it _exitd after recording its Linux signo in
+            // the shared table because no faithful fatal host mapping exists). The host reports CLD_EXITED;
+            // rebuild the CLD_KILLED/CLD_DUMPED siginfo. WNOWAIT (does not reap) must NOT consume the slot.
+            if (code == CLD_EXITED && sigexit_lookup((int)si.si_pid, &gsig, &gcore, !(lopt & 0x01000000))) {
+                code = gcore ? CLD_DUMPED : CLD_KILLED;
+                status = gsig;
+            }
+            // si_status carries a signal number for kill/dump/stop/cont -> translate macOS->Linux
+            else if (code == CLD_STOPPED) {
+                int guest_stop;
+                status = sigstop_lookup((int)si.si_pid, &guest_stop, 0) ? guest_stop : sig_m2l(status);
+            } else if (code == CLD_CONTINUED) {
+                int ignored_stop;
+                (void)sigstop_lookup((int)si.si_pid, &ignored_stop, 1);
+                status = sig_m2l(status);
+            } else if (code == CLD_KILLED || code == CLD_DUMPED)
+                status = sig_m2l(status);
+            // Linux reports CLD_DUMPED (not CLD_KILLED) when a core-dumping signal killed the child with
+            // cores enabled. macOS rarely dumps the host child, so synthesize it the way wait4 encodes
+            // WCOREDUMP: core-dumping signal AND the guest's RLIMIT_CORE soft limit > 0. (status is now the
+            // translated Linux signo.)
+            if (code == CLD_KILLED && sig_coredumps(status) && svc_core_rlimit_cur() > 0) code = CLD_DUMPED;
+            *(int *)(gi + 0) = 17;   // si_signo = Linux SIGCHLD
+            *(int *)(gi + 4) = 0;    // si_errno
+            *(int *)(gi + 8) = code; // si_code (CLD_* values match Linux<->macOS)
+            *(int *)(gi + 16) = (int)si.si_pid;
+            *(int *)(gi + 20) = (int)si.si_uid;
+            *(int *)(gi + 24) = status; // si_status
+        }
+        if (guest_copy_to(a2, linux_siginfo, sizeof linux_siginfo) != sizeof linux_siginfo) {
+            G_RET(c) = (uint64_t)(int64_t)-EFAULT;
+            return;
+        }
+    }
+    // guest-pid namespace: on an ACTUAL reap of a TERMINATED child (not a WNOWAIT peek, not a stop/
+    // continue report), drop its container-registry record -- see wait4 (case 260) -- so a signal-killed
+    // child leaves no stale membership marker a recycled host pid could inherit.
+    if (si.si_pid != 0 && !(lopt & 0x01000000) &&
+        (si.si_code == CLD_EXITED || si.si_code == CLD_KILLED || si.si_code == CLD_DUMPED))
+        proc_reg_reap((int)si.si_pid);
+    // Raw waitid(2) fills arg 5 (struct rusage *) when non-NULL (glibc's wrapper passes NULL, but the
+    // raw syscall and some runtimes use it). macOS waitid has no rusage variant, so report the reaped
+    // child's accounting best-effort from RUSAGE_CHILDREN in the guest's Linux layout -- leaving the
+    // buffer untouched exposed sentinel garbage (a wild ru_maxrss). Only on an actual reap (si_pid set).
+    if (a4 && si.si_pid != 0) {
+        struct rusage cru;
+        uint8_t linux_ru[144] = {0};
+        if (getrusage(RUSAGE_CHILDREN, &cru) == 0) rusage_to_linux(linux_ru, &cru);
+        if (guest_copy_to(a4, linux_ru, sizeof linux_ru) != sizeof linux_ru) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            return;
+        }
+    }
+    G_RET(c) = 0;
+    return;
+}
+
+static int svc_rare_timer_query(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                uint64_t a4, uint64_t a5) {
+    if (nr != 95) return 0;
+    svc_rare_waitid(c, a0, a1, a2, a3, a4);
+    return 1;
+}
+
+static int svc_rare_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    switch (nr) {
     case 45: {
         char guest_path[4200];
         int imported = guest_copy_string(guest_path, sizeof guest_path, a0);
@@ -1463,5 +1533,20 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #endif
     default: return 0;
     }
-    return svc_done(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done
+    return 1;
+}
+
+static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                           uint64_t a5) {
+    if (svc_rare_security_descriptor(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    if (svc_rare_process_descriptor(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    if (svc_rare_message_queue_open(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    if (svc_rare_message_queue_send(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    if (svc_rare_message_queue_receive(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    if (svc_rare_message_queue_control(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    if (svc_rare_scheduler_memory(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    if (svc_rare_identity_system(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    if (svc_rare_timer_query(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    if (svc_rare_timer_control(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    return 0;
 }
