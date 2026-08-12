@@ -3617,6 +3617,69 @@ static int lower_flag_register_transfer(struct insn *instruction) {
     return TX_NEXT;
 }
 
+static int lower_flag_stack_control(struct insn *instruction, uint64_t guest_pc) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0x9C) {
+        if (g_fl_pending) flags_materialize();
+        e_ldr(16, 28, OFF_NZCV);
+        e_movconst(17, 0x202u);
+        e_ldr(18, 28, OFF_DF);
+        e_rrr(A_ORR, 17, 17, 18, 0, 10);
+        emit32(0x53000000u | (29 << 16) | (29 << 10) | (16 << 5) | 18);
+        e_movconst(19, 1);
+        e_rrr(A_EOR, 18, 18, 19, 0, 0);
+        e_rrr(A_ORR, 17, 17, 18, 0, 0);
+        e_bit_move(17, 16, 30, 6, 18);
+        e_bit_move(17, 16, 31, 7, 18);
+        e_bit_move(17, 16, 28, 11, 18);
+        e_pf_compute(18);
+        e_rrr(A_ORR, 17, 17, 18, 0, 2);
+        e_ldr(18, 28, OFF_AF);
+        emit32(0x53000000u | (4 << 16) | (4 << 10) | (18 << 5) | 18);
+        e_rrr(A_ORR, 17, 17, 18, 0, 4);
+        e_ldr(18, 28, OFF_ID);
+        e_rrr(A_ORR, 17, 17, 18, 0, 21);
+        if (emit_soft_memory_active()) {
+            e_mov_rr(20, 17, 1);
+            e_subi(17, RSP, 8, 1);
+            emit_memory_guard(17, 8, guest_pc, X86_SOFT_WRITE);
+            e_subi(RSP, RSP, 8, 1);
+            e_store(8, 20, 17);
+        } else {
+            e_subi(RSP, RSP, 8, 1);
+            e_store(8, 17, RSP);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0x9D) {
+        if (emit_soft_memory_active()) {
+            e_mov_rr(17, RSP, 1);
+            emit_memory_guard(17, 8, guest_pc, X86_SOFT_READ);
+        }
+        e_load(8, 16, emit_soft_memory_active() ? 17 : RSP);
+        e_addi(RSP, RSP, 8, 1);
+        emit_restore_rflags(16);
+        return TX_NEXT;
+    }
+    if (opcode != 0xCF || !instruction->rexW) return TX_FALL;
+    int frame = RSP;
+    if (emit_soft_memory_active()) {
+        e_mov_rr(17, RSP, 1);
+        emit_memory_guard(17, 40, guest_pc, X86_SOFT_READ);
+        frame = 17;
+    }
+    e_ldr(21, frame, 0);
+    e_ldr(16, frame, 16);
+    e_ldr(22, frame, 24);
+    emit_restore_rflags(16);
+    e_mov_rr(RSP, 22, 1);
+    e_mov_rr(16, 21, 1);
+    e_movconst(19, guest_pc);
+    e_str(19, 28, OFF_IBSRC);
+    emit_ibranch();
+    return TX_BREAK;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -3933,79 +3996,12 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // pushfq (9C): materialize x86 RFLAGS from the flag substrate and push it. Bits assembled in
-            // x17: reserved bit1=1, IF(bit9)=1 (userspace), DF(bit10)=cpu->df (runtime), then CF/PF/ZF/
-            // SF/OF from cpu->nzcv + the PF lane, and AF(bit4) from the cpu->af lane.
-            if (op == 0x9C) {
-                if (g_fl_pending) flags_materialize(); // make cpu->nzcv current
-                e_ldr(16, 28, OFF_NZCV);               // x16 = ARM NZCV substrate
-                e_movconst(17, 0x202u);                // reserved bit1=1, IF(bit9)=1
-                e_ldr(18, 28, OFF_DF);                 // DF(bit10) from the runtime cpu->df (0/1)
-                e_rrr(A_ORR, 17, 17, 18, 0, 10);
-                emit32(0x53000000u | (29 << 16) | (29 << 10) | (16 << 5) | 18); // ubfx w18,w16,#29,#1 (borrow C)
-                e_movconst(19, 1);
-                e_rrr(A_EOR, 18, 18, 19, 0, 0); // x86 CF = NOT stored-C (borrow convention)
-                e_rrr(A_ORR, 17, 17, 18, 0, 0); // -> bit0
-                e_bit_move(17, 16, 30, 6, 18);  // ZF: NZCV.Z(30) -> bit6
-                e_bit_move(17, 16, 31, 7, 18);  // SF: NZCV.N(31) -> bit7
-                e_bit_move(17, 16, 28, 11, 18); // OF: NZCV.V(28) -> bit11
-                e_pf_compute(18);               // x18 = x86 PF (0/1); clobbers x16
-                e_rrr(A_ORR, 17, 17, 18, 0, 2); // -> bit2
-                e_ldr(18, 28, OFF_AF);
-                emit32(0x53000000u | (4 << 16) | (4 << 10) | (18 << 5) | 18); // ubfx w18,w18,#4,#1 (AF)
-                e_rrr(A_ORR, 17, 17, 18, 0, 4);                               // AF -> bit4
-                e_ldr(18, 28, OFF_ID);
-                e_rrr(A_ORR, 17, 17, 18, 0, 21); // ID(bit21) <- cpu->idflag (0/1) -- round-trips a CPUID probe
-                if (emit_soft_memory_active()) {
-                    e_mov_rr(20, 17, 1);
-                    e_subi(17, RSP, 8, 1);
-                    emit_memory_guard(17, 8, gpc, X86_SOFT_WRITE);
-                    e_subi(RSP, RSP, 8, 1);
-                    e_store(8, 20, 17);
-                } else {
-                    e_subi(RSP, RSP, 8, 1);
-                    e_store(8, 17, RSP);
-                }
+            int flag_stack_result = lower_flag_stack_control(&I, gpc);
+            if (flag_stack_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
-            // popfq (9D): pop RFLAGS and distribute back into the flag substrate (cpu->nzcv + PF/AF/ID/DF).
-            // DF (bit10) IS now restored to the runtime cpu->df (formerly a documented M-gap): the direction
-            // flag persists across block boundaries and a `popfq` of a value with bit10=1 followed by a
-            // later-block `rep movs/stos/scas` copies BACKWARD correctly. g_df becomes dynamic because the
-            // restored value is runtime (the string-op lowering will load cpu->df).
-            if (op == 0x9D) {
-                if (emit_soft_memory_active()) {
-                    e_mov_rr(17, RSP, 1);
-                    emit_memory_guard(17, 8, gpc, X86_SOFT_READ);
-                }
-                e_load(8, 16, emit_soft_memory_active() ? 17 : RSP); // x16 = popped RFLAGS
-                e_addi(RSP, RSP, 8, 1);
-                emit_restore_rflags(16);
-                gpc = next;
-                continue;
-            }
-            // iretq (REX.W CF): CoreCLR's context-restore path provides the complete long-mode frame,
-            // in increasing addresses: RIP, CS, RFLAGS, RSP, SS.  CS/SS are fixed user selectors in this
-            // user-mode engine, but they are still consumed so RSP has architectural five-qword semantics.
-            if (op == 0xCF && I.rexW) {
-                int frame = RSP;
-                if (emit_soft_memory_active()) {
-                    e_mov_rr(17, RSP, 1);
-                    emit_memory_guard(17, 40, gpc, X86_SOFT_READ);
-                    frame = 17;
-                }
-                e_ldr(21, frame, 0);  // restored RIP; preserve across flag restoration
-                e_ldr(16, frame, 16); // restored RFLAGS
-                e_ldr(22, frame, 24); // restored RSP
-                emit_restore_rflags(16);
-                e_mov_rr(RSP, 22, 1);
-                e_mov_rr(16, 21, 1);
-                e_movconst(19, gpc);
-                e_str(19, 28, OFF_IBSRC);
-                emit_ibranch();
-                break;
-            }
+            if (flag_stack_result == TX_BREAK) break;
             // ===== x87 FPU (D8-DF): double-precision stack emulation =====
             if (op >= 0xD8 && op <= 0xDF) {
                 mark_vdirty(); // x87 lowering touches the vector file -> mark cpu->V dirty
