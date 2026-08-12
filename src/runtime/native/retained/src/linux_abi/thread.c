@@ -430,6 +430,7 @@ static uint64_t nonpie_place_at_link_address(uint64_t basepage, uint64_t span, h
 }
 
 // ===================== non-PIE coordinates: the one rule ========================================
+#include "address_projection.h"
 // When the image IS folded (macOS, or a restored image captured folded) it is mapped HIGH at
 // +g_nonpie_bias but carries no dynamic relocations, so every address BAKED INTO IT stays at the LOW
 // link vaddr. One image byte therefore has two names, and which one is correct is not a judgement call:
@@ -455,13 +456,19 @@ static uint64_t nonpie_place_at_link_address(uint64_t basepage, uint64_t span, h
 static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias;
 
 static inline uint64_t nonpie_fold(uint64_t guest) {
-    return (g_nonpie_lo && guest >= g_nonpie_lo && guest < g_nonpie_hi) ? guest + g_nonpie_bias : guest;
+    if (!g_nonpie_lo) return guest;
+    const hl_native_address_projection p = {HL_NATIVE_ADDRESS_PROJECTION_ABI, (uint32_t)sizeof(p),
+                                             HL_NATIVE_ADDRESS_PROJECTION_DISPLACED, 0, g_nonpie_lo, g_nonpie_hi,
+                                             g_nonpie_bias};
+    return hl_native_address_projection_storage_unchecked(&p, guest);
 }
 
 static inline uint64_t nonpie_unfold(uint64_t storage) {
-    return (g_nonpie_lo && storage >= g_nonpie_lo + g_nonpie_bias && storage < g_nonpie_hi + g_nonpie_bias)
-               ? storage - g_nonpie_bias
-               : storage;
+    if (!g_nonpie_lo) return storage;
+    const hl_native_address_projection p = {HL_NATIVE_ADDRESS_PROJECTION_ABI, (uint32_t)sizeof(p),
+                                             HL_NATIVE_ADDRESS_PROJECTION_DISPLACED, 0, g_nonpie_lo, g_nonpie_hi,
+                                             g_nonpie_bias};
+    return hl_native_address_projection_guest_unchecked(&p, storage);
 }
 
 // ===================== guest PROT_NONE region registry ==========================================

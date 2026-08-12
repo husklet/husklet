@@ -294,6 +294,19 @@ struct CMainImagePlan {
     interpreter_identity: u64,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+struct CAddressProjection {
+    abi: u32,
+    size: u32,
+    flags: u32,
+    reserved: u32,
+    guest_start: u64,
+    guest_end: u64,
+    storage_bias: u64,
+}
+
 struct CImageFile(std::fs::File);
 
 impl hl_loader::ImageReadAt for CImageFile {
@@ -365,6 +378,25 @@ fn c_main_image_plan(
 }
 
 unsafe extern "C" {
+    #[cfg(test)]
+    fn hl_native_address_projection_init(
+        projection: *mut CAddressProjection,
+        guest_start: u64,
+        guest_end: u64,
+        storage_start: u64,
+    ) -> c_int;
+    #[cfg(test)]
+    fn hl_native_address_projection_storage(
+        projection: *const CAddressProjection,
+        guest: u64,
+        storage: *mut u64,
+    ) -> c_int;
+    #[cfg(test)]
+    fn hl_native_address_projection_guest(
+        projection: *const CAddressProjection,
+        storage: u64,
+        guest: *mut u64,
+    ) -> c_int;
     fn hl_c_backend_create(
         isa: c_uint,
         rootfs: *const c_char,
@@ -854,10 +886,11 @@ impl Drop for CGuestExecutor {
 #[cfg(test)]
 mod tests {
     use super::{
-        CGuestExecutor, CSyscallCpuAarch64, CSyscallTrapContext, CSyscallTrapResult, EVENT_CAPTURE_LOCK,
-        SYSCALL_TRAP_ABI, SYSCALL_TRAP_CONTINUE, SYSCALL_TRAP_DECLINED, SYSCALL_TRAP_FAULT, StreamBridge,
-        TASK_EVENT_CLONE_THREAD, TASK_EVENT_CREDENTIALS_CHANGED, TASK_EVENT_FORK_PROCESS, TASK_EVENT_PREPARE_FORK,
-        c_file_volumes, c_main_image_plan, c_option, c_syscall_trap,
+        CAddressProjection, CGuestExecutor, CSyscallCpuAarch64, CSyscallTrapContext, CSyscallTrapResult,
+        EVENT_CAPTURE_LOCK, SYSCALL_TRAP_ABI, SYSCALL_TRAP_CONTINUE, SYSCALL_TRAP_DECLINED, SYSCALL_TRAP_FAULT,
+        StreamBridge, TASK_EVENT_CLONE_THREAD, TASK_EVENT_CREDENTIALS_CHANGED, TASK_EVENT_FORK_PROCESS,
+        TASK_EVENT_PREPARE_FORK, c_file_volumes, c_main_image_plan, c_option, c_syscall_trap,
+        hl_native_address_projection_guest, hl_native_address_projection_init, hl_native_address_projection_storage,
     };
     use crate::activation::GuestIsa;
     use crate::composition::{
@@ -869,6 +902,71 @@ mod tests {
     use std::os::unix::ffi::OsStrExt;
     use std::sync::OnceLock;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn generic_address_projection_forces_displaced_et_exec_storage() {
+        assert_eq!(std::mem::size_of::<CAddressProjection>(), 40);
+        let mut projection = CAddressProjection::default();
+        assert_eq!(
+            unsafe { hl_native_address_projection_init(&raw mut projection, 0x40_0000, 0x41_0000, 0xa0_0000) },
+            0
+        );
+        assert_eq!(projection.abi, 1);
+        assert_eq!(projection.size as usize, std::mem::size_of::<CAddressProjection>());
+        assert_eq!(projection.flags, 1);
+        assert_eq!(projection.storage_bias, 0x60_0000);
+
+        for (guest, storage) in [
+            (0x3f_ffff, 0x3f_ffff),
+            (0x40_0000, 0xa0_0000),
+            (0x40_1234, 0xa0_1234),
+            (0x40_ffff, 0xa0_ffff),
+            (0x41_0000, 0x41_0000),
+        ] {
+            let mut actual = 0;
+            assert_eq!(
+                unsafe { hl_native_address_projection_storage(&raw const projection, guest, &raw mut actual) },
+                0
+            );
+            assert_eq!(actual, storage);
+            actual = 0;
+            assert_eq!(
+                unsafe { hl_native_address_projection_guest(&raw const projection, storage, &raw mut actual) },
+                0
+            );
+            assert_eq!(actual, guest);
+        }
+    }
+
+    #[test]
+    fn generic_address_projection_rejects_mutated_or_overflowing_contracts() {
+        let mut projection = CAddressProjection::default();
+        assert_ne!(
+            unsafe { hl_native_address_projection_init(&raw mut projection, 0x4000, 0x5000, 0x3000) },
+            0
+        );
+        assert_ne!(
+            unsafe {
+                hl_native_address_projection_init(
+                    &raw mut projection,
+                    u64::MAX - 0x2000,
+                    u64::MAX - 0x1000,
+                    u64::MAX - 0x100,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe { hl_native_address_projection_init(&raw mut projection, 0x4000, 0x5000, 0x8000) },
+            0
+        );
+        projection.flags = 0;
+        let mut output = 0;
+        assert_ne!(
+            unsafe { hl_native_address_projection_storage(&raw const projection, 0x4000, &raw mut output) },
+            0
+        );
+    }
 
     #[test]
     fn syscall_callback_abi_layout_is_stable() {

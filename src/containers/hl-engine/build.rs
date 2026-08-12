@@ -29,6 +29,8 @@ fn main() {
     println!("cargo:rerun-if-changed={C_ENGINE}/shim.c");
     println!("cargo:rerun-if-changed={C_ENGINE}/executable_authority.c");
     println!("cargo:rerun-if-changed={C_ENGINE}/executable_authority.h");
+    println!("cargo:rerun-if-changed={C_ENGINE}/address_projection.c");
+    println!("cargo:rerun-if-changed={C_ENGINE}/address_projection.h");
     println!("cargo:rerun-if-changed={TU_MANIFEST}");
     println!("cargo:rerun-if-changed={SOURCE_MANIFEST}");
     let source_manifest = fs::read_to_string(SOURCE_MANIFEST).expect("read retained C source manifest");
@@ -47,7 +49,7 @@ fn main() {
 
     compile(
         "hl_c_backend_shim",
-        &["shim.c", "executable_authority.c"],
+        &["shim.c", "executable_authority.c", "address_projection.c"],
         &["_GNU_SOURCE"],
         false,
     );
@@ -120,6 +122,7 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
     let mut build = cc::Build::new();
     build
         .cargo_metadata(false)
+        .include(C_ENGINE)
         .include(format!("{RETAINED}/include"))
         .include(format!("{RETAINED}/src"))
         .opt_level(2)
@@ -156,7 +159,7 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         }
     }
     for source in sources {
-        let path = if matches!(*source, "shim.c" | "executable_authority.c") {
+        let path = if matches!(*source, "shim.c" | "executable_authority.c" | "address_projection.c") {
             PathBuf::from(C_ENGINE).join(source)
         } else {
             PathBuf::from(RETAINED).join(source)

@@ -14,6 +14,12 @@ language-runtime identity is never an input.
 | Project only an in-range guest address to displaced private storage | `src/linux_abi/thread.c`: `nonpie_fold`/`nonpie_unfold` | `ImageProjection::{storage_address,guest_address}` |
 | Copy `PT_LOAD`, zero BSS, then apply final protections transactionally | `src/linux_abi/elf.c` and `x86.c`: load-segment population and protection | `Loader::stage_image` plus `ImageProtectionPlan` |
 
+The C migration boundary for the third row is
+`src/runtime/native/address_projection.h`. Its bounded, pointer-free descriptor
+contains only a guest interval and storage bias. The retained fold/unfold
+chokepoint consumes that generic primitive while downstream boundaries move to
+Rust ownership; no executable bytes or runtime-specific identity cross it.
+
 ## Deliberately rejected C policy
 
 The following retained-C branches are compatibility debt, not Linux ELF
