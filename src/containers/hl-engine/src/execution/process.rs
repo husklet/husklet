@@ -1,5 +1,6 @@
 #![allow(unsafe_code)]
 
+use super::checkpoint_broker::{Broker, Server as CheckpointServer, Trigger};
 use super::control::{FRAME_SIZE, FailureStage, Message};
 use super::environment::worker_environment;
 use super::{StreamBridge, wire};
@@ -20,6 +21,8 @@ use std::time::{Duration, Instant};
 const PLAN_DESCRIPTOR: i32 = 3;
 const CONTROL_DESCRIPTOR: i32 = 4;
 const PROVIDER_DESCRIPTOR: i32 = 5;
+const CHECKPOINT_DESCRIPTOR: i32 = 6;
+const CHECKPOINT_TRIGGER_DESCRIPTOR: i32 = 7;
 const FORCE_GRACE: Duration = Duration::from_millis(25);
 
 pub(crate) struct CWorker {
@@ -31,6 +34,22 @@ pub(crate) struct CWorker {
     startup: Mutex<Startup>,
     startup_changed: Condvar,
     provider_broker: Option<std::thread::JoinHandle<()>>,
+    checkpoint: Option<CheckpointControl>,
+}
+
+struct CheckpointControl {
+    server: Arc<CheckpointServer>,
+    trigger: Trigger,
+    acceptor: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for CheckpointControl {
+    fn drop(&mut self) {
+        self.server.stop();
+        if let Some(acceptor) = self.acceptor.take() {
+            let _ = acceptor.join();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -83,11 +102,32 @@ impl CWorker {
             .as_ref()
             .map(|_| std::os::unix::net::UnixStream::pair().map_err(|_| EngineError::LaunchFailed))
             .transpose()?;
+        let checkpoint_requested =
+            plan.options.get("HL_CHECKPOINT").is_some() || plan.options.get("HL_RESTORE").is_some();
+        let checkpoint = if checkpoint_requested {
+            let sink = services.checkpoint_sink.clone().ok_or(EngineError::LaunchFailed)?;
+            let source = services.checkpoint_source.clone().ok_or(EngineError::LaunchFailed)?;
+            let (broker, child) = Broker::pair().map_err(|_| EngineError::LaunchFailed)?;
+            let trigger = Trigger::create().map_err(|_| EngineError::LaunchFailed)?;
+            let server = Arc::new(CheckpointServer::new(sink, source));
+            let acceptor = CheckpointServer::start(&server, broker);
+            Some((server, trigger, acceptor, child))
+        } else {
+            None
+        };
         let plan_inherit = duplicate_high(plan_file.as_raw_fd())?;
         let control_inherit = duplicate_high(child_control.as_raw_fd())?;
         let provider_inherit = provider
             .as_ref()
             .map(|(_, child)| duplicate_high(child.as_raw_fd()))
+            .transpose()?;
+        let checkpoint_inherit = checkpoint
+            .as_ref()
+            .map(|(_, _, _, child)| duplicate_high(child.as_raw_fd()))
+            .transpose()?;
+        let checkpoint_trigger_inherit = checkpoint
+            .as_ref()
+            .map(|(_, trigger, _, _)| duplicate_high(trigger.descriptor()))
             .transpose()?;
         let mut streams = StreamBridge::new(services)?;
         let [input, output, error] = streams.take_guest_fds()?;
@@ -108,12 +148,19 @@ impl CWorker {
         if provider_inherit.is_some() {
             command.env("HL_C_PROVIDER_FD", PROVIDER_DESCRIPTOR.to_string());
         }
+        if checkpoint_inherit.is_some() {
+            command
+                .env("HL_C_CHECKPOINT_FD", CHECKPOINT_DESCRIPTOR.to_string())
+                .env("HL_C_CHECKPOINT_TRIGGER_FD", CHECKPOINT_TRIGGER_DESCRIPTOR.to_string());
+        }
         for (name, value) in worker_environment(|name| std::env::var_os(name)) {
             command.env(name, value);
         }
         let plan_raw = plan_inherit.as_raw_fd();
         let control_raw = control_inherit.as_raw_fd();
         let provider_raw = provider_inherit.as_ref().map(AsRawFd::as_raw_fd);
+        let checkpoint_raw = checkpoint_inherit.as_ref().map(AsRawFd::as_raw_fd);
+        let checkpoint_trigger_raw = checkpoint_trigger_inherit.as_ref().map(AsRawFd::as_raw_fd);
         // SAFETY: the child performs only async-signal-safe dup2 calls before immediate exec.
         unsafe {
             command.pre_exec(move || {
@@ -125,6 +172,12 @@ impl CWorker {
                 }
                 if let Some(provider) = provider_raw
                     && libc::dup2(provider, PROVIDER_DESCRIPTOR) < 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if let (Some(checkpoint), Some(trigger)) = (checkpoint_raw, checkpoint_trigger_raw)
+                    && (libc::dup2(checkpoint, CHECKPOINT_DESCRIPTOR) < 0
+                        || libc::dup2(trigger, CHECKPOINT_TRIGGER_DESCRIPTOR) < 0)
                 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -144,6 +197,8 @@ impl CWorker {
             plan_inherit,
             control_inherit,
             provider_inherit,
+            checkpoint_inherit,
+            checkpoint_trigger_inherit,
             child_control,
             plan_file,
         ));
@@ -169,6 +224,14 @@ impl CWorker {
         streams.attach_terminal(Arc::new(WorkerTerminalNotification {
             writer: Arc::clone(&writer),
         }))?;
+        let checkpoint = checkpoint.map(|(server, trigger, acceptor, child)| {
+            drop(child);
+            CheckpointControl {
+                server,
+                trigger,
+                acceptor: Some(acceptor),
+            }
+        });
         Ok(Self {
             child: Mutex::new(child.0.take()),
             reader: Mutex::new(reader),
@@ -178,7 +241,49 @@ impl CWorker {
             startup: Mutex::new(Startup::Starting),
             startup_changed: Condvar::new(),
             provider_broker,
+            checkpoint,
         })
+    }
+
+    pub(crate) fn checkpoint_supported(&self) -> Result<(), EngineError> {
+        self.checkpoint.as_ref().map(|_| ()).ok_or(EngineError::Unsupported)
+    }
+
+    pub(crate) fn capture_checkpoint(&self) -> Result<(), EngineError> {
+        let checkpoint = self.checkpoint.as_ref().ok_or(EngineError::Unsupported)?;
+        checkpoint.trigger.bump();
+        let process = self.child.lock().map_err(|_| EngineError::Synchronization)?;
+        let pid = process.as_ref().ok_or(EngineError::NotStarted)?.id();
+        drop(process);
+        // SAFETY: this pure query returns the retained C translation unit's reserved host signal.
+        let signal = unsafe { super::hl_c_backend_checkpoint_interrupt_signal() };
+        if interrupt_checkpoint_processes(pid, signal) == 0 {
+            return Err(EngineError::StopFailed);
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut next_interrupt = Instant::now() + Duration::from_millis(100);
+        loop {
+            if checkpoint.server.committed() {
+                return Ok(());
+            }
+            if checkpoint.server.failure().is_some() {
+                return Err(EngineError::LaunchFailed);
+            }
+            if Instant::now() >= deadline {
+                hl_log::hl_error!(
+                    hl_log::tag::CHECKPOINT,
+                    "retained C checkpoint timed out: broker_connections={} failure={:?}",
+                    checkpoint.server.connections(),
+                    checkpoint.server.failure()
+                );
+                return Err(EngineError::WaitFailed);
+            }
+            if Instant::now() >= next_interrupt {
+                let _ = interrupt_checkpoint_processes(pid, signal);
+                next_interrupt = Instant::now() + Duration::from_millis(100);
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
     pub(crate) fn start(&self) -> Result<(), EngineError> {
@@ -425,6 +530,41 @@ impl CWorker {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn interrupt_checkpoint_processes(worker: u32, signal: i32) -> usize {
+    let mut pending = vec![worker];
+    // The Rust worker is the launcher/control process and deliberately does not
+    // install the retained engine's reserved signal handler. Only its guest
+    // descendants are valid targets; a process-group broadcast would terminate
+    // the worker before the guest could publish its image.
+    let mut descendants = Vec::new();
+    while let Some(parent) = pending.pop() {
+        let children = std::fs::read_to_string(format!("/proc/{parent}/task/{parent}/children")).unwrap_or_default();
+        for child in children
+            .split_whitespace()
+            .filter_map(|value| value.parse::<u32>().ok())
+        {
+            pending.push(child);
+            descendants.push(child);
+        }
+    }
+    descendants
+        .into_iter()
+        // Match the standalone engine: process-directed delivery lets the
+        // kernel select an unblocked executor thread. A leader-only tgkill can
+        // land on a control thread whose engine TLS is empty, making the
+        // handler's safepoint flag update a no-op.
+        // SAFETY: every id came from the live worker descendant inventory.
+        .filter(|pid| unsafe { libc::kill(*pid as i32, signal) == 0 })
+        .count()
+}
+
+#[cfg(target_os = "macos")]
+fn interrupt_checkpoint_processes(worker: u32, signal: i32) -> usize {
+    let _ = (worker, signal);
+    0
+}
+
 fn worker_executable(
     isa: GuestIsa,
     test_binary_directory: Option<OsString>,
@@ -434,7 +574,15 @@ fn worker_executable(
         return Ok(std::path::PathBuf::from(directory).join(isa.engine_stem()));
     }
     current_executable
-        .and_then(|path| path.parent().map(|parent| parent.join(isa.engine_stem())))
+        .and_then(|path| {
+            path.parent().map(|parent| {
+                if parent.file_name().is_some_and(|name| name == "deps") {
+                    parent.parent().unwrap_or(parent).join(isa.engine_stem())
+                } else {
+                    parent.join(isa.engine_stem())
+                }
+            })
+        })
         .ok_or(EngineError::LaunchFailed)
 }
 
@@ -621,6 +769,10 @@ mod tests {
             worker_executable(GuestIsa::Aarch64, None, None),
             Err(crate::engine::EngineError::LaunchFailed)
         );
+        assert_eq!(
+            worker_executable(GuestIsa::Aarch64, None, Some("/target/debug/deps/test-hash".into())),
+            Ok("/target/debug/hl-aarch64".into())
+        );
     }
 
     #[test]
@@ -705,6 +857,7 @@ mod tests {
             startup: Mutex::new(Startup::Started),
             startup_changed: Condvar::new(),
             provider_broker: None,
+            checkpoint: None,
         };
         let events = capture_events(|| worker.stop(StopRequest::Force).unwrap());
         assert!(events.contains("retained_c.worker.force_kill"));
@@ -737,6 +890,7 @@ mod tests {
             startup: Mutex::new(Startup::Started),
             startup_changed: Condvar::new(),
             provider_broker: None,
+            checkpoint: None,
         };
 
         worker.stop(StopRequest::Force).unwrap();
@@ -772,6 +926,7 @@ mod tests {
             startup: Mutex::new(Startup::Started),
             startup_changed: Condvar::new(),
             provider_broker: None,
+            checkpoint: None,
         };
         let events = capture_events(|| drop(worker));
         assert!(events.contains("retained_c.worker.drop_rollback"));
@@ -808,6 +963,7 @@ mod tests {
             startup: Mutex::new(Startup::Starting),
             startup_changed: Condvar::new(),
             provider_broker: None,
+            checkpoint: None,
         };
         let peer_thread = std::thread::spawn(move || {
             write_message(&mut peer, Message::Ready).unwrap();

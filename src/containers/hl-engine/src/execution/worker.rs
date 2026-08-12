@@ -4,7 +4,7 @@ use super::control::{FRAME_SIZE, FailureStage, Message};
 use super::{CGuestExecutor, wire};
 use crate::engine::EngineError;
 use std::io::{Read, Write};
-use std::os::fd::{FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::sync::Arc;
 
 const MAXIMUM_PLAN: u64 = 64 * 1024 * 1024;
@@ -29,6 +29,8 @@ pub(crate) fn run(
     control_descriptor: RawFd,
     provider_descriptor: Option<RawFd>,
 ) -> Result<i32, WorkerError> {
+    let checkpoint_descriptor = inherited_descriptor("HL_C_CHECKPOINT_FD");
+    let checkpoint_trigger_descriptor = inherited_descriptor("HL_C_CHECKPOINT_TRIGGER_FD");
     // Lifecycle events belong to the supervising parent: this process's stderr is
     // the guest's stderr stream, so host diagnostics here would corrupt guest output.
     if plan_descriptor < 3
@@ -36,8 +38,20 @@ pub(crate) fn run(
         || plan_descriptor == control_descriptor
         || provider_descriptor
             .is_some_and(|provider| provider < 3 || provider == plan_descriptor || provider == control_descriptor)
+        || checkpoint_descriptor.is_some() != checkpoint_trigger_descriptor.is_some()
     {
         return Err(WorkerError::Descriptor);
+    }
+    if let (Some(checkpoint), Some(trigger)) = (checkpoint_descriptor, checkpoint_trigger_descriptor) {
+        if [plan_descriptor, control_descriptor].contains(&checkpoint)
+            || [plan_descriptor, control_descriptor, checkpoint].contains(&trigger)
+        {
+            return Err(WorkerError::Descriptor);
+        }
+        // SAFETY: both descriptors are uniquely inherited by this one-shot worker.
+        if unsafe { super::hl_c_backend_checkpoint_adopt(checkpoint, trigger) } != super::STATUS_OK {
+            return Err(WorkerError::Create);
+        }
     }
     // SAFETY: this is the one-shot worker entry and takes unique ownership of inherited descriptors.
     let plan_file = unsafe { std::fs::File::from_raw_fd(plan_descriptor) };
@@ -84,12 +98,22 @@ pub(crate) fn run(
             WorkerError::Create
         })?,
     );
+    // The retained engine shares this launcher process with Rust. Its checkpoint
+    // descriptor scan must not publish the Rust lifecycle channel as a guest
+    // socket. Registration occurs after backend creation, which initializes the
+    // engine-private descriptor registry.
+    if unsafe { super::hl_c_backend_private_descriptor_add(control.as_raw_fd()) } != super::STATUS_OK {
+        return Err(WorkerError::Descriptor);
+    }
     write_message(&mut control, Message::Ready)?;
     if read_message(&mut control)? != Message::Start {
         send_error(&mut control, FailureStage::Control, 1);
         return Err(WorkerError::Control);
     }
     let request_control = control.try_clone().map_err(|_| WorkerError::Control)?;
+    if unsafe { super::hl_c_backend_private_descriptor_add(request_control.as_raw_fd()) } != super::STATUS_OK {
+        return Err(WorkerError::Descriptor);
+    }
     let request_executor = Arc::clone(&executor);
     std::thread::Builder::new()
         .name("hl-c-worker-control".into())
@@ -113,6 +137,14 @@ fn launch_domain() -> Result<String, std::io::Error> {
             return Ok(identity.iter().map(|byte| format!("{byte:02x}")).collect());
         }
     }
+}
+
+fn inherited_descriptor(name: &str) -> Option<RawFd> {
+    let value = std::env::var(name).ok()?;
+    (!value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse().ok())
+        .flatten()
+        .filter(|descriptor| *descriptor >= 3)
 }
 
 fn serve_requests(mut control: std::os::unix::net::UnixStream, executor: Arc<CGuestExecutor>) {

@@ -10,7 +10,7 @@ use std::{
     io::{Read, Write},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -154,6 +154,8 @@ pub(crate) struct Server {
     source: Arc<dyn CheckpointSource>,
     state: Mutex<State>,
     committed: AtomicBool,
+    running: AtomicBool,
+    connections: AtomicUsize,
 }
 
 impl Server {
@@ -163,6 +165,8 @@ impl Server {
             source,
             state: Mutex::new(State::default()),
             committed: AtomicBool::new(false),
+            running: AtomicBool::new(true),
+            connections: AtomicUsize::new(0),
         }
     }
 
@@ -172,6 +176,35 @@ impl Server {
 
     pub(crate) fn failure(&self) -> Option<String> {
         self.state.lock().ok()?.failure.clone()
+    }
+
+    pub(crate) fn connections(&self) -> usize {
+        self.connections.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn stop(&self) {
+        self.running.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn start(server: &Arc<Self>, broker: Broker) -> std::thread::JoinHandle<()> {
+        let server = Arc::clone(server);
+        std::thread::Builder::new()
+            .name("hl-checkpoint-broker".into())
+            .spawn(move || {
+                let mut workers = Vec::new();
+                while server.running.load(Ordering::Acquire) {
+                    let Some((mut channel, host_pid)) = broker.accept(std::time::Duration::from_millis(50)) else {
+                        continue;
+                    };
+                    server.connections.fetch_add(1, Ordering::Release);
+                    let worker = Arc::clone(&server);
+                    workers.push(std::thread::spawn(move || worker.serve(&mut channel, host_pid)));
+                }
+                for worker in workers {
+                    let _ = worker.join();
+                }
+            })
+            .expect("checkpoint broker thread construction")
     }
 
     fn fail(&self, message: String) {
@@ -402,7 +435,10 @@ impl Server {
             }
             GROUP_PRESENT => self.state.lock().map_or_else(
                 |_| Reply::error(),
-                |state| Reply::value(u64::from(state.groups.contains(name))),
+                |state| {
+                    let present = state.groups.contains(name);
+                    Reply::value(u64::from(present))
+                },
             ),
             GROUP_COUNT => self.state.lock().map_or_else(
                 |_| Reply::error(),
@@ -475,6 +511,95 @@ impl Server {
             }
             _ => Reply::error(),
         }
+    }
+}
+
+pub(crate) struct Broker(std::os::fd::OwnedFd);
+
+impl Broker {
+    pub(crate) fn pair() -> std::io::Result<(Self, std::os::fd::OwnedFd)> {
+        use std::os::fd::FromRawFd as _;
+        let mut parent = 0_u64;
+        let mut child = 0_u64;
+        // SAFETY: successful creation returns two uniquely owned descriptors.
+        if unsafe { super::hl_ckpt_broker_pair(&raw mut parent, &raw mut child) } != 0
+            || parent == 0
+            || child == 0
+            || parent > i32::MAX as u64
+            || child > i32::MAX as u64
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: ownership was transferred by the successful C call above.
+        unsafe {
+            Ok((
+                Self(std::os::fd::OwnedFd::from_raw_fd(parent as i32)),
+                std::os::fd::OwnedFd::from_raw_fd(child as i32),
+            ))
+        }
+    }
+
+    fn accept(&self, timeout: std::time::Duration) -> Option<(std::os::unix::net::UnixStream, u64)> {
+        use std::os::fd::{AsRawFd as _, FromRawFd as _};
+        let timeout = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+        let mut host_pid = 0;
+        // SAFETY: self keeps the broker live; a nonzero result is a newly owned stream descriptor.
+        let channel = unsafe { super::hl_ckpt_broker_accept(self.0.as_raw_fd() as u64, timeout, &raw mut host_pid) };
+        if channel == 0 || channel > i32::MAX as u64 {
+            return None;
+        }
+        // SAFETY: the accept call transferred unique ownership.
+        Some((
+            unsafe { std::os::unix::net::UnixStream::from_raw_fd(channel as i32) },
+            host_pid,
+        ))
+    }
+}
+
+pub(crate) struct Trigger {
+    descriptor: i32,
+    mapping: *mut std::ffi::c_void,
+}
+
+// SAFETY: C owns the one-word shared mapping protocol; bump is the only access.
+unsafe impl Send for Trigger {}
+// SAFETY: capture is serialized by the machine lifecycle; bump is one generation update.
+unsafe impl Sync for Trigger {}
+
+impl Trigger {
+    pub(crate) fn create() -> std::io::Result<Self> {
+        let mut descriptor = 0_u64;
+        let mut mapping = std::ptr::null_mut();
+        // SAFETY: output pointers are valid and initialized by C on success.
+        if unsafe { super::hl_ckpt_trigger_create(&raw mut descriptor, &raw mut mapping) } != 0
+            || descriptor == 0
+            || descriptor > i32::MAX as u64
+            || mapping.is_null()
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            descriptor: descriptor as i32,
+            mapping,
+        })
+    }
+
+    pub(crate) const fn descriptor(&self) -> i32 {
+        self.descriptor
+    }
+
+    pub(crate) fn bump(&self) -> u32 {
+        // SAFETY: mapping remains live for self's lifetime.
+        unsafe { super::hl_ckpt_trigger_bump(self.mapping) }
+    }
+}
+
+impl Drop for Trigger {
+    fn drop(&mut self) {
+        // SAFETY: this type owns both resources and drops them exactly once.
+        unsafe { super::hl_ckpt_trigger_destroy(self.mapping, self.descriptor as u64) };
+        self.mapping = std::ptr::null_mut();
+        self.descriptor = -1;
     }
 }
 

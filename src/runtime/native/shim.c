@@ -1,7 +1,9 @@
+#include "core/checkpoint_channel.h"
 #include "core/engine_backend.h"
 #include "core/options.h"
 #include "core/provider/client.h"
 #include "core/provider/tree_files.h"
+#include "host/system.h"
 #include "executable_authority.h"
 #include "hl/engine.h"
 #include "hl/linux.h"
@@ -11,6 +13,7 @@
 
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -33,6 +36,30 @@ typedef struct hl_c_backend {
   int32_t provider_fd;
   hl_engine_exit result;
 } hl_c_backend;
+
+int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
+  char broker_text[32];
+  char trigger_text[32];
+  if (broker < 0 || trigger < 0)
+    return HL_STATUS_INVALID_ARGUMENT;
+  (void)snprintf(broker_text, sizeof(broker_text), "%d", broker);
+  (void)snprintf(trigger_text, sizeof(trigger_text), "%d", trigger);
+  return hl_ckpt_channel_adopt(broker_text, trigger_text) == 0
+             ? HL_STATUS_OK
+             : HL_STATUS_PLATFORM_FAILURE;
+}
+
+extern int hl_ckpt_interrupt_signal(void);
+
+int32_t hl_c_backend_checkpoint_interrupt_signal(void) {
+  return hl_ckpt_interrupt_signal();
+}
+
+int32_t hl_c_backend_private_descriptor_add(int32_t descriptor) {
+  return hl_host_process_fd_private_add(descriptor) == 0
+             ? HL_STATUS_OK
+             : HL_STATUS_PLATFORM_FAILURE;
+}
 
 static void hl_c_backend_provider_discard(hl_c_backend *backend) {
   if (backend == NULL || !backend->provider_initialized)

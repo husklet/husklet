@@ -54,37 +54,9 @@ impl CMachine {
 
 pub(crate) struct ProductionFactory;
 
-#[cfg(hl_retained_c)]
-#[derive(Clone, Copy)]
-enum CUnsupported {
-    Checkpoint,
-    Restore,
-}
-
-#[cfg(hl_retained_c)]
-impl CUnsupported {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Checkpoint => "checkpoint",
-            Self::Restore => "restore",
-        }
-    }
-}
-
 impl ProductionFactory {
     #[cfg(hl_retained_c)]
     fn c(request: RuntimeConstruction<'_>) -> Result<ProductionMachine, CompositionError> {
-        if let Some(reason) = Self::c_unsupported(&request) {
-            hl_log::hl_event!(
-                hl_log::tag::EXEC,
-                hl_log::Level::Error,
-                "execution.backend.rejected",
-                backend = "c",
-                isa = ?request.isa,
-                reason = reason.name()
-            );
-            return Err(CompositionError::RuntimeConstruction);
-        }
         hl_log::hl_event!(
             hl_log::tag::EXEC,
             hl_log::Level::Info,
@@ -107,17 +79,6 @@ impl ProductionFactory {
                 current: None,
             }),
         })))
-    }
-
-    #[cfg(hl_retained_c)]
-    fn c_unsupported(request: &RuntimeConstruction<'_>) -> Option<CUnsupported> {
-        if request.plan.options.get("HL_CHECKPOINT").is_some() {
-            Some(CUnsupported::Checkpoint)
-        } else if request.plan.options.get("HL_RESTORE").is_some() {
-            Some(CUnsupported::Restore)
-        } else {
-            None
-        }
     }
 }
 
@@ -160,14 +121,14 @@ impl GuestMachine for ProductionMachine {
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         match self {
             #[cfg(hl_retained_c)]
-            Self::C(_) => Err(EngineError::Unsupported),
+            Self::C(machine) => machine.current()?.checkpoint_supported(),
         }
     }
 
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         match self {
             #[cfg(hl_retained_c)]
-            Self::C(_) => Err(EngineError::Unsupported),
+            Self::C(machine) => machine.current()?.capture_checkpoint(),
         }
     }
 }
@@ -255,30 +216,30 @@ mod tests {
     }
 
     #[test]
-    fn retained_backend_rejects_active_checkpoint_policy() {
+    fn retained_backend_constructs_active_checkpoint_policy() {
         for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
             for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
                 let mut plan = c_plan();
                 plan.options.set(option, "1", true).unwrap();
-                assert!(matches!(
-                    Engine::with_checkpoint(isa, plan, StandardStreams::default(), Arc::new(Store), Arc::new(Store),),
-                    Err(EngineError::LaunchFailed)
-                ));
+                assert!(
+                    Engine::with_checkpoint(isa, plan, StandardStreams::default(), Arc::new(Store), Arc::new(Store),)
+                        .is_ok()
+                );
             }
         }
     }
 
     #[test]
-    fn product_default_rejects_checkpoint_policy() {
+    fn product_default_constructs_checkpoint_policy() {
         for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
             for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
                 let mut plan = c_plan();
                 plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
                 plan.options.set(option, "1", true).unwrap();
-                assert!(matches!(
-                    Engine::with_checkpoint(isa, plan, StandardStreams::default(), Arc::new(Store), Arc::new(Store),),
-                    Err(EngineError::LaunchFailed)
-                ));
+                assert!(
+                    Engine::with_checkpoint(isa, plan, StandardStreams::default(), Arc::new(Store), Arc::new(Store),)
+                        .is_ok()
+                );
             }
         }
     }

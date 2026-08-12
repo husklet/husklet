@@ -853,6 +853,15 @@ static void ckpt_poll(struct cpu *c) {
     _exit(rc == 0 ? 0 : 70);
 }
 
+// Export the exact host control signal selected by this unity translation unit. Embedders must not
+// reconstruct it from libc's SIGRTMIN: host_signal.h owns a separate Linux signal namespace, and
+// repeating the arithmetic outside this translation unit can turn a safepoint kick into termination.
+#if G_CKPT_ARCH == 2
+int hl_ckpt_interrupt_signal(void) {
+    return THREAD_INT_SIG;
+}
+#endif
+
 // Arm checkpoint/restore if HL_CHECKPOINT / HL_RESTORE is set. Called from engine_global_init (in every
 // process, so a forked child is armed too). Maps the shared trigger and records the CURRENT generation as
 // already-seen, so a stale trigger from a previous run never false-fires on a fresh launch or a restore
@@ -5368,11 +5377,27 @@ static void ckpt_restore_proc_run(int gpid); // fwd
 
 // Re-fork every child of `gpid` (per the checkpoint ppid table); each child restores its own subtree and
 // resumes. Records the checkpoint-gpid -> live-hostpid mapping so this process's guest pids resolve.
-static void ckpt_fork_children(int gpid) {
+static void ckpt_fork_children(int gpid, struct cpu *parent) {
     for (int i = 0; i < g_nrprocs; i++) {
         if (!g_rprocs[i].viable || g_rprocs[i].ppid != gpid || g_rprocs[i].gpid == gpid) continue;
         int cg = g_rprocs[i].gpid;
+        int source = cpu_tid(parent);
+        if (!hl_target_task_event(parent, HL_TASK_EVENT_PREPARE_FORK, 0, (uint64_t)source, 0)) {
+            fprintf(stderr, "[restore] runtime refused fork preparation for gpid %d\n", cg);
+            continue;
+        }
         pid_t p = fork();
+        if (p < 0) {
+            (void)hl_target_task_event(parent, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)source, 0);
+        } else if (!hl_target_task_event(parent, HL_TASK_EVENT_FORK_PROCESS, (uint64_t)cg, (uint64_t)source,
+                                         p == 0)) {
+            if (p == 0) _exit(127);
+            int status;
+            kill(p, SIGKILL);
+            while (waitpid(p, &status, 0) < 0 && errno == EINTR) {}
+            fprintf(stderr, "[restore] runtime refused restored child gpid %d\n", cg);
+            continue;
+        }
         if (p == 0) {
             ckpt_restore_proc_run(cg); // never returns
             _exit(0);
@@ -5432,7 +5457,7 @@ static void ckpt_restore_proc_run(int gpid) {
     char *pubargv[2] = {(char *)(exe[0] ? exe : "guest"), NULL};
     proc_reg_publish(g_exe_path, 1, pubargv);
 
-    ckpt_fork_children(gpid); // re-fork our own children before we resume (so a wait finds them)
+    ckpt_fork_children(gpid, &c); // re-fork our own children before we resume (so a wait finds them)
     if (thread_restore_group(images, (int)m.n_threads, &c) != 0) _exit(70);
     free(images);
     ckpt_restore_backings_close();
@@ -5543,7 +5568,7 @@ static int ckpt_restore_tree(const char *rootfs) {
     // so every child inherits it. Without this the resumed tree's fg group defaults to the init's, and a tty
     // SIGINT hits the init instead of the foreground job -> the whole tree dies on ^C.
     g_ckpt_fg_gpid = man.fg_pgid_gpid;
-    ckpt_fork_children(1); // rebuild the tree BEFORE init runs (empty block map -> no stale translation)
+    ckpt_fork_children(1, &c); // rebuild the tree BEFORE init runs (empty block map -> no stale translation)
     if (thread_restore_group(images, (int)im.n_threads, &c) != 0) {
         fprintf(stderr, "[restore] init thread-group restore failed\n");
         return 70;
