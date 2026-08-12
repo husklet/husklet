@@ -180,6 +180,70 @@ static enum translation_step translate_system_instruction(uint64_t guest_pc, uin
     return TRANSLATION_UNHANDLED;
 }
 
+static enum translation_step translate_pc_relative_address(uint64_t guest_pc, uint32_t instruction,
+                                                           uint64_t *guest_end) {
+    if ((instruction & 0x9F000000u) == 0x10000000u) {
+        int destination = instruction & 31;
+        int64_t immediate = sext((((instruction >> 5) & 0x7FFFF) << 2) | ((instruction >> 29) & 3), 21);
+        uint64_t value = pcrel_base(guest_pc) + immediate;
+        if (is_stolen(destination)) {
+            if (stealfast_on()) {
+                e_movconst(16, value);
+                e_str(16, CPUREG, destination * 8);
+            } else {
+                x18_prolog();
+                e_movconst(0, value);
+                e_str(0, 1, destination * 8);
+                x18_epilog();
+            }
+        } else {
+            e_movconst(destination, value);
+        }
+        return TRANSLATION_CONTINUE;
+    }
+    if ((instruction & 0x9F000000u) != 0x90000000u) return TRANSLATION_UNHANDLED;
+
+    int destination = instruction & 31;
+    int64_t immediate = sext((((instruction >> 5) & 0x7FFFF) << 2) | ((instruction >> 29) & 3), 21) << 12;
+    uint64_t value = (pcrel_base(guest_pc) & ~0xFFFull) + immediate;
+    if (hl_host_range_mapped((uintptr_t)guest_pc, 16)) {
+        uint32_t load = a64_fetch_instruction(guest_pc + 4, NULL);
+        uint32_t add = a64_fetch_instruction(guest_pc + 8, NULL);
+        uint32_t branch = a64_fetch_instruction(guest_pc + 12, NULL);
+        if (!guestbase_on() && !jit_guest_bus_active() && (instruction & 0x9F00001Fu) == 0x90000010u &&
+            (load & 0xFFC003FFu) == 0xF9400211u && (add & 0xFFC003FFu) == 0x91000210u && branch == 0xD61F0220u) {
+            if (!emit_guest_adrp_page(16, value)) e_movconst(16, value);
+            e_str(16, CPUREG, 16 * 8);
+            uint64_t load_host = (uint64_t)g_cp;
+            emit32(load);
+            pcache_record_provenance(load_host, (uint64_t)g_cp, guest_pc + 4);
+            e_str(17, CPUREG, 17 * 8);
+            emit32(add);
+            e_str(16, CPUREG, 16 * 8);
+            if (!g_tier2_build && g_txln_active)
+                for (uint64_t line = guest_pc >> 6; line <= (guest_pc + 12) >> 6; line++)
+                    txln_put(line);
+            if (guest_pc + 16 > *guest_end) *guest_end = guest_pc + 16;
+            emit_ibranch_ip2_ready(17, 1);
+            return TRANSLATION_STOP;
+        }
+    }
+    if (is_stolen(destination)) {
+        if (stealfast_on()) {
+            if (!emit_guest_adrp_page(16, value)) e_movconst(16, value);
+            e_str(16, CPUREG, destination * 8);
+        } else {
+            x18_prolog();
+            if (!emit_guest_adrp_page(0, value)) e_movconst(0, value);
+            e_str(0, 1, destination * 8);
+            x18_epilog();
+        }
+    } else if (!emit_guest_adrp_page(destination, value)) {
+        e_movconst(destination, value);
+    }
+    return TRANSLATION_CONTINUE;
+}
+
 static int translate_literal_load(uint64_t guest_pc, uint32_t instruction) {
     int64_t offset = sext((instruction >> 5) & 0x7FFFF, 19) << 2;
     if ((instruction & 0xBF000000u) == 0x18000000u) {
@@ -968,75 +1032,12 @@ static void *translate_block(uint64_t gpc) {
         }
         if (system_step == TRANSLATION_STOP) break;
 
-        // --- non-branch, PC-relative: rewrite to materialize the (relocated) addr ---
-        // adr
-        if ((in & 0x9F000000u) == 0x10000000u) {
-            int rd = in & 31;
-            int64_t imm = sext((((in >> 5) & 0x7FFFF) << 2) | ((in >> 29) & 3), 21);
-            uint64_t v = pcrel_base(gpc) + imm;
-            if (is_stolen(rd)) {
-                // stealfast: host x16 is engine-dead -> movconst + one store (no red-zone stash, no
-                // TLS-based cpu reload; x28 = cpu). adrp x16 is the PLT-stub head, so this is HOT.
-                if (stealfast_on()) {
-                    e_movconst(16, v);
-                    e_str(16, CPUREG, rd * 8);
-                } else {
-                    x18_prolog();
-                    e_movconst(0, v);
-                    e_str(0, 1, rd * 8);
-                    x18_epilog();
-                }
-            } else
-                e_movconst(rd, v);
+        enum translation_step address_step = translate_pc_relative_address(gpc, in, &guest_end);
+        if (address_step == TRANSLATION_CONTINUE) {
             gpc += 4;
             continue;
         }
-        // adrp
-        if ((in & 0x9F000000u) == 0x90000000u) {
-            int rd = in & 31;
-            int64_t imm = sext((((in >> 5) & 0x7FFFF) << 2) | ((in >> 29) & 3), 21) << 12;
-            uint64_t v = (pcrel_base(gpc) & ~0xFFFull) + imm;
-            // Exact canonical AArch64 PLT veneer:
-            //   adrp x16,page; ldr x17,[x16,#got]; add x16,x16,#lo; br x17
-            if (!hl_host_range_mapped((uintptr_t)gpc, 16)) goto no_adrp_plt_fuse;
-            uint32_t p1 = a64_fetch_instruction(gpc + 4, NULL);
-            uint32_t p2 = a64_fetch_instruction(gpc + 8, NULL);
-            uint32_t p3 = a64_fetch_instruction(gpc + 12, NULL);
-            if (!guestbase_on() && !jit_guest_bus_active() && (in & 0x9F00001Fu) == 0x90000010u &&
-                (p1 & 0xFFC003FFu) == 0xF9400211u && (p2 & 0xFFC003FFu) == 0x91000210u && p3 == 0xD61F0220u) {
-                if (!emit_guest_adrp_page(16, v)) e_movconst(16, v);
-                e_str(16, CPUREG, 16 * 8);
-                uint64_t load_host = (uint64_t)g_cp;
-                emit32(p1);
-                pcache_record_provenance(load_host, (uint64_t)g_cp, gpc + 4);
-                e_str(17, CPUREG, 17 * 8);
-                emit32(p2);
-                e_str(16, CPUREG, 16 * 8);
-                if (!g_tier2_build && g_txln_active) {
-                    uint64_t last = (gpc + 12) >> 6;
-                    for (uint64_t line = gpc >> 6; line <= last; line++)
-                        txln_put(line);
-                }
-                if (gpc + 16 > guest_end) guest_end = gpc + 16;
-                emit_ibranch_ip2_ready(17, 1);
-                break;
-            }
-        no_adrp_plt_fuse:
-            if (is_stolen(rd)) {
-                if (stealfast_on()) {
-                    if (!emit_guest_adrp_page(16, v)) e_movconst(16, v);
-                    e_str(16, CPUREG, rd * 8);
-                } else {
-                    x18_prolog();
-                    if (!emit_guest_adrp_page(0, v)) e_movconst(0, v);
-                    e_str(0, 1, rd * 8);
-                    x18_epilog();
-                }
-            } else if (!emit_guest_adrp_page(rd, v))
-                e_movconst(rd, v);
-            gpc += 4;
-            continue;
-        }
+        if (address_step == TRANSLATION_STOP) break;
         if (translate_literal_load(gpc, in)) {
             gpc += 4;
             continue;
