@@ -12,15 +12,8 @@ use hl_runtime::{
 
 use super::{Native, SwitchPath};
 
-struct SwitchAliases<'a> {
-    anchor: &'a Arc<hl_fs::Anchor>,
-    path: &'a [u8],
-    interface: &'a hl_network::EgressInterface,
-    aliases: &'a [hl_network::EgressInterface],
-    port: u16,
-    ipv6_only: bool,
-    wildcard_stream: bool,
-}
+mod binding;
+mod transfer;
 
 impl RuntimeNetworkHost for Native {
     type Attachment = OwnedFd;
@@ -173,109 +166,7 @@ impl RuntimeNetworkHost for Native {
     }
 
     fn bind_route(&self, token: u64, route: BindRoute) -> Result<SocketAddress, RuntimeNetworkError> {
-        if route.aliases.len() > hl_network::BIND_ROUTE_ALIAS_MAXIMUM {
-            return Err(RuntimeNetworkError::Invalid);
-        }
-        let Some(interface) = route.interface else {
-            return self.bind(token, route.address);
-        };
-        let (address, port, ipv6_wildcard) = match route.address {
-            SocketAddress::Inet4 { address, port } => (address, port, false),
-            SocketAddress::Inet6 { address, port, .. } if address == [0; 16] => ([0; 4], port, true),
-            SocketAddress::Inet6 { .. } | SocketAddress::Unix(_) => return Err(RuntimeNetworkError::Invalid),
-        };
-        let kind = self.socket_type(token)?;
-        if !matches!(kind, libc::SOCK_STREAM | libc::SOCK_DGRAM) {
-            return Err(RuntimeNetworkError::OperationNotSupported);
-        }
-        let first = if port == 0 {
-            20_000_u16.wrapping_add((token as u16) & 0x3fff)
-        } else {
-            port
-        };
-        let attempts = if port == 0 { 45_000 } else { 1 };
-        let ipv6_only = if ipv6_wildcard {
-            matches!(
-                super::super::socket_option::get(self.descriptor(token)?, 41, 26),
-                Ok(hl_linux::GuestSocketOption::Scalar(value)) if value != 0
-            )
-        } else {
-            false
-        };
-        let mut descriptor = None;
-        for offset in 0..attempts {
-            let candidate = first.wrapping_add(offset as u16).max(1024);
-            let bound = if let Some(bound) = descriptor {
-                bound
-            } else {
-                let value = self.switch_socket(token, kind)?;
-                descriptor = Some(value);
-                value
-            };
-            let mut publication = hl_fs::Publication::default();
-            let staged = (|| {
-                let (anchor, path) = Self::switch_reservation(&interface, candidate, ipv6_only)?;
-                let (storage, length) = Self::socket_address(&SocketAddress::Unix(path.clone()))?;
-                // SAFETY: storage contains a bounded sockaddr_un and descriptor remains table-owned.
-                if unsafe { libc::bind(bound, (&raw const storage).cast(), length) } != 0 {
-                    return Err(Self::runtime_error());
-                }
-                // The peer protocol reads this name back with getsockname, so the bind must address it
-                // by pathname; adoption confirms the entry it created is the one the anchor holds.
-                publication
-                    .adopt(&anchor, Self::switch_name(&path)?, path.clone())
-                    .map_err(Self::publication_error)?;
-                Self::stage_switch_aliases(
-                    &mut publication,
-                    SwitchAliases {
-                        anchor: &anchor,
-                        path: &path,
-                        interface: &interface,
-                        aliases: &route.aliases,
-                        port: candidate,
-                        ipv6_only,
-                        wildcard_stream: address == [0; 4] && kind == libc::SOCK_STREAM,
-                    },
-                )?;
-                publication.commit().map_err(Self::publication_error)
-            })();
-            if let Err(error) = staged {
-                drop(publication);
-                if port != 0 || error != RuntimeNetworkError::AddressInUse {
-                    self.restore_inet_socket(token, kind)?;
-                    return Err(error);
-                }
-                continue;
-            }
-            let local = SocketAddress::Inet4 {
-                address: interface.ipv4,
-                port: candidate,
-            };
-            let mut sockets = self
-                .shared
-                .sockets
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
-            entry.guest_local = Some(local.clone());
-            entry.switch_interface = Some(interface.clone());
-            let ownership = Arc::new(SwitchPath::new(publication));
-            let weak = Arc::downgrade(&ownership);
-            let mut registry = self
-                .shared
-                .switch_paths
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for owned_path in ownership.names() {
-                registry.insert(owned_path.clone(), weak.clone());
-            }
-            entry.switch_path = Some(ownership);
-            return Ok(local);
-        }
-        if descriptor.is_some() {
-            self.restore_inet_socket(token, kind)?;
-        }
-        Err(RuntimeNetworkError::AddressInUse)
+        self.bind_switch_route(token, route)
     }
 
     fn prepare_connect(&self, token: u64, address: SocketAddress) -> Result<(), RuntimeNetworkError> {
@@ -442,61 +333,7 @@ impl RuntimeNetworkHost for Native {
     }
 
     fn send_to(&self, token: u64, input: &[u8], address: SocketAddress, _: bool) -> Result<usize, RuntimeNetworkError> {
-        {
-            let mut sockets = self
-                .shared
-                .sockets
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.icmp) {
-                super::icmp::enqueue(&mut entry.icmp_packets, &mut entry.icmp_bytes, input, address)
-                    .map_err(|()| RuntimeNetworkError::WouldBlock)?;
-                drop(sockets);
-                self.notify(token);
-                return Ok(input.len());
-            }
-        }
-        if super::resolver::Resolver::accepts(&address) {
-            let mut sockets = self
-                .shared
-                .sockets
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
-            entry.resolver = true;
-            if let Some(response) = super::resolver::Resolver::answer(input) {
-                if !super::resolver::Resolver::queue_available(
-                    entry.resolver_packets.len(),
-                    entry.resolver_bytes,
-                    response.len(),
-                ) {
-                    return Err(RuntimeNetworkError::WouldBlock);
-                }
-                entry.resolver_bytes += response.len();
-                entry.resolver_packets.push_back(response);
-            }
-            drop(sockets);
-            self.notify(token);
-            return Ok(input.len());
-        }
-        let descriptor = self.descriptor(token)?;
-        let (storage, length) = Self::socket_address(&address)?;
-        // SAFETY: buffers and sockaddr remain valid for the duration of the call.
-        let result = unsafe {
-            libc::sendto(
-                descriptor,
-                input.as_ptr().cast(),
-                input.len(),
-                0,
-                (&raw const storage).cast(),
-                length,
-            )
-        };
-        if result >= 0 {
-            Ok(result as usize)
-        } else {
-            Err(Self::runtime_error())
-        }
+        self.transmit(token, input, address)
     }
 
     fn send_to_route(
@@ -506,65 +343,7 @@ impl RuntimeNetworkHost for Native {
         route: EgressRoute,
         nonblocking: bool,
     ) -> Result<usize, RuntimeNetworkError> {
-        let Some(interface) = route.interface else {
-            return self.send_to(token, input, route.address, nonblocking);
-        };
-        if self.is_icmp(token) {
-            return self.send_to(token, input, route.address, nonblocking);
-        }
-        let SocketAddress::Inet4 { address, port } = route.address else {
-            return Err(RuntimeNetworkError::Invalid);
-        };
-        if address[0] == 127 {
-            return self.send_to(token, input, route.address, nonblocking);
-        }
-        if port == 0 || self.socket_type(token)? != libc::SOCK_DGRAM {
-            return Err(RuntimeNetworkError::Invalid);
-        }
-        let needs_source = self
-            .shared
-            .sockets
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&token)
-            .is_none_or(|entry| entry.guest_local.is_none());
-        if needs_source {
-            self.bind_route(
-                token,
-                BindRoute {
-                    address: SocketAddress::Inet4 {
-                        address: interface.ipv4,
-                        port: 0,
-                    },
-                    interface: Some(interface.clone()),
-                    aliases: Vec::new(),
-                },
-            )?;
-        }
-        let path = Self::switch_destination_path(&interface, address, port)?;
-        let (storage, length) = Self::socket_address(&SocketAddress::Unix(path))?;
-        let descriptor = self.descriptor(token)?;
-        // SAFETY: input and bounded sockaddr_un remain live while the table retains descriptor.
-        let result = unsafe {
-            libc::sendto(
-                descriptor,
-                input.as_ptr().cast(),
-                input.len(),
-                0,
-                (&raw const storage).cast(),
-                length,
-            )
-        };
-        if result >= 0 {
-            Ok(result as usize)
-        } else if matches!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(error) if error == libc::ENOENT || error == libc::ECONNREFUSED
-        ) {
-            Ok(input.len())
-        } else {
-            Err(Self::runtime_error())
-        }
+        self.transmit_route(token, input, route, nonblocking)
     }
 
     fn receive_from(
@@ -574,88 +353,7 @@ impl RuntimeNetworkHost for Native {
         _: bool,
         peek: bool,
     ) -> Result<ReceivedDatagram, RuntimeNetworkError> {
-        {
-            let mut sockets = self
-                .shared
-                .sockets
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.icmp) {
-                let packet = if peek {
-                    entry.icmp_packets.front().cloned()
-                } else {
-                    entry.icmp_packets.pop_front()
-                };
-                let Some((packet, source)) = packet else {
-                    return Err(RuntimeNetworkError::WouldBlock);
-                };
-                if !peek {
-                    entry.icmp_bytes = entry.icmp_bytes.saturating_sub(packet.len());
-                }
-                let full_length = packet.len();
-                let count = output.len().min(full_length);
-                output[..count].copy_from_slice(&packet[..count]);
-                return Ok(ReceivedDatagram {
-                    count,
-                    full_length,
-                    source,
-                });
-            }
-            if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.resolver) {
-                let packet = if peek {
-                    entry.resolver_packets.front().cloned()
-                } else {
-                    entry.resolver_packets.pop_front()
-                };
-                let Some(packet) = packet else {
-                    return Err(RuntimeNetworkError::WouldBlock);
-                };
-                if !peek {
-                    entry.resolver_bytes = entry.resolver_bytes.saturating_sub(packet.len());
-                }
-                let full_length = packet.len();
-                let count = output.len().min(full_length);
-                output[..count].copy_from_slice(&packet[..count]);
-                return Ok(ReceivedDatagram {
-                    count,
-                    full_length,
-                    source: SocketAddress::Inet4 {
-                        address: [127, 0, 0, 11],
-                        port: 53,
-                    },
-                });
-            }
-        }
-        let descriptor = self.descriptor(token)?;
-        // SAFETY: zero is valid initialization for sockaddr storage.
-        let mut source = unsafe { zeroed::<libc::sockaddr_storage>() };
-        let mut length = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-        let flags = if peek { libc::MSG_PEEK } else { 0 } | libc::MSG_TRUNC;
-        // SAFETY: output and source are writable for their supplied lengths.
-        let result = unsafe {
-            libc::recvfrom(
-                descriptor,
-                output.as_mut_ptr().cast(),
-                output.len(),
-                flags,
-                (&raw mut source).cast(),
-                &raw mut length,
-            )
-        };
-        self.arm_read(token);
-        if result < 0 {
-            return Err(Self::runtime_error());
-        }
-        let source = Self::decode_address(&source, length)?;
-        let source = match source {
-            SocketAddress::Unix(path) => Self::switch_source(&path).ok_or(RuntimeNetworkError::Invalid)?,
-            source => source,
-        };
-        Ok(ReceivedDatagram {
-            count: (result as usize).min(output.len()),
-            full_length: result as usize,
-            source,
-        })
+        self.receive_datagram(token, output, peek)
     }
 
     fn send_urgent(&self, token: u64, input: &[u8]) -> Result<usize, RuntimeNetworkError> {
@@ -752,32 +450,6 @@ impl RuntimeNetworkHost for Native {
 }
 
 impl Native {
-    fn stage_switch_aliases(
-        publication: &mut hl_fs::Publication,
-        aliases: SwitchAliases<'_>,
-    ) -> Result<(), RuntimeNetworkError> {
-        if !aliases.wildcard_stream {
-            return Ok(());
-        }
-        for alias in aliases.aliases {
-            let (alias_anchor, alias_path) = Self::switch_reservation(alias, aliases.port, aliases.ipv6_only)?;
-            let alias_name = Self::switch_name(&alias_path)?.to_vec();
-            publication
-                .reserve_link(&alias_anchor, &alias_name, alias_path, aliases.path)
-                .map_err(Self::publication_error)?;
-        }
-        if aliases.ipv6_only {
-            return Ok(());
-        }
-        // Linux serves one wildcard listener at every local address, so the same publication
-        // carries the namespace-private loopback name.
-        let loopback = Self::switch_loopback_path(aliases.interface, aliases.port)?;
-        let loopback_name = Self::switch_name(&loopback)?.to_vec();
-        publication
-            .reserve_link(aliases.anchor, &loopback_name, loopback, aliases.path)
-            .map_err(Self::publication_error)
-    }
-
     /// Records the bridge rendezvous a refused loopback connect retries against, then dials host
     /// loopback first so a listener that really bound loopback still wins.
     fn prepare_loopback_connect(
