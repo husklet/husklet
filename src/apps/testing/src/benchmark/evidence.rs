@@ -270,9 +270,10 @@ fn sustained_quiet(seconds: u64, timeout: u64, max_load: f64) -> Result<(), Erro
             .ok()
             .and_then(|v| v.split_ascii_whitespace().next()?.parse::<f64>().ok())
             .unwrap_or(f64::INFINITY);
-        let busy = [("testing", 1_u64), ("cargo", 0), ("hl-aarch64", 0), ("hl-x86_64", 0)]
-            .iter()
-            .any(|(name, allowance)| process_count(name) > *allowance);
+        let mut busy = false;
+        for (name, allowance) in [("testing", 1_u64), ("cargo", 0), ("hl-aarch64", 0), ("hl-x86_64", 0)] {
+            busy |= HostProcess::exact_process_count(name)? > allowance;
+        }
         if busy || load > max_load {
             quiet_since = None;
         } else if quiet_since.is_none() {
@@ -283,15 +284,6 @@ fn sustained_quiet(seconds: u64, timeout: u64, max_load: f64) -> Result<(), Erro
         std::thread::sleep(Duration::from_secs(5.min(seconds.max(1))));
     }
     Err("box did not remain quiet before measurement timeout".into())
-}
-
-fn process_count(name: &str) -> u64 {
-    HostProcess::standard("pgrep")
-        .args(["-cx", name])
-        .output()
-        .ok()
-        .and_then(|output| std::str::from_utf8(&output.stdout).ok()?.trim().parse().ok())
-        .unwrap_or(0)
 }
 
 pub(super) struct Ledger {
