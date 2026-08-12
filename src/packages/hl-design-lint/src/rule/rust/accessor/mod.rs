@@ -171,16 +171,26 @@ fn inspect_impl(source: &Source, definitions: &Definitions, item: &ItemImpl, fin
         }
     }
 
-    for (index, left) in candidates.iter().enumerate() {
-        for right in &candidates[index + 1..] {
-            if left.access == right.access
-                && left.contract == right.contract
-                && visibility(&left.method.vis) == visibility(&right.method.vis)
-            {
-                findings.push(duplicate_finding(source, &owner, left, right));
-            }
-        }
-    }
+    findings.extend(
+        candidate_pairs(&candidates)
+            .filter(|(left, right)| equivalent_contract(left, right))
+            .map(|(left, right)| duplicate_finding(source, &owner, left, right)),
+    );
+}
+
+fn candidate_pairs<'a>(
+    candidates: &'a [Candidate<'a>],
+) -> impl Iterator<Item = (&'a Candidate<'a>, &'a Candidate<'a>)> {
+    candidates
+        .iter()
+        .enumerate()
+        .flat_map(move |(index, left)| candidates[index + 1..].iter().map(move |right| (left, right)))
+}
+
+fn equivalent_contract(left: &Candidate<'_>, right: &Candidate<'_>) -> bool {
+    left.access == right.access
+        && left.contract == right.contract
+        && visibility(&left.method.vis) == visibility(&right.method.vis)
 }
 
 fn candidate(method: &syn::ImplItemFn) -> Option<Candidate<'_>> {
