@@ -15,7 +15,7 @@ static int svc_readv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             size_t taken = pipe_pushback_take((int)a0, buffer, available);
             ssize_t copied = io_guest_vector_scatter(a1, (size_t)a2, buffer, taken);
             free(buffer);
-            G_RET(c) = copied >= 0 ? (uint64_t)copied : (uint64_t)(int64_t)copied;
+            G_RET(c) = (uint64_t)copied;
             break;
         }
         if (nl_is((int)a0)) { // netlink readv: drain the queued dump into the guest iov

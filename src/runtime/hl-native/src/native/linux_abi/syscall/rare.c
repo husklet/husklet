@@ -1436,7 +1436,7 @@ static int svc_rare_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint6
         }
         int r = svc_adjtimex(timex);
         if (r >= 0 && guest_copy_to(a1, timex, sizeof timex) != sizeof timex) r = -EFAULT;
-        G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
+        G_RET(c) = (uint64_t)r;
         break;
     }
     case 171: { // adjtimex(timex)
@@ -1447,7 +1447,7 @@ static int svc_rare_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint6
         }
         int r = svc_adjtimex(timex);
         if (r >= 0 && guest_copy_to(a0, timex, sizeof timex) != sizeof timex) r = -EFAULT;
-        G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
+        G_RET(c) = (uint64_t)r;
         break;
     }
     // sched_getattr(pid, attr, size, flags): report the task's LIVE scheduling profile so it agrees with

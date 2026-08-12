@@ -467,7 +467,7 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 if (copied != r) r = copied > 0 ? copied : -EFAULT;
             }
             free(buffer);
-            G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
+            G_RET(c) = (uint64_t)r;
             break;
         }
         // signalfd read -> struct signalfd_siginfo. Each signalfd OFD has its own self-pipe; the fd number
@@ -859,7 +859,7 @@ static int svc_write(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             }
             ssize_t r = memf_write_pos(g_memf[wfd], buffer, copied > 0 ? (size_t)copied : 0);
             free(buffer);
-            G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
+            G_RET(c) = (uint64_t)r;
             break;
         }
         svc_write_host(c, wfd, a1, a2);

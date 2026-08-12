@@ -94,7 +94,7 @@ static int svc_pread64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 if (copied != r) r = copied > 0 ? copied : -EFAULT;
             }
             free(buffer);
-            G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
+            G_RET(c) = (uint64_t)r;
             break;
         }
         ssize_t r; // SA_RESTART: restart a signal-interrupted blocking pread in place (see case 63)
@@ -151,7 +151,7 @@ static int svc_pwrite64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             }
             ssize_t r = memf_pwrite(g_memf[(int)a0], buffer, copied > 0 ? (size_t)copied : 0, (off_t)a3);
             free(buffer);
-            G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
+            G_RET(c) = (uint64_t)r;
             break;
         }
         hl_fdcache_fd_evict((int)a0);
