@@ -138,7 +138,11 @@ global parent state survives until server teardown. Errors remain explicit exit
 or typed engine status values. Architecture-specific target files own ELF and CPU
 entry details; the fork-server lifecycle is shared.
 
-## Rust ownership and gap
+## Historical Rust ownership and gap
+
+This section records the retired Rust executor that existed when the lifecycle
+profile was taken. Its paths and types have since been deleted; production now
+uses the retained C implementation through `ProductionFactory`.
 
 The corresponding Rust path was inspected in:
 

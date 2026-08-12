@@ -69,9 +69,10 @@ The Rust audit covered `TestImage::{resolve_identity,materialize}`,
 normal writable root currently reflinks or copies the complete immutable tree,
 preserves hard-link identity and permissions, recursively synchronizes every
 entry, atomically publishes the snapshot, and creates durable leases. The
-operation lock spans this transaction. `fork_overlay` avoids the copy, but the
-Rust execution engine does not yet implement overlay lookup and copy-up, so that
-path is not a valid production substitute.
+operation lock spans this transaction. `fork_overlay` avoided the copy, but the
+then-live Rust execution engine did not implement overlay lookup and copy-up, so
+that path was not a valid substitute at the measured 2026-08-04 revision. The
+Rust executor has since been retired; this paragraph is historical evidence.
 
 One uncontended ARM64 `syscall` benchmark row reported these separated setup
 costs:
