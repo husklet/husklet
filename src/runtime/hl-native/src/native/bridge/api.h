@@ -9,6 +9,8 @@
 
 typedef struct hl_c_backend hl_c_backend;
 
+HL_EXTERN_C_BEGIN
+
 HL_API int32_t hl_c_backend_leak_check_nonvacuity(void);
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host,
                                    int32_t executable_fd, const hl_c_main_image_plan *image_plan,
@@ -23,5 +25,7 @@ HL_API int32_t hl_c_backend_exit_status(const hl_c_backend *backend);
 HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend);
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend);
 HL_API void hl_c_backend_destroy(hl_c_backend *backend);
+
+HL_EXTERN_C_END
 
 #endif

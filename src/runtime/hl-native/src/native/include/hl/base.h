@@ -19,9 +19,11 @@
 #ifdef __cplusplus
 #define HL_EXTERN_C_BEGIN extern "C" {
 #define HL_EXTERN_C_END }
+#define HL_STATIC_ASSERT(condition, message) static_assert(condition, message)
 #else
 #define HL_EXTERN_C_BEGIN
 #define HL_EXTERN_C_END
+#define HL_STATIC_ASSERT(condition, message) _Static_assert(condition, message)
 #endif
 
 #define HL_ARRAY_COUNT(value) (sizeof(value) / sizeof((value)[0]))

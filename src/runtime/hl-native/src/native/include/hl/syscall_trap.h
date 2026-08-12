@@ -1,7 +1,7 @@
 #ifndef HL_SYSCALL_TRAP_H
 #define HL_SYSCALL_TRAP_H
 
-#include <stdint.h>
+#include "hl/base.h"
 
 #define HL_SYSCALL_TRAP_ABI 1u
 #define HL_TASK_EVENT_CLONE_THREAD UINT64_MAX
@@ -40,12 +40,16 @@ typedef struct hl_syscall_trap_result {
     uint64_t image_generation;
 } hl_syscall_trap_result;
 
-_Static_assert(sizeof(hl_syscall_cpu_aarch64) == 296, "AArch64 syscall snapshot ABI drifted");
-_Static_assert(sizeof(hl_syscall_trap_result) == 24, "syscall trap result ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_syscall_cpu_aarch64) == 296, "AArch64 syscall snapshot ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_syscall_trap_result) == 24, "syscall trap result ABI drifted");
 
 typedef int32_t (*hl_syscall_trap_fn)(void *context, uint32_t guest_isa, hl_syscall_cpu_aarch64 *cpu,
                                       hl_syscall_trap_result *result);
 
-void hl_target_syscall_trap_install(void *context, hl_syscall_trap_fn dispatch);
+HL_EXTERN_C_BEGIN
+
+HL_API void hl_target_syscall_trap_install(void *context, hl_syscall_trap_fn dispatch);
+
+HL_EXTERN_C_END
 
 #endif

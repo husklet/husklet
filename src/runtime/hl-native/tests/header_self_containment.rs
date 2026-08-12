@@ -82,3 +82,89 @@ fn owned_native_headers_are_self_contained() {
     }
     fs::remove_dir_all(scratch).expect("remove header probe directory");
 }
+
+#[test]
+fn public_abi_is_self_contained_for_c_and_cpp_consumers() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let include = native.join("include");
+    let scratch = std::env::temp_dir().join(format!("hl-native-public-abi-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("public ABI probe directory");
+    let mut public = headers_in(&include.join("hl"));
+    public.push(native.join("bridge/api.h"));
+    public.sort();
+
+    for (compiler, standard, extension) in [
+        (std::env::var_os("CC").unwrap_or_else(|| "cc".into()), "c11", "c"),
+        (std::env::var_os("CXX").unwrap_or_else(|| "c++".into()), "c++17", "cpp"),
+    ] {
+        for header in &public {
+            // linux_abi exposes C11 atomic_flag as part of its concrete implementation state. Its API is C;
+            // the portable bridge and all other public headers remain valid C++ boundaries.
+            if extension == "cpp" && header.ends_with("linux_abi.h") {
+                continue;
+            }
+            let relative = header.strip_prefix(&native).expect("public native header");
+            let probe = scratch.join(format!("probe.{extension}"));
+            fs::write(&probe, format!("#include \"{}\"\n", relative.display())).expect("public ABI probe source");
+            let result = Command::new(&compiler)
+                .arg(format!("-std={standard}"))
+                .arg("-fsyntax-only")
+                .arg(format!("-I{}", native.display()))
+                .arg(format!("-I{}", include.display()))
+                .arg(&probe)
+                .output()
+                .expect("C or C++ compiler for public ABI probe");
+            assert!(
+                result.status.success(),
+                "{} is not self-contained under {standard}:\n{}",
+                header.display(),
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+    }
+    fs::remove_dir_all(scratch).expect("remove public ABI probe directory");
+}
+
+fn headers_in(directory: &Path) -> Vec<PathBuf> {
+    let mut output = Vec::new();
+    headers(directory, &mut output);
+    output
+}
+
+#[test]
+fn public_visibility_selects_export_and_import_annotations() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let include = package.join("src/native/include");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let preprocess = |definitions: &[&str]| {
+        let mut command = Command::new(&compiler);
+        command.args(["-E", "-P", "-x", "c"]);
+        for definition in definitions {
+            command.arg(format!("-D{definition}"));
+        }
+        command.arg(format!("-I{}", include.display())).arg("-");
+        let mut child = command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("C preprocessor for visibility probe");
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .expect("visibility probe stdin")
+            .write_all(b"#include \"hl/base.h\"\nHL_API void hl_visibility_probe(void);\n")
+            .expect("visibility probe source");
+        let output = child.wait_with_output().expect("visibility probe output");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).expect("visibility probe UTF-8")
+    };
+
+    let posix = preprocess(&[]);
+    assert!(posix.contains("visibility(\"default\")"));
+    let windows_export = preprocess(&["_WIN32", "HL_SHARED", "HL_BUILDING_ENGINE"]);
+    assert!(windows_export.contains("__declspec(dllexport)"));
+    let windows_import = preprocess(&["_WIN32", "HL_SHARED"]);
+    assert!(windows_import.contains("__declspec(dllimport)"));
+}
