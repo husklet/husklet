@@ -282,6 +282,7 @@ source	executable_authority.h
 fixture	fixtures/testing/elf/displaced.c
 fixture	fixtures/testing/elf/pie.c
 fixture	fixtures/testing/projected_directory.c
+fixture	fixtures/testing/process_loop.c
 fixture	fixtures/testing/projected_read.c
 fixture	fixtures/testing/projected_spin.c
 fixture	fixtures/testing/projected_static.c
