@@ -32,20 +32,26 @@ struct Database {
 impl Database {
     fn collect(workspace: &Workspace) -> Self {
         let mut database = Self::default();
-        for source in workspace.production() {
-            for item in &source.syntax.items {
-                if let Item::Struct(item) = item {
-                    database.structure(source, item);
-                }
-            }
-        }
-        for source in workspace.production() {
-            for item in &source.syntax.items {
-                if let Item::Impl(item) = item {
-                    database.implementation(source, item);
-                }
-            }
-        }
+        workspace
+            .production()
+            .flat_map(|source| {
+                source
+                    .syntax
+                    .items
+                    .iter()
+                    .filter_map(move |item| structure(source, item))
+            })
+            .for_each(|(source, item)| database.structure(source, item));
+        workspace
+            .production()
+            .flat_map(|source| {
+                source
+                    .syntax
+                    .items
+                    .iter()
+                    .filter_map(move |item| implementation(source, item))
+            })
+            .for_each(|(source, item)| database.implementation(source, item));
         database
     }
 
@@ -125,6 +131,16 @@ impl Database {
             }
         }
     }
+}
+
+fn structure<'a>(source: &'a Source, item: &'a Item) -> Option<(&'a Source, &'a ItemStruct)> {
+    let Item::Struct(item) = item else { return None };
+    Some((source, item))
+}
+
+fn implementation<'a>(source: &'a Source, item: &'a Item) -> Option<(&'a Source, &'a ItemImpl)> {
+    let Item::Impl(item) = item else { return None };
+    Some((source, item))
 }
 
 struct Wrapper {
