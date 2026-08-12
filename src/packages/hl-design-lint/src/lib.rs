@@ -17,7 +17,7 @@ use std::path::PathBuf;
 pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use policy::{
-    BoundaryPolicy, DependencyKind, DependencyPolicy, DocumentationPolicy, EdgePolicy, LayerPolicy, OwnershipPolicy,
+    BoundaryPolicy, DependencyPolicy, DocumentationPolicy, LayerPolicy, OwnershipPolicy, PackageDependencyBudget,
     Policy, SourcePolicy, SourceSelector,
 };
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
