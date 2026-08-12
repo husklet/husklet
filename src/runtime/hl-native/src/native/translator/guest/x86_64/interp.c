@@ -3902,6 +3902,36 @@ static int interp_sse_integer_shift(struct cpu *cpu, struct insn *insn, uint64_t
     return STEP_NEXT;
 }
 
+static int interp_sse_integer_pack_compare(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    int unpack = op == 0x60 || op == 0x61 || op == 0x62 || op == 0x6C || op == 0x68 || op == 0x69 || op == 0x6A ||
+                 op == 0x6D;
+    int pack = op == 0x63 || op == 0x67 || op == 0x6B;
+    int greater = op == 0x64 || op == 0x65 || op == 0x66;
+    int equal = op == 0x74 || op == 0x75 || op == 0x76;
+    if (!unpack && !pack && !greater && !equal) return -1;
+    int mmx = interp_sse_prefix(insn) == SSE_NP;
+    int wide = mmx ? 8 : 16;
+    uint8_t d[16], s[16];
+    interp_simd_get(cpu, mmx, insn->reg, d);
+    interp_simd_rm_get(cpu, insn, mmx, next, s);
+    if (unpack) {
+        int lane = (op == 0x60 || op == 0x68) ? 1 : (op == 0x61 || op == 0x69) ? 2 :
+                   (op == 0x62 || op == 0x6A) ? 4 : 8;
+        int high = (op >= 0x68 && op <= 0x6A) || op == 0x6D;
+        interp_punpck(d, s, lane, high, wide);
+    } else if (pack) {
+        interp_pack(d, s, op == 0x6B ? 4 : 2, op != 0x67, wide);
+    } else if (greater) {
+        interp_pcmpgt(d, s, op == 0x64 ? 1 : op == 0x65 ? 2 : 4);
+    } else {
+        interp_pcmpeq(d, s, op == 0x74 ? 1 : op == 0x75 ? 2 : 4);
+    }
+    interp_simd_put(cpu, mmx, insn->reg, d);
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int prefix = interp_sse_prefix(insn);
@@ -3914,6 +3944,8 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
     delegated = interp_sse_integer_multiply_reduce(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_sse_integer_shift(cpu, insn, pc, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_sse_integer_pack_compare(cpu, insn, next);
     if (delegated >= 0) return delegated;
 
     // These have both MMX (no prefix, 64-bit) and SSE2 (0x66, 128-bit xmm) encodings. The MMX half of the
@@ -4064,49 +4096,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         cpu->rip = next;
         return STEP_NEXT;
 
-    // PUNPCK* low and high
-    case 0x60:
-    case 0x61:
-    case 0x62:
-    case 0x6C:
-    case 0x68:
-    case 0x69:
-    case 0x6A:
-    case 0x6D: {
-        int lane = (op == 0x60 || op == 0x68) ? 1 : (op == 0x61 || op == 0x69) ? 2 : (op == 0x62 || op == 0x6A) ? 4 : 8;
-        // NOT contiguous: the qword pair is at 0x6C (LOW) / 0x6D (HIGH), ABOVE the 0x68..0x6A group,
-        // so a naive `op >= 0x68` turns PUNPCKLQDQ into PUNPCKHQDQ.
-        int high = (op >= 0x68 && op <= 0x6A) || op == 0x6D;
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        interp_punpck(d, s, lane, high, wide);
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // PACKSSWB / PACKUSWB / PACKSSDW
-    case 0x63:
-    case 0x67:
-    case 0x6B:
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        interp_pack(d, s, op == 0x6B ? 4 : 2, op != 0x67, wide);
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-
-    // PCMPGTB/W/D
-    case 0x64:
-    case 0x65:
-    case 0x66:
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        interp_pcmpgt(d, s, op == 0x64 ? 1 : op == 0x65 ? 2 : 4);
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-
     // An INTEGER r/m operand; REX.W selects 64-bit; upper bits ZEROED.
     case 0x6E: {
         interp_operand operand = interp_rm(cpu, insn, next);
@@ -4186,17 +4175,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         cpu->rip = next;
         return STEP_NEXT;
     }
-
-    // PCMPEQB/W/D
-    case 0x74:
-    case 0x75:
-    case 0x76:
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        interp_pcmpeq(d, s, op == 0x74 ? 1 : op == 0x75 ? 2 : 4);
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
 
     // PINSRW and PEXTRW
     case 0xC4: {
