@@ -393,13 +393,7 @@ impl CWorker {
             return Err(EngineError::Exited);
         }
         drop(startup);
-        // SIGSTOP and SIGCONT govern the whole retained execution domain, not one
-        // emulated guest task.  The worker is a private session leader and every
-        // host process used by the C engine remains in that process group, so
-        // suspending the group freezes translation threads and guest descendants
-        // atomically.  Forwarding SIGSTOP through hl_engine_request is both too
-        // narrow and intentionally rejected by that API because it cannot return
-        // after stopping its own control thread.
+        // Freeze the private worker group: the C control thread cannot stop itself and reply.
         if matches!(request, StopRequest::Signal(signal) if signal == libc::SIGSTOP || signal == libc::SIGCONT) {
             let process = self
                 .child
