@@ -49,11 +49,14 @@ def main(argv=None):
         sys.stderr.buffer.write(completed.stderr)
         return completed.returncode
     try:
+        if completed.stderr:
+            raise ValueError("engine wrote stderr on success")
         rows = []
         for line in completed.stdout.decode("utf-8", "strict").splitlines():
             match = PHASE.match(line)
-            if match:
-                rows.append(match.groups())
+            if not match:
+                raise ValueError(f"engine returned non-PHASE output: {line!r}")
+            rows.append(match.groups())
         if not rows:
             raise ValueError("engine returned no benchmark rows")
         phases = set()

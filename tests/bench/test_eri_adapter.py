@@ -23,7 +23,7 @@ class AdapterTests(unittest.TestCase):
             engine = directory / "engine"
             engine.write_text(
                 "#!/bin/sh\n"
-                "printf '%s\\n' 'ignored' 'PHASE python us=7 ok=42' 'PHASE malloc us=11 ok=43'\n"
+                "printf '%s\\n' 'PHASE python us=7 ok=42' 'PHASE malloc us=11 ok=43'\n"
             )
             engine.chmod(0o755)
             guest = directory / "guest"
@@ -42,6 +42,34 @@ class AdapterTests(unittest.TestCase):
             rows = result.stdout.splitlines()
             self.assertRegex(rows[0], r"^PHASE python us=[1-9][0-9]* ok=42$")
             self.assertEqual(rows[1], "PHASE malloc us=11 ok=43")
+
+    def test_adapter_rejects_every_unaccounted_output_byte(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            guest = directory / "guest"
+            guest.write_text("fixture")
+            for stream, statement in (
+                ("stdout", "printf '%s\\n' unexpected"),
+                ("stderr", "printf '%s\\n' unexpected >&2"),
+            ):
+                engine = directory / f"engine-{stream}"
+                engine.write_text(
+                    "#!/bin/sh\n"
+                    "printf '%s\\n' 'PHASE python us=7 ok=42'\n"
+                    f"{statement}\n"
+                )
+                engine.chmod(0o755)
+                result = subprocess.run(
+                    [
+                        str(ADAPTER), "--provider", "product",
+                        "--engine", str(engine), "--rootfs", str(directory), "--", str(guest),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 65)
+                self.assertIn("invalid engine output", result.stderr)
 
     def test_rootfs_digest_covers_contents_and_symlink_targets(self):
         with tempfile.TemporaryDirectory() as directory:
