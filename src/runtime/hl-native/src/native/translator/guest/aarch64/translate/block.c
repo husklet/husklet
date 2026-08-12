@@ -130,6 +130,56 @@ static int translate_tls_instruction(uint32_t instruction) {
     return 1;
 }
 
+enum translation_step {
+    TRANSLATION_UNHANDLED,
+    TRANSLATION_CONTINUE,
+    TRANSLATION_STOP,
+};
+
+static enum translation_step translate_system_instruction(uint64_t guest_pc, uint32_t instruction) {
+    /* Keep the guest CPU/cache model independent of host EL0 access and cache geometry. DC ZVA lowers to
+       the advertised 64-byte zero operation; cache maintenance either queues invalidation or commits it. */
+    if ((instruction & 0xFFFFFFE0u) == 0xD53B0020u) {
+        emit_cpu_model_value(instruction & 31, g_aarch64_cpu_model.ctr_el0);
+        return TRANSLATION_CONTINUE;
+    }
+    if ((instruction & 0xFFFFFFE0u) == 0xD53B00E0u) {
+        emit_cpu_model_value(instruction & 31, g_aarch64_cpu_model.dczid_el0);
+        return TRANSLATION_CONTINUE;
+    }
+    if ((instruction & 0xFFFF0000u) == 0xD5380000u && !g_aarch64_cpu_model.user_id_registers) {
+        emit32(0);
+        return TRANSLATION_CONTINUE;
+    }
+    if ((instruction & 0xFFFFFFE0u) == 0xD50B7420u) {
+        int source = (int)(instruction & 31u);
+        if (is_stolen(source))
+            e_ldr(16, CPUREG, source * 8);
+        else
+            e_movr(16, source);
+        emit32(0x927AE610u);
+        if (jit_guest_bus_active()) emit_a64_bus_guard(16, 64, guest_pc);
+        struct a64_soft_guard soft = emit_a64_soft_guard_begin(16, 17, 18, 64, HL_LOGICAL_VMA_WRITE, guest_pc);
+        for (unsigned offset = 0; offset < 64; offset += 16)
+            emit32(0xA9000000u | (((offset / 8) & 0x7Fu) << 15) | (31u << 10) | (16u << 5) | 31u);
+        emit_a64_soft_guard_end(&soft);
+        return TRANSLATION_CONTINUE;
+    }
+    if ((instruction & 0xFFFFFFE0u) == 0xD50B7B20u) {
+        emit32(0xD503201Fu);
+        return TRANSLATION_CONTINUE;
+    }
+    if ((instruction & 0xFFFFFFE0u) == 0xD50B7520u && !smc_disabled()) {
+        emit_smc_queue((int)(instruction & 31));
+        return TRANSLATION_CONTINUE;
+    }
+    if (instruction == 0xD5033FDFu && !smc_disabled()) {
+        emit_exit_const(guest_pc + 4, R_ICCOMMIT);
+        return TRANSLATION_STOP;
+    }
+    return TRANSLATION_UNHANDLED;
+}
+
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
        an executable view backed by an emulated host-page snapshot. */
@@ -794,80 +844,12 @@ static void *translate_block(uint64_t gpc) {
             continue;
         }
 
-        // --- SMC prerequisite: mrs Xt, ctr_el0 (cache-type register) ---
-        // __clear_cache reads CTR_EL0 to size its dc/ic strides. Reading it from EL0 FAULTS for the JIT'd
-        // guest on macOS (SCTLR_EL1.UCT is not enabled for it), so the verbatim mrs crashed every guest that
-        // flushes its icache. Materialize a synthetic value describing the DBT's coherence model instead:
-        //   IminLine/DminLine = 4 -> 64-byte I/D lines        L1Ip = PIPT
-        //   IDC (bit28) = 1 -> "DC clean to PoU not required": TRUE here, the host re-translates the page by
-        //                      reading the SAME coherent memory the guest wrote, so __clear_cache skips DC.
-        //   DIC (bit29) = 0 -> "IC invalidate IS required": keeps the guest issuing `ic ivau`, our SMC hook.
-        if ((in & 0xFFFFFFE0u) == 0xD53B0020u) {
-            int rd = in & 31;
-            emit_cpu_model_value(rd, g_aarch64_cpu_model.ctr_el0);
+        enum translation_step system_step = translate_system_instruction(gpc, in);
+        if (system_step == TRANSLATION_CONTINUE) {
             gpc += 4;
             continue;
         }
-        if ((in & 0xFFFFFFE0u) == 0xD53B00E0u) {
-            emit_cpu_model_value(in & 31, g_aarch64_cpu_model.dczid_el0);
-            gpc += 4;
-            continue;
-        }
-        // HWCAP_CPUID is absent: EL1 ID-register families are inaccessible to EL0 and must not leak host IDs.
-        if ((in & 0xFFFF0000u) == 0xD5380000u && !g_aarch64_cpu_model.user_id_registers) {
-            emit32(0);
-            gpc += 4;
-            continue;
-        }
-
-        /* DC ZVA is defined by the guest's DCZID_EL0, not by the host CPU.
-           Apple hosts may use a different zero-block size; copying the opcode
-           verbatim then clears bytes outside the 64-byte block advertised to
-           the guest.  Managed runtimes place live metadata immediately after
-           such blocks, so the mismatch surfaces later as pointer corruption.
-           Lower to four exact stores at the guest-model-aligned address. */
-        if ((in & 0xFFFFFFE0u) == 0xD50B7420u) {
-            int source = (int)(in & 31u);
-            if (is_stolen(source))
-                e_ldr(16, CPUREG, source * 8);
-            else
-                e_movr(16, source);
-            emit32(0x927AE610u); /* and x16,x16,#-64 */
-            if (jit_guest_bus_active()) emit_a64_bus_guard(16, 64, gpc);
-            struct a64_soft_guard soft = emit_a64_soft_guard_begin(16, 17, 18, 64, HL_LOGICAL_VMA_WRITE, gpc);
-            for (unsigned offset = 0; offset < 64; offset += 16)
-                emit32(0xA9000000u | (((offset / 8) & 0x7Fu) << 15) | (31u << 10) | (16u << 5) |
-                       31u); /* stp xzr,xzr,[x16,#offset] */
-            emit_a64_soft_guard_end(&soft);
-            gpc += 4;
-            continue;
-        }
-        // --- SMC: dc cvau, Xt (data-cache clean to PoU) -> nop ---
-        // A pure no-op for a DBT: the host never instruction-fetches guest pages, so the guest's data writes
-        // need no clean for our re-translation (which is a normal coherent data read). Standard __clear_cache
-        // already skips DC via IDC=1 above; this also covers callers that issue it unconditionally and avoids
-        // any EL0 trap on the instruction. (NOSMC keeps it -- it is unrelated to the stale-translation A/B.)
-        if ((in & 0xFFFFFFE0u) == 0xD50B7B20u) {
-            emit32(0xD503201Fu); // nop
-            gpc += 4;
-            continue;
-        }
-        // --- SMC: ic ivau, Xt (instruction-cache invalidate by VA to PoU) ---
-        // A code-generating guest issues this (the __clear_cache / dc;dsb;ic;dsb;isb dance) before running
-        // freshly-written bytes. The host never instruction-fetches guest pages (we execute the TRANSLATED
-        // copy), so emitting `ic ivau` verbatim is a no-op for our cache -> the guest would re-run the STALE
-        // translation. Instead end the block here and exit R_ICFLUSH: the dispatcher drops the stale gpc->host
-        // map + IBTC (smc_icflush) and the modified bytes re-translate. pc resumes PAST the ic ivau. Gated by
-        // NOSMC; the dc cvau / isb in the same dance run verbatim (harmless: they touch real data memory).
-        if ((in & 0xFFFFFFE0u) == 0xD50B7520u && !smc_disabled()) {
-            emit_smc_queue((int)(in & 31));
-            gpc += 4;
-            continue;
-        }
-        if (in == 0xD5033FDFu && !smc_disabled()) {
-            emit_exit_const(gpc + 4, R_ICCOMMIT);
-            break;
-        }
+        if (system_step == TRANSLATION_STOP) break;
 
         // --- non-branch, PC-relative: rewrite to materialize the (relocated) addr ---
         // adr
