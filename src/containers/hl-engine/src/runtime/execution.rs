@@ -110,8 +110,6 @@ impl ProductionMachine {
             option_values: &values,
             standard_fds,
             provider_fd: -1,
-            syscall_context: std::ptr::null_mut(),
-            syscall_dispatch: None,
         };
         // SAFETY: all pointers in config remain live for this call and there is no callback state.
         unsafe { hl_native::Engine::create(config) }.map_err(|_| EngineError::LaunchFailed)

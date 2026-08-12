@@ -34,7 +34,7 @@ const _: () = assert!(offset_of!(MainImagePlan, interpreter_identity) == 40);
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct SyscallCpuAarch64 {
+pub(super) struct SyscallCpuAarch64 {
     pub abi: u32,
     pub size: u32,
     pub x: [u64; 31],
@@ -47,7 +47,7 @@ pub struct SyscallCpuAarch64 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct SyscallTrapResult {
+pub(super) struct SyscallTrapResult {
     pub abi: u32,
     pub size: u32,
     pub outcome: u32,
@@ -61,7 +61,7 @@ const _: () = assert!(offset_of!(SyscallCpuAarch64, task) == 288);
 const _: () = assert!(size_of::<SyscallTrapResult>() == 24);
 const _: () = assert!(offset_of!(SyscallTrapResult, image_generation) == 16);
 
-pub type SyscallDispatch =
+pub(super) type SyscallDispatch =
     unsafe extern "C" fn(*mut c_void, c_uint, *mut SyscallCpuAarch64, *mut SyscallTrapResult) -> c_int;
 
 unsafe extern "C" {

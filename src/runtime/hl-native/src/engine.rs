@@ -1,13 +1,13 @@
 #![allow(unsafe_code)]
 
 use std::{
-    ffi::{c_char, c_int, c_uint, c_void},
+    ffi::{c_char, c_int, c_uint},
     fs::File,
     io::{Read, Seek, SeekFrom},
     ptr::NonNull,
 };
 
-use crate::bindings::{self, Backend, SyscallDispatch};
+use crate::bindings::{self, Backend};
 
 pub const STATUS_OK: i32 = 0;
 
@@ -25,8 +25,6 @@ pub struct EngineConfig<'a> {
     pub option_values: &'a [*const c_char],
     pub standard_fds: [i32; 3],
     pub provider_fd: i32,
-    pub syscall_context: *mut c_void,
-    pub syscall_dispatch: Option<SyscallDispatch>,
 }
 
 type Plan = crate::bindings::MainImagePlan;
@@ -62,9 +60,9 @@ impl Engine {
     /// Creates an engine through the stable C bridge.
     ///
     /// # Safety
-    /// `image_plan`, option pointers and callback state must satisfy the C ABI.
+    /// Option pointers must satisfy the C ABI.
     /// Borrowed create inputs need only remain valid for this call; C copies
-    /// configuration. Callback context must remain valid until this value drops.
+    /// configuration.
     pub unsafe fn create(config: EngineConfig<'_>) -> Result<Self, i32> {
         if config.option_names.len() != config.option_values.len() {
             return Err(STATUS_OK.wrapping_add(1));
@@ -87,8 +85,8 @@ impl Engine {
                 config.option_values.as_ptr(),
                 config.standard_fds.as_ptr(),
                 config.provider_fd,
-                config.syscall_context,
-                config.syscall_dispatch,
+                std::ptr::null_mut(),
+                None,
                 &raw mut output,
             )
         };
@@ -340,7 +338,6 @@ impl Drop for Engine {
 mod tests {
     use super::{EngineConfig, Plan};
     use std::{
-        ffi::c_void,
         fs::OpenOptions,
         io::{Seek, SeekFrom, Write},
         os::fd::AsRawFd,
@@ -404,8 +401,6 @@ mod tests {
             option_values: &[],
             standard_fds: [-1; 3],
             provider_fd: -1,
-            syscall_context: std::ptr::null_mut::<c_void>(),
-            syscall_dispatch: None,
         };
         let result = Plan::inspect(&config);
         std::fs::remove_file(path).unwrap();
