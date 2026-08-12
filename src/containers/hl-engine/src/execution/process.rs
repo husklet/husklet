@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 const PLAN_DESCRIPTOR: i32 = 3;
 const CONTROL_DESCRIPTOR: i32 = 4;
+const PROVIDER_DESCRIPTOR: i32 = 5;
 const FORCE_GRACE: Duration = Duration::from_millis(25);
 
 pub(crate) struct CWorker {
@@ -29,6 +30,7 @@ pub(crate) struct CWorker {
     exit: Mutex<Option<EngineExit>>,
     startup: Mutex<Startup>,
     startup_changed: Condvar,
+    provider_broker: Option<std::thread::JoinHandle<()>>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -76,8 +78,17 @@ impl CWorker {
         let plan_file = sealed_plan(&wire::encode(isa, plan)?)?;
         let (parent_control, child_control) =
             std::os::unix::net::UnixStream::pair().map_err(|_| EngineError::LaunchFailed)?;
+        let provider = services
+            .projected_root_authority
+            .as_ref()
+            .map(|_| std::os::unix::net::UnixStream::pair().map_err(|_| EngineError::LaunchFailed))
+            .transpose()?;
         let plan_inherit = duplicate_high(plan_file.as_raw_fd())?;
         let control_inherit = duplicate_high(child_control.as_raw_fd())?;
+        let provider_inherit = provider
+            .as_ref()
+            .map(|(_, child)| duplicate_high(child.as_raw_fd()))
+            .transpose()?;
         let mut streams = StreamBridge::new(services)?;
         let [input, output, error] = streams.take_guest_fds()?;
         let executable = worker_executable(
@@ -94,11 +105,15 @@ impl CWorker {
             .stdin(Stdio::from(input))
             .stdout(Stdio::from(output))
             .stderr(Stdio::from(error));
+        if provider_inherit.is_some() {
+            command.env("HL_C_PROVIDER_FD", PROVIDER_DESCRIPTOR.to_string());
+        }
         for (name, value) in worker_environment(|name| std::env::var_os(name)) {
             command.env(name, value);
         }
         let plan_raw = plan_inherit.as_raw_fd();
         let control_raw = control_inherit.as_raw_fd();
+        let provider_raw = provider_inherit.as_ref().map(AsRawFd::as_raw_fd);
         // SAFETY: the child performs only async-signal-safe dup2 calls before immediate exec.
         unsafe {
             command.pre_exec(move || {
@@ -106,6 +121,11 @@ impl CWorker {
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::dup2(plan_raw, PLAN_DESCRIPTOR) < 0 || libc::dup2(control_raw, CONTROL_DESCRIPTOR) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if let Some(provider) = provider_raw
+                    && libc::dup2(provider, PROVIDER_DESCRIPTOR) < 0
+                {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
@@ -120,7 +140,21 @@ impl CWorker {
             pid = child.id()
         );
         let mut child = ChildGuard(Some(child));
-        drop((plan_inherit, control_inherit, child_control, plan_file));
+        drop((
+            plan_inherit,
+            control_inherit,
+            provider_inherit,
+            child_control,
+            plan_file,
+        ));
+        let provider_broker = match (provider, services.projected_root_authority.as_ref()) {
+            (Some((parent, child)), Some(authority)) => {
+                drop(child);
+                Some(super::provider_broker::spawn(parent, Arc::clone(authority))?)
+            }
+            (None, None) => None,
+            _ => return Err(EngineError::LaunchFailed),
+        };
         crate::executable::ExecutableAuthority::send_optional(services.executable_authority.as_ref(), &parent_control)
             .map_err(|_| EngineError::LaunchFailed)?;
         hl_log::hl_event!(
@@ -143,6 +177,7 @@ impl CWorker {
             exit: Mutex::new(None),
             startup: Mutex::new(Startup::Starting),
             startup_changed: Condvar::new(),
+            provider_broker,
         })
     }
 
@@ -423,6 +458,9 @@ impl Drop for CWorker {
                 let _ = child.wait();
             }
         }
+        if let Some(broker) = self.provider_broker.take() {
+            let _ = broker.join();
+        }
     }
 }
 
@@ -666,6 +704,7 @@ mod tests {
             exit: Mutex::new(None),
             startup: Mutex::new(Startup::Started),
             startup_changed: Condvar::new(),
+            provider_broker: None,
         };
         let events = capture_events(|| worker.stop(StopRequest::Force).unwrap());
         assert!(events.contains("retained_c.worker.force_kill"));
@@ -697,6 +736,7 @@ mod tests {
             exit: Mutex::new(None),
             startup: Mutex::new(Startup::Started),
             startup_changed: Condvar::new(),
+            provider_broker: None,
         };
 
         worker.stop(StopRequest::Force).unwrap();
@@ -731,6 +771,7 @@ mod tests {
             exit: Mutex::new(None),
             startup: Mutex::new(Startup::Started),
             startup_changed: Condvar::new(),
+            provider_broker: None,
         };
         let events = capture_events(|| drop(worker));
         assert!(events.contains("retained_c.worker.drop_rollback"));
@@ -766,6 +807,7 @@ mod tests {
             exit: Mutex::new(None),
             startup: Mutex::new(Startup::Starting),
             startup_changed: Condvar::new(),
+            provider_broker: None,
         };
         let peer_thread = std::thread::spawn(move || {
             write_message(&mut peer, Message::Ready).unwrap();

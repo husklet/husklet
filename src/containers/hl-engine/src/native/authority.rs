@@ -135,7 +135,7 @@ impl AuthorityWorker {
             .step("ping_reply")
     }
 
-    pub(super) fn provider(&mut self, payload: &[u8]) -> Result<Vec<u8>, ProjectionError> {
+    pub(crate) fn provider(&mut self, payload: &[u8]) -> Result<Vec<u8>, ProjectionError> {
         self.session
             .send(&mut self.stream, FrameKind::Provider, payload)
             .map_err(|_| ProjectionError::Session)?;

@@ -203,6 +203,7 @@ impl Fixture {
             RuntimeServices {
                 activation: activation.clone(),
                 executable_authority: None,
+                projected_root_authority: None,
                 checkpoint_sink: Some(checkpoints.clone()),
                 checkpoint_source: Some(checkpoints.clone()),
                 streams: StandardStreams::default(),
@@ -222,6 +223,7 @@ fn validates_required_checkpoint() {
     let services = RuntimeServices {
         activation: Arc::new(Channel::default()),
         executable_authority: None,
+        projected_root_authority: None,
         checkpoint_sink: None,
         checkpoint_source: None,
         streams: StandardStreams::default(),

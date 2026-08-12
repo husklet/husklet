@@ -8,6 +8,7 @@ pub(crate) mod worker;
 mod environment;
 mod ffi;
 mod options;
+mod provider_broker;
 
 use crate::activation::GuestIsa;
 use crate::composition::RuntimeServices;
@@ -1113,6 +1114,7 @@ mod tests {
         let services = RuntimeServices {
             activation: Arc::new(Channel),
             executable_authority: None,
+            projected_root_authority: None,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: StandardStreams::new(
@@ -1145,6 +1147,7 @@ mod tests {
         let services = RuntimeServices {
             activation: Arc::new(Channel),
             executable_authority: None,
+            projected_root_authority: None,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: StandardStreams::new(Cursor::new(Vec::new()), Vec::new(), Vec::new()).with_terminal(terminal),

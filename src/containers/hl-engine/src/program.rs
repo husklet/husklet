@@ -355,6 +355,7 @@ impl Program {
         let services = RuntimeServices {
             activation: Arc::new(Activation),
             executable_authority,
+            projected_root_authority: authority.cloned(),
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: crate::composition::StandardStreams::default(),

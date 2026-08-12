@@ -24,16 +24,29 @@ impl WorkerError {
     fn abandon(self) {}
 }
 
-pub(crate) fn run(plan_descriptor: RawFd, control_descriptor: RawFd) -> Result<i32, WorkerError> {
+pub(crate) fn run(
+    plan_descriptor: RawFd,
+    control_descriptor: RawFd,
+    provider_descriptor: Option<RawFd>,
+) -> Result<i32, WorkerError> {
     // Lifecycle events belong to the supervising parent: this process's stderr is
     // the guest's stderr stream, so host diagnostics here would corrupt guest output.
-    if plan_descriptor < 3 || control_descriptor < 3 || plan_descriptor == control_descriptor {
+    if plan_descriptor < 3
+        || control_descriptor < 3
+        || plan_descriptor == control_descriptor
+        || provider_descriptor
+            .is_some_and(|provider| provider < 3 || provider == plan_descriptor || provider == control_descriptor)
+    {
         return Err(WorkerError::Descriptor);
     }
     // SAFETY: this is the one-shot worker entry and takes unique ownership of inherited descriptors.
     let plan_file = unsafe { std::fs::File::from_raw_fd(plan_descriptor) };
     // SAFETY: same one-shot ownership contract, for the distinct control descriptor.
     let mut control = unsafe { std::os::unix::net::UnixStream::from_raw_fd(control_descriptor) };
+    let _provider = provider_descriptor.map(|descriptor| {
+        // SAFETY: the one-shot worker owns the distinct inherited provider descriptor.
+        unsafe { std::os::unix::net::UnixStream::from_raw_fd(descriptor) }
+    });
     let executable_authority = crate::executable::ExecutableAuthority::receive_optional(&control).map_err(|_| {
         send_error(&mut control, FailureStage::Control, 3);
         WorkerError::Control

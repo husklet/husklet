@@ -25,19 +25,30 @@ impl RetainedWorkerError {
 ///
 /// The descriptors become owned by this one-shot worker and must not be used again by the caller.
 pub fn run(plan_descriptor: i32, control_descriptor: i32) -> Result<i32, RetainedWorkerError> {
+    run_with_provider(plan_descriptor, control_descriptor, None)
+}
+
+/// Runs a retained-C worker with an optional dedicated projected-root provider socket.
+pub fn run_with_provider(
+    plan_descriptor: i32,
+    control_descriptor: i32,
+    provider_descriptor: Option<i32>,
+) -> Result<i32, RetainedWorkerError> {
     #[cfg(hl_retained_c)]
     {
-        crate::execution::worker::run(plan_descriptor, control_descriptor).map_err(|error| match error {
-            crate::execution::worker::WorkerError::Descriptor => RetainedWorkerError::Descriptor,
-            crate::execution::worker::WorkerError::Plan => RetainedWorkerError::Plan,
-            crate::execution::worker::WorkerError::Control => RetainedWorkerError::Control,
-            crate::execution::worker::WorkerError::Create => RetainedWorkerError::Create,
-            crate::execution::worker::WorkerError::Start => RetainedWorkerError::Start,
+        crate::execution::worker::run(plan_descriptor, control_descriptor, provider_descriptor).map_err(|error| {
+            match error {
+                crate::execution::worker::WorkerError::Descriptor => RetainedWorkerError::Descriptor,
+                crate::execution::worker::WorkerError::Plan => RetainedWorkerError::Plan,
+                crate::execution::worker::WorkerError::Control => RetainedWorkerError::Control,
+                crate::execution::worker::WorkerError::Create => RetainedWorkerError::Create,
+                crate::execution::worker::WorkerError::Start => RetainedWorkerError::Start,
+            }
         })
     }
     #[cfg(not(hl_retained_c))]
     {
-        let _ = (plan_descriptor, control_descriptor);
+        let _ = (plan_descriptor, control_descriptor, provider_descriptor);
         Err(RetainedWorkerError::Unsupported)
     }
 }

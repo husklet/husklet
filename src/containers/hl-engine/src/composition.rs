@@ -282,6 +282,7 @@ impl Default for StandardStreams {
 pub struct RuntimeServices {
     pub activation: Arc<dyn ActivationChannel>,
     pub executable_authority: Option<crate::executable::ExecutableAuthority>,
+    pub projected_root_authority: Option<Arc<Mutex<crate::native::AuthorityWorker>>>,
     pub checkpoint_sink: Option<Arc<dyn CheckpointSink>>,
     pub checkpoint_source: Option<Arc<dyn CheckpointSource>>,
     pub streams: StandardStreams,

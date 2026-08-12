@@ -87,12 +87,19 @@ impl Worker {
                     .flatten()
                     .filter(|value| *value >= 3)
             };
-            let status = match (descriptor("HL_C_PLAN_FD"), descriptor("HL_C_CONTROL_FD")) {
-                (Some(plan), Some(control)) if plan != control => hl_engine::retained_worker::run(plan, control)
-                    .unwrap_or_else(|error| {
+            let status = match (
+                descriptor("HL_C_PLAN_FD"),
+                descriptor("HL_C_CONTROL_FD"),
+                descriptor("HL_C_PROVIDER_FD"),
+            ) {
+                (Some(plan), Some(control), provider)
+                    if plan != control && provider.is_none_or(|provider| provider != plan && provider != control) =>
+                {
+                    hl_engine::retained_worker::run_with_provider(plan, control, provider).unwrap_or_else(|error| {
                         eprintln!("{}: retained worker failed: {error:?}", guest.program());
                         error.status()
-                    }),
+                    })
+                }
                 _ => {
                     eprintln!("{}: retained worker descriptors are invalid", guest.program());
                     64
