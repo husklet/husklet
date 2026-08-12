@@ -296,9 +296,34 @@
             export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
             cargo build --release -p engine --bins --locked --offline
             ${lib.optionalString pkgs.stdenv.isLinux ''
+              native_libraries=(target/release/build/hl-native-*/out/libhl_native_engine.so)
+              if [ "''${#native_libraries[@]}" -ne 1 ] || [ ! -f "''${native_libraries[0]}" ]; then
+                printf 'expected exactly one raw Linux native library, found %s\n' \
+                  "''${#native_libraries[@]}" >&2
+                exit 1
+              fi
+              raw_native="''${native_libraries[0]}"
+              test "$(patchelf --print-soname "$raw_native")" = libhl_native_engine.so
+              ! patchelf --print-rpath "$raw_native" | tr : '\n' | grep -F '/build/' >/dev/null
+              patchelf --print-needed "$raw_native" | sort -u > "$TMPDIR/raw-native-needed"
+              printf '%s\n' \
+                ld-linux-aarch64.so.1 \
+                ld-linux-x86-64.so.2 \
+                libc.so.6 \
+                libdl.so.2 \
+                libm.so.6 \
+                libpthread.so.0 \
+                libatomic.so.1 | sort -u > "$TMPDIR/allowed-native-needed"
+              while IFS= read -r dependency; do
+                grep -Fx "$dependency" "$TMPDIR/allowed-native-needed" >/dev/null || {
+                  printf 'unexpected raw native dependency: %s\n' "$dependency" >&2
+                  exit 1
+                }
+              done < "$TMPDIR/raw-native-needed"
               for binary in target/release/hl-engine target/release/hl-aarch64 target/release/hl-x86_64
               do
                 ! patchelf --print-rpath "$binary" | tr : '\n' | grep -F '/build/' >/dev/null
+                patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
               done
             ''}
             runHook postBuild
@@ -316,6 +341,7 @@
               exit 1
             fi
             install -Dm755 "''${native_libraries[0]}" "$out/lib/$(basename "''${native_libraries[0]}")"
+            cmp "''${native_libraries[0]}" "$out/lib/$(basename "''${native_libraries[0]}")"
             runHook postInstall
           '';
           postFixup = lib.optionalString pkgs.stdenv.isLinux ''
