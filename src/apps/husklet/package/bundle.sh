@@ -105,6 +105,8 @@ log "relocating dylibs (dylibbundler)"
 XARGS=( -x "$MACOS/husklet" -x "$RES/dockerd" )
 for so in "${LOADER_SOS[@]}"; do XARGS+=( -x "$so" ); done
 dylibbundler -of -cd -b -d "$FW" -p '@executable_path/../Frameworks' "${XARGS[@]}" >/dev/null
+[ -f "$FW/libhl_native_engine.dylib" ] \
+  || die "Cargo-built native engine dylib was not relocated into the application bundle"
 
 # 5. Compile GSettings schemas (GTK aborts at startup without them).
 log "compiling gsettings schemas"

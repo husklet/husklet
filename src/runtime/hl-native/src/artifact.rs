@@ -12,7 +12,11 @@ pub(crate) const fn loader_paths(target_os: &str) -> &'static [&'static str] {
     match target_os.as_bytes() {
         // bundle.sh relocates private dylibs into Contents/Frameworks. The
         // loader-relative entry also supports a library-local test layout.
-        b"macos" => &["@executable_path/../Frameworks", "@loader_path"],
+        b"macos" => &[
+            "@executable_path/../Frameworks",
+            "@executable_path/../lib",
+            "@loader_path",
+        ],
         // Windows searches the executable directory for private DLLs.
         b"windows" => &[],
         // Nix and conventional Unix packages place private libraries in lib.
@@ -30,7 +34,11 @@ mod tests {
         assert_eq!(super::loader_paths("linux"), &["$ORIGIN/../lib", "$ORIGIN"]);
         assert_eq!(
             super::loader_paths("macos"),
-            &["@executable_path/../Frameworks", "@loader_path"]
+            &[
+                "@executable_path/../Frameworks",
+                "@executable_path/../lib",
+                "@loader_path"
+            ]
         );
         assert!(super::loader_paths("windows").is_empty());
     }
