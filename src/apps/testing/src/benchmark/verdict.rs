@@ -1,4 +1,8 @@
-use super::{definition::Campaign, evidence::Row, schedule::CELLS};
+use super::{
+    definition::Campaign,
+    evidence::Row,
+    schedule::{self, CELLS, Step},
+};
 use crate::suite::Error;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,6 +16,7 @@ impl Report {
         if !limit.is_finite() || limit < 1.0 {
             return Err("benchmark limit must be finite and at least 1".into());
         }
+        verify_plan(&schedule::measurements(campaign), rows)?;
         verify_outputs(rows)?;
         let by_key = rows
             .iter()
@@ -49,6 +54,39 @@ impl Report {
             text: lines.join("\n") + "\n",
         })
     }
+}
+
+fn verify_plan(expected: &[Step], rows: &[Row]) -> Result<(), Error> {
+    if expected.len() != rows.len() {
+        return Err(format!(
+            "benchmark evidence cardinality differs from plan: expected {}, observed {}",
+            expected.len(),
+            rows.len()
+        )
+        .into());
+    }
+    let mut observed = BTreeMap::new();
+    for row in rows {
+        if observed.insert(row.key.as_str(), row).is_some() {
+            return Err(format!("duplicate benchmark evidence key {}", row.key).into());
+        }
+    }
+    for step in expected {
+        let key = step.key();
+        let row = observed
+            .get(key.as_str())
+            .ok_or_else(|| format!("missing benchmark evidence key {key}"))?;
+        if row.workload != step.workload
+            || row.layout != step.layout
+            || row.cell != step.cell
+            || row.round != step.round
+            || row.position != step.position
+            || row.arm != step.arm
+        {
+            return Err(format!("benchmark evidence provenance differs from plan for {key}").into());
+        }
+    }
+    Ok(())
 }
 
 type NullKey<'a> = (&'a str, &'a str, &'a str, &'a str);
@@ -268,7 +306,7 @@ fn median(values: &mut [f64]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{BTreeMap, Row};
+    use super::{BTreeMap, Row, Step};
 
     fn row(key: &str, arm: &str, us: u64) -> Row {
         Row {
@@ -305,5 +343,27 @@ mod tests {
             super::paired(&by_key, "malloc", "plain", "EE", "E", "E", "malloc", 1).unwrap(),
             [1.2]
         );
+    }
+
+    #[test]
+    fn evidence_provenance_must_match_the_scheduled_binary_and_layout() {
+        let step = Step {
+            workload: "malloc".into(),
+            layout: "plain".into(),
+            cell: "EE".into(),
+            round: 0,
+            position: 0,
+            arm: "E".into(),
+        };
+        let valid = row("malloc|plain|EE|0|0", "E", 100);
+        super::verify_plan(std::slice::from_ref(&step), std::slice::from_ref(&valid)).unwrap();
+
+        let mut wrong_binary = valid.clone();
+        wrong_binary.arm = "R".into();
+        assert!(super::verify_plan(std::slice::from_ref(&step), &[wrong_binary]).is_err());
+
+        let mut wrong_layout = valid.clone();
+        wrong_layout.layout = "sqlite".into();
+        assert!(super::verify_plan(std::slice::from_ref(&step), &[wrong_layout]).is_err());
     }
 }
