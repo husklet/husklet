@@ -3,7 +3,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use hl_descriptor::{ObjectError, OperationCancellation, PreparedSpliceRead};
 
 #[derive(Default)]
-pub(super) struct CursorGate {
+pub(in crate::ffi::linux) struct CursorGate {
     reserved: Mutex<bool>,
     changed: Condvar,
 }
@@ -22,7 +22,7 @@ impl hl_descriptor::CancellationNotification for CancellationWake {
 }
 
 impl CursorGate {
-    pub(super) fn enter(&self) {
+    pub(in crate::ffi::linux) fn enter(&self) {
         let mut reserved = self.reserved.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while *reserved {
             reserved = self
@@ -32,7 +32,7 @@ impl CursorGate {
         }
     }
 
-    pub(super) fn prepare(
+    pub(in crate::ffi::linux) fn prepare(
         self: &Arc<Self>,
         implicit: bool,
         nonblocking: bool,

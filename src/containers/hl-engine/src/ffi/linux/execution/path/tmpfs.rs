@@ -55,7 +55,7 @@ impl std::fmt::Debug for Budget {
     }
 }
 
-pub(super) struct Lease {
+pub(in crate::ffi::linux) struct Lease {
     budget: Arc<Budget>,
     key: Key,
 }
@@ -318,7 +318,7 @@ impl Lease {
 
     /// Holds the tmpfs extent reservation across one external native write.
     /// The terminal error is kept distinct from quota/accounting failures.
-    pub(super) fn external<T, E>(
+    pub(in crate::ffi::linux) fn external<T, E>(
         &self,
         file: &File,
         target: u64,

@@ -11,7 +11,7 @@ use hl_runtime::{
 };
 
 use super::Native;
-use crate::ffi::linux::execution::path::FileTransferRegistry;
+use crate::ffi::linux::file_transfer::FileTransferRegistry;
 
 pub(super) struct NativeTransfer {
     host: Arc<Native>,

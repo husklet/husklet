@@ -12,7 +12,7 @@ use hl_descriptor::{
 };
 use hl_runtime::RuntimeNetworkError;
 
-use super::super::splice::CursorGate;
+use super::cursor::CursorGate;
 use super::{FileCapability, FileOperation};
 
 pub(super) struct ImportedFile {

@@ -29,6 +29,7 @@ mod arena_test;
 #[path = "linux/event.rs"]
 mod event;
 pub(crate) mod execution;
+pub(in crate::ffi::linux) mod file_transfer;
 mod loader;
 mod mapping;
 mod mapping_access;

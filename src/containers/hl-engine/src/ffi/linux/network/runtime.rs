@@ -13,7 +13,7 @@ use hl_runtime::{
 
 use super::Native;
 use super::transfer::NativeTransfer;
-use crate::ffi::linux::execution::path::FileTransferRegistry;
+use crate::ffi::linux::file_transfer::FileTransferRegistry;
 
 /// Process-owned composition of live network routing and checkpoint authority.
 pub struct CheckpointRuntime {

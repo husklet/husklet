@@ -12,7 +12,7 @@ use hl_runtime::{DirectoryBaseLease, GuestPath, OpenIntent, PreparedPathOpen, Ru
 pub(super) use super::registry::Registry;
 use super::registry::SlotReservation;
 use super::source::ProjectedContext;
-use super::splice::CursorGate;
+use crate::ffi::linux::file_transfer::CursorGate;
 
 mod error;
 mod node;

@@ -9,12 +9,13 @@ use std::sync::{Arc, Mutex, Weak};
 use hl_descriptor::DescriptionIdentity;
 use hl_runtime::{ImportedDescription, ImportedTransfer, RuntimeNetworkError, TransferPublication};
 
-use super::NativeFile;
+use crate::ffi::linux::execution::path::NativeFile;
 
-#[path = "transfer_imported.rs"]
 mod imported;
+mod cursor;
 
 use imported::ImportedFile;
+pub(in crate::ffi::linux) use cursor::CursorGate;
 
 trait FileCapability: Send + Sync {
     fn duplicate(&self) -> Result<OwnedFd, RuntimeNetworkError>;
@@ -27,14 +28,14 @@ trait FileCapability: Send + Sync {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::ffi::linux::execution) enum FileIntent {
+pub(in crate::ffi::linux) enum FileIntent {
     Read,
     Write,
     Probe,
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::ffi::linux::execution) struct FileOperation {
+pub(in crate::ffi::linux) struct FileOperation {
     pub intent: FileIntent,
     pub position: Option<u64>,
     pub append: bool,
@@ -102,11 +103,11 @@ impl FileTransferRegistry {
         self.capability(identity).ok()?.mapping().ok()
     }
 
-    pub(in crate::ffi::linux::execution) fn supports(&self, identity: DescriptionIdentity) -> bool {
+    pub(in crate::ffi::linux) fn supports(&self, identity: DescriptionIdentity) -> bool {
         self.capability(identity).is_ok()
     }
 
-    pub(in crate::ffi::linux::execution) fn operate(
+    pub(in crate::ffi::linux) fn operate(
         &self,
         identity: DescriptionIdentity,
         request: FileOperation,

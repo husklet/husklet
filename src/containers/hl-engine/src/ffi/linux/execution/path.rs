@@ -84,16 +84,12 @@ mod source;
 #[cfg(test)]
 #[path = "path/source_test.rs"]
 mod source_tests;
-#[path = "path/splice.rs"]
-mod splice;
 #[path = "path/tmpfs.rs"]
-mod tmpfs;
-#[path = "path/transfer.rs"]
-mod transfer;
+pub(in crate::ffi::linux) mod tmpfs;
 mod unix_socket;
 use error::HostError;
 pub(in crate::ffi::linux::execution) use executable::ExecTarget;
-pub(in crate::ffi::linux::execution) use file::NativeFile;
+pub(in crate::ffi::linux) use file::NativeFile;
 pub(super) use unix_socket::UnixSocketPaths;
 #[derive(Clone)]
 pub(super) struct NativePath {
@@ -117,7 +113,7 @@ pub(super) struct NativePath {
     terminal_bindings: Arc<hl_runtime::TerminalBindings>,
     terminal_signals: Arc<dyn hl_runtime::TerminalSignalSink>,
     entropy: Arc<dyn ports::random::EntropySource>,
-    transfers: Arc<transfer::FileTransferRegistry>,
+    transfers: Arc<FileTransferRegistry>,
     fifos: Arc<fifo::Registry>,
     system: Option<Arc<hl_runtime::SystemAuthority>>,
     cpu_model: hl_runtime::ProcfsCpuModel,
@@ -129,8 +125,8 @@ struct SyntheticProvenance {
     filesystem: hl_runtime::FilesystemStats,
 }
 
-pub(in crate::ffi::linux) use transfer::FileTransferRegistry;
-pub(super) use transfer::{FileIntent, FileOperation};
+pub(in crate::ffi::linux) use crate::ffi::linux::file_transfer::FileTransferRegistry;
+pub(super) use crate::ffi::linux::file_transfer::{FileIntent, FileOperation};
 
 struct InitialTerminalWindowNotification {
     tasks: Arc<hl_task::TaskRegistry>,
@@ -244,7 +240,7 @@ impl NativePath {
             terminal_bindings: Arc::new(hl_runtime::TerminalBindings::default()),
             terminal_signals: Arc::new(device::DetachedSignals),
             entropy: Arc::new(super::image_data::Entropy),
-            transfers: Arc::new(transfer::FileTransferRegistry::default()),
+            transfers: Arc::new(FileTransferRegistry::default()),
             fifos: Arc::new(fifo::Registry::default()),
             system: None,
             cpu_model: hl_runtime::ProcfsCpuModel::Aarch64 {
@@ -312,7 +308,7 @@ impl NativePath {
         self
     }
 
-    pub(super) fn with_transfers(mut self, transfers: Arc<transfer::FileTransferRegistry>) -> Self {
+    pub(super) fn with_transfers(mut self, transfers: Arc<FileTransferRegistry>) -> Self {
         self.transfers = transfers;
         self
     }

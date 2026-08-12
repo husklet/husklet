@@ -16,8 +16,8 @@ use hl_descriptor::{
 
 use super::{directory, lease, metadata, mutation, tmpfs, watch};
 
-pub(in crate::ffi::linux::execution) struct NativeFile {
-    pub(super) file: Mutex<Option<File>>,
+pub(in crate::ffi::linux) struct NativeFile {
+    pub(in crate::ffi::linux) file: Mutex<Option<File>>,
     pub(super) directory: Mutex<Option<directory::State>>,
     pub(super) watches: Arc<watch::Hub>,
     path: PathBuf,
@@ -31,7 +31,7 @@ pub(in crate::ffi::linux::execution) struct NativeFile {
     pub(super) write_lease: Mutex<Option<lease::WriteLease>>,
     ownership: Arc<metadata::Registry>,
     pub(super) shm_budget: Option<Arc<tmpfs::Budget>>,
-    pub(super) shm_lease: Mutex<Option<tmpfs::Lease>>,
+    pub(in crate::ffi::linux) shm_lease: Mutex<Option<tmpfs::Lease>>,
     /// Set at open when the resolving mount is a bind or volume, so byte-range
     /// locks on this file also reach the daemon-global tier.
     shared_domain: AtomicBool,
@@ -145,7 +145,7 @@ impl NativeFile {
         result
     }
 
-    pub(super) fn object(error: std::io::Error) -> ObjectError {
+    pub(in crate::ffi::linux) fn object(error: std::io::Error) -> ObjectError {
         match error.kind() {
             std::io::ErrorKind::PermissionDenied => ObjectError::PermissionDenied,
             std::io::ErrorKind::WouldBlock => ObjectError::WouldBlock,
@@ -154,7 +154,7 @@ impl NativeFile {
         }
     }
 
-    pub(super) fn io(&self) -> Result<(), ObjectError> {
+    pub(in crate::ffi::linux) fn io(&self) -> Result<(), ObjectError> {
         if self.path_only.load(Ordering::Acquire) {
             Err(ObjectError::BadDescriptor)
         } else {
@@ -162,7 +162,7 @@ impl NativeFile {
         }
     }
 
-    pub(super) fn publish_modified(&self, count: usize) {
+    pub(in crate::ffi::linux) fn publish_modified(&self, count: usize) {
         if count != 0 {
             self.watches.publish(&self.path, hl_event::InotifyMask::MODIFY);
         }
