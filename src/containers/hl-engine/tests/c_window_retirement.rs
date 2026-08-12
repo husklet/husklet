@@ -2,14 +2,14 @@ use std::fs;
 #[cfg(hl_retained_c)]
 use std::process::Command;
 
-const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/");
+const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/hl-native/");
 const WINDOW: [&str; 2] = ["src/translator/window.c", "src/translator/window.h"];
 
 #[test]
 fn retained_window_helper_is_owned_and_compiled_for_x86_translation() {
     let manifest = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../runtime/native/COMPILED_TUS.tsv"
+        "/../../runtime/hl-native/COMPILED_TUS.tsv"
     ))
     .unwrap();
     let source_manifest = fs::read_to_string(format!("{RETAINED_ROOT}RUNTIME_SOURCES.manifest")).unwrap();

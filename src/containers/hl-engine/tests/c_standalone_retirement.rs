@@ -22,7 +22,7 @@ const RETIRED_CONFIG_TOKENS: [&str; 8] = [
     "HL_LAUNCH_RESULT",
 ];
 
-const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/");
+const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/hl-native/");
 
 const RETIRED_SYMBOLS: [&str; 5] = [
     "hl_engine_entry",
@@ -117,7 +117,7 @@ fn native_locality_violations(root: &Path) -> Vec<PathBuf> {
             matches!(
                 path.extension().and_then(|extension| extension.to_str()),
                 Some("c" | "h" | "s" | "S")
-            ) && !path.starts_with("src/runtime/native")
+            ) && !path.starts_with("src/runtime/hl-native")
                 && !path.starts_with("src/apps/testing/tests/fixtures")
         })
         .collect()
@@ -167,7 +167,7 @@ fn production_native_sources_have_one_authoritative_root() {
     assert_eq!(
         native_locality_violations(&root),
         Vec::<PathBuf>::new(),
-        "production C, headers, and assembly must live below src/runtime/native; testing fixtures remain testing-owned"
+        "production C, headers, and assembly must live below src/runtime/hl-native; testing fixtures remain testing-owned"
     );
 }
 
@@ -219,7 +219,7 @@ fn retired_rust_differential_executor_stays_deleted() {
 fn product_manifest_excludes_the_retired_standalone_path() {
     let manifest = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../runtime/native/COMPILED_TUS.tsv"
+        "/../../runtime/hl-native/COMPILED_TUS.tsv"
     ))
     .unwrap();
     assert!(

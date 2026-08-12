@@ -1157,7 +1157,6 @@ dependencies = [
 name = "hl-engine"
 version = "0.1.0"
 dependencies = [
- "cc",
  "hl-descriptor",
  "hl-event",
  "hl-fs",
@@ -1165,6 +1164,7 @@ dependencies = [
  "hl-linux",
  "hl-loader",
  "hl-log",
+ "hl-native",
  "hl-network",
  "hl-provider",
  "hl-runtime",
@@ -1270,6 +1270,13 @@ version = "0.1.0"
 dependencies = [
  "hl-isa",
  "hl-log",
+]
+
+[[package]]
+name = "hl-native"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

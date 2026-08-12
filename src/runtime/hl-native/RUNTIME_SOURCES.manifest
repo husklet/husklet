@@ -301,5 +301,5 @@ src/translator/reloc.c
 src/translator/reloc.h
 src/translator/window.c
 src/translator/window.h
-tests/aarch64_interpreter_link_smoke.c
-lifecycle_runner.c
+tests/fixtures/aarch64_interpreter_link_smoke.c
+tests/lifecycle_runner.c

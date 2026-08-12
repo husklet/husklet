@@ -1,8 +1,8 @@
-source	address_projection.c
-source	address_projection.h
-source	executable_authority.c
-source	executable_authority.h
-source	main_plan.h
+source	src/address_projection.c
+source	src/address_projection.h
+source	src/executable_authority.c
+source	src/executable_authority.h
+source	src/main_plan.h
 source	include/hl/activation.h
 source	include/hl/base.h
 source	include/hl/checkpoint_stream.h
@@ -306,6 +306,6 @@ source	src/translator/reloc.c
 source	src/translator/reloc.h
 source	src/translator/window.c
 source	src/translator/window.h
-fixture	tests/aarch64_interpreter_link_smoke.c
-source	lifecycle_runner.c
-source	shim.c
+fixture	tests/fixtures/aarch64_interpreter_link_smoke.c
+fixture	tests/lifecycle_runner.c
+source	src/shim.c

@@ -86,13 +86,13 @@ impl Audit {
     fn inventory(&self) -> Result<Vec<Entry>, String> {
         let rust = fs::read_to_string(self.root.join("src/runtime/hl-linux/src/syscall/table.rs"))
             .map_err(|error| format!("read Rust router table: {error}"))?;
-        let production = fs::read_to_string(self.root.join("src/runtime/native/src/linux_abi/number.c"))
+        let production = fs::read_to_string(self.root.join("src/runtime/hl-native/src/linux_abi/number.c"))
             .map_err(|error| format!("read production C syscall map: {error}"))?;
         let router = self.rust_routes(&rust);
         let mut entries = Self::c_entries(&production)?;
         let checked = Self::numbers(NUMBERS)?;
         if entries != checked {
-            return Err("syscall-numbers.tsv differs from production C number.c; run testing syscall-audit --regenerate src/runtime/native/src/linux_abi/number.c".into());
+            return Err("syscall-numbers.tsv differs from production C number.c; run testing syscall-audit --regenerate src/runtime/hl-native/src/linux_abi/number.c".into());
         }
         let supported = entries.iter().map(|entry| entry.name.clone()).collect::<BTreeSet<_>>();
         for entry in &mut entries {

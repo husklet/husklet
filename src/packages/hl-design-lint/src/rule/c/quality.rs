@@ -59,7 +59,7 @@ impl Rule for Quality {
     }
 
     fn check(&self, _workspace: &Workspace) -> Result<Vec<Finding>> {
-        let root = PathBuf::from("src/runtime/native");
+        let root = PathBuf::from("src/runtime/hl-native");
         let files = inventory(&root)?;
         let mut findings = inventory_findings(&root, &files)?;
         let sources = source_paths(&root)?;

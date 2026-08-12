@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, fs, path::Path, process::Command};
 
-const RETAINED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native");
+const RETAINED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/hl-native");
 const INTERPRETER_SHA256: &str = "040ace03601d91e7bd3871dd2cd8ca5382790131bbf683b1ca31110b362961ec";
 const DISPATCH_SHA256: &str = "fe66d0be5e2aa2dd9a3282e533338eb2f5c9b5ac343775ac4d19d60337f5184f";
 const X86_DECODE_SHA256: &str = "1ba08d646d28f03b32c0455801a111c4d2492480e346ba9cca8e80bdcafb88b0";
@@ -67,7 +67,7 @@ fn imported_interpreter_is_pinned_licensed_and_inventoried() {
     for path in [
         "src/translator/guest/aarch64/interp.c",
         "src/translator/guest/aarch64/interp_dispatch.h",
-        "tests/aarch64_interpreter_link_smoke.c",
+        "tests/fixtures/aarch64_interpreter_link_smoke.c",
     ] {
         assert!(sources.contains(path), "source inventory omitted {path}");
     }
@@ -79,7 +79,7 @@ fn imported_interpreter_is_pinned_licensed_and_inventoried() {
         })
     );
     assert!(units.lines().any(|line| {
-        line.starts_with("interpreter_link_smoke\t") && line.contains("tests/aarch64_interpreter_link_smoke.c")
+        line.starts_with("interpreter_link_smoke\t") && line.contains("tests/fixtures/aarch64_interpreter_link_smoke.c")
     }));
     let target = fs::read_to_string(retained.join("src/core/target/aarch64.c")).expect("A64 target unity");
     assert!(target.contains("#include \"../../translator/guest/aarch64/interp.c\""));
@@ -118,9 +118,9 @@ fn imported_interpreter_unity_compiles_and_links_unselected() {
         }
     }
     command
-        .arg(native.join("address_projection.c"))
+        .arg(native.join("src/address_projection.c"))
         .arg(retained.join("src/core/target/aarch64.c"))
-        .arg(retained.join("tests/aarch64_interpreter_link_smoke.c"))
+        .arg(retained.join("tests/fixtures/aarch64_interpreter_link_smoke.c"))
         .args(["-latomic", "-ldl", "-lm", "-lpthread", "-o"])
         .arg(&output);
     let result = command.output().expect("run retained interpreter smoke link");

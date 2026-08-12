@@ -2,19 +2,19 @@ use std::fs;
 #[cfg(hl_retained_c)]
 use std::process::Command;
 
-const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/");
+const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/hl-native/");
 const RETIRED: &str = "src/core/environment.h";
 
 #[test]
 fn retained_environment_boundary_is_physically_absent() {
     let source_manifest = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../runtime/native/RUNTIME_SOURCES.manifest"
+        "/../../runtime/hl-native/RUNTIME_SOURCES.manifest"
     ))
     .unwrap();
     let options = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../runtime/native/src/core/options.c"
+        "/../../runtime/hl-native/src/core/options.c"
     ))
     .unwrap();
 

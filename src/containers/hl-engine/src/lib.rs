@@ -32,6 +32,9 @@
     clippy::option_option
 )]
 
+#[cfg(hl_retained_c)]
+use hl_native as _;
+
 pub mod activation;
 
 #[doc(hidden)]
