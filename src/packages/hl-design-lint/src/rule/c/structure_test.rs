@@ -52,6 +52,24 @@ int sample(int value) {
 }
 
 #[test]
+fn else_if_chain_is_one_decision_level() {
+    let source = r#"
+int classify(int value) {
+    if (value == 1) return 1;
+    else if (value == 2) return 2;
+    else if (value == 3) return 3;
+    else if (value == 4) return 4;
+    else if (value == 5) return 5;
+    else if (value == 6) return 6;
+    else if (value == 7) return 7;
+    else return 0;
+}
+"#;
+    let findings = analyze(Path::new("classification.c"), source).unwrap();
+    assert!(findings.iter().all(|finding| finding.rule != "c-maximum-nesting"));
+}
+
+#[test]
 fn reasoned_annotation_suppresses_exactly_one_structural_diagnostic() {
     let mut source = String::from(
         "// hl-lint: allow(c-function-length) -- generated dispatch table is algorithmic data\nint generated(void) {\n",

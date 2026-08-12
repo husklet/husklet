@@ -92,11 +92,16 @@ fn visit_functions(node: Node<'_>, clean: &str, path: &Path, findings: &mut Vec<
 }
 
 fn maximum_nesting(node: Node<'_>, depth: usize) -> usize {
+    let is_else_if =
+        node.kind() == "if_statement" && node.parent().is_some_and(|parent| parent.kind() == "else_clause");
     let depth = depth
-        + usize::from(matches!(
-            node.kind(),
-            "if_statement" | "switch_statement" | "for_statement" | "while_statement" | "do_statement"
-        ));
+        + usize::from(
+            !is_else_if
+                && matches!(
+                    node.kind(),
+                    "if_statement" | "switch_statement" | "for_statement" | "while_statement" | "do_statement"
+                ),
+        );
     let mut maximum = depth;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
