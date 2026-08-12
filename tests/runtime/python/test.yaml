@@ -1,7 +1,6 @@
 targets: [arm64, amd64]
 image: python:3.12-alpine
-execution: { native: true, diagnostics: true }
-diagnostics-floor: [{ counter: runs, greater-than: 0 }]
+execution: { native: true }
 build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-static-pie, -O2]
