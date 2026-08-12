@@ -18,7 +18,6 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Component, Path, PathBuf},
-    process::Command as StdCommand,
     sync::atomic::AtomicBool,
     time::Duration,
 };
@@ -215,7 +214,7 @@ impl App {
         let output = directory.path().join(&case.output);
         let compiler = self.compiler.for_target(target);
         let source = self.directory.join(case.source.native());
-        let status = StdCommand::new(compiler)
+        let status = crate::platform::HostProcess::standard(compiler)
             .arg("-o")
             .arg(&output)
             .arg(&source)

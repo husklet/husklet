@@ -18,6 +18,7 @@ mod bench;
 mod benchmark;
 mod journal;
 mod nested;
+mod platform;
 mod pool;
 mod record;
 mod runtime;

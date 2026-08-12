@@ -103,7 +103,7 @@ pub(crate) async fn prepare(options: PrepareOptions) -> Result<(), Error> {
 async fn stage(workspace: &Path, target: Target, relative: &Path) -> Result<(), Error> {
     let worker = worker_name(target);
     let profile = crate::runtime::profile::PROFILE;
-    let mut build = tokio::process::Command::new(env!("CARGO"));
+    let mut build = crate::platform::HostProcess::asynchronous(env!("CARGO"));
     build
         .current_dir(workspace)
         .args(["build", "-p", "engine", "--bin", worker]);
@@ -166,7 +166,7 @@ async fn stage(workspace: &Path, target: Target, relative: &Path) -> Result<(), 
 async fn reexec(workspace: &Path, target: Target, relative: &Path) -> Result<(), Error> {
     let artifacts = workspace.join(relative);
     let staged = verify_artifacts(&artifacts, target, false)?;
-    let status = tokio::process::Command::new(&staged.runner)
+    let status = crate::platform::HostProcess::asynchronous(&staged.runner)
         .args(std::env::args_os().skip(1))
         .env(STAGED, "1")
         .stdin(Stdio::inherit())
@@ -235,7 +235,7 @@ async fn copy_artifact(source: PathBuf, destination: PathBuf) -> Result<(), Erro
 }
 
 async fn smoke(executable: &Path, argument: Option<&str>, expected: &[i32]) -> Result<(), Error> {
-    let mut command = tokio::process::Command::new(executable);
+    let mut command = crate::platform::HostProcess::asynchronous(executable);
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     if let Some(argument) = argument {
         command.arg(argument);

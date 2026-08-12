@@ -53,7 +53,7 @@ fn average() -> Option<f64> {
 
 #[cfg(target_os = "macos")]
 fn average() -> Option<f64> {
-    let output = std::process::Command::new("/usr/sbin/sysctl")
+    let output = crate::platform::HostProcess::standard("/usr/sbin/sysctl")
         .args(["-n", "vm.loadavg"])
         .output()
         .ok()?;

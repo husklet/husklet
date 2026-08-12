@@ -352,7 +352,7 @@ pub async fn prepare(
     let started = Instant::now();
     let compiler_version = if artifact.is_some() {
         let compiler = benchmark.compiler_name(target);
-        let output = tokio::process::Command::new(compiler)
+        let output = crate::platform::HostProcess::asynchronous(compiler)
             .arg("--version")
             .kill_on_drop(true)
             .output()

@@ -167,7 +167,7 @@ pub(crate) const ENGINE_BUILD: [&str; 7] = ["build", "--release", "--locked", "-
 /// binary instead of trusting a path another lane may have written.
 fn build_engine() -> Result<PathBuf, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = std::process::Command::new(cargo)
+    let output = crate::platform::HostProcess::standard(cargo)
         .args(ENGINE_BUILD)
         .arg("--message-format=json-render-diagnostics")
         .output()
@@ -197,7 +197,7 @@ fn artifact(stream: &str) -> Option<PathBuf> {
 /// The source revision the Rust engine under test was built from.
 pub(crate) fn revision() -> String {
     let git = |arguments: &[&str]| {
-        std::process::Command::new("git")
+        crate::platform::HostProcess::standard("git")
             .args(arguments)
             .output()
             .ok()
@@ -376,7 +376,7 @@ impl Gate {
             return Ok(None);
         }
         let executable = std::env::current_exe().map_err(|error| format!("runner executable: {error}"))?;
-        let status = std::process::Command::new("taskset")
+        let status = crate::platform::HostProcess::standard("taskset")
             .arg("-c")
             .arg(cpu.to_string())
             .arg(executable)

@@ -11,7 +11,6 @@ use crate::record::FramedIdentity;
 use clap::Args;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 type Error = Box<dyn std::error::Error>;
 
@@ -354,7 +353,7 @@ fn verdict_of(resolved: bool) -> &'static str {
 }
 
 fn execute(arm: &Arm, options: &Options) -> Result<Vec<Phase>, Error> {
-    let mut command = Command::new(&arm.binary);
+    let mut command = crate::platform::HostProcess::standard(&arm.binary);
     for option in &arm.options {
         command.arg("--engine-option").arg(option);
     }

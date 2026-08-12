@@ -237,7 +237,7 @@ impl Benchmark {
         let staging = tempfile::Builder::new().prefix("build-").tempdir_in(&root)?;
         let output = staging.path().join(case.id.replace('/', "-"));
         let compiler = build.compiler.for_target(target);
-        let status = tokio::process::Command::new(compiler)
+        let status = crate::platform::HostProcess::asynchronous(compiler)
             .args(&build.flags)
             .args(&case.build_flags)
             .arg(self.source_path())
