@@ -218,23 +218,22 @@ pub fn snake_case(value: &str) -> String {
     let mut output = String::new();
     let mut separator = false;
     for character in value.trim_start_matches("r#").chars() {
-        if character.is_ascii_alphanumeric() {
-            if (character.is_ascii_uppercase()
-                && output
-                    .chars()
-                    .last()
-                    .is_some_and(|character| character.is_ascii_lowercase()))
-                || (separator && !output.is_empty())
-            {
-                output.push('_');
-            }
-            output.push(character.to_ascii_lowercase());
-            separator = false;
-        } else {
-            separator = true;
-        }
+        append_snake_character(&mut output, &mut separator, character);
     }
     output.trim_matches('_').to_owned()
+}
+
+fn append_snake_character(output: &mut String, separator: &mut bool, character: char) {
+    if !character.is_ascii_alphanumeric() {
+        *separator = true;
+        return;
+    }
+    let follows_lowercase = output.chars().last().is_some_and(|value| value.is_ascii_lowercase());
+    if (character.is_ascii_uppercase() && follows_lowercase) || (*separator && !output.is_empty()) {
+        output.push('_');
+    }
+    output.push(character.to_ascii_lowercase());
+    *separator = false;
 }
 
 pub fn requires_test(attributes: &[Attribute]) -> bool {
@@ -494,7 +493,7 @@ pub(crate) fn test_source(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::Workspace;
+    use super::{Workspace, snake_case};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -531,5 +530,12 @@ mod tests {
         let workspace = Workspace::load_with_policy([root.clone()], &policy).unwrap();
         assert_eq!(workspace.empty_directories(), &[root.clone()]);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn identifiers_are_normalized_to_snake_case() {
+        assert_eq!(snake_case("r#HTTPServer-value"), "h_t_t_p_server_value");
+        assert_eq!(snake_case("GuestPath"), "guest_path");
+        assert_eq!(snake_case("__already_snake__"), "already_snake");
     }
 }
