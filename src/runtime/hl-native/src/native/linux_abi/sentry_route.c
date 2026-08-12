@@ -988,6 +988,9 @@ static int sentry_export_socket(struct sentry_marshal *M, int64_t *result) {
             if (ret >= 0) SENTRY_EXPORT_EXACT(G_A1(c), M->worker_msghdr, SENTRY_MSGHDR_SZ);
         }
         break;
+    default:
+        return 0;
+    }
     *result = ret;
     return 1;
 }
@@ -1047,9 +1050,6 @@ static int sentry_export_misc(struct sentry_marshal *M, int64_t *result) {
         return 0; // 56 openat / 57 close / 62 lseek / 64 write / 66 writev / 68 pwrite / 198 socket /
                // 200 bind / 203 connect / 206 sendto / 208 setsockopt / 210 shutdown / 211 sendmsg /
                // 20 epoll_create1 / 21 epoll_ctl / 23 dup / 24 dup3: no out bytes
-    }
-    default:
-        return 0;
     }
     *result = ret;
     return 1;
