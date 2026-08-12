@@ -1,4 +1,4 @@
-#include "../directory.h"
+#include "../../directory.h"
 
 #include <errno.h>
 #include <fcntl.h>
