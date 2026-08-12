@@ -5488,6 +5488,29 @@ static int lower_x87_family(struct insn *instruction, uint64_t guest_pc, uint64_
     return result == TX_FALL ? TX_NEXT : result;
 }
 
+static int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
+    uint8_t op = I.op;
+    if (op != 0x2E && op != 0x2F) return TX_FALL;
+    int s = vm;
+    if (I.is_mem) {
+        emit_ea(&I, next);
+        if (emit_soft_memory_active()) emit_memory_guard(17, I.p66 ? 8u : 4u, guest_pc, X86_SOFT_READ);
+        if (I.p66)
+            g_ldr_d(16, 17);
+        else
+            g_ldr_s(16, 17);
+        s = 16;
+    }
+    // COMISS/COMISD (0x2F) is the SIGNALING ordered compare: it raises Invalid (IE)
+    // on ANY NaN operand, including qNaN. UCOMISS/UCOMISD (0x2E) is quiet: IE only for
+    // sNaN. Map 0x2F -> FCMPE (bit4 set) and 0x2E -> FCMP. EFLAGS result is identical
+    // for both (unordered -> N0 Z0 C1 V1), so the fixup below is unchanged.
+    emit32((I.p66 ? 0x1E602000u : 0x1E202000u) | (op == 0x2F ? 0x10u : 0u) | (s << 16) |
+           (vd << 5));   // FCMP/FCMPE Dvd, Ds  (Rd=0)
+    e_nzcv_save_fcmp();  // unordered fixup: x86 ZF=PF=CF=1, SF=0 (ARM FCMP gives N0 Z0 C1 V1)
+    return TX_NEXT;
+}
+
 static int lower_sse_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     if (I.op != 0xC2) return TX_FALL;
     int packed = !I.repne && !I.rep;
@@ -6372,33 +6395,14 @@ static void *translate_block(uint64_t gpc) {
                     emit32(0x0E003C00u | ((((unsigned)lane << 2) | 2u) << 16) | (vm << 5) | I.reg);
                 } else if (lower_sse_compare(I, gpc, next, vd, vm) == TX_NEXT) {
                     // The helper emitted the complete packed or scalar comparison.
-                } else if (op == 0x2E || op == 0x2F) { // ucomisd/comisd (66=double, none=single) -> FCMP + flags
-                    int s = vm;
-                    if (I.is_mem) {
-                        emit_ea(&I, next);
-                        if (emit_soft_memory_active()) emit_memory_guard(17, I.p66 ? 8u : 4u, gpc, X86_SOFT_READ);
-                        if (I.p66)
-                            g_ldr_d(16, 17);
-                        else
-                            g_ldr_s(16, 17);
-                        s = 16;
-                    }
-                    // COMISS/COMISD (0x2F) is the SIGNALING ordered compare: it raises Invalid (IE)
-                    // on ANY NaN operand, including qNaN. UCOMISS/UCOMISD (0x2E) is quiet: IE only for
-                    // sNaN. Map 0x2F -> FCMPE (bit4 set) and 0x2E -> FCMP. EFLAGS result is identical
-                    // for both (unordered -> N0 Z0 C1 V1), so the fixup below is unchanged.
-                    emit32((I.p66 ? 0x1E602000u : 0x1E202000u) | (op == 0x2F ? 0x10u : 0u) | (s << 16) |
-                           (vd << 5));   // FCMP/FCMPE Dvd, Ds  (Rd=0)
-                    e_nzcv_save_fcmp();  // unordered fixup: x86 ZF=PF=CF=1, SF=0 (ARM FCMP gives N0 Z0 C1 V1)
-                } else if (op == 0xF4) { // pmuludq: vd.u64[i] = (u32)vd.even32[i] * (u32)src.even32[i]
-                    // W3b: was UNIMPL -> blocked glibc strchr/strrchr (byte-broadcast via pmuludq).
-                    // Gather the even (0,2) 32-bit lanes of each operand into the low 2 lanes (UZP1),
-                    // then widening multiply -> two 64-bit products. Bit-exact, 3 NEON insns.
+                } else if (lower_sse_flag_compare(I, gpc, next, vd, vm) == TX_NEXT) {
+                    // The helper emitted COMIS/UCOMIS and published its EFLAGS result.
+                } else if (op == 0xF4) { // pmuludq: multiply even unsigned 32-bit lanes to 64-bit products
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    emit32(0x4E801800u | (vd << 16) | (vd << 5) | 17); // uzp1 v17.4s, vd.4s, vd.4s -> [d0,d2,..]
-                    emit32(0x4E801800u | (s << 16) | (s << 5) | 18);   // uzp1 v18.4s, s.4s,  s.4s  -> [s0,s2,..]
-                    emit32(0x2EA0C000u | (18 << 16) | (17 << 5) | vd); // umull vd.2d, v17.2s, v18.2s
+                    emit32(0x4E801800u | (vd << 16) | (vd << 5) | 17);
+                    emit32(0x4E801800u | (s << 16) | (s << 5) | 18);
+                    emit32(0x2EA0C000u | (18 << 16) | (17 << 5) | vd);
                 } else if (op == 0x50) {
                     (void)lower_sse_sign_mask(&I, vm, mmx);
                 } else if (op == 0x5B) { // cvtdq2ps(NP)/cvtps2dq(66)/cvttps2dq(F3): packed 4-lane int<->float
