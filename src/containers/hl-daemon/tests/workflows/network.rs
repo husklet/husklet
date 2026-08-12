@@ -32,7 +32,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
                 &server_root,
                 Process::new("/bin/sh").args([
                     "-c",
-                    "printf 'ready\\n'; for n in 1 2; do printf 'bridge-ok\\n' | nc -l -p 8080; done",
+                    "printf 'ready\\n'; printf 'bridge-ok\\n' | nc -l -p 8080; printf 'bridge-ok\\n' | nc -l -p 8081",
                 ]),
             )
             .name("net-srv")
@@ -55,7 +55,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
         .create(
             ContainerSpec::from_directory(
                 &client_root,
-                Process::new("/bin/sh").args(["-c", &format!("nc net-srv 8080; nc {address} 8080")]),
+                Process::new("/bin/sh").args(["-c", &format!("nc net-srv 8080; nc {address} 8081")]),
             )
             .name("net-cli")
             .isolation(networked()),
