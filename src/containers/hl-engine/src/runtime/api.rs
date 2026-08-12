@@ -16,7 +16,7 @@ use crate::options::Options;
 mod workspace;
 
 use workspace::OwnedWorkspace;
-pub use workspace::{BaseSystem, Input, Rootfs};
+pub use workspace::{Input, Rootfs};
 
 #[derive(Clone, Debug)]
 pub struct Builder {
@@ -74,7 +74,7 @@ impl Builder {
             Err(error) => return workspace.fail(error),
         };
         if prepared.rootfs.is_none()
-            && let Err(error) = workspace.stage_base_system(BaseSystem::linux())
+            && let Err(error) = workspace.stage_base_system()
         {
             return workspace.fail(error);
         }

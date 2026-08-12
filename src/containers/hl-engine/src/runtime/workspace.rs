@@ -56,31 +56,6 @@ pub struct Rootfs {
     inputs: Vec<Input>,
 }
 
-#[derive(Clone, Debug)]
-pub struct BaseSystem {
-    files: Vec<(PathBuf, Box<[u8]>)>,
-}
-
-impl BaseSystem {
-    #[must_use]
-    pub fn empty() -> Self {
-        Self { files: Vec::new() }
-    }
-
-    #[must_use]
-    pub fn linux() -> Self {
-        Self::empty()
-            .with_file("etc/passwd", b"root:x:0:0:root:/root:/bin/sh\n".to_vec())
-            .with_file("etc/group", b"root:x:0:\n".to_vec())
-    }
-
-    #[must_use]
-    pub fn with_file(mut self, relative: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> Self {
-        self.files.push((relative.into(), contents.into().into_boxed_slice()));
-        self
-    }
-}
-
 impl Rootfs {
     #[must_use]
     pub fn scratch(entry: impl Into<PathBuf>) -> Self {
@@ -171,8 +146,11 @@ impl OwnedWorkspace {
         fs::create_dir_all(filesystem_root.join(relative)).map_err(|_| EngineError::WorkspaceFailed)
     }
 
-    pub(super) fn stage_base_system(&self, system: BaseSystem) -> Result<(), EngineError> {
-        for (relative, contents) in system.files {
+    pub(super) fn stage_base_system(&self) -> Result<(), EngineError> {
+        for (relative, contents) in [
+            (Path::new("etc/passwd"), b"root:x:0:0:root:/root:/bin/sh\n".as_slice()),
+            (Path::new("etc/group"), b"root:x:0:\n".as_slice()),
+        ] {
             self.reserve(u64::try_from(contents.len()).map_err(|_| EngineError::WorkspaceFailed)?)?;
             let destination = self.destination(&relative)?;
             if let Some(parent) = destination.parent() {
@@ -346,7 +324,7 @@ impl Workspace for OwnedWorkspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{BaseSystem, OwnedWorkspace};
+    use super::OwnedWorkspace;
     use crate::engine::{EngineError, Workspace, WorkspaceId};
     use std::fs::OpenOptions;
     use std::os::unix::fs::PermissionsExt;
@@ -355,7 +333,7 @@ mod tests {
     #[test]
     fn base_files_are_owned() {
         let workspace = OwnedWorkspace::create().unwrap();
-        workspace.stage_base_system(BaseSystem::linux()).unwrap();
+        workspace.stage_base_system().unwrap();
         assert_eq!(
             std::fs::read(workspace.root.join("etc/passwd")).unwrap(),
             b"root:x:0:0:root:/root:/bin/sh\n"
@@ -367,21 +345,6 @@ mod tests {
                 .mode()
                 & 0o777,
             0o644
-        );
-        workspace.cleanup(WorkspaceId(1)).unwrap();
-    }
-
-    #[test]
-    fn base_rejects_escape_collision() {
-        let workspace = OwnedWorkspace::create().unwrap();
-        assert_eq!(
-            workspace.stage_base_system(BaseSystem::empty().with_file("../escape", b"bad".to_vec())),
-            Err(EngineError::WorkspaceFailed)
-        );
-        workspace.stage_base_system(BaseSystem::linux()).unwrap();
-        assert_eq!(
-            workspace.stage_base_system(BaseSystem::empty().with_file("etc/passwd", b"replace".to_vec())),
-            Err(EngineError::WorkspaceFailed)
         );
         workspace.cleanup(WorkspaceId(1)).unwrap();
     }
