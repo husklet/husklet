@@ -23,6 +23,9 @@ use std::{
 };
 
 const ORACLE_CAPTURE_LIMIT: u64 = 1024 * 1024;
+const COMPILER_CAPTURE_LIMIT: u64 = 1024 * 1024;
+const COMPILER_TIMEOUT: Duration = Duration::from_secs(120);
+const COMPILER_DIAGNOSTIC_LIMIT: usize = 4096;
 
 pub struct Workload {
     pub id: String,
@@ -214,15 +217,24 @@ impl App {
         let output = directory.path().join(&case.output);
         let compiler = self.compiler.for_target(target);
         let source = self.directory.join(case.source.native());
-        let status = crate::platform::HostProcess::standard(compiler)
-            .arg("-o")
-            .arg(&output)
-            .arg(&source)
-            .args(&case.flags)
-            .status()
+        let capture = hl_process::Capture {
+            stdout: directory.path().join("compiler.stdout"),
+            stderr: directory.path().join("compiler.stderr"),
+            stdout_limit: COMPILER_CAPTURE_LIMIT,
+            stderr_limit: COMPILER_CAPTURE_LIMIT,
+        };
+        let mut command = hl_process::Command::new(compiler);
+        command.arg("-o").arg(&output).arg(&source).args(&case.flags);
+        let outcome = hl_process::run(&command, &capture, COMPILER_TIMEOUT, &AtomicBool::new(false))
             .map_err(|error| format!("run {compiler} on {}: {error}", source.display()))?;
-        if !status.success() {
-            return Err(format!("{compiler} failed with {status}").into());
+        if outcome != hl_process::Outcome::Exited(Some(0)) {
+            let stderr =
+                fs::read(&capture.stderr).unwrap_or_else(|error| format!("<unavailable: {error}>").into_bytes());
+            return Err(format!(
+                "{compiler} failed with {outcome:?}; stderr={}",
+                compiler_diagnostic(&stderr)
+            )
+            .into());
         }
         Ok(GuestBuild {
             _directory: directory,
@@ -308,6 +320,28 @@ impl App {
         let _provider = oracle.provider;
         oracle.commands.for_target(target)
     }
+}
+
+fn compiler_diagnostic(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut excerpt = String::with_capacity(text.len().min(COMPILER_DIAGNOSTIC_LIMIT));
+    for character in text.chars() {
+        let character = match character {
+            '\t' | '\n' | '\r' => ' ',
+            value => value,
+        };
+        if excerpt.len() + character.len_utf8() > COMPILER_DIAGNOSTIC_LIMIT {
+            break;
+        }
+        excerpt.push(character);
+    }
+    let shown = excerpt.len();
+    let suffix = bytes
+        .len()
+        .checked_sub(shown)
+        .filter(|omitted| *omitted > 0)
+        .map_or_else(String::new, |omitted| format!(" ... [{omitted} bytes omitted]"));
+    format!("{excerpt}{suffix}")
 }
 
 fn validate_golden(directory: &Path, relative: &Path) -> Result<PathBuf, Error> {
@@ -529,6 +563,45 @@ mod tests {
                 .join("target/testing/runtime")
                 .join(&app.name),
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_build_reports_bounded_compiler_stderr() {
+        let directory = tempfile::tempdir().unwrap();
+        let compiler = directory.path().join("failing-cc");
+        fs::write(
+            &compiler,
+            "#!/bin/sh\nprintf 'specific compiler failure\\n' >&2\nexit 17\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&compiler, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let rows = "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/one.out }\n";
+        fs::write(directory.path().join("one.c"), "one").unwrap();
+        fs::create_dir_all(directory.path().join("golden")).unwrap();
+        fs::write(directory.path().join("golden/one.out"), []).unwrap();
+        let definition = directory.path().join("test.yaml");
+        let compiler = compiler.display();
+        fs::write(
+            &definition,
+            format!(
+                "targets: [arm64]\nimage: alpine\nexecution: {{}}\nbuild:\n  compiler: {{ arm64: {compiler}, amd64: {compiler} }}\n  flags: []\ncases:\n{rows}"
+            ),
+        )
+        .unwrap();
+        let app = App::load(directory.path(), &definition).unwrap();
+
+        let error = app
+            .build(&app.cases[0], crate::suite::Target::Arm64)
+            .err()
+            .expect("the compiler must fail")
+            .to_string();
+        assert!(error.contains("Exited(Some(17))"), "{error}");
+        assert!(error.contains("specific compiler failure"), "{error}");
     }
 
     #[test]
