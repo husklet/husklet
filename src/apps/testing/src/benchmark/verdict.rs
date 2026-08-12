@@ -7,46 +7,48 @@ pub(super) struct Report {
     pub text: String,
 }
 
-pub(super) fn evaluate(campaign: &Campaign, rows: &[Row], limit: f64) -> Result<Report, Error> {
-    if !limit.is_finite() || limit < 1.0 {
-        return Err("benchmark limit must be finite and at least 1".into());
-    }
-    verify_outputs(rows)?;
-    let by_key = rows
-        .iter()
-        .map(|row| (row.key.as_str(), row))
-        .collect::<BTreeMap<_, _>>();
-    let mut nulls = BTreeMap::new();
-    let invariant = campaign
-        .invariant_phases
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    for (workload, definition) in &campaign.workloads {
-        collect_nulls(campaign, &by_key, &invariant, workload, definition, &mut nulls)?;
-    }
-    let mut verdict = "PASS";
-    let mut lines = vec!["workload\tlayout\tcell\tphase\tratio\tnull_floor\tupper\tverdict".to_owned()];
-    for (workload, definition) in &campaign.workloads {
-        if append_comparisons(campaign, &by_key, &nulls, workload, definition, limit, &mut lines)? {
-            verdict = "FAIL";
+impl Report {
+    pub(super) fn evaluate(campaign: &Campaign, rows: &[Row], limit: f64) -> Result<Self, Error> {
+        if !limit.is_finite() || limit < 1.0 {
+            return Err("benchmark limit must be finite and at least 1".into());
         }
-    }
-    lines.push("artifact\tsha256".to_owned());
-    for (arm, definition) in &campaign.arms {
-        for (name, artifact) in &definition.artifacts {
-            lines.push(format!("{arm}/{name}\t{}", artifact.sha256));
+        verify_outputs(rows)?;
+        let by_key = rows
+            .iter()
+            .map(|row| (row.key.as_str(), row))
+            .collect::<BTreeMap<_, _>>();
+        let mut nulls = BTreeMap::new();
+        let invariant = campaign
+            .invariant_phases
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        for (workload, definition) in &campaign.workloads {
+            collect_nulls(campaign, &by_key, &invariant, workload, definition, &mut nulls)?;
         }
+        let mut verdict = "PASS";
+        let mut lines = vec!["workload\tlayout\tcell\tphase\tratio\tnull_floor\tupper\tverdict".to_owned()];
+        for (workload, definition) in &campaign.workloads {
+            if append_comparisons(campaign, &by_key, &nulls, workload, definition, limit, &mut lines)? {
+                verdict = "FAIL";
+            }
+        }
+        lines.push("artifact\tsha256".to_owned());
+        for (arm, definition) in &campaign.arms {
+            for (name, artifact) in &definition.artifacts {
+                lines.push(format!("{arm}/{name}\t{}", artifact.sha256));
+            }
+        }
+        lines.push(format!("rootfs\t{}", campaign.rootfs.sha256));
+        lines.push("sample\thost_load".to_owned());
+        for row in rows {
+            lines.push(format!("{}\t{}", row.key, row.host_load));
+        }
+        Ok(Self {
+            verdict,
+            text: lines.join("\n") + "\n",
+        })
     }
-    lines.push(format!("rootfs\t{}", campaign.rootfs.sha256));
-    lines.push("sample\thost_load".to_owned());
-    for row in rows {
-        lines.push(format!("{}\t{}", row.key, row.host_load));
-    }
-    Ok(Report {
-        verdict,
-        text: lines.join("\n") + "\n",
-    })
 }
 
 type NullKey<'a> = (&'a str, &'a str, &'a str, &'a str);

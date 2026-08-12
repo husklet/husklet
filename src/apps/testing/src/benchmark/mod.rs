@@ -76,7 +76,7 @@ pub(crate) async fn run(options: Options) -> Result<(), Error> {
     // happened to remain stable. Re-hash after the last sample as well as before the first.
     campaign.verify_artifacts()?;
     let rows = ledger.complete()?;
-    let report = verdict::evaluate(&campaign, &rows, options.limit)?;
+    let report = verdict::Report::evaluate(&campaign, &rows, options.limit)?;
     ledger.publish(&report)?;
     print!("{}", report.text);
     println!(
