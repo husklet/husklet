@@ -137,7 +137,6 @@ fn execute(
     Ok(exit)
 }
 
-#[cfg(target_os = "linux")]
 pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Result<String, ()> {
     if arguments.get(1).map(String::as_str) != Some("--backend-receipt") {
         return Err(());
@@ -190,11 +189,6 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
     Ok(format!(
         "{{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"{hex}\"}}"
     ))
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn backend_receipt(_: &[String], _: Option<Guest>) -> Result<String, ()> {
-    Err(())
 }
 
 #[cfg(test)]
