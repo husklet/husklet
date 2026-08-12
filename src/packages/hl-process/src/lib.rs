@@ -16,9 +16,9 @@ const ENVIRONMENT_COUNT_LIMIT: usize = 4096;
 const ENVIRONMENT_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 
 mod drain;
+mod platform;
 #[cfg(unix)]
 mod unix;
-mod platform;
 #[cfg(windows)]
 mod windows;
 

@@ -1,8 +1,8 @@
-use hl_descriptor::DescriptorFlags;
+use hl_descriptor::{CancellationNotification, DescriptorFlags};
 use hl_linux::{Errno, GuestArchitecture, GuestMemory, LinuxResult};
 use std::sync::Arc;
 
-use crate::{filesystem::errno::FileErrno, filesystem::syscalls::RuntimeFilesystemSyscalls};
+use crate::{LockCancellation, filesystem::errno::FileErrno, filesystem::syscalls::RuntimeFilesystemSyscalls};
 
 mod record;
 

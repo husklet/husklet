@@ -1,7 +1,7 @@
 use super::passthrough::{LockDomain, SharedLockRegistry};
 use crate::{
-    AdvisoryLockSnapshot, FlockMode, FlockOwnerToken, FlockSnapshot, Identity, LockCancellation, LockError, LockRange,
-    ProcessLockOwner, RangeConflict, RangeLockKind, RangeLockSnapshot,
+    FlockMode, FlockOwnerToken, Identity, LockCancellation, LockError, LockRange, ProcessLockOwner, RangeConflict,
+    RangeLockKind,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};

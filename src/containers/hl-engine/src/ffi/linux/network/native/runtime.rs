@@ -278,32 +278,6 @@ impl RuntimeNetworkHost for Native {
         Err(RuntimeNetworkError::AddressInUse)
     }
 
-    fn stage_switch_aliases(
-        publication: &mut hl_fs::Publication,
-        aliases: SwitchAliases<'_>,
-    ) -> Result<(), RuntimeNetworkError> {
-        if !aliases.wildcard_stream {
-            return Ok(());
-        }
-        for alias in aliases.aliases {
-            let (alias_anchor, alias_path) = Self::switch_reservation(alias, aliases.port, aliases.ipv6_only)?;
-            let alias_name = Self::switch_name(&alias_path)?.to_vec();
-            publication
-                .reserve_link(&alias_anchor, &alias_name, alias_path, aliases.path)
-                .map_err(Self::publication_error)?;
-        }
-        if aliases.ipv6_only {
-            return Ok(());
-        }
-        // Linux serves one wildcard listener at every local address, so the same publication
-        // carries the namespace-private loopback name.
-        let loopback = Self::switch_loopback_path(aliases.interface, aliases.port)?;
-        let loopback_name = Self::switch_name(&loopback)?.to_vec();
-        publication
-            .reserve_link(aliases.anchor, &loopback_name, loopback, aliases.path)
-            .map_err(Self::publication_error)
-    }
-
     fn prepare_connect(&self, token: u64, address: SocketAddress) -> Result<(), RuntimeNetworkError> {
         let address = self.binding(&address).unwrap_or(address);
         let mut sockets = self
@@ -778,6 +752,32 @@ impl RuntimeNetworkHost for Native {
 }
 
 impl Native {
+    fn stage_switch_aliases(
+        publication: &mut hl_fs::Publication,
+        aliases: SwitchAliases<'_>,
+    ) -> Result<(), RuntimeNetworkError> {
+        if !aliases.wildcard_stream {
+            return Ok(());
+        }
+        for alias in aliases.aliases {
+            let (alias_anchor, alias_path) = Self::switch_reservation(alias, aliases.port, aliases.ipv6_only)?;
+            let alias_name = Self::switch_name(&alias_path)?.to_vec();
+            publication
+                .reserve_link(&alias_anchor, &alias_name, alias_path, aliases.path)
+                .map_err(Self::publication_error)?;
+        }
+        if aliases.ipv6_only {
+            return Ok(());
+        }
+        // Linux serves one wildcard listener at every local address, so the same publication
+        // carries the namespace-private loopback name.
+        let loopback = Self::switch_loopback_path(aliases.interface, aliases.port)?;
+        let loopback_name = Self::switch_name(&loopback)?.to_vec();
+        publication
+            .reserve_link(aliases.anchor, &loopback_name, loopback, aliases.path)
+            .map_err(Self::publication_error)
+    }
+
     /// Records the bridge rendezvous a refused loopback connect retries against, then dials host
     /// loopback first so a listener that really bound loopback still wins.
     fn prepare_loopback_connect(

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use hl_descriptor::CancellationNotification;
 use hl_linux::{Errno, GuestMemory, LinuxResult};
 use hl_vfs::FlockOwnerToken;
 
