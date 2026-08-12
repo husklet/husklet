@@ -1089,6 +1089,37 @@ static enum avx_dispatch_result avx_dispatch_map2_variable_permutation(const hl_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_variable_shift(const hl_x86_avx_state *state, struct cpu *c,
+                                                                struct insn *instruction, uint64_t next, int map,
+                                                                int op, int destination, int value_register,
+                                                                int width) {
+    if (map != 2 || (op != 0x45 && op != 0x46 && op != 0x47)) return AVX_DISPATCH_UNMATCHED;
+
+    int element_size = instruction->vex_w ? 8 : 4;
+    uint8_t values[64], counts[64], output[64];
+    avx_get(c, value_register, values);
+    avx_get_rm(state, c, instruction, next, width, counts);
+    for (int offset = 0; offset < width; offset += element_size) {
+        uint64_t value = 0, count = 0, result;
+        memcpy(&value, values + offset, (size_t)element_size);
+        memcpy(&count, counts + offset, (size_t)element_size);
+        int bits = element_size * 8;
+        if (op == 0x46) { // vpsravd: arithmetic dword right shift
+            int32_t signed_value;
+            memcpy(&signed_value, values + offset, 4);
+            result = (uint32_t)(count >= 32 ? signed_value >> 31 : signed_value >> count);
+        } else if (op == 0x45) { // vpsrlvd/q
+            result = count >= (uint64_t)bits ? 0 : value >> count;
+        } else { // vpsllvd/q
+            result = count >= (uint64_t)bits ? 0 : value << count;
+        }
+        memcpy(output + offset, &result, (size_t)element_size);
+    }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1533,6 +1564,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map2_widen(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_variable_permutation(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
         return;
+    if (avx_dispatch_map2_variable_shift(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2570,33 +2602,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(&y, b + i, 4);
                 int32_t z = x * y;
                 memcpy(d + i, &z, 4);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x45: // vpsrlvd/q: variable logical right shift
-        case 0x46: // vpsravd:   variable arithmetic right shift (dword only)
-        case 0x47: // vpsllvd/q: variable logical left shift
-        {
-            int es = I.vex_w ? 8 : 4; // W selects dword(0) / qword(1); 0x46 is dword-only
-            avx_get(c, vv, a);        // values to shift
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += es) {
-                uint64_t v = 0, cnt = 0;
-                memcpy(&v, a + i, (size_t)es);
-                memcpy(&cnt, b + i, (size_t)es);
-                uint64_t z;
-                int bits = es * 8;
-                if (op == 0x46) { // arithmetic right (sign-extend), dword
-                    int32_t sv;
-                    memcpy(&sv, a + i, 4);
-                    z = (uint32_t)((cnt >= 32) ? (sv >> 31) : (sv >> cnt));
-                } else if (op == 0x45) { // logical right
-                    z = (cnt >= (uint64_t)bits) ? 0 : (v >> cnt);
-                } else { // 0x47 logical left
-                    z = (cnt >= (uint64_t)bits) ? 0 : (v << cnt);
-                }
-                memcpy(d + i, &z, (size_t)es);
             }
             avx_put(c, rd, d, W);
             goto done;
