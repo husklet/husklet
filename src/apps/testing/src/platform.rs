@@ -9,5 +9,4 @@ impl HostProcess {
     pub(crate) fn standard(program: impl AsRef<OsStr>) -> std::process::Command {
         std::process::Command::new(program)
     }
-
 }

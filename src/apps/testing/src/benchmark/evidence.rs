@@ -2,7 +2,7 @@ use super::{
     definition::{Campaign, GuestPath},
     schedule::{self, Step},
 };
-use crate::{record::FramedIdentity, suite::Error};
+use crate::{platform::HostProcess, record::FramedIdentity, suite::Error};
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -45,7 +45,7 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
             Path::new(&guest[0]).strip_prefix(&campaign.rootfs.path)?.display()
         ),
     };
-    let mut command = Command::new(&arm.command[0]);
+    let mut command = HostProcess::standard(&arm.command[0]);
     command
         .args(&arm.command[1..])
         .arg(executable)
@@ -286,7 +286,7 @@ fn sustained_quiet(seconds: u64, timeout: u64, max_load: f64) -> Result<(), Erro
 }
 
 fn process_count(name: &str) -> u64 {
-    Command::new("pgrep")
+    HostProcess::standard("pgrep")
         .args(["-cx", name])
         .output()
         .ok()

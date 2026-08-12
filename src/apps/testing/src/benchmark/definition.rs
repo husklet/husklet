@@ -1,10 +1,10 @@
-use crate::{record::FramedIdentity, suite::Error};
+use crate::{platform::HostProcess, record::FramedIdentity, suite::Error};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 const SCHEMA: &str = "husklet-benchmark-v1";
@@ -140,7 +140,7 @@ impl Campaign {
             {
                 return Err(format!("arm {label} command is not bound to a hashed artifact").into());
             }
-            let status = Command::new(&arm.smoke[0])
+            let status = HostProcess::standard(&arm.smoke[0])
                 .args(&arm.smoke[1..])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
