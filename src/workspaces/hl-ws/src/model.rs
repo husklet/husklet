@@ -104,12 +104,6 @@ impl Workspace {
             .clone()
             .unwrap_or_else(|| base.join("workspaces").join(Self::storage_component(&self.name)))
     }
-    /// The default shell command to run in the workspace.
-    #[must_use]
-    pub fn default_shell() -> Vec<String> {
-        vec!["/bin/bash".to_string(), "-l".to_string()]
-    }
-
     /// Encode a workspace name as one safe path component.
     /// Reversible, traversal-safe filesystem component for a workspace identity.
     #[must_use]
