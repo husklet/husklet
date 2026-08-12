@@ -116,7 +116,7 @@ mod process_wait;
 mod retained_exit;
 mod retained_identity;
 mod robust;
-mod runtime_socket;
+mod socket;
 mod syscall_router;
 mod task_exec;
 mod thread;
@@ -173,9 +173,9 @@ pub use procfs::{
 pub use retained_exit::RetainedExitTrap;
 pub use retained_identity::RetainedTaskContext;
 pub use robust::{ExitHandler as RobustExitHandler, Wake as RobustWake};
-pub use runtime_socket::Registry as SocketRegistry;
-pub(crate) use runtime_socket::{RuntimeSocket, RuntimeSocketKind};
 pub use signal::{FramePort, PreparedFramePublication};
+pub use socket::Registry as SocketRegistry;
+pub(crate) use socket::{RuntimeSocket, RuntimeSocketKind};
 pub use syscall_router::{
     RouterDependencies, RuntimeSyscallRouter, RuntimeSyscallTrap, RuntimeTerminal, RuntimeTrapOutcome,
     SignalBoundaryOutcome, SignalBoundaryPort, SyscallRecord,

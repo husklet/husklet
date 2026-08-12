@@ -19,8 +19,8 @@ pub(crate) struct CMachine {
 
 #[cfg(hl_retained_c)]
 struct CExecutionState {
-    prepared: Option<Arc<crate::c_execution::process::CWorker>>,
-    current: Option<Arc<crate::c_execution::process::CWorker>>,
+    prepared: Option<Arc<crate::execution::process::CWorker>>,
+    current: Option<Arc<crate::execution::process::CWorker>>,
 }
 
 #[cfg(hl_retained_c)]
@@ -30,7 +30,7 @@ impl CMachine {
             let mut state = self.execution.lock().map_err(|_| EngineError::Synchronization)?;
             let execution = match state.prepared.take() {
                 Some(execution) => execution,
-                None => Arc::new(crate::c_execution::process::CWorker::create(
+                None => Arc::new(crate::execution::process::CWorker::create(
                     self.isa,
                     &self.plan,
                     &self.services,
@@ -42,7 +42,7 @@ impl CMachine {
         execution.start()
     }
 
-    fn current(&self) -> Result<Arc<crate::c_execution::process::CWorker>, EngineError> {
+    fn current(&self) -> Result<Arc<crate::execution::process::CWorker>, EngineError> {
         self.execution
             .lock()
             .map_err(|_| EngineError::Synchronization)?

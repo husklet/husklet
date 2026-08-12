@@ -14,7 +14,7 @@
 
 mod baseline;
 #[cfg(test)]
-mod case_tests;
+mod case_test;
 pub(crate) mod definition;
 mod diagnostic;
 mod execution;

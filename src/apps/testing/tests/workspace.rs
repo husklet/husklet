@@ -1,4 +1,4 @@
-mod guest_fixture;
+mod guest;
 
 use hl_engine::activation::GuestIsa;
 use hl_engine::runtime::{Builder, Input, Rootfs};
@@ -100,7 +100,7 @@ fn socket_teardown_child() {
     let root = std::env::temp_dir().join(format!("hl-socket-stop-{}-{mode}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let guest = root.join("socket-stop");
-    guest_fixture::socket_stop(name, &guest);
+    guest::socket_stop(name, &guest);
     let count = if mode.ends_with("isolation") { 2 } else { 1 };
     let mut engines = Vec::new();
     for _ in 0..count {

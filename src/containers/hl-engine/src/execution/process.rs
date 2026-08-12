@@ -530,10 +530,10 @@ mod tests {
         worker_executable, write_message,
     };
     use crate::activation::GuestIsa;
-    use crate::c_execution::StreamBridge;
-    use crate::c_execution::control::{FailureStage, Message};
     use crate::engine::StopRequest;
     use crate::engine::{EngineExit, ExitKind};
+    use crate::execution::StreamBridge;
+    use crate::execution::control::{FailureStage, Message};
     use std::io::{BufRead, BufReader};
     use std::os::unix::process::CommandExt;
     use std::os::unix::process::ExitStatusExt;
@@ -550,7 +550,7 @@ mod tests {
     }
 
     fn capture_events(run: impl FnOnce()) -> String {
-        let _guard = crate::c_execution::EVENT_CAPTURE_LOCK.lock().unwrap();
+        let _guard = crate::execution::EVENT_CAPTURE_LOCK.lock().unwrap();
         let output = Arc::new(Mutex::new(String::new()));
         hl_log::Events::global().set(Box::new(Capture(Arc::clone(&output))));
         run();

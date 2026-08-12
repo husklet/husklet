@@ -27,12 +27,12 @@ impl RetainedWorkerError {
 pub fn run(plan_descriptor: i32, control_descriptor: i32) -> Result<i32, RetainedWorkerError> {
     #[cfg(hl_retained_c)]
     {
-        crate::c_execution::worker::run(plan_descriptor, control_descriptor).map_err(|error| match error {
-            crate::c_execution::worker::WorkerError::Descriptor => RetainedWorkerError::Descriptor,
-            crate::c_execution::worker::WorkerError::Plan => RetainedWorkerError::Plan,
-            crate::c_execution::worker::WorkerError::Control => RetainedWorkerError::Control,
-            crate::c_execution::worker::WorkerError::Create => RetainedWorkerError::Create,
-            crate::c_execution::worker::WorkerError::Start => RetainedWorkerError::Start,
+        crate::execution::worker::run(plan_descriptor, control_descriptor).map_err(|error| match error {
+            crate::execution::worker::WorkerError::Descriptor => RetainedWorkerError::Descriptor,
+            crate::execution::worker::WorkerError::Plan => RetainedWorkerError::Plan,
+            crate::execution::worker::WorkerError::Control => RetainedWorkerError::Control,
+            crate::execution::worker::WorkerError::Create => RetainedWorkerError::Create,
+            crate::execution::worker::WorkerError::Start => RetainedWorkerError::Start,
         })
     }
     #[cfg(not(hl_retained_c))]

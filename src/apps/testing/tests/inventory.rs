@@ -7,7 +7,7 @@
 )]
 
 use std::collections::{BTreeMap, VecDeque};
-mod engine_binary;
+mod engine;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -818,14 +818,8 @@ fn run_stamp(
     for (label, path) in [
         ("inventory-runner", std::env::current_exe()?),
         ("compat-worker", PathBuf::from(env!("CARGO_BIN_EXE_hl-compat-worker"))),
-        (
-            "arm-engine",
-            engine_binary::EngineBinaryPaths::required().named("hl-aarch64"),
-        ),
-        (
-            "x86-engine",
-            engine_binary::EngineBinaryPaths::required().named("hl-x86_64"),
-        ),
+        ("arm-engine", engine::EngineBinaryPaths::required().named("hl-aarch64")),
+        ("x86-engine", engine::EngineBinaryPaths::required().named("hl-x86_64")),
         ("authority", PathBuf::from(env!("CARGO_BIN_EXE_hl-authority-child"))),
         ("projection", PathBuf::from(env!("CARGO_BIN_EXE_hl-projection-worker"))),
     ] {

@@ -1,10 +1,10 @@
 #![cfg(target_os = "linux")]
 
-mod engine_binary;
-mod guest_fixture;
+mod engine;
+mod guest;
 
 fn engine_binary(name: &str) -> String {
-    engine_binary::EngineBinaryPaths::required()
+    engine::EngineBinaryPaths::required()
         .named(name)
         .to_string_lossy()
         .into_owned()
@@ -112,7 +112,7 @@ fn confined_static_guest() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir(&root).unwrap();
     let path = root.join("guest");
-    guest_fixture::projection("projected_static.c", "x86_64", &path);
+    guest::projection("projected_static.c", "x86_64", &path);
     let authority = ProcessAuthority::projected(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
         &path,
@@ -157,7 +157,7 @@ fn confined_projected_file() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir(&root).unwrap();
     let guest = root.join("guest");
-    guest_fixture::projection("projected_read.c", "x86_64", &guest);
+    guest::projection("projected_read.c", "x86_64", &guest);
     std::fs::write(root.join("data"), b"original").unwrap();
     let authority = ProcessAuthority::projected_root(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
@@ -205,7 +205,7 @@ fn projected_directory(isa: &str, engine: &str) {
     std::os::unix::fs::symlink("child", root.join("tree/base/relative")).unwrap();
     std::os::unix::fs::symlink("/tree/base/child", root.join("tree/base/absolute")).unwrap();
     let guest = root.join("guest");
-    guest_fixture::projection("projected_directory.c", isa, &guest);
+    guest::projection("projected_directory.c", isa, &guest);
     let authority = ProcessAuthority::projected_root(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
         &root,
@@ -251,7 +251,7 @@ fn projected_write(isa: &str, engine: &str) {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let guest = root.join("guest");
-    guest_fixture::projection("projected_write.c", isa, &guest);
+    guest::projection("projected_write.c", isa, &guest);
     let authority = ProcessAuthority::projected_root_writable(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
         &root,
