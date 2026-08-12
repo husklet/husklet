@@ -15,7 +15,7 @@ pub use bindings::SyscallDispatch;
 pub use engine::{Engine, EngineConfig, Exit, STATUS_OK};
 pub use provider::{LIBRARY_NAME, Native};
 
-pub use platform::{ExecutionMode, GuestIsa, HostArch, HostOs, HostTarget, SUPPORTED_HOSTS};
+pub use platform::{ExecutionMode, GuestIsa, HostArch, HostOs, HostTarget, PLANNED_HOSTS, SUPPORTED_HOSTS};
 
 mod platform;
 

@@ -8,6 +8,8 @@ HL_EXTERN_C_BEGIN
 typedef struct hl_host_macos hl_host_macos;
 
 HL_API hl_status hl_host_macos_create(hl_host_macos **out_host, hl_host_services *out_services);
+/* Duplicates a live native descriptor into an owned FILE handle. */
+HL_API hl_host_result hl_host_macos_import_file(hl_host_macos *host, int descriptor);
 HL_API void hl_host_macos_destroy(hl_host_macos *host);
 
 HL_EXTERN_C_END

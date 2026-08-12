@@ -1,21 +1,17 @@
 #include "../engine/checkpoint_channel.h"
 #include "../engine/backend.h"
 #include "../engine/options.h"
+#if !defined(_WIN32)
 #include "../engine/provider/client.h"
 #include "../engine/provider/tree_files.h"
+#endif
 #include "executable_authority.h"
 #include "hl/engine.h"
-#if defined(_WIN32)
-#include "hl/windows.h"
-#elif defined(__APPLE__)
-#include "hl/macos.h"
-#else
-#include "hl/linux.h"
-#endif
 #include "hl/linux_abi.h"
 #include "hl/syscall_trap.h"
 #include "../host/system.h"
 #include "main_plan.h"
+#include "host.h"
 
 #include <fcntl.h>
 #include <stdint.h>
@@ -25,6 +21,20 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#if defined(_WIN32)
+#define HL_C_OPEN_CLOEXEC 0
+static ssize_t hl_c_backend_pread(int fd, void *buffer, size_t size, off_t offset) {
+    off_t saved = lseek(fd, 0, SEEK_CUR);
+    if (saved < 0 || lseek(fd, offset, SEEK_SET) < 0) return -1;
+    ssize_t result = read(fd, buffer, size);
+    if (lseek(fd, saved, SEEK_SET) < 0) return -1;
+    return result;
+}
+#else
+#define HL_C_OPEN_CLOEXEC O_CLOEXEC
+#define hl_c_backend_pread pread
+#endif
+
 /* Explicitly anchors the lifecycle object when the retained backend is linked
  * from static archives. The function is idempotent and replaces reliance on
  * linker-specific constructor extraction. */
@@ -32,58 +42,19 @@ extern void hl_aarch64_target_register_backend(void);
 extern void hl_x86_64_target_register_backend(void);
 
 typedef struct hl_c_backend {
-    void *host;
+    hl_c_bridge_host *host;
     hl_host_services services;
     hl_engine *engine;
     hl_options options;
     uint32_t options_initialized;
+#if !defined(_WIN32)
     hl_provider_client provider;
+#endif
     uint32_t provider_initialized;
     uint32_t provider_files_installed;
     int32_t provider_fd;
     hl_engine_exit result;
 } hl_c_backend;
-
-static hl_status hl_c_backend_host_create(void **host, hl_host_services *services) {
-#if defined(_WIN32)
-    return hl_host_windows_create((hl_host_windows **)host, services);
-#elif defined(__APPLE__)
-    return hl_host_macos_create((hl_host_macos **)host, services);
-#else
-    return hl_host_linux_create((hl_host_linux **)host, services);
-#endif
-}
-
-static void hl_c_backend_host_destroy(void *host) {
-#if defined(_WIN32)
-    hl_host_windows_destroy((hl_host_windows *)host);
-#elif defined(__APPLE__)
-    hl_host_macos_destroy((hl_host_macos *)host);
-#else
-    hl_host_linux_destroy((hl_host_linux *)host);
-#endif
-}
-
-static hl_host_result hl_c_backend_import_standard(hl_c_backend *backend, uint32_t stream, int32_t descriptor) {
-#if defined(__linux__)
-    return hl_host_linux_import_file((hl_host_linux *)backend->host, descriptor);
-#else
-    (void)descriptor;
-    if (backend->services.file == NULL || backend->services.file->standard_stream == NULL)
-        return (hl_host_result){HL_STATUS_NOT_SUPPORTED, 0, 0, 0};
-    return backend->services.file->standard_stream(backend->services.context, stream);
-#endif
-}
-
-static hl_host_result hl_c_backend_import_descriptor(hl_c_backend *backend, int32_t descriptor) {
-#if defined(__linux__)
-    return hl_host_linux_import_file((hl_host_linux *)backend->host, descriptor);
-#else
-    (void)backend;
-    (void)descriptor;
-    return (hl_host_result){HL_STATUS_NOT_SUPPORTED, 0, 0, 0};
-#endif
-}
 
 #if defined(HL_LEAK_CHECK_PROBE)
 /* Non-vacuity hook for the dedicated sanitizer gate. It is compiled only into
@@ -153,12 +124,14 @@ HL_API int32_t hl_c_backend_private_descriptor_add(int32_t descriptor) {
 
 static void hl_c_backend_provider_discard(hl_c_backend *backend) {
     if (backend == NULL || !backend->provider_initialized) return;
+#if !defined(_WIN32)
     if (backend->provider_files_installed) {
         hl_provider_tree_files_revoke();
         backend->provider_files_installed = 0;
     }
     hl_provider_client_destroy(&backend->provider);
     close(backend->provider_fd);
+#endif
     backend->provider_fd = -1;
     backend->provider_initialized = 0;
 }
@@ -185,7 +158,7 @@ static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *pla
         plan->link_end <= plan->link_start || (plan->flags != 0 && plan->kind != HL_C_IMAGE_EXECUTABLE))
         return 0;
     if (fstat(fd, &metadata) != 0 || metadata.st_size < (off_t)sizeof(header) ||
-        pread(fd, header, sizeof(header), 0) != (ssize_t)sizeof(header))
+        hl_c_backend_pread(fd, header, sizeof(header), 0) != (ssize_t)sizeof(header))
         return 0;
     if (memcmp(header, "\177ELF", 4) != 0 || header[4] != 2 || header[5] != 1 || header[6] != 1 ||
         (header[7] != 0 && header[7] != 3))
@@ -218,7 +191,7 @@ static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *pla
     for (uint16_t index = 0; index < phnum; ++index) {
         uint8_t ph[56];
         uint64_t offset = phoff + (uint64_t)index * phentsize;
-        if (offset < phoff || pread(fd, ph, sizeof(ph), (off_t)offset) != (ssize_t)sizeof(ph)) return 0;
+        if (offset < phoff || hl_c_backend_pread(fd, ph, sizeof(ph), (off_t)offset) != (ssize_t)sizeof(ph)) return 0;
         uint32_t ph_type;
         memcpy(&ph_type, ph, sizeof(ph_type));
         if (ph_type == 3) {
@@ -230,7 +203,8 @@ static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *pla
                 file_size > image_length - file_offset)
                 return 0;
             uint8_t interpreter[4096];
-            if (pread(fd, interpreter, (size_t)file_size, (off_t)file_offset) != (ssize_t)file_size) return 0;
+            if (hl_c_backend_pread(fd, interpreter, (size_t)file_size, (off_t)file_offset) != (ssize_t)file_size)
+                return 0;
             size_t length = (size_t)file_size - 1;
             if (interpreter[length] != 0 || memchr(interpreter, 0, length) != NULL) return 0;
             interpreter_identity = UINT64_C(0xcbf29ce484222325);
@@ -285,7 +259,7 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
     int validation_fd = executable_fd;
     int validation_owned = 0;
     if (validation_fd < 0 && executable_host != NULL) {
-        validation_fd = open(executable_host, O_RDONLY | O_CLOEXEC);
+        validation_fd = open(executable_host, O_RDONLY | HL_C_OPEN_CLOEXEC);
         validation_owned = validation_fd >= 0;
     }
     int validation_ok = validation_fd >= 0 && hl_c_validate_main_image_plan(validation_fd, image_plan);
@@ -300,7 +274,7 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         if (provider_fd >= 0) close(provider_fd);
         return HL_STATUS_OUT_OF_MEMORY;
     }
-    status = hl_c_backend_host_create(&backend->host, &backend->services);
+    status = hl_c_bridge_host_create(&backend->host, &backend->services);
     if (status != HL_STATUS_OK) {
         if (provider_fd >= 0) close(provider_fd);
         free(backend);
@@ -308,10 +282,15 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
     }
     backend->provider_fd = -1;
     if (provider_fd >= 0) {
+#if defined(_WIN32)
+        hl_c_bridge_host_destroy(backend->host);
+        free(backend);
+        return HL_STATUS_NOT_SUPPORTED;
+#else
         if (provider_fd < 3 ||
             (standard_fds != NULL &&
              (provider_fd == standard_fds[0] || provider_fd == standard_fds[1] || provider_fd == standard_fds[2]))) {
-            hl_c_backend_host_destroy(backend->host);
+            hl_c_bridge_host_destroy(backend->host);
             close(provider_fd);
             free(backend);
             return HL_STATUS_INVALID_ARGUMENT;
@@ -320,18 +299,19 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         backend->provider_fd = provider_fd;
         if (hl_provider_client_init(&backend->provider, provider_fd, 4096) != 0) {
             backend->provider_initialized = 0;
-            hl_c_backend_host_destroy(backend->host);
+            hl_c_bridge_host_destroy(backend->host);
             close(provider_fd);
             free(backend);
             return HL_STATUS_INVALID_ARGUMENT;
         }
         if (hl_provider_tree_files_install(&backend->services, &backend->provider) != 0) {
             hl_c_backend_provider_discard(backend);
-            hl_c_backend_host_destroy(backend->host);
+            hl_c_bridge_host_destroy(backend->host);
             free(backend);
             return HL_STATUS_INVALID_ARGUMENT;
         }
         backend->provider_files_installed = 1;
+#endif
     }
     memset(&config, 0, sizeof(config));
     hl_aarch64_target_register_backend();
@@ -345,13 +325,14 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
     memset(&executable, 0, sizeof(executable));
     if (standard_fds != NULL) {
         for (index = 0; index < 3; ++index) {
-            imported[index] = hl_c_backend_import_standard(backend, index, standard_fds[index]);
+            uint32_t access = index == 0 ? HL_HOST_FILE_READ : HL_HOST_FILE_WRITE;
+            imported[index] = hl_c_bridge_host_import_file(backend->host, standard_fds[index], access);
             if (imported[index].status != HL_STATUS_OK) {
                 uint32_t close_index;
                 for (close_index = 0; close_index < index; ++close_index)
                     (void)backend->services.file->close(backend->services.context, imported[close_index].value);
                 hl_c_backend_provider_discard(backend);
-                hl_c_backend_host_destroy(backend->host);
+                hl_c_bridge_host_destroy(backend->host);
                 free(backend);
                 return imported[index].status;
             }
@@ -367,21 +348,22 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
     }
     if (hl_options_init_records(&backend->options, option_count, option_names, option_values) != 0) {
         hl_c_backend_provider_discard(backend);
-        hl_c_backend_host_destroy(backend->host);
+        hl_c_bridge_host_destroy(backend->host);
         free(backend);
         return HL_STATUS_INVALID_ARGUMENT;
     }
     backend->options_initialized = 1;
     config.main_image_plan = image_plan;
     if (executable_fd >= 0) {
-        hl_host_result imported_executable = hl_c_backend_import_descriptor(backend, executable_fd);
+        hl_host_result imported_executable =
+            hl_c_bridge_host_import_file(backend->host, executable_fd, HL_HOST_FILE_READ);
         if (imported_executable.status != HL_STATUS_OK || imported_executable.value == HL_HOST_HANDLE_INVALID) {
             hl_options_destroy(&backend->options);
             if (standard_fds != NULL)
                 for (index = 0; index < 3; ++index)
                     (void)backend->services.file->close(backend->services.context, imported[index].value);
             hl_c_backend_provider_discard(backend);
-            hl_c_backend_host_destroy(backend->host);
+            hl_c_bridge_host_destroy(backend->host);
             free(backend);
             return imported_executable.status == HL_STATUS_OK ? HL_STATUS_PLATFORM_FAILURE : imported_executable.status;
         }
@@ -400,7 +382,7 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         if (status != HL_STATUS_OK) {
             hl_options_destroy(&backend->options);
             hl_c_backend_provider_discard(backend);
-            hl_c_backend_host_destroy(backend->host);
+            hl_c_bridge_host_destroy(backend->host);
             free(backend);
             return status;
         }
@@ -414,7 +396,7 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
             for (index = 0; index < 3; ++index)
                 (void)backend->services.file->close(backend->services.context, imported[index].value);
         hl_c_backend_provider_discard(backend);
-        hl_c_backend_host_destroy(backend->host);
+        hl_c_bridge_host_destroy(backend->host);
         hl_options_destroy(&backend->options);
         free(backend);
         return status;
@@ -458,7 +440,7 @@ HL_API void hl_c_backend_destroy(hl_c_backend *backend) {
     hl_engine_destroy(backend->engine);
     if (backend->options_initialized) hl_options_destroy(&backend->options);
     hl_c_backend_provider_discard(backend);
-    hl_c_backend_host_destroy(backend->host);
+    hl_c_bridge_host_destroy(backend->host);
     free(backend);
     hl_c_backend_leak_check_verdict();
 }

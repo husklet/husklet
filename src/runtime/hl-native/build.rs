@@ -22,6 +22,11 @@ fn main() {
         println!("cargo:warning=native C engine unavailable for {target_arch}-{target_os}");
         return;
     };
+    if !target.supported() {
+        println!("cargo:supported=0");
+        println!("cargo:warning=native C engine planned but not yet verified for {target_arch}-{target_os}");
+        return;
+    }
     println!("cargo:supported=1");
     println!("cargo:host_os={}", target.os.cfg_name());
     println!("cargo:host_arch={}", target.arch.cfg_name());
@@ -39,6 +44,7 @@ fn main() {
         "hl_c_backend_shim",
         &[
             "src/native/bridge/shim.c",
+            "src/native/bridge/host.c",
             "src/native/bridge/executable_authority.c",
             "src/native/bridge/address_projection.c",
         ],
@@ -134,6 +140,7 @@ fn discover_runtime_roots(target_os: &str) -> Vec<String> {
         .collect::<BTreeSet<_>>();
     let special = [
         "src/native/bridge/shim.c",
+        "src/native/bridge/host.c",
         "src/native/bridge/executable_authority.c",
         "src/native/bridge/address_projection.c",
         "src/native/engine/lifecycle.c",
@@ -208,6 +215,9 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         .flag_if_supported("-fvisibility=hidden")
         .flag_if_supported("-fno-function-sections")
         .flag_if_supported("-fno-data-sections");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        build.include("src/native/toolchain/msvc-posix/include");
+    }
     if name == "hl_c_backend_shim" {
         // This archive is the narrow Rust/C bridge. The engine itself stays
         // hidden; only bridge entry points and the versioned public C ABI are

@@ -72,7 +72,7 @@ impl HostTarget {
             return None;
         };
         let target = Self { os, arch };
-        if target.supported() { Some(target) } else { None }
+        if target.planned() { Some(target) } else { None }
     }
 
     /// Both guest ISAs are present on every supported host. The target C code
@@ -98,10 +98,10 @@ impl HostTarget {
     /// Reports optional execution machinery compiled for a host/guest pair.
     #[must_use]
     pub const fn supports_execution(self, guest: GuestIsa, mode: ExecutionMode) -> bool {
-        match (self.arch, guest, mode) {
-            (HostArch::Aarch64, _, ExecutionMode::Jit)
-            | (HostArch::X86_64, _, ExecutionMode::Interpreter)
-            | (HostArch::X86_64, GuestIsa::X86_64, ExecutionMode::Transliterator) => true,
+        match (self.os, self.arch, guest, mode) {
+            (_, HostArch::Aarch64, _, ExecutionMode::Jit)
+            | (_, HostArch::X86_64, _, ExecutionMode::Interpreter)
+            | (HostOs::Linux, HostArch::X86_64, GuestIsa::X86_64, ExecutionMode::Transliterator) => true,
             _ => false,
         }
     }
@@ -112,8 +112,14 @@ impl HostTarget {
             (self.os, self.arch),
             (HostOs::Linux, HostArch::Aarch64 | HostArch::X86_64)
                 | (HostOs::Macos, HostArch::Aarch64)
-                | (HostOs::Windows, HostArch::X86_64)
         )
+    }
+
+    /// Intended product matrix. A planned target is not advertised as
+    /// supported until its complete Cargo/DLL build and runtime gate pass.
+    #[must_use]
+    pub const fn planned(self) -> bool {
+        self.supported() || matches!((self.os, self.arch), (HostOs::Windows, HostArch::X86_64))
     }
 }
 
@@ -134,6 +140,12 @@ pub const SUPPORTED_HOSTS: &[HostTarget] = &[
     HostTarget { os: HostOs::Linux, arch: HostArch::Aarch64 },
     HostTarget { os: HostOs::Linux, arch: HostArch::X86_64 },
     HostTarget { os: HostOs::Macos, arch: HostArch::Aarch64 },
+];
+
+pub const PLANNED_HOSTS: &[HostTarget] = &[
+    HostTarget { os: HostOs::Linux, arch: HostArch::Aarch64 },
+    HostTarget { os: HostOs::Linux, arch: HostArch::X86_64 },
+    HostTarget { os: HostOs::Macos, arch: HostArch::Aarch64 },
     HostTarget { os: HostOs::Windows, arch: HostArch::X86_64 },
 ];
 
@@ -141,6 +153,17 @@ pub const SUPPORTED_HOSTS: &[HostTarget] = &[
 /// system. Sources outside `host/<platform>/` are portable engine sources and
 /// remain selected on every host.
 pub fn source_matches(target_os: &str, source: &str) -> bool {
+    if target_os == "windows"
+        && matches!(
+            source,
+            "src/native/host/child.c"
+                | "src/native/host/fork_wire.c"
+                | "src/native/host/private.c"
+                | "src/native/host/resolve.c"
+        )
+    {
+        return false;
+    }
     if source.starts_with("src/native/toolchain/msvc-posix/") {
         return target_os == "windows";
     }
@@ -178,7 +201,7 @@ pub fn static_archive_filename(target_os: &str, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExecutionMode, GuestIsa, HostArch, HostOs, HostTarget, SUPPORTED_HOSTS};
+    use super::{ExecutionMode, GuestIsa, HostArch, HostOs, HostTarget, PLANNED_HOSTS, SUPPORTED_HOSTS};
 
     #[test]
     fn host_matrix_is_explicit_and_complete() {
@@ -187,7 +210,7 @@ mod tests {
                 let parsed = HostTarget::from_cfg(os, arch);
                 assert_eq!(
                     parsed.is_some(),
-                    SUPPORTED_HOSTS.iter().any(|target| {
+                    PLANNED_HOSTS.iter().any(|target| {
                         target.os.cfg_name() == os && target.arch.cfg_name() == arch
                     }),
                     "{arch}-{os}"
@@ -219,12 +242,17 @@ mod tests {
         let linux_x86 = HostTarget::from_cfg("linux", "x86_64").unwrap();
         assert!(linux_x86.supports_execution(GuestIsa::X86_64, ExecutionMode::Transliterator));
         assert!(!linux_x86.supports_execution(GuestIsa::Aarch64, ExecutionMode::Transliterator));
+        let windows_x86 = HostTarget::from_cfg("windows", "x86_64").unwrap();
+        assert!(!windows_x86.supports_execution(GuestIsa::X86_64, ExecutionMode::Transliterator));
     }
 
     #[test]
     fn unsupported_pair_is_not_constructed() {
         assert_eq!(HostTarget::from_cfg("macos", "x86_64"), None);
         assert!(!HostTarget { os: HostOs::Windows, arch: HostArch::Aarch64 }.supported());
+        let windows = HostTarget::from_cfg("windows", "x86_64").unwrap();
+        assert!(windows.planned());
+        assert!(!windows.supported());
     }
 
     #[test]

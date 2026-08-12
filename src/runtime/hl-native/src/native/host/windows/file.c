@@ -32,6 +32,7 @@
  * owner 0, and set_owner accepts only the "change nothing" encoding.
  */
 #include "internal.h"
+#include <io.h>
 
 #include <winioctl.h>
 
@@ -136,6 +137,29 @@ static hl_host_result hl_windows_file_register(hl_host_windows *host, HANDLE obj
     entry->file_cursor = 0;
     hl_windows_unlock(host);
     return registered;
+}
+
+hl_host_result hl_host_windows_import_file(hl_host_windows *host, int descriptor, uint32_t access) {
+    intptr_t raw;
+    HANDLE copy = NULL;
+    hl_host_result result;
+    if (host == NULL || descriptor < 0) return hl_windows_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    raw = _get_osfhandle(descriptor);
+    if (raw == -1) return hl_windows_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)raw, GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS))
+        return hl_windows_last_error_result();
+    if ((access & ~(HL_HOST_FILE_READ | HL_HOST_FILE_WRITE | HL_HOST_FILE_APPEND | HL_HOST_FILE_NONBLOCK)) != 0 ||
+        (access & (HL_HOST_FILE_READ | HL_HOST_FILE_WRITE)) == 0) {
+        CloseHandle(copy);
+        return hl_windows_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    }
+    result = hl_windows_file_register(host, copy, access, 0);
+    if (result.status != HL_STATUS_OK) {
+        CloseHandle(copy);
+        return result;
+    }
+    result.detail = access;
+    return result;
 }
 
 static void hl_windows_file_release(hl_host_windows *host, hl_host_handle handle) {
