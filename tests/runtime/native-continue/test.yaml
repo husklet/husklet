@@ -7,11 +7,11 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: []
 cases:
-  - id: runtime/native_continue/quantum
+  - id: runtime/native-continue/quantum
     status: active
     compat: { class: compatibility }
-    build: { source: main.c, output: native_continue, flags: [-static-pie, -O2, -std=gnu11] }
-    artifact: { destination: /opt/husklet/native_continue }
+    build: { source: main.c, output: native-continue, flags: [-static-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/native-continue }
     run: []
     timeout: 30
     expect: { exit: 0, stdout: golden/continue.txt }

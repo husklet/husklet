@@ -32,7 +32,7 @@ chains:
           native_execution: true
           native_diagnostics: true
     guest:
-      path: target/testing/runtime/abi_core/arm64/hello
+      path: target/testing/runtime/abi-core/arm64/hello
     timeout_seconds: 120
     capture_limit_bytes: 1048576
     expect:

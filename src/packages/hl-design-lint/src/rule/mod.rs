@@ -36,6 +36,7 @@ mod safety;
 mod shape;
 mod state;
 mod suite;
+mod suite_path;
 mod syntax;
 mod toolkit;
 
@@ -70,6 +71,7 @@ pub use safety::Boundary as UnsafeBoundary;
 pub use shape::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, TestName};
 pub use state::FiniteStateString;
 pub use suite::{Dependency as TestDependency, Directory as TestDirectory};
+pub use suite_path::KebabPath as TestSuiteKebabPath;
 pub use toolkit::GuiToolkitLeakage;
 
 /// One independently executable design check.

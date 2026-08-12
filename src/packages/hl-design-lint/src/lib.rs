@@ -71,6 +71,7 @@ impl Linter {
                 .register(rule::PathModules)
                 .register(rule::TestDirectory)
                 .register(rule::TestDependency)
+                .register(rule::TestSuiteKebabPath)
                 .register(rule::IntegrationCandidate)
                 .register(rule::FolderNoun)
                 .register(rule::ModulePrefix)
@@ -169,7 +170,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 35);
+        assert_eq!(summaries.len(), 36);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "maximum-nesting");
@@ -204,7 +205,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 35);
+        assert_eq!(summaries.len(), 36);
         assert!(
             reporter
                 .0
