@@ -279,6 +279,7 @@ fixture	exec/test/x86_write_counters.c
 fixture	exec/test/xadd.c
 source	executable_authority.c
 source	executable_authority.h
+fixture	fixtures/testing/displaced_et_exec.c
 fixture	fixtures/testing/projected_directory.c
 fixture	fixtures/testing/projected_read.c
 fixture	fixtures/testing/projected_spin.c
