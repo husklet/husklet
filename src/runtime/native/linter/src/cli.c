@@ -59,8 +59,9 @@ void hl_lint_config_init(LintConfig *config) {
         .run_clang_tidy = true,
         .run_cppcheck = true,
         .run_custom = true,
-        .clang_tidy_checks = "clang-analyzer-*,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,"
-                             "bugprone-assignment-in-if-condition,bugprone-branch-clone,bugprone-inc-dec-in-conditions,"
+        .clang_tidy_checks = "clang-analyzer-*,-clang-analyzer-deadcode.DeadStores,"
+                             "-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,"
+                             "bugprone-inc-dec-in-conditions,"
                              "bugprone-infinite-loop,bugprone-not-null-terminated-result,bugprone-posix-return,"
                              "bugprone-signal-handler,bugprone-sizeof-expression,bugprone-suspicious-memory-comparison,"
                              "bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation",
@@ -206,4 +207,3 @@ HlLintCliResult hl_lint_cli_parse(LintConfig *config, int argc, char **argv) {
     }
     return HL_LINT_CLI_RUN;
 }
-

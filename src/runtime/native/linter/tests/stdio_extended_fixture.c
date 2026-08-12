@@ -6,4 +6,3 @@ void hl_lint_extended_stdio_fixture(void *arguments) {
     fputc('x', stdout);
     putchar('x');
 }
-

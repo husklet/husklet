@@ -112,4 +112,3 @@ if(NOT "${_output}${_error}" MATCHES "${_pattern}")
   message(FATAL_ERROR
     "${HL_LINT_CASE}: output did not match `${_pattern}`\n${_output}${_error}")
 endif()
-

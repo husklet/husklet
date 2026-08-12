@@ -18,4 +18,3 @@ void hl_lint_config_destroy(LintConfig *config);
 HlLintCliResult hl_lint_cli_parse(LintConfig *config, int argc, char **argv);
 
 #endif
-

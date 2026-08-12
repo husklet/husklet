@@ -97,4 +97,3 @@ if(HL_BUILD_TESTS)
     set_tests_properties(lint.exit-${_case} PROPERTIES LABELS "lint")
   endforeach()
 endif()
-

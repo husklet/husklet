@@ -39,4 +39,3 @@ typedef struct {
 } LintStats;
 
 #endif
-

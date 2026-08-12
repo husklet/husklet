@@ -7,9 +7,13 @@ if(HL_BUILD_TESTS)
   enable_testing()
 endif()
 file(GLOB_RECURSE HL_EXEC_C CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../native/exec/src/*.c" "${CMAKE_CURRENT_SOURCE_DIR}/../../native/exec/cache/*.c")
-set(HL_RUNTIME_C "${CMAKE_CURRENT_SOURCE_DIR}/executable_authority.c" "${CMAKE_CURRENT_SOURCE_DIR}/shim.c")
+set(HL_RUNTIME_C
+    "${CMAKE_CURRENT_SOURCE_DIR}/address_projection.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/executable_authority.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shim.c")
 add_library(hl_lint_native_objects OBJECT EXCLUDE_FROM_ALL ${HL_EXEC_C} ${HL_RUNTIME_C})
 target_compile_features(hl_lint_native_objects PRIVATE c_std_11)
+set_source_files_properties(${HL_RUNTIME_C} PROPERTIES COMPILE_DEFINITIONS _GNU_SOURCE)
 target_include_directories(hl_lint_native_objects PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/retained/include" "${CMAKE_CURRENT_SOURCE_DIR}/retained/src" "${CMAKE_CURRENT_SOURCE_DIR}/../../native/exec/include" "${CMAKE_CURRENT_SOURCE_DIR}/../../native/exec/src" "${CMAKE_CURRENT_SOURCE_DIR}/../../native/cpu/include")
 add_subdirectory(linter)
 add_custom_target(source-manifest-check COMMAND "${CMAKE_COMMAND}" -DROOT=${CMAKE_CURRENT_SOURCE_DIR}/../.. -DMANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/lint-sources.manifest -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SourceManifest.cmake" VERBATIM)

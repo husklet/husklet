@@ -346,4 +346,3 @@ void hl_lint_policy_run(const LintConfig *cfg, const StringList *files, LintStat
         check_file_custom(cfg, files->items[i], stats);
     }
 }
-

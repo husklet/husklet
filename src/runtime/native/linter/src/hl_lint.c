@@ -53,4 +53,3 @@ int main(int argc, char **argv) {
     hl_lint_config_destroy(&cfg);
     return rc;
 }
-

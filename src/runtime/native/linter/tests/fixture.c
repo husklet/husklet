@@ -7,4 +7,3 @@ int hl_lint_fixture(FILE *report) {
     if (report != NULL) { fprintf(report, "%s", buffer); }
     return printf_count;
 }
-

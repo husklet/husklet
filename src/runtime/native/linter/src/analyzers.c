@@ -228,4 +228,3 @@ int hl_lint_analyzers_run(const LintConfig *config, const StringList *files, con
     if (result == 0 && config->run_cppcheck) result = run_cppcheck(config, files, stats);
     return result;
 }
-

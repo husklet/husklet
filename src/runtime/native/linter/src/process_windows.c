@@ -219,4 +219,3 @@ void hl_lint_process_result_destroy(HlLintProcessResult *result) {
     free(result->output);
     result_init(result);
 }
-

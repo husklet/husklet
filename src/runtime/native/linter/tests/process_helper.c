@@ -24,4 +24,3 @@ int main(int argc, char **argv) {
     fputs("unknown helper mode\n", stderr);
     return 2;
 }
-

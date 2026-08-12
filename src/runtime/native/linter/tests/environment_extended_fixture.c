@@ -5,4 +5,3 @@ void hl_lint_extended_environment_fixture(void) {
     GetEnvironmentVariableA("FOUR", 0, 0);
     GetEnvironmentVariableW(L"FIVE", 0, 0);
 }
-

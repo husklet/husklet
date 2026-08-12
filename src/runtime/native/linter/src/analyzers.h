@@ -7,4 +7,3 @@ int hl_lint_analyzers_run(const LintConfig *config, const StringList *files, con
                           LintStats *stats);
 
 #endif
-

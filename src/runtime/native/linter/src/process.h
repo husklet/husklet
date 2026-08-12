@@ -23,4 +23,3 @@ int hl_lint_process_run(const char *const argv[], size_t output_limit, HlLintPro
 void hl_lint_process_result_destroy(HlLintProcessResult *result);
 
 #endif
-

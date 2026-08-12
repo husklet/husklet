@@ -25,4 +25,3 @@ fatal.
 Rules live in `src/`, with contract tests in `tests/`. Add or change a rule and
 its positive and negative test cases together. `ctest -L lint
 --no-tests=error` runs those contracts from a configured test build.
-

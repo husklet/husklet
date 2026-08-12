@@ -1,5 +1,8 @@
 file(GLOB_RECURSE actual RELATIVE "${ROOT}" "${ROOT}/native/exec/src/*.c" "${ROOT}/native/exec/cache/*.c")
-list(APPEND actual "runtime/native/executable_authority.c" "runtime/native/shim.c")
+list(APPEND actual
+ "runtime/native/address_projection.c"
+ "runtime/native/executable_authority.c"
+ "runtime/native/shim.c")
 list(SORT actual)
 file(STRINGS "${MANIFEST}" expected)
 list(FILTER expected EXCLUDE REGEX "^($|#)")

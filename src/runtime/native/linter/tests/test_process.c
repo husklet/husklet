@@ -78,4 +78,3 @@ int main(int argc, char **argv) {
     test_missing_executable();
     return failures ? 1 : 0;
 }
-

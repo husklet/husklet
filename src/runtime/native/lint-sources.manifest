@@ -86,6 +86,6 @@ native/exec/src/fault/thread.c
 native/exec/src/ibtc/storage.c
 native/exec/src/state.c
 native/exec/src/translation.c
+runtime/native/address_projection.c
 runtime/native/executable_authority.c
 runtime/native/shim.c
-

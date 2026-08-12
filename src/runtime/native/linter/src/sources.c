@@ -175,4 +175,3 @@ void hl_lint_sources_collect(const LintConfig *config, StringList *files) {
         collect_recursive(config->source_dirs.items[index], files);
     }
 }
-

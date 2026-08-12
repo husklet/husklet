@@ -84,4 +84,3 @@ int main(int argc, char **argv) {
     fputs("fake-analyzer: unknown invocation\n", stderr);
     return 2;
 }
-
