@@ -3,6 +3,7 @@ use crate::{
     service::{OverlayConfig, ProcessConfig, Running, Runtime},
 };
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::VecDeque,
     sync::{Arc, Condvar, Mutex as StdMutex},
@@ -112,6 +113,56 @@ struct TerminalChannel {
     state: StdMutex<TerminalState>,
     changed: Condvar,
     output: crate::service::LogSender,
+}
+
+struct OutputChannel {
+    output: crate::service::LogSender,
+    closed: AtomicBool,
+}
+
+impl OutputChannel {
+    fn new(output: crate::service::LogSender) -> Self {
+        Self {
+            output,
+            closed: AtomicBool::new(false),
+        }
+    }
+}
+
+impl hl_engine::composition::StandardStreamPort for OutputChannel {
+    fn write(&self, stream: hl_engine::composition::StandardStream, input: &[u8]) -> std::io::Result<usize> {
+        if input.is_empty() {
+            return Ok(0);
+        }
+        let length = input.len().min(crate::service::LOG_CHUNK_BYTES);
+        let stream = match stream {
+            hl_engine::composition::StandardStream::Stdout => crate::Stream::Stdout,
+            hl_engine::composition::StandardStream::Stderr => crate::Stream::Stderr,
+        };
+        let mut chunk = crate::LogChunk {
+            stream,
+            bytes: input[..length].to_vec(),
+        };
+        loop {
+            if self.closed.load(Ordering::Acquire) {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+            match self.output.try_send(chunk) {
+                Ok(()) => return Ok(length),
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(std::io::ErrorKind::BrokenPipe.into());
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
+                    chunk = returned;
+                    std::thread::sleep(TerminalChannel::CANCELLATION_POLL);
+                }
+            }
+        }
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
 }
 
 impl TerminalChannel {
@@ -240,7 +291,9 @@ impl Runtime for Engine {
                     .map_err(|_| Error::Runtime("terminal construction failed".into()))?;
                 hl_engine::composition::StandardStreams::default().with_terminal(terminal)
             }
-            None => hl_engine::composition::StandardStreams::default(),
+            None => {
+                hl_engine::composition::StandardStreams::default().with_output(Arc::new(OutputChannel::new(sender)))
+            }
         };
         let checkpoint = config
             .checkpoint

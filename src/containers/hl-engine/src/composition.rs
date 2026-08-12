@@ -142,9 +142,21 @@ impl Drop for Terminal {
 /// Construction rejects a populated request until the runtime can bind its
 /// master transport and resize operations to native descriptors. This keeps a
 /// terminal from silently using the supervisor's standard descriptors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StandardStream {
+    Stdout,
+    Stderr,
+}
+
+pub trait StandardStreamPort: Send + Sync {
+    fn write(&self, stream: StandardStream, bytes: &[u8]) -> std::io::Result<usize>;
+    fn close(&self);
+}
+
 #[derive(Clone, Default)]
 pub struct StandardStreams {
     terminal: Option<Arc<Terminal>>,
+    output: Option<Arc<dyn StandardStreamPort>>,
 }
 
 impl StandardStreams {
@@ -154,8 +166,18 @@ impl StandardStreams {
         self
     }
 
+    #[must_use]
+    pub fn with_output(mut self, output: Arc<dyn StandardStreamPort>) -> Self {
+        self.output = Some(output);
+        self
+    }
+
     pub(crate) fn terminal(&self) -> Option<Arc<Terminal>> {
         self.terminal.clone()
+    }
+
+    pub(crate) fn output(&self) -> Option<Arc<dyn StandardStreamPort>> {
+        self.output.clone()
     }
 }
 
@@ -314,6 +336,12 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
     fn validate_services(plan: &RuntimePlan, services: &RuntimeServices) -> Result<(), CompositionError> {
         if services.streams.terminal().is_some() && !cfg!(unix) {
             return Err(CompositionError::UnsupportedTerminal);
+        }
+        if services.streams.output().is_some() && !cfg!(unix) {
+            return Err(CompositionError::UnsupportedTerminal);
+        }
+        if services.streams.terminal().is_some() && services.streams.output().is_some() {
+            return Err(CompositionError::RuntimeConstruction);
         }
         if plan.options.get("HL_CHECKPOINT").is_some() && services.checkpoint_sink.is_none() {
             return Err(CompositionError::MissingCheckpointSink);

@@ -6,6 +6,8 @@ use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
+use super::terminal::NativeOutputBridge;
+#[cfg(unix)]
 use super::terminal::NativeTerminalBridge;
 
 const REQUEST_INTERRUPT: u32 = 1;
@@ -17,6 +19,8 @@ pub(crate) struct ProductionMachine {
     plan: crate::launcher::plan::RuntimePlan,
     #[cfg(unix)]
     terminal: Option<NativeTerminalBridge>,
+    #[cfg(unix)]
+    output: Option<NativeOutputBridge>,
     engine: Mutex<Option<Arc<hl_native::Engine>>>,
 }
 
@@ -33,11 +37,24 @@ impl RuntimeFactory for ProductionFactory {
             .terminal()
             .map(NativeTerminalBridge::attach)
             .transpose()?;
+        #[cfg(unix)]
+        let output = if terminal.is_none() {
+            request
+                .services
+                .streams
+                .output()
+                .map(NativeOutputBridge::attach)
+                .transpose()?
+        } else {
+            None
+        };
         Ok(ProductionMachine {
             isa: request.isa,
             plan: request.plan.clone(),
             #[cfg(unix)]
             terminal,
+            #[cfg(unix)]
+            output,
             engine: Mutex::new(None),
         })
     }
@@ -95,7 +112,9 @@ impl ProductionMachine {
         let standard_fds = self
             .terminal
             .as_ref()
-            .map_or([0, 1, 2], NativeTerminalBridge::standard_fds);
+            .map(NativeTerminalBridge::standard_fds)
+            .or_else(|| self.output.as_ref().map(NativeOutputBridge::standard_fds))
+            .unwrap_or([0, 1, 2]);
         #[cfg(not(unix))]
         let standard_fds = [0, 1, 2];
         let config = hl_native::EngineConfig {
@@ -160,7 +179,12 @@ impl GuestMachine for ProductionMachine {
             .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
             .collect::<Result<Vec<_>, _>>()?;
         let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
-        engine.run(&pointers).map_err(|_| EngineError::LaunchFailed)
+        engine.run(&pointers).map_err(|_| EngineError::LaunchFailed)?;
+        #[cfg(unix)]
+        if let Some(output) = &self.output {
+            output.flush();
+        }
+        Ok(())
     }
 
     fn wait(&self) -> Result<EngineExit, EngineError> {

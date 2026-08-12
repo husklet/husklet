@@ -1,12 +1,187 @@
 #![allow(unsafe_code)]
 
-use crate::composition::{CompositionError, Terminal, TerminalAttachment, TerminalPort};
+use crate::composition::{
+    CompositionError, StandardStream, StandardStreamPort, Terminal, TerminalAttachment, TerminalPort,
+};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
+
+pub(super) struct NativeOutputBridge {
+    input: OwnedFd,
+    stdout: Option<OwnedFd>,
+    stderr: Option<OwnedFd>,
+    stop: Arc<AtomicBool>,
+    port: Arc<dyn StandardStreamPort>,
+    workers: Vec<JoinHandle<()>>,
+}
+
+impl NativeOutputBridge {
+    pub(super) fn attach(port: Arc<dyn StandardStreamPort>) -> Result<Self, CompositionError> {
+        let input = open_null()?;
+        let (stdout_reader, stdout) = open_pipe()?;
+        let (stderr_reader, stderr) = open_pipe()?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let stdout_worker = spawn_stream_reader(
+            Arc::clone(&port),
+            Arc::clone(&stop),
+            stdout_reader,
+            StandardStream::Stdout,
+        )?;
+        let stderr_worker = match spawn_stream_reader(
+            Arc::clone(&port),
+            Arc::clone(&stop),
+            stderr_reader,
+            StandardStream::Stderr,
+        ) {
+            Ok(worker) => worker,
+            Err(error) => {
+                stop.store(true, Ordering::Release);
+                drop(stdout);
+                let _ = stdout_worker.join();
+                return Err(error);
+            }
+        };
+        Ok(Self {
+            input,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            stop,
+            port,
+            workers: vec![stdout_worker, stderr_worker],
+        })
+    }
+
+    pub(super) fn standard_fds(&self) -> [i32; 3] {
+        [
+            self.input.as_raw_fd(),
+            self.stdout.as_ref().expect("live stdout bridge").as_raw_fd(),
+            self.stderr.as_ref().expect("live stderr bridge").as_raw_fd(),
+        ]
+    }
+
+    pub(super) fn flush(&self) {
+        for _ in 0..200 {
+            if self.pending_bytes() == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                if self.pending_bytes() == 0 {
+                    return;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn pending_bytes(&self) -> i32 {
+        [&self.stdout, &self.stderr]
+            .into_iter()
+            .filter_map(Option::as_ref)
+            .map(|descriptor| {
+                let mut pending = 0;
+                // SAFETY: FIONREAD writes one integer and borrows a live pipe descriptor.
+                if unsafe { libc::ioctl(descriptor.as_raw_fd(), libc::FIONREAD, &raw mut pending) } == 0 {
+                    pending
+                } else {
+                    1
+                }
+            })
+            .sum()
+    }
+}
+
+impl Drop for NativeOutputBridge {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.stdout.take();
+        self.stderr.take();
+        self.port.close();
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn open_null() -> Result<OwnedFd, CompositionError> {
+    let path = c"/dev/null";
+    // SAFETY: path is a static NUL-terminated string and the returned descriptor is uniquely owned.
+    let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if descriptor < 0 {
+        return Err(CompositionError::RuntimeConstruction);
+    }
+    // SAFETY: successful open returned a fresh descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+fn open_pipe() -> Result<(File, OwnedFd), CompositionError> {
+    let mut descriptors = [-1; 2];
+    // SAFETY: descriptors points to two writable integers.
+    if unsafe { libc::pipe(descriptors.as_mut_ptr()) } != 0 {
+        return Err(CompositionError::RuntimeConstruction);
+    }
+    for descriptor in descriptors {
+        // SAFETY: pipe returned live descriptors; F_SETFD does not transfer ownership.
+        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+            // SAFETY: both descriptors are still uniquely owned here.
+            unsafe {
+                libc::close(descriptors[0]);
+                libc::close(descriptors[1]);
+            }
+            return Err(CompositionError::RuntimeConstruction);
+        }
+    }
+    // SAFETY: successful pipe2 returned two fresh descriptors with distinct ownership.
+    let pair = unsafe { (File::from_raw_fd(descriptors[0]), OwnedFd::from_raw_fd(descriptors[1])) };
+    set_file_nonblocking(&pair.0)?;
+    Ok(pair)
+}
+
+fn set_file_nonblocking(descriptor: &File) -> Result<(), CompositionError> {
+    // SAFETY: both operations borrow a live descriptor and do not transfer ownership.
+    let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(CompositionError::RuntimeConstruction);
+    }
+    Ok(())
+}
+
+fn spawn_stream_reader(
+    port: Arc<dyn StandardStreamPort>,
+    stop: Arc<AtomicBool>,
+    mut reader: File,
+    stream: StandardStream,
+) -> Result<JoinHandle<()>, CompositionError> {
+    std::thread::Builder::new()
+        .name(match stream {
+            StandardStream::Stdout => "hl-stdout".to_owned(),
+            StandardStream::Stderr => "hl-stderr".to_owned(),
+        })
+        .spawn(move || {
+            let mut bytes = [0_u8; 8192];
+            while !stop.load(Ordering::Acquire) {
+                let count = match reader.read(&mut bytes) {
+                    Ok(0) => break,
+                    Ok(count) => count,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                };
+                let mut written = 0;
+                while written < count {
+                    match port.write(stream, &bytes[written..count]) {
+                        Ok(0) | Err(_) => return,
+                        Ok(count) => written += count,
+                    }
+                }
+            }
+        })
+        .map_err(|_| CompositionError::RuntimeConstruction)
+}
 
 struct NativeTerminalControl {
     master: OwnedFd,
