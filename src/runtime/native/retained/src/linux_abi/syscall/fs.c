@@ -3446,8 +3446,8 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // overlay -> a missing upper means this open will CREATE it fresh; stamp its owner post-open.
             int nf_new = nf_want && access(host, F_OK) != 0;
             // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap (host table larger).
-            int r = nofile_gate(open(host, mf | osymlink | ((lf & G_O_NOFOLLOW) && !osymlink ? O_NOFOLLOW : 0),
-                                     (mode_t)a3));
+            int r = nofile_gate(
+                open(host, mf | osymlink | ((lf & G_O_NOFOLLOW) && !osymlink ? O_NOFOLLOW : 0), (mode_t)a3));
             if (r >= 0 && nf_new) newfile_stamp_fd(r);
             if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
             if (r >= 0) {
