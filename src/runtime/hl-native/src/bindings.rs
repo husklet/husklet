@@ -99,6 +99,9 @@ mod tests {
 
     #[test]
     fn exported_bridge_contract_is_callable() {
+        // SAFETY: these calls exercise the C bridge's documented null-input
+        // contract: queries and destroy accept null, while create, run, and
+        // request reject it without dereferencing any supplied pointer.
         unsafe {
             assert_ne!(hl_engine_abi(), 0);
             assert!(!hl_engine_version().is_null());

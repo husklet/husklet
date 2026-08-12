@@ -170,7 +170,7 @@ impl Plan {
         if config.isa == 1 && !entry.is_multiple_of(4) {
             return Err(1);
         }
-        let layout = inspect_program_headers(
+        let layout = ProgramLayout::inspect(
             &mut file,
             image_length,
             entry,
@@ -236,78 +236,81 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
     return Err(3);
 }
 
-fn inspect_program_headers(
-    file: &mut File,
-    image_length: u64,
-    entry: u64,
-    phoff: u64,
-    phentsize: u64,
-    phnum: u16,
-) -> Result<ProgramLayout, i32> {
-    const PROGRAM_HEADER_SIZE: u64 = 56;
-    const MAX_PROGRAM_HEADERS: u16 = 1024;
-    const MAX_LOAD_SEGMENTS: u16 = 128;
-    if phentsize != PROGRAM_HEADER_SIZE || phnum == 0 || phnum > MAX_PROGRAM_HEADERS {
-        return Err(1);
-    }
-    let table_size = phentsize.checked_mul(u64::from(phnum)).ok_or(1)?;
-    if phoff.checked_add(table_size).is_none_or(|end| end > image_length) {
-        return Err(1);
-    }
-    let mut first = u64::MAX;
-    let mut last = 0_u64;
-    let mut interpreter = None;
-    let mut loads = 0_u16;
-    let mut entry_is_executable = false;
-    for index in 0..phnum {
-        let offset = phoff
-            .checked_add(u64::from(index).checked_mul(phentsize).ok_or(1)?)
-            .ok_or(1)?;
-        file.seek(SeekFrom::Start(offset)).map_err(|_| 1)?;
-        let mut program = [0_u8; 56];
-        file.read_exact(&mut program).map_err(|_| 1)?;
-        let u32_at = |offset| u32::from_le_bytes(program[offset..offset + 4].try_into().expect("program header"));
-        let u64_at = |offset| u64::from_le_bytes(program[offset..offset + 8].try_into().expect("program header"));
-        match u32_at(0) {
-            1 => {
-                loads = loads.checked_add(1).ok_or(1)?;
-                if loads > MAX_LOAD_SEGMENTS {
-                    return Err(1);
-                }
-                let file_offset = u64_at(8);
-                let start = u64_at(16);
-                let file_size = u64_at(32);
-                let memory_size = u64_at(40);
-                let alignment = u64_at(48);
-                if file_size > memory_size
-                    || (file_size != 0 && file_offset.checked_add(file_size).is_none_or(|end| end > image_length))
-                    || (alignment > 1 && (!alignment.is_power_of_two() || start % alignment != file_offset % alignment))
-                {
-                    return Err(1);
-                }
-                let end = start.checked_add(memory_size).ok_or(1)?;
-                first = first.min(start);
-                last = last.max(end);
-                entry_is_executable |= u32_at(4) & 1 != 0 && entry >= start && entry < end;
-            }
-            3 => {
-                if interpreter.is_some() {
-                    return Err(1);
-                }
-                interpreter = Some(read_interpreter(file, u64_at(8), u64_at(32))?);
-            }
-            _ => {}
+impl ProgramLayout {
+    fn inspect(
+        file: &mut File,
+        image_length: u64,
+        entry: u64,
+        phoff: u64,
+        phentsize: u64,
+        phnum: u16,
+    ) -> Result<Self, i32> {
+        const PROGRAM_HEADER_SIZE: u64 = 56;
+        const MAX_PROGRAM_HEADERS: u16 = 1024;
+        const MAX_LOAD_SEGMENTS: u16 = 128;
+        if phentsize != PROGRAM_HEADER_SIZE || phnum == 0 || phnum > MAX_PROGRAM_HEADERS {
+            return Err(1);
         }
+        let table_size = phentsize.checked_mul(u64::from(phnum)).ok_or(1)?;
+        if phoff.checked_add(table_size).is_none_or(|end| end > image_length) {
+            return Err(1);
+        }
+        let mut first = u64::MAX;
+        let mut last = 0_u64;
+        let mut interpreter = None;
+        let mut loads = 0_u16;
+        let mut entry_is_executable = false;
+        for index in 0..phnum {
+            let offset = phoff
+                .checked_add(u64::from(index).checked_mul(phentsize).ok_or(1)?)
+                .ok_or(1)?;
+            file.seek(SeekFrom::Start(offset)).map_err(|_| 1)?;
+            let mut program = [0_u8; 56];
+            file.read_exact(&mut program).map_err(|_| 1)?;
+            let u32_at = |offset| u32::from_le_bytes(program[offset..offset + 4].try_into().expect("program header"));
+            let u64_at = |offset| u64::from_le_bytes(program[offset..offset + 8].try_into().expect("program header"));
+            match u32_at(0) {
+                1 => {
+                    loads = loads.checked_add(1).ok_or(1)?;
+                    if loads > MAX_LOAD_SEGMENTS {
+                        return Err(1);
+                    }
+                    let file_offset = u64_at(8);
+                    let start = u64_at(16);
+                    let file_size = u64_at(32);
+                    let memory_size = u64_at(40);
+                    let alignment = u64_at(48);
+                    if file_size > memory_size
+                        || (file_size != 0 && file_offset.checked_add(file_size).is_none_or(|end| end > image_length))
+                        || (alignment > 1
+                            && (!alignment.is_power_of_two() || start % alignment != file_offset % alignment))
+                    {
+                        return Err(1);
+                    }
+                    let end = start.checked_add(memory_size).ok_or(1)?;
+                    first = first.min(start);
+                    last = last.max(end);
+                    entry_is_executable |= u32_at(4) & 1 != 0 && entry >= start && entry < end;
+                }
+                3 => {
+                    if interpreter.is_some() {
+                        return Err(1);
+                    }
+                    interpreter = Some(read_interpreter(file, u64_at(8), u64_at(32))?);
+                }
+                _ => {}
+            }
+        }
+        if first == u64::MAX {
+            return Err(1);
+        }
+        Ok(Self {
+            load_start: first,
+            load_end: last,
+            interpreter,
+            entry_is_executable,
+        })
     }
-    if first == u64::MAX {
-        return Err(1);
-    }
-    Ok(ProgramLayout {
-        load_start: first,
-        load_end: last,
-        interpreter,
-        entry_is_executable,
-    })
 }
 
 fn read_interpreter(file: &mut File, offset: u64, encoded_size: u64) -> Result<Vec<u8>, i32> {
