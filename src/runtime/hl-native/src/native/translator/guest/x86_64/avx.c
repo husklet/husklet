@@ -1024,6 +1024,35 @@ static enum avx_dispatch_result avx_dispatch_map2_memory(const hl_x86_avx_state 
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_widen(const hl_x86_avx_state *state, struct cpu *c,
+                                                        struct insn *instruction, uint64_t next, int map, int op,
+                                                        int destination, int width) {
+    int sign_extend = op >= 0x20 && op <= 0x25;
+    int zero_extend = op >= 0x30 && op <= 0x35;
+    if (map != 2 || (!sign_extend && !zero_extend)) return AVX_DISPATCH_UNMATCHED;
+
+    static const int k_source_sizes[6] = {1, 1, 1, 2, 2, 4};
+    static const int k_destination_sizes[6] = {2, 4, 8, 4, 8, 8};
+    int index = op - (sign_extend ? 0x20 : 0x30);
+    int source_size = k_source_sizes[index];
+    int destination_size = k_destination_sizes[index];
+    int count = width / destination_size;
+    uint8_t source[64], output[64];
+    avx_get_rm(state, c, instruction, next, count * source_size, source);
+    for (int element = 0; element < count; element++) {
+        uint64_t value = 0;
+        memcpy(&value, source + element * source_size, (size_t)source_size);
+        if (sign_extend) {
+            uint64_t sign = UINT64_C(1) << (source_size * 8 - 1);
+            if (value & sign) value |= ~(sign * 2 - 1);
+        }
+        memcpy(output + element * destination_size, &value, (size_t)destination_size);
+    }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1466,6 +1495,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_fma(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_crypto(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_memory(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map2_widen(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2400,37 +2430,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             c->af = 0;
             c->rip = next;
             return;
-        }
-        case 0x20: // vpmovsxbw   vpmov{s,z}x{b,w,d}{w,d,q}: widen a smaller source element with
-        case 0x21: // vpmovsxbd   sign(2x)/zero(3x) extension. dst holds W/dst_es elements.
-        case 0x22: // vpmovsxbq
-        case 0x23: // vpmovsxwd
-        case 0x24: // vpmovsxwq
-        case 0x25: // vpmovsxdq
-        case 0x30: // vpmovzxbw
-        case 0x31: // vpmovzxbd
-        case 0x32: // vpmovzxbq
-        case 0x33: // vpmovzxwd
-        case 0x34: // vpmovzxwq
-        case 0x35: // vpmovzxdq
-        {
-            int sx = (op < 0x30), idx = op - (sx ? 0x20 : 0x30);
-            static const int k_src_es[6] = {1, 1, 1, 2, 2, 4};
-            static const int k_dst_es[6] = {2, 4, 8, 4, 8, 8};
-            int src_es = k_src_es[idx], dst_es = k_dst_es[idx];
-            int n = W / dst_es;
-            avx_get_rm(state, c, &I, next, n * src_es, b);
-            for (int i = 0; i < n; i++) {
-                int64_t v = 0;
-                memcpy(&v, b + i * src_es, (size_t)src_es);
-                if (sx) { // sign-extend from src_es bytes
-                    int sh = 64 - src_es * 8;
-                    v = (v << sh) >> sh;
-                }
-                memcpy(d + i * dst_es, &v, (size_t)dst_es);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
         }
         case 0x13: { // vcvtph2ps: rm holds W/2 bytes of packed fp16 -> W/4 fp32 in dst
             int nf = W / 4;
