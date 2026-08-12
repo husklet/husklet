@@ -10,6 +10,7 @@ import time
 
 
 PHASE = re.compile(r"^PHASE\s+(\S+)\s+.*?us=(\d+)\s+.*?ok=(\S+)(?:\s|$)")
+COUNTER_FREQUENCY = re.compile(r"^cntfrq=(\d+) divisor=(\d+)$")
 
 
 def main(argv=None):
@@ -52,13 +53,25 @@ def main(argv=None):
         if completed.stderr:
             raise ValueError("engine wrote stderr on success")
         rows = []
+        metadata = []
         for line in completed.stdout.decode("utf-8", "strict").splitlines():
             match = PHASE.match(line)
-            if not match:
-                raise ValueError(f"engine returned non-PHASE output: {line!r}")
-            rows.append(match.groups())
+            if match:
+                rows.append(match.groups())
+                continue
+            match = COUNTER_FREQUENCY.match(line)
+            if match:
+                metadata.append(match.groups())
+                continue
+            raise ValueError(f"engine returned unrecognized output: {line!r}")
         if not rows:
             raise ValueError("engine returned no benchmark rows")
+        if len(metadata) > 1:
+            raise ValueError("engine returned duplicate counter-frequency metadata")
+        for frequency, divisor in metadata:
+            # Keep deterministic non-timing guest output in the matrix stream.  Its canonical
+            # identity therefore proves all arms observed the same counter and workload scale.
+            print(f"META cntfrq={frequency} divisor={divisor}")
         phases = set()
         for phase, micros, checksum in rows:
             if phase in phases:

@@ -71,6 +71,32 @@ class AdapterTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 65)
                 self.assertIn("invalid engine output", result.stderr)
 
+    def test_adapter_accounts_for_counter_frequency_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = pathlib.Path(directory)
+            engine = directory / "engine"
+            engine.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' 'cntfrq=24000000 divisor=2' 'PHASE malloc us=11 ok=43'\n"
+            )
+            engine.chmod(0o755)
+            guest = directory / "guest"
+            guest.write_text("fixture")
+            result = subprocess.run(
+                [
+                    str(ADAPTER), "--provider", "product",
+                    "--engine", str(engine), "--rootfs", str(directory), "--", str(guest),
+                ],
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(
+                result.stdout.splitlines(),
+                ["META cntfrq=24000000 divisor=2", "PHASE malloc us=11 ok=43"],
+            )
+
     def test_rootfs_digest_covers_contents_and_symlink_targets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
