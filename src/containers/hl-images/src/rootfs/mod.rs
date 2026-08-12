@@ -176,11 +176,6 @@ impl OverlayView {
     pub fn upper_ownership(&self) -> &crate::snapshot::Ownerships {
         self.upper.ownership()
     }
-    #[must_use]
-    pub fn upper_names(&self) -> &crate::snapshot::Names {
-        self.upper.names()
-    }
-
     /// Archive only the writable overlay layer with guest names and ownership metadata.
     /// The immutable lower tree is never traversed or materialized.
     ///
