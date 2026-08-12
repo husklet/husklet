@@ -320,15 +320,6 @@ impl<'ast> Visit<'ast> for Strings<'_> {
 }
 
 impl Strings<'_> {
-    fn struct_owner(&self, item: &ExprStruct) -> Option<String> {
-        let owner = item.path.segments.last()?.ident.to_string();
-        if owner == "Self" {
-            self.owner.clone()
-        } else {
-            Some(owner)
-        }
-    }
-
     fn record_match(&mut self, item: &ExprMatch, concept: Concept) {
         let open = item
             .arms
