@@ -378,7 +378,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(hl_retained_c)]
     fn iteration_preserves_explicit_empty_and_omits_absent_options() {
         let mut options = Options::default();
         options.set("HL_CWD", "", true).unwrap();

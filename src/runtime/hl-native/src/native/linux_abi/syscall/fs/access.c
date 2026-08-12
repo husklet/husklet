@@ -314,6 +314,9 @@ static void svc_fs_access_55(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
     }
 }
 
+static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                             uint64_t a4, uint64_t a5);
+
 static void svc_fs_access_437(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                               uint64_t a4, uint64_t a5) {
     switch (nr) {
@@ -380,9 +383,9 @@ static void svc_fs_access_437(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t 
         g_openat2_resolve_intent =
             (resolve & (0x04ULL /*NO_SYMLINKS*/ | 0x08ULL /*BENEATH*/ | 0x10ULL /*IN_ROOT*/)) ? HL_OPEN_NO_SYMLINKS : 0;
         if (resolve & (0x04ULL | 0x08ULL | 0x10ULL)) oflags |= (uint64_t)G_O_NOFOLLOW;
-        a2 = oflags; // open_how.flags -> openat flags
-        a3 = omode;  // open_how.mode  -> openat mode
-    } /* fall through to openat */
+        svc_fs_access_56(c, 56, a0, a1, oflags, omode, a4, a5);
+        break;
+    }
     default: break;
     }
 }

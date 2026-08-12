@@ -5,7 +5,6 @@ use crate::engine::{
     Engine, EngineError, EngineExit, EnginePhase, Launcher, ProcessId, StopRequest, Workspace, WorkspaceId,
 };
 use crate::launch_plan::RuntimeLaunchPlan;
-use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -89,18 +88,8 @@ pub trait TerminalPort: Send + Sync {
     fn close(&self);
 }
 
-/// One application-owned terminal transport attached to one runtime PTY.
-#[derive(Clone, Copy)]
-pub(crate) struct TerminalWindow {
-    pub(crate) rows: u16,
-    pub(crate) columns: u16,
-    pub(crate) pixel_width: u16,
-    pub(crate) pixel_height: u16,
-}
-
 pub struct Terminal {
     port: Arc<dyn TerminalPort>,
-    initial: TerminalWindow,
 }
 
 impl Terminal {
@@ -109,19 +98,7 @@ impl Terminal {
         if rows == 0 || columns == 0 {
             return Err(CompositionError::RuntimeConstruction);
         }
-        Ok(Arc::new(Self {
-            port,
-            initial: TerminalWindow {
-                rows,
-                columns,
-                pixel_width: 0,
-                pixel_height: 0,
-            },
-        }))
-    }
-
-    pub(crate) fn initial(&self) -> TerminalWindow {
-        self.initial
+        Ok(Arc::new(Self { port }))
     }
 
     pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
@@ -142,36 +119,13 @@ impl Drop for Terminal {
     }
 }
 
-type StandardInput = Arc<Mutex<Box<dyn Read + Send>>>;
-type StandardOutput = Arc<Mutex<Box<dyn Write + Send>>>;
-
-/// Process-owned standard streams installed as Linux descriptors 0, 1, and 2.
-///
-/// Clones retain the same underlying stream objects. This matches Linux open-file-description
-/// sharing across descriptor duplication and process forks without consulting process-global I/O.
+/// Optional terminal control retained beside a native-engine execution.
 #[derive(Clone)]
 pub struct StandardStreams {
-    input: StandardInput,
-    output: StandardOutput,
-    error: StandardOutput,
     terminal: Option<Arc<Terminal>>,
 }
 
 impl StandardStreams {
-    #[must_use]
-    pub fn new(
-        input: impl Read + Send + 'static,
-        output: impl Write + Send + 'static,
-        error: impl Write + Send + 'static,
-    ) -> Self {
-        Self {
-            input: Arc::new(Mutex::new(Box::new(input))),
-            output: Arc::new(Mutex::new(Box::new(output))),
-            error: Arc::new(Mutex::new(Box::new(error))),
-            terminal: None,
-        }
-    }
-
     #[must_use]
     pub fn with_terminal(mut self, terminal: Arc<Terminal>) -> Self {
         self.terminal = Some(terminal);
@@ -181,23 +135,11 @@ impl StandardStreams {
     pub(crate) fn terminal(&self) -> Option<Arc<Terminal>> {
         self.terminal.clone()
     }
-
-    pub(crate) fn input(&self) -> StandardInput {
-        Arc::clone(&self.input)
-    }
-
-    pub(crate) fn output(&self) -> StandardOutput {
-        Arc::clone(&self.output)
-    }
-
-    pub(crate) fn error(&self) -> StandardOutput {
-        Arc::clone(&self.error)
-    }
 }
 
 impl Default for StandardStreams {
     fn default() -> Self {
-        Self::new(std::io::stdin(), std::io::stdout(), std::io::stderr())
+        Self { terminal: None }
     }
 }
 

@@ -108,41 +108,6 @@ pub enum EngineError {
     AuthorityFailed,
 }
 
-impl EngineError {
-    /// `AuthorityFailed` carries no operand, so a `socketpair` denied by confinement and a
-    /// dead child look identical to the caller; name the step before collapsing it.
-    pub(crate) fn denied(operation: &str) -> Self {
-        hl_log::hl_error!(hl_log::tag::EXEC, "authority step refused operation={operation}");
-        Self::AuthorityFailed
-    }
-}
-
-/// Name the authority step a failure came from; `AuthorityFailed` carries no operand.
-pub(crate) trait Step<T> {
-    fn step(self, operation: &str) -> Result<T, EngineError>;
-}
-
-impl<T, E: core::fmt::Debug> Step<T> for Result<T, E> {
-    fn step(self, operation: &str) -> Result<T, EngineError> {
-        self.map_err(|error| {
-            hl_log::hl_error!(
-                hl_log::tag::EXEC,
-                "authority step failed operation={operation} error={error:?}"
-            );
-            EngineError::AuthorityFailed
-        })
-    }
-}
-
-impl<T> Step<T> for Option<T> {
-    fn step(self, operation: &str) -> Result<T, EngineError> {
-        self.ok_or_else(|| {
-            hl_log::hl_error!(hl_log::tag::EXEC, "authority step found nothing operation={operation}");
-            EngineError::AuthorityFailed
-        })
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkspaceId(pub u64);
 
