@@ -78,7 +78,6 @@ gate:
 	  cargo clippy -p husklet --all-targets --features gui --locked --offline -- -D warnings || status=1; \
 	  cargo test --workspace --all-targets --locked --offline --no-fail-fast || status=1; \
 	  cargo test --workspace --doc --locked --offline || status=1; \
-	  src/runtime/native/exec/test/memory_lifecycle.sh || status=1; \
 	  exit $$status'
 
 # The full runtime compatibility sweep is intentionally separate from `gate`: it executes thousands

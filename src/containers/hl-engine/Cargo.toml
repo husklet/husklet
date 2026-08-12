@@ -19,7 +19,6 @@ hl-isa = { path = "../../runtime/hl-isa" }
 hl-loader = { path = "../../runtime/hl-loader" }
 hl-log = { path = "../../packages/hl-log" }
 hl-linux = { path = "../../runtime/hl-linux" }
-hl-native = { path = "../../native" }
 hl-provider = { path = "../../runtime/hl-provider" }
 hl-runtime = { path = "../../runtime/hl-runtime" }
 ring = "0.17.14"
@@ -44,4 +43,4 @@ default = ["c-execution"]
 # Counts host heap allocations per native crossing; see `native::allocations`.
 alloc-count = []
 # Production retained-C execution backend; build.rs admits only source-complete targets.
-c-execution = ["hl-native/c-coexist"]
+c-execution = []

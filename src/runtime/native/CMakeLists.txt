@@ -6,12 +6,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(HL_BUILD_TESTS)
   enable_testing()
 endif()
-file(GLOB_RECURSE HL_EXEC_C CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/exec/src/*.c" "${CMAKE_CURRENT_SOURCE_DIR}/exec/cache/*.c")
 set(HL_RUNTIME_C
     "${CMAKE_CURRENT_SOURCE_DIR}/address_projection.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/executable_authority.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/shim.c")
-add_library(hl_lint_native_objects OBJECT EXCLUDE_FROM_ALL ${HL_EXEC_C} ${HL_RUNTIME_C})
+add_library(hl_lint_native_objects OBJECT EXCLUDE_FROM_ALL ${HL_RUNTIME_C})
 target_compile_features(hl_lint_native_objects PRIVATE c_std_11)
 set(HL_STRICT_C_WARNINGS
     -Werror -Werror=implicit-function-declaration -Werror=implicit-int
@@ -22,7 +21,7 @@ set(HL_HARDENED_C_WARNINGS
 target_compile_options(hl_lint_native_objects PRIVATE ${HL_STRICT_C_WARNINGS})
 target_compile_options(hl_lint_native_objects PRIVATE ${HL_HARDENED_C_WARNINGS})
 set_source_files_properties(${HL_RUNTIME_C} PROPERTIES COMPILE_DEFINITIONS _GNU_SOURCE)
-target_include_directories(hl_lint_native_objects PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/retained/include" "${CMAKE_CURRENT_SOURCE_DIR}/retained/src" "${CMAKE_CURRENT_SOURCE_DIR}/exec/include" "${CMAKE_CURRENT_SOURCE_DIR}/exec/src" "${CMAKE_CURRENT_SOURCE_DIR}/cpu/include")
+target_include_directories(hl_lint_native_objects PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/retained/include" "${CMAKE_CURRENT_SOURCE_DIR}/retained/src")
 
 # Reconstruct each production retained-C compile group from the same manifest
 # Cargo consumes.  Besides keeping clang-tidy's compile database honest, these

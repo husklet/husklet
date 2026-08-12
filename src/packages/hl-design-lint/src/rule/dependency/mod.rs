@@ -366,8 +366,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-container", "hl-vfs")
             | (
                 "hl-engine",
-                "hl-native"
-                    | "hl-runtime"
+                "hl-runtime"
                     | "hl-checkpoint"
                     | "hl-descriptor"
                     | "hl-event"

@@ -150,8 +150,8 @@ fn repository_gates_keep_native_and_compatibility_coverage() {
     let root = repository_root();
     let makefile = fs::read_to_string(root.join("Makefile")).expect("read Makefile");
     assert!(
-        makefile.contains("src/runtime/native/exec/test/memory_lifecycle.sh || status=1"),
-        "the normal gate must aggregate the native memory lifecycle result"
+        !makefile.contains("runtime/native/exec"),
+        "the normal gate must not resurrect the retired replacement executor"
     );
     for required in [
         ".PHONY: all check design-lint gate gate-app gate-compat gate-fixture",
