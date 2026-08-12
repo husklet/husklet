@@ -1,5 +1,9 @@
 # Completeness compatibility oracle audit
 
+> **Ownership note:** The corpus contract remains current. References to
+> `hl-execution` describe the deleted Rust replacement engine; production is
+> `src/runtime/native/retained`.
+
 This folder preserves the whole legacy `completeness` category as one selectable
 compatibility domain: 184 cases backed by 184 registered byte-preserved C
 sources and 185 byte-preserved stdout files.  The former category also contained

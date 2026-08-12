@@ -1,5 +1,9 @@
 # Native slice admission audit
 
+> **Historical replacement-engine audit:** `ExecutionMachine` and its native
+> slice admission path were deleted. Production selection is C-only; this file
+> remains evidence for any future replacement proposal.
+
 ## Retained oracle
 
 The read-only comparison covered

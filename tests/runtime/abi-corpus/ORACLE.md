@@ -1,5 +1,9 @@
 # Exact ABI corpus oracle
 
+> **Historical ownership:** `hl-execution` rows preserve the deleted Rust-engine
+> audit. Production execution is `src/runtime/native/retained`; the ABI cases
+> remain active.
+
 The ABI cohorts preserve deterministic C programs and byte-exact goldens, but
 their implementation oracle is the retained read-only engine in `../engine`.
 The audit read these implementation owners and entry points, rather than only

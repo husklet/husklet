@@ -1,5 +1,9 @@
 # Exclusive reservation lifetime audit
 
+> **Historical replacement ownership:** Rows naming `hl-execution` document the
+> deleted Rust executor. The selected C engine currently owns guest reservation
+> execution; `hl-memory` remains a Rust control-plane service.
+
 This audit covers the address-space lifetime of AArch64 local exclusive
 reservations. The retained C engine at `../engine` was read-only throughout.
 

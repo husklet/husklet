@@ -1,5 +1,8 @@
 # Retained core ABI oracle audit
 
+> **Historical ownership:** Rows naming `hl-execution` describe the deleted
+> Rust replacement engine. Production is `src/runtime/native/retained`.
+
 This flat category ports all 35 cases from
 `../engine/tests/compat/core/abi/manifest.tsv`. The retained tree was used
 read-only; no retained file was edited. The fixtures remain independent even

@@ -1,5 +1,9 @@
 # Terminal scenario oracle
 
+> **Historical ownership:** References below to the integrated Rust engine
+> describe the deleted executor. The scenario contracts remain current and run
+> through the selected C production backend.
+
 These 48 end-to-end cases preserve the IDs, images, shell or argv commands,
 timeouts, class, targets, expected failures, resources, environments, exit
 status, and substring contracts from

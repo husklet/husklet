@@ -1,5 +1,9 @@
 # Native hot-path parity audit
 
+> **Historical replacement-engine audit:** Paths naming the Rust native executor
+> are deleted and are not current production ownership. The measurements remain
+> useful evidence for the unselected `exec` candidate.
+
 This source audit ranks generic native-execution gaps against the retained C
 engine.  It changes no production behavior.  Husklet was inspected at
 `7e368ec300ad6c3a136ce1b0b2ec052a34fc6306`; the read-only retained oracle was

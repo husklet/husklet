@@ -42,9 +42,10 @@ mechanisms rather than one registry:
 The C engine works because real host processes and sessions supply much of the
 process model. Its process attributes are mostly process globals, its thread
 registry has a separate mutex, and signal state mixes atomics, TLS, a queue lock,
-and host handlers. The Rust engine instead makes the guest-visible model explicit
-and per-runtime. That difference is intentional; behavior and ordering remain
-the migration contract.
+and host handlers. The deleted Rust replacement engine instead made the
+guest-visible model explicit and per-runtime. That comparison remains historical
+migration evidence; selected production execution is C, while `hl-task` remains
+a Rust control-plane domain.
 
 For child waits, retained `proc.c::svc_proc` case 260 probes rusage first, calls
 host `wait4`, then performs rusage/status copyout and reap bookkeeping; a mapping

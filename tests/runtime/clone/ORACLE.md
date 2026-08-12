@@ -1,5 +1,8 @@
 # Thread clone and robust-exit oracle
 
+> **Historical ownership:** `hl-execution` and `ffi/linux/execution` references
+> preserve the deleted Rust-engine audit. Production is the selected C closure.
+
 This workload was migrated from `tests/runtime/legacy/source/clone.c`. QEMU
 user-mode returns `ENOSYS` for AArch64 `set_robust_list`; that oracle-only
 capability refusal is accepted while the clone, futex, and clear-TID lifecycle

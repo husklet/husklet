@@ -1,5 +1,8 @@
 # Syscall core oracle audit
 
+> **Historical ownership:** Rust-engine and `ffi/linux/execution` references
+> describe the deleted replacement path. These cases now gate selected C.
+
 This cohort preserves the retained engine's `core/syscall` acceptance boundary.
 The retained tree at `../engine` was read only. The fixtures alone were not used
 as an implementation specification.

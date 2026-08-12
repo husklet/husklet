@@ -1,5 +1,9 @@
 # Retained regression-domain oracle
 
+> **Historical ownership:** Deleted Rust-engine paths below remain as audit
+> evidence. These regression cases now gate the selected C engine under
+> `src/runtime/native/retained`.
+
 The source programs and expected stdout in this folder are byte-for-byte copies
 from `../engine/tests/compat/core/regress`. The retired engine itself is the
 behavioral oracle; it was inspected read-only. This audit covers the complete

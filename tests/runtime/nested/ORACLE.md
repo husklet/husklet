@@ -1,5 +1,9 @@
 # Nested engine oracle audit
 
+> **Historical ownership:** Rust aperture and `ffi/linux/execution` comparisons
+> below describe the deleted Rust executor. The nested contract remains current
+> for the selected C engine.
+
 The retained implementation was studied read-only in `../engine`.
 
 | C capability | Oracle owner and entry | State, ordering, and teardown | Rust test owner | Status |

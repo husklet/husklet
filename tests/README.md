@@ -3,8 +3,8 @@
 The repository-level suites are grouped by the behavior they prove:
 
 - `runtime/` owns C guest sources and their YAML execution definitions. It is
-  the compatibility and differential corpus shared by the Rust engine and the
-  read-only C oracle.
+  the compatibility corpus for the selected in-repository C engine and the
+  differential corpus for unselected replacement candidates and pinned oracles.
 - `scenarios/` owns daemon, container, and interactive workflow definitions.
   The daemon harness is being moved here without changing its public behavior.
 - `bench/` owns C benchmark sources and YAML workload definitions. Persistent

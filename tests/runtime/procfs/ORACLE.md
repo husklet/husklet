@@ -1,5 +1,9 @@
 # Procfs retained-C audit
 
+> **Historical ownership:** Old Rust execution-adapter paths below are retained
+> as migration evidence. Production procfs behavior currently comes through the
+> selected C engine under `src/runtime/native/retained`.
+
 Checkpoint selector prerequisite: the retained C procfs implementation has no
 durable open-description codec or tagged object catalog; its temporary procfs
 files and directories are process-local host artifacts and are rebuilt rather

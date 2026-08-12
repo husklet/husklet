@@ -1,11 +1,11 @@
 # Husklet instructions
 
 These rules define the durable architecture, safety, coding, testing, and delivery
-standards for Husklet and its integrated Rust engine. Apply them to every new package and improve
+standards for Husklet and its integrated C execution engine. Apply them to every new package and improve
 nearby code when doing so preserves behavior and remains within scope.
 
 The retired C engine in `../engine` is a read-only behavioral and performance oracle
-during migration. Husklet is the active repository and owns the Rust engine, containers,
+during migration. Husklet is the active repository and owns the integrated C engine, Rust control plane, containers,
 workspaces, terminal, and desktop application. Do not add GPU, graphics translation,
 surface, compositor, CUDA, OpenGL, Vulkan, or Wayland implementation back into this
 repository. Never edit `../engine` while studying it.
@@ -623,8 +623,9 @@ changing edits until the dependent verification has captured a coherent commit.
 
 ## Mission
 
-Provide isolated, reproducible Linux workspaces backed by a memory-safe,
-high-performance Rust execution engine. Opening a workspace enters its configured
+Provide isolated, reproducible Linux workspaces backed by the production C
+execution engine under `src/runtime/native`, with a memory-safe Rust control plane.
+Opening a workspace enters its configured
 image with a terminal, filesystem, networking, VPN, and container services.
 
 Preserve exact Linux behavior across AArch64 and x86-64 guests and Linux, macOS,
@@ -640,24 +641,27 @@ framework, executable name, build-information marker, or vendor identity.  In
 particular, Go, V8, JVM, and similar guest internals are not Linux ABI
 domains.  When retained C contains such a branch, preserve it as migration evidence
 and identify the violated generic invariant (for example non-PIE guest-address
-placement or signal semantics); repair that invariant rather than creating a
-runtime-specific Rust package.  Guest-visible addresses remain ELF/Linux addresses;
+placement or signal semantics); repair that invariant in its authoritative
+owner rather than adding runtime-specific detection in C or Rust. Guest-visible
+addresses remain ELF/Linux addresses;
 host storage placement is an internal mapping detail and must not leak into guest
 pointers, symbols, signals, `/proc`, checkpoints, or runtime metadata.
 
-## C oracle study before every migration lane
+## Production/native ownership study before every migration lane
 
 Reading retained fixtures and expected output is necessary but insufficient.
-Before changing a runtime domain, the lane owner must inspect the corresponding
-read-only implementation in `../engine` and record:
+Before changing a runtime domain, the lane owner must inspect the selected
+implementation under `src/runtime/native/retained` and, when provenance or an
+independent baseline matters, the corresponding pinned read-only implementation
+in `../engine`. Record:
 
 - the exact C and assembly files and entry functions studied;
 - state ownership, identity, lifetime, locking, and teardown behavior;
 - syscall ordering, partial-result, blocking, cancellation, signal, and errno
   semantics relevant to the lane;
 - architecture-specific and host-specific branches;
-- the explicit mapping from each observed C capability to its Rust owner, or an
-  honest remaining gap.
+- the explicit mapping from each observed capability to its current production
+  C owner, Rust control-plane boundary, or honest remaining replacement gap.
 
 Record this oracle audit beside the relevant compatibility or performance report
 before the lane is accepted.
@@ -691,20 +695,20 @@ measurement. A fixture that passes on the bare host kernel as well as in the
 engine validates the assertion; one that only passes in the engine validates
 nothing.
 
-### Port domains, not failing cases
+### Change domains, not failing cases
 
-The retained C engine is the primary implementation oracle. Compatibility cases
-are acceptance evidence and prioritization signals; they are not a substitute
-for migrating the implementation that already works.
+The selected retained C backend is the production implementation. Compatibility
+cases are acceptance evidence and prioritization signals; they are not a
+substitute for understanding the complete implementation that already works.
 
 Before fixing a corpus cluster, read the complete retained C domain and its call
 graph rather than only the function named by the first failure. Inventory every
 entry point, state object, ownership edge, lock, wakeup, error path, architecture
 branch, and teardown transition, then compare that inventory mechanically against
-the Rust owners. Record a dense capability matrix with each C capability marked
-implemented, divergent, or missing in Rust. Implement the largest coherent
-missing mechanism and all of its widths, flags, lifecycle paths, and error
-semantics before returning to the corpus.
+the current in-repository owners. Record a dense capability matrix with each
+capability marked selected, replacement-candidate, divergent, or missing.
+Implement the largest coherent missing mechanism and all of its widths, flags,
+lifecycle paths, and error semantics before returning to the corpus.
 
 Walking one executable until it exposes the next unsupported instruction or
 patching one fixture-visible branch at a time is forbidden when the retained C
@@ -721,8 +725,8 @@ execution, container capabilities, workspace capabilities, and the product root:
 ```text
 src/
   packages/   transferable libraries and repository tool packages
-  runtime/    engine-specific runtime domains
-  native/     CPU schema and native execution implementation
+  runtime/    engine runtime domains, including the production C engine in native/
+  native/     CPU schema generation and C ABI test/build harness
   containers/ container services and the integrated hl-engine
   workspaces/ workspace, terminal, and generic GUI capabilities
   apps/husklet/ the product composition root
@@ -732,7 +736,7 @@ Dependencies point inward:
 
 ```text
 husklet -> workspaces + containers -> runtime -> packages -> std
-                              -> native
+                              -> native schema/build harness
 ```
 
 - Production libraries in `packages/` must make sense without an engine, guest,
@@ -829,10 +833,12 @@ A port is a narrow trait owned by the consumer that needs the capability. Add a
 port only for a real platform, substitution, testing, FFI, or stable domain
 boundary.
 
-Examples:
+Current execution boundary:
 
-- task owns `GuestExecutor`; execution implements it;
-- execution owns `TrapHandler` and `InstructionMemory`; runtime implements them;
+- `hl-engine` owns validated launch plans, worker supervision, fail-closed
+  C-only backend selection, and the coarse retained-C FFI;
+- Rust loader and memory services own bounded image/projection inputs;
+- selected C owns guest scheduling, Linux personality, translation, and execution;
 - memory owns `Backing`; runtime adapts a pinned open-file description;
 - VFS owns `VfsHost`; the app supplies the selected host adapter;
 - network owns `SocketHost`; the app supplies the selected host adapter.
@@ -842,7 +848,20 @@ Keep traits small and capability-specific.
 
 ## Native execution boundary
 
-The retained C/assembly kernel lives under `src/native/execution`. It is limited to:
+The production C/assembly engine lives under `src/runtime/native/retained` and
+is selected through the Rust boundary in
+`src/containers/hl-engine/src/execution`. It currently owns the complete guest
+execution closure: translation, scheduling, Linux ABI services, signals,
+filesystem and descriptor behavior, and guest lifecycle. Rust owns product
+selection, launch-plan validation, worker supervision, and the public product
+interfaces. Builds must not read or link `../engine`.
+
+`src/runtime/native/exec` is an unselected replacement candidate retained for
+differential evidence. `src/native` contains CPU-schema generation, build
+integration, and C test harnesses; it is not the production engine source root.
+
+The following narrow boundary described the deleted Rust-executor migration and
+is retained as historical design evidence, not as the current architecture:
 
 - CPU layouts whose offsets are embedded in machine code;
 - assembly entry, block-return, and trampoline code;
@@ -851,17 +870,21 @@ The retained C/assembly kernel lives under `src/native/execution`. It is limited
 - fault-context reconstruction;
 - async-signal-safe and fork-critical repair.
 
-It must not own Linux syscall, filesystem, descriptor, networking, task, loader,
-checkpoint, or product policy.
+The candidate boundary was not intended to own Linux syscall, filesystem,
+descriptor, networking, task, loader, checkpoint, or product policy.
 
 Cross-language operations are coarse. FFI per instruction, guest memory access,
 block lookup, or chain transition is forbidden.
 
-CPU layouts are generated from `src/schema/cpu` into C and Rust. Both sides compile
+CPU layouts are generated from `src/native/cpu` into C and Rust. Both sides compile
 size, alignment, and offset assertions. Hand-maintained duplicate layouts are
 forbidden.
 
-### Why arm64 translates far less than amd64
+### Historical: why the deleted Rust executor translated less on arm64
+
+The measurements and symbols in this subsection describe the deleted Rust
+executor. They remain useful performance evidence but do not describe current
+production routing or ownership.
 
 arm64 still retires far less translated code than amd64 on short programs, but the
 figures this section used to carry are stale and one of its three limiters has been

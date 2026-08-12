@@ -1,5 +1,8 @@
 # Syscall-edge oracle audit
 
+> **Historical ownership:** The `ffi/linux/execution` path below records the
+> deleted Rust executor. These syscall-edge contracts now gate selected C.
+
 ## Scope and retained implementation studied
 
 This category is the complete 52-case `syscall_edges` manifest, not only the

@@ -1,5 +1,9 @@
 # Terminal lifecycle oracle audit
 
+> **Historical ownership:** Old `ffi/linux/execution` paths below preserve the
+> deleted Rust-engine audit. The selected C engine currently supplies guest
+> terminal behavior through the Rust product boundary.
+
 ## Retained C implementation studied
 
 - `../engine/src/linux_abi/syscall/fs.c`: `svc_fs` ioctl switch, pty master

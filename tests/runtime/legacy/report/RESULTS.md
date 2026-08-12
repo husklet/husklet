@@ -1,5 +1,9 @@
 # Rust compatibility results
 
+> **Historical checkpoint:** These results describe the deleted Rust executor.
+> They are retained as migration evidence and are not current C-primary product
+> results.
+
 | Status | Count |
 |---|---:|
 | pass | 8 |

@@ -1,5 +1,8 @@
 # Exec compatibility oracle audit
 
+> **Historical ownership:** Rust-engine ownership statements below are retained
+> migration evidence. Exec cases now exercise the selected C production engine.
+
 ## Retained implementation studied
 
 The retained engine was read only. `../engine/src/linux_abi/syscall/proc.c`

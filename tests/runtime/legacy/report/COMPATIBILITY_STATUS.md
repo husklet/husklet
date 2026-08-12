@@ -1,6 +1,12 @@
 # Compatibility status
 
-This file is the canonical accounting note for retained-C compatibility. It
+> **Historical checkpoint:** The counts and Rust-parity denominator in this
+> report predate the C-primary cutover. They are not current-tip completion
+> evidence. A final C-primary corpus run must supersede this report or explicitly
+> account for every remaining failure.
+
+This file preserves the canonical accounting note for that retained-C/Rust
+compatibility checkpoint. It
 separates inventory, scheduler coverage, historical execution, and results from
 the current source fingerprint. Those numbers answer different questions and
 must not be substituted for one another.

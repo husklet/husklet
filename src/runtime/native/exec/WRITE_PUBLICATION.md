@@ -1,5 +1,9 @@
 # Write publication audit
 
+> **Historical replacement-engine audit:** Paths naming the Rust native executor
+> are deleted and are not current production ownership. The publication findings
+> remain evidence for the unselected `exec` candidate.
+
 This audit records why per-view coarse write publication is a promising native
 execution optimization, but is not yet safe to enable. It was made against
 Husklet `7e368ec300ad6c3a136ce1b0b2ec052a34fc6306` and the retained C engine in

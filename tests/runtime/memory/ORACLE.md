@@ -1,5 +1,9 @@
 # Memory compatibility oracle audit
 
+> **Historical ownership:** References to `src/native/execution` and the former
+> Rust scheduler describe deleted or unselected replacement work. Production
+> memory behavior currently enters `src/runtime/native/retained`.
+
 Retained C was studied read-only in `../engine/src/linux_abi/syscall/mem.c`, `../engine/src/linux_abi/host_mman.h`, `../engine/src/linux_abi/host_uio.h`, `../engine/src/linux_abi/linux_abi.c` vector entry points, `../engine/src/linux_abi/sentry.c` iovec admission/copyback, and the mapping/pipe/fork paths. Mapping and descriptor identities own state; whole vectors are admitted before payload transfer, Linux caps and partial results are preserved, pipe writes within `PIPE_BUF` remain atomic, blocking operations wake or interrupt with exact errno, and last-close/fork teardown is explicit. Rust ownership maps to `hl-memory`, `hl-descriptor`, and `hl-runtime` memory/filesystem/pipe composition.
 
 The four cases preserve lock scope, vector caps, validation ordering, atomic pipe writes, scatter reads, and forked aliases on both ISAs.

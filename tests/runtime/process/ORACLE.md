@@ -1,5 +1,8 @@
 # Process compatibility oracle audit
 
+> **Historical ownership:** The old `ffi/linux/execution` path below is deleted.
+> Process cases now exercise the selected C production closure.
+
 Retained C was studied read-only in `../engine/src/linux_abi/syscall/proc.c`, `../engine/src/linux_abi/fork.c`, `../engine/src/linux_abi/signal.c`, `../engine/src/linux_abi/syscall/net.c`, `../engine/src/linux_abi/container/netns.c`, `../engine/src/linux_abi/host_socket.h`, `../engine/src/linux_abi/seccomp.c`, `../engine/src/linux_abi/seccomp_vm.c`, and `../engine/src/linux_abi/number.c`. Process identity, credentials, UTS namespace and prctl state, socket/OFD identity, explicit host/isolation policy, per-thread stacked filters, verifier/action precedence, fork/exec inheritance, signal/wait ordering, cancellation, and teardown were followed. Host-specific socket mechanics stay behind the host adapter; guest syscall numbers differ by ISA while Linux-visible state does not.
 
 Rust ownership maps to `hl-task`, `hl-network`, `hl-linux`, `hl-descriptor`, and `hl-runtime` process/network/seccomp composition. The eight cases preserve the complete local boundary cohort: namespace/uname, explicit INET modes, credential mutation, parent-death/subreaper lifecycle, and seccomp filter/matrix behavior.

@@ -1,5 +1,8 @@
 # ISA oracle audit
 
+> **Historical ownership:** `hl-execution` rows describe a deleted replacement
+> engine. ISA cases now gate `src/runtime/native/retained` in production.
+
 This category owns guest-instruction translation and ELF-address-model compatibility. Architecture is a
 case target, not a directory owner. The nine stable legacy case identities are preserved in one manifest;
 the source and expected stdout bytes are unchanged apart from semantic filenames.

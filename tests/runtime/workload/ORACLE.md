@@ -1,5 +1,9 @@
 # Workload compatibility oracle audit
 
+> **Ownership note:** The behavioral audit and test contract remain current.
+> Names for `hl-execution` or the former Rust execution adapter below are
+> historical; production is `src/runtime/native/retained`.
+
 ## Retained implementation studied
 
 This category preserves the complete retained `core/workload` registration.
