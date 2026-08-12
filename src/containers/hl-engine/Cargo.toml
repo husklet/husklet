@@ -13,7 +13,6 @@ workspace = true
 hl-log = { path = "../../packages/hl-log" }
 hl-native = { path = "../../runtime/hl-native" }
 ring = "0.17.14"
-zeroize = "1.9"
 [dev-dependencies]
 tempfile = "3"
 

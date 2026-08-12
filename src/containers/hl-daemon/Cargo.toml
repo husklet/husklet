@@ -57,7 +57,6 @@ regex = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-serde_yaml.workspace = true
 sha2 = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 tar = { workspace = true, optional = true }
@@ -67,12 +66,10 @@ tokio-util = { workspace = true, features = ["io"], optional = true }
 tower = { workspace = true, features = ["util"], optional = true }
 
 [dev-dependencies]
-fs2.workspace = true
 flate2.workspace = true
 hl-client = { path = "../hl-client" }
 hl-container = { path = "../hl-container" }
 hl-images = { path = "../hl-images" }
-nix = { version = "0.30", features = ["signal"] }
 sha2.workspace = true
 tar.workspace = true
 tempfile.workspace = true

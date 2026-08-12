@@ -1089,7 +1089,6 @@ dependencies = [
  "bytes",
  "chrono",
  "flate2",
- "fs2",
  "futures-util",
  "hl-client",
  "hl-container",
@@ -1100,12 +1099,10 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "nix",
  "regex",
  "reqwest",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2",
  "tar",
  "tempfile",
@@ -1150,7 +1147,6 @@ dependencies = [
  "libc",
  "ring",
  "tempfile",
- "zeroize",
 ]
 
 [[package]]
@@ -1298,7 +1294,6 @@ dependencies = [
  "hl-ws",
  "hl-ws-term",
  "libc",
- "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "serde",
