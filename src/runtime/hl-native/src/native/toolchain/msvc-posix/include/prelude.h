@@ -61,7 +61,7 @@
 /* clock_gettime and its clock ids. C11's <time.h> in the UCRT has
  * timespec_get() and TIME_UTC but not the POSIX clock family. The ids are the
  * Linux values because this tree passes them across the guest ABI boundary in
- * places, and posix.c implements the four that are reachable. */
+ * places, and compatibility.c implements the four that are reachable. */
 #ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
@@ -87,7 +87,7 @@ int nanosleep(const struct timespec *requested, struct timespec *remaining);
  * <string.h> and not <strings.h>, which is where POSIX actually puts the
  * casecmp pair, so declaring them here reaches those TUs without this
  * directory having to interpose on <string.h> itself. Each has an exact UCRT
- * counterpart -- strtok_s, _stricmp, _strnicmp -- so posix.c forwards rather
+ * counterpart -- strtok_s, _stricmp, _strnicmp -- so compatibility.c forwards rather
  * than reimplementing. */
 char *strtok_r(char *string, const char *delimiters, char **save);
 int strcasecmp(const char *left, const char *right);

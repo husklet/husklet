@@ -237,7 +237,7 @@ mod tests {
             assert!(super::source_matches(target, "src/native/engine/runtime.c"));
             assert!(super::source_matches(target, "src/native/host/sync.c"));
             assert_eq!(
-                super::source_matches(target, "src/native/toolchain/msvc-posix/posix.c"),
+                super::source_matches(target, "src/native/toolchain/msvc-posix/compatibility.c"),
                 target == "windows"
             );
         }

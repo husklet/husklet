@@ -4,7 +4,7 @@
  * The mingw-w64 lane gets this from winpthreads, a full POSIX threads
  * implementation shipped as a GNU static archive. That archive cannot be
  * linked into an MSVC-ABI image, so the subset this tree actually calls is
- * reimplemented over Win32 in posix.c. "The subset this tree actually calls"
+ * reimplemented over Win32 in compatibility.c. "The subset this tree actually calls"
  * is not a guess: it is the exact set of pthread_* identifiers that the
  * archive's source closure leaves undeclared when compiled against the MSVC
  * headers, and nothing else is declared here. A call site that grows a new
@@ -31,7 +31,7 @@
  *                        supported: Win32 fibre-local storage has no per-thread
  *                        destructor callback outside a DLL's thread-detach
  *                        notification, and this archive is not a DLL. See the
- *                        note on pthread_key_create in posix.c -- passing a
+ *                        note on pthread_key_create in compatibility.c -- passing a
  *                        non-NULL destructor FAILS rather than silently
  *                        ignoring it.
  *   pthread_t         -> the Win32 thread id plus its handle. An id alone would
@@ -63,7 +63,7 @@ extern "C" {
  * Both SRWLOCK and CONDITION_VARIABLE are documented as a single pointer-sized
  * opaque field, and both are initialised to all-zero by SRWLOCK_INIT /
  * CONDITION_VARIABLE_INIT. Declaring them structurally keeps the Win32
- * preprocessor vocabulary out of every TU that locks a mutex; posix.c includes
+ * preprocessor vocabulary out of every TU that locks a mutex; compatibility.c includes
  * the real <windows.h> and asserts the sizes match. */
 typedef struct {
     void *opaque;

@@ -10,7 +10,7 @@
  * and the five calls the UCRT genuinely does not have.
  *
  * Those five -- ftruncate, truncate, usleep, mkstemp, mkdtemp -- are
- * implemented in posix.c beside this file. They are not stubs: each is a real
+ * implemented in compatibility.c beside this file. They are not stubs: each is a real
  * implementation over the UCRT or Win32, because the engine calls them on
  * paths that run.
  */

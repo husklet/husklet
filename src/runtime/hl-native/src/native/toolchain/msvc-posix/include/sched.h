@@ -4,7 +4,7 @@
  * One function is reached from this tree: sched_yield(), used by the spin
  * paths in the dispatch and provider layers. Win32's SwitchToThread() is the
  * exact counterpart -- it yields the remainder of the time slice to another
- * ready thread on the same processor -- so posix.c implements it over that
+ * ready thread on the same processor -- so compatibility.c implements it over that
  * rather than over Sleep(0), which differs in that it will not yield to a
  * lower-priority thread.
  *
