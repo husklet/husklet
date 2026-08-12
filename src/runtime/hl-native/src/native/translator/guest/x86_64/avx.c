@@ -3653,6 +3653,134 @@ static enum avx_dispatch_result sse_dispatch_immediate_blend(const hl_x86_avx_st
     return AVX_DISPATCH_HANDLED;
 }
 
+static void sse_sha1_rounds4(uint8_t imm, const uint8_t state_bytes[16], const uint8_t word_bytes[16],
+                             uint8_t result[16]) {
+    uint32_t function = imm & 3;
+    uint32_t constant = (function == 0)   ? 0x5A827999u
+                        : (function == 1) ? 0x6ED9EBA1u
+                        : (function == 2) ? 0x8F1BBCDCu
+                                          : 0xCA62C1D6u;
+    uint32_t state[4], words[4];
+    memcpy(state, state_bytes, 16);
+    memcpy(words, word_bytes, 16);
+    uint32_t a = state[3], b = state[2], c = state[1], d = state[0];
+    uint32_t schedule[4] = {words[3], words[2], words[1], words[0]};
+    uint32_t e = 0;
+    for (int i = 0; i < 4; i++) {
+        uint32_t f = (function == 0)   ? ((b & c) | (~b & d))
+                     : (function == 2) ? ((b & c) | (b & d) | (c & d))
+                                       : (b ^ c ^ d);
+        uint32_t next = f + rotl32(a, 5) + schedule[i] + constant + e;
+        e = d;
+        d = c;
+        c = rotl32(b, 30);
+        b = a;
+        a = next;
+    }
+    uint32_t output[4] = {d, c, b, a};
+    memcpy(result, output, 16);
+}
+
+static enum avx_dispatch_result sse_dispatch_immediate_arithmetic(int op, uint8_t imm,
+                                                                  const uint8_t destination[16],
+                                                                  const uint8_t source[16], uint8_t result[16]) {
+    switch (op) {
+    case 0x08:
+    case 0x09:
+    case 0x0A:
+    case 0x0B: {          // roundps/pd/ss/sd, mode in imm[3:0]; bit2 set = use MXCSR.RC (current host FPCR)
+        if (op == 0x08) { // roundps
+            float input[4], output[4];
+            memcpy(input, source, 16);
+            for (int i = 0; i < 4; i++) output[i] = sse_round_f(input[i], imm);
+            memcpy(result, output, 16);
+        } else if (op == 0x09) { // roundpd
+            double input[2], output[2];
+            memcpy(input, source, 16);
+            for (int i = 0; i < 2; i++) output[i] = sse_round_d(input[i], imm);
+            memcpy(result, output, 16);
+        } else if (op == 0x0A) { // roundss: low lane from src, rest from dst
+            float input;
+            memcpy(&input, source, 4);
+            input = sse_round_f(input, imm);
+            memcpy(result, &input, 4);
+        } else { // roundsd
+            double input;
+            memcpy(&input, source, 8);
+            input = sse_round_d(input, imm);
+            memcpy(result, &input, 8);
+        }
+        return AVX_DISPATCH_HANDLED;
+    }
+    case 0x0F: { // palignr: (dst:src) >> imm8 bytes
+        uint8_t combined[32];
+        memcpy(combined, source, 16);
+        memcpy(combined + 16, destination, 16);
+        for (int i = 0; i < 16; i++) result[i] = imm < (unsigned)(32 - i) ? combined[imm + (unsigned)i] : 0;
+        return AVX_DISPATCH_HANDLED;
+    }
+    case 0x40: { // dpps: packed-single dot product
+        float left[4], right[4];
+        memcpy(left, destination, 16);
+        memcpy(right, source, 16);
+        float sum = 0;
+        for (int i = 0; i < 4; i++)
+            if (imm & (0x10 << i)) sum += left[i] * right[i];
+        float output[4];
+        for (int i = 0; i < 4; i++) output[i] = (imm & (1 << i)) ? sum : 0.0f;
+        memcpy(result, output, 16);
+        return AVX_DISPATCH_HANDLED;
+    }
+    case 0x41: { // dppd: packed-double dot product
+        double left[2], right[2];
+        memcpy(left, destination, 16);
+        memcpy(right, source, 16);
+        double sum = 0;
+        for (int i = 0; i < 2; i++)
+            if (imm & (0x10 << i)) sum += left[i] * right[i];
+        double output[2];
+        for (int i = 0; i < 2; i++) output[i] = (imm & (1 << i)) ? sum : 0.0;
+        memcpy(result, output, 16);
+        return AVX_DISPATCH_HANDLED;
+    }
+    case 0x42: { // mpsadbw: eight 4-byte sum-of-absolute-differences windows.
+        int source_offset = (imm & 3) * 4;
+        int destination_offset = ((imm >> 2) & 1) * 4;
+        uint16_t output[8];
+        for (int i = 0; i < 8; i++) {
+            int sum = 0;
+            for (int k = 0; k < 4; k++) {
+                int difference =
+                    (int)destination[destination_offset + i + k] - (int)source[source_offset + k];
+                sum += difference < 0 ? -difference : difference;
+            }
+            output[i] = (uint16_t)sum;
+        }
+        memcpy(result, output, 16);
+        return AVX_DISPATCH_HANDLED;
+    }
+    case 0x44: { // pclmulqdq: carryless multiply of selected 64-bit halves
+        uint64_t left, right;
+        memcpy(&left, destination + 8 * (imm & 1), 8);
+        memcpy(&right, source + 8 * ((imm >> 4) & 1), 8);
+// __int128: pre-C23 GNU/clang extension needed for the PCLMULQDQ carryless product; scope -Wpedantic.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+        unsigned __int128 product = 0;
+        for (int i = 0; i < 64; i++)
+            if ((right >> i) & 1) product ^= (unsigned __int128)left << i;
+#pragma GCC diagnostic pop
+        memcpy(result, &product, 16);
+        return AVX_DISPATCH_HANDLED;
+    }
+    case 0xCC: { // sha1rnds4: 4 SHA-1 rounds, function/constant from imm[1:0]
+        sse_sha1_rounds4(imm, destination, source, result);
+        return AVX_DISPATCH_HANDLED;
+    }
+    default: return AVX_DISPATCH_UNIMPLEMENTED;
+    }
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3861,132 +3989,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     }
 
     // ---- map == 3 (0F3A), the xmm-destructive imm8 forms ------------------------------------------
-    {
-        uint8_t imm = (uint8_t)I.imm;
-        switch (op) {
-        case 0x08:
-        case 0x09:
-        case 0x0A:
-        case 0x0B: {          // roundps/pd/ss/sd, mode in imm[3:0]; bit2 set = use MXCSR.RC (current host FPCR)
-            if (op == 0x08) { // roundps
-                float a[4], o[4];
-                memcpy(a, s, 16);
-                for (int i = 0; i < 4; i++)
-                    o[i] = sse_round_f(a[i], imm);
-                memcpy(r, o, 16);
-            } else if (op == 0x09) { // roundpd
-                double a[2], o[2];
-                memcpy(a, s, 16);
-                for (int i = 0; i < 2; i++)
-                    o[i] = sse_round_d(a[i], imm);
-                memcpy(r, o, 16);
-            } else if (op == 0x0A) { // roundss: low lane from src, rest from dst
-                float a;
-                memcpy(&a, s, 4);
-                a = sse_round_f(a, imm);
-                memcpy(r, &a, 4);
-            } else { // roundsd
-                double a;
-                memcpy(&a, s, 8);
-                a = sse_round_d(a, imm);
-                memcpy(r, &a, 8);
-            }
-            break;
-        }
-        case 0x0F: { // palignr: (dst:src) >> imm8 bytes
-            uint8_t comb[32];
-            memcpy(comb, s, 16);
-            memcpy(comb + 16, D, 16);
-            for (int i = 0; i < 16; i++)
-                r[i] = imm < (unsigned)(32 - i) ? comb[imm + (unsigned)i] : 0;
-            break;
-        }
-        case 0x40: { // dpps: packed-single dot product
-            float a[4], b[4];
-            memcpy(a, D, 16);
-            memcpy(b, s, 16);
-            float sum = 0;
-            for (int i = 0; i < 4; i++)
-                if (imm & (0x10 << i)) sum += a[i] * b[i];
-            float o[4];
-            for (int i = 0; i < 4; i++)
-                o[i] = (imm & (1 << i)) ? sum : 0.0f;
-            memcpy(r, o, 16);
-            break;
-        }
-        case 0x41: { // dppd: packed-double dot product
-            double a[2], b[2];
-            memcpy(a, D, 16);
-            memcpy(b, s, 16);
-            double sum = 0;
-            for (int i = 0; i < 2; i++)
-                if (imm & (0x10 << i)) sum += a[i] * b[i];
-            double o[2];
-            for (int i = 0; i < 2; i++)
-                o[i] = (imm & (1 << i)) ? sum : 0.0;
-            memcpy(r, o, 16);
-            break;
-        }
-        case 0x42: { // mpsadbw: eight 4-byte sum-of-absolute-differences windows.
-            // imm[1:0] selects the src2(r/m) block offset (*4 bytes); imm[2] selects the
-            // src1(dst) block offset (*4 bytes). Result word[i] = sum_{k=0..3} |D[aoff+i+k] - s[boff+k]|.
-            int boff = (imm & 3) * 4;
-            int aoff = ((imm >> 2) & 1) * 4;
-            uint16_t o[8];
-            for (int i = 0; i < 8; i++) {
-                int sum = 0;
-                for (int k = 0; k < 4; k++) {
-                    int diff = (int)D[aoff + i + k] - (int)s[boff + k];
-                    sum += diff < 0 ? -diff : diff;
-                }
-                o[i] = (uint16_t)sum;
-            }
-            memcpy(r, o, 16);
-            break;
-        }
-        case 0x44: { // pclmulqdq: carryless multiply of selected 64-bit halves
-            uint64_t a64, b64;
-            memcpy(&a64, D + 8 * (imm & 1), 8);
-            memcpy(&b64, s + 8 * ((imm >> 4) & 1), 8);
-// __int128: pre-C23 GNU/clang extension needed for the PCLMULQDQ carryless product; scope -Wpedantic.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
-            unsigned __int128 prod = 0;
-            for (int i = 0; i < 64; i++)
-                if ((b64 >> i) & 1) prod ^= (unsigned __int128)a64 << i;
-#pragma GCC diagnostic pop
-            memcpy(r, &prod, 16);
-            break;
-        }
-        case 0xCC: { // sha1rnds4: 4 SHA-1 rounds, function/constant from imm[1:0]
-            uint32_t f_sel = imm & 3;
-            uint32_t K = (f_sel == 0)   ? 0x5A827999u
-                         : (f_sel == 1) ? 0x6ED9EBA1u
-                         : (f_sel == 2) ? 0x8F1BBCDCu
-                                        : 0xCA62C1D6u;
-            uint32_t st[4], w[4];
-            memcpy(st, D, 16); // D0=st[0],C0=st[1],B0=st[2],A0=st[3]
-            memcpy(w, s, 16);  // W3=w[0],W2=w[1],W1=w[2],W0=w[3]
-            uint32_t A = st[3], B = st[2], Cc = st[1], Dd = st[0];
-            uint32_t W[4] = {w[3], w[2], w[1], w[0]};
-            uint32_t E = 0;
-            for (int i = 0; i < 4; i++) {
-                uint32_t f = (f_sel == 0)   ? ((B & Cc) | (~B & Dd))
-                             : (f_sel == 2) ? ((B & Cc) | (B & Dd) | (Cc & Dd))
-                                            : (B ^ Cc ^ Dd);
-                uint32_t t = f + rotl32(A, 5) + W[i] + K + E;
-                E = Dd;
-                Dd = Cc;
-                Cc = rotl32(B, 30);
-                B = A;
-                A = t;
-            }
-            uint32_t o[4] = {Dd, Cc, B, A}; // DEST: [31:0]=D4,[63:32]=C4,[95:64]=B4,[127:96]=A4
-            memcpy(r, o, 16);
-            break;
-        }
-        default: goto unimpl;
-        }
+    if (sse_dispatch_immediate_arithmetic(op, (uint8_t)I.imm, D, s, r) == AVX_DISPATCH_HANDLED) {
         memcpy(D, r, 16);
         c->rip = next;
         return;
