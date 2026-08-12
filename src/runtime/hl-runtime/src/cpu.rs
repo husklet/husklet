@@ -346,6 +346,7 @@ pub enum ExecutionStateError {
     NotFrozen,
 }
 
+#[path = "cpu_codec.rs"]
 mod codec;
 use codec::SnapshotCodec;
 

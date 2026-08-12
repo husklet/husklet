@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::{LockCancellation, filesystem::errno::FileErrno, filesystem::syscalls::RuntimeFilesystemSyscalls};
 
+#[path = "fcntl_record.rs"]
 mod record;
 
 impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
