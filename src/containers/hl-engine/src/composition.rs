@@ -337,9 +337,6 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
         if services.streams.terminal().is_some() && !cfg!(unix) {
             return Err(CompositionError::UnsupportedTerminal);
         }
-        if services.streams.output().is_some() && !cfg!(unix) {
-            return Err(CompositionError::UnsupportedTerminal);
-        }
         if services.streams.terminal().is_some() && services.streams.output().is_some() {
             return Err(CompositionError::RuntimeConstruction);
         }
