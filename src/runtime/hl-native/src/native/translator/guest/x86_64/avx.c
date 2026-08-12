@@ -1266,6 +1266,55 @@ static enum avx_dispatch_result avx_dispatch_map1_move(const hl_x86_avx_state *s
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_floating_arithmetic(const hl_x86_avx_state *state, struct cpu *c,
+                                                                      struct insn *instruction, uint64_t next,
+                                                                      int width) {
+    int op = instruction->op;
+    if (op != 0x58 && op != 0x59 && op != 0x5C && op != 0x5D && op != 0x5E && op != 0x5F)
+        return AVX_DISPATCH_UNMATCHED;
+    int dbl = instruction->vex_pp == 1 || instruction->vex_pp == 3;
+    int scalar = instruction->vex_pp == 2 || instruction->vex_pp == 3;
+    int element = dbl ? 8 : 4;
+    uint8_t left[64], right[64], result[64];
+    avx_get(c, instruction->vvvv, left);
+    avx_get_rm(state, c, instruction, next, scalar ? element : width, right);
+    if (scalar) {
+        memcpy(result, left, 16);
+        if (dbl) {
+            double x, y;
+            memcpy(&x, left, 8);
+            memcpy(&y, right, 8);
+            double value = avx_fp_arith_f64(op, x, y);
+            memcpy(result, &value, 8);
+        } else {
+            float x, y;
+            memcpy(&x, left, 4);
+            memcpy(&y, right, 4);
+            float value = avx_fp_arith_f32(op, x, y);
+            memcpy(result, &value, 4);
+        }
+        width = 16;
+    } else {
+        for (int offset = 0; offset < width; offset += element) {
+            if (dbl) {
+                double x, y;
+                memcpy(&x, left + offset, 8);
+                memcpy(&y, right + offset, 8);
+                double value = avx_fp_arith_f64(op, x, y);
+                memcpy(result + offset, &value, 8);
+            } else {
+                float x, y;
+                memcpy(&x, left + offset, 4);
+                memcpy(&y, right + offset, 4);
+                float value = avx_fp_arith_f32(op, x, y);
+                memcpy(result + offset, &value, 4);
+            }
+        }
+    }
+    avx_put(c, instruction->reg, result, width);
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_map1_packed_integer_arithmetic(const hl_x86_avx_state *state,
                                                                             struct cpu *c, struct insn *instruction,
                                                                             uint64_t next, int width) {
@@ -1418,6 +1467,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_crypto(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_memory(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
         goto done;
 
@@ -1679,54 +1729,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                     memcpy(d + 4 * i, &y, 4);
                 }
                 avx_put(c, rd, d, W / 2);
-            }
-            goto done;
-        }
-        // packed/scalar FP arithmetic: dst = src1 OP src2 (src1=vvvv, src2=rm). pp: 0=ps,1=pd,2=ss,3=sd.
-        case 0x58: // vadd
-        case 0x59: // vmul
-        case 0x5C: // vsub
-        case 0x5D: // vmin
-        case 0x5E: // vdiv
-        case 0x5F: // vmax
-        {
-            int dbl = (pp == 1 || pp == 3), scalar = (pp == 2 || pp == 3);
-            int es = dbl ? 8 : 4;
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, scalar ? es : W, b);
-            if (scalar) { // low element computed, rest of low-128 from src1
-                memcpy(d, a, 16);
-                if (dbl) {
-                    double x, y;
-                    memcpy(&x, a, 8);
-                    memcpy(&y, b, 8);
-                    double z = avx_fp_arith_f64(op, x, y);
-                    memcpy(d, &z, 8);
-                } else {
-                    float x, y;
-                    memcpy(&x, a, 4);
-                    memcpy(&y, b, 4);
-                    float z = avx_fp_arith_f32(op, x, y);
-                    memcpy(d, &z, 4);
-                }
-                avx_put(c, rd, d, 16);
-            } else {
-                for (int i = 0; i < W; i += es) {
-                    if (dbl) {
-                        double x, y;
-                        memcpy(&x, a + i, 8);
-                        memcpy(&y, b + i, 8);
-                        double z = avx_fp_arith_f64(op, x, y);
-                        memcpy(d + i, &z, 8);
-                    } else {
-                        float x, y;
-                        memcpy(&x, a + i, 4);
-                        memcpy(&y, b + i, 4);
-                        float z = avx_fp_arith_f32(op, x, y);
-                        memcpy(d + i, &z, 4);
-                    }
-                }
-                avx_put(c, rd, d, W);
             }
             goto done;
         }
