@@ -40,3 +40,7 @@ pclib_blob_*.bin
 # `make lint-cases` regenerates these Markdown review queues from scratch; they are tool output.
 /lint/errors/
 /lint/check/
+
+# Compatibility ledgers create these transiently and remove them after a complete run.
+/tests/runtime/legacy/report/*.lock
+/tests/runtime/legacy/report/*.partial.tsv
