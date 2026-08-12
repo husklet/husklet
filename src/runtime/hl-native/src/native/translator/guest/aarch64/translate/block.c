@@ -37,6 +37,13 @@ struct deferred_branch {
     uint32_t instruction;
 };
 
+struct inline_context {
+    uint64_t target;
+    uint64_t resume;
+    uint64_t return_pc;
+    uint64_t expected_x30;
+};
+
 static void finish_block(uint64_t start, uint64_t guest_start, uint64_t guest_end, void *host, void *body,
                          uint64_t provenance_host, uint64_t provenance_guest, int provenance_fault_capable,
                          const struct deferred_branch *deferred, int deferred_count) {
@@ -585,6 +592,51 @@ static enum translation_step translate_condition_branch(uint64_t *guest_pc, uint
     return TRANSLATION_STOP;
 }
 
+static enum translation_step translate_indirect_control(uint64_t *guest_pc, uint32_t instruction,
+                                                        struct inline_context *contexts, int *context_count) {
+    if ((instruction & 0xFFFFFC1Fu) == 0xD65F0000u) {
+        int source = (instruction >> 5) & 31;
+        if (source == 30 && *context_count > 0 && *guest_pc == contexts[*context_count - 1].return_pc) {
+            struct inline_context *context = &contexts[*context_count - 1];
+            e_movr(16, 30);
+            e_movconst(17, context->expected_x30);
+            emit32(0xCB000000u | (17u << 16) | (16u << 5) | 16u);
+            uint32_t *zero = (uint32_t *)g_cp;
+            emit32(0);
+            emit_ibranch(30);
+            *zero = 0xB4000000u | (((uint32_t)((g_cp - (uint8_t *)zero) / 4) & 0x7FFFF) << 5) | 16;
+            *guest_pc = context->resume;
+            (*context_count)--;
+            return TRANSLATION_CONTINUE;
+        }
+        if (source == 30)
+            shadowgate() == -1 ? emit_ibranch(30) : emit_shadow_ret();
+        else
+            emit_ibranch(source);
+        return TRANSLATION_STOP;
+    }
+    if ((instruction & 0xFFFFFC1Fu) == 0xD61F0000u) {
+        int source = (instruction >> 5) & 31;
+        if (g_steal1617 && !g_noibslim && !is_stolen(source) && is_interp_dispatch_br(*guest_pc, source))
+            emit_hash_tail(source);
+        else
+            emit_ibranch(source);
+        return TRANSLATION_STOP;
+    }
+    if ((instruction & 0xFFFFFC1Fu) != 0xD63F0000u) return TRANSLATION_UNHANDLED;
+
+    int source = (instruction >> 5) & 31;
+    if (source == 30) {
+        e_ldr(17, CPUREG, 30 * 8);
+        emit_set_x30(pcrel_base(*guest_pc) + 4);
+        emit_ibranch_ip2_ready(17, 1);
+    } else {
+        emit_set_x30(pcrel_base(*guest_pc) + 4);
+        emit_ibranch(source);
+    }
+    return TRANSLATION_STOP;
+}
+
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
        an executable view backed by an emulated host-page snapshot. */
@@ -645,9 +697,7 @@ static void *translate_block(uint64_t gpc) {
     // ordinary chain-exit path (identical to the NOSTITCH baseline, just re-anchored deeper).
     int ncond = 0;
 
-    struct {
-        uint64_t target, resume, retpc, expected_x30;
-    } ctx[CTX_INLINE_DEPTH];
+    struct inline_context ctx[CTX_INLINE_DEPTH];
 
     int nctx = 0;
 #ifndef STITCH_MAX_COND
@@ -911,7 +961,7 @@ static void *translate_block(uint64_t gpc) {
                 emit_set_x30(pcrel_base(gpc) + 4);
                 ctx[nctx].target = gpc + off;
                 ctx[nctx].resume = gpc + 4;
-                ctx[nctx].retpc = clone_ret;
+                ctx[nctx].return_pc = clone_ret;
                 ctx[nctx].expected_x30 = pcrel_base(gpc) + 4;
                 nctx++;
                 gpc += off;
@@ -921,65 +971,9 @@ static void *translate_block(uint64_t gpc) {
             // §B: shadow push + host bl (RAS) + Lcont continuation
             break;
         }
-        // ret xN
-        if ((in & 0xFFFFFC1Fu) == 0xD65F0000u) {
-            int rrn = (in >> 5) & 31;
-            if (rrn == 30 && nctx > 0 && gpc == ctx[nctx - 1].retpc) {
-                e_movr(16, 30);
-                e_movconst(17, ctx[nctx - 1].expected_x30);
-                emit32(0xCB000000u | (17u << 16) | (16u << 5) | 16u);
-                uint32_t *p_zero = (uint32_t *)g_cp;
-                emit32(0);
-                emit_ibranch(30);
-                uint8_t *resume_host = g_cp;
-                *p_zero =
-                    0xB4000000u | (((uint32_t)(((uint8_t *)resume_host - (uint8_t *)p_zero) / 4) & 0x7FFFF) << 5) | 16;
-                gpc = ctx[nctx - 1].resume;
-                nctx--;
-                continue;
-            }
-            if (rrn == 30)
-                // A3: §B OFF (default) -> bare IBTC return (no shadow-ret preamble); §B ON -> shadow ret
-                // (FAST host-ret on guest_ret+guest_sp match, else IBTC fallback).
-                shadowgate() == -1 ? emit_ibranch(30) : emit_shadow_ret();
-            else
-                // ret xN via another reg -> ordinary indirect branch
-                emit_ibranch(rrn);
-            break;
-        }
-        // br
-        if ((in & 0xFFFFFC1Fu) == 0xD61F0000u) {
-            int brn = (in >> 5) & 31;
-            if (g_steal1617 && !g_noibslim && !is_stolen(brn) && is_interp_dispatch_br(gpc, brn))
-                // IBSLIM: a recognized interpreter-dispatch site (megamorphic by construction) --
-                // skip the dead per-site IC, go straight to the shared hash.
-                emit_hash_tail(brn);
-            else
-                emit_ibranch(brn);
-            break;
-        }
-        // blr
-        if ((in & 0xFFFFFC1Fu) == 0xD63F0000u) {
-            // guest x30 lives in cpu->x[30] (stolen); RAS push needs a host blr. The link value is
-            // guest-visible (spilled to the guest stack), so store the UN-BIASED (low) return vaddr
-            // for non-PIE; the dispatcher re-biases on the ret. pcrel_base is identity for PIE.
-            int blrn = (in >> 5) & 31;
-            if (blrn == 30) {
-                // BLR x30 reads the old guest x30 as its target, then writes
-                // the return address to x30. Preserve that ordering now that
-                // guest x30 is resident in cpu->x[30].
-                // emit_set_x30 uses x16 as its store scratch, so keep the
-                // branch target in the other engine-private IP register.
-                e_ldr(17, CPUREG, 30 * 8);
-                emit_set_x30(pcrel_base(gpc) + 4);
-                emit_ibranch_ip2_ready(17, 1);
-            } else {
-                emit_set_x30(pcrel_base(gpc) + 4);
-                emit_ibranch(blrn);
-            }
-            //   (Section 3) -- deferred; Stage-B IBTC for the function-ptr return
-            break;
-        }
+        enum translation_step indirect_step = translate_indirect_control(&gpc, in, ctx, &nctx);
+        if (indirect_step == TRANSLATION_CONTINUE) continue;
+        if (indirect_step == TRANSLATION_STOP) break;
         if ((in & 0xFF000010u) == 0x54000000u) {
             struct conditional_branch_state branch_state = {
                 .start = start,
