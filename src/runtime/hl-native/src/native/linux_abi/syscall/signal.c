@@ -116,11 +116,7 @@ static void thread_kill(struct cpu *c, int tid, int sig) {
     raise_guest_signal_si(c, sig, HL_SI_TKILL, 0, container_pid(), g_ruid);
 }
 
-static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                      uint64_t a5) {
-    if ((nr >= 129 && nr <= 139) || nr == (UINT64_C(0x10000) | 34))
-        HL_LOGF(&g_jit_log, HL_LOG_TAG_SIGNAL, "nr=%llu target=%lld signal=%lld", (unsigned long long)nr, (long long)a0,
-                (long long)a1);
+static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2) {
     switch (nr) {
     // ===================== Signals — Linux signal numbers -> macOS; kill/sigaction/sigreturn =====================
     // kill(pid,sig)
@@ -367,6 +363,13 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         break;
     }
 #endif
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3) {
+    switch (nr) {
     // rt_sigsuspend(const sigset_t *unewset, size_t sigsetsize): atomically install the guest's arg
     // mask, wait until a signal that has a guest handler (and is unblocked under that mask) becomes
     // pending, then return -EINTR -- the handler runs and only then does sigsuspend "return" (standard
@@ -594,6 +597,13 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             if (installed & (1ull << s)) sigaction(sig_l2m(s), &saved[s], NULL); // restore disposition
         break;
     }
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_signal_action(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3) {
+    switch (nr) {
     // rt_sigaction(sig, *act, *old)
     case 134: {
         int sig = (int)a0;
@@ -743,6 +753,13 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         G_RET(c) = 0;
         break;
     }
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_signal_mask(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3) {
+    switch (nr) {
     // rt_sigprocmask(how, *set, *old, sigsetsize)
     case 135: {
         // (W4F slow-path counter removed: it lived in x86 emit.c, undefined in the shared/aarch64 TU)
@@ -853,6 +870,19 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         break;
     default: return 0;
     }
+    return 1;
+}
+
+static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                      uint64_t a5) {
+    (void)a4;
+    (void)a5;
+    if ((nr >= 129 && nr <= 139) || nr == (UINT64_C(0x10000) | 34))
+        HL_LOGF(&g_jit_log, HL_LOG_TAG_SIGNAL, "nr=%llu target=%lld signal=%lld", (unsigned long long)nr, (long long)a0,
+                (long long)a1);
+    int handled = svc_signal_target(c, nr, a0, a1, a2) || svc_signal_wait(c, nr, a0, a1, a2, a3) ||
+                  svc_signal_action(c, nr, a0, a1, a2, a3) || svc_signal_mask(c, nr, a0, a1, a2, a3);
+    if (!handled) return 0;
 #if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
     /* x86 self-signal syscalls can resume inside their translated block. At
        this point their architectural return value has been committed, so an
