@@ -470,4 +470,3 @@ static hl_host_result hl_macos_counter_close(void *context, hl_host_handle handl
     }
     return hl_macos_result(HL_STATUS_OK, 0, 0);
 }
-

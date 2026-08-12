@@ -55,4 +55,3 @@ static hl_host_result hl_macos_shared_resize(void *context, hl_host_handle objec
     pthread_mutex_unlock(&host->lock);
     return result == 0 ? hl_macos_result(HL_STATUS_OK, 0, 0) : hl_macos_errno();
 }
-

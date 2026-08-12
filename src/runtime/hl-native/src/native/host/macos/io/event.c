@@ -312,4 +312,3 @@ static hl_host_result hl_macos_event_close(void *context, hl_host_handle pollset
     hl_host_process_fd_private_remove(descriptor);
     return close(descriptor) == 0 ? hl_macos_result(HL_STATUS_OK, 0, 0) : hl_macos_errno();
 }
-

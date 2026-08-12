@@ -1,11 +1,11 @@
-    struct timespec remaining;
-    (void)context;
-    remaining.tv_sec = (time_t)(interval_ns / UINT64_C(1000000000));
-    remaining.tv_nsec = (long)(interval_ns % UINT64_C(1000000000));
-    while (nanosleep(&remaining, &remaining) != 0) {
-        if (errno != EINTR) return hl_macos_errno();
-    }
-    return hl_macos_result(HL_STATUS_OK, 0, 0);
+struct timespec remaining;
+(void)context;
+remaining.tv_sec = (time_t)(interval_ns / UINT64_C(1000000000));
+remaining.tv_nsec = (long)(interval_ns % UINT64_C(1000000000));
+while (nanosleep(&remaining, &remaining) != 0) {
+    if (errno != EINTR) return hl_macos_errno();
+}
+return hl_macos_result(HL_STATUS_OK, 0, 0);
 }
 
 static void hl_macos_precise_sleep_begin(void) {
@@ -60,4 +60,3 @@ static hl_host_result hl_macos_clock_sleep_until(void *context, uint32_t clock_k
         if (clock_kind == HL_HOST_CLOCK_MONOTONIC) return hl_macos_result(HL_STATUS_OK, 0, 0);
     }
 }
-

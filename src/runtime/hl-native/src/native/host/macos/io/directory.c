@@ -275,4 +275,3 @@ static hl_host_result hl_macos_directory_close(void *context, hl_host_handle ins
     }
     return hl_macos_result(HL_STATUS_OK, 0, 0);
 }
-

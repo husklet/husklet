@@ -170,4 +170,3 @@ static void hl_macos_watch_note(hl_host_macos *host, uintptr_t descriptor, uint3
         break;
     }
 }
-

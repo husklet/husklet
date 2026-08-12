@@ -229,4 +229,3 @@ static hl_host_result hl_macos_process_close(void *context, hl_host_handle handl
     pthread_mutex_unlock(&host->lock);
     return hl_macos_result(HL_STATUS_OK, 0, 0);
 }
-

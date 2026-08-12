@@ -34,4 +34,3 @@ static hl_host_result hl_macos_interrupt_park(void *context, uint64_t waiter) {
     hl_host_macos *host = context;
     return hl_host_sync_interrupt_park(host->sync, waiter);
 }
-

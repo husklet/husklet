@@ -687,4 +687,3 @@ static hl_host_result hl_macos_repair_code(void *context, hl_host_code_mapping *
     public_mapping->executable_address = (uint64_t)(uintptr_t)executable;
     return hl_macos_result(HL_STATUS_OK, public_mapping->handle, 0);
 }
-

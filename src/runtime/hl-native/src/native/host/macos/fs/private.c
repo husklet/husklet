@@ -91,4 +91,3 @@ static hl_host_result hl_macos_file_validate_private_directory(void *context, hl
                ? hl_macos_result(HL_STATUS_OK, 0, 0)
                : hl_macos_result(HL_STATUS_PERMISSION_DENIED, 0, 0);
 }
-

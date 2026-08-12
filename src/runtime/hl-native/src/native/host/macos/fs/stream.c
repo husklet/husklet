@@ -280,4 +280,3 @@ done:
     hl_macos_stream_release(output_pin);
     return result;
 }
-

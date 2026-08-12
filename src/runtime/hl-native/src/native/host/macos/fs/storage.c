@@ -322,4 +322,3 @@ static hl_host_result hl_macos_file_read_directory(void *context, hl_host_handle
     }
     return hl_macos_result(HL_STATUS_OK, produced, used);
 }
-

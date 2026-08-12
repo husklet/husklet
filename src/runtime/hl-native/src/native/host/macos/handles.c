@@ -390,4 +390,3 @@ static inline int hl_macos_mapping_holds_locked(const hl_macos_mapping *mapping,
     }
     return 0;
 }
-

@@ -523,4 +523,3 @@ static hl_host_result hl_macos_file_seek(void *context, hl_host_handle file, int
     }
     return result < 0 ? hl_macos_errno() : hl_macos_result(HL_STATUS_OK, (uint64_t)result, 0);
 }
-

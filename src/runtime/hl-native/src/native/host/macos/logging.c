@@ -12,4 +12,3 @@ static void hl_macos_log(void *context, uint32_t event, const char *message, siz
         break;
     }
 }
-

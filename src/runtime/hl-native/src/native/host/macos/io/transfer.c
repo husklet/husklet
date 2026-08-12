@@ -241,4 +241,3 @@ static hl_host_result hl_macos_transfer_duplicate(void *context, hl_host_handle 
         return result;
     }
 }
-

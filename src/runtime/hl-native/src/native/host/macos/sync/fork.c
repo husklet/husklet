@@ -118,4 +118,3 @@ static hl_host_result hl_macos_fork_child(void *context) {
         result = hl_macos_result(HL_STATUS_PLATFORM_FAILURE, 0, 0);
     return result;
 }
-
