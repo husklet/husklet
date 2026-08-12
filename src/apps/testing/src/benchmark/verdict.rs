@@ -16,7 +16,7 @@ impl Report {
         if !limit.is_finite() || limit < 1.0 {
             return Err("benchmark limit must be finite and at least 1".into());
         }
-        verify_plan(&schedule::measurements(campaign), rows)?;
+        verify_plan(campaign, &schedule::measurements(campaign), rows)?;
         verify_outputs(rows)?;
         let by_key = rows
             .iter()
@@ -56,7 +56,7 @@ impl Report {
     }
 }
 
-fn verify_plan(expected: &[Step], rows: &[Row]) -> Result<(), Error> {
+fn verify_plan(campaign: &Campaign, expected: &[Step], rows: &[Row]) -> Result<(), Error> {
     if expected.len() != rows.len() {
         return Err(format!(
             "benchmark evidence cardinality differs from plan: expected {}, observed {}",
@@ -76,15 +76,35 @@ fn verify_plan(expected: &[Step], rows: &[Row]) -> Result<(), Error> {
         let row = observed
             .get(key.as_str())
             .ok_or_else(|| format!("missing benchmark evidence key {key}"))?;
-        if row.workload != step.workload
-            || row.layout != step.layout
-            || row.cell != step.cell
-            || row.round != step.round
-            || row.position != step.position
-            || row.arm != step.arm
-        {
-            return Err(format!("benchmark evidence provenance differs from plan for {key}").into());
-        }
+        verify_row_provenance(step, row)?;
+        verify_phase_coverage(row, phases(campaign, &step.workload, &step.layout))?;
+    }
+    Ok(())
+}
+
+fn verify_row_provenance(step: &Step, row: &Row) -> Result<(), Error> {
+    if row.workload != step.workload
+        || row.layout != step.layout
+        || row.cell != step.cell
+        || row.round != step.round
+        || row.position != step.position
+        || row.arm != step.arm
+    {
+        Err(format!("benchmark evidence provenance differs from plan for {}", step.key()).into())
+    } else {
+        Ok(())
+    }
+}
+
+fn verify_phase_coverage(row: &Row, expected: &[String]) -> Result<(), Error> {
+    let observed = row.phases.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let expected = expected.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    if observed != expected {
+        return Err(format!(
+            "benchmark evidence phase coverage differs from campaign for {}/{}",
+            row.workload, row.layout
+        )
+        .into());
     }
     Ok(())
 }
@@ -356,14 +376,35 @@ mod tests {
             arm: "E".into(),
         };
         let valid = row("malloc|plain|EE|0|0", "E", 100);
-        super::verify_plan(std::slice::from_ref(&step), std::slice::from_ref(&valid)).unwrap();
+        super::verify_row_provenance(&step, &valid).unwrap();
 
         let mut wrong_binary = valid.clone();
         wrong_binary.arm = "R".into();
-        assert!(super::verify_plan(std::slice::from_ref(&step), &[wrong_binary]).is_err());
+        assert!(super::verify_row_provenance(&step, &wrong_binary).is_err());
 
         let mut wrong_layout = valid.clone();
         wrong_layout.layout = "sqlite".into();
-        assert!(super::verify_plan(std::slice::from_ref(&step), &[wrong_layout]).is_err());
+        assert!(super::verify_row_provenance(&step, &wrong_layout).is_err());
+    }
+
+    #[test]
+    fn evidence_phase_coverage_must_be_exact() {
+        let expected = ["malloc".to_owned()];
+        let complete = row("malloc|plain|EE|0|0", "E", 100);
+        super::verify_phase_coverage(&complete, &expected).unwrap();
+
+        let mut missing = complete.clone();
+        missing.phases.clear();
+        assert!(super::verify_phase_coverage(&missing, &expected).is_err());
+
+        let mut extra = complete;
+        extra.phases.insert(
+            "unplanned".into(),
+            super::super::evidence::Phase {
+                us: 1,
+                ok: "same".into(),
+            },
+        );
+        assert!(super::verify_phase_coverage(&extra, &expected).is_err());
     }
 }
