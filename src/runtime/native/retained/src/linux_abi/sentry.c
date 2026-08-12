@@ -596,6 +596,33 @@ static struct hl_sentry_snapshots g_snapshots = {
 
 static pthread_mutex_t g_fd_lock = PTHREAD_MUTEX_INITIALIZER; // guards process/thread tables and mappings
 
+// Temporary bounded diagnostic ledger for sentry descriptor ownership.  It remains private to the sentry
+// process and is intentionally inspectable from a stopped debug build after a workflow wedges.
+struct sentry_fd_trace {
+    uint32_t sequence;
+    int32_t worker;
+    int32_t operation; // 1=pipe allocation, 2=guest close, 3=native close, 4=table release, 5=exec, 6=close_range
+    int32_t virtual_fd;
+    int32_t real_fd;
+    int32_t detail; // close: borrowed|(typed<<1); pipe: second virtual fd
+    int32_t extra;  // pipe: second real fd
+};
+static struct sentry_fd_trace g_sentry_fd_trace[256];
+static uint32_t g_sentry_fd_trace_sequence;
+
+static void sentry_fd_trace(int worker, int operation, int virtual_fd, int real_fd, int detail, int extra) {
+    uint32_t sequence = __atomic_add_fetch(&g_sentry_fd_trace_sequence, 1, __ATOMIC_RELAXED);
+    g_sentry_fd_trace[sequence % 256] = (struct sentry_fd_trace){
+        .sequence = sequence,
+        .worker = worker,
+        .operation = operation,
+        .virtual_fd = virtual_fd,
+        .real_fd = real_fd,
+        .detail = detail,
+        .extra = extra,
+    };
+}
+
 // Initialize a freshly claimed table: empty except stdio 0/1/2 mapped 1:1 and marked BORROWED. (All helpers
 // below run with g_fd_lock held by the caller.)
 static void proc_init_table(struct sentry_proc *p) {
@@ -651,6 +678,7 @@ static void sentry_native_close(int descriptor) {
     // Tear down descriptor-indexed emulation while the descriptor still names its object.  In particular,
     // epoll/OFD cleanup may inspect or re-home registrations; closing first lets that work reuse this number
     // and leaves the replacement open when the reset returns.
+    sentry_fd_trace(0, 3, -1, descriptor, 0, 0);
     fd_reset_emul(descriptor);
     int result = close(descriptor);
     int error = errno;
@@ -683,7 +711,10 @@ static void table_release_locked(uint16_t index) {
     struct sentry_proc *table = &g_table[index];
     if (table->refs == 0 || --table->refs != 0) return;
     for (uint32_t v = 0; v < SENTRY_VFD_MAX; v++)
-        if (table->real[v] >= 0 && !table->borrowed[v]) sentry_owned_close(table->real[v], table->typed[v]);
+        if (table->real[v] >= 0 && !table->borrowed[v]) {
+            sentry_fd_trace(0, 4, (int)v, table->real[v], table->typed[v] << 1, index);
+            sentry_owned_close(table->real[v], table->typed[v]);
+        }
     memset(table, 0, sizeof *table);
 }
 
@@ -958,6 +989,7 @@ static int sentry_proc_exec_sweep(pid_t wpid, uint32_t token) {
         for (uint32_t v = 0; v < SENTRY_VFD_MAX; v++)
             if (p->real[v] >= 0 && p->cloexec[v]) {
                 int typed = p->typed[v];
+                sentry_fd_trace((int)wpid, 5, (int)v, p->real[v], p->borrowed[v] | (typed << 1), 0);
                 int rfd = vfd_drop(p, (int)v);
                 if (rfd >= 0) sentry_owned_close(rfd, typed);
             }
@@ -1202,6 +1234,7 @@ static void sentry_service_one(struct sentry_ring *R) {
                         p->cloexec[v] = 1;
                     } else {
                         int typed = p->typed[v];
+                        sentry_fd_trace((int)R->wpid, 6, (int)v, p->real[v], p->borrowed[v] | (typed << 1), 0);
                         int real = vfd_drop(p, (int)v);
                         if (real >= 0) sentry_owned_close(real, typed);
                     }
@@ -1584,6 +1617,7 @@ static void sentry_service_one(struct sentry_ring *R) {
                     break;
                 }
                 int typed = p->typed[v];
+                sentry_fd_trace((int)R->wpid, 2, v, r, p->borrowed[v] | (typed << 1), 0);
                 if (vfd_drop(p, v) < 0) {
                     handled_local = 1;
                     local_ret = 0;
@@ -1834,6 +1868,7 @@ static void sentry_service_one(struct sentry_ring *R) {
                         p->typed[v1] = 0;
                         p->cloexec[v0] = cx;
                         p->cloexec[v1] = cx;
+                        sentry_fd_trace((int)R->wpid, 1, v0, r0, v1, r1);
                         *(int *)(R->buf) = v0;
                         *(int *)(R->buf + 4) = v1;
                     }
