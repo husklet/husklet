@@ -17,8 +17,10 @@ language-runtime identity is never an input.
 The C migration boundary for the third row is
 `src/runtime/native/address_projection.h`. Its bounded, pointer-free descriptor
 contains only a guest interval and storage bias. The retained fold/unfold
-chokepoint consumes that generic primitive while downstream boundaries move to
-Rust ownership; no executable bytes or runtime-specific identity cross it.
+chokepoint consumes that generic primitive while the remaining C boundaries
+are migrated to the same descriptor; no executable bytes or runtime-specific
+identity cross it. Rust loader code may construct the bounded launch plan, but
+the production execution engine owns and applies projection in C.
 
 ## Deliberately rejected C policy
 
