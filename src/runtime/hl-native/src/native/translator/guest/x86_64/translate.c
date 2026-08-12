@@ -3449,6 +3449,67 @@ static int lower_group45(struct insn *instruction, uint64_t guest_pc, uint64_t n
     return TX_FALL;
 }
 
+static int lower_exchange(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    if (instruction->op != 0x86 && instruction->op != 0x87) return TX_FALL;
+    int width = (instruction->op & 1) ? instruction->opsize : 1;
+    if (instruction->is_mem) {
+        emit_ea(instruction, next);
+        emit_memory_guard(17, (uint64_t)width, guest_pc, X86_SOFT_READ | X86_SOFT_WRITE);
+        int source = width == 1 ? byte_val(instruction, instruction->reg, 19) : instruction->reg;
+        // A memory XCHG is implicitly atomic even without a LOCK prefix.
+        e_lse(LSE_SWP, width, source, 16, 17);
+        if (width >= 4)
+            e_mov_rr(instruction->reg, 16, width == 8);
+        else if (width == 1)
+            byte_wb(instruction, instruction->reg, 16);
+        else
+            e_bfi(instruction->reg, 16, 0, 8 * width, 1);
+        if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)width);
+        return TX_NEXT;
+    }
+    if (width == 1) {
+        // Materialize both byte lanes before either write; they may alias.
+        int left = byte_val(instruction, instruction->reg, 16);
+        int right = byte_val(instruction, instruction->rm_reg, 17);
+        e_mov_rr(19, left, 0);
+        e_mov_rr(23, right, 0);
+        byte_wb(instruction, instruction->reg, 23);
+        byte_wb(instruction, instruction->rm_reg, 19);
+    } else if (width == 2) {
+        e_mov_rr(19, instruction->rm_reg, 1);
+        e_bfi(instruction->rm_reg, instruction->reg, 0, 16, 1);
+        e_bfi(instruction->reg, 19, 0, 16, 1);
+    } else {
+        int wide = width == 8;
+        e_mov_rr(19, instruction->rm_reg, wide);
+        e_mov_rr(instruction->rm_reg, instruction->reg, wide);
+        e_mov_rr(instruction->reg, 19, wide);
+    }
+    return TX_NEXT;
+}
+
+static int lower_stack_transfer(struct insn *instruction, uint64_t next) {
+    if (instruction->op == 0x68 || instruction->op == 0x6A) {
+        e_subi(RSP, RSP, 8, 1);
+        e_movconst(16, (uint64_t)instruction->imm);
+        e_store(8, 16, RSP);
+        return TX_NEXT;
+    }
+    if (instruction->op != 0x8F) return TX_FALL;
+    if (instruction->is_mem) {
+        // The destination address observes RSP after the pop.
+        e_load(8, 19, RSP);
+        e_addi(RSP, RSP, 8, 1);
+        emit_ea(instruction, next);
+        e_store(8, 19, 17);
+    } else {
+        e_load(8, 16, RSP);
+        e_addi(RSP, RSP, 8, 1);
+        e_mov_rr(instruction->rm_reg, 16, 1);
+    }
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -3583,73 +3644,13 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             if (group45_result == TX_BREAK) break;
-            // ---- xchg (86/87) ----
-            if (op == 0x86 || op == 0x87) {
-                int w = (op & 1) ? I.opsize : 1, mem;
-                if (I.is_mem) {
-                    emit_ea(&I, next);
-                    emit_memory_guard(17, (uint64_t)w, gpc, X86_SOFT_READ | X86_SOFT_WRITE);
-                    int sv = (w == 1) ? byte_val(&I, I.reg, 19) : I.reg; // reg->mem: handle ah/bh/ch/dh
-                    // xchg with memory is IMPLICITLY atomic on x86 (no LOCK needed) -> SWP, not load+store.
-                    // glibc's mutex fast-path acquires the lock with xchg, so this must be a real atomic.
-                    e_lse(LSE_SWP, w, sv, 16, 17); // x16 = old [mem]; [mem] = sv (atomic swap)
-                    if (w >= 4)
-                        e_mov_rr(I.reg, 16, w == 8);
-                    else if (w == 1)
-                        byte_wb(&I, I.reg, 16);
-                    else
-                        e_bfi(I.reg, 16, 0, 8 * w, 1);
-                    if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)w);
-                } else if (w == 1) {
-                    // byte xchg of two registers, either of which may be a high-byte (ah/bh/ch/dh) or even
-                    // the SAME underlying register (xchg %ch,%cl): materialize BOTH bytes into independent
-                    // scratch before writing either back, or the first write corrupts the second's source.
-                    // The full-register e_mov_rr swap below ignores the byte/hi8 lanes -> base64 -d
-                    // byte-scramble (busybox decode_base64 repacks via `mov %esi,%ecx; xchg %ch,%cl`).
-                    int a = byte_val(&I, I.reg, 16);
-                    int b = byte_val(&I, I.rm_reg, 17);
-                    e_mov_rr(19, a, 0);
-                    e_mov_rr(23, b, 0);
-                    byte_wb(&I, I.reg, 23);
-                    byte_wb(&I, I.rm_reg, 19);
-                } else if (w == 2) {
-                    // 16-bit register swap: only bits 15:0 move; bits 63:16 of BOTH operands are
-                    // preserved (the sf==0 full-register swap below zero-extended them away).
-                    e_mov_rr(19, I.rm_reg, 1);
-                    e_bfi(I.rm_reg, I.reg, 0, 16, 1);
-                    e_bfi(I.reg, 19, 0, 16, 1);
-                } else {
-                    e_mov_rr(19, I.rm_reg, sf);
-                    e_mov_rr(I.rm_reg, I.reg, sf);
-                    e_mov_rr(I.reg, 19, sf);
-                }
-                (void)mem;
+            int exchange_result = lower_exchange(&I, gpc, next);
+            if (exchange_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
-            // ---- push imm (68 iz, 6A ib) ----
-            if (op == 0x68 || op == 0x6A) {
-                e_subi(RSP, RSP, 8, 1);
-                e_movconst(16, (uint64_t)I.imm);
-                e_store(8, 16, RSP);
-                gpc = next;
-                continue;
-            }
-            // ---- pop r/m (8F /0) ----
-            if (op == 0x8F) {
-                if (I.is_mem) {
-                    // Pop into x19 (callee-saved) FIRST: emit_ea uses x16 as a scratch, so the popped
-                    // value can't live in x16 across the address computation. x86 also computes the
-                    // destination EA AFTER RSP is incremented (matters for an RSP-based destination).
-                    e_load(8, 19, RSP);
-                    e_addi(RSP, RSP, 8, 1);
-                    emit_ea(&I, next);
-                    e_store(8, 19, 17);
-                } else {
-                    e_load(8, 16, RSP);
-                    e_addi(RSP, RSP, 8, 1);
-                    e_mov_rr(I.rm_reg, 16, 1);
-                }
+            int stack_result = lower_stack_transfer(&I, next);
+            if (stack_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
