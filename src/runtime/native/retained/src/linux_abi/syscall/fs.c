@@ -1851,13 +1851,21 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 break;
             }
             int r = symlinkat(target, pfd, fin), e = errno;
+            if (r == 0 && newfile_stamp_wanted()) {
+                char parent[4200], created[4300];
+                if (hl_native_fd_path(pfd, parent, sizeof parent) == 0 &&
+                    path_join(created, sizeof created, parent, fin) == 0)
+                    newfile_stamp_path(created, 1);
+            }
             close(pfd);
             G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : 0;
             break;
         }
         char pb[4200];
         const char *p = atpath((int)a1, (const char *)a2, pb, sizeof pb, 0);
-        G_RET(c) = symlinkat(target, ATFD(a1), p) < 0 ? (uint64_t)(-errno) : 0;
+        int linked = symlinkat(target, ATFD(a1), p);
+        if (linked == 0 && newfile_stamp_wanted()) newfile_stamp_path(p, 1);
+        G_RET(c) = linked < 0 ? (uint64_t)(-errno) : 0;
         break;
     }
     // linkat(odir,opath,ndir,npath,flags) -- writes both ends (new link + source link count)
@@ -2968,6 +2976,14 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // normal read fd (O_RDONLY, +O_DIRECTORY for a dir) for the metadata ops and record the flag so the
         // I/O family (svc_io) returns EBADF. Marked on every open-success path below.
         int is_opath = (lf & 0x200000) != 0;
+        // Confinement turns a relative guest name into an absolute host path. Validate its directory
+        // descriptor first, while Linux still considers it: otherwise host openat() ignores the invalid
+        // dirfd and reports an unrelated path error (usually ENOENT).
+        int directory_error = at_dirfd_check((int32_t)a0, (const char *)a1);
+        if (directory_error < 0) {
+            G_RET(c) = (uint64_t)(int64_t)directory_error;
+            break;
+        }
         // openat/openat2 never give an empty pathname AT_EMPTY_PATH semantics,
         // including for O_PATH. Resolving "" through atpath() instead folded the
         // dirfd itself into the host path and opened it successfully.

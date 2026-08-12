@@ -692,6 +692,25 @@ static int newfile_stamp_wanted(void) {
 // root-created file stays xattr-free). fd form for openat(O_CREAT); path form for mkdir/mknod.
 static void newfile_stamp_fd(int fd) {
     int u = newfile_uid(), g = newfile_gid();
+    /* Linux inherits the group of a setgid parent directory.  Host ownership is deliberately not the
+     * authority for container credentials, so the host kernel cannot perform this inheritance for us:
+     * consult the same virtual mode/owner overlay stat(2) exposes to the guest. */
+    char path[4200];
+    if (hl_native_fd_path(fd, path, sizeof path) == 0) {
+        char *slash = strrchr(path, '/');
+        if (slash != NULL) {
+            struct stat parent;
+            uint32_t parent_uid, parent_gid;
+            if (slash == path)
+                slash[1] = '\0';
+            else
+                *slash = '\0';
+            if (stat(path, &parent) == 0 && (stat_virt_mode(&parent, path, -1) & S_ISGID) != 0) {
+                stat_virt_ids(&parent, path, -1, &parent_uid, &parent_gid);
+                g = (int)parent_gid;
+            }
+        }
+    }
     hl_owner_set_fd(fd, u != cuid() ? u : -1, g != cgid() ? g : -1);
 }
 
