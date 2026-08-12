@@ -19,6 +19,10 @@
 #include "ckpt_sink.h"
 #include "../engine/checkpoint_channel.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 static uint64_t g_ckpt_stream_next_id = 1;
 
 // One round trip with no payload in either direction. Returns the reply status, or -1 on transport failure.

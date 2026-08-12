@@ -1,6 +1,12 @@
 #ifndef HL_LINUX_ABI_SOCKET_GUEST_H
 #define HL_LINUX_ABI_SOCKET_GUEST_H
 
+#include <errno.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+
 /* ---- SHAPE: the scalar types the rest of the vocabulary is written in. ---
  *
  * socklen_t is 32 bits on Linux and is passed BY ADDRESS to accept(),

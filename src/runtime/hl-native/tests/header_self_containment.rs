@@ -16,19 +16,30 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn x86_translator_owned_headers_are_self_contained() {
+fn owned_native_headers_are_self_contained() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");
     let guest = native.join("translator/guest/x86_64");
     let mut owned = Vec::new();
     headers(&guest, &mut owned);
+    for boundary in ["bridge", "engine", "linux_abi"] {
+        headers(&native.join(boundary), &mut owned);
+    }
     owned.sort();
 
-    // These two files are macro composition fragments expanded inside the complete target TU.
+    // These files explicitly document that they are implementation/composition fragments expanded only
+    // after their target translation unit has established the target-specific macros and private helpers.
     owned.retain(|path| {
+        let relative = path.strip_prefix(&native).expect("native header");
+        let relative = relative.to_string_lossy();
         !matches!(
-            path.file_name().and_then(|name| name.to_str()),
-            Some("dispatch.h" | "interp_dispatch.h")
+            relative.as_ref(),
+            "translator/guest/x86_64/dispatch.h"
+                | "translator/guest/x86_64/interp_dispatch.h"
+                | "linux_abi/elf_protect.h"
+                | "linux_abi/guest_stat.h"
+                | "linux_abi/syscall/nonpie_args.h"
+                | "linux_abi/syscall/sysv_state.h"
         )
     });
 
@@ -37,10 +48,15 @@ fn x86_translator_owned_headers_are_self_contained() {
     let probe = scratch.join("probe.c");
     let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
     for header in owned {
-        let relative = header.strip_prefix(&guest).expect("x86 translator header");
+        let relative = header.strip_prefix(&native).expect("owned native header");
         fs::write(&probe, format!("#include \"{}\"\n", relative.display())).expect("header probe source");
         let result = Command::new(&compiler)
-            .args(["-std=c11", "-fsyntax-only"])
+            .args([
+                "-std=c11",
+                "-D_GNU_SOURCE",
+                "-Werror=implicit-function-declaration",
+                "-fsyntax-only",
+            ])
             .arg(format!("-I{}", guest.display()))
             .arg(format!("-I{}", native.display()))
             .arg(format!("-I{}", native.join("include").display()))

@@ -1,6 +1,9 @@
 #ifndef HL_LINUX_ABI_ELF_PROTECT_H
 #define HL_LINUX_ABI_ELF_PROTECT_H
 
+// Target composition fragment: loaders include this only after defining their private address-projection,
+// read-only-registry, and effective-host-service helpers.
+
 #include "hl/host_services.h"
 
 #include <stdint.h>

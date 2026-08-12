@@ -1,6 +1,8 @@
 #ifndef HL_LINUX_ABI_SYSCALL_NONPIE_ARGS_H
 #define HL_LINUX_ABI_SYSCALL_NONPIE_ARGS_H
 
+// Syscall-dispatch composition fragment: its includer owns nonpie_p() and the target's canonical numbers.
+
 // THE table of which syscall ARGUMENTS are guest pointers.
 //
 // A non-PIE ET_EXEC is mapped HIGH (+g_nonpie_bias) while every pointer baked into it keeps its LOW link

@@ -20,7 +20,7 @@
 #ifndef HL_LINUX_ABI_CKPT_SOURCE_H
 #define HL_LINUX_ABI_CKPT_SOURCE_H
 
-#include "ckpt_sink.h"
+#include "sink_stream.h"
 
 struct ckpt_source;
 

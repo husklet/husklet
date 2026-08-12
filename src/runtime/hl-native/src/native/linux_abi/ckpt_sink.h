@@ -27,6 +27,9 @@
 #ifndef HL_LINUX_ABI_CKPT_SINK_H
 #define HL_LINUX_ABI_CKPT_SINK_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 struct ckpt_sink;
 
 #define CKPT_SINK_BUFFER 65536u
