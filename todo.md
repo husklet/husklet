@@ -38,6 +38,10 @@ This is the authoritative checklist for the C-primary production migration. Chec
   Native Windows CI additionally compiles the public API as strict C and C++ and
   pins Win64 layouts, function signatures, and C linkage. Its executed DLL is a
   fixture only; it does not claim that the complete engine DLL links or runs.
+  Linux cross checks also link strict C and C++ LP64 consumers against each
+  target's actual shared engine without executing foreign binaries. Native
+  macOS CI links and runs the same consumers against its Cargo-built dylib;
+  this proves public ABI loading, not Linux-guest compatibility behavior.
 
 ## Host architecture
 

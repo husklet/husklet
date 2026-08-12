@@ -569,8 +569,14 @@
               "${pkgs.stdenv.cc}/bin/cc"
             else
               "${targetPkgs.stdenv.cc}/bin/${targetPkgs.stdenv.cc.targetPrefix}cc";
+          cxx =
+            if native then
+              "${pkgs.stdenv.cc}/bin/c++"
+            else
+              "${targetPkgs.stdenv.cc}/bin/${targetPkgs.stdenv.cc.targetPrefix}c++";
           target = "${architecture}-unknown-linux-gnu";
           targetKey = lib.toUpper (lib.replaceStrings [ "-" ] [ "_" ] target);
+          fileArchitecture = if architecture == "aarch64" then "ARM aarch64" else "x86-64";
         in
         (rustPlatformFor pkgs).buildRustPackage {
           pname = "hl-native-${architecture}-linux-compile";
@@ -581,6 +587,7 @@
           nativeBuildInputs = [
             (rustFor pkgs)
             targetPkgs.stdenv.cc
+            pkgs.file
           ];
           doCheck = false;
           buildPhase = ''
@@ -592,11 +599,25 @@
             native_libraries=(target/${target}/debug/build/hl-native-*/out/libhl_native_engine.so)
             test "''${#native_libraries[@]}" -eq 1
             test -s "''${native_libraries[0]}"
+            native_directory="$(dirname "''${native_libraries[0]}")"
+            ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
+              -Isrc/runtime/hl-native/src/native/include \
+              tests/native/host-abi/unix.c -L"$native_directory" \
+              -Wl,-rpath-link,"$native_directory" -lhl_native_engine -o public-abi-c
+            ${lib.escapeShellArg cxx} -std=c++20 -Wall -Wextra -Werror \
+              -Isrc/runtime/hl-native/src/native/include \
+              tests/native/host-abi/unix.cpp -L"$native_directory" \
+              -Wl,-rpath-link,"$native_directory" -lhl_native_engine -o public-abi-cxx
+            file public-abi-c public-abi-cxx | grep -F ${lib.escapeShellArg fileArchitecture}
+            ${targetPkgs.stdenv.cc.targetPrefix}readelf -d public-abi-c \
+              | grep -F 'Shared library: [libhl_native_engine.so]' >/dev/null
+            ${targetPkgs.stdenv.cc.targetPrefix}readelf -d public-abi-cxx \
+              | grep -F 'Shared library: [libhl_native_engine.so]' >/dev/null
             runHook postBuild
           '';
           installPhase = ''
             mkdir -p "$out"
-            printf '%s\n' ${lib.escapeShellArg "full Cargo/C shared-engine compile for ${target}"} > "$out/evidence"
+            printf '%s\n' ${lib.escapeShellArg "full Cargo/C shared-engine compile plus strict C/C++ LP64 public-ABI link contracts for ${target}"} > "$out/evidence"
           '';
         };
 

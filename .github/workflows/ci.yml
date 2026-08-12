@@ -40,6 +40,23 @@ jobs:
           cargo test --locked -p hl-native --lib tests::shared_engine_exports_matching_abi
           -- --exact
 
+      - name: Compile, link, and run the public C and C++ ABI contracts
+        run: |
+          set -euo pipefail
+          library="$(find target/debug/build -path '*/out/libhl_native_engine.dylib' -type f -print -quit)"
+          test -n "$library"
+          native_directory="$(dirname "$library")"
+          xcrun clang -std=c11 -Wall -Wextra -Werror \
+            -Isrc/runtime/hl-native/src/native/include \
+            tests/native/host-abi/unix.c -L"$native_directory" \
+            -lhl_native_engine -o "$RUNNER_TEMP/hl-public-abi-c"
+          xcrun clang++ -std=c++20 -Wall -Wextra -Werror \
+            -Isrc/runtime/hl-native/src/native/include \
+            tests/native/host-abi/unix.cpp -L"$native_directory" \
+            -lhl_native_engine -o "$RUNNER_TEMP/hl-public-abi-cxx"
+          DYLD_LIBRARY_PATH="$native_directory" "$RUNNER_TEMP/hl-public-abi-c"
+          DYLD_LIBRARY_PATH="$native_directory" "$RUNNER_TEMP/hl-public-abi-cxx"
+
   native-windows-amd64:
     name: Native surface / Windows AMD64
     runs-on: windows-2025
