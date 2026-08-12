@@ -268,16 +268,24 @@ static int smc_commit(struct cpu *c) {
      * and untouched until the ordinary capacity rotation retires them; no
      * executing host PC is invalidated.  Subsequent entries translate the
      * modified guest bytes on demand.
-     */
+    */
     stw_mapping_begin();
+#if HL_ENABLE_LOGGING
     uint32_t removed;
+#endif
     if (force_whole || c->smc_range_overflow) {
+#if HL_ENABLE_LOGGING
         removed = g_live_map_count;
+#endif
         map_clear();
         memset(g_ibtc, 0, sizeof g_ibtc);
         txpg_clear();
     } else {
+#if HL_ENABLE_LOGGING
         removed = map_invalidate_source_ranges((const uint64_t (*)[2])c->smc_ranges, c->smc_range_count);
+#else
+        (void)map_invalidate_source_ranges((const uint64_t (*)[2])c->smc_ranges, c->smc_range_count);
+#endif
     }
     pend_reset();
     for (int i = 0; i < STW_MAXTHREAD; i++)

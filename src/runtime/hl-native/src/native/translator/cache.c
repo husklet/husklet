@@ -1470,6 +1470,7 @@ static int stw_checkpoint_wait(uint64_t request) {
         if (!pending) return 0;
         jit_backoff_ns(UINT64_C(50000));
     }
+#if HL_ENABLE_LOGGING
     for (int i = 0; i < STW_MAXTHREAD; i++) {
         if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
         uint64_t ack = atomic_load_explicit(&g_stw_threads[i].dispatch_ack, memory_order_acquire);
@@ -1481,6 +1482,7 @@ static int stw_checkpoint_wait(uint64_t request) {
                 (unsigned long long)(c ? __atomic_load_n(&c->in_service, __ATOMIC_SEQ_CST) : 0),
                 (unsigned long long)ack, (unsigned long long)request);
     }
+#endif
     return -1;
 }
 
@@ -1584,8 +1586,10 @@ static int cache_oom_fail(void) {
 // (stw_flush) and the dispatcher holding g_jit_lock.
 static int jit_flush_to_fresh(int retain_map_generations) {
     hl_host_code_mapping mapping;
+#if HL_ENABLE_LOGGING
     size_t old_used = (size_t)(g_cp - g_cache);
     uint32_t old_blocks = g_live_map_count;
+#endif
 #if G_GPC_HASH_SHIFT != 0
     /*
      * g_smc_seen is an AArch64 frontend latch.  x86 has different SMC
@@ -1604,8 +1608,13 @@ static int jit_flush_to_fresh(int retain_map_generations) {
      * before reclaim removes the only post-SMC ingress not represented by the
      * map.  Pre-SMC direct chains retain the historical wholesale policy.
      */
-    uint32_t evicted = 0;
-    if (retain_generations && g_cache_gen >= 3) evicted = map_invalidate_cache_generation(g_cache_gen - 3);
+#if HL_ENABLE_LOGGING
+    uint32_t evicted = retain_generations && g_cache_gen >= 3
+                           ? map_invalidate_cache_generation(g_cache_gen - 3)
+                           : 0;
+#else
+    if (retain_generations && g_cache_gen >= 3) (void)map_invalidate_cache_generation(g_cache_gen - 3);
+#endif
     reclaim_retired(); // free retired caches no peer is still in -> bound VA + free space for the new alloc
     if (code_mapping_reserve(&mapping, g_dualmap) != 0) return cache_oom_fail();
     if (!retire_current()) {
