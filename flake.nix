@@ -275,11 +275,17 @@
           '';
           installPhase = ''
             runHook preInstall
-            mkdir -p "$out/bin"
+            mkdir -p "$out/bin" "$out/lib"
             for binary in hl-engine hl-aarch64 hl-x86_64
             do
               install -Dm755 "target/release/$binary" "$out/bin/$binary"
             done
+            native_libraries=(target/release/build/hl-native-*/out/libhl_native_engine.*)
+            if [ "''${#native_libraries[@]}" -ne 1 ] || [ ! -f "''${native_libraries[0]}" ]; then
+              printf 'expected exactly one hl-native shared library, found %s\n' "''${#native_libraries[@]}" >&2
+              exit 1
+            fi
+            install -Dm755 "''${native_libraries[0]}" "$out/lib/$(basename "''${native_libraries[0]}")"
             runHook postInstall
           '';
           meta = {

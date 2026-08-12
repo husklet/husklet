@@ -34,3 +34,6 @@ impl Native {
 
 /// Platform filename produced by this package's Cargo build.
 pub const LIBRARY_NAME: &str = env!("HL_NATIVE_LIBRARY_NAME");
+
+#[cfg(test)]
+pub(crate) const LIBRARY_PATH: &str = env!("HL_NATIVE_LIBRARY_PATH");

@@ -8,6 +8,9 @@ mod bindings;
 mod engine;
 mod provider;
 
+#[cfg(test)]
+mod artifact;
+
 pub use bindings::SyscallDispatch;
 pub use engine::{Engine, EngineConfig, Exit, STATUS_OK};
 pub use provider::{LIBRARY_NAME, Native};
@@ -18,12 +21,19 @@ mod platform;
 
 #[cfg(test)]
 mod tests {
-    use super::{LIBRARY_NAME, Native};
+    use super::{LIBRARY_NAME, Native, provider::LIBRARY_PATH};
 
     #[test]
     fn shared_engine_exports_matching_abi() {
         assert_eq!(Native.abi(), 5);
         assert!(!Native.version().to_bytes().is_empty());
         assert!(LIBRARY_NAME.contains("hl_native_engine"));
+        let library = std::path::Path::new(LIBRARY_PATH);
+        assert!(
+            library.is_file(),
+            "Cargo-owned native library is missing: {}",
+            library.display()
+        );
+        assert_eq!(library.file_name().and_then(|name| name.to_str()), Some(LIBRARY_NAME));
     }
 }

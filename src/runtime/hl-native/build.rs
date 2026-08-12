@@ -4,6 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "src/artifact.rs"]
+mod artifact;
 #[path = "src/platform.rs"]
 mod platform;
 
@@ -116,7 +118,7 @@ fn main() {
     link_shared_engine(&output, &target_os, &archives, system_libraries);
     println!("cargo:rustc-link-search=native={}", output.display());
     println!("cargo:rustc-link-lib=dylib=hl_native_engine");
-    emit_development_rpath(&output, &target_os);
+    emit_loader_paths(&output, &target_os);
     if env::var("HL_C_SANITIZER").as_deref() == Ok("leak") && target_os == "linux" {
         println!("cargo:rustc-link-lib=lsan");
     }
@@ -254,7 +256,7 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
 
 fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], libraries: &[&str]) {
     let compiler = cc::Build::new().get_compiler();
-    let filename = shared_library_filename(target_os);
+    let filename = artifact::filename(target_os);
     let destination = output.join(filename);
     let mut command = compiler.to_command();
     if target_os == "macos" {
@@ -299,17 +301,15 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
         .unwrap_or_else(|error| panic!("link {}: {error}", destination.display()));
     assert!(status.success(), "native shared-library link failed with {status}");
     println!("cargo:rustc-env=HL_NATIVE_LIBRARY_NAME={filename}");
+    println!("cargo:rustc-env=HL_NATIVE_LIBRARY_PATH={}", destination.display());
 }
 
-fn shared_library_filename(target_os: &str) -> &'static str {
-    match target_os {
-        "macos" => "libhl_native_engine.dylib",
-        "windows" => "hl_native_engine.dll",
-        _ => "libhl_native_engine.so",
+fn emit_loader_paths(output: &Path, target_os: &str) {
+    // Keep relocatable package locations before the development fallback.
+    // Windows has no rpath; its package places the DLL beside each executable.
+    for path in artifact::loader_paths(target_os) {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{path}");
     }
-}
-
-fn emit_development_rpath(output: &Path, target_os: &str) {
     if target_os != "windows" {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", output.display());
     }
