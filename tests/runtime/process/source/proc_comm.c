@@ -109,6 +109,44 @@ static void run_stage(int kind, const char *path, const char *self, const char *
     waitpid(p, &st, 0);
 }
 
+static int run_comm_mode(const char *self, const char *temporary, const char *canonical_temporary) {
+    char comm[64];
+    read_comm(comm, sizeof comm);
+    printf("commchk self=%s\n", comm);
+    run_stage(0, "/proc/self/exe", self, "s2c:proc");
+    run_stage(1, NULL, self, "s2c:rel");
+
+    char link[PATH_MAX + 32];
+    snprintf(link, sizeof link, "%s/lnk-selfexe", canonical_temporary);
+    symlink(self, link);
+    run_stage(0, link, self, "s2c:lnk");
+
+    char script[PATH_MAX + 16];
+    snprintf(script, sizeof script, "%s/shb.sh", canonical_temporary);
+    FILE *file = fopen(script, "w");
+    if (file) {
+        fprintf(file, "#!%s s2c:shb\n", self);
+        fclose(file);
+        chmod(script, 0755);
+    }
+    fflush(stdout);
+    pid_t child = fork();
+    if (child == 0) {
+        char *arguments[] = {script, NULL};
+        execv(script, arguments);
+        printf("stage shb execfail errno=%d\n", errno);
+        _exit(1);
+    }
+    int status;
+    waitpid(child, &status, 0);
+
+    unlink(link);
+    unlink(script);
+    rmdir(temporary);
+    printf("commchk done\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc > 1 && !strncmp(argv[1], "s2", 2)) return stage(argv[1]);
@@ -133,39 +171,7 @@ int main(int argc, char **argv) {
     stat(self, &sself);
 
     if (commmode) {
-        char c[64];
-        read_comm(c, sizeof c);
-        printf("commchk self=%s\n", c);
-        run_stage(0, "/proc/self/exe", self, "s2c:proc");
-        run_stage(1, NULL, self, "s2c:rel");
-        char lnk[PATH_MAX + 32];
-        snprintf(lnk, sizeof lnk, "%s/lnk-selfexe", tdr);
-        symlink(self, lnk);
-        run_stage(0, lnk, self, "s2c:lnk");
-        char script[PATH_MAX + 16];
-        snprintf(script, sizeof script, "%s/shb.sh", tdr);
-        FILE *f = fopen(script, "w");
-        if (f) {
-            fprintf(f, "#!%s s2c:shb\n", self);
-            fclose(f);
-            chmod(script, 0755);
-        }
-        fflush(stdout);
-        pid_t p = fork();
-        if (p == 0) {
-            char *na[] = {script, NULL};
-            execv(script, na);
-            printf("stage shb execfail errno=%d\n", errno);
-            _exit(1);
-        }
-        int st;
-        waitpid(p, &st, 0);
-        // cleanup
-        unlink(lnk);
-        unlink(script);
-        rmdir(td);
-        printf("commchk done\n");
-        return 0;
+        return run_comm_mode(self, td, tdr);
     }
 
     // ---- 1. /proc/self/exe: readlink spellings + open/stat/lstat/access through the link ----
