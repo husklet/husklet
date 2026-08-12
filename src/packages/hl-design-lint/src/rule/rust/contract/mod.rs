@@ -76,6 +76,30 @@ struct Method {
 }
 
 impl Method {
+    fn from_trait(method: &TraitItemFn, source: &Source) -> Self {
+        let name = method.sig.ident.to_string();
+        let mut types = method
+            .sig
+            .inputs
+            .iter()
+            .filter_map(|argument| match argument {
+                FnArg::Receiver(_) => None,
+                FnArg::Typed(argument) => Some(type_words(source, argument.ty.span())),
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        if let ReturnType::Type(_, output) = &method.sig.output {
+            types.extend(type_words(source, output.span()));
+        }
+        Self {
+            cluster: capability(&name),
+            signature: normalized(source, method.sig.span()),
+            types,
+            location: source.location(method.span()),
+            name,
+        }
+    }
+
     /// The domain type names a signature mentions, with language and primitive words removed.
     fn signature_types(&self) -> BTreeSet<String> {
         self.types
@@ -268,7 +292,7 @@ impl Visit<'_> for Collector<'_> {
             .items
             .iter()
             .filter_map(|item| match item {
-                TraitItem::Fn(item) => Some(method(item, self.source)),
+                TraitItem::Fn(item) => Some(Method::from_trait(item, self.source)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -297,30 +321,6 @@ impl Visit<'_> for Collector<'_> {
             owner: normalized(self.source, item.self_ty.span()),
             location: self.source.location(item.span()),
         });
-    }
-}
-
-fn method(method: &TraitItemFn, source: &Source) -> Method {
-    let name = method.sig.ident.to_string();
-    let mut types = method
-        .sig
-        .inputs
-        .iter()
-        .filter_map(|argument| match argument {
-            FnArg::Receiver(_) => None,
-            FnArg::Typed(argument) => Some(type_words(source, argument.ty.span())),
-        })
-        .flatten()
-        .collect::<BTreeSet<_>>();
-    if let ReturnType::Type(_, output) = &method.sig.output {
-        types.extend(type_words(source, output.span()));
-    }
-    Method {
-        cluster: capability(&name),
-        signature: normalized(source, method.sig.span()),
-        types,
-        location: source.location(method.span()),
-        name,
     }
 }
 
