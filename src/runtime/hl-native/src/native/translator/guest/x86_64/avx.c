@@ -1043,6 +1043,75 @@ static enum avx_dispatch_result avx_dispatch_lane_permutation(const hl_x86_avx_s
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_immediate_floating(const hl_x86_avx_state *state, struct cpu *c,
+                                                                struct insn *instruction, uint64_t next, int width) {
+    int op = instruction->op;
+    int immediate = (int)instruction->imm;
+    uint8_t left[64], right[64], result[64];
+    if (op == 0x08 || op == 0x09) { // vroundps/vroundpd
+        avx_get_rm(state, c, instruction, next, width, right);
+        if (op == 0x08) {
+            float input[16], output[16];
+            memcpy(input, right, (size_t)width);
+            for (int lane = 0; lane < width / 4; lane++) output[lane] = sse_round_f(input[lane], immediate);
+            memcpy(result, output, (size_t)width);
+        } else {
+            double input[8], output[8];
+            memcpy(input, right, (size_t)width);
+            for (int lane = 0; lane < width / 8; lane++) output[lane] = sse_round_d(input[lane], immediate);
+            memcpy(result, output, (size_t)width);
+        }
+    } else if (op == 0x0A || op == 0x0B) { // vroundss/vroundsd
+        int bytes = op == 0x0A ? 4 : 8;
+        avx_get(c, instruction->vvvv, result);
+        avx_get_rm(state, c, instruction, next, bytes, right);
+        if (op == 0x0A) {
+            float value;
+            memcpy(&value, right, 4);
+            value = sse_round_f(value, immediate);
+            memcpy(result, &value, 4);
+        } else {
+            double value;
+            memcpy(&value, right, 8);
+            value = sse_round_d(value, immediate);
+            memcpy(result, &value, 8);
+        }
+        width = 16;
+    } else if (op == 0x40 || op == 0x41) { // vdpps/vdppd
+        int element = op == 0x40 ? 4 : 8;
+        avx_get(c, instruction->vvvv, left);
+        avx_get_rm(state, c, instruction, next, width, right);
+        for (int block = 0; block < width; block += 16) {
+            if (element == 4) {
+                float a[4], b[4], sum = 0;
+                memcpy(a, left + block, 16);
+                memcpy(b, right + block, 16);
+                for (int lane = 0; lane < 4; lane++)
+                    if (immediate & (0x10 << lane)) sum += a[lane] * b[lane];
+                for (int lane = 0; lane < 4; lane++) {
+                    float value = (immediate & (1 << lane)) ? sum : 0.0f;
+                    memcpy(result + block + 4 * lane, &value, 4);
+                }
+            } else {
+                double a[2], b[2], sum = 0;
+                memcpy(a, left + block, 16);
+                memcpy(b, right + block, 16);
+                for (int lane = 0; lane < 2; lane++)
+                    if (immediate & (0x10 << lane)) sum += a[lane] * b[lane];
+                for (int lane = 0; lane < 2; lane++) {
+                    double value = (immediate & (1 << lane)) ? sum : 0.0;
+                    memcpy(result + block + 8 * lane, &value, 8);
+                }
+            }
+        }
+        if (op == 0x41) width = 16;
+    } else {
+        return AVX_DISPATCH_UNMATCHED;
+    }
+    avx_put(c, instruction->reg, result, width);
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2555,6 +2624,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (map == 3) {
         if (avx_dispatch_lane_transfer(state, c, &I, next) == AVX_DISPATCH_HANDLED) goto done;
         if (avx_dispatch_lane_permutation(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
+        if (avx_dispatch_immediate_floating(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
         int imm = (int)I.imm;
         switch (op) {
         case 0x04: { // vpermilps imm: per-128-lane, dword j <- src.dword[imm[2j+1:2j]] (single src=rm)
@@ -2574,44 +2644,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             avx_put(c, rd, d, W);
             goto done;
         }
-        case 0x08:   // vroundps
-        case 0x09: { // vroundpd -- single source (rm), imm[3:0] rounding control
-            avx_get_rm(state, c, &I, next, W, b);
-            if (op == 0x08) {
-                float a4[8], o[8];
-                memcpy(a4, b, (size_t)W);
-                for (int i = 0; i < W / 4; i++)
-                    o[i] = sse_round_f(a4[i], imm);
-                memcpy(d, o, (size_t)W);
-            } else {
-                double a2[4], o[4];
-                memcpy(a2, b, (size_t)W);
-                for (int i = 0; i < W / 8; i++)
-                    o[i] = sse_round_d(a2[i], imm);
-                memcpy(d, o, (size_t)W);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x0A:   // vroundss: low dword = round(rm low), rest of low-128 from src1(vvvv)
-        case 0x0B: { // vroundsd: low qword = round(rm low)
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, op == 0x0A ? 4 : 8, b);
-            memcpy(d, a, 16);
-            if (op == 0x0A) {
-                float x;
-                memcpy(&x, b, 4);
-                float y = sse_round_f(x, imm);
-                memcpy(d, &y, 4);
-            } else {
-                double x;
-                memcpy(&x, b, 8);
-                double y = sse_round_d(x, imm);
-                memcpy(d, &y, 8);
-            }
-            avx_put(c, rd, d, 16);
-            goto done;
-        }
         case 0x0C: { // vblendps: imm bit per dword across W; src1=vvvv, src2=rm
             avx_get(c, vv, a);
             avx_get_rm(state, c, &I, next, W, b);
@@ -2626,40 +2658,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             for (int i = 0; i < W / 8; i++)
                 memcpy(d + 8 * i, ((imm >> i) & 1) ? b + 8 * i : a + 8 * i, 8);
             avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x40: { // vdpps: per-128-lane 4-wide dot product; src1=vvvv, src2=rm
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16) {
-                float av[4], bv[4];
-                memcpy(av, a + lane, 16);
-                memcpy(bv, b + lane, 16);
-                float sum = 0;
-                for (int i = 0; i < 4; i++)
-                    if (imm & (0x10 << i)) sum += av[i] * bv[i];
-                for (int i = 0; i < 4; i++) {
-                    float o = (imm & (1 << i)) ? sum : 0.0f;
-                    memcpy(d + lane + 4 * i, &o, 4);
-                }
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x41: { // vdppd: 128-bit only 2-wide double dot product; src1=vvvv, src2=rm
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, 16, b);
-            double av[2], bv[2];
-            memcpy(av, a, 16);
-            memcpy(bv, b, 16);
-            double sum = 0;
-            for (int i = 0; i < 2; i++)
-                if (imm & (0x10 << i)) sum += av[i] * bv[i];
-            for (int i = 0; i < 2; i++) {
-                double o = (imm & (1 << i)) ? sum : 0.0;
-                memcpy(d + 8 * i, &o, 8);
-            }
-            avx_put(c, rd, d, 16);
             goto done;
         }
         case 0x1D: { // vcvtps2ph: reg holds W/4 fp32 -> W/2 bytes of fp16 in rm (imm[2:0] rounding control)
