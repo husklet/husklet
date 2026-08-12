@@ -17,17 +17,17 @@ use std::path::PathBuf;
 pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use policy::{
-    BoundaryPolicy, DependencyKind, DependencyPolicy, EdgePolicy, LayerPolicy, OwnershipPolicy, Policy, SourcePolicy,
-    SourceSelector,
+    BoundaryPolicy, DependencyKind, DependencyPolicy, DocumentationPolicy, EdgePolicy, LayerPolicy, OwnershipPolicy,
+    Policy, SourcePolicy, SourceSelector,
 };
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CCallPolicy, CPolicy, CStructure, CatchAllModule,
-    CatchAllSourcePath, CeremonialStructure, DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
-    FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
-    IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand,
-    PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory,
-    StructNaming, SuffixRole, TestDependency, TestDirectory, TestName, UnsafeBoundary,
+    CatchAllSourcePath, CeremonialStructure, DependencyDirection, Documentation, DuplicateEntity, EmptyDirectory,
+    EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage,
+    IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules,
+    PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool,
+    SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory, TestName, UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 
@@ -57,6 +57,7 @@ impl Linter {
     #[must_use]
     pub fn standard_with_policy(policy: Policy) -> Self {
         let Policy {
+            documentation,
             dependency,
             unsafe_boundary,
             environment_boundary,
@@ -68,6 +69,10 @@ impl Linter {
         let mut linter = Self::new(
             Registry::new()
                 .register(rule::DependencyDirection::new(dependency))
+                .register(rule::Documentation::new(
+                    documentation,
+                    source.ignored_directories.clone(),
+                ))
                 .register(rule::RuntimeTool::new(ownership))
                 .register(rule::UnsafeBoundary::new(unsafe_boundary))
                 .register(rule::FreeFunction)
@@ -202,6 +207,7 @@ mod tests {
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
         let expected_ids = [
             "dependency-direction",
+            "documentation-contract",
             "runtime-tool-ownership",
             "unsafe-boundary",
             "unclassified-free-function",
@@ -300,7 +306,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 37);
+        assert_eq!(summaries.len(), 41);
         assert!(
             reporter
                 .0

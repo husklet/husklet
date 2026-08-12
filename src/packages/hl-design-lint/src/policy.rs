@@ -26,6 +26,9 @@ pub struct DependencyPolicy {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
+    /// Repository documentation inventory and executable example contracts.
+    #[serde(default)]
+    pub documentation: DocumentationPolicy,
     /// Dependency architecture.
     #[serde(default)]
     pub dependency: DependencyPolicy,
@@ -44,6 +47,18 @@ pub struct Policy {
     /// Source discovery and repository-escape exclusions.
     #[serde(default)]
     pub source: SourcePolicy,
+}
+
+/// Repository-owned Markdown inventory and structural example documents.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DocumentationPolicy {
+    /// Slash-normalized Markdown paths permitted in the repository.
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    /// Allowed Markdown paths that must satisfy the generic example-document contract.
+    #[serde(default)]
+    pub examples: Vec<String>,
 }
 
 /// A set of portable source selectors. Selectors are ORed; fields within one selector are ANDed.
