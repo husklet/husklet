@@ -1272,8 +1272,10 @@ static int interp_one_byte_string(struct cpu *cpu, struct insn *insn, uint64_t n
         return STEP_NEXT;
     }
     if (insn->rep) {
-        if (movs) hl_x86_count_rep_movs();
-        else if (!lods) hl_x86_count_rep_stos();
+        if (movs)
+            hl_x86_count_rep_movs();
+        else if (!lods)
+            hl_x86_count_rep_stos();
     }
     uint64_t iterations = insn->rep ? cpu->r[RCX] : 1;
     while (iterations != 0) {
@@ -1354,7 +1356,7 @@ static int interp_one_byte_integer_convert(struct cpu *cpu, struct insn *insn, u
         interp_reg_write(cpu, insn, insn->reg, insn->opsize, value);
     } else if (op == 0x98) {
         int width = insn->opsize;
-        uint64_t value = width == 2 ? (uint64_t)(int64_t)(int8_t)(uint8_t)cpu->r[RAX]
+        uint64_t value = width == 2   ? (uint64_t)(int64_t)(int8_t)(uint8_t)cpu->r[RAX]
                          : width == 4 ? (uint64_t)(int64_t)(int16_t)(uint16_t)cpu->r[RAX]
                                       : (uint64_t)(int64_t)(int32_t)(uint32_t)cpu->r[RAX];
         interp_reg_write(cpu, insn, RAX, width, value);
@@ -1380,6 +1382,7 @@ static int interp_one_byte_move_immediate(struct cpu *cpu, struct insn *insn, ui
 }
 
 #include "interp_shift.c"
+#include "interp_group3.c"
 
 static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
@@ -1402,6 +1405,8 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     delegated = interp_one_byte_move_immediate(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_one_byte_shift(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_one_byte_group3(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -1553,51 +1558,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         cpu->df = 1;
         cpu->rip = next;
         return STEP_NEXT;
-
-    // Group 3
-    case 0xF6:
-    case 0xF7: {
-        int width = (op & 1) ? insn->opsize : 1;
-        int sub = insn->reg & 7;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        switch (sub) {
-        case 0:
-        case 1: { // TEST r/m, imm
-            uint64_t value = interp_rm_read(cpu, insn, &operand, width);
-            interp_flags_logic(cpu, value & (uint64_t)insn->imm & interp_mask(width), width);
-            break;
-        }
-        case 2: { // NOT: no flags at all
-            if (insn->lock && operand.is_memory) {
-                (void)interp_locked_rmw(operand.address, width, RMW_NOT, 0, 0);
-            } else {
-                uint64_t value = interp_rm_read(cpu, insn, &operand, width);
-                interp_rm_write(cpu, insn, &operand, width, (~value) & interp_mask(width));
-            }
-            break;
-        }
-        case 3: { // NEG: flags exactly as SUB(0, value), so CF = (value != 0)
-            uint64_t old;
-            if (insn->lock && operand.is_memory)
-                old = interp_locked_rmw(operand.address, width, RMW_NEG, 0, 0);
-            else
-                old = interp_rm_read(cpu, insn, &operand, width);
-            uint64_t result = interp_alu_sub(cpu, 0, old, 0, width);
-            if (!(insn->lock && operand.is_memory)) interp_rm_write(cpu, insn, &operand, width, result);
-            break;
-        }
-        case 4: // MUL
-        case 5: // IMUL (widening)
-            interp_widening_multiply(cpu, insn, interp_rm_read(cpu, insn, &operand, width), width, sub == 5);
-            break;
-        case 6: // DIV
-        case 7: // IDIV
-            return interp_divide(cpu, interp_rm_read(cpu, insn, &operand, width), width, sub == 7, pc, next);
-        default: break;
-        }
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
 
     // Group 4/5
     case 0xFE:
