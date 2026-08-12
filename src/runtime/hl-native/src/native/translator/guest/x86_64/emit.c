@@ -1281,6 +1281,15 @@ static void s1_calibrate(void) {
 // unchanged full R_SYSCALL exit. Guest nzcv is saved (x17) and restored on EVERY path so the slow
 // exit is semantically identical to the baseline. The CALLER ends the block right after this (a
 // chained branch to `next`); we never continue decoding past the syscall (would run off the end).
+static void emit_fast_syscall_success(void) {
+    emit_host_ptr(20, (uint64_t)&g_fast_count, PRELOC_HOSTGLOBAL);
+    e_ldr(21, 20, 0);
+    e_addi(21, 21, 1, 1);
+    e_str(21, 20, 0);
+    e_movconst(0, 0);
+    emit32(0xD51B4211u);
+}
+
 static void emit_fast_syscall(uint64_t next) {
     emit32(0xD53B4211u); // mrs x17, nzcv   (preserve guest flags across our compares)
     uint32_t *after[12];
@@ -1357,12 +1366,7 @@ static void emit_fast_syscall(uint64_t next) {
     e_str(26, 6, 0);          // ts->tv_sec   (rsi=x6)   [guarded]
     e_str(27, 6, 8);          // ts->tv_nsec             [guarded]
     e_str(31, 28, OFF_FCRES); // cpu->fastclk_resume = 0  (window disarmed; xzr)
-    emit_host_ptr(20, (uint64_t)&g_fast_count, PRELOC_HOSTGLOBAL);
-    e_ldr(21, 20, 0);
-    e_addi(21, 21, 1, 1);
-    e_str(21, 20, 0);    // g_fast_count++
-    e_movconst(0, 0);    // rax = 0
-    emit32(0xD51B4211u); // msr nzcv, x17  (restore guest flags)
+    emit_fast_syscall_success();
     after[na++] = (uint32_t *)g_cp;
     emit32(0x14000000u); // b L_after
 
@@ -1408,12 +1412,7 @@ static void emit_fast_syscall(uint64_t next) {
     e_str(26, 7, 0);          // tv->tv_sec   (rdi=x7)   [guarded]
     e_str(27, 7, 8);          // tv->tv_usec             [guarded]
     e_str(31, 28, OFF_FCRES); // disarm
-    emit_host_ptr(20, (uint64_t)&g_fast_count, PRELOC_HOSTGLOBAL);
-    e_ldr(21, 20, 0);
-    e_addi(21, 21, 1, 1);
-    e_str(21, 20, 0);
-    e_movconst(0, 0);    // rax = 0
-    emit32(0xD51B4211u); // msr nzcv, x17
+    emit_fast_syscall_success();
     after[na++] = (uint32_t *)g_cp;
     emit32(0x14000000u); // b L_after
 
