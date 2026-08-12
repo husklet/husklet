@@ -4502,6 +4502,21 @@ static int interp_two_byte_extend(struct cpu *cpu, struct insn *insn, uint64_t n
     return STEP_NEXT;
 }
 
+static int interp_two_byte_shift(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op != 0xA4 && op != 0xA5 && op != 0xAC && op != 0xAD) return -1;
+    int right = op >= 0xAC;
+    int width = insn->opsize;
+    unsigned count = (op == 0xA4 || op == 0xAC) ? (unsigned)(insn->imm & 0xff)
+                                                  : (unsigned)(cpu->r[RCX] & 0xff);
+    interp_operand operand = interp_rm(cpu, insn, next);
+    uint64_t value = interp_rm_read(cpu, insn, &operand, width);
+    uint64_t fill = interp_reg_read(cpu, insn, insn->reg, width);
+    interp_rm_write(cpu, insn, &operand, width, interp_double_shift(cpu, right, value, fill, count, width));
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_two_byte_condition(cpu, insn, next);
@@ -4511,6 +4526,8 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     delegated = interp_two_byte_system(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
     delegated = interp_two_byte_extend(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_two_byte_shift(cpu, insn, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -4542,22 +4559,6 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         interp_reg_write(
             cpu, insn, insn->reg, insn->opsize,
             interp_imul_truncating(cpu, interp_reg_read(cpu, insn, insn->reg, insn->opsize), source, insn->opsize));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // SHLD / SHRD (0F A4/A5/AC/AD)
-    case 0xA4:
-    case 0xA5:
-    case 0xAC:
-    case 0xAD: {
-        int right = (op >= 0xAC);
-        int width = insn->opsize;
-        unsigned count = (op == 0xA4 || op == 0xAC) ? (unsigned)(insn->imm & 0xff) : (unsigned)(cpu->r[RCX] & 0xff);
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t value = interp_rm_read(cpu, insn, &operand, width);
-        uint64_t fill = interp_reg_read(cpu, insn, insn->reg, width);
-        interp_rm_write(cpu, insn, &operand, width, interp_double_shift(cpu, right, value, fill, count, width));
         cpu->rip = next;
         return STEP_NEXT;
     }
