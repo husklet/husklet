@@ -330,6 +330,7 @@ fn append_cell(
         let right_floor = nulls[&(workload, layout, right, phase_name)];
         let floor = left_floor.max(right_floor);
         let upper = corrected_upper(ratio, left_floor, right_floor)?;
+        qualify_control(ratio, campaign.invariant_phases.iter().any(|item| item == phase))?;
         let judged = right == "I" && campaign.workloads[workload].phases.iter().any(|item| item == phase);
         let result = if judged && upper > limit {
             failed = true;
@@ -344,6 +345,16 @@ fn append_cell(
         ));
     }
     Ok(failed)
+}
+
+fn qualify_control(ratio: f64, invariant: bool) -> Result<(), Error> {
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return Err("invalid invariant-control ratio".into());
+    }
+    if invariant && !(0.985..=1.015).contains(&ratio) {
+        return Err(format!("unqualified invariant control: ratio={ratio:.6}").into());
+    }
+    Ok(())
 }
 
 fn corrected_upper(ratio: f64, left_floor: f64, right_floor: f64) -> Result<f64, Error> {
@@ -532,6 +543,16 @@ mod tests {
             "one-sided correction would falsely pass"
         );
         assert!(super::corrected_upper(1.0, 0.0, 1.0).is_err());
+    }
+
+    #[test]
+    fn declared_invariant_must_hold_across_engine_arms() {
+        super::qualify_control(1.015, true).unwrap();
+        super::qualify_control(0.985, true).unwrap();
+        assert!(super::qualify_control(1.016, true).is_err());
+        assert!(super::qualify_control(0.984, true).is_err());
+        // A target phase is judged by the configured acceptance limit, not the control bound.
+        super::qualify_control(1.09, false).unwrap();
     }
 
     #[test]
