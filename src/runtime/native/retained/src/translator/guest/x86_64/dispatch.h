@@ -98,10 +98,27 @@ static int smc_on_write(uint64_t a) {
     for (int i = 0; i < g_smc_n; i++)
         if (g_smc_pg[i] == pg) {
             mprotect((void *)pg, (size_t)size, PROT_READ | PROT_WRITE); // let the guest's write through
-            g_smc_pg[i] = g_smc_pg[--g_smc_n];                          // re-protected on next translate
             g_smc_flushes++;
             return 1;
         }
+    return 0;
+}
+
+/* Claim a successful store to a tracked translated source page.  Keeping the
+ * page in this registry lets every concurrent writer publish through the
+ * ordinary stop-the-world path, not only the thread which took the fault. */
+static int smc_tracked_written(uint64_t address, uint64_t size) {
+    if (size == 0 || address > UINT64_MAX - size) return 0;
+    uint64_t page_size = smc_page_size();
+    for (int index = 0; index < g_smc_n; ++index) {
+        uint64_t page = g_smc_pg[index];
+        if (address >= page + page_size || address + size <= page) continue;
+        /* Re-arm before publication. A concurrent writer which was already
+         * admitted either reaches this same observer and publishes too, or
+         * faults and retries after the stop-the-world commit. */
+        (void)mprotect((void *)page, (size_t)page_size, PROT_READ);
+        return 1;
+    }
     return 0;
 }
 

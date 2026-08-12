@@ -560,6 +560,7 @@ static void jit86_store_alias_changed(uint64_t guest, uint64_t size) {
     if (size == 0 || guest > UINT64_MAX - size) return;
     struct cpu *cpu = pthread_getspecific(g_cpu_key);
     if (cpu == NULL) return;
+    if (smc_tracked_written(guest, size)) jit86_smc_queue_range(guest, guest + size, cpu);
     if (hl_logical_vma_visit_exec_aliases(guest, guest + size, jit86_smc_queue_range, cpu)) return;
     if (!filemap_shared_filter_maybe(guest, size)) return;
     uint64_t last = guest + size;

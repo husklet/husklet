@@ -947,24 +947,14 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
         raise(sig);
         return;
     }
-    // W6A item 3 (SMC): a guest write to a translated, write-protected JIT code page. Drop the cached
-    // translations + IBTC (they're stale; do NOT reset g_cp -> the currently-running block's host code
-    // stays intact, orphaned translations are reclaimed by the normal wholesale flush), unprotect the
-    // page (smc_on_write retries + the write lands), and let the modified bytes re-translate on next
-    // execution. smc_on_write is inert unless a JIT guest is present (g_rwx_guest) -> matrix bit-exact.
-    if (si && si->si_addr && smc_on_write((uint64_t)si->si_addr)) {
-        map_clear();
-        memset(g_ibtc, 0, sizeof g_ibtc);
-        // (PyPy JIT bridge coherence): the x86 opt2 2-way IBTC (g_xibtc) is read by the hot
-        // indirect-branch fast path and keyed by guest PC -> host body. It MUST be dropped here too, or a
-        // surviving entry re-dispatches the just-patched code (e.g. a PyPy guard whose rel32 was rewritten
-        // to point at a freshly-assembled bridge) to its STALE pre-patch host body -> the old jump target
-        // still fires -> PyPy re-bridges the same guard -> `assert adr_jump_offset != 0` (assemble_bridge/
-        // patch_jump_for_descr) fatals. The wholesale flush drops it via G_SHADOW_CLEAR; mirror that here.
-        memset(g_xibtc, 0, sizeof g_xibtc);
-        pend_reset();
-        return;
-    }
+    // W6A item 3 (SMC): a guest write to a translated, write-protected JIT code page. Unprotect the page
+    // so the instruction retries. The generated post-store observer then records the exact written range
+    // and exits through R_SMC, whose jit86_smc_commit stop-the-world section invalidates the translation
+    // map and both indirect caches before any peer can execute the modified source. Do not mutate those
+    // shared tables here: this is a synchronous signal handler and another guest thread may be reading
+    // them. The old unlocked clear produced stale or corrupt dispatch under concurrent JIT writers.
+    // smc_on_write is inert unless a JIT guest is present (g_rwx_guest), preserving the non-JIT path.
+    if (si && si->si_addr && smc_on_write((uint64_t)si->si_addr)) { return; }
     // A genuine guest fault (isolated wild pointer / null deref) with a registered handler is the guest's
     // to handle; legitimate glibc vector over-reads are ADJACENT to a live mapping and still fall through
     // to the lazy zero-page map below.
