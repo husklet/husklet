@@ -407,16 +407,24 @@ fn serde_attribute(attributes: &[Attribute]) -> bool {
 }
 
 fn serialized_name(default: String, attributes: &[Attribute]) -> String {
+    attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("serde"))
+        .filter_map(serde_rename)
+        .last()
+        .unwrap_or(default)
+}
+
+fn serde_rename(attribute: &Attribute) -> Option<String> {
     let mut renamed = None;
-    for attribute in attributes.iter().filter(|attribute| attribute.path().is_ident("serde")) {
-        let _ = attribute.parse_nested_meta(|meta| {
-            if meta.path.is_ident("rename") {
-                renamed = Some(meta.value()?.parse::<syn::LitStr>()?.value());
-            }
-            Ok(())
-        });
-    }
-    renamed.unwrap_or(default)
+    let _ = attribute.parse_nested_meta(|meta| {
+        if !meta.path.is_ident("rename") {
+            return Ok(());
+        }
+        renamed = Some(meta.value()?.parse::<syn::LitStr>()?.value());
+        Ok(())
+    });
+    renamed
 }
 
 fn representation(attributes: &[Attribute]) -> bool {
