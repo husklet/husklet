@@ -4243,6 +4243,61 @@ static int lower_sse_moves(struct insn *instruction, uint64_t guest_pc, uint64_t
     return TX_FALL;
 }
 
+// Packed horizontal and alternating arithmetic shares NaN handling but not the
+// lane ordering of ordinary vertical SSE arithmetic.
+static int lower_sse_horizontal(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0x7C && opcode != 0x7D && opcode != 0xD0) return TX_FALL;
+    int source = vm;
+    if (instruction->is_mem) {
+        g_ldr_q_ea(16, instruction, next);
+        source = 16;
+    }
+    int double_precision = instruction->p66 != 0;
+    emit_nan_input_gate(vd, source, double_precision, guest_pc);
+    int fix_nan = fpdnan_on();
+    if (opcode == 0xD0) {
+        // Compute each operation before selecting even/odd lanes. Flipping the
+        // source sign before FADD would also flip an input NaN's sign.
+        if (fix_nan) emit_dnan_pre(vd, source, 1, double_precision);
+        if (double_precision) {
+            e_v3(0x4EE0D400u, 17, vd, source);
+            e_v3(0x4E60D400u, 18, vd, source);
+            e_movconst(19, ~0ULL);
+            emit32(0x9E670000u | (19 << 5) | 19);
+        } else {
+            e_v3(0x4EA0D400u, 17, vd, source);
+            e_v3(0x4E20D400u, 18, vd, source);
+            e_movconst(19, 0x00000000FFFFFFFFULL);
+            emit32(0x4E080C00u | (19 << 5) | 19);
+        }
+        e_v3(0x6E601C00u, 19, 17, 18);
+        e_vmov(vd, 19);
+        if (fix_nan) emit_dnan_post(vd, double_precision, 1);
+        return TX_NEXT;
+    }
+
+    uint32_t size = instruction->p66 ? 0x00400000u : 0;
+    if (fix_nan) {
+        uint32_t equal = double_precision ? 0x4E60E400u : 0x4E20E400u;
+        unsigned sign_shift = double_precision ? 127u : 63u;
+        emit32(equal | (vd << 16) | (vd << 5) | 20);
+        emit32(equal | (source << 16) | (source << 5) | 21);
+        e_v3(0x4E801800u | size, 22, 20, 21);
+        e_v3(0x4E805800u | size, 21, 20, 21);
+        e_v3(0x4E201C00u, 20, 22, 21);
+        emit32(0x4F005400u | (sign_shift << 16) | (20 << 5) | 20);
+    }
+    e_v3(0x4E801800u | size, 17, vd, source);
+    e_v3(0x4E805800u | size, 18, vd, source);
+    if (opcode == 0x7C)
+        e_v3(0x4E20D400u | size, vd, 18, 17); // HADD uses odd + even for x86 NaN selection.
+    else
+        e_v3(0x4EA0D400u | size, vd, 17, 18);
+    if (fix_nan) emit_dnan_post(vd, double_precision, 1);
+    return TX_NEXT;
+}
+
 static int lower_double_shift(struct insn *instruction, uint64_t next) {
     uint8_t opcode = instruction->op;
     if (opcode != 0xA4 && opcode != 0xA5 && opcode != 0xAC && opcode != 0xAD) return TX_FALL;
@@ -5477,77 +5532,12 @@ static void *translate_block(uint64_t gpc) {
                     gpc = next;
                     continue;
                 }
-                if (op == 0x7C || op == 0x7D) { // SSE3 haddps/hsubps (F2) or haddpd/hsubpd (66)
-                    int s = vm;
-                    if (I.is_mem) {
-                        g_ldr_q_ea(16, &I, next);
-                        s = 16;
-                    }
-                    uint32_t szb = I.p66 ? 0x00400000u : 0; // 66 -> double lanes (.2d), F2 -> single (.4s)
-                    int dbl = I.p66 != 0;
-                    emit_nan_input_gate(vd, s, dbl, gpc); // two-NaN lanes -> x86-exact C softmulator
-                    int fixnan = fpdnan_on();
-                    if (fixnan) {
-                        // Generated-NaN sign fixup, as for the vertical FP arithmetic: an inf-inf in
-                        // any result lane must come out as x86's NEGATIVE indefinite, not ARM's
-                        // positive default NaN. The PRESIGN mask has to follow the HORIZONTAL
-                        // pairing, so the per-lane "input not NaN" masks are deinterleaved with the
-                        // same UZP1/UZP2 the op itself uses before being ANDed together.
-                        uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u;
-                        unsigned immhb = dbl ? (64u + 63u) : (32u + 31u);
-                        emit32(EQ | (vd << 16) | (vd << 5) | 20); // v20 = (src1 == src1)
-                        emit32(EQ | (s << 16) | (s << 5) | 21);   // v21 = (src2 == src2)
-                        e_v3(0x4E801800u | szb, 22, 20, 21);      // uzp1 -> even lanes of the pair
-                        e_v3(0x4E805800u | szb, 21, 20, 21);      // uzp2 -> odd lanes of the pair
-                        e_v3(0x4E201C00u, 20, 22, 21);            // v20 = both-inputs-notnan per RESULT lane
-                        emit32(0x4F005400u | (immhb << 16) | (20 << 5) | 20); // -> PRESIGN
-                    }
-                    if (op == 0x7C) {
-                        // HADD is NOT a plain FADDP. x86 defines the addend order as
-                        // DEST[63:0] = SRC1[127:64] + SRC1[63:0] -- the ODD lane is the FIRST
-                        // operand -- while FADDP adds the even lane first. Addition is commutative
-                        // for values but NOT for NaN selection, so a pair holding two NaNs came out
-                        // as the wrong one (haddpd of {-QNaN, +QNaN} gave -QNaN instead of +QNaN).
-                        // Deinterleave explicitly and add odd + even, mirroring the HSUB path.
-                        e_v3(0x4E801800u | szb, 17, vd, s);  // uzp1 v17 = even lanes
-                        e_v3(0x4E805800u | szb, 18, vd, s);  // uzp2 v18 = odd lanes
-                        e_v3(0x4E20D400u | szb, vd, 18, 17); // fadd vd = odd + even
-                    } else { // HSUB: even/odd deinterleave (UZP1/UZP2) then FSUB even-odd
-                        e_v3(0x4E801800u | szb, 17, vd, s);  // uzp1 v17 = even lanes
-                        e_v3(0x4E805800u | szb, 18, vd, s);  // uzp2 v18 = odd lanes
-                        e_v3(0x4EA0D400u | szb, vd, 17, 18); // fsub vd = even - odd
-                    }
-                    if (fixnan) emit_dnan_post(vd, dbl, 1);
-                } else if (op == 0xD0) { // SSE3 addsubps (F2) / addsubpd (66): even lanes sub, odd lanes add
-                    int s = vm;
-                    if (I.is_mem) {
-                        g_ldr_q_ea(16, &I, next);
-                        s = 16;
-                    }
-                    // Compute the sub and the add lanewise and SELECT, rather than flipping the
-                    // sign of src2's even lanes and adding. The sign-flip corrupts a NaN operand:
-                    // x86's subtract propagates an input NaN with its ORIGINAL sign, but XOR-ing the
-                    // sign bit first hands FADD a sign-flipped NaN, which it then propagates
-                    // (addsubps with a positive NaN in an even lane came out negative).
-                    int dbl = I.p66 != 0;
-                    emit_nan_input_gate(vd, s, dbl, gpc); // two-NaN lanes -> x86-exact C softmulator
-                    int fixnan = fpdnan_on();
-                    if (fixnan) emit_dnan_pre(vd, s, 1, dbl);
-                    if (dbl) {
-                        e_v3(0x4EE0D400u, 17, vd, s); // fsub v17.2d = vd - s   (even/low lane)
-                        e_v3(0x4E60D400u, 18, vd, s); // fadd v18.2d = vd + s   (odd/high lane)
-                        e_movconst(19, ~0ULL);
-                        emit32(0x9E670000u | (19 << 5) | 19); // fmov d19, x19 -> [all-ones, 0]
-                    } else {
-                        e_v3(0x4EA0D400u, 17, vd, s); // fsub v17.4s = vd - s   (even lanes 0,2)
-                        e_v3(0x4E20D400u, 18, vd, s); // fadd v18.4s = vd + s   (odd lanes 1,3)
-                        e_movconst(19, 0x00000000FFFFFFFFULL);
-                        emit32(0x4E080C00u | (19 << 5) | 19); // dup v19.2d, x19 -> even-lane mask
-                    }
-                    e_v3(0x6E601C00u, 19, 17, 18); // bsl v19.16b: mask ? sub : add
-                    e_vmov(vd, 19);
-                    if (fixnan) emit_dnan_post(vd, dbl, 1);
-                } else if ((op == 0x12 || op == 0x16) && I.rep) { // SSE3 movsldup/movshdup: dup even/odd single lanes
+                int horizontal_result = lower_sse_horizontal(&I, gpc, next, vd, vm);
+                if (horizontal_result == TX_NEXT) {
+                    gpc = next;
+                    continue;
+                }
+                if ((op == 0x12 || op == 0x16) && I.rep) { // SSE3 movsldup/movshdup
                     int s = vm;
                     if (I.is_mem) {
                         g_ldr_q_ea(16, &I, next);
