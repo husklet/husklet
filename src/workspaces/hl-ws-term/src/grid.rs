@@ -53,17 +53,6 @@ impl Default for Cell {
 }
 
 impl Cell {
-    /// A blank cell that keeps the given pen's colors/attrs (used when erasing so the cleared region
-    /// adopts the current background, matching xterm's "erase with current SGR background" behavior).
-    #[must_use]
-    pub fn blank_with(fg: Color, bg: Color, attrs: Attrs) -> Cell {
-        Cell {
-            ch: ' ',
-            fg,
-            bg,
-            attrs: attrs & Attrs::REVERSE,
-        } // keep only reverse for bg fill
-    }
     /// Is this cell visually empty (a space with default colors/attrs)?
     #[must_use]
     pub fn is_blank(&self) -> bool {
