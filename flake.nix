@@ -527,9 +527,14 @@
               binary="$prefix/bin/$name"
               test -x "$binary"
               patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
-              test "$(patchelf --print-rpath "$binary" | cut -d: -f1)" = '$ORIGIN/../lib'
-              ! patchelf --print-rpath "$binary" | tr : '\n' |
-                grep -Fx ${engine}/lib >/dev/null
+              patchelf --print-rpath "$binary" | tr : '\n' > "$TMPDIR/$name.runpath"
+              test "$(head -n1 "$TMPDIR/$name.runpath")" = '$ORIGIN/../lib'
+              tail -n+2 "$TMPDIR/$name.runpath" | while IFS= read -r entry; do
+                case "$entry" in
+                  /nix/store/*/lib) ;;
+                  *) printf 'unsafe RUNPATH entry in %s: %s\n' "$name" "$entry" >&2; exit 1 ;;
+                esac
+              done
               env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
                 "$binary" --backend-receipt > "$TMPDIR/$name.receipt"
               env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
@@ -565,7 +570,7 @@
             (cd "$prefix" && sha256sum bin/hl-engine bin/hl-aarch64 bin/hl-x86_64 \
               lib/libhl_native_engine.so) > "$out/SHA256SUMS"
             printf '%s\n' \
-              'copied-prefix RUNPATH, NEEDED, backend ABI, and sibling-library loader selection passed' \
+              'copied-prefix bounded RUNPATH, NEEDED, backend ABI, and sibling-library loader selection passed' \
               > "$out/evidence"
           '';
 
