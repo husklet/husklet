@@ -84,6 +84,52 @@ static void finish_block(uint64_t start, uint64_t guest_start, uint64_t guest_en
     }
 }
 
+static int translate_tls_instruction(uint32_t instruction) {
+    if ((instruction & 0xFFFFFFE0u) == 0xD53BD040u) {
+        int reg = instruction & 31;
+        if (is_stolen(reg)) {
+            if (stealfast_on()) {
+                e_ldr(16, CPUREG, OFF_TLS);
+                e_str(16, CPUREG, reg * 8);
+            } else {
+                x18_prolog();
+                e_ldr(0, 1, OFF_TLS);
+                e_str(0, 1, reg * 8);
+                x18_epilog();
+            }
+        } else if (stealfast_on()) {
+            e_ldr(reg, CPUREG, OFF_TLS);
+        } else {
+            e_load_cpu(reg);
+            e_ldr(reg, reg, OFF_TLS);
+        }
+        return 1;
+    }
+    if ((instruction & 0xFFFFFFE0u) != 0xD51BD040u) return 0;
+
+    int reg = instruction & 31;
+    int scratch = reg == 16 ? 15 : 16;
+    if (is_stolen(reg)) {
+        if (stealfast_on()) {
+            e_ldr(16, CPUREG, reg * 8);
+            e_str(16, CPUREG, OFF_TLS);
+        } else {
+            x18_prolog();
+            e_ldr(0, 1, reg * 8);
+            e_str(0, 1, OFF_TLS);
+            x18_epilog();
+        }
+    } else if (stealfast_on()) {
+        e_str(reg, CPUREG, OFF_TLS);
+    } else {
+        e_str(scratch, CPUREG, (int)OFF_MSCRATCH);
+        e_load_cpu(scratch);
+        e_str(reg, scratch, OFF_TLS);
+        e_ldr(scratch, CPUREG, (int)OFF_MSCRATCH);
+    }
+    return 1;
+}
+
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
        an executable view backed by an emulated host-page snapshot. */
@@ -743,56 +789,7 @@ static void *translate_block(uint64_t gpc) {
             break;
         }
 
-        // --- TLS: the whole point. mrs/msr tpidr_el0 become a single NATIVE
-        //     load/store from cpu->tls. No trap, no Mach round-trip. ---
-        // mrs xN, tpidr_el0  (TLS read, hot: CPython reads its thread state through this constantly).
-        // stealfast: x28 IS the cpu pointer for the whole block, so the read is ONE ldr (legacy paid a
-        // 3-insn TLS-based cpu reload via e_load_cpu, or the full x18_prolog dance for a stolen rd).
-        if ((in & 0xFFFFFFE0u) == 0xD53BD040u) {
-            int n = in & 31;
-            if (is_stolen(n)) {
-                if (stealfast_on()) {
-                    e_ldr(16, CPUREG, OFF_TLS);
-                    e_str(16, CPUREG, n * 8);
-                } else {
-                    x18_prolog();
-                    e_ldr(0, 1, OFF_TLS);
-                    e_str(0, 1, n * 8);
-                    x18_epilog();
-                }
-            } else if (stealfast_on()) {
-                e_ldr(n, CPUREG, OFF_TLS);
-            } else {
-                e_load_cpu(n);
-                e_ldr(n, n, OFF_TLS);
-            }
-            gpc += 4;
-            continue;
-        }
-        // msr tpidr_el0, xN  (TLS write, rare)
-        if ((in & 0xFFFFFFE0u) == 0xD51BD040u) {
-            int n = in & 31, t = (n == 16) ? 15 : 16;
-            if (is_stolen(n)) {
-                if (stealfast_on()) {
-                    e_ldr(16, CPUREG, n * 8);
-                    e_str(16, CPUREG, OFF_TLS);
-                } else {
-                    x18_prolog();
-                    e_ldr(0, 1, n * 8);
-                    e_str(0, 1, OFF_TLS);
-                    x18_epilog();
-                }
-            } else if (stealfast_on()) {
-                e_str(n, CPUREG, OFF_TLS);
-            } else {
-                // NOSTEALFAST/NOSTEAL1617 only: park scratch `t` in cpu->mscratch[0] (x28=cpu holds), NOT
-                // [sp,#-16] -- a below-SP store faults on a shallow guest stack (the 6d38d96c crash class).
-                // t (15/16) != n (non-stolen) and != CPUREG, so no operand is clobbered.
-                e_str(t, CPUREG, (int)OFF_MSCRATCH);
-                e_load_cpu(t);
-                e_str(n, t, OFF_TLS);
-                e_ldr(t, CPUREG, (int)OFF_MSCRATCH);
-            }
+        if (translate_tls_instruction(in)) {
             gpc += 4;
             continue;
         }
