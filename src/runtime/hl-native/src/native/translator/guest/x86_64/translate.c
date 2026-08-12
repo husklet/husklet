@@ -5442,6 +5442,44 @@ static int lower_x87_family(struct insn *instruction, uint64_t guest_pc, uint64_
     return result == TX_FALL ? TX_NEXT : result;
 }
 
+static int lower_sse_precision_conversion(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
+    if (I.op != 0x5A) return TX_FALL;
+    // 0F 5A is FOUR instructions, selected by the mandatory prefix:
+    //   F2 cvtsd2ss   F3 cvtss2sd   66 cvtpd2ps (PACKED)   none cvtps2pd (PACKED)
+    // The two PACKED forms used to fall into the `else` arm and were lowered as
+    // cvtss2sd -- i.e. legacy (non-VEX) CVTPS2PD/CVTPD2PS produced a single
+    // converted low element and garbage everywhere else.
+    int packed = !I.repne && !I.rep;
+    int s = vm;
+    if (I.is_mem) {
+        emit_ea(&I, next);
+        if (emit_soft_memory_active())
+            emit_memory_guard(17, I.rep ? 4u : (packed && I.p66) ? 16u : 8u, guest_pc, X86_SOFT_READ);
+        if (I.rep)
+            g_ldr_s(16, 17); // cvtss2sd: m32
+        else if (packed && I.p66)
+            g_ldr_q(16, 17, 0); // cvtpd2ps: m128
+        else
+            g_ldr_d(16, 17); // cvtsd2ss: m64 ; cvtps2pd: m64 (two floats)
+        s = 16;
+    }
+    if (packed) {
+        if (I.p66)
+            emit32(0x0E616800u | (s << 5) | vd); // FCVTN vd.2s, s.2d -- upper 64 zeroed
+        else
+            emit32(0x0E617800u | (s << 5) | vd); // FCVTL vd.2d, s.2s
+    } else if (I.repne) {
+        // The scalar forms write ONLY the low element (32 bits for cvtsd2ss, 64 for
+        // cvtss2sd) and preserve the rest of the destination: convert, then merge.
+        emit32(0x1E624000u | (s << 5) | 18); // FCVT S18, Dn (double->single)
+        e_ins_s(vd, 0, 18, 0);
+    } else {
+        emit32(0x1E22C000u | (s << 5) | 18); // FCVT D18, Sn (single->double)
+        e_ins_d(vd, 0, 18, 0);
+    }
+    return TX_NEXT;
+}
+
 static int lower_sse_float_arithmetic(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t op = I.op;
     if (op != 0x58 && op != 0x59 && op != 0x5C && op != 0x5E && op != 0x51 &&
@@ -6241,40 +6279,8 @@ static void *translate_block(uint64_t gpc) {
                     }
                 } else if (lower_sse_float_arithmetic(I, gpc, next, vd, vm) == TX_NEXT) {
                     // The helper emitted the complete packed or scalar floating-point operation.
-                } else if (op == 0x5A) {
-                    // 0F 5A is FOUR instructions, selected by the mandatory prefix:
-                    //   F2 cvtsd2ss   F3 cvtss2sd   66 cvtpd2ps (PACKED)   none cvtps2pd (PACKED)
-                    // The two PACKED forms used to fall into the `else` arm and were lowered as
-                    // cvtss2sd -- i.e. legacy (non-VEX) CVTPS2PD/CVTPD2PS produced a single
-                    // converted low element and garbage everywhere else.
-                    int packed = !I.repne && !I.rep;
-                    int s = vm;
-                    if (I.is_mem) {
-                        emit_ea(&I, next);
-                        if (emit_soft_memory_active())
-                            emit_memory_guard(17, I.rep ? 4u : (packed && I.p66) ? 16u : 8u, gpc, X86_SOFT_READ);
-                        if (I.rep)
-                            g_ldr_s(16, 17); // cvtss2sd: m32
-                        else if (packed && I.p66)
-                            g_ldr_q(16, 17, 0); // cvtpd2ps: m128
-                        else
-                            g_ldr_d(16, 17); // cvtsd2ss: m64 ; cvtps2pd: m64 (two floats)
-                        s = 16;
-                    }
-                    if (packed) {
-                        if (I.p66)
-                            emit32(0x0E616800u | (s << 5) | vd); // FCVTN vd.2s, s.2d -- upper 64 zeroed
-                        else
-                            emit32(0x0E617800u | (s << 5) | vd); // FCVTL vd.2d, s.2s
-                    } else if (I.repne) {
-                        // The scalar forms write ONLY the low element (32 bits for cvtsd2ss, 64 for
-                        // cvtss2sd) and preserve the rest of the destination: convert, then merge.
-                        emit32(0x1E624000u | (s << 5) | 18); // FCVT S18, Dn (double->single)
-                        e_ins_s(vd, 0, 18, 0);
-                    } else {
-                        emit32(0x1E22C000u | (s << 5) | 18); // FCVT D18, Sn (single->double)
-                        e_ins_d(vd, 0, 18, 0);
-                    }
+                } else if (lower_sse_precision_conversion(I, gpc, next, vd, vm) == TX_NEXT) {
+                    // The helper emitted the scalar or packed precision conversion.
                 } else if (op == 0xC4) { // pinsrw: insert low 16 bits of r/m16 into xmm H-lane (imm8 & 7)
                     int lane = (int)I.imm & (mmx ? 3 : 7); // mm has 4 words: hardware wraps $4 to lane 0
                     int src;
