@@ -4450,6 +4450,135 @@ static int lower_x87_memory_state(struct insn *instruction, uint64_t guest_pc, u
     return TX_NEXT;
 }
 
+static int lower_x87_d9_register(struct insn *instruction, uint64_t guest_pc, uint64_t next, int reg, int rm) {
+    if (instruction->op != 0xD9) return TX_FALL;
+    if (reg == 0) {
+        hl_x86_x87_live(rm, -1); // an empty SOURCE underflows; the PUSHED slot takes the
+        hl_x86_x87_load(16, rm); // indefinite and the source stays empty
+        hl_x86_x87_indefinite(16);
+        hl_x86_x87_push(16);
+    } // fld ST(i)
+    else if (reg == 1) {
+        // FXCH: the exchange happens either way, then ST0 takes the indefinite -- ST(i) keeps
+        // the old ST0 and is tagged live (measured on `fld1; fxch %st(1)`).
+        hl_x86_x87_live(0, rm);
+        hl_x86_x87_load(16, 0);
+        hl_x86_x87_load(18, rm);
+        hl_x86_x87_indefinite(18);
+        hl_x86_x87_store(18, 0);
+        hl_x86_x87_store(16, rm);
+    } // fxch
+    else if (reg == 4 && rm == 0) {
+        hl_x86_x87_live(0, -1);
+        hl_x86_x87_load(16, 0);
+        emit32(0x1E614000u | (16 << 5) | 16);
+        hl_x86_x87_indefinite(16);
+        hl_x86_x87_store(16, 0);
+    } // fchs
+    else if (reg == 4 && rm == 1) {
+        hl_x86_x87_live(0, -1);
+        hl_x86_x87_load(16, 0);
+        emit32(0x1E60C000u | (16 << 5) | 16);
+        hl_x86_x87_indefinite(16);
+        hl_x86_x87_store(16, 0);
+    } // fabs
+    else if (reg == 5) { // fld const
+        static const uint64_t k[8] = {0x3FF0000000000000ull /*1*/,
+                                      0x400A934F0979A371ull /*l2t*/,
+                                      0x3FF71547652B82FEull /*l2e*/,
+                                      0x400921FB54442D18ull /*pi*/,
+                                      0x3FD34413509F79FFull /*lg2*/,
+                                      0x3FE62E42FEFA39EFull /*ln2*/,
+                                      0x0ull /*0*/,
+                                      0x0ull};
+        e_movconst(16, k[rm]);
+        e_fmov_to_d(16, 16);
+        hl_x86_x87_push(16);
+    } else if (reg == 7 && rm == 2) {
+        hl_x86_x87_live(0, -1);
+        hl_x86_x87_load(16, 0);
+        hl_x86_x87_indefinite(16);
+        hl_x86_x87_rc_enter();
+        hl_x86_x87_dnan_pre(16, 16); // fsqrt(-x): x86 yields the NEGATIVE indefinite
+        emit32(0x1E61C000u | (16 << 5) | 16);
+        hl_x86_x87_dnan_post(16);
+        hl_x86_x87_narrow(16);
+        hl_x86_x87_rc_leave();
+        hl_x86_x87_store(16, 0);
+    } // fsqrt
+    else if (reg == 2 && rm == 0) { /* fnop */
+    } else if (reg == 4 && rm == 4) {
+        hl_x86_x87_live(0, -1);
+        hl_x86_x87_test();
+    } // ftst
+    else if (reg == 4 && rm == 5) {
+        hl_x86_x87_classify();
+    } // fxam
+    else if (reg == 6 && rm == 0) {
+        hl_x86_x87_function(X87_F2XM1, next);
+        return TX_BREAK;
+    } // f2xm1
+    else if (reg == 6 && rm == 1) {
+        hl_x86_x87_function(X87_FYL2X, next);
+        return TX_BREAK;
+    } // fyl2x
+    else if (reg == 6 && rm == 2) {
+        hl_x86_x87_function(X87_FPTAN, next);
+        return TX_BREAK;
+    } // fptan
+    else if (reg == 6 && rm == 3) {
+        hl_x86_x87_function(X87_FPATAN, next);
+        return TX_BREAK;
+    } // fpatan
+    else if (reg == 6 && rm == 4) {
+        hl_x86_x87_live(0, -1);
+        hl_x86_x87_extract();
+    } // fxtract
+    else if (reg == 6 && rm == 5) {
+        hl_x86_x87_function(X87_FPREM1, next);
+        return TX_BREAK;
+    } // fprem1
+    else if (reg == 6 && rm == 6) {
+        hl_x86_x87_adjust_top(-1);
+    } // fdecstp
+    else if (reg == 6 && rm == 7) {
+        hl_x86_x87_adjust_top(1);
+    } // fincstp
+    else if (reg == 7 && rm == 0) {
+        hl_x86_x87_function(X87_FPREM, next);
+        return TX_BREAK;
+    } // fprem
+    else if (reg == 7 && rm == 1) {
+        hl_x86_x87_function(X87_FYL2XP1, next);
+        return TX_BREAK;
+    } // fyl2xp1
+    else if (reg == 7 && rm == 3) {
+        hl_x86_x87_function(X87_FSINCOS, next);
+        return TX_BREAK;
+    } // fsincos
+    else if (reg == 7 && rm == 4) {
+        hl_x86_x87_live(0, -1);
+        hl_x86_x87_round();
+    } // frndint
+    else if (reg == 7 && rm == 5) {
+        hl_x86_x87_live(0, 1);
+        hl_x86_x87_scale();
+    } // fscale
+    else if (reg == 7 && rm == 6) {
+        hl_x86_x87_function(X87_FSIN, next);
+        return TX_BREAK;
+    } // fsin
+    else if (reg == 7 && rm == 7) {
+        hl_x86_x87_function(X87_FCOS, next);
+        return TX_BREAK;
+    } // fcos
+    else {
+        report_unimpl(guest_pc, instruction);
+        return TX_BREAK;
+    }
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -4886,132 +5015,13 @@ static void *translate_block(uint64_t gpc) {
                     continue;
                 }
                 // ---- register forms (mod=3) ----
-                if (op == 0xD9) {
-                    if (reg == 0) {
-                        hl_x86_x87_live(rm, -1); // an empty SOURCE underflows; the PUSHED slot takes the
-                        hl_x86_x87_load(16, rm); // indefinite and the source stays empty
-                        hl_x86_x87_indefinite(16);
-                        hl_x86_x87_push(16);
-                    } // fld ST(i)
-                    else if (reg == 1) {
-                        // FXCH: the exchange happens either way, then ST0 takes the indefinite -- ST(i) keeps
-                        // the old ST0 and is tagged live (measured on `fld1; fxch %st(1)`).
-                        hl_x86_x87_live(0, rm);
-                        hl_x86_x87_load(16, 0);
-                        hl_x86_x87_load(18, rm);
-                        hl_x86_x87_indefinite(18);
-                        hl_x86_x87_store(18, 0);
-                        hl_x86_x87_store(16, rm);
-                    } // fxch
-                    else if (reg == 4 && rm == 0) {
-                        hl_x86_x87_live(0, -1);
-                        hl_x86_x87_load(16, 0);
-                        emit32(0x1E614000u | (16 << 5) | 16);
-                        hl_x86_x87_indefinite(16);
-                        hl_x86_x87_store(16, 0);
-                    } // fchs
-                    else if (reg == 4 && rm == 1) {
-                        hl_x86_x87_live(0, -1);
-                        hl_x86_x87_load(16, 0);
-                        emit32(0x1E60C000u | (16 << 5) | 16);
-                        hl_x86_x87_indefinite(16);
-                        hl_x86_x87_store(16, 0);
-                    } // fabs
-                    else if (reg == 5) { // fld const
-                        static const uint64_t k[8] = {0x3FF0000000000000ull /*1*/,
-                                                      0x400A934F0979A371ull /*l2t*/,
-                                                      0x3FF71547652B82FEull /*l2e*/,
-                                                      0x400921FB54442D18ull /*pi*/,
-                                                      0x3FD34413509F79FFull /*lg2*/,
-                                                      0x3FE62E42FEFA39EFull /*ln2*/,
-                                                      0x0ull /*0*/,
-                                                      0x0ull};
-                        e_movconst(16, k[rm]);
-                        e_fmov_to_d(16, 16);
-                        hl_x86_x87_push(16);
-                    } else if (reg == 7 && rm == 2) {
-                        hl_x86_x87_live(0, -1);
-                        hl_x86_x87_load(16, 0);
-                        hl_x86_x87_indefinite(16);
-                        hl_x86_x87_rc_enter();
-                        hl_x86_x87_dnan_pre(16, 16); // fsqrt(-x): x86 yields the NEGATIVE indefinite
-                        emit32(0x1E61C000u | (16 << 5) | 16);
-                        hl_x86_x87_dnan_post(16);
-                        hl_x86_x87_narrow(16);
-                        hl_x86_x87_rc_leave();
-                        hl_x86_x87_store(16, 0);
-                    } // fsqrt
-                    else if (reg == 2 && rm == 0) { /* fnop */
-                    } else if (reg == 4 && rm == 4) {
-                        hl_x86_x87_live(0, -1);
-                        hl_x86_x87_test();
-                    } // ftst
-                    else if (reg == 4 && rm == 5) {
-                        hl_x86_x87_classify();
-                    } // fxam
-                    else if (reg == 6 && rm == 0) {
-                        hl_x86_x87_function(X87_F2XM1, next);
-                        break;
-                    } // f2xm1
-                    else if (reg == 6 && rm == 1) {
-                        hl_x86_x87_function(X87_FYL2X, next);
-                        break;
-                    } // fyl2x
-                    else if (reg == 6 && rm == 2) {
-                        hl_x86_x87_function(X87_FPTAN, next);
-                        break;
-                    } // fptan
-                    else if (reg == 6 && rm == 3) {
-                        hl_x86_x87_function(X87_FPATAN, next);
-                        break;
-                    } // fpatan
-                    else if (reg == 6 && rm == 4) {
-                        hl_x86_x87_live(0, -1);
-                        hl_x86_x87_extract();
-                    } // fxtract
-                    else if (reg == 6 && rm == 5) {
-                        hl_x86_x87_function(X87_FPREM1, next);
-                        break;
-                    } // fprem1
-                    else if (reg == 6 && rm == 6) {
-                        hl_x86_x87_adjust_top(-1);
-                    } // fdecstp
-                    else if (reg == 6 && rm == 7) {
-                        hl_x86_x87_adjust_top(1);
-                    } // fincstp
-                    else if (reg == 7 && rm == 0) {
-                        hl_x86_x87_function(X87_FPREM, next);
-                        break;
-                    } // fprem
-                    else if (reg == 7 && rm == 1) {
-                        hl_x86_x87_function(X87_FYL2XP1, next);
-                        break;
-                    } // fyl2xp1
-                    else if (reg == 7 && rm == 3) {
-                        hl_x86_x87_function(X87_FSINCOS, next);
-                        break;
-                    } // fsincos
-                    else if (reg == 7 && rm == 4) {
-                        hl_x86_x87_live(0, -1);
-                        hl_x86_x87_round();
-                    } // frndint
-                    else if (reg == 7 && rm == 5) {
-                        hl_x86_x87_live(0, 1);
-                        hl_x86_x87_scale();
-                    } // fscale
-                    else if (reg == 7 && rm == 6) {
-                        hl_x86_x87_function(X87_FSIN, next);
-                        break;
-                    } // fsin
-                    else if (reg == 7 && rm == 7) {
-                        hl_x86_x87_function(X87_FCOS, next);
-                        break;
-                    } // fcos
-                    else {
-                        report_unimpl(gpc, &I);
-                        break;
-                    }
-                } else if (op == 0xD8 || op == 0xDC || op == 0xDE) { // arith ST0/ST(i) [+pop for DE]
+                int d9_result = lower_x87_d9_register(&I, gpc, next, reg, rm);
+                if (d9_result == TX_NEXT) {
+                    gpc = next;
+                    continue;
+                }
+                if (d9_result == TX_BREAK) break;
+                if (op == 0xD8 || op == 0xDC || op == 0xDE) { // arith ST0/ST(i) [+pop for DE]
                     hl_x86_x87_live(0, rm);
                     hl_x86_x87_load(18, 0);
                     hl_x86_x87_load(16, rm); // v18=ST0, v16=ST(rm)
