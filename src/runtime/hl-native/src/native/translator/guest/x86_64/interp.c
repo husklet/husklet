@@ -1369,6 +1369,16 @@ static int interp_one_byte_integer_convert(struct cpu *cpu, struct insn *insn, u
     return STEP_NEXT;
 }
 
+static int interp_one_byte_move_immediate(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op < 0xB0 || op > 0xBF) return -1;
+    int width = op < 0xB8 ? 1 : insn->opsize;
+    int number = (op & 7) | (insn->rexB << 3);
+    interp_reg_write(cpu, insn, number, width, (uint64_t)insn->imm);
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_one_byte_alu(cpu, insn, next);
@@ -1386,6 +1396,8 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     delegated = interp_one_byte_test_immediate(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_one_byte_integer_convert(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_one_byte_move_immediate(cpu, insn, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -1429,33 +1441,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
             interp_reg_write(cpu, insn, RAX, width, interp_load(address, width));
         else
             interp_store(address, width, interp_reg_read(cpu, insn, RAX, width));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // MOV r, imm
-    case 0xB0:
-    case 0xB1:
-    case 0xB2:
-    case 0xB3:
-    case 0xB4:
-    case 0xB5:
-    case 0xB6:
-    case 0xB7:
-        interp_reg_write(cpu, insn, (op & 7) | (insn->rexB << 3), 1, (uint64_t)insn->imm);
-        cpu->rip = next;
-        return STEP_NEXT;
-    case 0xB8:
-    case 0xB9:
-    case 0xBA:
-    case 0xBB:
-    case 0xBC:
-    case 0xBD:
-    case 0xBE:
-    case 0xBF: {
-        uint64_t value = (uint64_t)insn->imm;
-        int width = insn->opsize;
-        interp_reg_write(cpu, insn, (op & 7) | (insn->rexB << 3), width, value);
         cpu->rip = next;
         return STEP_NEXT;
     }
