@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
-use super::{source_files, suppression};
+use super::{parse, source_files, suppression};
 use crate::{Finding, LintError, Location, Result, Severity, rule::Rule, source::Workspace};
 
 const RULE: &str = "c-source-policy";
@@ -82,13 +82,7 @@ impl Rule for Policy {
 }
 
 fn analyze(path: &Path, source: &str, policy: &Policy) -> Result<Vec<Finding>> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_c::LANGUAGE.into())
-        .map_err(|error| parse_error(path, error.to_string()))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
+    let tree = parse(path, source)?;
     let mut candidates = Vec::new();
     collect_calls(tree.root_node(), source.as_bytes(), path, policy, &mut candidates);
     let owned = policy.known_rules();
@@ -132,14 +126,6 @@ fn collect_calls(node: Node<'_>, source: &[u8], path: &Path, policy: &Policy, ou
     for child in node.children(&mut cursor) {
         collect_calls(child, source, path, policy, output);
     }
-}
-
-fn parse_error(path: &Path, message: impl Into<String>) -> LintError {
-    LintError::io(
-        "parse",
-        path,
-        std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()),
-    )
 }
 
 #[cfg(test)]

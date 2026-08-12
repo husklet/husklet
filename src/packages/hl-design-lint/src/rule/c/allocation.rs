@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
-use super::{source_files, suppression};
+use super::{parse, source_files, suppression};
 use crate::{CAllocationPolicy, Finding, LintError, Location, Result, Severity, rule::Rule, source::Workspace};
 
 const RULE: &str = "c-unchecked-allocation";
@@ -36,13 +36,7 @@ impl Rule for Allocation {
 }
 
 fn analyze(path: &Path, source: &str, allocators: &BTreeSet<String>) -> Result<Vec<Finding>> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_c::LANGUAGE.into())
-        .map_err(|error| parse_error(path, error.to_string()))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
+    let tree = parse(path, source)?;
     let mut findings = Vec::new();
     visit_functions(tree.root_node(), source, allocators, path, &mut findings);
     let rules = BTreeSet::from([RULE]);
@@ -182,14 +176,6 @@ fn finding(path: &Path, node: Node<'_>, name: &str) -> Finding {
         "check the allocation result before dereference, or use an allocator with a documented non-null contract"
             .into();
     finding
-}
-
-fn parse_error(path: &Path, message: impl Into<String>) -> LintError {
-    LintError::io(
-        "parse",
-        path,
-        std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()),
-    )
 }
 
 #[cfg(test)]

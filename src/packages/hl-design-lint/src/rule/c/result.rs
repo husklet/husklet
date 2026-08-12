@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
-use super::{source_files, suppression};
+use super::{parse, source_files, suppression};
 use crate::{CResultPolicy, Finding, LintError, Location, Result, Severity, rule::Rule, source::Workspace};
 
 const RULE: &str = "c-ignored-result";
@@ -42,13 +42,7 @@ impl Rule for ResultUse {
 }
 
 fn analyze(path: &Path, source: &str, functions: &BTreeSet<String>) -> Result<Vec<Finding>> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_c::LANGUAGE.into())
-        .map_err(|error| parse_error(path, error.to_string()))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
+    let tree = parse(path, source)?;
     let mut findings = Vec::new();
     collect(tree.root_node(), source, functions, path, &mut findings);
     let rules = BTreeSet::from([RULE]);
@@ -136,14 +130,6 @@ fn finding(path: &Path, node: Node<'_>, name: &str) -> Finding {
     finding.help =
         "check and handle the result, return it to the caller, or explicitly document a narrow suppression".into();
     finding
-}
-
-fn parse_error(path: &Path, message: impl Into<String>) -> LintError {
-    LintError::io(
-        "parse",
-        path,
-        std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()),
-    )
 }
 
 #[cfg(test)]

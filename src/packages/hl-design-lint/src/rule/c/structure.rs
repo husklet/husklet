@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
-use super::{source_files, suppression};
+use super::{parse, source_files, suppression};
 use crate::{Finding, LintError, Location, Result, Review, Severity, rule::Rule, source::Workspace};
 
 const FILE_LINES: usize = 1_500;
@@ -32,13 +32,7 @@ impl Rule for Structure {
 }
 
 fn analyze(path: &Path, text: &str) -> Result<Vec<Finding>> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_c::LANGUAGE.into())
-        .map_err(|error| parse_error(path, error.to_string()))?;
-    let tree = parser
-        .parse(text, None)
-        .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
+    let tree = parse(path, text)?;
     let clean = without_comments(text, tree.root_node());
     let effective = effective_lines(&clean, 0, clean.len());
     let mut findings = Vec::new();
@@ -163,14 +157,6 @@ fn metric(path: &Path, line: usize, column: usize, subject: &str, value: usize, 
     review.questions = vec!["Which independent responsibility can move behind a narrow header?".into()];
     finding.review = Some(review);
     finding
-}
-
-fn parse_error(path: &Path, message: impl Into<String>) -> LintError {
-    LintError::io(
-        "parse",
-        path,
-        std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()),
-    )
 }
 
 #[cfg(test)]

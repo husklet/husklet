@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
-use super::{source_files, suppression};
+use super::{parse, source_files, suppression};
 use crate::{CInterfacePolicy, Finding, LintError, Location, Result, Review, Severity, rule::Rule, source::Workspace};
 
 const RULE: &str = "c-interface-breadth";
@@ -43,13 +43,7 @@ impl Rule for Interface {
 }
 
 fn analyze(path: &Path, source: &str, maximum: usize) -> Result<Vec<Finding>> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_c::LANGUAGE.into())
-        .map_err(|error| parse_error(path, error.to_string()))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
+    let tree = parse(path, source)?;
     let declarations = declarations(tree.root_node(), source);
     let candidates = declarations
         .first()
@@ -110,14 +104,6 @@ fn finding(path: &Path, line: usize, count: usize, maximum: usize) -> Finding {
     review.questions = vec!["Which declarations share one lifecycle, state owner, and change reason?".into()];
     finding.review = Some(review);
     finding
-}
-
-fn parse_error(path: &Path, message: impl Into<String>) -> LintError {
-    LintError::io(
-        "parse",
-        path,
-        std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()),
-    )
 }
 
 #[cfg(test)]
