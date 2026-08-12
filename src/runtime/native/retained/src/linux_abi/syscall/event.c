@@ -1001,15 +1001,12 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
                 if (atomic_load_explicit(&ow->active, memory_order_acquire) == 0 || ow->epoll != registry_ep ||
                     ow->epoll_generation != obj_ep_generation)
                     continue;
-                hl_linux_fd_snapshot osnap;
                 hl_linux_object_pin opin;
                 if (g_linux_box == NULL ||
-                    hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)ow->descriptor, &osnap) != HL_STATUS_OK ||
-                    osnap.descriptor_generation != ow->descriptor_generation) {
-                    ep_object_free(ow); // the watched fd was closed or reused
+                    hl_linux_object_pin_ofd(g_linux_box, ow->ofd, ow->ofd_generation, &opin) != HL_STATUS_OK) {
+                    ep_object_free(ow); // the watched OFD lost its final descriptor
                     continue;
                 }
-                if (hl_linux_object_pin_fd(g_linux_box, (hl_linux_fd)ow->descriptor, &opin) != HL_STATUS_OK) continue;
                 uint32_t readiness = hl_linux_object_ready(&opin, ow->interests);
                 hl_linux_object_unpin(&opin);
                 uint32_t oev = ep_provider_linux_events(readiness);
