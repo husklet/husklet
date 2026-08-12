@@ -14,6 +14,94 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-macos-arm64:
+    name: Native engine / macOS ARM64
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an Apple Silicon host
+        run: test "$(uname -m)" = arm64
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+
+      - name: Compile, link, and exercise the native engine ABI
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes'
+          build -L .#checks.aarch64-darwin.host-darwin-aarch64-native
+
+      - name: Exercise the dylib ABI boundary explicitly
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test --locked -p hl-native --lib tests::shared_engine_exports_matching_abi
+          -- --exact
+
+  native-windows-amd64:
+    name: Native surface / Windows AMD64
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an AMD64 host
+        shell: pwsh
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
+            throw "Husklet Windows smoke requires AMD64, got $env:PROCESSOR_ARCHITECTURE"
+          }
+
+      - name: Select the repository Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal
+          rustup default 1.93.1
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Enter the native MSVC AMD64 environment
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $installation) { throw "MSVC AMD64 tools are unavailable" }
+          $developer = Join-Path $installation "Common7\Tools\VsDevCmd.bat"
+          $variables = cmd.exe /d /s /c "`"$developer`" -no_logo -arch=amd64 >nul && set"
+          $variables | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*=' } |
+            Add-Content -Path $env:GITHUB_ENV
+
+      - name: Check the Rust Windows provider surface
+        shell: pwsh
+        run: cargo check --locked -p hl-native --target x86_64-pc-windows-msvc
+
+      - name: Compile the Windows host adapter
+        shell: pwsh
+        run: >-
+          cl.exe /nologo /std:c11 /c /DHL_SHARED /DHL_BUILDING_ENGINE
+          /Isrc/runtime/hl-native/src/native
+          /Isrc/runtime/hl-native/src/native/include
+          src/runtime/hl-native/src/native/bridge/host.c
+          /Fo:$env:RUNNER_TEMP\hl-host-windows.obj
+
+      - name: Link and execute the public ABI fixture
+        shell: pwsh
+        run: |
+          cl.exe /nologo /std:c11 /LD /DHL_ABI_FIXTURE_EXPORT `
+            /Isrc/runtime/hl-native/src/native/include `
+            tests/native/host-abi/windows.c `
+            /Fe:$env:RUNNER_TEMP\hl-abi-fixture.dll `
+            /link /IMPLIB:$env:RUNNER_TEMP\hl-abi-fixture.lib
+          cl.exe /nologo /std:c11 `
+            /Isrc/runtime/hl-native/src/native/include `
+            tests/native/host-abi/windows.c `
+            $env:RUNNER_TEMP\hl-abi-fixture.lib `
+            /Fe:$env:RUNNER_TEMP\hl-abi-smoke.exe
+          & "$env:RUNNER_TEMP\hl-abi-smoke.exe"
+
   workspace:
     name: Workspace quality and tests
     runs-on: macos-26
