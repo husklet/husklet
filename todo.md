@@ -15,7 +15,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Keep only intentional Markdown: `AGENTS.md`, `README.md`, this checklist, and the positive/negative lint examples; fold the former pipeline proposal into this checklist.
 - [x] Restore and update root `AGENTS.md` for the Cargo-owned C architecture.
 - [x] Restore `lint/examples/positive.md` and `lint/examples/negative.md` as executable design documentation.
-- [ ] Run a final unused-file, unused-package, reachability, and generated-artifact audit on the merged tip.
+- [x] Run a final unused-file, unused-package, reachability, and generated-artifact audit on the merged tip. Current evidence covers all 18 Cargo packages and 74 targets, reaches all 310 C files across the four modeled host closures, finds no unused direct dependencies, and finds no tracked build artifacts, ignored files, empty files, or broken links.
 
 ## `hl-native` package and C boundary
 
