@@ -14,7 +14,18 @@ use crate::{
 };
 
 /// Prevents reusable code from obtaining configuration from ambient process state.
-pub struct Access;
+#[derive(Default)]
+pub struct Access {
+    policy: crate::policy::BoundaryPolicy,
+}
+
+impl Access {
+    /// Creates the rule with repository-provided boundary selectors.
+    #[must_use]
+    pub fn new(policy: crate::policy::BoundaryPolicy) -> Self {
+        Self { policy }
+    }
+}
 
 impl Rule for Access {
     fn id(&self) -> &'static str {
@@ -28,7 +39,7 @@ impl Rule for Access {
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         for source in workspace.sources() {
-            let mut visitor = Accesses::new(source);
+            let mut visitor = Accesses::new(source, &self.policy);
             visitor.visit_file(&source.syntax);
             findings.extend(visitor.findings);
         }
@@ -43,10 +54,11 @@ struct Accesses<'a> {
     context: Option<(String, Span)>,
     test_depth: usize,
     findings: Vec<Finding>,
+    policy: &'a crate::policy::BoundaryPolicy,
 }
 
 impl<'a> Accesses<'a> {
-    fn new(source: &'a Source) -> Self {
+    fn new(source: &'a Source, policy: &'a crate::policy::BoundaryPolicy) -> Self {
         Self {
             source,
             aliases: HashMap::new(),
@@ -54,6 +66,7 @@ impl<'a> Accesses<'a> {
             context: None,
             test_depth: 0,
             findings: Vec::new(),
+            policy,
         }
     }
 
@@ -61,7 +74,14 @@ impl<'a> Accesses<'a> {
         self.source.test
             || self.test_depth > 0
             || source_boundary(self.source, &self.modules)
-            || self.source.package == "hl-engine"
+            || self.policy.allow.iter().any(|selector| {
+                selector.matches(
+                    &self.source.package,
+                    &self.source.domain,
+                    &self.source.path,
+                    &self.modules,
+                )
+            })
     }
 
     fn resolved_path(&self, expression: &syn::ExprPath) -> Vec<String> {
@@ -337,35 +357,7 @@ fn source_boundary(source: &Source, modules: &[String]) -> bool {
             if surface == "surface"
                 && matches!(platform.as_str(), "macos" | "windows" | "linux")
     );
-    let shim = source.package.contains("-shim-")
-        && source
-            .path
-            .components()
-            .any(|component| component.as_os_str().to_str().is_some_and(|part| part == "shim"));
-    let concrete_wgpu = source.package == "hl-gpu-wgpu"
-        && source
-            .path
-            .components()
-            .any(|component| component.as_os_str().to_str().is_some_and(|part| part == "gpu"))
-        && source
-            .path
-            .components()
-            .any(|component| component.as_os_str().to_str().is_some_and(|part| part == "hl-gpu-wgpu"));
-    executable || composition_root(source) || explicit_module || shim || concrete_wgpu
-}
-
-/// Reports whether the source belongs to a composition root, which owns environment capture.
-///
-/// `src/apps/*` is the application layer and `hl-engine` is the engine composition root; both
-/// are named as owners of configuration and environment capture. Nothing depends on them, so
-/// they are not the reusable code this rule protects. Locating the capture in `main.rs` is a
-/// file-layout choice, not the property that makes it legitimate.
-fn composition_root(source: &Source) -> bool {
-    source
-        .path
-        .components()
-        .zip(source.path.components().skip(1))
-        .any(|(layer, package)| layer.as_os_str() == "src" && package.as_os_str() == "apps")
+    executable || explicit_module
 }
 
 fn package_relative(source: &Source) -> Option<std::path::PathBuf> {

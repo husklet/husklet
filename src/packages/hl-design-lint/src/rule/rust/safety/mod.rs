@@ -12,7 +12,18 @@ use crate::{
 };
 
 /// Confines unsafe Rust to reviewed native and FFI boundaries.
-pub struct Boundary;
+#[derive(Default)]
+pub struct Boundary {
+    policy: crate::policy::BoundaryPolicy,
+}
+
+impl Boundary {
+    /// Creates the rule with repository-provided boundary selectors.
+    #[must_use]
+    pub fn new(policy: crate::policy::BoundaryPolicy) -> Self {
+        Self { policy }
+    }
+}
 
 impl Rule for Boundary {
     fn id(&self) -> &'static str {
@@ -28,8 +39,23 @@ impl Rule for Boundary {
         for source in workspace.sources() {
             let mut visitor = Syntax {
                 source,
-                boundary: boundary(source) || allows(&source.syntax.attrs),
-                application: application(source),
+                boundary: self.policy.allow.iter().any(|selector| {
+                    selector.matches(
+                        &source.package,
+                        &source.domain,
+                        &source.path,
+                        &filesystem_modules(source),
+                    )
+                }) || allows(&source.syntax.attrs),
+                module_names: &self.policy.module_names,
+                module_owner: self.policy.module_owners.iter().any(|selector| {
+                    selector.matches(
+                        &source.package,
+                        &source.domain,
+                        &source.path,
+                        &filesystem_modules(source),
+                    )
+                }),
                 ffi_depth: 0,
                 allow_depth: 0,
                 macro_depth: 0,
@@ -45,7 +71,8 @@ impl Rule for Boundary {
 struct Syntax<'a> {
     source: &'a Source,
     boundary: bool,
-    application: bool,
+    module_names: &'a [String],
+    module_owner: bool,
     ffi_depth: usize,
     allow_depth: usize,
     macro_depth: usize,
@@ -96,7 +123,7 @@ impl Syntax<'_> {
 
 impl<'ast> Visit<'ast> for Syntax<'_> {
     fn visit_item_mod(&mut self, module: &'ast ItemMod) {
-        let ffi = self.application && module.ident == "ffi";
+        let ffi = self.module_owner && self.module_names.iter().any(|name| module.ident == name);
         self.ffi_depth += usize::from(ffi);
         let allow = self.enter(&module.attrs);
         syn::visit::visit_item_mod(self, module);
@@ -181,19 +208,15 @@ impl<'ast> Visit<'ast> for Syntax<'_> {
     }
 }
 
-fn boundary(source: &Source) -> bool {
-    let components = source
+fn filesystem_modules(source: &Source) -> Vec<String> {
+    source
         .path
         .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>();
-    components.windows(2).any(|components| components == ["src", "native"])
-        || (source.package == "hl-engine" && components.windows(2).any(|components| components == ["src", "ffi"]))
-        || components.windows(4).any(|components| {
-            matches!(components[0], "app" | "apps")
-                && components[2] == "src"
-                && (components[3] == "ffi.rs" || components[3] == "ffi")
-        })
+        .filter_map(|part| part.as_os_str().to_str())
+        .skip_while(|part| *part != "src")
+        .skip(1)
+        .map(|part| part.trim_end_matches(".rs").to_owned())
+        .collect()
 }
 
 /// Recognises the compiler-enforced opt-out from the workspace `unsafe_code = "deny"` policy.
@@ -207,17 +230,6 @@ fn allows(attributes: &[Attribute]) -> bool {
                     .any(|token| matches!(token, TokenTree::Ident(ident) if ident == "unsafe_code"))
             })
     })
-}
-
-fn application(source: &Source) -> bool {
-    let components = source
-        .path
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>();
-    components
-        .windows(2)
-        .any(|components| components[0] == "src" && matches!(components[1], "app" | "apps"))
 }
 
 /// Start of the comment block that runs unbroken up to `line`, so the window below is measured from

@@ -13,7 +13,18 @@ use crate::{
 };
 
 /// Prevents host process execution from leaking outside platform boundaries.
-pub struct PlatformCommand;
+#[derive(Default)]
+pub struct PlatformCommand {
+    policy: crate::policy::BoundaryPolicy,
+}
+
+impl PlatformCommand {
+    /// Creates the rule with repository-provided boundary selectors.
+    #[must_use]
+    pub fn new(policy: crate::policy::BoundaryPolicy) -> Self {
+        Self { policy }
+    }
+}
 
 impl Rule for PlatformCommand {
     fn id(&self) -> &'static str {
@@ -27,7 +38,7 @@ impl Rule for PlatformCommand {
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         for source in workspace.sources() {
-            let mut visitor = Commands::new(source);
+            let mut visitor = Commands::new(source, &self.policy);
             visitor.visit_file(&source.syntax);
             findings.extend(visitor.findings);
         }
@@ -42,10 +53,11 @@ struct Commands<'a> {
     test_depth: usize,
     staged: HashMap<String, Staged>,
     findings: Vec<Finding>,
+    policy: &'a crate::policy::BoundaryPolicy,
 }
 
 impl<'a> Commands<'a> {
-    fn new(source: &'a Source) -> Self {
+    fn new(source: &'a Source, policy: &'a crate::policy::BoundaryPolicy) -> Self {
         Self {
             source,
             aliases: HashMap::new(),
@@ -53,6 +65,7 @@ impl<'a> Commands<'a> {
             test_depth: 0,
             staged: HashMap::new(),
             findings: Vec::new(),
+            policy,
         }
     }
 
@@ -64,12 +77,14 @@ impl<'a> Commands<'a> {
                 .modules
                 .iter()
                 .any(|module| matches!(module.as_str(), "adapter" | "adapters" | "platform" | "host"))
-            || (self.source.package == "hl-engine"
-                && (self
-                    .modules
-                    .first()
-                    .is_some_and(|module| matches!(module.as_str(), "native" | "platform"))
-                    || self.source.path.file_name().is_some_and(|name| name == "main.rs")))
+            || self.policy.allow.iter().any(|selector| {
+                selector.matches(
+                    &self.source.package,
+                    &self.source.domain,
+                    &self.source.path,
+                    &self.modules,
+                )
+            })
     }
 
     fn program_path(&self, call: &ExprCall) -> Option<String> {

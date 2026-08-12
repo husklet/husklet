@@ -15,7 +15,25 @@ use crate::{
 mod tests;
 
 /// Rejects relative paths that leave the repository and `include!` sources owned by another directory.
-pub struct Repository;
+pub struct Repository {
+    ignored_directories: Vec<String>,
+}
+
+impl Repository {
+    /// Creates the rule with traversal exclusions.
+    #[must_use]
+    pub fn new(policy: &crate::policy::SourcePolicy) -> Self {
+        Self {
+            ignored_directories: policy.ignored_directories.clone(),
+        }
+    }
+}
+
+impl Default for Repository {
+    fn default() -> Self {
+        Self::new(&crate::policy::SourcePolicy::default())
+    }
+}
 
 impl Rule for Repository {
     fn id(&self) -> &'static str {
@@ -29,7 +47,7 @@ impl Rule for Repository {
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut files = Vec::new();
         for path in workspace.paths() {
-            collect(path, &mut files).map_err(|error| LintError::io("walk", path, error))?;
+            collect(path, &mut files, &self.ignored_directories).map_err(|error| LintError::io("walk", path, error))?;
         }
         files.sort();
         files.dedup();
@@ -44,7 +62,7 @@ impl Rule for Repository {
     }
 }
 
-fn collect(path: &Path, output: &mut Vec<PathBuf>) -> std::io::Result<()> {
+fn collect(path: &Path, output: &mut Vec<PathBuf>, ignored: &[String]) -> std::io::Result<()> {
     if path.symlink_metadata()?.file_type().is_symlink() {
         return Ok(());
     }
@@ -57,12 +75,12 @@ fn collect(path: &Path, output: &mut Vec<PathBuf>) -> std::io::Result<()> {
     if path
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, ".git" | "target" | "vendor" | "lint" | "hl-design-lint"))
+        .is_some_and(|name| ignored.iter().any(|value| value == name))
     {
         return Ok(());
     }
     for entry in fs::read_dir(path)? {
-        collect(&entry?.path(), output)?;
+        collect(&entry?.path(), output, ignored)?;
     }
     Ok(())
 }

@@ -25,7 +25,40 @@ fn findings(package: &str, layer: &str, relative: &str, source: &str) -> Vec<cra
     .unwrap();
     fs::write(&path, source).unwrap();
     let workspace = Workspace::load([PathBuf::from(&path)]).unwrap();
-    let values = Boundary.check(&workspace).unwrap();
+    let policy = crate::policy::BoundaryPolicy {
+        module_names: vec!["ffi".into()],
+        module_owners: vec![
+            crate::policy::SourceSelector {
+                domain: Some("app".into()),
+                ..Default::default()
+            },
+            crate::policy::SourceSelector {
+                domain: Some("apps".into()),
+                ..Default::default()
+            },
+            crate::policy::SourceSelector {
+                package: Some("hl-engine".into()),
+                ..Default::default()
+            },
+        ],
+        allow: vec![
+            crate::policy::SourceSelector {
+                path_contains: Some("/src/native/".into()),
+                ..Default::default()
+            },
+            crate::policy::SourceSelector {
+                domain: Some("apps".into()),
+                path_contains: Some("/src/ffi".into()),
+                ..Default::default()
+            },
+            crate::policy::SourceSelector {
+                package: Some("hl-engine".into()),
+                path_contains: Some("/src/ffi".into()),
+                ..Default::default()
+            },
+        ],
+    };
+    let values = Boundary::new(policy).check(&workspace).unwrap();
     fs::remove_dir_all(root).unwrap();
     values
 }

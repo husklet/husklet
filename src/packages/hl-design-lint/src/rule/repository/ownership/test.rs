@@ -23,17 +23,34 @@ fn fixture(domain: &str, package: &str) -> Workspace {
 
 #[test]
 fn rejects_runtime_audit_package() {
-    let findings = RuntimeTool.check(&fixture("runtime", "hl-syscall-audit")).unwrap();
+    let policy = crate::policy::OwnershipPolicy {
+        protected_domains: vec!["runtime".into()],
+        tool_contains: vec!["audit".into()],
+        ..Default::default()
+    };
+    let findings = RuntimeTool::new(policy)
+        .check(&fixture("runtime", "hl-syscall-audit"))
+        .unwrap();
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].rule, "runtime-tool-ownership");
 }
 
 #[test]
 fn permits_testing_owned_audit_module() {
-    assert!(RuntimeTool.check(&fixture("apps", "testing")).unwrap().is_empty());
+    assert!(
+        RuntimeTool::default()
+            .check(&fixture("apps", "testing"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
 fn permits_runtime_domain_package() {
-    assert!(RuntimeTool.check(&fixture("runtime", "hl-linux")).unwrap().is_empty());
+    assert!(
+        RuntimeTool::default()
+            .check(&fixture("runtime", "hl-linux"))
+            .unwrap()
+            .is_empty()
+    );
 }

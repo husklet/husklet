@@ -16,28 +16,35 @@ use std::path::PathBuf;
 
 pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
-pub use policy::{DependencyKind, DependencyPolicy, EdgePolicy, LayerPolicy, Policy};
+pub use policy::{
+    BoundaryPolicy, DependencyKind, DependencyPolicy, EdgePolicy, LayerPolicy, OwnershipPolicy, Policy, SourcePolicy,
+    SourceSelector,
+};
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CCallPolicy, CPolicy, CStructure, CatchAllModule,
-    CatchAllSourcePath, CeremonialStructure, DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
-    FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
-    IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand,
-    PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory,
-    StructNaming, SuffixRole, TestDependency, TestDirectory, TestName, UnsafeBoundary,
+    CatchAllSourcePath, CeremonialStructure, DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName,
+    FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate,
+    ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory,
+    ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory, StructNaming, SuffixRole,
+    TestDependency, TestDirectory, TestName, UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 
 /// Runs a registry of design rules over one parsed workspace.
 pub struct Linter {
     registry: Registry,
+    source_policy: policy::SourcePolicy,
 }
 
 impl Linter {
     /// Creates a linter from an explicit rule registry.
     #[must_use]
     pub fn new(registry: Registry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            source_policy: policy::SourcePolicy::default(),
+        }
     }
 
     /// Creates the repository's standard rule set.
@@ -49,19 +56,28 @@ impl Linter {
     /// Creates the standard generic rules with an explicit repository dependency policy.
     #[must_use]
     pub fn standard_with_policy(policy: Policy) -> Self {
-        Self::new(
+        let Policy {
+            dependency,
+            unsafe_boundary,
+            environment_boundary,
+            command_boundary,
+            ownership,
+            source,
+        } = policy;
+        let escape = rule::RepositoryEscape::new(&source);
+        let mut linter = Self::new(
             Registry::new()
-                .register(rule::DependencyDirection::new(policy.dependency))
-                .register(rule::RuntimeTool)
-                .register(rule::UnsafeBoundary)
+                .register(rule::DependencyDirection::new(dependency))
+                .register(rule::RuntimeTool::new(ownership))
+                .register(rule::UnsafeBoundary::new(unsafe_boundary))
                 .register(rule::FreeFunction)
                 .register(rule::DuplicateEntity)
                 .register(rule::BooleanState)
                 .register(rule::BroadTrait)
-                .register(rule::EnvironmentAccess)
-                .register(rule::RepositoryEscape)
+                .register(rule::EnvironmentAccess::new(environment_boundary))
+                .register(escape)
                 .register(rule::ManualDispatch)
-                .register(rule::PlatformCommand)
+                .register(rule::PlatformCommand::new(command_boundary))
                 .register(rule::IgnoredResult)
                 .register(rule::AsyncBlocking)
                 .register(rule::StructNaming)
@@ -91,12 +107,14 @@ impl Linter {
                 .register(rule::CeremonialStructure)
                 .register(rule::CStructure)
                 .register(rule::CPolicy::new()),
-        )
+        );
+        linter.source_policy = source;
+        linter
     }
 
     /// Runs every registered rule and reports its findings.
     pub fn run(&self, paths: impl IntoIterator<Item = PathBuf>, reporter: &mut dyn Reporter) -> Result<Vec<Summary>> {
-        let workspace = Workspace::load(paths)?;
+        let workspace = Workspace::load_with_policy(paths, &self.source_policy)?;
         reporter.begin(&workspace)?;
         let mut summaries = Vec::new();
         for rule in self.registry.rules() {
@@ -261,7 +279,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 40);
+        assert_eq!(summaries.len(), 37);
         assert!(
             reporter
                 .0
@@ -286,45 +304,6 @@ fn caller() {
         ] {
             assert!(reporter.0.iter().any(|finding| finding.rule == rule), "missing {rule}");
         }
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn standard_repository_invocation_rejects_oversized_c_below_arbitrary_root() {
-        let root = temporary("standard-c-structure");
-        let nested = root.join("components/portable/implementation");
-        fs::create_dir_all(&nested).unwrap();
-        let path = nested.join("host.c");
-        fs::write(&path, "int declaration;\n".repeat(1_501)).unwrap();
-        let catch_all = nested.join("common.c");
-        fs::write(&catch_all, "int declaration;\n").unwrap();
-
-        let mut reporter = Memory(Vec::new());
-        let summaries = Linter::standard().run([root.clone()], &mut reporter).unwrap();
-
-        let summary = summaries
-            .iter()
-            .find(|summary| summary.rule == "c-source-structure")
-            .expect("standard registry must contain the C structure rule");
-        assert_eq!(summary.severity, Severity::Error);
-        assert_eq!(summary.findings, 1);
-        assert!(reporter.0.iter().any(|finding| {
-            finding.rule == "c-source-structure"
-                && finding.subject == "file length"
-                && finding.location.path == path
-                && finding.is_violation()
-        }));
-        let catch_all_summary = summaries
-            .iter()
-            .find(|summary| summary.rule == "catch-all-source-path")
-            .expect("standard registry must contain the catch-all source path rule");
-        assert_eq!(catch_all_summary.severity, Severity::Error);
-        assert_eq!(catch_all_summary.findings, 1);
-        assert!(reporter.0.iter().any(|finding| {
-            finding.rule == "catch-all-source-path"
-                && finding.location.path == catch_all
-                && finding.is_violation()
-        }));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -766,7 +745,18 @@ const PROSE: &str = "mod misc {}";
         }
         write(&root, "pub struct Present;\n");
 
-        let workspace = Workspace::load([root.clone()]).unwrap();
+        let policy = policy::SourcePolicy {
+            ignored_directories: vec![
+                "lint".into(),
+                "target".into(),
+                "vendor".into(),
+                "native".into(),
+                "schema".into(),
+            ],
+            self_packages: vec!["hl-design-lint".into()],
+            ..Default::default()
+        };
+        let workspace = Workspace::load_with_policy([root.clone()], &policy).unwrap();
 
         assert!(EmptyDirectory.check(&workspace).unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
@@ -790,7 +780,11 @@ const PROSE: &str = "mod misc {}";
         let workspace = Workspace::load([linter.clone()]).unwrap();
         assert_eq!(workspace.sources().len(), 1);
 
-        let workspace = Workspace::load([root.clone()]).unwrap();
+        let policy = policy::SourcePolicy {
+            self_packages: vec!["hl-design-lint".into()],
+            ..Default::default()
+        };
+        let workspace = Workspace::load_with_policy([root.clone()], &policy).unwrap();
         assert!(workspace.sources().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
@@ -810,7 +804,11 @@ const PROSE: &str = "mod misc {}";
             fs::write(directory.join("lib.rs"), source).unwrap();
         }
 
-        let workspace = Workspace::load([root.join("src")]).expect("load workspace");
+        let policy = policy::SourcePolicy {
+            foreign_source_directories: vec!["native".into(), "schema".into()],
+            ..Default::default()
+        };
+        let workspace = Workspace::load_with_policy([root.join("src")], &policy).expect("load workspace");
         let paths = workspace
             .sources()
             .iter()

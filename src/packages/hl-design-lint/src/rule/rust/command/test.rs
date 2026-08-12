@@ -27,7 +27,15 @@ fn findings_in(package_name: &str, source: &str, relative: &str) -> Vec<crate::F
     .expect("write manifest");
     fs::write(&path, source).expect("write fixture");
     let workspace = crate::source::Workspace::load([PathBuf::from(&path)]).expect("parse fixture");
-    let values = PlatformCommand.check(&workspace).expect("run rule");
+    let policy = crate::policy::BoundaryPolicy {
+        allow: vec![crate::policy::SourceSelector {
+            package: Some("hl-engine".into()),
+            module_prefix: vec!["native".into()],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let values = PlatformCommand::new(policy).check(&workspace).expect("run rule");
     fs::remove_dir_all(root).expect("remove fixture");
     values
 }

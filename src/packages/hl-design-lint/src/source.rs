@@ -69,23 +69,32 @@ pub struct Workspace {
     empty_directories: Vec<PathBuf>,
     single_file_directories: Vec<(PathBuf, PathBuf)>,
     paths: Vec<PathBuf>,
+    policy: crate::policy::SourcePolicy,
 }
 
 impl Workspace {
     /// Discovers, reads, and parses Rust sources once.
     pub fn load(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self> {
+        Self::load_with_policy(paths, &crate::policy::SourcePolicy::default())
+    }
+
+    pub(crate) fn load_with_policy(
+        paths: impl IntoIterator<Item = PathBuf>,
+        policy: &crate::policy::SourcePolicy,
+    ) -> Result<Self> {
         let paths = paths.into_iter().collect::<Vec<_>>();
         let mut files = Vec::new();
         let mut empty_directories = Vec::new();
         let mut single_file_directories = Vec::new();
         for path in &paths {
-            let include_linter = explicit_linter(path);
-            rust_files(path, &mut files, include_linter).map_err(|error| LintError::io("walk", path, error))?;
+            let include_linter = explicit_self_package(path, policy);
+            rust_files(path, &mut files, include_linter, policy).map_err(|error| LintError::io("walk", path, error))?;
             directory_shapes(
                 path,
                 &mut empty_directories,
                 &mut single_file_directories,
                 include_linter,
+                policy,
             )
             .map_err(|error| LintError::io("walk", path, error))?;
         }
@@ -103,6 +112,7 @@ impl Workspace {
             empty_directories,
             single_file_directories,
             paths,
+            policy: policy.clone(),
         })
     }
 
@@ -139,7 +149,7 @@ impl Workspace {
     pub(crate) fn source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         for path in &self.paths {
-            source_files(path, &mut files)?;
+            source_files(path, &mut files, true, &self.policy)?;
         }
         files.sort();
         files.dedup();
@@ -281,8 +291,16 @@ fn parse_cfg_items(list: &syn::MetaList) -> Option<Punctuated<Meta, Token![,]>> 
         .ok()
 }
 
-fn rust_files(path: &Path, files: &mut Vec<PathBuf>, include_linter: bool) -> io::Result<()> {
-    if (!include_linter && is_linter(path)) || is_foreign_source(path) || is_external_corpus(path) {
+fn rust_files(
+    path: &Path,
+    files: &mut Vec<PathBuf>,
+    include_linter: bool,
+    policy: &crate::policy::SourcePolicy,
+) -> io::Result<()> {
+    if (!include_linter && is_self_package(path, policy))
+        || is_foreign_source(path, policy)
+        || is_ignored_subtree(path, policy)
+    {
         return Ok(());
     }
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
@@ -297,25 +315,34 @@ fn rust_files(path: &Path, files: &mut Vec<PathBuf>, include_linter: bool) -> io
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Ok(());
     };
-    if matches!(name, ".git" | "target" | "vendor") || (!include_linter && name == "hl-design-lint") {
+    if policy.ignored_directories.iter().any(|ignored| ignored == name)
+        || (!include_linter && policy.self_packages.iter().any(|package| package == name))
+    {
         return Ok(());
     }
     let mut entries = fs::read_dir(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
     entries.sort_by_key(std::fs::DirEntry::path);
     for entry in entries {
-        rust_files(&entry.path(), files, include_linter)?;
+        rust_files(&entry.path(), files, include_linter, policy)?;
     }
     Ok(())
 }
 
-fn source_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+fn source_files(
+    path: &Path,
+    files: &mut Vec<PathBuf>,
+    explicitly_requested: bool,
+    policy: &crate::policy::SourcePolicy,
+) -> Result<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| LintError::io("inspect", path, error))?;
     if metadata.file_type().is_symlink() {
         return Ok(());
     }
     if metadata.is_file() {
         let extension = path.extension().and_then(|value| value.to_str());
-        if matches!(extension, Some("rs" | "c" | "h" | "m" | "mm")) {
+        if matches!(extension, Some("rs" | "c" | "h" | "m" | "mm"))
+            && (explicitly_requested || below_architecture_root(path))
+        {
             files.push(path.to_owned());
         }
         return Ok(());
@@ -323,7 +350,7 @@ fn source_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     if path
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, ".git" | "target" | "vendor"))
+        .is_some_and(|name| policy.ignored_directories.iter().any(|ignored| ignored == name))
     {
         return Ok(());
     }
@@ -333,9 +360,14 @@ fn source_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         .map_err(|error| LintError::io("read source directory", path, error))?;
     entries.sort_by_key(std::fs::DirEntry::path);
     for entry in entries {
-        source_files(&entry.path(), files)?;
+        source_files(&entry.path(), files, false, policy)?;
     }
     Ok(())
+}
+
+fn below_architecture_root(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component.as_os_str().to_str(), Some("src" | "tests")))
 }
 
 fn directory_shapes(
@@ -343,8 +375,10 @@ fn directory_shapes(
     empty: &mut Vec<PathBuf>,
     single: &mut Vec<(PathBuf, PathBuf)>,
     include_linter: bool,
+    policy: &crate::policy::SourcePolicy,
 ) -> io::Result<()> {
-    if excluded(path, include_linter) || fs::symlink_metadata(path)?.file_type().is_symlink() || path.is_file() {
+    if excluded(path, include_linter, policy) || fs::symlink_metadata(path)?.file_type().is_symlink() || path.is_file()
+    {
         return Ok(());
     }
 
@@ -361,7 +395,7 @@ fn directory_shapes(
     }
     for entry in entries {
         if entry.file_type()?.is_dir() {
-            directory_shapes(&entry.path(), empty, single, include_linter)?;
+            directory_shapes(&entry.path(), empty, single, include_linter, policy)?;
         }
     }
     Ok(())
@@ -379,49 +413,58 @@ fn placeholder(path: &Path) -> bool {
         .is_some_and(|name| matches!(name, ".gitkeep" | ".keep" | ".DS_Store"))
 }
 
-fn excluded(path: &Path, include_linter: bool) -> bool {
-    if (!include_linter && is_linter(path)) || is_foreign_source(path) || is_external_corpus(path) {
+fn excluded(path: &Path, include_linter: bool, policy: &crate::policy::SourcePolicy) -> bool {
+    if (!include_linter && is_self_package(path, policy))
+        || is_foreign_source(path, policy)
+        || is_ignored_subtree(path, policy)
+    {
         return true;
     }
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, ".git" | "target" | "vendor" | "lint"))
+        .is_some_and(|name| policy.ignored_directories.iter().any(|ignored| ignored == name))
 }
 
-fn is_external_corpus(path: &Path) -> bool {
+fn is_ignored_subtree(path: &Path, policy: &crate::policy::SourcePolicy) -> bool {
     path.ancestors().any(|ancestor| {
-        ancestor.join(".hl-external-corpus").is_file() || ancestor.join(".hl-generated-artifacts").is_file()
+        policy
+            .ignored_markers
+            .iter()
+            .any(|marker| ancestor.join(marker).is_file())
     })
 }
 
-fn is_foreign_source(path: &Path) -> bool {
+fn is_foreign_source(path: &Path, policy: &crate::policy::SourcePolicy) -> bool {
     let mut components = path.components().filter_map(|component| match component {
         std::path::Component::Normal(value) => value.to_str(),
         _ => None,
     });
     while let Some(component) = components.next() {
         if component == "src" {
-            return components
-                .next()
-                .is_some_and(|layer| matches!(layer, "native" | "schema"));
+            return components.next().is_some_and(|layer| {
+                policy
+                    .foreign_source_directories
+                    .iter()
+                    .any(|directory| directory == layer)
+            });
         }
     }
     false
 }
 
-fn is_linter(path: &Path) -> bool {
+fn is_self_package(path: &Path, policy: &crate::policy::SourcePolicy) -> bool {
     path.components().any(|component| {
         component
             .as_os_str()
             .to_str()
-            .is_some_and(|name| name == "hl-design-lint")
+            .is_some_and(|name| policy.self_packages.iter().any(|package| package == name))
     })
 }
 
-fn explicit_linter(path: &Path) -> bool {
+fn explicit_self_package(path: &Path, policy: &crate::policy::SourcePolicy) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "hl-design-lint")
+        .is_some_and(|name| policy.self_packages.iter().any(|package| package == name))
         && path.join("Cargo.toml").is_file()
 }
 
@@ -458,7 +501,11 @@ mod tests {
         fs::create_dir_all(&imported).unwrap();
         fs::write(root.join("oracle/.hl-external-corpus"), b"external\n").unwrap();
         fs::write(imported.join("fixture.c"), b"int main(void) { return 0; }\n").unwrap();
-        let workspace = Workspace::load([root.clone()]).unwrap();
+        let policy = crate::policy::SourcePolicy {
+            ignored_markers: vec![".hl-external-corpus".into()],
+            ..Default::default()
+        };
+        let workspace = Workspace::load_with_policy([root.clone()], &policy).unwrap();
         assert!(workspace.single_file_directories().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
@@ -470,7 +517,11 @@ mod tests {
         let generated = root.join("work/empty");
         fs::create_dir_all(&generated).unwrap();
         fs::write(root.join("work/.hl-generated-artifacts"), b"generated\n").unwrap();
-        let workspace = Workspace::load([root.clone()]).unwrap();
+        let policy = crate::policy::SourcePolicy {
+            ignored_markers: vec![".hl-generated-artifacts".into()],
+            ..Default::default()
+        };
+        let workspace = Workspace::load_with_policy([root.clone()], &policy).unwrap();
         assert!(workspace.empty_directories().is_empty());
         fs::remove_dir_all(root).unwrap();
     }

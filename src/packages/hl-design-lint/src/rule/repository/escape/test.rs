@@ -25,7 +25,7 @@ fn findings(relative: &str, source: &str) -> Vec<crate::Finding> {
     .unwrap();
     fs::write(&path, source).unwrap();
     let workspace = Workspace::load([PathBuf::from(&path)]).unwrap();
-    let values = Repository.check(&workspace).unwrap();
+    let values = Repository::default().check(&workspace).unwrap();
     fs::remove_dir_all(root).unwrap();
     values
 }

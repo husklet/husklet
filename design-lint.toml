@@ -119,3 +119,52 @@ kinds = ["development"]
 [[dependency.edges]]
 sources = ["testing"]
 targets = ["hl-container", "hl-design", "hl-engine", "hl-images", "hl-log", "hl-process"]
+
+[unsafe_boundary]
+module_names = ["ffi"]
+[[unsafe_boundary.module_owners]]
+domain = "apps"
+[[unsafe_boundary.module_owners]]
+package = "hl-engine"
+[[unsafe_boundary.allow]]
+path_contains = "/src/native/"
+[[unsafe_boundary.allow]]
+package = "hl-engine"
+path_contains = "/src/ffi"
+[[unsafe_boundary.allow]]
+domain = "apps"
+path_contains = "/src/ffi"
+
+[environment_boundary]
+[[environment_boundary.allow]]
+domain = "apps"
+[[environment_boundary.allow]]
+package = "hl-engine"
+[[environment_boundary.allow]]
+package = "hl-gpu-wgpu"
+[[environment_boundary.allow]]
+path_contains = "/shim/"
+
+[command_boundary]
+[[command_boundary.allow]]
+package = "hl-engine"
+module_prefix = ["native"]
+[[command_boundary.allow]]
+package = "hl-engine"
+module_prefix = ["platform"]
+[[command_boundary.allow]]
+package = "hl-engine"
+file = "main.rs"
+
+[ownership]
+protected_domains = ["runtime"]
+tool_names = ["testing"]
+tool_contains = ["audit"]
+tool_suffixes = ["-test", "-tests", "-tool", "-tools"]
+destination_domain = "src/apps"
+
+[source]
+ignored_directories = [".git", "target", "vendor", "lint"]
+ignored_markers = [".hl-external-corpus", ".hl-generated-artifacts"]
+self_packages = ["hl-design-lint"]
+foreign_source_directories = ["native", "schema"]

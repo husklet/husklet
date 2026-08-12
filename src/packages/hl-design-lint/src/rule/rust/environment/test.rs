@@ -24,7 +24,14 @@ fn findings_under(layer: &str, package_name: &str, source: &str, relative: &str)
     .expect("write manifest");
     fs::write(&path, source).expect("write fixture");
     let workspace = crate::source::Workspace::load([PathBuf::from(&path)]).expect("parse fixture");
-    let values = Access.check(&workspace).expect("run rule");
+    let policy = crate::policy::BoundaryPolicy {
+        allow: vec![crate::policy::SourceSelector {
+            domain: Some("apps".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let values = Access::new(policy).check(&workspace).expect("run rule");
     fs::remove_dir_all(root).expect("remove fixture");
     values
 }
