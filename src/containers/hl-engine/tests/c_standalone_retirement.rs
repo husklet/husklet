@@ -146,6 +146,42 @@ fn every_production_input_is_independent_of_sibling_engines() {
 }
 
 #[test]
+fn repository_gates_keep_native_and_compatibility_coverage() {
+    let root = repository_root();
+    let makefile = fs::read_to_string(root.join("Makefile")).expect("read Makefile");
+    assert!(
+        makefile.contains("src/runtime/native/exec/test/memory_lifecycle.sh || status=1"),
+        "the normal gate must aggregate the native memory lifecycle result"
+    );
+    for required in [
+        ".PHONY: all check design-lint gate gate-app gate-compat gate-fixture",
+        "gate-compat:",
+        "cargo build --release -p engine -p testing --bins --locked --offline",
+        "HL_TEST_ENGINE_APP_BIN_DIR=\"$(CURDIR)/target/release\"",
+        "--backend-receipt",
+        "\"backend\":\"retained-c\"",
+        "mktemp -d \"$(CURDIR)/target/testing/runtime/gate.XXXXXX\"",
+        "test ! -e \"$$results\"",
+        "--baseline tests/runtime/baseline.tsv",
+        "--engine-profile release",
+    ] {
+        assert!(
+            makefile.contains(required),
+            "compatibility gate lost required contract: {required}"
+        );
+    }
+    let flake = fs::read_to_string(root.join("flake.nix")).expect("read flake");
+    assert!(
+        flake.contains("`make gate-app`"),
+        "flake must name the real application gate"
+    );
+    assert!(
+        !flake.contains("gate-gui"),
+        "flake references the nonexistent gate-gui target"
+    );
+}
+
+#[test]
 fn production_native_sources_have_one_authoritative_root() {
     let root = repository_root();
     assert_eq!(

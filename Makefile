@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint gate gate-app gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci test-compiles containers engine app dmg install uninstall clean bench-product-ab-prepare bench-product-ab bench-direct-ab bench-workloads
+.PHONY: all check design-lint gate gate-app gate-compat gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci test-compiles containers engine app dmg install uninstall clean bench-product-ab-prepare bench-product-ab bench-direct-ab bench-workloads
 
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
@@ -80,7 +80,30 @@ gate:
 	  cargo clippy -p husklet --all-targets --features gui --locked --offline -- -D warnings || status=1; \
 	  cargo test --workspace --all-targets --locked --offline --no-fail-fast || status=1; \
 	  cargo test --workspace --doc --locked --offline || status=1; \
+	  src/runtime/native/exec/test/memory_lifecycle.sh || status=1; \
 	  exit $$status'
+
+# The full runtime compatibility sweep is intentionally separate from `gate`: it executes thousands
+# of guest cases and is evidence for a release-sized engine, not a minute-scale PR check. Every run
+# gets a fresh directory and a nonexistent ledger path, so the resumable runner cannot replay an old
+# result set. The directory is retained after the run for diagnosis and comparison.
+COMPAT_JOBS ?= 4
+gate-compat:
+	$(NIX_DEV) bash -euc '\
+	  cargo build --release -p engine -p testing --bins --locked --offline; \
+	  export HL_TEST_ENGINE_APP_BIN_DIR="$(CURDIR)/target/release"; \
+	  for worker in hl-aarch64 hl-x86_64; do \
+	    "$$HL_TEST_ENGINE_APP_BIN_DIR/$$worker" --backend-receipt \
+	      | grep -F '\''"backend":"retained-c"'\'' >/dev/null; \
+	  done; \
+	  mkdir -p "$(CURDIR)/target/testing/runtime"; \
+	  run_dir="$$(mktemp -d "$(CURDIR)/target/testing/runtime/gate.XXXXXX")"; \
+	  results="$$run_dir/results.tsv"; \
+	  test ! -e "$$results"; \
+	  echo "runtime compatibility results: $$results"; \
+	  target/release/testing runtime --jobs "$(COMPAT_JOBS)" \
+	    --results "$${results#$(CURDIR)/}" --baseline tests/runtime/baseline.tsv \
+	    --engine-profile release'
 
 # The Alpine-fixture tests, which the workspace sweep never runs because they are `#[ignore]`d behind
 # HL_ALPINE_ARCHIVE. Deliberately not part of `gate`: they need the fixture and a host `cc` that can
