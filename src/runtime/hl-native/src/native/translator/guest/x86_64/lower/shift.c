@@ -17,6 +17,65 @@
 #include "../cpu.h"
 #include "../encoding.h"
 
+static int lower_rotate_carry(struct insn *I, uint64_t next, int width, int operation, int by_cl, int by_one) {
+    if (operation != 2 && operation != 3) return TX_FALL;
+    if (!by_cl) {
+        int mask = width == 8 ? 63 : 31;
+        emit_rcl_rcr(I, next, width, operation == 3, by_one ? 1 : ((int)I->imm & mask));
+        return TX_NEXT;
+    }
+    uint64_t descriptor = (uint64_t)width | ((uint64_t)(operation == 3) << 8);
+    if (I->is_mem) {
+        emit_ea(I, next);
+        emit_memory_guard(17, (uint64_t)width, next - (uint64_t)I->len, X86_SOFT_READ | X86_SOFT_WRITE);
+        if (emit_soft_memory_active()) {
+            emit_soft_store_commit((uint64_t)width);
+            e_ldr(17, 28, OFF_BUS_EA);
+        }
+        e_str(17, 28, OFF_X87EA);
+        descriptor |= 1ull << 9;
+    } else {
+        int high_byte = width == 1 && !I->has_rex && I->rm_reg >= 4 && I->rm_reg <= 7;
+        int register_number = high_byte ? I->rm_reg - 4 : I->rm_reg;
+        descriptor |= ((uint64_t)high_byte << 10) | ((uint64_t)(register_number & 0x1f) << 16);
+    }
+    e_movconst(16, descriptor);
+    e_str(16, 28, OFF_DIVOP);
+    emit_exit_const(next, R_RCL);
+    return TX_BREAK;
+}
+
+static int lower_rotate_narrow(struct insn *I, const hl_x86_shift_state *state, int raw, int width_bytes,
+                               int operation, int by_cl, int by_one) {
+    if ((operation != 0 && operation != 1) || width_bytes >= 4) return TX_FALL;
+    int width = 8 * width_bytes;
+    e_uxt(16, raw, width_bytes);
+    e_bfi(16, 16, width, width, 0);
+    if (width_bytes == 1) e_bfi(16, 16, 16, 16, 0);
+    if (by_cl) {
+        e_movconst(19, (uint64_t)(width - 1));
+        e_rrr(A_AND, 20, RCX, 19, 0, 0);
+        if (operation == 0) {
+            e_movconst(19, (uint64_t)width);
+            e_rrr(A_SUB, 20, 19, 20, 0, 0);
+            e_movconst(19, (uint64_t)(width - 1));
+            e_rrr(A_AND, 20, 20, 19, 0, 0);
+        }
+        e_shv(S_RORV, 16, 16, 20, 0);
+        e_rot_flags_cl(16, operation, width);
+    } else {
+        int count = by_one ? 1 : (int)I->imm;
+        int effective = ((count % width) + width) % width;
+        int right = operation == 1 ? effective : (width - effective) % width;
+        if (right) e_ror_i(16, 16, right, 0);
+        int masked = count & 0x1f;
+        if (masked && !state->output_flags_dead)
+            e_rot_flags_const(16, operation, width, effective ? effective : width);
+    }
+    rm_store_after_guard(I, width_bytes, 16);
+    return TX_NEXT;
+}
+
 int hl_x86_lower_shift(struct insn *I, uint64_t next, const hl_x86_shift_state *state) {
     uint8_t op = I->op;
     int sf = I->opsize == 8;
@@ -26,82 +85,11 @@ int hl_x86_lower_shift(struct insn *I, uint64_t next, const hl_x86_shift_state *
         if (k == 6) k = 4; // SAL == SHL
         int w = (op & 1) ? I->opsize : 1, mem;
         int bycl = (op == 0xD2 || op == 0xD3), by1 = (op == 0xD0 || op == 0xD1);
-        // RCL(/2)/RCR(/3) through carry: the constant-count forms (by-1, immediate) are emitted here;
-        // the by-CL form still defers (caught by the unimpl check below).
-        if ((k == 2 || k == 3) && !bycl) {
-            int cmask = (w == 8) ? 63 : 31;
-            emit_rcl_rcr(I, next, w, k == 3, by1 ? 1 : ((int)I->imm & cmask));
-            return TX_NEXT;
-        }
-        if (k == 2 || k == 3) {
-            // RCL/RCR by CL: the count MOD (width+1) reduction (mod 9/17 for byte/word) is awkward in
-            // emitted code, so exit to do_rcl (R_RCL) which does the whole rotate + CF/OF in C. The
-            // lazy-flag pre-pass in translate_block has already materialized cpu->nzcv, so do_rcl's
-            // CF carry-in (and the following block's flag reload) sees the canonical membank flags.
-            uint64_t desc = (uint64_t)w | ((uint64_t)(k == 3) << 8);
-            if (I->is_mem) {
-                emit_ea(I, next);
-                emit_memory_guard(17, (uint64_t)w, next - (uint64_t)I->len, X86_SOFT_READ | X86_SOFT_WRITE);
-                if (emit_soft_memory_active()) {
-                    emit_soft_store_commit((uint64_t)w);
-                    e_ldr(17, 28, OFF_BUS_EA);
-                }
-                e_str(17, 28, OFF_X87EA); // stash the EA for do_rcl to dereference
-                desc |= (1ull << 9);
-            } else {
-                int hi8 = (w == 1 && !I->has_rex && I->rm_reg >= 4 && I->rm_reg <= 7);
-                int rr = hi8 ? (I->rm_reg - 4) : I->rm_reg; // AH/CH/DH/BH -> base reg RAX/RCX/RDX/RBX
-                desc |= ((uint64_t)(hi8 ? 1 : 0) << 10) | ((uint64_t)(rr & 0x1f) << 16);
-            }
-            e_movconst(16, desc);
-            e_str(16, 28, OFF_DIVOP);
-            emit_exit_const(next, R_RCL);
-            return TX_BREAK; // block ends at the exit (rip = next; do_rcl resumes there)
-        } // RCL/RCR by CL -> C helper
+        int carry_rotation = lower_rotate_carry(I, next, w, k, bycl, by1);
+        if (carry_rotation != TX_FALL) return carry_rotation;
         int raw = rm_load_access(I, next, w, &mem, X86_SOFT_READ | X86_SOFT_WRITE);
-        if ((k == 0 || k == 1) && w < 4) {        // 8/16-bit ROL/ROR -- rotate WITHIN the operand width
-            int width = 8 * w;                    // (a 64-bit ROR would wrap the wrong bits, e.g. rolw $8)
-            e_uxt(16, raw, w);                    // x16 = zero-extended operand (low `width` bits)
-            e_bfi(16, 16, width, width, 0);       // replicate v -> [2w-1:w] (16-bit: now 32 bits = v|v)
-            if (w == 1) e_bfi(16, 16, 16, 16, 0); // byte: replicate the pair again -> 4 copies fill 32 bits
-            if (bycl) {                           // count = CL masked to the operand width
-                e_movconst(19, (uint64_t)(width - 1));
-                e_rrr(A_AND, 20, RCX, 19, 0, 0); // x20 = CL & (width-1)
-                if (k == 0) {
-                    e_movconst(19, (uint64_t)width);
-                    e_rrr(A_SUB, 20, 19, 20, 0, 0); // ROL by n == ROR by (width-n)
-                    e_movconst(19, (uint64_t)(width - 1));
-                    e_rrr(A_AND, 20, 20, 19, 0, 0);
-                }
-                e_shv(S_RORV, 16, 16, 20, 0); // 32-bit RORV of the replicated value -> low `width` bits correct
-            } else {
-                int ce = ((((by1 ? 1 : (int)I->imm) % width) + width) % width);
-                int rr = (k == 1) ? ce : (width - ce) % width;
-                if (rr) e_ror_i(16, 16, rr, 0); // 32-bit ROR; low `width` bits are the answer
-            }
-            // x86 rotates leave SF/ZF/PF/AF unchanged but DO set CF (and OF for a 1-bit rotate).
-            if (bycl) {
-                e_rot_flags_cl(16, k, width);
-            } else {
-                int rc = by1 ? 1 : (int)I->imm;
-                int ce = (((rc % width) + width) % width);
-                // x86 masks the rotate count to 5 bits for byte/word; CF is set whenever that masked
-                // count (mc) is nonzero, EVEN when the rotate amount (ce = mc MOD width) is 0. E.g.
-                // `rolb $8` rotates by 8%8==0 (value unchanged) but still sets CF=LSB(result). Gating on
-                // ce alone left CF stale for immediate multiples of the width (the CL path already fixes
-                // this via the true cmask in e_rot_flags_cl). Pass width (>1) as the count when ce==0 so
-                // OF stays untouched (undefined for a multi-bit rotate; it can never be a 1-bit rotate).
-                int mc = rc & 0x1f;
-                // Dead-flag elision: an IMMEDIATE ROL/ROR only ever writes CF (and OF for a 1-bit
-                // rotate) -- SF/ZF/PF/AF are left untouched. When the whole architectural flag output
-                // is provably dead before any read at every successor (state->output_flags_dead, the
-                // same guest-byte liveness scan the SHL/SHR path uses), skip the CF/OF synthesis
-                // entirely; the rotated value in x16 is final. NOSHIFTFLAGELIDE=1 forces the gate off.
-                if (mc && !state->output_flags_dead) e_rot_flags_const(16, k, width, ce ? ce : width);
-            }
-            rm_store_after_guard(I, w, 16); // stores low w bytes
-            return TX_NEXT;
-        }
+        int narrow_rotation = lower_rotate_narrow(I, state, raw, w, k, bycl, by1);
+        if (narrow_rotation != TX_FALL) return narrow_rotation;
         int ssf = (w >= 4) ? sf : 1; // operate 64-bit on extended byte/word
         // register residency: an IMMEDIATE/by-1 SHL/SHR/SAR whose r/m is a REGISTER at width>=4
         // shifts straight into the guest home (src==dst==raw==I->rm_reg), skipping the raw->x16 copy
