@@ -442,10 +442,10 @@ static int32_t hl_production_entry(void *opaque) {
         context->config->executable == NULL ? HL_HOST_HANDLE_INVALID : context->config->executable->host_handle;
     const hl_engine_executable *spec = context->config->executable;
     hl_target_syscall_trap_install(context->syscall_context, context->syscall_dispatch);
-    int32_t result = hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
-                                        spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
-                                        context->config->main_image_plan, context->argc,
-                                        (char *const *)(uintptr_t)context->argv);
+    int32_t result =
+        hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
+                           spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
+                           context->config->main_image_plan, context->argc, (char *const *)(uintptr_t)context->argv);
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);

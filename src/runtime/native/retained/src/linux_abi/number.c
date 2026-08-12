@@ -362,8 +362,7 @@ static pthread_once_t x86_inverse_once = PTHREAD_ONCE_INIT;
 static void x86_inverse_init(void) {
     for (uint64_t guest = 0; guest <= HL_LINUX_CANONICAL_MAX; guest++) {
         uint64_t canonical = x86_number(guest);
-        if (canonical <= HL_LINUX_CANONICAL_MAX)
-            x86_guest_by_canonical[canonical] = (uint16_t)(guest + 1u);
+        if (canonical <= HL_LINUX_CANONICAL_MAX) x86_guest_by_canonical[canonical] = (uint16_t)(guest + 1u);
     }
 }
 

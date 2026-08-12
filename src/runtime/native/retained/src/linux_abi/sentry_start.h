@@ -9,8 +9,8 @@ struct hl_sentry_start {
     uint32_t token;
 };
 
-static inline int hl_sentry_start_reserve(
-    struct hl_sentry_start *starts, uint32_t count, const void *thread, uint32_t token) {
+static inline int hl_sentry_start_reserve(struct hl_sentry_start *starts, uint32_t count, const void *thread,
+                                          uint32_t token) {
     if (!thread || token == 0) return -EINVAL;
     for (uint32_t i = 0; i < count; i++)
         if (starts[i].thread == thread) return -EEXIST;
@@ -22,8 +22,8 @@ static inline int hl_sentry_start_reserve(
     return -EAGAIN;
 }
 
-static inline int hl_sentry_start_take(
-    struct hl_sentry_start *starts, uint32_t count, const void *thread, uint32_t *token) {
+static inline int hl_sentry_start_take(struct hl_sentry_start *starts, uint32_t count, const void *thread,
+                                       uint32_t *token) {
     for (uint32_t i = 0; i < count; i++)
         if (starts[i].thread == thread) {
             *token = starts[i].token;

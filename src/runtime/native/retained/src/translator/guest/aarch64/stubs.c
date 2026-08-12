@@ -222,9 +222,8 @@ static void emit_ibranch_ip2_ready(int rn, int ready) {
     g_cp += 8;
     *p_ldrt = 0x58000000u | (((uint32_t)((Lt - (uint8_t *)p_ldrt) / 4) & 0x7FFFFu) << 5) | (unsigned)other;
     *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)hash - (uint8_t *)p_cbnz) / 4) & 0x7FFFFu) << 5) | (unsigned)other;
-    *p_hash_miss = 0xB5000000u |
-                   (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_hash_miss) / 4) & 0x7FFFFu) << 5) |
-                   (unsigned)other;
+    *p_hash_miss =
+        0xB5000000u | (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_hash_miss) / 4) & 0x7FFFFu) << 5) | (unsigned)other;
     int64_t ao = Lt - (uint8_t *)p_adr;
     *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)(ao >> 2) & 0x7FFFFu) << 5) | 9u;
     pc_record_icsite(Lt);

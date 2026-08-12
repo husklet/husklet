@@ -464,9 +464,8 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
     if (config->flags != 0 || config->reserved != 0) return HL_STATUS_INVALID_ARGUMENT;
     if (config->payload_size != 0 && config->payload == NULL) return HL_STATUS_INVALID_ARGUMENT;
     if (config->payload_size != 0) return HL_STATUS_NOT_SUPPORTED;
-    if (borrow_options &&
-        (source_options == NULL || config->memory_limit != 0 || config->pid_limit != 0 || config->cpu_limit != 0 ||
-         config->box != NULL || hl_options_validate(source_options) != 0))
+    if (borrow_options && (source_options == NULL || config->memory_limit != 0 || config->pid_limit != 0 ||
+                           config->cpu_limit != 0 || config->box != NULL || hl_options_validate(source_options) != 0))
         return HL_STATUS_INVALID_ARGUMENT;
     if (config->executable != NULL &&
         (config->executable->abi != HL_ENGINE_ABI || config->executable->size < sizeof(*config->executable)))
@@ -477,14 +476,12 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
          (config->executable->ownership != HL_ENGINE_FD_TRANSFER &&
           config->executable->ownership != HL_ENGINE_FD_BORROW)))
         return HL_STATUS_INVALID_ARGUMENT;
-    if (config->main_image_plan != NULL &&
-        (config->main_image_plan->abi != HL_ENGINE_MAIN_IMAGE_PLAN_ABI ||
-         config->main_image_plan->size < sizeof(*config->main_image_plan)))
+    if (config->main_image_plan != NULL && (config->main_image_plan->abi != HL_ENGINE_MAIN_IMAGE_PLAN_ABI ||
+                                            config->main_image_plan->size < sizeof(*config->main_image_plan)))
         return HL_STATUS_ABI_MISMATCH;
-    if (config->main_image_plan != NULL &&
-        (config->main_image_plan->reserved != 0 ||
-         config->main_image_plan->link_end <= config->main_image_plan->link_start ||
-         (config->main_image_plan->kind != 1 && config->main_image_plan->kind != 2)))
+    if (config->main_image_plan != NULL && (config->main_image_plan->reserved != 0 ||
+                                            config->main_image_plan->link_end <= config->main_image_plan->link_start ||
+                                            (config->main_image_plan->kind != 1 && config->main_image_plan->kind != 2)))
         return HL_STATUS_INVALID_ARGUMENT;
     if (config->fd_binding_count != 0 && config->fd_bindings == NULL) return HL_STATUS_INVALID_ARGUMENT;
     status = hl_host_services_validate(host, HL_HOST_CAP_MEMORY | HL_HOST_CAP_CLOCK | HL_HOST_CAP_SYNC);
@@ -679,9 +676,10 @@ hl_status hl_engine_create_with_borrowed_options(const hl_engine_config *config,
     return hl_engine_create_with_options_mode(config, host, source_options, 1, out_engine);
 }
 
-hl_status hl_engine_create_with_borrowed_options_and_syscall_trap(
-    const hl_engine_config *config, const hl_host_services *host, const hl_options *source_options,
-    void *syscall_context, hl_syscall_trap_fn syscall_dispatch, hl_engine **out_engine) {
+hl_status
+hl_engine_create_with_borrowed_options_and_syscall_trap(const hl_engine_config *config, const hl_host_services *host,
+                                                        const hl_options *source_options, void *syscall_context,
+                                                        hl_syscall_trap_fn syscall_dispatch, hl_engine **out_engine) {
     hl_status status = hl_engine_create_with_options_mode(config, host, source_options, 1, out_engine);
     if (status == HL_STATUS_OK) {
         (*out_engine)->syscall_context = syscall_context;
@@ -721,10 +719,9 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
         hl_engine_unlock(engine);
         return HL_STATUS_NOT_SUPPORTED;
     }
-    status =
-        engine->backend->start_process(&engine->host, engine->box_initialized ? &engine->box : NULL, &engine->options,
-                                       &engine->config, (uint32_t)argc, argv, engine->syscall_context,
-                                       engine->syscall_dispatch, &process, &process_result);
+    status = engine->backend->start_process(
+        &engine->host, engine->box_initialized ? &engine->box : NULL, &engine->options, &engine->config, (uint32_t)argc,
+        argv, engine->syscall_context, engine->syscall_dispatch, &process, &process_result);
     if (status != HL_STATUS_OK) {
         hl_engine_lock(engine);
         engine->state = HL_ENGINE_FINISHED;

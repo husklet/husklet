@@ -8,6 +8,7 @@ include/hl/linux_abi.h
 include/hl/log.h
 include/hl/macos.h
 include/hl/network.h
+include/hl/syscall_trap.h
 src/core/bus.c
 src/core/bus.h
 src/core/checkpoint_channel.c

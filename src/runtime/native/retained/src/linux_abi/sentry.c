@@ -150,13 +150,13 @@ static int sentry_cpu_set_canonical(struct cpu *cpu, uint64_t canonical) {
 // per-process synthetic /proc file whose truth lives only in the worker -- see sentry_worker_proc_leaf)
 // and hands it over SCM_RIGHTS on this ring's control socketpair; the sentry installs it into the
 // worker's virtual fd table so every later read/lseek/close forwards exactly like a sentry-opened fd.
-#define SENTRY_OP_ADOPT 0xFFFFFFF9u       // a[0]=cloexec; ctl-socket carries the fd -> ret = the new virtual fd
-#define SENTRY_OP_THREAD_EXIT 0xFFFFFFF8u // release a CLOSE_RANGE_UNSHARE private table for this thread token
-#define SENTRY_OP_FORK_PREPARE 0xFFFFFFF7u // clone caller table now -> positive opaque snapshot id
-#define SENTRY_OP_FORK_CANCEL 0xFFFFFFF6u  // a[0]=snapshot id -> release a failed fork's prepared table
+#define SENTRY_OP_ADOPT 0xFFFFFFF9u          // a[0]=cloexec; ctl-socket carries the fd -> ret = the new virtual fd
+#define SENTRY_OP_THREAD_EXIT 0xFFFFFFF8u    // release a CLOSE_RANGE_UNSHARE private table for this thread token
+#define SENTRY_OP_FORK_PREPARE 0xFFFFFFF7u   // clone caller table now -> positive opaque snapshot id
+#define SENTRY_OP_FORK_CANCEL 0xFFFFFFF6u    // a[0]=snapshot id -> release a failed fork's prepared table
 #define SENTRY_OP_THREAD_PREPARE 0xFFFFFFF5u // a[0]=child token -> retain caller's exact table before pthread
 #define SENTRY_OP_THREAD_CANCEL 0xFFFFFFF4u  // a[0]=unused child token -> release its prepared binding
-#define SENTRY_OP_BIND 0xFFFFFFF3u // resolve/create caller binding before an irreversible local operation
+#define SENTRY_OP_BIND 0xFFFFFFF3u           // resolve/create caller binding before an irreversible local operation
 
 // The guest passes LINUX flag values, but this engine is a macOS binary whose <fcntl.h> O_CLOEXEC differs
 // (0x1000000 vs Linux 0x80000). Match the guest's own O_CLOEXEC / SOCK_CLOEXEC / EFD_CLOEXEC /
@@ -197,11 +197,11 @@ struct sentry_ring {
     _Atomic uint64_t request;
     _Atomic uint64_t response;
     // request: the post-normalize syscall registers (frontend-agnostic via G_RAWNR / G_A0..G_A5)
-    uint32_t wpid;  // stamping worker PROCESS pid: selects this guest's per-process virtual fd table (P1/P2)
-    uint32_t wtid;  // stable worker-thread token: selects a CLOSE_RANGE_UNSHARE private fd-table copy
+    uint32_t wpid;         // stamping worker PROCESS pid: selects this guest's per-process virtual fd table (P1/P2)
+    uint32_t wtid;         // stable worker-thread token: selects a CLOSE_RANGE_UNSHARE private fd-table copy
     uint32_t inherit_wtid; // reserved for wire compatibility; prepared thread bindings no longer defer inheritance
-    uint64_t rawnr; // raw syscall-number register (so the sentry's G_NR re-derives the canonical nr)
-    uint64_t a[6];  // a0..a5 (G_A0..G_A5)
+    uint64_t rawnr;        // raw syscall-number register (so the sentry's G_NR re-derives the canonical nr)
+    uint64_t a[6];         // a0..a5 (G_A0..G_A5)
     // Generalized pointer marshaling: redir[i] is the byte offset within buf[] that arg i is redirected
     // to (or -1 to leave the register untouched). The sentry rebases a[i] -> buf+redir[i] AFTER bounds-
     // checking the offset, so service_local() only ever dereferences ring memory -- never a worker-
@@ -253,8 +253,7 @@ static int sentry_thread_prepare(struct cpu *child) {
     if (!g_untrusted) return 0;
     pthread_mutex_lock(&g_thread_start_lock);
     uint32_t token = hl_sentry_token_next(&g_shm->claim);
-    int reserved =
-        hl_sentry_start_reserve(g_thread_start, SENTRY_THREAD_STARTS, child, token);
+    int reserved = hl_sentry_start_reserve(g_thread_start, SENTRY_THREAD_STARTS, child, token);
     if (reserved == 0 && sentry_ctl_op(SENTRY_OP_THREAD_PREPARE, token, 0) < 0) {
         uint32_t unused = 0;
         hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &unused);
@@ -277,8 +276,7 @@ static void sentry_thread_enter(struct cpu *child) {
     if (!g_untrusted) return;
     pthread_mutex_lock(&g_thread_start_lock);
     uint32_t token = 0;
-    if (hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &token) == 0)
-        t_token = token;
+    if (hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &token) == 0) t_token = token;
     pthread_mutex_unlock(&g_thread_start_lock);
 }
 
@@ -647,8 +645,7 @@ static void table_release_locked(uint16_t index) {
     struct sentry_proc *table = &g_table[index];
     if (table->refs == 0 || --table->refs != 0) return;
     for (uint32_t v = 0; v < SENTRY_VFD_MAX; v++)
-        if (table->real[v] >= 0 && !table->borrowed[v])
-            sentry_real_close(table->real[v]);
+        if (table->real[v] >= 0 && !table->borrowed[v]) sentry_real_close(table->real[v]);
     memset(table, 0, sizeof *table);
 }
 
@@ -665,8 +662,7 @@ static struct sentry_proc *binding_table_locked(pid_t wpid, uint32_t token, uint
         struct hl_sentry_binding *parent = binding_lookup_locked(wpid, inherit);
         if (parent) table = parent->table;
     }
-    if (hl_sentry_binding_reserve(g_binding, SENTRY_NBIND, wpid, token, table) != 0)
-        return NULL;
+    if (hl_sentry_binding_reserve(g_binding, SENTRY_NBIND, wpid, token, table) != 0) return NULL;
     g_table[table].refs++;
     return &g_table[table];
 }
@@ -684,8 +680,7 @@ static int binding_prepare_locked(pid_t wpid, uint32_t parent_token, uint32_t ch
     struct sentry_proc *source = binding_table_locked(wpid, parent_token, 0, 1);
     if (!source) return -ENOMEM;
     uint16_t table = (uint16_t)(source - g_table);
-    int result =
-        hl_sentry_binding_reserve(g_binding, SENTRY_NBIND, wpid, child_token, table);
+    int result = hl_sentry_binding_reserve(g_binding, SENTRY_NBIND, wpid, child_token, table);
     if (result == -EEXIST) return -EINVAL;
     if (result == 0) g_table[table].refs++;
     return result;
@@ -777,8 +772,7 @@ static int table_clone_locked(const struct sentry_proc *source) {
                 table_release_locked((uint16_t)index);
                 return -1;
             }
-            duplicate = (int)bound_dup_at_least(
-                typed.fd, 0, source->cloexec[v] ? HL_LINUX_FD_CLOEXEC : 0);
+            duplicate = (int)bound_dup_at_least(typed.fd, 0, source->cloexec[v] ? HL_LINUX_FD_CLOEXEC : 0);
         } else {
             duplicate = dup(source->real[v]);
         }
@@ -821,8 +815,7 @@ static int64_t sentry_fork_prepare(pid_t parent, uint32_t token, uint32_t inheri
         pthread_mutex_unlock(&g_fd_lock);
         return -ENOMEM;
     }
-    int64_t handle =
-        hl_sentry_snapshot_reserve(&g_snapshots, parent, token, (uint16_t)table);
+    int64_t handle = hl_sentry_snapshot_reserve(&g_snapshots, parent, token, (uint16_t)table);
     if (handle < 0) {
         table_release_locked((uint16_t)table);
         pthread_mutex_unlock(&g_fd_lock);
@@ -849,8 +842,7 @@ static int sentry_proc_fork(pid_t owner, uint32_t token, uint64_t handle, pid_t 
         pthread_mutex_unlock(&g_fd_lock);
         return -EEXIST;
     }
-    struct hl_sentry_snapshot *snapshot =
-        hl_sentry_snapshot_find(&g_snapshots, owner, token, handle);
+    struct hl_sentry_snapshot *snapshot = hl_sentry_snapshot_find(&g_snapshots, owner, token, handle);
     if (!snapshot) {
         pthread_mutex_unlock(&g_fd_lock);
         return -EINVAL;
@@ -871,9 +863,7 @@ static int sentry_proc_fork(pid_t owner, uint32_t token, uint64_t handle, pid_t 
         return -EAGAIN;
     }
     uint16_t table = 0;
-    if (hl_sentry_snapshot_take(&g_snapshots, owner, token, handle, &table) != 0 ||
-        table != process->table)
-        abort();
+    if (hl_sentry_snapshot_take(&g_snapshots, owner, token, handle, &table) != 0 || table != process->table) abort();
     pthread_mutex_unlock(&g_fd_lock);
     return 0;
 }
@@ -952,10 +942,8 @@ static int sentry_cmsg_translate_out(struct sentry_proc *p, uint8_t *ctl, size_t
             size_t nfd = (size_t)(clen - 16u) / sizeof(int);
             for (size_t i = 0; i < nfd; i++) {
                 int *slot = (int *)(ctl + o + 16u + i * sizeof(int));
-                int rfd =
-                    hl_sentry_native_fd(p->real, p->typed, SENTRY_VFD_MAX, *slot);
-                if (rfd < 0)
-                    return -1; // not a native fd owned by this guest -> reject the whole sendmsg
+                int rfd = hl_sentry_native_fd(p->real, p->typed, SENTRY_VFD_MAX, *slot);
+                if (rfd < 0) return -1; // not a native fd owned by this guest -> reject the whole sendmsg
                 *slot = rfd;
             }
         }
@@ -1049,12 +1037,9 @@ static void sentry_service_one(struct sentry_ring *R) {
     if (R->rawnr == SENTRY_OP_FDPASS) {
         int idx = (int)(R - g_shm->ring);
         pthread_mutex_lock(&g_fd_lock);
-        struct sentry_proc *p =
-            binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
+        struct sentry_proc *p = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
         int vfd = (int)(int64_t)R->a[0];
-        int rfd = p ? hl_sentry_native_fd(
-                          p->real, p->typed, SENTRY_VFD_MAX, vfd)
-                    : -1;
+        int rfd = p ? hl_sentry_native_fd(p->real, p->typed, SENTRY_VFD_MAX, vfd) : -1;
         pthread_mutex_unlock(&g_fd_lock);
         if (rfd >= 0) {
             sentry_send_fd(g_ctl[idx][1], rfd);
@@ -1078,8 +1063,7 @@ static void sentry_service_one(struct sentry_ring *R) {
             return;
         }
         pthread_mutex_lock(&g_fd_lock);
-        struct sentry_proc *p =
-            binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
+        struct sentry_proc *p = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
         int v = p ? vfd_alloc(p, rfd, 0) : -1;
         if (v >= 0) p->cloexec[v] = (uint8_t)(R->a[0] != 0);
         pthread_mutex_unlock(&g_fd_lock);
@@ -1164,9 +1148,8 @@ static void sentry_service_one(struct sentry_ring *R) {
         } else {
             if (last >= SENTRY_VFD_MAX) last = SENTRY_VFD_MAX - 1;
             pthread_mutex_lock(&g_fd_lock);
-            struct sentry_proc *p =
-                (flags & 2u) ? table_unshare_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid)
-                             : binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
+            struct sentry_proc *p = (flags & 2u) ? table_unshare_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid)
+                                                 : binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
             if ((flags & 2u) && p == NULL) {
                 pthread_mutex_unlock(&g_fd_lock);
                 R->ret = -ENOMEM;
@@ -1411,8 +1394,7 @@ static void sentry_service_one(struct sentry_ring *R) {
                     // sentry fd. A non-guest fd (smuggled g_ctl[]/ring/daemon fd) is not in the table -> reject
                     // the whole sendmsg -EPERM, so it can never reach the wire.
                     pthread_mutex_lock(&g_fd_lock);
-                    struct sentry_proc *cp =
-                        binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
+                    struct sentry_proc *cp = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
                     int ctl_ok = cp && sentry_cmsg_translate_out(cp, pctl, (size_t)ccap) == 0;
                     pthread_mutex_unlock(&g_fd_lock);
                     if (!ctl_ok) {
@@ -1453,8 +1435,7 @@ static void sentry_service_one(struct sentry_ring *R) {
     int64_t local_ret = 0;
     {
         pthread_mutex_lock(&g_fd_lock);
-        struct sentry_proc *p =
-            binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
+        struct sentry_proc *p = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
         int eb = (p == NULL);
         g_bound_source_native = 0;
         g_bound_second_native = 0;
@@ -1596,12 +1577,9 @@ static void sentry_service_one(struct sentry_ring *R) {
                         local_ret = -EBADF;
                         break;
                     }
-                    rnew = (int)bound_dup_at_least(
-                        typed.fd, 0,
-                        (flags & LX_O_CLOEXEC) ? HL_LINUX_FD_CLOEXEC : 0);
+                    rnew = (int)bound_dup_at_least(typed.fd, 0, (flags & LX_O_CLOEXEC) ? HL_LINUX_FD_CLOEXEC : 0);
                 } else {
-                    rnew =
-                        fcntl(rold, (flags & O_CLOEXEC) ? F_DUPFD_CLOEXEC : F_DUPFD, 0);
+                    rnew = fcntl(rold, (flags & O_CLOEXEC) ? F_DUPFD_CLOEXEC : F_DUPFD, 0);
                 }
                 if (rnew < 0) {
                     local_ret = -errno;
@@ -1726,8 +1704,7 @@ static void sentry_service_one(struct sentry_ring *R) {
     //      dup3 is fully handled there.) ----
     {
         pthread_mutex_lock(&g_fd_lock);
-        struct sentry_proc *p =
-            binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
+        struct sentry_proc *p = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
         if (p) switch (snr) {
             case 56:
             case 198:
@@ -2012,9 +1989,8 @@ static void sentry_shutdown(void) {
     for (int i = 0; i < SENTRY_NRINGS; i++)
         total += g_shm->ring[i].nserved;
     char message[96];
-    int length = snprintf(
-        message, sizeof message, "[sentry] forwarded %llu syscalls; sentry reaped\n",
-        (unsigned long long)total);
+    int length = snprintf(message, sizeof message, "[sentry] forwarded %llu syscalls; sentry reaped\n",
+                          (unsigned long long)total);
     if (length > 0 && (size_t)length < sizeof message)
         (void)hl_sentry_pipe_write(STDERR_FILENO, message, (size_t)length);
     g_sentry_pid = 0; // idempotent: the exit-path shutdown + the post-run_guest teardown must not double-reap
@@ -2165,8 +2141,8 @@ static void syscall_route(struct cpu *c) {
             G_RET(c) = (uint64_t)(int64_t)-error;
             return;
         }
-        service_local(c);                // spawn_thread (CLONE_THREAD) or fork() -- both worker-local
-        if (getpid() != g_worker_pid) {  // we are the new child worker
+        service_local(c);               // spawn_thread (CLONE_THREAD) or fork() -- both worker-local
+        if (getpid() != g_worker_pid) { // we are the new child worker
             close(fork_sync[1]);
             unsigned char ready;
             ssize_t received;
@@ -2175,7 +2151,7 @@ static void syscall_route(struct cpu *c) {
             while (received < 0 && errno == EINTR);
             close(fork_sync[0]);
             if (received != sizeof ready || ready != 1) _exit(127);
-            sentry_fork_child();         // drop inherited lane, mint a fresh token + identity
+            sentry_fork_child(); // drop inherited lane, mint a fresh token + identity
             return;
         }
         if (!is_thread && (int64_t)G_RET(c) > 0) {

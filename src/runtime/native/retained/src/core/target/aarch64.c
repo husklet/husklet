@@ -89,6 +89,7 @@ static void filemap_refresh_emulated(uint64_t lo, uint64_t hi);
 
 #include "../../translator/guest/aarch64/cpu.h"
 static int container_pid(void);
+
 static int hl_target_syscall_trap(struct cpu *c) {
     hl_syscall_cpu_aarch64 snapshot;
     hl_syscall_trap_result result;
@@ -158,9 +159,9 @@ static int hl_target_task_event(struct cpu *c, uint64_t event, uint64_t value, u
 
 static int hl_target_syscall_trap_selected(const struct cpu *c) {
     /* Rust-owned exit and process identity. Keep selection cheaper than constructing the stable snapshot. */
-    return g_syscall_trap_dispatch != NULL &&
-           (c->x[8] == 93 || (c->x[8] >= 172 && c->x[8] <= 178));
+    return g_syscall_trap_dispatch != NULL && (c->x[8] == 93 || (c->x[8] >= 172 && c->x[8] <= 178));
 }
+
 #include "../../translator/guest/aarch64/signal.h"
 #include "../../translator/guest/aarch64/abi.h" // the cpu interface os/linux/ is written against
 #define HL_GUEST_STAT_SIZE HL_LINUX_STAT_AARCH64_SIZE
@@ -204,6 +205,7 @@ static int hl_target_credentials_publish(struct cpu *c) {
     if (accepted) atomic_store_explicit(&g_runtime_credentials_published, 1, memory_order_release);
     return accepted;
 }
+
 #include "../../linux_abi/fdcache.h"
 #include "../../linux_abi/container/vfs/gmap.h"
 #include "../../linux_abi/container/owner.h"
@@ -1235,8 +1237,8 @@ static int hl_restore_checkpoint(const char *rootfs) {
 }
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
-                       const void *executable_image, size_t executable_size, const hl_engine_main_image_plan *image_plan,
-                       uint32_t argument_count, char *const argv[]) {
+                       const void *executable_image, size_t executable_size,
+                       const hl_engine_main_image_plan *image_plan, uint32_t argument_count, char *const argv[]) {
     int argc;
     (void)executable;
     g_initial_executable_image = executable_image;

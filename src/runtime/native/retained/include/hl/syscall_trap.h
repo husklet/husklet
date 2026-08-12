@@ -44,7 +44,7 @@ _Static_assert(sizeof(hl_syscall_cpu_aarch64) == 296, "AArch64 syscall snapshot 
 _Static_assert(sizeof(hl_syscall_trap_result) == 24, "syscall trap result ABI drifted");
 
 typedef int32_t (*hl_syscall_trap_fn)(void *context, uint32_t guest_isa, hl_syscall_cpu_aarch64 *cpu,
-                                     hl_syscall_trap_result *result);
+                                      hl_syscall_trap_result *result);
 
 void hl_target_syscall_trap_install(void *context, hl_syscall_trap_fn dispatch);
 

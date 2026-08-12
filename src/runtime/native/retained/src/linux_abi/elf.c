@@ -4,7 +4,6 @@
 #include "elf_protect.h" // the loader's protection contract, shared with linux_abi/x86.c
 #include "image.h"
 
-
 // ---------------- minimal ELF loader (load segments HIGH; PC-relative stays valid) ----------------
 static uint16_t rd16(const uint8_t *p) {
     return p[0] | (p[1] << 8);
@@ -757,8 +756,7 @@ struct main_placement {
 };
 
 static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struct main_placement *placement) {
-    if (plan == NULL || placement == NULL || plan->abi != HL_ENGINE_MAIN_IMAGE_PLAN_ABI ||
-        plan->size < sizeof(*plan) ||
+    if (plan == NULL || placement == NULL || plan->abi != HL_ENGINE_MAIN_IMAGE_PLAN_ABI || plan->size < sizeof(*plan) ||
         plan->link_end <= plan->link_start || (plan->kind != 1 && plan->kind != 2))
         return -1;
     placement->link_start = plan->link_start;
@@ -859,11 +857,9 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
     hl_gmap_add((uint64_t)base, span);
     uint64_t bias = (uint64_t)base - basepage;
     hl_native_address_projection image_projection;
-    uint32_t image_kind = etype == 2 ? HL_NATIVE_ELF_EXECUTABLE
-                                     : HL_NATIVE_ELF_POSITION_INDEPENDENT;
-    if (hl_native_address_projection_init_elf(
-            &image_projection, image_kind, basepage, basepage + span,
-            (uint64_t)base) != 0) {
+    uint32_t image_kind = etype == 2 ? HL_NATIVE_ELF_EXECUTABLE : HL_NATIVE_ELF_POSITION_INDEPENDENT;
+    if (hl_native_address_projection_init_elf(&image_projection, image_kind, basepage, basepage + span,
+                                              (uint64_t)base) != 0) {
         fprintf(stderr, "hl-engine: invalid ELF image address projection\n");
         exit(1);
     }

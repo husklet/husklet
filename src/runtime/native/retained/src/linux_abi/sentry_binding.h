@@ -14,17 +14,15 @@ struct hl_sentry_binding {
     uint8_t inuse;
 };
 
-static inline struct hl_sentry_binding *hl_sentry_binding_find(
-    struct hl_sentry_binding *bindings, uint32_t count, int32_t owner, uint32_t token) {
+static inline struct hl_sentry_binding *hl_sentry_binding_find(struct hl_sentry_binding *bindings, uint32_t count,
+                                                               int32_t owner, uint32_t token) {
     for (uint32_t i = 0; i < count; i++)
-        if (bindings[i].inuse && bindings[i].owner == owner && bindings[i].token == token)
-            return &bindings[i];
+        if (bindings[i].inuse && bindings[i].owner == owner && bindings[i].token == token) return &bindings[i];
     return NULL;
 }
 
-static inline int hl_sentry_binding_reserve(
-    struct hl_sentry_binding *bindings, uint32_t count, int32_t owner, uint32_t token,
-    uint16_t table) {
+static inline int hl_sentry_binding_reserve(struct hl_sentry_binding *bindings, uint32_t count, int32_t owner,
+                                            uint32_t token, uint16_t table) {
     if (token == 0) return -EINVAL;
     if (hl_sentry_binding_find(bindings, count, owner, token)) return -EEXIST;
     for (uint32_t i = 0; i < count; i++)
@@ -40,11 +38,9 @@ static inline int hl_sentry_binding_reserve(
     return -EAGAIN;
 }
 
-static inline int hl_sentry_binding_release(
-    struct hl_sentry_binding *bindings, uint32_t count, int32_t owner, uint32_t token,
-    uint16_t *table) {
-    struct hl_sentry_binding *binding =
-        hl_sentry_binding_find(bindings, count, owner, token);
+static inline int hl_sentry_binding_release(struct hl_sentry_binding *bindings, uint32_t count, int32_t owner,
+                                            uint32_t token, uint16_t *table) {
+    struct hl_sentry_binding *binding = hl_sentry_binding_find(bindings, count, owner, token);
     if (!binding) return -ENOENT;
     *table = binding->table;
     *binding = (struct hl_sentry_binding){0};

@@ -16,8 +16,7 @@ typedef struct hl_options {
 
 int hl_options_init(hl_options *options);
 /* Deep-copy one already-validated, unique record set into the C read view. */
-int hl_options_init_records(hl_options *options, size_t count, const char *const *names,
-                            const char *const *values);
+int hl_options_init_records(hl_options *options, size_t count, const char *const *names, const char *const *values);
 int hl_options_clone(hl_options *destination, const hl_options *source);
 /* Validate a complete store before lending its lifetime to an engine. */
 int hl_options_validate(const hl_options *options);

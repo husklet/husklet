@@ -14,7 +14,8 @@ void hl_engine_child_result_publish_signal(int32_t guest_signal) {
     (void)guest_signal;
 }
 
-void hl_engine_child_result_after_fork(void) {}
+void hl_engine_child_result_after_fork(void) {
+}
 
 /* The smoke link pulls the non-selected interpreter unity object and its
  * runtime archive into one executable. Reaching main proves the imported

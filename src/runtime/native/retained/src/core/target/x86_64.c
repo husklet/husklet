@@ -90,6 +90,7 @@ void hl_target_syscall_trap_install(void *context, hl_syscall_trap_fn dispatch) 
 }
 
 struct cpu;
+
 static int hl_target_task_event(struct cpu *cpu, uint64_t event, uint64_t value, uint64_t source, uint64_t child) {
     (void)cpu;
     (void)event;
@@ -1346,9 +1347,11 @@ static int hl_standalone_run(const char *rootfs, const char *executable_host, ui
         ckpt_restore_hold_tty_signals();
     return hl_native_engine_run(HL_GUEST_ISA_X86_64, rootfs, argc, argv, options, result_path);
 }
+
 int main(int argc, char **argv) {
     return hl_engine_entry(argc, argv);
 }
+
 int hl_engine_entry(int argc, char **argv) {
     hl_cli_route route = hl_cli_route_parse(argc, argv);
     int ai = 1;

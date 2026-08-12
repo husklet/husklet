@@ -114,8 +114,7 @@ int hl_options_init(hl_options *options) {
     return 0;
 }
 
-int hl_options_init_records(hl_options *options, size_t count, const char *const *names,
-                            const char *const *values) {
+int hl_options_init_records(hl_options *options, size_t count, const char *const *names, const char *const *values) {
     size_t record;
     if (options == NULL || (count != 0 && (names == NULL || values == NULL)) || count > HL_OPTION_COUNT) return -1;
     if (hl_options_init(options) != 0) return -1;
@@ -174,8 +173,8 @@ int hl_options_validate(const hl_options *options) {
             if (options->values[index] != NULL) return -1;
             continue;
         }
-        if (size > HL_OPTION_STORE_LIMIT || options->values[index] == NULL ||
-            options->values[index][size - 1] != 0 || total > HL_OPTION_STORE_LIMIT - size)
+        if (size > HL_OPTION_STORE_LIMIT || options->values[index] == NULL || options->values[index][size - 1] != 0 ||
+            total > HL_OPTION_STORE_LIMIT - size)
             return -1;
         total += size;
     }

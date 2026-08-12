@@ -457,17 +457,25 @@ static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias;
 
 static inline uint64_t nonpie_fold(uint64_t guest) {
     if (!g_nonpie_lo) return guest;
-    const hl_native_address_projection p = {HL_NATIVE_ADDRESS_PROJECTION_ABI, (uint32_t)sizeof(p),
-                                             HL_NATIVE_ADDRESS_PROJECTION_DISPLACED, 0, g_nonpie_lo, g_nonpie_hi,
-                                             g_nonpie_bias};
+    const hl_native_address_projection p = {HL_NATIVE_ADDRESS_PROJECTION_ABI,
+                                            (uint32_t)sizeof(p),
+                                            HL_NATIVE_ADDRESS_PROJECTION_DISPLACED,
+                                            0,
+                                            g_nonpie_lo,
+                                            g_nonpie_hi,
+                                            g_nonpie_bias};
     return hl_native_address_projection_storage_unchecked(&p, guest);
 }
 
 static inline uint64_t nonpie_unfold(uint64_t storage) {
     if (!g_nonpie_lo) return storage;
-    const hl_native_address_projection p = {HL_NATIVE_ADDRESS_PROJECTION_ABI, (uint32_t)sizeof(p),
-                                             HL_NATIVE_ADDRESS_PROJECTION_DISPLACED, 0, g_nonpie_lo, g_nonpie_hi,
-                                             g_nonpie_bias};
+    const hl_native_address_projection p = {HL_NATIVE_ADDRESS_PROJECTION_ABI,
+                                            (uint32_t)sizeof(p),
+                                            HL_NATIVE_ADDRESS_PROJECTION_DISPLACED,
+                                            0,
+                                            g_nonpie_lo,
+                                            g_nonpie_hi,
+                                            g_nonpie_bias};
     return hl_native_address_projection_guest_unchecked(&p, storage);
 }
 

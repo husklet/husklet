@@ -740,17 +740,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                     (unsigned long long)g_prof_cross, (unsigned long long)g_prof_sys, (unsigned long long)g_prof_miss,
                     (unsigned long long)(g_prof_cross - g_prof_sys - g_prof_miss), (unsigned long long)g_prof_xlate,
                     (unsigned long long)g_lse_n, (unsigned long long)g_wx_toggles, g_dualmap, g_xlate_ns / 1e6,
-                    g_service_ns / 1e6,
-                    g_mtibtc, (unsigned long long)g_mtfill, (unsigned long long)g_futex_wake_fast,
+                    g_service_ns / 1e6, g_mtibtc, (unsigned long long)g_mtfill, (unsigned long long)g_futex_wake_fast,
                     (unsigned long long)g_futex_wake_slow, (unsigned long long)g_futex_wait_n,
-                    (unsigned long long)g_prof_soft_sites_sampled,
-                    (unsigned long long)g_prof_soft_hull_sampled,
-                    (unsigned long long)g_prof_soft_cached_sampled,
-                    (unsigned long long)g_prof_soft_miss,
-                    (unsigned long long)g_prof_soft_span,
-                    (unsigned long long)g_prof_soft_bounce_prepare,
-                    (unsigned long long)g_prof_soft_bounce_commit,
-                    (unsigned long long)g_prof_smc_queued,
+                    (unsigned long long)g_prof_soft_sites_sampled, (unsigned long long)g_prof_soft_hull_sampled,
+                    (unsigned long long)g_prof_soft_cached_sampled, (unsigned long long)g_prof_soft_miss,
+                    (unsigned long long)g_prof_soft_span, (unsigned long long)g_prof_soft_bounce_prepare,
+                    (unsigned long long)g_prof_soft_bounce_commit, (unsigned long long)g_prof_smc_queued,
                     (unsigned long long)g_prof_smc_commit);
         // A3: §B shadow-return coverage. hit-rate = shret_hit / (shret_hit + shret_fb). bl_shadow /
         // bl_leaf show how the depth-gate split call sites at translate time. PROF-only (keep dark).
@@ -1923,8 +1918,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)bound_status;
             break;
         }
-        if (pid < 0)
-            (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
+        if (pid < 0) (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
         errno = fork_error;
         if (pid >= 0) {
             uint64_t child_pid = (uint64_t)(pid == 0 ? getpid() : pid);
@@ -2544,8 +2538,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             r > 0 && (st & 0xff) != 0x7f && st != 0xffff &&
             !hl_target_task_event(c, HL_TASK_EVENT_REAP_PROCESS, (uint64_t)r,
                                   (uint64_t)(c->tid ? c->tid : container_pid()), (uint64_t)(uint32_t)st);
-        G_RET(c) = status_efault ? (uint64_t)(int64_t)(-EFAULT)
-                                 : runtime_reap_fault ? (uint64_t)(int64_t)(-EIO) : (uint64_t)r;
+        G_RET(c) = status_efault        ? (uint64_t)(int64_t)(-EFAULT)
+                   : runtime_reap_fault ? (uint64_t)(int64_t)(-EIO)
+                                        : (uint64_t)r;
     wait_done:; // the EINTR reroute jumps here (G_RET + *status already set)
         break;
     }
