@@ -5,8 +5,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::thread;
 
+#[cfg(not(unix))]
 struct TerminalPort;
 
+#[cfg(not(unix))]
 impl super::TerminalPort for TerminalPort {
     fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
         Ok(0)
@@ -214,6 +216,7 @@ fn validates_required_checkpoint() {
 }
 
 #[test]
+#[cfg(not(unix))]
 fn rejects_terminal_before_native_construction() {
     let factory = Factory::new(Machine::default());
     let terminal = Terminal::new(Arc::new(TerminalPort), 24, 80).unwrap();

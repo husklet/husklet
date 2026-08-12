@@ -7,6 +7,9 @@ use std::sync::Arc;
 mod execution;
 pub(crate) use execution::{ProductionFactory, ProductionMachine};
 
+#[cfg(unix)]
+mod terminal;
+
 use crate::activation::GuestIsa;
 use crate::composition::{EngineBackend, RuntimeServices};
 use crate::engine::{EngineError, EngineExit, StopRequest};
@@ -156,8 +159,9 @@ impl Engine {
 
     /// Constructs a runtime with optional standard-stream policy.
     ///
-    /// A terminal request currently returns [`EngineError::Unsupported`]
-    /// rather than silently inheriting the supervisor's descriptors.
+    /// On Unix, a terminal request is attached to an owned native PTY. Other
+    /// hosts return [`EngineError::Unsupported`] rather than silently
+    /// inheriting the supervisor's descriptors.
     pub fn with_streams(
         isa: GuestIsa,
         plan: RuntimePlan,

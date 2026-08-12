@@ -82,8 +82,14 @@ pub trait TerminalPort: Send + Sync {
     fn close(&self);
 }
 
+pub(crate) trait TerminalAttachment: Send + Sync {
+    fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError>;
+}
+
 pub struct Terminal {
     port: Arc<dyn TerminalPort>,
+    initial: (u16, u16),
+    attachment: Mutex<Option<Arc<dyn TerminalAttachment>>>,
 }
 
 impl Terminal {
@@ -92,18 +98,47 @@ impl Terminal {
         if rows == 0 || columns == 0 {
             return Err(CompositionError::RuntimeConstruction);
         }
-        Ok(Arc::new(Self { port }))
+        Ok(Arc::new(Self {
+            port,
+            initial: (rows, columns),
+            attachment: Mutex::new(None),
+        }))
     }
 
     pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
         if rows == 0 || columns == 0 {
             return Err(CompositionError::RuntimeConstruction);
         }
-        Err(CompositionError::RuntimeConstruction)
+        self.attachment
+            .lock()
+            .map_err(|_| CompositionError::RuntimeConstruction)?
+            .as_ref()
+            .ok_or(CompositionError::UnsupportedTerminal)?
+            .resize(rows, columns)
     }
 
     pub fn close(&self) {
         self.port.close();
+    }
+
+    pub(crate) fn port(&self) -> Arc<dyn TerminalPort> {
+        Arc::clone(&self.port)
+    }
+
+    pub(crate) fn initial(&self) -> (u16, u16) {
+        self.initial
+    }
+
+    pub(crate) fn attach(&self, attachment: Arc<dyn TerminalAttachment>) -> Result<(), CompositionError> {
+        let mut current = self
+            .attachment
+            .lock()
+            .map_err(|_| CompositionError::RuntimeConstruction)?;
+        if current.is_some() {
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        *current = Some(attachment);
+        Ok(())
     }
 }
 
@@ -132,10 +167,6 @@ impl StandardStreams {
 
     pub(crate) fn terminal(&self) -> Option<Arc<Terminal>> {
         self.terminal.clone()
-    }
-
-    fn requests_terminal(&self) -> bool {
-        self.terminal.is_some()
     }
 }
 
@@ -298,7 +329,7 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
     }
 
     fn validate_services(plan: &RuntimeLaunchPlan, services: &RuntimeServices) -> Result<(), CompositionError> {
-        if services.streams.requests_terminal() {
+        if services.streams.terminal().is_some() && !cfg!(unix) {
             return Err(CompositionError::UnsupportedTerminal);
         }
         if plan.options.get("HL_CHECKPOINT").is_some() && services.checkpoint_sink.is_none() {

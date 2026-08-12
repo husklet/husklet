@@ -5,6 +5,9 @@ use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
+use super::terminal::NativeTerminalBridge;
+
 const REQUEST_INTERRUPT: u32 = 1;
 const REQUEST_FORCE_STOP: u32 = 2;
 const REQUEST_SIGNAL: u32 = 3;
@@ -12,6 +15,8 @@ const REQUEST_SIGNAL: u32 = 3;
 pub(crate) struct ProductionMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launch_plan::RuntimeLaunchPlan,
+    #[cfg(unix)]
+    terminal: Option<NativeTerminalBridge>,
     engine: Mutex<Option<Arc<hl_native::Engine>>>,
 }
 
@@ -21,9 +26,18 @@ impl RuntimeFactory for ProductionFactory {
     type Machine = ProductionMachine;
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
+        #[cfg(unix)]
+        let terminal = request
+            .services
+            .streams
+            .terminal()
+            .map(NativeTerminalBridge::attach)
+            .transpose()?;
         Ok(ProductionMachine {
             isa: request.isa,
             plan: request.plan.clone(),
+            #[cfg(unix)]
+            terminal,
             engine: Mutex::new(None),
         })
     }
@@ -77,6 +91,13 @@ impl ProductionMachine {
         ));
         let names = options.iter().map(|(name, _)| name.as_ptr()).collect::<Vec<_>>();
         let values = options.iter().map(|(_, value)| value.as_ptr()).collect::<Vec<_>>();
+        #[cfg(unix)]
+        let standard_fds = self
+            .terminal
+            .as_ref()
+            .map_or([0, 1, 2], NativeTerminalBridge::standard_fds);
+        #[cfg(not(unix))]
+        let standard_fds = [0, 1, 2];
         let config = hl_native::EngineConfig {
             isa: match self.isa {
                 crate::activation::GuestIsa::Aarch64 => 1,
@@ -87,7 +108,7 @@ impl ProductionMachine {
             executable_fd: -1,
             option_names: &names,
             option_values: &values,
-            standard_fds: [0, 1, 2],
+            standard_fds,
             provider_fd: -1,
             syscall_context: std::ptr::null_mut(),
             syscall_dispatch: None,
