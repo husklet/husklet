@@ -35,6 +35,10 @@ fn main() {
     for input in build_support::COMPILER_ENVIRONMENT_INPUTS {
         println!("cargo:rerun-if-env-changed={input}");
     }
+    let target_triple = env::var("TARGET").expect("Cargo supplies TARGET");
+    for input in build_support::target_compiler_environment_inputs(&target_triple) {
+        println!("cargo:rerun-if-env-changed={input}");
+    }
     println!("cargo:rerun-if-env-changed=HL_C_SANITIZER");
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo supplies CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo supplies CARGO_CFG_TARGET_ARCH");

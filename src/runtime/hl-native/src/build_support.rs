@@ -7,6 +7,22 @@ pub(crate) const BUILD_POLICY_INPUTS: &[&str] =
 
 pub(crate) const COMPILER_ENVIRONMENT_INPUTS: &[&str] =
     &["AR", "ARFLAGS", "CC", "CFLAGS", "CPPFLAGS", "CRATE_CC_NO_DEFAULTS"];
+const TARGET_SCOPED_COMPILER_ENVIRONMENT_INPUTS: &[&str] = &["AR", "ARFLAGS", "CC", "CFLAGS", "CPPFLAGS"];
+
+pub(crate) fn target_compiler_environment_inputs(target: &str) -> Vec<String> {
+    let normalized = target.replace(['-', '.'], "_");
+    TARGET_SCOPED_COMPILER_ENVIRONMENT_INPUTS
+        .iter()
+        .flat_map(|input| {
+            [
+                format!("{input}_{target}"),
+                format!("{input}_{normalized}"),
+                format!("HOST_{input}"),
+                format!("TARGET_{input}"),
+            ]
+        })
+        .collect()
+}
 
 pub(crate) const WINDOWS_SYSTEM_LIBRARIES: &[&str] = &[
     "kernel32",
@@ -77,6 +93,30 @@ mod tests {
         assert_eq!(
             super::COMPILER_ENVIRONMENT_INPUTS,
             &["AR", "ARFLAGS", "CC", "CFLAGS", "CPPFLAGS", "CRATE_CC_NO_DEFAULTS"]
+        );
+    }
+
+    #[test]
+    fn target_compiler_environment_inputs_cover_cc_precedence_forms() {
+        let inputs = super::target_compiler_environment_inputs("aarch64-unknown-linux.gnu");
+        assert_eq!(
+            &inputs[..4],
+            &[
+                "AR_aarch64-unknown-linux.gnu",
+                "AR_aarch64_unknown_linux_gnu",
+                "HOST_AR",
+                "TARGET_AR",
+            ]
+        );
+        assert_eq!(inputs.len(), super::TARGET_SCOPED_COMPILER_ENVIRONMENT_INPUTS.len() * 4);
+        assert_eq!(
+            &inputs[inputs.len() - 4..],
+            &[
+                "CPPFLAGS_aarch64-unknown-linux.gnu",
+                "CPPFLAGS_aarch64_unknown_linux_gnu",
+                "HOST_CPPFLAGS",
+                "TARGET_CPPFLAGS",
+            ]
         );
     }
 
