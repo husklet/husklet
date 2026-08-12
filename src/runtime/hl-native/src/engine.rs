@@ -239,7 +239,7 @@ fn inspect_program_headers(
                 last = last.max(end);
             }
             3 => {
-                interpreter = Some(read_interpreter(&mut file, u64_at(8), u64_at(32))?);
+                interpreter = Some(read_interpreter(file, u64_at(8), u64_at(32))?);
             }
             _ => {}
         }
