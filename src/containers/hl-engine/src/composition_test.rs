@@ -175,8 +175,8 @@ impl Workspace for WorkspacePort {
 struct Fixture;
 
 impl Fixture {
-    fn plan(arguments: &[&[u8]]) -> RuntimeLaunchPlan {
-        RuntimeLaunchPlan {
+    fn plan(arguments: &[&[u8]]) -> RuntimePlan {
+        RuntimePlan {
             rootfs: None,
             executable_host: None,
             arguments: arguments.iter().map(|argument| argument.to_vec()).collect(),

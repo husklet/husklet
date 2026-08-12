@@ -1,7 +1,7 @@
 //! Per-engine lifecycle coordination over injected launch capabilities.
 
 use crate::activation::GuestIsa;
-use crate::launch_plan::RuntimeLaunchPlan;
+use crate::launch_plan::RuntimePlan;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,8 +120,7 @@ pub trait Workspace: Send + Sync {
 
 /// Starts and controls one selected engine process.
 pub trait Launcher: Send + Sync {
-    fn launch(&self, isa: GuestIsa, plan: &RuntimeLaunchPlan, workspace: WorkspaceId)
-    -> Result<ProcessId, EngineError>;
+    fn launch(&self, isa: GuestIsa, plan: &RuntimePlan, workspace: WorkspaceId) -> Result<ProcessId, EngineError>;
     fn wait(&self, process: ProcessId) -> Result<EngineExit, EngineError>;
     fn terminate(&self, process: ProcessId, request: StopRequest) -> Result<(), EngineError>;
 }
@@ -146,7 +145,7 @@ struct EngineContext<L, W> {
 
 pub struct Engine<L, W> {
     isa: GuestIsa,
-    plan: RuntimeLaunchPlan,
+    plan: RuntimePlan,
     shared: Arc<EngineContext<L, W>>,
 }
 
@@ -166,7 +165,7 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
     }
 
     #[must_use]
-    pub fn new(isa: GuestIsa, plan: RuntimeLaunchPlan, launcher: L, workspaces: W) -> Self {
+    pub fn new(isa: GuestIsa, plan: RuntimePlan, launcher: L, workspaces: W) -> Self {
         Self {
             isa,
             plan,

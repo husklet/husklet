@@ -2,7 +2,7 @@
 
 use crate::activation::GuestIsa;
 use crate::engine::{Engine, EngineError, EngineExit, Launcher, ProcessId, StopRequest, Workspace, WorkspaceId};
-use crate::launch_plan::RuntimeLaunchPlan;
+use crate::launch_plan::RuntimePlan;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -171,7 +171,7 @@ pub struct RuntimeServices {
 
 pub struct RuntimeConstruction<'a> {
     pub isa: GuestIsa,
-    pub plan: &'a RuntimeLaunchPlan,
+    pub plan: &'a RuntimePlan,
     pub services: &'a RuntimeServices,
 }
 
@@ -214,7 +214,7 @@ impl<M: GuestMachine> Drop for MachineLauncher<M> {
 }
 
 impl<M: GuestMachine + 'static> Launcher for MachineLauncher<M> {
-    fn launch(&self, _: GuestIsa, _: &RuntimeLaunchPlan, _: WorkspaceId) -> Result<ProcessId, EngineError> {
+    fn launch(&self, _: GuestIsa, _: &RuntimePlan, _: WorkspaceId) -> Result<ProcessId, EngineError> {
         let mut worker = self.worker.lock().map_err(|_| EngineError::Synchronization)?;
         if worker.is_some() {
             return Err(EngineError::Busy);
@@ -263,7 +263,7 @@ pub struct EngineBackend<M: GuestMachine, W> {
 impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
     pub fn construct<F>(
         isa: GuestIsa,
-        plan: RuntimeLaunchPlan,
+        plan: RuntimePlan,
         services: RuntimeServices,
         factory: &F,
         workspaces: W,
@@ -314,7 +314,7 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
         self.engine.destroy()
     }
 
-    fn validate_services(plan: &RuntimeLaunchPlan, services: &RuntimeServices) -> Result<(), CompositionError> {
+    fn validate_services(plan: &RuntimePlan, services: &RuntimeServices) -> Result<(), CompositionError> {
         if services.streams.terminal().is_some() && !cfg!(unix) {
             return Err(CompositionError::UnsupportedTerminal);
         }

@@ -14,7 +14,7 @@ const REQUEST_SIGNAL: u32 = 3;
 
 pub(crate) struct ProductionMachine {
     isa: crate::activation::GuestIsa,
-    plan: crate::launch_plan::RuntimeLaunchPlan,
+    plan: crate::launch_plan::RuntimePlan,
     #[cfg(unix)]
     terminal: Option<NativeTerminalBridge>,
     engine: Mutex<Option<Arc<hl_native::Engine>>>,

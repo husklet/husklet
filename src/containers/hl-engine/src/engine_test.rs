@@ -37,7 +37,7 @@ impl FakeLauncher {
 }
 
 impl Launcher for Arc<FakeLauncher> {
-    fn launch(&self, isa: GuestIsa, _: &RuntimeLaunchPlan, _: WorkspaceId) -> Result<ProcessId, EngineError> {
+    fn launch(&self, isa: GuestIsa, _: &RuntimePlan, _: WorkspaceId) -> Result<ProcessId, EngineError> {
         let mut state = self.state.lock().unwrap();
         state.launched_isa = Some(isa);
         state.launch_entered = true;
@@ -114,8 +114,8 @@ impl Workspace for Arc<FakeWorkspace> {
     }
 }
 
-fn plan() -> RuntimeLaunchPlan {
-    RuntimeLaunchPlan {
+fn plan() -> RuntimePlan {
+    RuntimePlan {
         rootfs: None,
         executable_host: None,
         arguments: vec![b"guest".to_vec()],

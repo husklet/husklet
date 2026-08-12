@@ -24,9 +24,6 @@ pub struct RuntimePlan {
     pub options: Options,
 }
 
-/// Compatibility name retained while downstream callers migrate to [`RuntimePlan`].
-pub type RuntimeLaunchPlan = RuntimePlan;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlanError {
     OptionStore,

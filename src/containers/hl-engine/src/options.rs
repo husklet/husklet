@@ -4,7 +4,7 @@
 //! globals. A caller explicitly owns and passes one store per launch.
 
 /// Maximum aggregate storage, including one trailing NUL per value.
-pub const STORE_LIMIT: usize = 64 * 1024 * 1024;
+const STORE_LIMIT: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Shape {
