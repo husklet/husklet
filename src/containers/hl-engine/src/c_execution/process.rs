@@ -77,10 +77,11 @@ impl CWorker {
         let control_inherit = duplicate_high(child_control.as_raw_fd())?;
         let mut streams = StreamBridge::new(services)?;
         let [input, output, error] = streams.take_guest_fds()?;
-        let executable = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|parent| parent.join(isa.engine_stem())))
-            .ok_or(EngineError::LaunchFailed)?;
+        let executable = worker_executable(
+            isa,
+            std::env::var_os("HL_TEST_ENGINE_APP_BIN_DIR"),
+            std::env::current_exe().ok(),
+        )?;
         let mut command = Command::new(executable);
         command
             .arg("--c-worker")
@@ -386,6 +387,19 @@ impl CWorker {
     }
 }
 
+fn worker_executable(
+    isa: GuestIsa,
+    test_binary_directory: Option<OsString>,
+    current_executable: Option<std::path::PathBuf>,
+) -> Result<std::path::PathBuf, EngineError> {
+    if let Some(directory) = test_binary_directory {
+        return Ok(std::path::PathBuf::from(directory).join(isa.engine_stem()));
+    }
+    current_executable
+        .and_then(|path| path.parent().map(|parent| parent.join(isa.engine_stem())))
+        .ok_or(EngineError::LaunchFailed)
+}
+
 impl Drop for CWorker {
     fn drop(&mut self) {
         let child = self.child.get_mut().unwrap_or_else(|error| error.into_inner());
@@ -502,8 +516,9 @@ fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) 
 mod tests {
     use super::{
         CWorker, ChildGuard, Startup, process_status_matches, read_message, report_worker_failure, worker_environment,
-        write_message,
+        worker_executable, write_message,
     };
+    use crate::activation::GuestIsa;
     use crate::c_execution::StreamBridge;
     use crate::c_execution::control::{FailureStage, Message};
     use crate::engine::StopRequest;
@@ -539,6 +554,30 @@ mod tests {
             detail: 0,
             fault: None,
         }
+    }
+
+    #[test]
+    fn worker_executable_prefers_the_integration_binary_directory() {
+        assert_eq!(
+            worker_executable(
+                GuestIsa::Aarch64,
+                Some("/fixture/bin".into()),
+                Some("/ignored/deps/test-hash".into()),
+            ),
+            Ok("/fixture/bin/hl-aarch64".into())
+        );
+    }
+
+    #[test]
+    fn worker_executable_defaults_to_the_calling_binary_sibling() {
+        assert_eq!(
+            worker_executable(GuestIsa::X86_64, None, Some("/product/bin/husklet".into())),
+            Ok("/product/bin/hl-x86_64".into())
+        );
+        assert_eq!(
+            worker_executable(GuestIsa::Aarch64, None, None),
+            Err(crate::engine::EngineError::LaunchFailed)
+        );
     }
 
     #[test]
