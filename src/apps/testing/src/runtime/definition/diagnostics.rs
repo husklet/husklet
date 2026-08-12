@@ -328,6 +328,23 @@ mod tests {
         assert!(!digest.contains("a64_slim_exits"), "{digest}");
     }
 
+    #[test]
+    fn admission_digest_retains_matching_arm64_and_x86_guard_evidence() {
+        let report = b"hl-native-detail: a64_guard_fast=11 a64_guard_full=12 a64_dirty_committed=13 \
+                       x86_guard_fast=21 x86_guard_full=22 x86_dirty_committed=23\n";
+        let digest = super::digest(report);
+        for field in [
+            "a64_guard_fast=11",
+            "a64_guard_full=12",
+            "a64_dirty_committed=13",
+            "x86_guard_fast=21",
+            "x86_guard_full=22",
+            "x86_dirty_committed=23",
+        ] {
+            assert!(digest.contains(field), "missing {field} from {digest}");
+        }
+    }
+
     /// The digest sits inside the measured window, so it is bounded against the stderr ceiling
     /// rather than against the few kilobytes a typical case emits.
     #[test]
