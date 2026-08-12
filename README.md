@@ -18,7 +18,7 @@
 Husklet is an early-stage workspace application for isolated, reproducible Linux development environments.
 Each workspace combines a configured image, terminal, containers, networking, and project settings without
 installing project tools on the host. The goal is a practical environment for everyday development, including
-VPNs, graphical tools, and deeper workspace integrations.
+networking, terminals, and deeper workspace integrations.
 
 ## Workspaces
 
@@ -41,9 +41,8 @@ flowchart TB
     ENGINE["Husklet execution engine"]
     HOST["Host services and hardware"]
 
-    MAC["macOS<br/>current"]
-    LINUX["Linux<br/>planned"]
-    WINDOWS["Windows<br/>eventual"]
+    MAC["macOS / ARM64 host"]
+    LINUX["Linux / ARM64 host"]
 
     ARM --> ABI
     AMD --> ABI
@@ -51,12 +50,11 @@ flowchart TB
     ENGINE --> HOST
     HOST --> MAC
     HOST --> LINUX
-    HOST --> WINDOWS
 ```
 
 The workspace sees Linux while Husklet translates execution, files, networking, and devices onto the host.
 This avoids the memory and startup cost of one complete virtual machine per workspace. macOS is the current
-host target; Linux and Windows are later portability goals.
+host targets currently covered by the C engine are macOS/ARM64 and Linux/ARM64.
 
 ## Docker
 
@@ -69,17 +67,25 @@ The engine controls Linux process execution, which makes saving process state an
 commands possible. Husklet is integrating this into “continue later” workspace sessions; complete,
 failure-safe restoration remains in development.
 
-## GPU and GUI applications
-
-The virtual GPU lowers guest GL, Vulkan, and CUDA operations into an intermediate representation for
-execution on host hardware. Together with Wayland and host surfaces, this is intended to let gui apps (editors,
-browsers etc) and their supporting tools run inside the same isolated workspace. GPU and GUI compatibility is
-still being expanded and hardened.
-
 ## Terminal
 
 Husklet includes a terminal attached directly to each workspace. The target is a responsive, native-feeling
 terminal with reliable session restoration.
+
+## Development
+
+The pinned Nix flake supplies the Rust, C, GTK, and fixture toolchain. Build the
+two production engine workers with `make engine`; the C engine source lives only
+under `src/runtime/native` and is linked into `hl-aarch64` and `hl-x86_64`.
+Run `make lint-c` for its inventory, format, analysis, and warning-strict checks,
+and `make gate` for the complete headless repository gate. `make gate-fixture`
+is optional and requires the documented Alpine fixture and a static-capable host
+C compiler.
+
+Performance work uses `make bench-product-ab-prepare PRODUCT_AB_RUN=<new-id>`
+followed by `make bench-product-ab PRODUCT_AB_RUN=<same-id>`. The harness refuses
+reused artifact directories and results paths. Historical Rust-vs-C benchmark
+records are not current product baselines.
 
 ## Contact
 

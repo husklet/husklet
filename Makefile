@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint gate gate-app gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
+.PHONY: all check design-lint gate gate-app gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci test-compiles containers engine app dmg install uninstall clean bench-product-ab-prepare bench-product-ab bench-direct-ab bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
 
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
@@ -145,10 +145,50 @@ test-compiles:
 	cargo test --no-run --workspace --all-targets
 
 engine:
-	cargo build --release -p engine --bins --locked
+	$(NIX_DEV) cargo build --release -p engine --bins --locked --offline
 
-# Authoritative Rust-vs-retained-C verdict. The harness selects the retained engine and its
-# exec wrapper from BENCH_C_BUILD, pins one CPU, and refuses a verdict it cannot trust.
+# Authoritative product-boundary C-vs-C campaign. Preparation copies completed
+# workers in separate phases, hashes and smokes them before use; execution
+# alternates explicit-C/default-C order and refuses reused artifact/result paths.
+PRODUCT_AB_ISA ?= arm64
+PRODUCT_AB_BENCHMARK ?= lifecycle
+PRODUCT_AB_CASE ?= lifecycle
+PRODUCT_AB_ROUNDS ?= 6
+PRODUCT_AB_RUN ?=
+PRODUCT_AB_ARTIFACTS = target/testing/product-ab/artifacts/$(PRODUCT_AB_RUN)
+PRODUCT_AB_RESULTS = target/testing/product-ab/results/$(PRODUCT_AB_RUN).tsv
+
+bench-product-ab-prepare:
+	@test -n "$(PRODUCT_AB_RUN)" || { echo "set PRODUCT_AB_RUN to a new campaign id"; exit 1; }
+	cargo build --release -p testing --bin testing --locked
+	target/release/testing product-ab-prepare --isa $(PRODUCT_AB_ISA) --artifacts $(PRODUCT_AB_ARTIFACTS)
+
+bench-product-ab:
+	@test -n "$(PRODUCT_AB_RUN)" || { echo "set PRODUCT_AB_RUN to the prepared campaign id"; exit 1; }
+	target/release/testing product-ab $(PRODUCT_AB_BENCHMARK) $(PRODUCT_AB_CASE) \
+	  --isa $(PRODUCT_AB_ISA) --rounds $(PRODUCT_AB_ROUNDS) \
+	  --artifacts $(PRODUCT_AB_ARTIFACTS) --results $(PRODUCT_AB_RESULTS)
+
+# Direct preserved-artifact comparison used by the final ERI C-vs-C campaign.
+# Establish a same-binary null result first, then provide it when BASE and
+# CANDIDATE differ. Paths are deliberately required so Make cannot select an
+# implicit sibling checkout or reuse a ledger.
+AB_BASE ?=
+AB_CANDIDATE ?=
+AB_GUEST ?=
+AB_RESULTS ?=
+AB_NULL_RESULTS ?=
+AB_ROUNDS ?= 6
+
+bench-direct-ab:
+	@test -n "$(AB_BASE)" -a -n "$(AB_GUEST)" -a -n "$(AB_RESULTS)" || \
+	  { echo "set AB_BASE, AB_GUEST, and a new AB_RESULTS path"; exit 1; }
+	target/release/testing ab --base $(AB_BASE) $(if $(AB_CANDIDATE),--candidate $(AB_CANDIDATE)) \
+	  --guest $(AB_GUEST) --rounds $(AB_ROUNDS) --results $(AB_RESULTS) \
+	  $(if $(AB_NULL_RESULTS),--null-arm-results $(AB_NULL_RESULTS))
+
+# Historical Rust-vs-retained-C development gate. Keep it available for reading
+# old ledgers and oracle investigations; it is not the C-primary product verdict.
 BENCH_WORKLOAD ?= compute
 BENCH_ARCH ?= arm64
 BENCH_C_BUILD ?= $(CURDIR)/../engine/build/unit-audit

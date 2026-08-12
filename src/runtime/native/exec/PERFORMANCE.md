@@ -8,6 +8,12 @@ packaged commands, container launches, the testing application, and the GUI
 runtime now construct the retained C engine; `HL_EXECUTION_BACKEND=rust` is
 rejected.
 
+The authoritative current product boundary is documented in
+[`../README.md`](../README.md). Use `make bench-product-ab-prepare` and
+`make bench-product-ab` for explicit-C versus default-C product evidence, or
+`make bench-direct-ab` for preserved C artifact comparisons. Do not update a
+product baseline from any Rust row below.
+
 ## 2026-08-05 AArch64 source-window fallthrough
 
 The retained read-only audit covered `/Users/x/dd/engine/src/core/dispatch.c`

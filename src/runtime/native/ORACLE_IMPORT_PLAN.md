@@ -7,10 +7,10 @@ dependency. Every imported file is copied into `retained/`, reviewed there,
 and recorded in both retained source inventories.
 
 Current status: the AArch64 interpreter tranche and complete x86 closure have
-been imported. The x86 closure is compiled and inventoried but remains
-production-unselected. Production has no Rust execution fallback; promotion of
-another retained target must pass the gates below and update the fail-closed
-selector explicitly.
+been imported. Both AArch64 and x86-64 guest targets are product-selected
+through the fail-closed C bridge. Production has no Rust execution fallback;
+promotion of another retained target must pass the gates below and update the
+selector and backend receipt explicitly.
 
 [`ORACLE_IMPORT_MANIFEST.tsv`](ORACLE_IMPORT_MANIFEST.tsv) is the
 source-by-source delta for the standalone core and both translator ISAs. Files
@@ -18,13 +18,14 @@ already present and byte-identical remain governed by
 `retained/RUNTIME_SOURCES.manifest`. The five common translator files that
 differ are explicit conflict rows; none may be overwritten wholesale.
 
-## Authority boundary
+## Historical authority boundary
 
-The import restores C translation completeness, not oracle ownership of the
-product. Rust remains authoritative for address-space ledgers, projection and
-snapshot pins, mapping and instruction generations, executable tokens, cache
-identity policy, dirty publication, signals, process lifecycle, checkpointing,
-syscalls, container services, and application launch.
+This section records the boundary used while the replacement Rust executor was
+still present; it is not the current execution architecture. The final import
+restored the retained C engine as the production owner of guest execution,
+translation, Linux ABI service, guest signals, and in-worker lifecycle. Rust
+owns validated product launch, worker supervision, container/application
+composition, and the bounded `c_execution.rs` FFI/wire boundary.
 
 Consequently, oracle global logical-VMA pointers, identity-mapping fast paths,
 mutation-time peer stopping, standalone configuration reads, and signal/process
@@ -44,8 +45,10 @@ to use the same-ISA AArch64 translator rather than this interpreter arm.
 The x86 backend was not safely divisible into individual lowering files: decoder,
 operand, flags, emit, REP, vector, x87, cache, and generated dispatch headers
 cross-include each other. The manifest's complete `x86_closure`, including
-`core/target/{dual,x86_64}.c`, is now present. It remains non-selected pending
-CPU snapshot, signal, syscall, dirty-publication, and differential tests.
+`core/target/{dual,x86_64}.c`, is now present and product-selected. CPU, signal,
+syscall, dirty-publication, compatibility, and performance evidence remain
+required regression coverage; they are no longer a statement that x86 is
+unwired.
 
 The standalone CLI/config/environment/launch files are last and remain
 unwired. Their purpose is a diagnostic standalone executable for oracle-floor

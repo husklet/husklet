@@ -25,10 +25,9 @@ The production execution architecture is C-only: container, direct worker, and
 GUI launches all enter `ProductionFactory`, which has no Rust execution arm.
 The direct workers additionally provide a hash-bound backend receipt and reject
 an unsupported or unknown selection instead of silently falling back. The
-compiled retained host closure currently covers Linux/AArch64 and macOS/AArch64;
-Linux/AArch64 is the default product target. The retained tree now contains both
-AArch64 and x86-64 guest translators, but production selection remains AArch64
-guest-only until the x86 target boundary is promoted independently.
+compiled retained host closure currently covers Linux/AArch64 and macOS/AArch64.
+The retained tree and product worker boundary select both AArch64 and x86-64
+guests; an unknown ISA still fails closed.
 
 ## Status and evidence rules
 
@@ -55,7 +54,8 @@ useful context but is not parity proof. Each completed semantic row needs:
 3. an engine-level test for ownership, rejection, invalidation, or lifecycle
    behavior that crosses the retained worker boundary.
 
-The retained implementation is still the behavioral and performance oracle.
+The retained implementation is the production behavioral baseline. The
+standalone `../engine` tree remains a read-only external performance oracle.
 There is currently no general retained-C-versus-current-native differential in
 the permanent gate, so rows marked **Open** must not be declared complete from
 the existing component tests alone.
@@ -73,7 +73,7 @@ Path shorthand in the tables is deliberate: retained `translator/...` and
 | Product launch, worker supervision, and backend rejection | `src/containers/hl-engine/src/{runtime,c_execution}.rs` and the application/container composition roots | Retained lifecycle, guest scheduling, translated execution, and classified exits |
 | Guest memory and executable identity | `hl-memory` projection/direct-authority leases and executable versions | Checked source/projection views, memory lowering, dirty ranges, and fault provenance |
 | Translation admission and cache identity | Retained `core/dispatch.c`, `translator/cache.c`, and the selected guest target | Translation cache, relocation, chaining, and IBTC mechanics; Rust supplies bounded launch/image identity |
-| Architectural state | Generated schema in `src/native/cpu` and Rust CPU state in `hl-execution` | ABI-compatible state load/store around native entry |
+| Architectural state | Retained per-ISA CPU layouts and generated bridge schema in `src/native/cpu` | ABI-compatible state at the C bridge and translator entry |
 
 ## Translation manifest
 
@@ -84,7 +84,7 @@ Path shorthand in the tables is deliberate: retained `translator/...` and
 | `translator/guest_fetch.{c,h}` | Bounded guest instruction fetch across source windows | Retained production translator; `arch/aarch64/source.{c,h}` and Rust projection leases form the replacement candidate | **Retained, Open** | `exec/test/aarch64_source.c`, `aarch64_frontend.c`, `aarch64_stale_site.c`, and source-boundary differential tests remain retirement evidence. Retirement requires truncation, overflow, cross-view, and stale-source cases to remain asserted. |
 | `translator/guest/aarch64/stubs.c`, `dispatch.h` | Entry stubs, dispatcher transitions, chaining, and public exits | The retained production target; corresponding `exec` files are differential candidates | **Retained, Open** | Retained worker lifecycle tests plus `exec/test` and differential coverage are required before selection can move. Rust no longer schedules a production fallback executor. |
 | `translator/guest/aarch64/{abi,cpu}.h` | Guest CPU layout and the translator/dispatcher ABI | `src/native/cpu/{layout.tsv,generate.rs,rust/layout.rs}`, `src/runtime/native/cpu/include/layout.h`, `src/runtime/native/exec/include/executor.h`, and `hl-execution` AArch64 CPU state | **Split, Open** | `src/runtime/native/cpu/test/layout.c`, C `_Static_assert`s in the public header, `exec/test/state_tally.c`, and the retained differential fixtures are the evidence targets. Before retirement, wire the standalone layout check or an equivalent generated-output check into the permanent gate so changing only one language fails. |
-| `translator/guest/x86_64/**`, `core/target/x86_64.c`, `core/target/dual.c` | x86-64 guest translation and dual-guest target wiring on an AArch64 host | Imported retained closure, compiled and inventoried but not production-selected | **Retained, unselected** | Archive/link smoke and inventory tests prevent rot. Production promotion still requires CPU/signal/syscall/dirty-publication differentials and balanced x86 performance evidence; AArch64 parity is not x86 evidence. |
+| `translator/guest/x86_64/**`, `core/target/x86_64.c`, `core/target/dual.c` | x86-64 guest translation and dual-guest target wiring on an AArch64 host | Imported retained closure selected by the `hl-x86_64` product worker | **Retained, selected** | Product receipt, execution, compatibility, inventory, and link tests prevent silent fallback or rot. CPU/signal/syscall/dirty-publication and balanced x86 performance evidence remain required regression coverage; AArch64 parity is not x86 evidence. |
 
 ## Execution and signal manifest
 
@@ -165,7 +165,11 @@ lifecycle, or retained-backend compatibility.
 The audit documents [`exec/HOT_PATH.md`](exec/HOT_PATH.md),
 [`exec/FALLBACK_AUDIT.md`](exec/FALLBACK_AUDIT.md), and
 [`exec/WRITE_PUBLICATION.md`](exec/WRITE_PUBLICATION.md) explain design choices
-and measurements. They are supporting rationale, not permanent parity evidence.
+and measurements. They are historical Rust-replacement rationale, not current
+product performance baselines. Product C-vs-C measurements use the staged,
+hash-bound `testing product-ab` campaign; preserved original/retained C binaries
+are compared with `testing ab`, balanced arm order, exact output, unique ledgers,
+and a same-binary null arm.
 
 ## Retirement order
 

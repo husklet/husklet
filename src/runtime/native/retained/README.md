@@ -3,10 +3,11 @@
 This directory contains the retained C runtime closure imported from the
 original Husklet engine. It is Husklet's production execution backend and the
 performance reference while components are replaced incrementally. The host
-closure covers Linux/AArch64 and macOS/AArch64; the source inventory contains
-both AArch64 and x86-64 guest translators. Production selection is currently
-AArch64 guest-only, so presence in this tree does not by itself make the x86
-target selectable.
+closure covers Linux/AArch64 and macOS/AArch64. The source inventory contains
+both AArch64 and x86-64 guest translators, and both guest targets are selected
+by their product workers. Inventory membership alone is still not a selection
+contract: `ProductionFactory`, backend receipts, and worker smoke tests fail
+closed on unknown targets.
 
 - Upstream repository: `../engine`
 - Source revision: `7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`

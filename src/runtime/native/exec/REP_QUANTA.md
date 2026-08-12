@@ -1,5 +1,10 @@
 # AMD64 REP quantum audit
 
+> Historical replacement-engine audit. Rust/native benchmark commands and
+> verdict thresholds below are retained as migration evidence, not as current
+> product instructions. The C-primary campaign is described in
+> [`../README.md`](../README.md).
+
 ## Exact-quantum completion boundary
 
 The follow-up audit used detached commit `d6d1ad382`. In addition to the

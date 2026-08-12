@@ -1,5 +1,9 @@
 # AMD64 native performance audit
 
+> Historical replacement-engine audit. Rust/native measurements below are not
+> current product baselines; use the C-primary campaign described in
+> [`../README.md`](../README.md).
+
 ## Write projection publication, 2026-08-05
 
 The writable-view cache now admits scalar, vector, and RMW stores against the
