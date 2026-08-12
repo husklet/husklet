@@ -48,15 +48,12 @@ impl Audit {
     }
 
     fn inventory(&self) -> Result<Vec<Entry>, String> {
-        let production = fs::read_to_string(
-            self.root
-                .join("src/runtime/hl-native/src/linux_abi/number.c"),
-        )
-        .map_err(|error| format!("read production C syscall map: {error}"))?;
+        let production = fs::read_to_string(self.root.join("src/runtime/hl-native/src/native/linux_abi/number.c"))
+            .map_err(|error| format!("read production C syscall map: {error}"))?;
         let entries = Self::c_entries(&production)?;
         let checked = Self::numbers(NUMBERS)?;
         if entries != checked {
-            return Err("syscall-numbers.tsv differs from production C number.c; run testing syscall-audit --regenerate src/runtime/hl-native/src/linux_abi/number.c".into());
+            return Err("syscall-numbers.tsv differs from production C number.c; run testing syscall-audit --regenerate src/runtime/hl-native/src/native/linux_abi/number.c".into());
         }
         Ok(entries)
     }
@@ -91,14 +88,8 @@ impl Audit {
                 continue;
             };
             output.push(Entry {
-                arm: Some(
-                    arm.parse()
-                        .map_err(|_| format!("invalid arm number: {arm}"))?,
-                ),
-                x86: Some(
-                    x86.parse()
-                        .map_err(|_| format!("invalid x86 number: {x86}"))?,
-                ),
+                arm: Some(arm.parse().map_err(|_| format!("invalid arm number: {arm}"))?),
+                x86: Some(x86.parse().map_err(|_| format!("invalid x86 number: {x86}"))?),
                 name: (*name).to_owned(),
             });
         }
@@ -147,7 +138,6 @@ impl Audit {
         output.sort_by_key(|entry| (entry.arm, entry.x86));
         Ok(output)
     }
-
 }
 
 #[cfg(test)]
@@ -160,8 +150,7 @@ mod tests {
         let entries = audit.inventory().unwrap();
         assert!(entries.iter().any(|entry| entry.name == "read"));
         assert!(entries.windows(2).all(|pair| {
-            (pair[0].arm.unwrap_or(u16::MAX), pair[0].x86)
-                <= (pair[1].arm.unwrap_or(u16::MAX), pair[1].x86)
+            (pair[0].arm.unwrap_or(u16::MAX), pair[0].x86) <= (pair[1].arm.unwrap_or(u16::MAX), pair[1].x86)
         }));
     }
 }

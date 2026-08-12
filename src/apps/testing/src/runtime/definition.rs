@@ -313,17 +313,22 @@ impl App {
                 .into());
             }
             if let Some(golden) = &case.golden {
-                if update {
-                    let temporary = golden.with_extension("tmp");
-                    fs::write(&temporary, &stdout)?;
-                    fs::rename(temporary, golden)?;
-                } else if fs::read(golden)? != stdout {
-                    return Err(format!("oracle output differs for {} {}", case.id, target.name()).into());
-                }
+                Self::publish_or_compare(golden, &stdout, update, &case.id, target)?;
             } else if !stdout.is_empty() {
                 return Err(format!("oracle output differs for {} {}", case.id, target.name()).into());
             }
             println!("ORACLE {} {}", case.id, target.name());
+        }
+        Ok(())
+    }
+
+    fn publish_or_compare(golden: &Path, stdout: &[u8], update: bool, case: &str, target: Target) -> Result<(), Error> {
+        if update {
+            let temporary = golden.with_extension("tmp");
+            fs::write(&temporary, stdout)?;
+            fs::rename(temporary, golden)?;
+        } else if fs::read(golden)? != stdout {
+            return Err(format!("oracle output differs for {case} {}", target.name()).into());
         }
         Ok(())
     }

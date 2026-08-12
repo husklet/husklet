@@ -1,4 +1,5 @@
 use crate::suite::Error;
+use fs2::FileExt;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -60,7 +61,7 @@ pub(crate) struct Ledger<S: Schema> {
     file: Mutex<Option<BufWriter<File>>>,
     rows: Mutex<BTreeMap<S::Key, S::Row>>,
     keys: BTreeSet<S::Key>,
-    _lock: hl_engine::native::FileLock,
+    _lock: FileLock,
     _schema: PhantomData<fn() -> S>,
 }
 
@@ -75,7 +76,7 @@ impl<S: Schema> Ledger<S> {
         if let Some(parent) = report.parent() {
             fs::create_dir_all(parent)?;
         }
-        let lock = hl_engine::native::FileLock::acquire(report.with_extension("lock"))?;
+        let lock = FileLock::acquire(report.with_extension("lock"))?;
         let prior = if resume && partial.exists() {
             Self::load(&partial, stamp, keys)?
         } else {
@@ -218,5 +219,27 @@ impl<S: Schema> Ledger<S> {
             file.sync_data()?;
         }
         Ok(bytes)
+    }
+}
+
+/// Process-scoped lock for one resumable testing ledger.
+struct FileLock(File);
+
+impl FileLock {
+    fn acquire(path: impl AsRef<Path>) -> std::io::Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        file.try_lock_exclusive()?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
     }
 }

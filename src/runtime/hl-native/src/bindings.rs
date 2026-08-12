@@ -12,6 +12,7 @@ pub type SyscallDispatch = unsafe extern "C" fn(*mut c_void, c_uint, *mut c_void
 unsafe extern "C" {
     pub(super) fn hl_engine_abi() -> c_uint;
     pub(super) fn hl_engine_version() -> *const c_char;
+    pub(super) fn hl_c_backend_leak_check_nonvacuity() -> c_int;
     pub(super) fn hl_c_backend_create(
         isa: c_uint,
         rootfs: *const c_char,

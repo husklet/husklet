@@ -30,6 +30,14 @@ impl Native {
         // ABI guarantees the referenced NUL-terminated bytes live forever.
         unsafe { CStr::from_ptr(value) }
     }
+
+    /// Exercises one deliberately retained native allocation so leak tooling
+    /// can prove that it observes the integrated C engine.
+    #[must_use]
+    pub fn leak_check_nonvacuity(self) -> i32 {
+        // SAFETY: the symbol takes no arguments and owns its test allocation.
+        unsafe { super::bindings::hl_c_backend_leak_check_nonvacuity() }
+    }
 }
 
 /// Platform filename produced by this package's Cargo build.
