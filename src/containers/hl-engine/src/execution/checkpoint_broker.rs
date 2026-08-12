@@ -58,8 +58,8 @@ struct Request {
 
 impl Request {
     fn decode(bytes: &[u8; REQUEST_BYTES]) -> Option<Self> {
-        let word = |at| u32::from_ne_bytes(bytes[at..at + 4].try_into().ok()?);
-        let long = |at| u64::from_ne_bytes(bytes[at..at + 8].try_into().ok()?);
+        let word = |at| u32::from_ne_bytes(bytes[at..at + 4].try_into().expect("fixed request layout"));
+        let long = |at| u64::from_ne_bytes(bytes[at..at + 8].try_into().expect("fixed request layout"));
         if word(0) != MAGIC_REQUEST || word(4) != ABI {
             return None;
         }
