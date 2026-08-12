@@ -29,7 +29,9 @@ const RUST_BRIDGE_EXPORTS: &[&str] = &[
     "hl_c_backend_executable_discard",
 ];
 fn main() {
-    println!("cargo:rerun-if-changed=build.rs");
+    for input in build_support::BUILD_POLICY_INPUTS {
+        println!("cargo:rerun-if-changed={input}");
+    }
     println!("cargo:rerun-if-env-changed=HL_C_SANITIZER");
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo supplies CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo supplies CARGO_CFG_TARGET_ARCH");

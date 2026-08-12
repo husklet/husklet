@@ -2,6 +2,9 @@
 
 use std::fmt::Write;
 
+pub(crate) const BUILD_POLICY_INPUTS: &[&str] =
+    &["build.rs", "src/artifact.rs", "src/build_support.rs", "src/platform.rs"];
+
 pub(crate) const WINDOWS_SYSTEM_LIBRARIES: &[&str] = &[
     "kernel32",
     "ntdll",
@@ -66,6 +69,20 @@ fn symbols_with_affixes(symbols: &[&str], header: &str, prefix: &str, suffix: &s
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn build_policy_modules_are_complete_and_stably_ordered() {
+        assert_eq!(
+            super::BUILD_POLICY_INPUTS,
+            &["build.rs", "src/artifact.rs", "src/build_support.rs", "src/platform.rs"]
+        );
+        for path in super::BUILD_POLICY_INPUTS {
+            assert!(
+                std::path::Path::new(path).is_file(),
+                "missing build policy input {path}"
+            );
+        }
+    }
+
     #[test]
     fn platform_source_closures_do_not_mix_host_implementations() {
         for target in ["linux", "macos", "windows"] {
