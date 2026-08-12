@@ -31,10 +31,143 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
-    if tree.root_node().has_error() {
-        return Err(parse_error(path, "source contains invalid C syntax"));
+    if let Some(node) = first_unrecoverable_error(tree.root_node(), source) {
+        let point = node.start_position();
+        let excerpt = node
+            .utf8_text(source.as_bytes())
+            .unwrap_or("<non-UTF-8 syntax>")
+            .lines()
+            .next()
+            .unwrap_or_default();
+        return Err(parse_error(
+            path,
+            format!(
+                "source contains invalid C syntax at {}:{} ({}, {excerpt:?})",
+                point.row + 1,
+                point.column + 1,
+                node.kind()
+            ),
+        ));
     }
     Ok(tree)
+}
+
+fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str) -> Option<tree_sitter::Node<'tree>> {
+    if node.is_error() || node.is_missing() {
+        if macro_continuation(node, source) || enclosing_macro_invocation(node, source) {
+            return None;
+        }
+        return Some(node);
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .find_map(|child| first_unrecoverable_error(child, source))
+}
+
+fn macro_continuation(node: tree_sitter::Node<'_>, source: &str) -> bool {
+    let lines = source.lines().collect::<Vec<_>>();
+    let mut row = node.start_position().row;
+    while row > 0 {
+        row -= 1;
+        let line = lines[row].trim_end();
+        if !line.ends_with('\\') {
+            return false;
+        }
+        if line.trim_start().starts_with("#define ") {
+            return true;
+        }
+    }
+    false
+}
+
+fn enclosing_macro_invocation(mut node: tree_sitter::Node<'_>, source: &str) -> bool {
+    loop {
+        if node.kind().starts_with("preproc_") {
+            return true;
+        }
+        if recoverable_macro_invocation(node, source) {
+            return true;
+        }
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        node = parent;
+    }
+}
+
+fn recoverable_macro_invocation(node: tree_sitter::Node<'_>, source: &str) -> bool {
+    if node.parent().is_none_or(|parent| parent.kind() != "translation_unit") {
+        return false;
+    }
+    let Ok(text) = node.utf8_text(source.as_bytes()) else {
+        return false;
+    };
+    let mut offset = 0;
+    let mut invocation = false;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            offset += line.len();
+            continue;
+        }
+        if defined_macro_invocation(trimmed, source) {
+            invocation = true;
+            offset += line.len();
+            continue;
+        }
+        break;
+    }
+    invocation && (offset == text.len() || parses_without_recovery(&text[offset..]))
+}
+
+fn parses_without_recovery(source: &str) -> bool {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_c::LANGUAGE.into()).is_ok()
+        && parser
+            .parse(source, None)
+            .is_some_and(|tree| !tree.root_node().has_error())
+}
+
+fn defined_macro_invocation(text: &str, source: &str) -> bool {
+    let text = text.trim().trim_end_matches(';').trim_end();
+    let Some(open) = text.find('(') else {
+        return false;
+    };
+    let name = text[..open].trim();
+    if name.is_empty()
+        || !name.bytes().all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        || name.as_bytes()[0].is_ascii_digit()
+        || !balanced_parentheses(&text[open..])
+    {
+        return false;
+    }
+    source.lines().any(|line| {
+        let line = line.trim_start();
+        line.strip_prefix("#define")
+            .is_some_and(|definition| definition.trim_start().starts_with(&format!("{name}(")))
+    })
+}
+
+fn balanced_parentheses(text: &str) -> bool {
+    let mut depth = 0usize;
+    let length = text.len();
+    for (index, byte) in text.bytes().enumerate() {
+        match byte {
+            b'(' => depth += 1,
+            b')' => {
+                let Some(next) = depth.checked_sub(1) else {
+                    return false;
+                };
+                depth = next;
+            }
+            _ => {}
+        }
+        if depth == 0 && index + 1 != length {
+            // A matching close before the end means trailing syntax was recovered too.
+            return false;
+        }
+    }
+    depth == 0
 }
 
 fn parse_error(path: &Path, message: impl Into<String>) -> LintError {
@@ -102,5 +235,17 @@ mod test {
     fn parser_rejects_recovered_syntax_errors() {
         let error = parse(Path::new("invalid.c"), "int answer(void) { return ; trailing }").unwrap_err();
         assert!(error.to_string().contains("invalid C syntax"));
+    }
+
+    #[test]
+    fn parser_accepts_defined_top_level_macro_with_an_empty_argument() {
+        let source = "#define MAKE(name, ty, suffix) ty name(ty value) { return value; }\n\
+                      MAKE(identity, int, )\n";
+        parse(Path::new("generated.c"), source).unwrap();
+    }
+
+    #[test]
+    fn parser_rejects_undeclared_top_level_recovery() {
+        assert!(parse(Path::new("invalid.c"), "UNKNOWN(identity, int, )\n").is_err());
     }
 }
