@@ -3,7 +3,7 @@
 #include <string.h>
 
 static void hl_c_backend_executable_clear(hl_engine_executable *executable) {
-    memset(executable, 0, sizeof(*executable));
+    *executable = (hl_engine_executable){0};
 }
 
 hl_status hl_c_backend_executable_open(const hl_host_services *services, const char *host_path,

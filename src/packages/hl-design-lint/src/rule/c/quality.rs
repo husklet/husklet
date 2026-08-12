@@ -349,10 +349,12 @@ fn run(program: &str, arguments: &[&str]) -> Result<()> {
     if output.status.success() {
         return Ok(());
     }
+    let mut diagnostics = String::from_utf8_lossy(&output.stdout).into_owned();
+    diagnostics.push_str(&String::from_utf8_lossy(&output.stderr));
     Err(LintError::io(
         "execute",
         Path::new(program),
-        std::io::Error::other(String::from_utf8_lossy(&output.stderr).into_owned()),
+        std::io::Error::other(diagnostics),
     ))
 }
 
