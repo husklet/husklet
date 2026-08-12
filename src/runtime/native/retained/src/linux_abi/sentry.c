@@ -1583,12 +1583,15 @@ static void sentry_service_one(struct sentry_ring *R) {
                     eb = 1;
                     break;
                 }
+                int typed = p->typed[v];
                 if (vfd_drop(p, v) < 0) {
                     handled_local = 1;
                     local_ret = 0;
                     break;
                 } // borrowed: success, real fd stays
-                G_A0(&tmp) = (uint64_t)(int64_t)r; // fall through to service_local: real close + fscache flush
+                sentry_owned_close(r, typed);
+                handled_local = 1;
+                local_ret = 0;
                 break;
             }
             case 24: { // dup3(oldfd, newfd, flags): handled ENTIRELY here -- never let the kernel use the guest's
