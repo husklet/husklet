@@ -3940,6 +3940,75 @@ static int lower_system_query(struct insn *instruction, uint64_t next) {
     return TX_FALL;
 }
 
+static int lower_bit_test_modify(struct insn *instruction, uint64_t guest_pc, uint64_t next, int sf) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0xA3 && opcode != 0xAB && opcode != 0xB3 && opcode != 0xBB && opcode != 0xBA)
+        return TX_FALL;
+    int immediate = opcode == 0xBA;
+    int operation = immediate ? (instruction->reg & 7)
+                              : (opcode == 0xA3 ? 4 : opcode == 0xAB ? 5 : opcode == 0xB3 ? 6 : 7);
+    if (operation < 4) {
+        report_unimpl(guest_pc, instruction);
+        return TX_BREAK;
+    }
+    int width = instruction->opsize;
+    int memory;
+    int bits = width * 8;
+    int log_bits = width == 8 ? 6 : width == 4 ? 5 : 4;
+    int log_width = width == 8 ? 3 : width == 4 ? 2 : 1;
+    int value;
+    uint32_t access = operation == 4 ? X86_SOFT_READ : X86_SOFT_READ | X86_SOFT_WRITE;
+    if (instruction->is_mem && !immediate) {
+        emit_ea(instruction, next);
+        if (width == 8)
+            e_mov_rr(20, instruction->reg, 1);
+        else
+            e_sxt(20, instruction->reg, width);
+        e_asr_i(20, 20, log_bits, 1);
+        e_rrr(A_ADD, 17, 17, 20, 1, log_width);
+        emit_memory_guard(17, (uint64_t)width, guest_pc, access);
+        e_load(width, 16, 17);
+        value = 16;
+        memory = 1;
+    } else {
+        value = rm_load_access(instruction, next, width, &memory, access);
+    }
+    if (immediate) {
+        e_movconst(19, (uint64_t)instruction->imm & (uint64_t)(bits - 1));
+    } else {
+        e_movconst(21, bits - 1);
+        e_rrr(A_AND, 19, instruction->reg, 21, sf, 0);
+    }
+    e_shv(S_LSRV, 21, value, 19, sf);
+    e_movconst(22, 1);
+    e_rrr(A_AND, 21, 21, 22, sf, 0);
+    e_rrr(A_SUBS, 31, 31, 21, 1, 0);
+    e_nzcv_save();
+    if (operation == 4) return TX_NEXT;
+    e_movconst(22, 1);
+    e_shv(S_LSLV, 22, 22, 19, sf);
+    if (memory && instruction->lock) {
+        uint32_t lse = operation == 5 ? LSE_LDSET : operation == 6 ? LSE_LDCLR : LSE_LDEOR;
+        e_lse(lse, width, 22, 23, 17);
+        e_shv(S_LSRV, 24, 23, 19, sf);
+        e_movconst(25, 1);
+        e_rrr(A_AND, 24, 24, 25, sf, 0);
+        e_rrr(A_SUBS, 31, 31, 24, 1, 0);
+        e_nzcv_save();
+        if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)width);
+        return TX_NEXT;
+    }
+    int output = memory || width < 4 ? 16 : instruction->rm_reg;
+    if (operation == 5)
+        e_rrr(A_ORR, output, value, 22, sf, 0);
+    else if (operation == 6)
+        e_rrr(A_BIC, output, value, 22, sf, 0);
+    else
+        e_rrr(A_EOR, output, value, 22, sf, 0);
+    rm_store_after_guard(instruction, width, output);
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6179,85 +6248,12 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // bit ops: BT(A3) BTS(AB) BTR(B3) BTC(BB), and group BA /4..7 with imm8.
-            if (op == 0xA3 || op == 0xAB || op == 0xB3 || op == 0xBB || op == 0xBA) {
-                int isimm = (op == 0xBA);
-                int sub = isimm ? (I.reg & 7) : (op == 0xA3 ? 4 : op == 0xAB ? 5 : op == 0xB3 ? 6 : 7);
-                if (sub < 4) {
-                    report_unimpl(gpc, &I);
-                    break;
-                }
-                int w = I.opsize, mem, bits = w * 8;
-                int logbits = w == 8 ? 6 : w == 4 ? 5 : 4; // log2(bits): 64/32/16
-                int logw = w == 8 ? 3 : w == 4 ? 2 : 1;    // log2(w)
-                int val;
-                // x86 bit-string addressing: with a MEMORY base and a REGISTER bit offset, the high bits of
-                // the (signed) offset select the addressed word (EA + (offset/bits)*w); only the low
-                // log2(bits) bits index within it. (An immediate offset is taken modulo the operand size,
-                // for both reg and mem.) Dropping the high bits -- the pre-fix behavior -- mis-tests a
-                // 256-bit bitset (e.g. glibc/grep's DFA charclass `bt %reg,(%mem)`), the debian-grep miss.
-                if (I.is_mem && !isimm) {
-                    emit_ea(&I, next); // x17 = base EA
-                    if (w == 8)
-                        e_mov_rr(20, I.reg, 1);
-                    else
-                        e_sxt(20, I.reg, w);           // sxtw/sxth: index as a 64-bit signed value
-                    e_asr_i(20, 20, logbits, 1);       // x20 = signed word offset = index >> log2(bits)
-                    e_rrr(A_ADD, 17, 17, 20, 1, logw); // EA += wordoff * w
-                    uint32_t access = sub != 4 ? (X86_SOFT_READ | X86_SOFT_WRITE) : X86_SOFT_READ;
-                    emit_memory_guard(17, (uint64_t)w, gpc, access);
-                    e_load(w, 16, 17);
-                    val = 16;
-                    mem = 1;
-                } else {
-                    uint32_t access = sub != 4 ? (X86_SOFT_READ | X86_SOFT_WRITE) : X86_SOFT_READ;
-                    val = rm_load_access(&I, next, w, &mem, access);
-                }
-                if (isimm)
-                    e_movconst(19, (uint64_t)(((uint64_t)I.imm) & (bits - 1))); // idx -> x19
-                else {
-                    e_movconst(21, bits - 1);
-                    e_rrr(A_AND, 19, I.reg, 21, sf, 0);
-                }
-                e_shv(S_LSRV, 21, val, 19, sf);
-                e_movconst(22, 1);
-                e_rrr(A_AND, 21, 21, 22, sf, 0); // x21 = bit
-                e_rrr(A_SUBS, 31, 31, 21, 1, 0);
-                e_nzcv_save();  // ARM C = !bit  (subs convention -> x86 CF)
-                if (sub != 4) { // BTS/BTR/BTC: modify the bit + write back
-                    e_movconst(22, 1);
-                    e_shv(S_LSLV, 22, 22, 19, sf); // mask = 1<<idx
-                    if (mem && I.lock) {
-                        // LOCK BTS/BTR/BTC: the read-modify-write MUST be atomic or contending guest threads
-                        // lose updates on a shared bitset word. Use the LSE atomic (LDSET/LDCLR/LDEOR); it
-                        // returns the OLD memory value, so recompute CF from THAT -- the tested bit and the RMW
-                        // are then a single atomic operation (a pre-load CF could be stale after a peer's flip).
-                        uint32_t lse = (sub == 5) ? LSE_LDSET : (sub == 6) ? LSE_LDCLR : LSE_LDEOR;
-                        e_lse(lse, w, 22, 23, 17); // x23 = old [m]; [m] {|=,&=~,^=} mask (acquire-release)
-                        e_shv(S_LSRV, 24, 23, 19, sf);
-                        e_movconst(25, 1);
-                        e_rrr(A_AND, 24, 24, 25, sf, 0); // x24 = old tested bit
-                        e_rrr(A_SUBS, 31, 31, 24, 1, 0);
-                        e_nzcv_save(); // ARM C = !bit -> x86 CF, atomically consistent with the RMW above
-                        if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)w);
-                    } else {
-                        // A 16-bit register dest must preserve bits 63:16 (x86 word ops leave the upper
-                        // 48 bits untouched), but a 32-bit ARM op writing the guest home zeroes 63:32.
-                        // Route w<4 through the x16 scratch so rm_store's bfi merges only the low `w`
-                        // bytes; w>=4 writes the home directly (a 32-bit zero-extend is x86-correct there).
-                        int o = (mem || w < 4) ? 16 : I.rm_reg;
-                        if (sub == 5)
-                            e_rrr(A_ORR, o, val, 22, sf, 0); // BTS
-                        else if (sub == 6)
-                            e_rrr(A_BIC, o, val, 22, sf, 0); // BTR
-                        else
-                            e_rrr(A_EOR, o, val, 22, sf, 0); // BTC
-                        rm_store_after_guard(&I, w, o);
-                    }
-                }
+            int bit_modify_result = lower_bit_test_modify(&I, gpc, next, sf);
+            if (bit_modify_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
+            if (bit_modify_result == TX_BREAK) break;
             int compare_exchange_result = lower_compare_exchange(&I, gpc, next);
             if (compare_exchange_result == TX_NEXT) {
                 gpc = next;
