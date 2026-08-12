@@ -4517,6 +4517,83 @@ static int interp_two_byte_shift(struct cpu *cpu, struct insn *insn, uint64_t ne
     return STEP_NEXT;
 }
 
+static int interp_two_byte_bit_modify(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op != 0xA3 && op != 0xAB && op != 0xB3 && op != 0xBB && op != 0xBA) return -1;
+    int immediate_form = op == 0xBA;
+    int sub = immediate_form ? (insn->reg & 7) : ((op >> 3) & 3) + 4;
+    if (immediate_form && sub < 4) return interp_undefined(cpu, insn, pc, "0F BA group with /reg < 4");
+    int width = insn->opsize;
+    interp_operand operand = interp_rm(cpu, insn, next);
+    int64_t index = immediate_form ? (int64_t)(insn->imm & (width == 8 ? 63 : 31))
+                                   : (int64_t)interp_reg_read(cpu, insn, insn->reg, width);
+    if (!immediate_form && width != 8) index = (int64_t)(int32_t)(uint32_t)(uint64_t)index;
+    enum interp_rmw_kind rmw = sub == 5 ? RMW_BTS : sub == 6 ? RMW_BTR : RMW_BTC;
+    unsigned bit;
+    uint64_t old;
+    if (operand.is_memory) {
+        uint64_t address = operand.address + (uint64_t)(index >> 3);
+        bit = (unsigned)(index & 7);
+        if (sub == 4)
+            old = interp_load(address, 1);
+        else if (insn->lock)
+            old = interp_locked_rmw(address, 1, rmw, UINT64_C(1) << bit, 0);
+        else {
+            old = interp_load(address, 1);
+            interp_store(address, 1, interp_rmw_apply(rmw, old, UINT64_C(1) << bit, 0, 1));
+        }
+    } else {
+        bit = (unsigned)((uint64_t)index & (width == 8 ? 63u : (unsigned)(8 * width - 1)));
+        old = interp_reg_read(cpu, insn, operand.number, width);
+        if (sub != 4)
+            interp_reg_write(cpu, insn, operand.number, width,
+                             interp_rmw_apply(rmw, old, UINT64_C(1) << bit, 0, width));
+    }
+    interp_set_cf(cpu, (unsigned)((old >> bit) & 1));
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
+static int interp_two_byte_bit_count(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op == 0xB8) {
+        if (!insn->rep) return interp_undefined(cpu, insn, pc, "0F B8 without the F3 prefix (JMPE)");
+        int width = insn->opsize;
+        interp_operand operand = interp_rm(cpu, insn, next);
+        uint64_t source = interp_rm_read(cpu, insn, &operand, width) & interp_mask(width);
+        uint64_t result = (uint64_t)__builtin_popcountll(source);
+        interp_flags_nzcv(cpu, 0, source == 0, 0, 0);
+        cpu->pf = 1;
+        cpu->af = 0;
+        interp_reg_write(cpu, insn, insn->reg, width, result);
+        cpu->rip = next;
+        return STEP_NEXT;
+    }
+    if (op != 0xBC && op != 0xBD) return -1;
+    int width = insn->opsize;
+    unsigned bits = (unsigned)(8 * width);
+    interp_operand operand = interp_rm(cpu, insn, next);
+    uint64_t source = interp_rm_read(cpu, insn, &operand, width) & interp_mask(width);
+    if (insn->rep) {
+        uint64_t result = source == 0 ? bits
+                                     : op == 0xBC ? (uint64_t)__builtin_ctzll(source)
+                                                  : (uint64_t)(__builtin_clzll(source) - (64 - bits));
+        interp_flags_nzcv(cpu, 0, result == 0, source == 0, 0);
+        cpu->pf = result & 0xff;
+        interp_reg_write(cpu, insn, insn->reg, width, result);
+    } else if (source == 0) {
+        interp_flags_nzcv(cpu, 0, 1, 0, 0);
+        cpu->pf = 0xff;
+    } else {
+        uint64_t result = op == 0xBC ? (uint64_t)__builtin_ctzll(source) : (uint64_t)(63 - __builtin_clzll(source));
+        interp_flags_nzcv(cpu, 0, 0, 0, 0);
+        cpu->pf = result & 0xff;
+        interp_reg_write(cpu, insn, insn->reg, width, result);
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_two_byte_condition(cpu, insn, next);
@@ -4528,6 +4605,10 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     delegated = interp_two_byte_extend(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_two_byte_shift(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_two_byte_bit_modify(cpu, insn, pc, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_two_byte_bit_count(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -4559,100 +4640,6 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         interp_reg_write(
             cpu, insn, insn->reg, insn->opsize,
             interp_imul_truncating(cpu, interp_reg_read(cpu, insn, insn->reg, insn->opsize), source, insn->opsize));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // BT/BTS/BTR/BTC: 0F A3/AB/B3/BB register-index, 0F BA /4../7 immediate. Only CF is written. A MEMORY
-    // bit index is NOT masked; byte + bit-in-byte keeps a locked BTS a single-byte atomic.
-    case 0xA3:
-    case 0xAB:
-    case 0xB3:
-    case 0xBB:
-    case 0xBA: {
-        int immediate_form = (op == 0xBA);
-        int sub = immediate_form ? (insn->reg & 7) : ((op >> 3) & 3) + 4;
-        if (immediate_form && sub < 4) return interp_undefined(cpu, insn, pc, "0F BA group with /reg < 4");
-        int width = insn->opsize;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        int64_t index = immediate_form ? (int64_t)(insn->imm & (width == 8 ? 63 : 31))
-                                       : (int64_t)interp_reg_read(cpu, insn, insn->reg, width);
-        if (!immediate_form && width != 8) index = (int64_t)(int32_t)(uint32_t)(uint64_t)index;
-        // sub: 4 = BT, 5 = BTS, 6 = BTR, 7 = BTC.
-        enum interp_rmw_kind rmw = sub == 5 ? RMW_BTS : sub == 6 ? RMW_BTR : RMW_BTC;
-        unsigned bit;
-        uint64_t old;
-        if (operand.is_memory) {
-            int64_t byte_offset = index >> 3; // arithmetic: negative reaches below the EA
-            uint64_t address = operand.address + (uint64_t)byte_offset;
-            bit = (unsigned)(index & 7);
-            if (sub == 4) {
-                old = interp_load(address, 1);
-            } else if (insn->lock) {
-                old = interp_locked_rmw(address, 1, rmw, UINT64_C(1) << bit, 0);
-            } else {
-                old = interp_load(address, 1);
-                interp_store(address, 1, interp_rmw_apply(rmw, old, UINT64_C(1) << bit, 0, 1));
-            }
-        } else {
-            bit = (unsigned)((uint64_t)index & (width == 8 ? 63u : (unsigned)(8 * width - 1)));
-            old = interp_reg_read(cpu, insn, operand.number, width);
-            if (sub != 4)
-                interp_reg_write(cpu, insn, operand.number, width,
-                                 interp_rmw_apply(rmw, old, UINT64_C(1) << bit, 0, width));
-        }
-        interp_set_cf(cpu, (unsigned)((old >> bit) & 1));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // BSF (0F BC) / BSR (0F BD). F3 selects TZCNT/LZCNT, which differ: lzcnt counts leading ZEROS where
-    // bsr returns a bit INDEX.
-    case 0xBC:
-    case 0xBD: {
-        int width = insn->opsize;
-        unsigned bits = (unsigned)(8 * width);
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t source = interp_rm_read(cpu, insn, &operand, width) & interp_mask(width);
-        if (insn->rep) { // TZCNT / LZCNT: CF = (source == 0), ZF = (result == 0)
-            uint64_t result;
-            if (source == 0)
-                result = bits;
-            else if (op == 0xBC)
-                result = (uint64_t)__builtin_ctzll(source);
-            else
-                result = (uint64_t)(__builtin_clzll(source) - (64 - bits));
-            interp_flags_nzcv(cpu, 0, result == 0, source == 0, 0);
-            cpu->pf = result & 0xff;
-            interp_reg_write(cpu, insn, insn->reg, width, result);
-        } else { // BSF / BSR: ZF = (source == 0), destination UNDEFINED (unchanged) then
-            if (source == 0) {
-                interp_flags_nzcv(cpu, 0, 1, 0, 0);
-                cpu->pf = 0xff;
-            } else {
-                uint64_t result =
-                    op == 0xBC ? (uint64_t)__builtin_ctzll(source) : (uint64_t)(63 - __builtin_clzll(source));
-                interp_flags_nzcv(cpu, 0, 0, 0, 0);
-                cpu->pf = result & 0xff;
-                interp_reg_write(cpu, insn, insn->reg, width, result);
-            }
-        }
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    case 0xB8: {
-        if (!insn->rep) return interp_undefined(cpu, insn, pc, "0F B8 without the F3 prefix (JMPE)");
-        int width = insn->opsize;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t source = interp_rm_read(cpu, insn, &operand, width) & interp_mask(width);
-        uint64_t result = (uint64_t)__builtin_popcountll(source);
-        // ZF comes from the SOURCE; every other flag clears.
-        interp_flags_nzcv(cpu, 0, source == 0, 0, 0);
-        // pf holds a byte whose EVEN parity IS PF, so clearing PF means storing an ODD-parity byte.
-        cpu->pf = 1;
-        cpu->af = 0;
-        interp_reg_write(cpu, insn, insn->reg, width, result);
         cpu->rip = next;
         return STEP_NEXT;
     }
