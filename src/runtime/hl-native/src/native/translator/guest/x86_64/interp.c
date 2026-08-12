@@ -1253,6 +1253,48 @@ static int interp_one_byte_relative_control(struct cpu *cpu, struct insn *insn, 
     return STEP_END;
 }
 
+static int interp_one_byte_string(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op == 0xA6 || op == 0xA7 || op == 0xAE || op == 0xAF) {
+        int width = (op & 1) ? insn->opsize : 1;
+        int is_scas = op == 0xAE || op == 0xAF;
+        cpu->divop = (uint64_t)width | ((uint64_t)is_scas << 8) | ((uint64_t)(insn->repne != 0) << 9) |
+                     ((uint64_t)((insn->rep || insn->repne) != 0) << 10) | ((cpu->df & 1) << 11);
+        return interp_exit(cpu, next, R_REPSTR);
+    }
+    if (op != 0xA4 && op != 0xA5 && op != 0xAA && op != 0xAB && op != 0xAC && op != 0xAD) return -1;
+    int width = (op & 1) ? insn->opsize : 1;
+    int movs = op == 0xA4 || op == 0xA5;
+    int lods = op == 0xAC || op == 0xAD;
+    uint64_t step = (cpu->df & 1) ? UINT64_C(0) - (uint64_t)width : (uint64_t)width;
+    if (insn->rep && cpu->r[RCX] == 0) {
+        cpu->rip = next;
+        return STEP_NEXT;
+    }
+    if (insn->rep) {
+        if (movs) hl_x86_count_rep_movs();
+        else if (!lods) hl_x86_count_rep_stos();
+    }
+    uint64_t iterations = insn->rep ? cpu->r[RCX] : 1;
+    while (iterations != 0) {
+        if (movs) {
+            interp_store(cpu->r[RDI], width, interp_load(cpu->r[RSI], width));
+            cpu->r[RSI] += step;
+            cpu->r[RDI] += step;
+        } else if (lods) {
+            interp_reg_write(cpu, insn, RAX, width, interp_load(cpu->r[RSI], width));
+            cpu->r[RSI] += step;
+        } else {
+            interp_store(cpu->r[RDI], width, cpu->r[RAX] & interp_mask(width));
+            cpu->r[RDI] += step;
+        }
+        if (!insn->rep) break;
+        iterations = --cpu->r[RCX];
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_one_byte_alu(cpu, insn, next);
@@ -1262,6 +1304,8 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     delegated = interp_one_byte_modrm_transfer(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
     delegated = interp_one_byte_relative_control(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_one_byte_string(cpu, insn, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -1399,65 +1443,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
             interp_store(address, width, interp_reg_read(cpu, insn, RAX, width));
         cpu->rip = next;
         return STEP_NEXT;
-    }
-
-    // MOVS / STOS / LODS
-    case 0xA4:
-    case 0xA5:
-    case 0xAA:
-    case 0xAB:
-    case 0xAC:
-    case 0xAD: {
-        int width = (op & 1) ? insn->opsize : 1;
-        int movs = (op == 0xA4 || op == 0xA5);
-        int lods = (op == 0xAC || op == 0xAD);
-        int backward = (int)(cpu->df & 1);
-        uint64_t step = backward ? (UINT64_C(0) - (uint64_t)width) : (uint64_t)width;
-        // One element at a time, updating RCX/RSI/RDI after EACH: a fault mid-string must leave them
-        // partially advanced so a guest handler can resume.
-        // TODO(amd64-host): use the memcpy path for the forward non-overlapping case once it links.
-        if (insn->rep && cpu->r[RCX] == 0) { // REP with RCX==0 executes nothing at all
-            cpu->rip = next;
-            return STEP_NEXT;
-        }
-        if (insn->rep) {
-            if (movs)
-                hl_x86_count_rep_movs();
-            else if (!lods)
-                hl_x86_count_rep_stos();
-        }
-        uint64_t iterations = insn->rep ? cpu->r[RCX] : 1;
-        while (iterations != 0) {
-            if (movs) {
-                interp_store(cpu->r[RDI], width, interp_load(cpu->r[RSI], width));
-                cpu->r[RSI] += step;
-                cpu->r[RDI] += step;
-            } else if (lods) {
-                interp_reg_write(cpu, insn, RAX, width, interp_load(cpu->r[RSI], width));
-                cpu->r[RSI] += step;
-            } else { // STOS
-                interp_store(cpu->r[RDI], width, cpu->r[RAX] & interp_mask(width));
-                cpu->r[RDI] += step;
-            }
-            if (!insn->rep) break;
-            cpu->r[RCX]--;
-            iterations = cpu->r[RCX];
-        }
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // CMPS / SCAS: handed whole to hl_x86_rep_compare via R_REPSTR; descriptor layout is rep.c's.
-    case 0xA6:
-    case 0xA7:
-    case 0xAE:
-    case 0xAF: {
-        int width = (op & 1) ? insn->opsize : 1;
-        int is_scas = (op == 0xAE || op == 0xAF);
-        uint64_t descriptor = (uint64_t)width | ((uint64_t)(is_scas != 0) << 8) | ((uint64_t)(insn->repne != 0) << 9) |
-                              ((uint64_t)((insn->rep || insn->repne) != 0) << 10) | ((cpu->df & 1) << 11);
-        cpu->divop = descriptor;
-        return interp_exit(cpu, next, R_REPSTR);
     }
 
     // TEST AL/eAX, imm
