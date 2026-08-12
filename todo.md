@@ -74,8 +74,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Decompose checkpoint image capture, descriptor restore, and resource restore functions below the configured limits.
 - [x] Decompose the rare syscall dispatcher into capability handlers below the configured limits.
 - [ ] Finish netns ancillary/service function decomposition (in progress).
-- [ ] Split `container/vfs.c` and its oversized/nested functions (in progress).
-- [ ] Split `syscall/binding.c` and `bound_route` (in progress).
+- [x] Split `container/vfs.c` into capability-owned unity fragments below the file threshold and decompose its synthetic-stat/proc-content hotspots.
+- [x] Split `syscall/binding.c` into capability fragments and reduce `bound_route` to an ordered family router below all limits.
 - [x] Split sentry service, lifecycle, marshalling, copy-back, and worker routing below all configured C structure limits.
 - [ ] Split remaining oversized syscall domains: memory, network, process, rare, signal, SysV, and time.
 - [ ] Split remaining oversized Linux ABI sources: context, ELF, fork, socket ABI header, number translation, and thread support.
@@ -121,7 +121,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Integrate clang-format verification, clang-tidy, and cppcheck without Make/CMake. Cargo owns C compilation and the embedded tree-sitter rules; Nix supplies Bear, clang-format, clang-tidy, and cppcheck, and the normal verification derivation runs them through `hl-design-lint` with Cargo's real compilation database and file-level diagnostics.
 - [ ] Make the complete `hl-design-lint` suite green.
 - [ ] Run `cargo check --workspace --all-targets` on the final merged tip.
-- [ ] Run `cargo test --workspace --lib --bins` on the final merged tip.
+- [x] Run `cargo test --workspace --lib --bins` successfully after restoring the C-backed engine/testing applications; rerun again on the final delivery tip.
 - [ ] Run `cargo test -p hl-native --all-targets` and all C executable/compatibility tests on the final merged tip.
 - [ ] Run feature-gated application Clippy checks and Nix flake checks on the final merged tip.
 - [ ] Obtain macOS CI evidence for platform-specific application/native code.
