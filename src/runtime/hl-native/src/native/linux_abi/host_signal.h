@@ -389,15 +389,6 @@ static inline int sigaddset(sigset_t *set, int signo) {
     return 0;
 }
 
-static inline int sigdelset(sigset_t *set, int signo) {
-    if (set == NULL || !hl_linux_sigset_bit_ok(signo)) {
-        errno = EINVAL;
-        return -1;
-    }
-    set->__val[(unsigned)(signo - 1) / 64] &= ~(1ull << ((unsigned)(signo - 1) % 64));
-    return 0;
-}
-
 static inline int sigismember(const sigset_t *set, int signo) {
     if (set == NULL || !hl_linux_sigset_bit_ok(signo)) {
         errno = EINVAL;
