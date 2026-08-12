@@ -26,7 +26,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Expose a slim opaque Rust API around the C engine and isolate/document every unsafe ABI boundary.
 - [x] Route `hl-engine` lifecycle through `hl-native` and remove dependencies on deleted Rust runtime packages.
 - [x] Give `hl-native` a configured zero-local-dependency budget in `lint.toml`.
-- [ ] Prove the final shared-library packaging/install step on Linux, macOS, and Windows artifacts.
+- [x] Install the Cargo-built private shared library beside packaged products with relocatable Linux/macOS loader paths and portable artifact naming.
+- [ ] Prove final installed-product execution on Linux and authoritative packaging/install behavior on macOS and Windows artifacts.
 
 ## Host architecture
 
@@ -38,7 +39,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Restore the Windows AMD64 source backend, isolate its Cargo source closure, and wire its DLL/import-library boundary into the current native layout.
 - [ ] Replace the Linux-specific bridge lifecycle and descriptor imports with Windows host-service handles before enabling Windows support.
 - [ ] Prove Windows runtime behavior; previous oracle evidence was incomplete and is not production evidence. (Windows implementation is only priority if you are on windows and have powershell and tools.)
-- [ ] Eliminate the five remaining single-file-directory findings without undoing meaningful capability ownership.
+- [x] Eliminate the five single-file-directory findings without adding ceremonial siblings.
 - [ ] Resolve `host/linux/memory/shared.c` consistently: parent context makes `shared.c` precise, so the generic catch-all rule must understand contextual ownership rather than forcing `shared_memory.c`.
 
 ## Supported platform and execution matrix
