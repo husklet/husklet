@@ -81,6 +81,20 @@ enum AttachedTerminal {
     Native(NativeTerminalBridge),
 }
 
+impl AttachedTerminal {
+    fn close(self) {
+        match self {
+            #[cfg(hl_retained_c)]
+            Self::Native(mut bridge) => {
+                drop(bridge.master.take());
+                for worker in bridge.workers {
+                    let _ = worker.join();
+                }
+            }
+        }
+    }
+}
+
 /// Writes the whole slice and reports whether the port stayed writable; unlike the master, a port
 /// that accepts nothing is closed rather than busy.
 fn write_all_to_port(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
@@ -194,15 +208,7 @@ impl Terminal {
         let bridge = self.bridge.lock().ok().and_then(|mut bridge| bridge.take());
         self.port.close();
         if let Some(bridge) = bridge {
-            match bridge {
-                #[cfg(hl_retained_c)]
-                AttachedTerminal::Native(mut bridge) => {
-                    drop(bridge.master.take());
-                    for worker in bridge.workers {
-                        let _ = worker.join();
-                    }
-                }
-            }
+            bridge.close();
         }
     }
 }

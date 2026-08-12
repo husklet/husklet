@@ -489,6 +489,28 @@ impl crate::composition::NativeTerminalWindowNotification for CTerminalWindowNot
 }
 
 impl StreamBridge {
+    fn relay_output(source: OwnedFd, destination: Arc<Mutex<Box<dyn Write + Send>>>) {
+        let mut source = std::fs::File::from(source);
+        let mut bytes = [0; 16 * 1024];
+        loop {
+            let count = match source.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(count) => count,
+                Err(error) => {
+                    hl_log::hl_error!(hl_log::tag::EXEC, "c output bridge read failed: error={error}");
+                    break;
+                }
+            };
+            let result = destination
+                .lock()
+                .map_err(|_| ())
+                .and_then(|mut output| output.write_all(&bytes[..count]).map_err(|_| ()));
+            if result.is_err() {
+                break;
+            }
+        }
+    }
+
     fn inherited() -> Self {
         Self {
             output_workers: Vec::new(),
@@ -611,27 +633,7 @@ impl StreamBridge {
             output_workers.push(
                 std::thread::Builder::new()
                     .name(name.into())
-                    .spawn(move || {
-                        let mut source = std::fs::File::from(source);
-                        let mut bytes = [0; 16 * 1024];
-                        loop {
-                            let count = match source.read(&mut bytes) {
-                                Ok(0) => break,
-                                Ok(count) => count,
-                                Err(error) => {
-                                    hl_log::hl_error!(hl_log::tag::EXEC, "c output bridge read failed: error={error}");
-                                    break;
-                                }
-                            };
-                            let result = destination
-                                .lock()
-                                .map_err(|_| ())
-                                .and_then(|mut output| output.write_all(&bytes[..count]).map_err(|_| ()));
-                            if result.is_err() {
-                                break;
-                            }
-                        }
-                    })
+                    .spawn(move || Self::relay_output(source, destination))
                     .map_err(|_| EngineError::LaunchFailed)?,
             );
         }
@@ -683,6 +685,27 @@ unsafe impl Send for CGuestExecutor {}
 unsafe impl Sync for CGuestExecutor {}
 
 impl CGuestExecutor {
+    fn encode_environment_byte(encoded: &mut Vec<u8>, byte: u8) {
+        match byte {
+            b'\\' => encoded.extend_from_slice(b"\\\\"),
+            b'\n' => encoded.extend_from_slice(b"\\n"),
+            byte => encoded.push(byte),
+        }
+    }
+
+    fn encode_environment(environment: &[Vec<u8>]) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        for (index, record) in environment.iter().enumerate() {
+            if index != 0 {
+                encoded.push(b'\n');
+            }
+            for byte in record {
+                Self::encode_environment_byte(&mut encoded, *byte);
+            }
+        }
+        encoded
+    }
+
     fn create_with_streams(
         isa: GuestIsa,
         plan: &RuntimeLaunchPlan,
@@ -734,19 +757,7 @@ impl CGuestExecutor {
                 CString::new(volumes.join(",")).map_err(|_| EngineError::LaunchFailed)?,
             ));
         }
-        let mut encoded_environment = Vec::new();
-        for (index, record) in plan.environment.iter().enumerate() {
-            if index != 0 {
-                encoded_environment.push(b'\n');
-            }
-            for byte in record {
-                match byte {
-                    b'\\' => encoded_environment.extend_from_slice(b"\\\\"),
-                    b'\n' => encoded_environment.extend_from_slice(b"\\n"),
-                    byte => encoded_environment.push(*byte),
-                }
-            }
-        }
+        let encoded_environment = Self::encode_environment(&plan.environment);
         option_records.push((
             CString::new("HL_GUEST_ENV").unwrap(),
             CString::new(encoded_environment).map_err(|_| EngineError::LaunchFailed)?,
