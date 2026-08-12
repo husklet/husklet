@@ -44,7 +44,7 @@ focused structural/differential test passed:
 ```sh
 sources=$(find src/runtime/native/exec/src src/runtime/native/exec/cache -type f -name '*.c' -print)
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/runtime/native/cpu/include \
   $sources src/runtime/native/exec/src/arch/aarch64/entry.S \
   src/runtime/native/exec/src/arch/x86_64/entry.S src/runtime/native/exec/test/x86_run.S \
   src/runtime/native/exec/test/x86_translation.c -lpthread -o /tmp/hl_x86_sse_new

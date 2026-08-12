@@ -20,14 +20,14 @@ fi
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address \
     -I "$repository/src/runtime/native/exec/include" \
     -I "$repository/src/runtime/native/exec/src" \
-    -I "$repository/src/native/cpu/include" \
+    -I "$repository/src/runtime/native/cpu/include" \
     "$repository/src/runtime/native/exec/test/memory_lifecycle.c" "$archive" "${entry_argument[@]}" -lpthread \
     -o "$scratch/memory_lifecycle"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 HL_NATIVE_SKIP_RESOURCE_COUNTS=1 "$scratch/memory_lifecycle"
 cc -std=c11 -Wall -Wextra -Werror \
     -I "$repository/src/runtime/native/exec/include" \
     -I "$repository/src/runtime/native/exec/src" \
-    -I "$repository/src/native/cpu/include" \
+    -I "$repository/src/runtime/native/cpu/include" \
     "$repository/src/runtime/native/exec/test/memory_lifecycle.c" "$archive" "${entry_argument[@]}" -lpthread \
     -o "$scratch/memory_lifecycle_resources"
 "$scratch/memory_lifecycle_resources"

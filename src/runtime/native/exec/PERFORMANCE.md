@@ -490,7 +490,7 @@ The fail-first test was linked to the previously built archive:
 ```sh
 archive=$(find target/debug/build -path '*/out/libhl_native_execution.a' -print | tail -1)
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/runtime/native/cpu/include \
   src/runtime/native/exec/test/x86_budget.c "$archive" -lpthread -o /tmp/hl-x86-budget
 /tmp/hl-x86-budget
 ```
@@ -507,7 +507,7 @@ test passed with no output:
 ```sh
 sources=$(find src/runtime/native/exec/src src/runtime/native/exec/cache -type f -name '*.c' -print)
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/runtime/native/cpu/include \
   $sources src/runtime/native/exec/src/arch/aarch64/entry.S \
   src/runtime/native/exec/src/arch/x86_64/entry.S \
   src/runtime/native/exec/test/x86_budget.c -lpthread -o /tmp/hl-x86-budget-new
@@ -1345,13 +1345,13 @@ entry assemblies. `x86_budget` and `x86_rep` compiled and passed with no output:
 ```sh
 sources=$(find src/runtime/native/exec/src src/runtime/native/exec/cache -type f -name '*.c' -print)
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/runtime/native/cpu/include \
   $sources src/runtime/native/exec/src/arch/aarch64/entry.S \
   src/runtime/native/exec/src/arch/x86_64/entry.S \
   src/runtime/native/exec/test/x86_budget.c -lpthread -o /tmp/hl-x86-budget-audit
 /tmp/hl-x86-budget-audit
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/runtime/native/cpu/include \
   $sources src/runtime/native/exec/src/arch/aarch64/entry.S \
   src/runtime/native/exec/src/arch/x86_64/entry.S \
   src/runtime/native/exec/test/x86_rep.c -lpthread -o /tmp/hl-x86-rep-audit

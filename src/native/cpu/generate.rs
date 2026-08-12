@@ -44,7 +44,11 @@ fn main() {
             expected += field.count * field.lanes * 8;
         }
     }
-    output(&root.join("include/layout.h"), c_output(&layouts), check);
+    output(
+        &root.join("../../runtime/native/cpu/include/layout.h"),
+        c_output(&layouts),
+        check,
+    );
     output(&root.join("rust/layout.rs"), rust_output(&layouts), check);
 }
 
@@ -60,7 +64,7 @@ fn output(path: &Path, generated: String, check: bool) {
 fn c_output(layouts: &BTreeMap<String, Vec<Field>>) -> String {
     let mut out = String::from(
         concat!(
-            "/* Generated from ../layout.tsv by ../generate.rs. */\n",
+            "/* Generated from src/native/cpu/layout.tsv by generate.rs. */\n",
             "#ifndef HL_NATIVE_CPU_LAYOUT_H\n#define HL_NATIVE_CPU_LAYOUT_H\n\n",
             "#include <stddef.h>\n#include <stdint.h>\n\n",
         ),

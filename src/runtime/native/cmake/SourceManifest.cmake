@@ -1,4 +1,11 @@
 file(GLOB_RECURSE actual RELATIVE "${ROOT}" "${ROOT}/runtime/native/exec/src/*.c" "${ROOT}/runtime/native/exec/cache/*.c")
+file(GLOB_RECURSE repository_c_sources RELATIVE "${ROOT}"
+ "${ROOT}/*.c" "${ROOT}/*.h" "${ROOT}/*.S")
+foreach(source IN LISTS repository_c_sources)
+ if(NOT source MATCHES "^runtime/native/")
+  message(FATAL_ERROR "C source is outside src/runtime/native: ${source}")
+ endif()
+endforeach()
 list(APPEND actual
  "runtime/native/address_projection.c"
  "runtime/native/executable_authority.c"

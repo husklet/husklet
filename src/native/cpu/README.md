@@ -1,8 +1,10 @@
 # CPU execution schema
 
 `layout.tsv` is the sole editable definition of the native block-entry prefix.
-It mirrors the baked offsets in the retained C engine. Generate both language
-views from this directory with:
+It mirrors the baked offsets in the retained C engine. The Rust view is emitted
+beside this schema and the C view is emitted to
+`../../runtime/native/cpu/include/layout.h`. Generate both from this directory
+with:
 
 ```text
 rustc generate.rs -o /tmp/hl-cpu-schema

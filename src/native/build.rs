@@ -14,7 +14,7 @@ impl NativeInputs {
         inputs.visit(&root.join("cache"), true);
         inputs.visit(&root.join("include"), false);
         // cpu.h crosses the native boundary through this crate-owned ABI header.
-        inputs.visit(Path::new("cpu/include"), false);
+        inputs.visit(Path::new("../runtime/native/cpu/include"), false);
         inputs.sources.sort();
         inputs.assembly.sort();
         inputs.dependencies.sort();
@@ -82,7 +82,11 @@ fn emit_test_environment(root: &Path, allocation_test: bool) {
     );
     println!(
         "cargo:rustc-env=HL_NATIVE_TEST_INCLUDES={}",
-        [root.join("include"), root.join("src"), PathBuf::from("cpu/include")]
+        [
+            root.join("include"),
+            root.join("src"),
+            PathBuf::from("../runtime/native/cpu/include"),
+        ]
             .into_iter()
             .map(|path| display(manifest.join(path)))
             .collect::<Vec<_>>()
@@ -158,7 +162,7 @@ fn main() {
         .files(&inputs.sources)
         .include(root.join("include"))
         .include(root.join("src"))
-        .include("cpu/include")
+        .include("../runtime/native/cpu/include")
         .std("c11")
         .warnings(true)
         .extra_warnings(true)
@@ -193,7 +197,7 @@ fn main() {
             )
             .include(root.join("include"))
             .include(root.join("src"))
-            .include("cpu/include")
+            .include("../runtime/native/cpu/include")
             .warnings(true)
             .extra_warnings(true)
             .flag_if_supported("-Werror")
@@ -208,7 +212,7 @@ fn main() {
     // Directory watches discover newly added compilation units and headers.
     for directory in [root.join("src"), root.join("cache"), root.join("include")]
         .into_iter()
-        .chain([PathBuf::from("cpu/include")])
+        .chain([PathBuf::from("../runtime/native/cpu/include")])
     {
         println!("cargo:rerun-if-changed={}", directory.display());
     }

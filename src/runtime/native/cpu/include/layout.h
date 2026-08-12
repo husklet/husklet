@@ -1,4 +1,4 @@
-/* Generated from ../layout.tsv by ../generate.rs. */
+/* Generated from src/native/cpu/layout.tsv by generate.rs. */
 #ifndef HL_NATIVE_CPU_LAYOUT_H
 #define HL_NATIVE_CPU_LAYOUT_H
 

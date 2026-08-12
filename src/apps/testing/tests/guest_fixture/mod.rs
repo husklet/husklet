@@ -48,9 +48,7 @@ pub fn projection(name: &str, isa: &str, destination: &Path) {
     } else {
         FREESTANDING
     };
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/guest_fixture")
-        .join(name);
+    let source = repository("src/runtime/native/fixtures/testing").join(name);
     compile(&source, isa, destination, flags);
 }
 
