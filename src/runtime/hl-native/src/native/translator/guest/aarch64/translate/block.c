@@ -309,6 +309,48 @@ static void translate_memory_or_fallback(uint64_t guest_pc, uint32_t instruction
         emit32(instruction);
 }
 
+static uint64_t translate_special_instruction(uint64_t guest_pc, uint64_t block_start, uint64_t tail_carry_load,
+                                              uint32_t instruction, int *in_exclusive_region) {
+    if (!*in_exclusive_region) {
+        if (tail_carry_load && guest_pc == block_start) {
+            e_ldr(17, CPUREG, 30 * 8);
+            emit32((instruction & ~(31u << 10)) | (17u << 10));
+            return 4;
+        }
+        if (tail_carry_load && guest_pc == tail_carry_load) {
+            emit32((instruction & ~(31u << 10)) | (17u << 10));
+            e_str(17, CPUREG, 30 * 8);
+            return 4;
+        }
+        int atomic_bytes = try_lse_atomic(guest_pc);
+        if (atomic_bytes) {
+            if (!g_tier2_build && g_txln_active)
+                for (uint64_t line = guest_pc >> 6; line <= (guest_pc + atomic_bytes - 1) >> 6; line++)
+                    txln_put(line);
+            return (uint64_t)atomic_bytes;
+        }
+    }
+    if (is_i8mm_mmla(instruction)) {
+        emit_i8mm_mmla(instruction);
+        return 4;
+    }
+    if (is_bf16_bfcvt(instruction)) {
+        emit_bf16_bfcvt(instruction);
+        return 4;
+    }
+    if (is_bf16_bfdot(instruction)) {
+        emit_bf16_bfdot(instruction);
+        return 4;
+    }
+    if (!is_casp(instruction)) {
+        if ((instruction & 0x3FC00000u) == 0x08400000u)
+            *in_exclusive_region = 1;
+        else if (*in_exclusive_region && (instruction & 0x3FC00000u) == 0x08000000u)
+            *in_exclusive_region = 0;
+    }
+    return 0;
+}
+
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
        an executable view backed by an emulated host-page snapshot. */
@@ -545,64 +587,10 @@ static void *translate_block(uint64_t gpc) {
             }
         }
 
-        if (!in_excl) {
-            if (tail_carry_ldp && gpc == start) {
-                e_ldr(17, CPUREG, 30 * 8);
-                emit32((in & ~(31u << 10)) | (17u << 10));
-                gpc += 4;
-                continue;
-            }
-            if (tail_carry_ldp && gpc == tail_carry_ldp) {
-                emit32((in & ~(31u << 10)) | (17u << 10));
-                e_str(17, CPUREG, 30 * 8);
-                gpc += 4;
-                continue;
-            }
-            int n = try_lse_atomic(gpc);
-            if (n) {
-                // try_lse_atomic consumes n bytes (a whole ldxr..stxr sequence) without re-entering the
-                // loop top, so mark every source line it spans -- not just gpc's -- keeping the line set a
-                // complete superset of the decoded bytes.
-                if (!g_tier2_build && g_txln_active)
-                    for (uint64_t ll = gpc >> 6; ll <= (gpc + n - 1) >> 6; ll++)
-                        txln_put(ll);
-                gpc += n;
-                continue;
-            }
-            // ldxr/stxr loop -> LSE
-        }
-        if (is_i8mm_mmla(in)) {
-            emit_i8mm_mmla(in);
-            gpc += 4;
+        uint64_t consumed = translate_special_instruction(gpc, start, tail_carry_ldp, in, &in_excl);
+        if (consumed) {
+            gpc += consumed;
             continue;
-        }
-        if (is_bf16_bfcvt(in)) {
-            emit_bf16_bfcvt(in);
-            gpc += 4;
-            continue;
-        }
-        if (is_bf16_bfdot(in)) {
-            emit_bf16_bfdot(in);
-            gpc += 4;
-            continue;
-        }
-        // Load/store-exclusive family is bits[29:24]=001000. The o2 bit (bit23) distinguishes the
-        // EXCLUSIVE monitor variants (o2=0: LDXR/LDAXR/STXR/STLXR/LDXP/STXP) from the merely ORDERED
-        // load-acquire/store-release (o2=1: LDAR/LDLAR/STLR/STLLR), which are NOT part of an exclusive
-        // pair. Masking bit23 in (0x3FC00000) keeps a bare LDAR -- ubiquitous in C++ std::atomic and
-        // glibc -- from opening the region and leaving in_excl stuck on. L (bit22) selects load vs store.
-        // CASP/CASPA/CASPL/CASPAL share this encoding box (o2=0, and A reuses the L bit), so the plain
-        // mask alone reads CASPA/CASPAL as a load-exclusive and CASP/CASPL as a store-exclusive. A CASPA
-        // then latches in_excl ON for the rest of the block, which disables the non-PIE bias fold for
-        // every following memory op -- a fatal SIGSEGV on the next low image access. Exclude CASP here;
-        // it is a single self-contained instruction and opens no monitor region.
-        if (!is_casp(in)) {
-            if ((in & 0x3FC00000u) == 0x08400000u)
-                // load-exclusive (o2=0, L=1)
-                in_excl = 1;
-            else if (in_excl && (in & 0x3FC00000u) == 0x08000000u)
-                // store-exclusive (o2=0, L=0)
-                in_excl = 0;
         }
         // Defensive: the deferred-branch table is fixed-size. If a region ever fills it (pathological
         // or mis-decoded -- a real LDXR..STXR pair never holds this many conditional branches), end the
