@@ -31,6 +31,59 @@ static uint64_t scan_tail_x30_carry(uint64_t pc) {
     return 0;
 }
 
+struct deferred_branch {
+    uint32_t *patch;
+    uint64_t target;
+    uint32_t instruction;
+};
+
+static void finish_block(uint64_t start, uint64_t guest_start, uint64_t guest_end, void *host, void *body,
+                         uint64_t provenance_host, uint64_t provenance_guest, int provenance_fault_capable,
+                         const struct deferred_branch *deferred, int deferred_count) {
+    if (provenance_fault_capable) jit_instruction_map_put(provenance_host, (uint64_t)g_cp, provenance_guest);
+    for (int i = 0; i < deferred_count; i++) {
+        int64_t distance = ((uint8_t *)g_cp - (uint8_t *)deferred[i].patch) / 4;
+        *deferred[i].patch = recode_cond(deferred[i].instruction, distance);
+        emit_chain_exit(deferred[i].target);
+    }
+    chain_exit_dedup_finish();
+    if (g_irq_patch || g_t2_irq_patch) {
+        int pad_removed_t2_exit = g_t2_irq_patch != NULL;
+        uint8_t *stub = g_cp;
+        if (g_irq_patch) {
+            uint32_t *patch = g_irq_patch;
+            g_irq_patch = NULL;
+            *patch = 0xB5000000u | (((uint32_t)((stub - (uint8_t *)patch) / 4) & 0x7FFFF) << 5) | 16;
+        }
+        if (g_t2_irq_patch) {
+            uint32_t *patch = g_t2_irq_patch;
+            g_t2_irq_patch = NULL;
+            *patch = 0xB5000000u | (((uint32_t)((stub - (uint8_t *)patch) / 4) & 0x7FFFF) << 5) | 16;
+        }
+        uint8_t *exit_begin = g_cp;
+        emit_exit_const(start, R_BRANCH);
+        size_t exit_bytes = (size_t)(g_cp - exit_begin);
+        if (pad_removed_t2_exit)
+            for (size_t offset = 0; offset < exit_bytes; offset += 4)
+                emit32(0xD503201Fu);
+    }
+    emit_a64_bus_stub();
+    emit_a64_soft_stub();
+    size_t emitted_bytes = (size_t)(g_cp - (uint8_t *)host);
+    if (emitted_bytes >= (1u << 20))
+        HL_LOGF(&g_jit_log, HL_LOG_TAG_JIT,
+                "large block guest=%#llx source=%#llx-%#llx bytes=%zu bus_sites=%u soft_sites=%u",
+                (unsigned long long)start, (unsigned long long)guest_start, (unsigned long long)guest_end,
+                emitted_bytes, g_bus_stub_patch_count, g_soft_stub_patch_count);
+    g_last_body = body;
+    g_last_guest_start = guest_start;
+    g_last_guest_end = guest_end;
+    if (!g_tier2_build) {
+        map_put(start, guest_start, guest_end, host, body);
+        txpg_mark(start, guest_end);
+    }
+}
+
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
        an executable view backed by an emulated host-page snapshot. */
@@ -68,11 +121,7 @@ static void *translate_block(uint64_t gpc) {
     // deferred to stubs after the store-exclusive.
     int in_excl = 0;
 
-    struct {
-        uint32_t *patch;
-        uint64_t target;
-        uint32_t in;
-    } defer[64];
+    struct deferred_branch defer[64];
 
     int ndefer = 0;
     uint64_t provenance_host = 0;
@@ -492,7 +541,7 @@ static void *translate_block(uint64_t gpc) {
             if (in_excl) {
                 defer[ndefer].patch = (uint32_t *)g_cp;
                 defer[ndefer].target = taken;
-                defer[ndefer].in = in;
+                defer[ndefer].instruction = in;
                 ndefer++;
                 emit32(0);
                 gpc += 4;
@@ -543,7 +592,7 @@ static void *translate_block(uint64_t gpc) {
             if (in_excl) {
                 defer[ndefer].patch = (uint32_t *)g_cp;
                 defer[ndefer].target = taken;
-                defer[ndefer].in = in;
+                defer[ndefer].instruction = in;
                 ndefer++;
                 emit32(0);
                 gpc += 4;
@@ -628,7 +677,7 @@ static void *translate_block(uint64_t gpc) {
             if (in_excl) {
                 defer[ndefer].patch = (uint32_t *)g_cp;
                 defer[ndefer].target = taken;
-                defer[ndefer].in = in;
+                defer[ndefer].instruction = in;
                 ndefer++;
                 emit32(0);
                 gpc += 4;
@@ -1099,58 +1148,8 @@ static void *translate_block(uint64_t gpc) {
             emit32(in);
         gpc += 4;
     }
-    if (provenance_fault_capable) jit_instruction_map_put(provenance_host, (uint64_t)g_cp, provenance_guest);
-    // emit the deferred exit stubs for branches taken inside an exclusive region
-    for (int i = 0; i < ndefer; i++) {
-        int64_t d = ((uint8_t *)g_cp - (uint8_t *)defer[i].patch) / 4;
-        *defer[i].patch = recode_cond(defer[i].in, d);
-        emit_chain_exit(defer[i].target);
-    }
-    chain_exit_dedup_finish();
-    // IRQSLIM: the out-of-line poll exit stub the body-entry cbnz targets (irq set -> exit to
-    // the dispatcher at the block start, exactly like the legacy inline poll).
-    if (g_irq_patch || g_t2_irq_patch) {
-        int pad_removed_t2_exit = g_t2_irq_patch != NULL;
-        uint8_t *stub = g_cp;
-        if (g_irq_patch) {
-            uint32_t *p = g_irq_patch;
-            g_irq_patch = NULL;
-            *p = 0xB5000000u | (((uint32_t)((stub - (uint8_t *)p) / 4) & 0x7FFFF) << 5) | 16;
-        }
-        if (g_t2_irq_patch) {
-            uint32_t *p = g_t2_irq_patch;
-            g_t2_irq_patch = NULL;
-            *p = 0xB5000000u | (((uint32_t)((stub - (uint8_t *)p) / 4) & 0x7FFFF) << 5) | 16;
-        }
-        uint8_t *exit_begin = g_cp;
-        emit_exit_const(start, R_BRANCH);
-        size_t exit_bytes = (size_t)(g_cp - exit_begin);
-        if (pad_removed_t2_exit)
-            for (size_t off = 0; off < exit_bytes; off += 4)
-                emit32(0xD503201Fu);
-    }
-    emit_a64_bus_stub();
-    emit_a64_soft_stub();
-    size_t emitted_bytes = (size_t)(g_cp - (uint8_t *)host);
-    if (emitted_bytes >= (1u << 20))
-        HL_LOGF(&g_jit_log, HL_LOG_TAG_JIT,
-                "large block guest=%#llx source=%#llx-%#llx bytes=%zu bus_sites=%u soft_sites=%u",
-                (unsigned long long)start, (unsigned long long)guest_start, (unsigned long long)guest_end,
-                emitted_bytes, g_bus_stub_patch_count, g_soft_stub_patch_count);
-    // Only the REGION HEAD (start) is registered; intermediate inlined block-starts are left
-    // unregistered so a later mid-region entry self-heals via re-translate + back-patch.
-    // W4E tier-2: the promoter (g_tier2_build) recompiles in place and updates the EXISTING map entry
-    // itself, so don't insert a duplicate. Expose the body for it.
-    g_last_body = body;
-    g_last_guest_start = guest_start;
-    g_last_guest_end = guest_end;
-    if (!g_tier2_build) {
-        map_put(start, guest_start, guest_end, host, body);
-        // SMC precise gate: record every guest page this block's SOURCE spans, so a later guest `ic ivau`
-        // to one of these pages takes the full invalidation while a flush of any never-translated page is
-        // skipped. `gpc` is the (exclusive) end of the decoded block here; `start` is its entry.
-        txpg_mark(start, guest_end);
-    }
+    finish_block(start, guest_start, guest_end, host, body, provenance_host, provenance_guest, provenance_fault_capable,
+                 defer, ndefer);
     // patch_links_to is MOVED to the dispatcher, AFTER the new block's icache is invalidated:
     // chaining an existing block X -> this new block before its code is icache-coherent on a peer
     // core lets that core fetch stale instructions. Only chain to it once it's visible everywhere.
@@ -1158,4 +1157,3 @@ static void *translate_block(uint64_t gpc) {
 }
 
 #undef STITCH_OK
-
