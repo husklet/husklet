@@ -108,8 +108,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Remove Python ERI benchmark adapters and obsolete Python tests.
 - [x] Replace unexplained zero-byte golden files with typed empty-output assertions.
 - [x] Add leak-sanitizer build support and testing leak integration.
-- [ ] Restore/fix testing compilation against only the new `hl-native`/`hl-engine` public APIs; remove references to deleted `hl_engine::native` helpers.
-- [ ] Prove leak tests are non-vacuous and run through the normal testing/gate path.
+- [x] Restore testing compilation against only the new `hl-native`/`hl-engine` public APIs and remove obsolete deleted-Rust-engine adapters.
+- [x] Expose and execute the native C leak non-vacuity probe through the slim `hl-native::Native` boundary.
 - [ ] Audit every package/root test for correct unit, package integration, compatibility, or testing-app ownership.
 
 ## Quality gates
@@ -127,7 +127,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 
 ## Performance and production readiness
 
-- [ ] Freeze reproducible original standalone-C and integrated-C baseline binaries; record hashes and smoke-run each copied binary.
+- [x] Restore a typed Rust benchmark harness with hashed and smoke-tested artifacts, exact-output checks, balanced scheduling, qualified nulls, unique resumable ledgers, bounded waits, two guest layouts, complete phases, and per-row host load.
+- [ ] Freeze reproducible original standalone-C and integrated-C baseline binaries; record hashes and smoke-run each copied binary for the acceptance campaign.
 - [ ] Run balanced-order, unique-ledger, box-locked benchmarks on at least two guests and report every phase.
 - [ ] Benchmark Python, sqlite, and malloc against the faster original/retained C baseline.
 - [ ] Meet the final requirement: Husklet no more than 10% slower than the faster C baseline.
