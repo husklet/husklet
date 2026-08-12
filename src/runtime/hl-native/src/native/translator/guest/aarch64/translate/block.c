@@ -37,13 +37,6 @@ struct deferred_branch {
     uint32_t instruction;
 };
 
-struct inline_context {
-    uint64_t target;
-    uint64_t resume;
-    uint64_t return_pc;
-    uint64_t expected_x30;
-};
-
 static void finish_block(uint64_t start, uint64_t guest_start, uint64_t guest_end, void *host, void *body,
                          uint64_t provenance_host, uint64_t provenance_guest, int provenance_fault_capable,
                          const struct deferred_branch *deferred, int deferred_count) {
@@ -890,75 +883,10 @@ static void *translate_block(uint64_t gpc) {
         enum translation_step direct_branch_step = translate_unconditional_branch(&gpc, in, &direct_branch_state);
         if (direct_branch_step == TRANSLATION_CONTINUE) continue;
         if (direct_branch_step == TRANSLATION_STOP) break;
-        // bl
-        if ((in & 0xFC000000u) == 0x94000000u) {
-            int64_t off = sext(in & 0x3FFFFFF, 26) << 2;
-            // Fuse a direct call to the exact canonical four-insn PLT veneer:
-            //   adrp x16,page; ldr x17,[x16,#got]; add x16,x16,#lo; br x17
-            // Preserve every architectural effect and the real fault-capable GOT
-            // load; only the extra translated-block hop and its entry poll vanish.
-            uint64_t plt = gpc + off;
-            if (smc_seen()) goto no_bl_plt_fuse;
-            if (!hl_host_range_mapped((uintptr_t)plt, 16)) goto no_bl_plt_fuse;
-            uint32_t p0 = a64_fetch_instruction(plt, NULL);
-            uint32_t p1 = a64_fetch_instruction(plt + 4, NULL);
-            uint32_t p2 = a64_fetch_instruction(plt + 8, NULL);
-            uint32_t p3 = a64_fetch_instruction(plt + 12, NULL);
-            if (!guestbase_on() && !jit_guest_bus_active() && (p0 & 0x9F00001Fu) == 0x90000010u &&
-                (p1 & 0xFFC003FFu) == 0xF9400211u && (p2 & 0xFFC003FFu) == 0x91000210u && p3 == 0xD61F0220u) {
-                int64_t pimm = sext((((p0 >> 5) & 0x7FFFF) << 2) | ((p0 >> 29) & 3), 21) << 12;
-                uint64_t page = (pcrel_base(plt) & ~0xFFFull) + pimm;
-                emit_set_x30(pcrel_base(gpc) + 4);
-                if (!emit_guest_adrp_page(16, page)) e_movconst(16, page);
-                e_str(16, CPUREG, 16 * 8);
-                uint64_t load_host = (uint64_t)g_cp;
-                emit32(p1);
-                pcache_record_provenance(load_host, (uint64_t)g_cp, plt + 4);
-                e_str(17, CPUREG, 17 * 8);
-                emit32(p2);
-                e_str(16, CPUREG, 16 * 8);
-                txpg_mark(plt, plt + 16);
-                if (g_txln_active)
-                    for (uint64_t line = plt >> 6; line <= (plt + 15) >> 6; line++)
-                        txln_put(line);
-                emit_ibranch_ip2_ready(17, 1);
-                break;
-            }
-        no_bl_plt_fuse:
-            // Inline an LSE outline-atomic helper call to a single host atomic op (elides the call +
-            // return dispatch, the dominant atomics tax); only fires in the verbatim-safe regime.
-            if (try_inline_outline_atomic(gpc, gpc + off)) {
-                gpc += 4;
-                continue;
-            }
-            uint64_t ancestors[CTX_INLINE_DEPTH];
-            for (int i = 0; i < nctx; i++)
-                ancestors[i] = ctx[i].target;
-            uint64_t clone_ret;
-            int clone_cost;
-            /*
-             * A BUS-active generation expands every cloned memory operation
-             * with a runtime guard. Cloning then duplicates both hot guards
-             * and cold stubs, accelerating cache rotation while removing only
-             * a call/return pair. Keep ordinary context cloning unchanged, but
-             * use the normal RAS call path while BUS observation is active.
-             */
-            if (!smc_seen() && !jit_guest_bus_active() && nctx < CTX_INLINE_DEPTH &&
-                context_clone_candidate(gpc + off, ancestors, nctx, &clone_ret, &clone_cost) &&
-                (g_cp - (uint8_t *)host) + clone_cost * 16 < TRACE_MAX_BYTES) {
-                emit_set_x30(pcrel_base(gpc) + 4);
-                ctx[nctx].target = gpc + off;
-                ctx[nctx].resume = gpc + 4;
-                ctx[nctx].return_pc = clone_ret;
-                ctx[nctx].expected_x30 = pcrel_base(gpc) + 4;
-                nctx++;
-                gpc += off;
-                continue;
-            }
-            emit_bl_ras(gpc, gpc + off);
-            // §B: shadow push + host bl (RAS) + Lcont continuation
-            break;
-        }
+        struct direct_call_state direct_call_state = {.host = host, .contexts = ctx, .context_count = &nctx};
+        enum translation_step direct_call_step = translate_direct_call(&gpc, in, &direct_call_state);
+        if (direct_call_step == TRANSLATION_CONTINUE) continue;
+        if (direct_call_step == TRANSLATION_STOP) break;
         enum translation_step indirect_step = translate_indirect_control(&gpc, in, ctx, &nctx);
         if (indirect_step == TRANSLATION_CONTINUE) continue;
         if (indirect_step == TRANSLATION_STOP) break;
