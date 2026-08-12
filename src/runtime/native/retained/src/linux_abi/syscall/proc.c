@@ -18,6 +18,8 @@
 #define HL_EXEC_ELF_MACHINE 0xB7u // EM_AARCH64
 #endif
 
+enum { HL_EXEC_ARGUMENT_BYTES = 128 * 1024 };
+
 // execve env forwarding: serialize the guest's envp array into HL_GUEST_ENV (the "K=V\nK=V..." string
 // build_stack reads when laying out the new process stack), so the guest's actual environment crosses the
 // re-exec. A guest-initiated exec makes the guest's envp AUTHORITATIVE (like Linux): whatever the guest
@@ -2148,6 +2150,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // rewrite below and before binfmt_script (execve("/proc/self/exe") -> comm "exe"; "./run.sh"
         // keeps "run.sh"). Applied at the committed point further down, only once the exec cannot fail.
         char comm_src[256];
+        int script_image = 0;
         {
             const char *cb = (const char *)a0, *cs = cb ? strrchr(cb, '/') : NULL;
             const char *name = cs ? cs + 1 : (cb ? cb : "");
@@ -2215,6 +2218,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                         fclose(xf);
                         int is_elf = got >= 4 && hdr[0] == 0x7f && hdr[1] == 'E' && hdr[2] == 'L' && hdr[3] == 'F';
                         int is_script = got >= 2 && hdr[0] == '#' && hdr[1] == '!';
+                        script_image = is_script;
                         if (!is_elf && !is_script) {
                             G_RET(c) = (uint64_t)(int64_t)(-ENOEXEC);
                             break;
@@ -2236,12 +2240,40 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
             // ENOENT
         }
-        char *argv[HL_MAXARGV];        // Linux allows far more than 255 args within ARG_MAX -- a fixed 256 silently
-        int ac = 0;                    // dropped the tail (a different command ran, and /proc/self/cmdline diverged)
-        uint64_t *gv = (uint64_t *)a1; // a1 (argv array base) already nonpie_p()'d at the top redirect
-        while (gv && gv[ac] && ac < HL_MAXARGV - 1) {
-            argv[ac] = (char *)nonpie_p(gv[ac]); // each argv[] element may itself be a low-image pointer
-            ac++;
+        char *argv[HL_MAXARGV]; // Linux allows far more than 255 args within ARG_MAX -- a fixed 256 silently
+        int ac = 0;             // dropped the tail (a different command ran, and /proc/self/cmdline diverged)
+        size_t argument_bytes = 0;
+        int argument_error = 0;
+        char *argument_probe = malloc(HL_EXEC_ARGUMENT_BYTES + 1u);
+        if (!argument_probe) {
+            G_RET(c) = (uint64_t)(int64_t)-ENOMEM;
+            break;
+        }
+        while (a1 && ac < HL_MAXARGV - 1) {
+            uint64_t guest_argument = 0;
+            if (guest_copy_from(&guest_argument, a1 + (uint64_t)ac * sizeof guest_argument, sizeof guest_argument) !=
+                sizeof guest_argument) {
+                argument_error = EFAULT;
+                break;
+            }
+            if (!guest_argument) break;
+            size_t remaining = HL_EXEC_ARGUMENT_BYTES - argument_bytes;
+            int length = guest_copy_string(argument_probe, remaining + 1, guest_argument);
+            if (length == -EFAULT) {
+                argument_error = EFAULT;
+                break;
+            }
+            if (length < 0 || (size_t)length + 1 > remaining) {
+                argument_error = E2BIG;
+                break;
+            }
+            argument_bytes += (size_t)length + 1;
+            argv[ac++] = (char *)nonpie_p(guest_argument);
+        }
+        free(argument_probe);
+        if (argument_error) {
+            G_RET(c) = (uint64_t)(int64_t)-argument_error;
+            break;
         }
         argv[ac] = NULL;
         // Forward the guest's ACTUAL environment across the exec: build_stack rebuilds the new process env
@@ -2277,6 +2309,13 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             // too many nested #! -> ELOOP. `-ELOOP` is the host macOS errno 62; svc_done's boundary translation
             // maps it to Linux ELOOP (40) at the syscall boundary, exactly like the vfs symlink-loop path.
             G_RET(c) = (uint64_t)(-ELOOP);
+            break;
+        }
+        if (script_image && sh_new == nn) {
+            // A file beginning with #! is accepted only when binfmt_script resolved a non-empty
+            // interpreter.  Falling through to the ELF loader after an empty/malformed shebang
+            // commits the exec, tears down the old image, and interprets text bytes as an ELF.
+            G_RET(c) = (uint64_t)(int64_t)-ENOEXEC;
             break;
         }
         if (sh_new != nn) { // a shebang chain resolved -> load the final interpreter, not the script
