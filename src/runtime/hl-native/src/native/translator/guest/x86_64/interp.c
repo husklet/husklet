@@ -3807,6 +3807,59 @@ static int interp_sse_integer_arithmetic(struct cpu *cpu, struct insn *insn, uin
     return STEP_NEXT;
 }
 
+static int interp_sse_integer_multiply_reduce(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op != 0xD5 && op != 0xE4 && op != 0xE5 && op != 0xF4 && op != 0xF5 && op != 0xF6 && op != 0xE0 &&
+        op != 0xE3)
+        return -1;
+    int mmx = interp_sse_prefix(insn) == SSE_NP;
+    int wide = mmx ? 8 : 16;
+    uint8_t d[16], s[16], out[16] = {0};
+    interp_simd_get(cpu, mmx, insn->reg, d);
+    interp_simd_rm_get(cpu, insn, mmx, next, s);
+    if (op == 0xD5 || op == 0xE4 || op == 0xE5) {
+        for (int i = 0; i < wide / 2; i++) {
+            uint32_t product = op == 0xE5
+                                   ? (uint32_t)(int32_t)((int16_t)interp_lane16(d, i) *
+                                                        (int32_t)(int16_t)interp_lane16(s, i))
+                                   : (uint32_t)interp_lane16(d, i) * (uint32_t)interp_lane16(s, i);
+            interp_put16(d, i, (uint16_t)(op == 0xD5 ? product & 0xffff : product >> 16));
+        }
+    } else if (op == 0xF4) {
+        for (int i = 0; i < wide / 8; i++)
+            interp_put64(out, i, (uint64_t)interp_lane32(d, 2 * i) * (uint64_t)interp_lane32(s, 2 * i));
+        memcpy(d, out, (size_t)wide);
+    } else if (op == 0xF5) {
+        for (int i = 0; i < wide / 4; i++) {
+            int32_t low = (int32_t)(int16_t)interp_lane16(d, 2 * i) * (int32_t)(int16_t)interp_lane16(s, 2 * i);
+            int32_t high =
+                (int32_t)(int16_t)interp_lane16(d, 2 * i + 1) * (int32_t)(int16_t)interp_lane16(s, 2 * i + 1);
+            interp_put32(out, i, (uint32_t)(low + high));
+        }
+        memcpy(d, out, (size_t)wide);
+    } else if (op == 0xF6) {
+        for (int half = 0; half < wide / 8; half++) {
+            uint32_t total = 0;
+            for (int i = 0; i < 8; i++) {
+                int index = 8 * half + i;
+                total += (uint32_t)(d[index] > s[index] ? d[index] - s[index] : s[index] - d[index]);
+            }
+            interp_put16(out, 4 * half, (uint16_t)total);
+        }
+        memcpy(d, out, (size_t)wide);
+    } else if (op == 0xE0) {
+        for (int i = 0; i < wide; i++) d[i] = (uint8_t)(((uint32_t)d[i] + (uint32_t)s[i] + 1u) >> 1);
+    } else {
+        for (int i = 0; i < wide / 2; i++) {
+            uint32_t sum = (uint32_t)interp_lane16(d, i) + (uint32_t)interp_lane16(s, i) + 1u;
+            interp_put16(d, i, (uint16_t)(sum >> 1));
+        }
+    }
+    interp_simd_put(cpu, mmx, insn->reg, d);
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int prefix = interp_sse_prefix(insn);
@@ -3815,6 +3868,8 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
     // Native host FP under the guest's MXCSR.
     if (interp_sse_is_float_arithmetic(op)) return interp_step_sse_fp(cpu, insn, pc, next);
     int delegated = interp_sse_integer_arithmetic(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_sse_integer_multiply_reduce(cpu, insn, next);
     if (delegated >= 0) return delegated;
 
     // These have both MMX (no prefix, 64-bit) and SSE2 (0x66, 128-bit xmm) encodings. The MMX half of the
@@ -4249,83 +4304,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         cpu->rip = next;
         return STEP_NEXT;
     }
-
-    case 0xD5: // PMULLW: low 16 of each product
-    case 0xE4: // PMULHUW: high 16, unsigned
-    case 0xE5: // PMULHW: high 16, signed
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        for (int i = 0; i < wide / 2; i++) {
-            uint32_t product;
-            if (op == 0xE5)
-                product = (uint32_t)(int32_t)((int16_t)interp_lane16(d, i) * (int32_t)(int16_t)interp_lane16(s, i));
-            else
-                product = (uint32_t)interp_lane16(d, i) * (uint32_t)interp_lane16(s, i);
-            interp_put16(d, i, (uint16_t)(op == 0xD5 ? (product & 0xffff) : (product >> 16)));
-        }
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-
-    case 0xF4: { // PMULUDQ: unsigned 32x32 -> 64
-        uint8_t out[16];
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        interp_put64(out, 0, (uint64_t)interp_lane32(d, 0) * (uint64_t)interp_lane32(s, 0));
-        interp_put64(out, 1, (uint64_t)interp_lane32(d, 2) * (uint64_t)interp_lane32(s, 2));
-        interp_simd_put(cpu, mmx, destination, out);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    case 0xF5: { // PMADDWD: 16x16 products summed in pairs
-        uint8_t out[16];
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        for (int i = 0; i < 4; i++) {
-            int32_t low = (int32_t)(int16_t)interp_lane16(d, 2 * i) * (int32_t)(int16_t)interp_lane16(s, 2 * i);
-            int32_t high =
-                (int32_t)(int16_t)interp_lane16(d, 2 * i + 1) * (int32_t)(int16_t)interp_lane16(s, 2 * i + 1);
-            interp_put32(out, i, (uint32_t)(low + high));
-        }
-        interp_simd_put(cpu, mmx, destination, out);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    case 0xF6: { // PSADBW: |differences| summed per half
-        uint8_t out[16] = {0};
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        for (int half = 0; half < 2; half++) {
-            uint32_t total = 0;
-            for (int i = 0; i < 8; i++) {
-                int index = 8 * half + i;
-                total += (uint32_t)(d[index] > s[index] ? d[index] - s[index] : s[index] - d[index]);
-            }
-            interp_put16(out, 4 * half, (uint16_t)total);
-        }
-        interp_simd_put(cpu, mmx, destination, out);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    case 0xE0: // PAVGB
-    case 0xE3: // PAVGW
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        if (op == 0xE0) {
-            for (int i = 0; i < wide; i++)
-                d[i] = (uint8_t)(((uint32_t)d[i] + (uint32_t)s[i] + 1u) >> 1);
-        } else {
-            for (int i = 0; i < wide / 2; i++) {
-                uint32_t sum = (uint32_t)interp_lane16(d, i) + (uint32_t)interp_lane16(s, i) + 1u;
-                interp_put16(d, i, (uint16_t)(sum >> 1));
-            }
-        }
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
 
     default: break;
     }
