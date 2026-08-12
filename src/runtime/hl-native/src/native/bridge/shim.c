@@ -261,6 +261,7 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         if (provider_fd >= 0) close(provider_fd);
         return HL_STATUS_INVALID_ARGUMENT;
     }
+    *output = NULL;
     int validation_fd = executable_fd;
     int validation_owned = 0;
     if (validation_fd < 0 && executable_host != NULL) {
@@ -273,7 +274,6 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         if (provider_fd >= 0) close(provider_fd);
         return HL_STATUS_INVALID_ARGUMENT;
     }
-    *output = NULL;
     backend = calloc(1, sizeof(*backend));
     if (backend == NULL) {
         if (provider_fd >= 0) close(provider_fd);

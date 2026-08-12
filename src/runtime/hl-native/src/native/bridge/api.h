@@ -13,6 +13,7 @@ typedef struct hl_c_backend hl_c_backend;
 HL_EXTERN_C_BEGIN
 
 HL_API int32_t hl_c_backend_leak_check_nonvacuity(void);
+/* output is required and is cleared before any other input is validated; every failure leaves it NULL. */
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host,
                                    int32_t executable_fd, const hl_c_main_image_plan *image_plan,
                                    uint32_t option_count, const char *const *option_names,

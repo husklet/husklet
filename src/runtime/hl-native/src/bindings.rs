@@ -133,4 +133,30 @@ mod tests {
             hl_c_backend_destroy(ptr::null_mut());
         }
     }
+
+    #[test]
+    fn create_clears_output_before_rejecting_inputs() {
+        let mut output = ptr::dangling_mut::<Backend>();
+        // SAFETY: output is writable and every other pointer is null. The invalid image input must be
+        // rejected before it is dereferenced; this test also proves the documented failure ownership state.
+        let status = unsafe {
+            hl_c_backend_create(
+                0,
+                ptr::null(),
+                ptr::null(),
+                -1,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                -1,
+                ptr::null_mut(),
+                None,
+                &raw mut output,
+            )
+        };
+        assert_ne!(status, 0);
+        assert!(output.is_null());
+    }
 }
