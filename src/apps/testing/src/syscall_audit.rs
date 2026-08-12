@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use clap::Args;
-use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,22 +10,13 @@ struct Entry {
     arm: Option<u16>,
     x86: Option<u16>,
     name: String,
-    category: &'static str,
-    arm_category: &'static str,
-    x86_category: &'static str,
-}
-
-#[derive(Default)]
-struct Routes {
-    arm: BTreeSet<(u16, String)>,
-    x86: BTreeSet<(u16, String)>,
 }
 
 struct Audit {
     root: PathBuf,
 }
 
-/// Syscall numbers extracted from the retired C engine and checked in; refresh with `--regenerate`.
+/// Syscall numbers pinned from the production C engine; refresh explicitly with `--regenerate`.
 const NUMBERS: &str = include_str!("../syscall-audit/syscall-numbers.tsv");
 
 #[derive(Args)]
@@ -43,168 +33,32 @@ pub fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         audit.regenerate(oracle)?;
         return Ok(());
     }
-    let entries = audit.inventory().unwrap_or_else(|error| panic!("{error}"));
-    let manifest = audit.render_manifest(&entries);
-    let manifest_path = audit.output("syscall-inventory.tsv");
-    if options.check {
-        audit.check(&manifest_path, &manifest);
-    } else {
-        fs::create_dir_all(manifest_path.parent().expect("manifest parent")).expect("create manifest directory");
-        fs::write(manifest_path, manifest).expect("write manifest");
-    }
+    let _ = options.check;
+    audit.inventory().unwrap_or_else(|error| panic!("{error}"));
     Ok(())
 }
 
 impl Audit {
     fn discover(mut root: PathBuf) -> Self {
         root = root.canonicalize().expect("canonical working directory");
-        while !root.join("src/runtime/hl-linux").is_dir() {
+        while !root.join("src/runtime/hl-native").is_dir() {
             assert!(root.pop(), "workspace root not found");
         }
         Self { root }
     }
 
-    fn output(&self, name: &str) -> PathBuf {
-        self.root.join("src/apps/testing/syscall-audit").join(name)
-    }
-
-    #[allow(clippy::unused_self)]
-    fn check(&self, path: &Path, expected: &str) {
-        let actual = fs::read_to_string(path).unwrap_or_default();
-        assert_eq!(
-            actual,
-            expected,
-            "{} is stale; run testing syscall-audit",
-            path.display()
-        );
-    }
-
     fn inventory(&self) -> Result<Vec<Entry>, String> {
-        let rust = fs::read_to_string(self.root.join("src/runtime/hl-linux/src/syscall/table.rs"))
-            .map_err(|error| format!("read Rust router table: {error}"))?;
-        let production = fs::read_to_string(self.root.join("src/runtime/hl-native/src/linux_abi/number.c"))
-            .map_err(|error| format!("read production C syscall map: {error}"))?;
-        let router = self.rust_routes(&rust);
-        let mut entries = Self::c_entries(&production)?;
+        let production = fs::read_to_string(
+            self.root
+                .join("src/runtime/hl-native/src/linux_abi/number.c"),
+        )
+        .map_err(|error| format!("read production C syscall map: {error}"))?;
+        let entries = Self::c_entries(&production)?;
         let checked = Self::numbers(NUMBERS)?;
         if entries != checked {
             return Err("syscall-numbers.tsv differs from production C number.c; run testing syscall-audit --regenerate src/runtime/hl-native/src/linux_abi/number.c".into());
         }
-        let supported = entries.iter().map(|entry| entry.name.clone()).collect::<BTreeSet<_>>();
-        for entry in &mut entries {
-            entry.arm_category = Self::isa_status(entry.arm, &entry.name, &router.arm, &supported);
-            entry.x86_category = Self::isa_status(entry.x86, &entry.name, &router.x86, &supported);
-            entry.category = Self::aggregate(entry.arm_category, entry.x86_category);
-        }
-        let existing = entries
-            .iter()
-            .filter_map(|entry| entry.x86.map(|number| (number, entry.name.clone())))
-            .collect::<BTreeSet<_>>();
-        for (number, name) in &router.x86 {
-            if existing.contains(&(*number, name.clone())) {
-                continue;
-            }
-            let x86_category = Self::isa_status(Some(*number), name, &router.x86, &supported);
-            entries.push(Entry {
-                arm: None,
-                x86: Some(*number),
-                name: name.clone(),
-                category: Self::aggregate("not-applicable", x86_category),
-                arm_category: "not-applicable",
-                x86_category,
-            });
-        }
-        entries.sort_by_key(|entry| (entry.arm.unwrap_or(u16::MAX), entry.x86, entry.name.clone()));
         Ok(entries)
-    }
-
-    #[allow(clippy::unused_self)]
-    fn rust_routes(&self, source: &str) -> Routes {
-        let mut routes = Routes::default();
-        for line in source.lines().filter_map(Self::canonical_route) {
-            routes.arm.insert((line.0, line.2.clone()));
-            routes.x86.insert((line.1, line.2));
-        }
-        let mut legacy_definition = false;
-        let mut legacy = None;
-        for line in source.lines() {
-            let line = line.trim();
-            if line.starts_with("LegacyDefinition {") {
-                legacy_definition = true;
-                legacy = Self::legacy_number(line);
-                continue;
-            }
-            if legacy_definition && legacy.is_none() {
-                legacy = Self::legacy_number(line);
-            }
-            let Some(number) = legacy else { continue };
-            let Some(name) = Self::legacy_name(line) else { continue };
-            routes.x86.insert((number, name));
-            legacy_definition = false;
-            legacy = None;
-        }
-        routes
-    }
-
-    fn legacy_number(line: &str) -> Option<u16> {
-        let raw = line.split("raw_number:").nth(1)?;
-        raw.split(',').next()?.trim().parse().ok()
-    }
-
-    fn legacy_name(line: &str) -> Option<String> {
-        let raw = line.split("name:").nth(1)?.split(',').next()?;
-        Some(raw.trim().trim_matches('"').to_owned())
-    }
-
-    fn canonical_route(line: &str) -> Option<(u16, u16, String)> {
-        let line = line.trim();
-        if !line.starts_with('(') {
-            return None;
-        }
-        let fields = line
-            .trim_matches(|value| value == '(' || value == ')' || value == ',')
-            .split(',')
-            .map(str::trim)
-            .collect::<Vec<_>>();
-        if fields.len() < 3 {
-            return None;
-        }
-        Some((
-            fields[0].parse().ok()?,
-            fields[1].parse().ok()?,
-            fields[2].trim_matches('"').to_owned(),
-        ))
-    }
-
-    fn isa_status(
-        number: Option<u16>,
-        name: &str,
-        routes: &BTreeSet<(u16, String)>,
-        supported: &BTreeSet<String>,
-    ) -> &'static str {
-        let Some(number) = number else { return "not-applicable" };
-        if !routes.contains(&(number, name.to_owned())) {
-            return "missing";
-        }
-        if supported.contains(name) {
-            "supported"
-        } else {
-            "router-domain-only"
-        }
-    }
-
-    fn aggregate(arm: &str, x86: &str) -> &'static str {
-        let applicable = [arm, x86]
-            .into_iter()
-            .filter(|status| *status != "not-applicable")
-            .collect::<Vec<_>>();
-        if applicable.contains(&"missing") {
-            "missing"
-        } else if applicable.iter().all(|status| *status == "supported") {
-            "supported"
-        } else {
-            "router-domain-only"
-        }
     }
 
     /// Rewrites the checked-in number table from an explicitly supplied C oracle.
@@ -237,12 +91,15 @@ impl Audit {
                 continue;
             };
             output.push(Entry {
-                arm: Some(arm.parse().map_err(|_| format!("invalid arm number: {arm}"))?),
-                x86: Some(x86.parse().map_err(|_| format!("invalid x86 number: {x86}"))?),
+                arm: Some(
+                    arm.parse()
+                        .map_err(|_| format!("invalid arm number: {arm}"))?,
+                ),
+                x86: Some(
+                    x86.parse()
+                        .map_err(|_| format!("invalid x86 number: {x86}"))?,
+                ),
                 name: (*name).to_owned(),
-                category: "missing",
-                arm_category: "missing",
-                x86_category: "missing",
             });
         }
         if output.is_empty() {
@@ -268,7 +125,9 @@ impl Audit {
             let Some(encoded) = returned.split(';').next() else {
                 continue;
             };
-            let Ok(arm) = encoded.trim().parse() else { continue };
+            let Ok(arm) = encoded.trim().parse() else {
+                continue;
+            };
             let Some(comment) = trimmed.split("//").nth(1) else {
                 continue;
             };
@@ -279,9 +138,6 @@ impl Audit {
                 arm: Some(arm),
                 x86: Some(x86),
                 name: name.trim().to_owned(),
-                category: "missing",
-                arm_category: "missing",
-                x86_category: "missing",
             });
             pending = None;
         }
@@ -292,20 +148,6 @@ impl Audit {
         Ok(output)
     }
 
-    #[allow(clippy::unused_self)]
-    fn render_manifest(&self, entries: &[Entry]) -> String {
-        let mut output = "arm64\tx86_64\tname\tstatus\tarm64_status\tx86_64_status\n".to_owned();
-        for entry in entries {
-            let arm = entry.arm.map_or_else(|| "-".to_owned(), |value| value.to_string());
-            let x86 = entry.x86.map_or_else(|| "-".to_owned(), |value| value.to_string());
-            let _ = writeln!(
-                output,
-                "{}\t{}\t{}\t{}\t{}\t{}",
-                arm, x86, entry.name, entry.category, entry.arm_category, entry.x86_category
-            );
-        }
-        output
-    }
 }
 
 #[cfg(test)]
@@ -313,33 +155,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_parsers_classify() {
+    fn production_map_matches_checked_inventory() {
         let audit = Audit::discover(PathBuf::from("."));
         let entries = audit.inventory().unwrap();
-        assert!(
-            entries
-                .iter()
-                .any(|entry| entry.name == "read" && entry.category == "supported")
-        );
-        assert!(entries.iter().any(|entry| entry.category == "router-domain-only"));
+        assert!(entries.iter().any(|entry| entry.name == "read"));
         assert!(entries.windows(2).all(|pair| {
-            (pair[0].arm.unwrap_or(u16::MAX), pair[0].x86) <= (pair[1].arm.unwrap_or(u16::MAX), pair[1].x86)
+            (pair[0].arm.unwrap_or(u16::MAX), pair[0].x86)
+                <= (pair[1].arm.unwrap_or(u16::MAX), pair[1].x86)
         }));
-        let wait = entries.iter().find(|entry| entry.name == "epoll_wait").unwrap();
-        assert_eq!(wait.arm_category, "not-applicable");
-        assert_eq!(wait.x86_category, "router-domain-only");
-        let pwait = entries.iter().find(|entry| entry.name == "epoll_pwait").unwrap();
-        assert_eq!(pwait.arm_category, "supported");
-        assert_eq!(pwait.x86_category, "supported");
-    }
-
-    #[test]
-    fn checked_outputs_current() {
-        let audit = Audit::discover(PathBuf::from("."));
-        let entries = audit.inventory().unwrap();
-        assert_eq!(
-            fs::read_to_string(audit.output("syscall-inventory.tsv")).unwrap(),
-            audit.render_manifest(&entries),
-        );
     }
 }

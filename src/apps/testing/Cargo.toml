@@ -30,13 +30,6 @@ tempfile.workspace = true
 tar.workspace = true
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "signal"] }
 
-[dev-dependencies]
-hl-checkpoint = { path = "../../runtime/hl-checkpoint" }
-hl-descriptor = { path = "../../runtime/hl-descriptor" }
-hl-network = { path = "../../runtime/hl-network" }
-hl-provider = { path = "../../runtime/hl-provider" }
-hl-runtime = { path = "../../runtime/hl-runtime" }
-
 [[bin]]
 name = "testing"
 path = "src/main.rs"
