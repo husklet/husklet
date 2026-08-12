@@ -3833,6 +3833,46 @@ static int lower_compare_exchange(struct insn *instruction, uint64_t guest_pc, u
     return TX_NEXT;
 }
 
+static int lower_exchange_add(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0xC0 && opcode != 0xC1) return TX_FALL;
+    int width = opcode == 0xC0 ? 1 : instruction->opsize;
+    int sf = width == 8;
+    if (instruction->is_mem) {
+        emit_ea(instruction, next);
+        emit_memory_guard(17, (uint64_t)width, guest_pc, X86_SOFT_READ | X86_SOFT_WRITE);
+        e_lse(LSE_LDADD, width, instruction->reg, 19, 17);
+        do_alu(0, -1, 19, instruction->reg, width);
+        if (width >= 4)
+            e_mov_rr(instruction->reg, 19, sf);
+        else
+            e_bfi(instruction->reg, 19, 0, 8 * width, 1);
+        if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)width);
+        return TX_NEXT;
+    }
+    if (width >= 4) {
+        e_mov_rr(19, instruction->rm_reg, sf);
+        e_rrr(A_ADDS, instruction->rm_reg, instruction->rm_reg, instruction->reg, sf, 0);
+        e_nzcv_save_ci();
+        e_mov_rr(instruction->reg, 19, sf);
+        return TX_NEXT;
+    }
+    int old_value = width == 1 ? byte_val(instruction, instruction->rm_reg, 19) : instruction->rm_reg;
+    int addend = width == 1 ? byte_val(instruction, instruction->reg, 24) : instruction->reg;
+    if (old_value != 19) e_mov_rr(19, old_value, 1);
+    if (addend != 24) e_mov_rr(24, addend, 1);
+    do_alu(0, -1, 19, 24, width);
+    e_rrr(A_ADD, 26, 19, 24, 0, 0);
+    if (width == 1) {
+        byte_wb(instruction, instruction->reg, 19);
+        byte_wb(instruction, instruction->rm_reg, 26);
+    } else {
+        e_bfi(instruction->reg, 19, 0, 16, 1);
+        e_bfi(instruction->rm_reg, 26, 0, 16, 1);
+    }
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6223,41 +6263,8 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // xadd (0F C0 byte / C1): tmp=r/m; r/m += reg; reg = tmp (+ flags)
-            if (op == 0xC0 || op == 0xC1) {
-                int w = op == 0xC0 ? 1 : I.opsize, sf2 = (w == 8);
-                if (I.is_mem) {
-                    emit_ea(&I, next);
-                    emit_memory_guard(17, (uint64_t)w, gpc, X86_SOFT_READ | X86_SOFT_WRITE);
-                    e_lse(LSE_LDADD, w, I.reg, 19, 17); // x19 = old; [m] += reg
-                    do_alu(0, -1, 19, I.reg, w);        // flags from old+reg
-                    if (w >= 4)
-                        e_mov_rr(I.reg, 19, sf2);
-                    else
-                        e_bfi(I.reg, 19, 0, 8 * w, 1); // reg = old
-                    if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)w);
-                } else if (w >= 4) {
-                    e_mov_rr(19, I.rm_reg, sf2); // old
-                    e_rrr(A_ADDS, I.rm_reg, I.rm_reg, I.reg, sf2, 0);
-                    e_nzcv_save_ci();         // rm += reg (x86 add carry)
-                    e_mov_rr(I.reg, 19, sf2); // reg = old
-                } else {
-                    // 8/16-bit register forms (previously UNIMPL -> hard abort). Compute the sum
-                    // into scratch, then write the narrow destination and the narrow source-swap.
-                    int oldv = (w == 1) ? byte_val(&I, I.rm_reg, 19) : I.rm_reg;
-                    int addv = (w == 1) ? byte_val(&I, I.reg, 24) : I.reg;
-                    if (oldv != 19) e_mov_rr(19, oldv, 1);
-                    if (addv != 24) e_mov_rr(24, addv, 1);
-                    do_alu(0, -1, 19, 24, w);       // x86 add flags at width w (x21/x22 scratch)
-                    e_rrr(A_ADD, 26, 19, 24, 0, 0); // x26 = old + reg
-                    if (w == 1) {                   // reg = old FIRST, then dest = sum: when the two
-                        byte_wb(&I, I.reg, 19);     // operands are the same register (`xadd %ax,%ax`)
-                        byte_wb(&I, I.rm_reg, 26);  // the sum is the surviving value
-                    } else {
-                        e_bfi(I.reg, 19, 0, 16, 1);
-                        e_bfi(I.rm_reg, 26, 0, 16, 1);
-                    }
-                }
+            int exchange_add_result = lower_exchange_add(&I, gpc, next);
+            if (exchange_add_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
