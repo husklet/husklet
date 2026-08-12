@@ -139,7 +139,7 @@ impl Workspace {
     pub(crate) fn source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         for path in &self.paths {
-            source_files(path, &mut files)?;
+            source_files(path, &mut files, true)?;
         }
         files.sort();
         files.dedup();
@@ -308,14 +308,16 @@ fn rust_files(path: &Path, files: &mut Vec<PathBuf>, include_linter: bool) -> io
     Ok(())
 }
 
-fn source_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+fn source_files(path: &Path, files: &mut Vec<PathBuf>, explicitly_requested: bool) -> Result<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| LintError::io("inspect", path, error))?;
     if metadata.file_type().is_symlink() {
         return Ok(());
     }
     if metadata.is_file() {
         let extension = path.extension().and_then(|value| value.to_str());
-        if matches!(extension, Some("rs" | "c" | "h")) && below_architecture_root(path) {
+        if matches!(extension, Some("rs" | "c" | "h" | "m" | "mm"))
+            && (explicitly_requested || below_architecture_root(path))
+        {
             files.push(path.to_owned());
         }
         return Ok(());
@@ -333,7 +335,7 @@ fn source_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         .map_err(|error| LintError::io("read source directory", path, error))?;
     entries.sort_by_key(std::fs::DirEntry::path);
     for entry in entries {
-        source_files(&entry.path(), files)?;
+        source_files(&entry.path(), files, false)?;
     }
     Ok(())
 }

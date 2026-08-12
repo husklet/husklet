@@ -6,8 +6,9 @@ use hl_design_lint::{Cases, Diagnostic, Linter, Markdown, Reporter, Result, Seve
 #[derive(Debug, Parser)]
 #[command(disable_version_flag = true)]
 struct Arguments {
-    #[arg(long, value_name = "DIRECTORY", conflicts_with_all = ["markdown", "cases"])]
-    native: Option<PathBuf>,
+    /// Runs the portable C rules on the requested paths.
+    #[arg(long, conflicts_with_all = ["markdown", "cases"])]
+    c: bool,
     #[arg(long, conflicts_with = "cases")]
     markdown: bool,
     #[arg(long, value_name = "DIRECTORY", conflicts_with = "markdown")]
@@ -46,13 +47,15 @@ impl Arguments {
             Output::Markdown => Box::new(Markdown::default()),
             Output::Cases(root) => Box::new(Cases::new(root)),
         };
-        let linter = self.native.map_or_else(Linter::standard, |directory| {
+        let linter = if self.c {
             Linter::new(
                 hl_design_lint::Registry::new()
                     .register(hl_design_lint::CStructure)
-                    .register(hl_design_lint::NativeQuality::new(directory)),
+                    .register(hl_design_lint::CPolicy::new()),
             )
-        });
+        } else {
+            Linter::standard()
+        };
         let summaries = linter.run(self.paths, reporter.as_mut())?;
         Ok(cases
             || !summaries

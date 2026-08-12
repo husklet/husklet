@@ -19,3 +19,5 @@ serde_json.workspace = true
 syn = { version = "2", features = ["full", "visit"] }
 thiserror = "2"
 toml = "1"
+tree-sitter = "0.26"
+tree-sitter-c = "0.24"

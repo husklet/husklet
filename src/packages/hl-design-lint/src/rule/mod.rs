@@ -45,7 +45,7 @@ pub use arguments::ManualDispatch;
 pub use blocking::AsyncBlocking;
 pub use boolean::State as BooleanState;
 pub use boundary::PathModules;
-pub use c::{Quality as NativeQuality, Structure as CStructure};
+pub use c::{CallPolicy as CCallPolicy, Policy as CPolicy, Structure as CStructure};
 pub use catchall::CatchAllModule;
 pub use ceremony::CeremonialStructure;
 pub use command::PlatformCommand;
