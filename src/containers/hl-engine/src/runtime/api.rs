@@ -15,7 +15,7 @@ mod terminal;
 use crate::activation::GuestIsa;
 use crate::composition::{CompositionError, EngineBackend, RuntimeServices};
 use crate::engine::{EngineError, EngineExit, StopRequest};
-use crate::launch_plan::RuntimePlan;
+use crate::launcher::plan::RuntimePlan;
 use crate::options::Options;
 
 mod workspace;

@@ -1,6 +1,6 @@
 use hl_engine::activation::GuestIsa;
 use hl_engine::engine::{EngineError, ExitKind};
-use hl_engine::launch_plan::RuntimePlan;
+use hl_engine::launcher::plan::RuntimePlan;
 use hl_engine::options::Options;
 use hl_engine::runtime::Engine;
 

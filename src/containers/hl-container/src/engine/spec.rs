@@ -1,5 +1,5 @@
 use crate::{Error, Result, service::ProcessConfig};
-use hl_engine::{activation::GuestIsa, launch_plan::RuntimePlan, options::Options};
+use hl_engine::{activation::GuestIsa, launcher::plan::RuntimePlan, options::Options};
 
 pub(super) struct Spec {
     pub(super) isa: GuestIsa,

@@ -3,7 +3,7 @@
 use hl_engine::{
     activation::GuestIsa,
     composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStreams},
-    launch_plan::RuntimePlan,
+    launcher::plan::RuntimePlan,
     options::Options,
     runtime::Engine,
 };

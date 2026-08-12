@@ -2,7 +2,7 @@
 
 use crate::activation::GuestIsa;
 use crate::engine::{Engine, EngineError, EngineExit, Launcher, ProcessId, StopRequest, Workspace, WorkspaceId};
-use crate::launch_plan::RuntimePlan;
+use crate::launcher::plan::RuntimePlan;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 

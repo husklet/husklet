@@ -157,7 +157,7 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
     } else {
         Guest::X86_64
     });
-    let plan = hl_engine::launch_plan::RuntimePlan {
+    let plan = hl_engine::launcher::plan::RuntimePlan {
         rootfs: None,
         executable_host: None,
         arguments: vec![b"backend-receipt".to_vec()],

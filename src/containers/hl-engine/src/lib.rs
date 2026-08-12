@@ -38,10 +38,6 @@ pub mod config;
 pub mod domain;
 pub mod engine;
 pub mod launcher;
-/// Compatibility surface for callers using the former flat launch-plan module.
-pub mod launch_plan {
-    pub use crate::launcher::plan::*;
-}
 pub mod options;
 #[path = "runtime/api.rs"]
 pub mod runtime;

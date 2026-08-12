@@ -1,7 +1,7 @@
 //! Per-engine lifecycle coordination over injected launch capabilities.
 
 use crate::activation::GuestIsa;
-use crate::launch_plan::RuntimePlan;
+use crate::launcher::plan::RuntimePlan;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
