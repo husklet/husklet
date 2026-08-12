@@ -1,4 +1,4 @@
-#![cfg(hl_retained_c)]
+#![cfg(all(any(target_os = "linux", target_os = "macos"), target_arch = "aarch64"))]
 #![allow(unsafe_code)]
 
 use std::{ffi::c_void, os::raw::c_char, ptr};
@@ -70,9 +70,9 @@ unsafe extern "C" {
 }
 
 // Keep the package library in this integration-test link. Its build script
-// supplies the retained C archives used by the direct ABI assertions below.
+// supplies the native C archives used by the direct ABI assertions below.
 fn link_engine_native_archives() {
-    drop(hl_engine::options::Options::default());
+    assert!(hl_native::supported(std::env::consts::OS, std::env::consts::ARCH));
 }
 
 struct State {
