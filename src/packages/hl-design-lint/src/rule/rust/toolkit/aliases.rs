@@ -78,22 +78,24 @@ fn collect_use(tree: &UseTree, prefix: Option<String>, aliases: &mut Aliases) {
             collect_use(&path.tree, Some(next), aliases);
         }
         UseTree::Name(name) => record_use(prefix, name.ident.to_string(), aliases),
-        UseTree::Rename(rename) => {
-            if let Some(prefix) = prefix {
-                record_use(Some(prefix), rename.rename.to_string(), aliases);
-            } else {
-                let original = rename.ident.to_string();
-                if TOOLKITS.contains(&original.as_str()) {
-                    aliases.crates.insert(rename.rename.to_string(), original);
-                }
-            }
-        }
+        UseTree::Rename(rename) => record_rename(prefix, rename, aliases),
         UseTree::Group(group) => {
             for item in &group.items {
                 collect_use(item, prefix.clone(), aliases);
             }
         }
         UseTree::Glob(_) => {}
+    }
+}
+
+fn record_rename(prefix: Option<String>, rename: &syn::UseRename, aliases: &mut Aliases) {
+    if let Some(prefix) = prefix {
+        record_use(Some(prefix), rename.rename.to_string(), aliases);
+        return;
+    }
+    let original = rename.ident.to_string();
+    if TOOLKITS.contains(&original.as_str()) {
+        aliases.crates.insert(rename.rename.to_string(), original);
     }
 }
 
