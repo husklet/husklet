@@ -1,299 +1,8 @@
 /* Included by io.c: unity-build access with bounded I/O capability handlers. */
 
-static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
-    switch (nr) {
-    case 63: {
-        int rfd = (int)a0;
-        if (fcntl(rfd, F_GETFL) < 0 && errno == EBADF) {
-            G_RET(c) = (uint64_t)(-EBADF);
-            break;
-        }
-        // tee(2) pushback: bytes a prior tee() peeked out of this pipe are re-served here first, in order.
-        if (rfd >= 0 && rfd < HL_NFD && g_fd_pb_len[rfd]) {
-            size_t want = (size_t)a2;
-            size_t accessible = guest_accessible_prefix(a1, want, HL_LOGICAL_VMA_WRITE);
-            if (want != 0 && accessible == 0) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            want = accessible;
-            void *buffer = malloc(want == 0 ? 1 : want);
-            if (buffer == NULL) {
-                G_RET(c) = (uint64_t)(-ENOMEM);
-                break;
-            }
-            size_t taken = pipe_pushback_take(rfd, buffer, want);
-            ssize_t copied = guest_copy_to(a1, buffer, taken);
-            free(buffer);
-            G_RET(c) = copied == (ssize_t)taken ? taken : copied > 0 ? (uint64_t)copied : (uint64_t)(-EFAULT);
-            break;
-        }
-        // AF_NETLINK socket read: busybox `ip` receives its RTNETLINK dump with read(2)/recvmsg;
-        // drain our queued reply with the Linux MSG_PEEK/MSG_TRUNC semantics (see netns.c nl_recv).
-        if (nl_is(rfd)) {
-            size_t accessible = guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE);
-            if (a2 && !accessible) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            uint8_t *buffer = malloc(accessible ? accessible : 1);
-            if (!buffer) {
-                G_RET(c) = (uint64_t)(-ENOMEM);
-                break;
-            }
-            struct iovec iov = {buffer, accessible};
-            int64_t result = nl_recv(rfd, &iov, 1, 0, NULL);
-            if (result > 0) {
-                size_t produced = (uint64_t)result < accessible ? (size_t)result : accessible;
-                ssize_t copied = guest_copy_to(a1, buffer, produced);
-                if (copied != (ssize_t)produced) result = copied > 0 ? copied : -EFAULT;
-            }
-            free(buffer);
-            G_RET(c) = (uint64_t)result;
-            break;
-        }
-        // RAM-backed scratch file: serve the read from memory. Unlike a host-fd read (whose kernel copyout
-        // faults a bad buffer to EFAULT), this copies straight into the guest buffer, so a bad/unmapped
-        // pointer must be validated here or the engine memcpy faults (access_ok).
-        if (memf_get(rfd)) {
-            size_t accessible = guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE);
-            if (a2 != 0 && accessible == 0) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            void *buffer = malloc(accessible == 0 ? 1 : accessible);
-            if (buffer == NULL) {
-                G_RET(c) = (uint64_t)(-ENOMEM);
-                break;
-            }
-            ssize_t r = memf_read_pos(g_memf[rfd], buffer, accessible);
-            if (r > 0) {
-                ssize_t copied = guest_copy_to(a1, buffer, (size_t)r);
-                if (copied != r) r = copied > 0 ? copied : -EFAULT;
-            }
-            free(buffer);
-            G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
-            break;
-        }
-        // signalfd read -> struct signalfd_siginfo. Each signalfd OFD has its own self-pipe; the fd number
-        // (original OR a dup, both mapped by g_sigfd_slot) is the read end, so read straight from rfd.
-        if (rfd >= 0 && rfd < HL_NFD && g_sigfd_slot[rfd]) {
-            // Linux needs room for at least one struct signalfd_siginfo (128 bytes); a shorter buffer is
-            // EINVAL and must NOT consume a pending signal (checked before draining the wake byte).
-            if (a2 < 128) {
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                break;
-            }
-            char b;
-            // drain one wake byte (one byte was written per queued instance -> keeps readability accurate)
-            ssize_t pr = read(rfd, &b, 1);
-            if (pr <= 0) {
-                G_RET(c) = (uint64_t)(int64_t)(pr < 0 ? -errno : -EAGAIN);
-                break;
-            }
-            // The self-pipe only preserves INSERTION order, but signalfd drains in priority order (lowest
-            // signo first, FIFO within a signo) carrying the queued siginfo (ssi_int / ssi_pid / ssi_code).
-            // So ignore the byte's signo for SELECTION: scan this OFD's mask ascending for the lowest signo
-            // with a queued instance and pop it. Only if nothing is queued (a host async-path wake that set
-            // the bit with an empty queue) do we fall back to the byte's signo and the single-slot g_sig*.
-            int sslot = g_sigfd_slot[rfd] - 1;
-            uint64_t omask = g_sfd[sslot].mask;
-            struct sigq_ent ent;
-            int sig = 0, popped = 0;
-            for (int s = 1; s < 64; s++)
-                if ((omask & (1ull << s)) && sigq_pop(s, &ent)) {
-                    sig = s;
-                    popped = 1;
-                    break;
-                }
-            if (!popped) {
-                sig = (unsigned char)b;
-                if (sig > 0 && sig < 64) __atomic_and_fetch(&g_pending, ~(1ull << (unsigned)sig), __ATOMIC_SEQ_CST);
-            }
-            if (a1 && a2 >= 128) {
-                // a1 is a raw guest buffer we write directly -> EFAULT a bad pointer instead of faulting the engine
-                uint8_t info[128] = {0};
-                uint32_t signo = (uint32_t)sig, pid = (uint32_t)(popped ? ent.pid : g_sigpid[sig]);
-                uint32_t uid = (uint32_t)(popped ? ent.uid : g_siguid[sig]);
-                int32_t error = popped ? ent.error : g_sigerror[sig];
-                int32_t code = popped ? ent.code : g_sigcode[sig];
-                memcpy(info, &signo, sizeof(signo));
-                memcpy(info + 4, &error, sizeof(error));
-                memcpy(info + 8, &code, sizeof(code));
-                memcpy(info + 12, &pid, sizeof(pid));
-                memcpy(info + 16, &uid, sizeof(uid));
-                uint64_t val = popped ? ent.value : g_sigval[sig];
-                int32_t integer = (int32_t)val;
-                memcpy(info + 44, &integer, sizeof(integer));
-                memcpy(info + 48, &val, sizeof(val));
-                if (guest_copy_to(a1, info, sizeof(info)) != (ssize_t)sizeof(info)) {
-                    G_RET(c) = (uint64_t)(-EFAULT);
-                    break;
-                }
-                if (!popped) {
-                    g_sigerror[sig] = 0;
-                    g_sigcode[sig] = 0;
-                    g_sigval[sig] = 0;
-                    g_sigpid[sig] = 0;
-                    g_siguid[sig] = 0;
-                }
-            }
-            G_RET(c) = 128;
-            break;
-        }
-        // inotify read -> struct inotify_event[]
-#if defined(__linux__)
-        if (rfd >= 0 && rfd < HL_NFD && g_inotify[rfd] && g_inotify_raw_pos[rfd] < g_inotify_raw_len[rfd]) {
-            if (a2 < 16) {
-                G_RET(c) = (uint64_t)(-EINVAL);
-                break;
-            }
-            if (guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE) != (size_t)a2) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            size_t available = g_inotify_raw_len[rfd] - g_inotify_raw_pos[rfd];
-            size_t copied = available < (size_t)a2 ? available : (size_t)a2;
-            if (guest_copy_to(a1, g_inotify_raw[rfd] + g_inotify_raw_pos[rfd], copied) != (ssize_t)copied) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            g_inotify_raw_pos[rfd] += copied;
-            if (g_inotify_raw_pos[rfd] == g_inotify_raw_len[rfd]) {
-                free(g_inotify_raw[rfd]);
-                g_inotify_raw[rfd] = NULL;
-                g_inotify_raw_pos[rfd] = g_inotify_raw_len[rfd] = 0;
-            }
-            G_RET(c) = copied;
-            break;
-        }
-#else
-        if (rfd >= 0 && rfd < 1024 && g_inotify[rfd]) {
-            // Linux needs room for at least one struct inotify_event (16-byte header); a shorter buffer is
-            // EINVAL and must NOT consume the queued event (checked before any kqueue drain / snapshot diff).
-            if (a2 < 16) {
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                break;
-            }
-            // The whole [a1, a1+a2) buffer is written directly by the engine below; validate it up front so a
-            // bad/unmapped pointer returns -EFAULT (without consuming events) instead of faulting the engine.
-            if (guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE) != (size_t)a2) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            uint8_t *out = malloc((size_t)a2);
-            if (!out) {
-                G_RET(c) = (uint64_t)(-ENOMEM);
-                break;
-            }
-            size_t off = 0;
-            // First drain any queued rename events (IN_MOVED_FROM/IN_MOVED_TO) for this instance; the
-            // snapshot diff below can only synthesize IN_CREATE/IN_DELETE, not paired moves.
-            off += inomv_drain(rfd, out, (size_t)a2);
-            for (int wd = 0; wd < 1024; wd++) {
-                if (g_inotify_owner[wd] != rfd || !g_inotify_pending[wd]) continue;
-                if (g_inotify_isdir[wd]) {
-                    char *cur = dir_snapshot(g_inotify_wpath[wd]);
-                    char *old = g_inotify_snap[wd];
-                    for (int pass = 0; pass < 2; pass++) {
-                        const char *src = pass == 0 ? cur : old, *other = pass == 0 ? old : cur;
-                        uint32_t mask = pass == 0 ? 0x100u : 0x200u;
-                        for (const char *p = src ? src : ""; *p;) {
-                            const char *e = strchr(p, '\n');
-                            size_t length = e ? (size_t)(e - p) : strlen(p);
-                            if (length && !snap_has(other, p, length) && (g_inotify_mask[wd] & mask)) {
-                                size_t nlen = (length + 1 + 15) & ~(size_t)15;
-                                if (off + 16 + nlen > a2) break;
-                                *(int32_t *)(out + off) = wd;
-                                *(uint32_t *)(out + off + 4) = mask;
-                                *(uint32_t *)(out + off + 8) = 0;
-                                *(uint32_t *)(out + off + 12) = (uint32_t)nlen;
-                                memcpy(out + off + 16, p, length);
-                                memset(out + off + 16 + length, 0, nlen - length);
-                                off += 16 + nlen;
-                            }
-                            p = e ? e + 1 : p + length;
-                        }
-                    }
-                    free(old);
-                    g_inotify_snap[wd] = cur;
-                } else if (off + 16 <= a2) {
-                    *(int32_t *)(out + off) = wd;
-                    *(uint32_t *)(out + off + 4) = g_inotify_pending[wd] & g_inotify_mask[wd];
-                    *(uint32_t *)(out + off + 8) = 0;
-                    *(uint32_t *)(out + off + 12) = 0;
-                    off += 16;
-                }
-                g_inotify_pending[wd] = 0;
-            }
-            struct kevent kv[32];
-            struct timespec zero = {0, 0};
-            int nb = g_inotify_nb[rfd];
-            // If we already produced move events, poll the kqueue non-blocking so we never wait behind them.
-            int n = kevent(rfd, NULL, 0, kv, 32, (nb || off > 0) ? &zero : NULL);
-            if (n <= 0) {
-                if (off > 0) {
-                    ssize_t copied = guest_copy_to(a1, out, off);
-                    G_RET(c) = copied == (ssize_t)off ? (uint64_t)off : (uint64_t)(-EFAULT);
-                    free(out);
-                    break;
-                } // return the moves we already have
-                G_RET(c) = (uint64_t)(int64_t)(n < 0 ? -errno : -EAGAIN);
-                free(out);
-                break;
-            }
-            for (int i = 0; i < n; i++) {
-                int wd = (int)kv[i].ident;
-                if (wd >= 0 && wd < 1024 && g_inotify_isdir[wd]) {
-                    // directory watch: diff current entries against the snapshot -> IN_CREATE/IN_DELETE+name
-                    char *cur = dir_snapshot(g_inotify_wpath[wd]);
-                    char *old = g_inotify_snap[wd];
-                    for (int pass = 0; pass < 2; pass++) { // pass 0 = created, pass 1 = deleted
-                        const char *src = pass == 0 ? cur : old, *other = pass == 0 ? old : cur;
-                        uint32_t mask = pass == 0 ? 0x100u : 0x200u; // IN_CREATE / IN_DELETE
-                        for (const char *p = src ? src : ""; *p;) {
-                            const char *e = strchr(p, '\n');
-                            size_t l = e ? (size_t)(e - p) : strlen(p);
-                            if (l && !snap_has(other, p, l) && (g_inotify_mask[wd] & mask)) {
-                                size_t nlen = (l + 1 + 15) & ~(size_t)15; // padded name field
-                                if (off + 16 + nlen > a2) break;
-                                *(int32_t *)(out + off) = wd;
-                                *(uint32_t *)(out + off + 4) = mask;
-                                *(uint32_t *)(out + off + 8) = 0;               // cookie
-                                *(uint32_t *)(out + off + 12) = (uint32_t)nlen; // len
-                                memcpy(out + off + 16, p, l);
-                                memset(out + off + 16 + l, 0, nlen - l);
-                                off += 16 + nlen;
-                            }
-                            p = e ? e + 1 : p + l;
-                        }
-                    }
-                    free(old);
-                    g_inotify_snap[wd] = cur;
-                } else {
-                    if (off + 16 > a2) break;
-                    uint32_t f = kv[i].fflags, m = 0;
-                    if (f & (NOTE_WRITE | NOTE_EXTEND)) m |= 0x2; // IN_MODIFY
-                    if (f & NOTE_ATTRIB) m |= 0x4;                // IN_ATTRIB
-                    if (f & NOTE_DELETE) m |= 0x400;              // IN_DELETE_SELF
-                    if (f & NOTE_RENAME) m |= 0x800;              // IN_MOVE_SELF
-                    *(int32_t *)(out + off) = wd;
-                    *(uint32_t *)(out + off + 4) = m;
-                    *(uint32_t *)(out + off + 8) = 0;
-                    *(uint32_t *)(out + off + 12) = 0;
-                    off += 16;
-                }
-            }
-            ssize_t copied = guest_copy_to(a1, out, off);
-            G_RET(c) = copied == (ssize_t)off ? (uint64_t)off : (uint64_t)(-EFAULT);
-            free(out);
-            break;
-        }
-#endif
-        // timerfd read -> drain timer, return count
-        if (rfd >= 0 && rfd < HL_NFD && g_timerfd[rfd]) {
+static int svc_read_timer(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
+    if (rfd < 0 || rfd >= HL_NFD || !g_timerfd[rfd]) return 0;
+    do {
             // Linux needs an 8-byte buffer; a shorter read is EINVAL and must NOT drain the expiration
             // (checked before the kqueue drain so the pending tick survives an invalid short read).
             if (a2 < 8) {
@@ -452,9 +161,13 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             }
             G_RET(c) = 8;
             break;
-        }
-        // eventfd read: return the accumulated counter, reset it, drain the readiness pipe
-        if (rfd >= 0 && rfd < HL_NFD && g_eventfd_peer[rfd]) {
+    } while (0);
+    return 1;
+}
+
+static int svc_read_eventfd(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
+    if (rfd < 0 || rfd >= HL_NFD || !g_eventfd_peer[rfd]) return 0;
+    do {
             int eslot = eventfd_counter_slot(rfd);
             if (a2 < 8) {
                 G_RET(c) = (uint64_t)(-EINVAL);
@@ -526,7 +239,309 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = 8;
         eventfd_read_done:
             break;
+    } while (0);
+    return 1;
+}
+
+static int svc_read_inotify(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
+#if defined(__linux__)
+    if (!((rfd >= 0 && rfd < HL_NFD && g_inotify[rfd] && g_inotify_raw_pos[rfd] < g_inotify_raw_len[rfd]))) return 0;
+            if (a2 < 16) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                return 1;
+            }
+            if (guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE) != (size_t)a2) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                return 1;
+            }
+            size_t available = g_inotify_raw_len[rfd] - g_inotify_raw_pos[rfd];
+            size_t copied = available < (size_t)a2 ? available : (size_t)a2;
+            if (guest_copy_to(a1, g_inotify_raw[rfd] + g_inotify_raw_pos[rfd], copied) != (ssize_t)copied) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                return 1;
+            }
+            g_inotify_raw_pos[rfd] += copied;
+            if (g_inotify_raw_pos[rfd] == g_inotify_raw_len[rfd]) {
+                free(g_inotify_raw[rfd]);
+                g_inotify_raw[rfd] = NULL;
+                g_inotify_raw_pos[rfd] = g_inotify_raw_len[rfd] = 0;
+            }
+            G_RET(c) = copied;
+            return 1;
+#else
+    if (!((rfd >= 0 && rfd < 1024 && g_inotify[rfd]))) return 0;
+            // Linux needs room for at least one struct inotify_event (16-byte header); a shorter buffer is
+            // EINVAL and must NOT consume the queued event (checked before any kqueue drain / snapshot diff).
+            if (a2 < 16) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                return 1;
+            }
+            // The whole [a1, a1+a2) buffer is written directly by the engine below; validate it up front so a
+            // bad/unmapped pointer returns -EFAULT (without consuming events) instead of faulting the engine.
+            if (guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE) != (size_t)a2) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                return 1;
+            }
+            uint8_t *out = malloc((size_t)a2);
+            if (!out) {
+                G_RET(c) = (uint64_t)(-ENOMEM);
+                return 1;
+            }
+            size_t off = 0;
+            // First drain any queued rename events (IN_MOVED_FROM/IN_MOVED_TO) for this instance; the
+            // snapshot diff below can only synthesize IN_CREATE/IN_DELETE, not paired moves.
+            off += inomv_drain(rfd, out, (size_t)a2);
+            for (int wd = 0; wd < 1024; wd++) {
+                if (g_inotify_owner[wd] != rfd || !g_inotify_pending[wd]) continue;
+                if (g_inotify_isdir[wd]) {
+                    char *cur = dir_snapshot(g_inotify_wpath[wd]);
+                    char *old = g_inotify_snap[wd];
+                    for (int pass = 0; pass < 2; pass++) {
+                        const char *src = pass == 0 ? cur : old, *other = pass == 0 ? old : cur;
+                        uint32_t mask = pass == 0 ? 0x100u : 0x200u;
+                        for (const char *p = src ? src : ""; *p;) {
+                            const char *e = strchr(p, '\n');
+                            size_t length = e ? (size_t)(e - p) : strlen(p);
+                            if (length && !snap_has(other, p, length) && (g_inotify_mask[wd] & mask)) {
+                                size_t nlen = (length + 1 + 15) & ~(size_t)15;
+                                if (off + 16 + nlen > a2) break;
+                                *(int32_t *)(out + off) = wd;
+                                *(uint32_t *)(out + off + 4) = mask;
+                                *(uint32_t *)(out + off + 8) = 0;
+                                *(uint32_t *)(out + off + 12) = (uint32_t)nlen;
+                                memcpy(out + off + 16, p, length);
+                                memset(out + off + 16 + length, 0, nlen - length);
+                                off += 16 + nlen;
+                            }
+                            p = e ? e + 1 : p + length;
+                        }
+                    }
+                    free(old);
+                    g_inotify_snap[wd] = cur;
+                } else if (off + 16 <= a2) {
+                    *(int32_t *)(out + off) = wd;
+                    *(uint32_t *)(out + off + 4) = g_inotify_pending[wd] & g_inotify_mask[wd];
+                    *(uint32_t *)(out + off + 8) = 0;
+                    *(uint32_t *)(out + off + 12) = 0;
+                    off += 16;
+                }
+                g_inotify_pending[wd] = 0;
+            }
+            struct kevent kv[32];
+            struct timespec zero = {0, 0};
+            int nb = g_inotify_nb[rfd];
+            // If we already produced move events, poll the kqueue non-blocking so we never wait behind them.
+            int n = kevent(rfd, NULL, 0, kv, 32, (nb || off > 0) ? &zero : NULL);
+            if (n <= 0) {
+                if (off > 0) {
+                    ssize_t copied = guest_copy_to(a1, out, off);
+                    G_RET(c) = copied == (ssize_t)off ? (uint64_t)off : (uint64_t)(-EFAULT);
+                    free(out);
+                    return 1;
+                } // return the moves we already have
+                G_RET(c) = (uint64_t)(int64_t)(n < 0 ? -errno : -EAGAIN);
+                free(out);
+                return 1;
+            }
+            for (int i = 0; i < n; i++) {
+                int wd = (int)kv[i].ident;
+                if (wd >= 0 && wd < 1024 && g_inotify_isdir[wd]) {
+                    // directory watch: diff current entries against the snapshot -> IN_CREATE/IN_DELETE+name
+                    char *cur = dir_snapshot(g_inotify_wpath[wd]);
+                    char *old = g_inotify_snap[wd];
+                    for (int pass = 0; pass < 2; pass++) { // pass 0 = created, pass 1 = deleted
+                        const char *src = pass == 0 ? cur : old, *other = pass == 0 ? old : cur;
+                        uint32_t mask = pass == 0 ? 0x100u : 0x200u; // IN_CREATE / IN_DELETE
+                        for (const char *p = src ? src : ""; *p;) {
+                            const char *e = strchr(p, '\n');
+                            size_t l = e ? (size_t)(e - p) : strlen(p);
+                            if (l && !snap_has(other, p, l) && (g_inotify_mask[wd] & mask)) {
+                                size_t nlen = (l + 1 + 15) & ~(size_t)15; // padded name field
+                                if (off + 16 + nlen > a2) break;
+                                *(int32_t *)(out + off) = wd;
+                                *(uint32_t *)(out + off + 4) = mask;
+                                *(uint32_t *)(out + off + 8) = 0;               // cookie
+                                *(uint32_t *)(out + off + 12) = (uint32_t)nlen; // len
+                                memcpy(out + off + 16, p, l);
+                                memset(out + off + 16 + l, 0, nlen - l);
+                                off += 16 + nlen;
+                            }
+                            p = e ? e + 1 : p + l;
+                        }
+                    }
+                    free(old);
+                    g_inotify_snap[wd] = cur;
+                } else {
+                    if (off + 16 > a2) break;
+                    uint32_t f = kv[i].fflags, m = 0;
+                    if (f & (NOTE_WRITE | NOTE_EXTEND)) m |= 0x2; // IN_MODIFY
+                    if (f & NOTE_ATTRIB) m |= 0x4;                // IN_ATTRIB
+                    if (f & NOTE_DELETE) m |= 0x400;              // IN_DELETE_SELF
+                    if (f & NOTE_RENAME) m |= 0x800;              // IN_MOVE_SELF
+                    *(int32_t *)(out + off) = wd;
+                    *(uint32_t *)(out + off + 4) = m;
+                    *(uint32_t *)(out + off + 8) = 0;
+                    *(uint32_t *)(out + off + 12) = 0;
+                    off += 16;
+                }
+            }
+            ssize_t copied = guest_copy_to(a1, out, off);
+            G_RET(c) = copied == (ssize_t)off ? (uint64_t)off : (uint64_t)(-EFAULT);
+            free(out);
+            break;
+#endif
+    return 1;
+}
+
+static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                     uint64_t a4, uint64_t a5) {
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    switch (nr) {
+    case 63: {
+        int rfd = (int)a0;
+        if (fcntl(rfd, F_GETFL) < 0 && errno == EBADF) {
+            G_RET(c) = (uint64_t)(-EBADF);
+            break;
         }
+        // tee(2) pushback: bytes a prior tee() peeked out of this pipe are re-served here first, in order.
+        if (rfd >= 0 && rfd < HL_NFD && g_fd_pb_len[rfd]) {
+            size_t want = (size_t)a2;
+            size_t accessible = guest_accessible_prefix(a1, want, HL_LOGICAL_VMA_WRITE);
+            if (want != 0 && accessible == 0) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
+            want = accessible;
+            void *buffer = malloc(want == 0 ? 1 : want);
+            if (buffer == NULL) {
+                G_RET(c) = (uint64_t)(-ENOMEM);
+                break;
+            }
+            size_t taken = pipe_pushback_take(rfd, buffer, want);
+            ssize_t copied = guest_copy_to(a1, buffer, taken);
+            free(buffer);
+            G_RET(c) = copied == (ssize_t)taken ? taken : copied > 0 ? (uint64_t)copied : (uint64_t)(-EFAULT);
+            break;
+        }
+        // AF_NETLINK socket read: busybox `ip` receives its RTNETLINK dump with read(2)/recvmsg;
+        // drain our queued reply with the Linux MSG_PEEK/MSG_TRUNC semantics (see netns.c nl_recv).
+        if (nl_is(rfd)) {
+            size_t accessible = guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE);
+            if (a2 && !accessible) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
+            uint8_t *buffer = malloc(accessible ? accessible : 1);
+            if (!buffer) {
+                G_RET(c) = (uint64_t)(-ENOMEM);
+                break;
+            }
+            struct iovec iov = {buffer, accessible};
+            int64_t result = nl_recv(rfd, &iov, 1, 0, NULL);
+            if (result > 0) {
+                size_t produced = (uint64_t)result < accessible ? (size_t)result : accessible;
+                ssize_t copied = guest_copy_to(a1, buffer, produced);
+                if (copied != (ssize_t)produced) result = copied > 0 ? copied : -EFAULT;
+            }
+            free(buffer);
+            G_RET(c) = (uint64_t)result;
+            break;
+        }
+        // RAM-backed scratch file: serve the read from memory. Unlike a host-fd read (whose kernel copyout
+        // faults a bad buffer to EFAULT), this copies straight into the guest buffer, so a bad/unmapped
+        // pointer must be validated here or the engine memcpy faults (access_ok).
+        if (memf_get(rfd)) {
+            size_t accessible = guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE);
+            if (a2 != 0 && accessible == 0) {
+                G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
+            void *buffer = malloc(accessible == 0 ? 1 : accessible);
+            if (buffer == NULL) {
+                G_RET(c) = (uint64_t)(-ENOMEM);
+                break;
+            }
+            ssize_t r = memf_read_pos(g_memf[rfd], buffer, accessible);
+            if (r > 0) {
+                ssize_t copied = guest_copy_to(a1, buffer, (size_t)r);
+                if (copied != r) r = copied > 0 ? copied : -EFAULT;
+            }
+            free(buffer);
+            G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
+            break;
+        }
+        // signalfd read -> struct signalfd_siginfo. Each signalfd OFD has its own self-pipe; the fd number
+        // (original OR a dup, both mapped by g_sigfd_slot) is the read end, so read straight from rfd.
+        if (rfd >= 0 && rfd < HL_NFD && g_sigfd_slot[rfd]) {
+            // Linux needs room for at least one struct signalfd_siginfo (128 bytes); a shorter buffer is
+            // EINVAL and must NOT consume a pending signal (checked before draining the wake byte).
+            if (a2 < 128) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            char b;
+            // drain one wake byte (one byte was written per queued instance -> keeps readability accurate)
+            ssize_t pr = read(rfd, &b, 1);
+            if (pr <= 0) {
+                G_RET(c) = (uint64_t)(int64_t)(pr < 0 ? -errno : -EAGAIN);
+                break;
+            }
+            // The self-pipe only preserves INSERTION order, but signalfd drains in priority order (lowest
+            // signo first, FIFO within a signo) carrying the queued siginfo (ssi_int / ssi_pid / ssi_code).
+            // So ignore the byte's signo for SELECTION: scan this OFD's mask ascending for the lowest signo
+            // with a queued instance and pop it. Only if nothing is queued (a host async-path wake that set
+            // the bit with an empty queue) do we fall back to the byte's signo and the single-slot g_sig*.
+            int sslot = g_sigfd_slot[rfd] - 1;
+            uint64_t omask = g_sfd[sslot].mask;
+            struct sigq_ent ent;
+            int sig = 0, popped = 0;
+            for (int s = 1; s < 64; s++)
+                if ((omask & (1ull << s)) && sigq_pop(s, &ent)) {
+                    sig = s;
+                    popped = 1;
+                    break;
+                }
+            if (!popped) {
+                sig = (unsigned char)b;
+                if (sig > 0 && sig < 64) __atomic_and_fetch(&g_pending, ~(1ull << (unsigned)sig), __ATOMIC_SEQ_CST);
+            }
+            if (a1 && a2 >= 128) {
+                // a1 is a raw guest buffer we write directly -> EFAULT a bad pointer instead of faulting the engine
+                uint8_t info[128] = {0};
+                uint32_t signo = (uint32_t)sig, pid = (uint32_t)(popped ? ent.pid : g_sigpid[sig]);
+                uint32_t uid = (uint32_t)(popped ? ent.uid : g_siguid[sig]);
+                int32_t error = popped ? ent.error : g_sigerror[sig];
+                int32_t code = popped ? ent.code : g_sigcode[sig];
+                memcpy(info, &signo, sizeof(signo));
+                memcpy(info + 4, &error, sizeof(error));
+                memcpy(info + 8, &code, sizeof(code));
+                memcpy(info + 12, &pid, sizeof(pid));
+                memcpy(info + 16, &uid, sizeof(uid));
+                uint64_t val = popped ? ent.value : g_sigval[sig];
+                int32_t integer = (int32_t)val;
+                memcpy(info + 44, &integer, sizeof(integer));
+                memcpy(info + 48, &val, sizeof(val));
+                if (guest_copy_to(a1, info, sizeof(info)) != (ssize_t)sizeof(info)) {
+                    G_RET(c) = (uint64_t)(-EFAULT);
+                    break;
+                }
+                if (!popped) {
+                    g_sigerror[sig] = 0;
+                    g_sigcode[sig] = 0;
+                    g_sigval[sig] = 0;
+                    g_sigpid[sig] = 0;
+                    g_siguid[sig] = 0;
+                }
+            }
+            G_RET(c) = 128;
+            break;
+        }
+        // inotify read -> struct inotify_event[]
+        if (svc_read_inotify(c, rfd, a1, a2)) break;
+        // timerfd read -> drain timer, return count
+        if (svc_read_timer(c, rfd, a1, a2)) break;
+        // eventfd read: return the accumulated counter, reset it, drain the readiness pipe
+        if (svc_read_eventfd(c, rfd, a1, a2)) break;
         // /proc/<pid>/pagemap (vfs.c backs it with an empty seekable fd; g_pagemap_fd marks it): synthesize
         // one 64-bit entry per page with the PRESENT bit (63) set. The guest lseek'd to vaddr/pagesize*8 and
         // reads sequentially; advance the real fd offset so its position tracks what we "read" (LTP mmap12).
