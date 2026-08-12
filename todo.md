@@ -123,7 +123,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Preserve strict C compiler warnings and Cargo-owned source discovery.
 - [x] Integrate clang-format verification, clang-tidy, and cppcheck without Make/CMake. Cargo owns C compilation and the embedded tree-sitter rules; Nix supplies Bear, clang-format, clang-tidy, and cppcheck, and the normal verification derivation runs them through `hl-design-lint` with Cargo's real compilation database and file-level diagnostics.
 - [x] Classify and fix the 17 path-sensitive reports found by `scan-build` 21.1.8. Current ARM64 and AMD64 analyses both report zero findings using target-matched Nix compiler/sysroot closures.
-- [ ] Make zero-finding ARM64 and AMD64 `scan-build` analysis a bounded Nix hard gate.
+- [x] Make zero-finding ARM64 and AMD64 `scan-build` analysis a bounded Nix hard gate using target-matched compiler/sysroot closures and disposable analyzer outputs.
 - [ ] Make the complete `hl-design-lint` suite green.
 - [x] Run `cargo check --workspace --all-targets` successfully on the integrated C-backed workspace; rerun on the final delivery tip.
 - [x] Run `cargo test --workspace --lib --bins` successfully after restoring the C-backed engine/testing applications; rerun again on the final delivery tip.
