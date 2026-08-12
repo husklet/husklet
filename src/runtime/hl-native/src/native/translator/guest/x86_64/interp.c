@@ -2398,14 +2398,12 @@ static int interp_step_sse_fp(struct cpu *cpu, struct insn *insn, uint64_t pc, u
     int scalar = interp_fp_is_scalar(prefix);
     unsigned source_bytes = interp_fp_source_bytes(op, prefix);
     uint8_t d[16], s[16];
-
     if ((op == 0x2A || op == 0x2C || op == 0x2D) && !scalar) {
         interp_fp_mmx_convert(cpu, insn, next, op, dbl, source_bytes);
         cpu->rip = next;
         return STEP_NEXT;
     }
     if ((op == 0x52 || op == 0x53) && dbl) return interp_undefined(cpu, insn, pc, "reserved (no RSQRTPD/RCPPD)");
-
     switch (op) {
     case 0x2A: {
         interp_operand operand = interp_rm(cpu, insn, next);
