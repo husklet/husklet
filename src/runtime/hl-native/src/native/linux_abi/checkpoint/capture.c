@@ -1,5 +1,5 @@
 // hl/linux_abi -- native checkpoint/restore ("CRIU-equivalent"), MULTI-PROCESS.
-#include "pipe.h"
+#include "../pipe.h"
 //
 // Freezes a running guest -- a WHOLE process tree (multiple shells, background jobs, their children) -- to an
 // on-disk directory (RAM + CPU + fds, per process), so every host engine process can exit and free its
@@ -48,15 +48,15 @@
 // tree, then exits it. Restore: HL_RESTORE (or `--restore`) calls the restore path. Both directions carry
 // bytes over the socket activation handed the engine; the embedder owns the other end.
 
-#include "host_fd.h"   // the null-device spelling behind the placeholder descriptors below
-#include "host_wait.h" // waitid/waitpid: coordinator peer-reap; multi-thread refusal probe
-#include "host_tty.h"  // the controlling terminal's line discipline is captured and replayed
+#include "../host_fd.h"   // the null-device spelling behind the placeholder descriptors below
+#include "../host_wait.h" // waitid/waitpid: coordinator peer-reap; multi-thread refusal probe
+#include "../host_tty.h"  // the controlling terminal's line discipline is captured and replayed
 
-#include "../host/file.h"
-#include "../host/system.h"
-#include "sink_stream.h" // the writer emits every image byte through the sink
-#include "ckpt_source.h" // restore reads the image back through the symmetric source interface
-#include "logical_vma.h"
+#include "../../host/file.h"
+#include "../../host/system.h"
+#include "../sink_stream.h" // the writer emits every image byte through the sink
+#include "../ckpt_source.h" // restore reads the image back through the symmetric source interface
+#include "../logical_vma.h"
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
