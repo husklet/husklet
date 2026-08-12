@@ -2390,6 +2390,22 @@ static void interp_fp_compare(struct cpu *cpu, struct insn *insn, uint64_t next,
     interp_xmm_put(cpu, insn->reg, d);
 }
 
+static void interp_fp_integer_to_scalar(struct cpu *cpu, struct insn *insn, uint64_t next, int dbl) {
+    uint8_t d[16];
+    interp_operand operand = interp_rm(cpu, insn, next);
+    int width = insn->rexW ? 8 : 4;
+    uint64_t raw = interp_rm_read(cpu, insn, &operand, width);
+    interp_xmm_get(cpu, insn->reg, d);
+    if (dbl) {
+        __m128d a = interp_fp_get_pd(d);
+        interp_fp_put_pd(d, width == 8 ? _mm_cvtsi64_sd(a, (long long)raw) : _mm_cvtsi32_sd(a, (int)(uint32_t)raw));
+    } else {
+        __m128 a = interp_fp_get_ps(d);
+        interp_fp_put_ps(d, width == 8 ? _mm_cvtsi64_ss(a, (long long)raw) : _mm_cvtsi32_ss(a, (int)(uint32_t)raw));
+    }
+    interp_xmm_put(cpu, insn->reg, d);
+}
+
 static int interp_step_sse_fp(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int prefix = interp_sse_prefix(insn);
@@ -2406,20 +2422,7 @@ static int interp_step_sse_fp(struct cpu *cpu, struct insn *insn, uint64_t pc, u
     if ((op == 0x52 || op == 0x53) && dbl) return interp_undefined(cpu, insn, pc, "reserved (no RSQRTPD/RCPPD)");
     switch (op) {
     case 0x2A: {
-        interp_operand operand = interp_rm(cpu, insn, next);
-        int width = insn->rexW ? 8 : 4;
-        uint64_t raw = interp_rm_read(cpu, insn, &operand, width);
-        interp_xmm_get(cpu, destination, d);
-        if (dbl) {
-            __m128d a = interp_fp_get_pd(d);
-            a = width == 8 ? _mm_cvtsi64_sd(a, (long long)raw) : _mm_cvtsi32_sd(a, (int)(uint32_t)raw);
-            interp_fp_put_pd(d, a);
-        } else {
-            __m128 a = interp_fp_get_ps(d);
-            a = width == 8 ? _mm_cvtsi64_ss(a, (long long)raw) : _mm_cvtsi32_ss(a, (int)(uint32_t)raw);
-            interp_fp_put_ps(d, a);
-        }
-        interp_xmm_put(cpu, destination, d);
+        interp_fp_integer_to_scalar(cpu, insn, next, dbl);
         cpu->rip = next;
         return STEP_NEXT;
     }
