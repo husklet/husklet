@@ -412,7 +412,17 @@ pub(super) struct Ledger {
     directory: PathBuf,
     writer: BufWriter<File>,
     rows: BTreeMap<String, Row>,
-    planned: BTreeSet<String>,
+    planned: BTreeMap<String, Step>,
+}
+
+fn follows_schedule(row: &Row, step: &Step) -> bool {
+    row.key == step.key()
+        && row.workload == step.workload
+        && row.layout == step.layout
+        && row.cell == step.cell
+        && row.round == step.round
+        && row.position == step.position
+        && row.arm == step.arm
 }
 
 impl Ledger {
@@ -432,16 +442,22 @@ impl Ledger {
                 serde_json::to_vec_pretty(&serde_json::json!({"identity": identity, "campaign": campaign}))?,
             )?;
         }
-        let planned: BTreeSet<String> = schedule::measurements(campaign)
+        let planned: BTreeMap<String, Step> = schedule::measurements(campaign)
             .into_iter()
-            .map(|step| step.key())
+            .map(|step| (step.key(), step))
             .collect();
         let mut rows = BTreeMap::new();
         if raw.exists() {
             for line in BufReader::new(File::open(&raw)?).lines() {
                 let row: Row = serde_json::from_str(&line?)?;
-                if !planned.contains(&row.key) || rows.insert(row.key.clone(), row).is_some() {
-                    return Err("ledger has a foreign or duplicate row".into());
+                let Some(step) = planned.get(&row.key) else {
+                    return Err("ledger has a foreign row".into());
+                };
+                if !follows_schedule(&row, step) {
+                    return Err("ledger row violates the benchmark schedule".into());
+                }
+                if rows.insert(row.key.clone(), row).is_some() {
+                    return Err("ledger has a duplicate row".into());
                 }
             }
         }
@@ -457,8 +473,14 @@ impl Ledger {
         self.rows.contains_key(key)
     }
     pub fn append(&mut self, row: &Row) -> Result<(), Error> {
-        if !self.planned.contains(&row.key) || self.rows.contains_key(&row.key) {
-            return Err("benchmark ledger rejected a foreign or duplicate row".into());
+        let Some(step) = self.planned.get(&row.key) else {
+            return Err("benchmark ledger rejected a foreign row".into());
+        };
+        if !follows_schedule(row, step) {
+            return Err("benchmark ledger rejected a row that violates the schedule".into());
+        }
+        if self.rows.contains_key(&row.key) {
+            return Err("benchmark ledger rejected a duplicate row".into());
         }
         serde_json::to_writer(&mut self.writer, row)?;
         self.writer.write_all(b"\n")?;
@@ -468,7 +490,7 @@ impl Ledger {
         Ok(())
     }
     pub fn complete(&self) -> Result<Vec<Row>, Error> {
-        if self.rows.keys().collect::<BTreeSet<_>>() != self.planned.iter().collect() {
+        if self.rows.keys().collect::<BTreeSet<_>>() != self.planned.keys().collect() {
             return Err(format!(
                 "benchmark ledger incomplete: {}/{} rows",
                 self.rows.len(),
@@ -494,12 +516,23 @@ impl Ledger {
 
 #[cfg(test)]
 mod ledger_tests {
-    use super::{Ledger, Phase, Row};
+    use super::{Ledger, Phase, Row, Step};
     use std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::BTreeMap,
         fs::{self, File},
         io::BufWriter,
     };
+
+    fn step() -> Step {
+        Step {
+            workload: "malloc".into(),
+            layout: "plain".into(),
+            cell: "EE".into(),
+            round: 0,
+            position: 0,
+            arm: "E".into(),
+        }
+    }
 
     fn row(key: &str) -> Row {
         Row {
@@ -528,18 +561,57 @@ mod ledger_tests {
     fn append_rejects_duplicate_and_foreign_rows_before_durable_write() {
         let directory = tempfile::tempdir().unwrap();
         let raw = directory.path().join("raw.jsonl");
+        let expected = step();
+        let key = expected.key();
         let mut ledger = Ledger {
             directory: directory.path().into(),
             writer: BufWriter::new(File::create(&raw).unwrap()),
             rows: BTreeMap::new(),
-            planned: BTreeSet::from(["planned".into()]),
+            planned: BTreeMap::from([(key.clone(), expected)]),
         };
-        ledger.append(&row("planned")).unwrap();
+        ledger.append(&row(&key)).unwrap();
         let durable = fs::metadata(&raw).unwrap().len();
-        assert!(ledger.append(&row("planned")).is_err());
+        assert!(ledger.append(&row(&key)).is_err());
         assert!(ledger.append(&row("foreign")).is_err());
         assert_eq!(fs::metadata(&raw).unwrap().len(), durable);
-        assert_eq!(ledger.rows.keys().map(String::as_str).collect::<Vec<_>>(), ["planned"]);
+        assert_eq!(ledger.rows.keys().map(String::as_str).collect::<Vec<_>>(), [key]);
+    }
+
+    #[test]
+    fn append_rejects_valid_key_with_out_of_schedule_provenance() {
+        let directory = tempfile::tempdir().unwrap();
+        let raw = directory.path().join("raw.jsonl");
+        let expected = step();
+        let key = expected.key();
+        let mut ledger = Ledger {
+            directory: directory.path().into(),
+            writer: BufWriter::new(File::create(&raw).unwrap()),
+            rows: BTreeMap::new(),
+            planned: BTreeMap::from([(key.clone(), expected)]),
+        };
+        let mut forged = row(&key);
+        forged.arm = "I".into();
+        let error = ledger.append(&forged).unwrap_err();
+        assert!(error.to_string().contains("violates the schedule"), "{error}");
+        assert_eq!(fs::metadata(raw).unwrap().len(), 0);
+        assert!(ledger.rows.is_empty());
+    }
+
+    #[test]
+    fn complete_rejects_an_incomplete_rust_ledger() {
+        let directory = tempfile::tempdir().unwrap();
+        let raw = directory.path().join("raw.jsonl");
+        let expected = step();
+        let ledger = Ledger {
+            directory: directory.path().into(),
+            writer: BufWriter::new(File::create(raw).unwrap()),
+            rows: BTreeMap::new(),
+            planned: BTreeMap::from([(expected.key(), expected)]),
+        };
+        let Err(error) = ledger.complete() else {
+            panic!("incomplete ledger was accepted");
+        };
+        assert!(error.to_string().contains("incomplete"));
     }
 }
 
