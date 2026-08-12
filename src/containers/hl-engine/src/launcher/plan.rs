@@ -34,29 +34,6 @@ pub enum PlanError {
     LowerLayersTooLarge,
 }
 
-/// Resolves a host path only when the platform adapter is constructed.
-pub trait HostPathAccess {
-    type Path;
-    type Error;
-
-    fn resolve(&self, encoded: &[u8]) -> Result<Self::Path, Self::Error>;
-}
-
-/// Applies guest credentials at the process/platform boundary.
-pub trait CredentialAccess {
-    type Error;
-
-    fn apply(&self, uid: Option<u32>, gid: Option<u32>) -> Result<(), Self::Error>;
-}
-
-/// Acquires a named launch service without a process-global locator.
-pub trait ServiceAccess {
-    type Service;
-    type Error;
-
-    fn acquire(&self, name: &[u8]) -> Result<Self::Service, Self::Error>;
-}
-
 impl RuntimePlan {
     pub fn project(config: &LaunchConfig, diagnostics: DiagnosticsMode) -> Result<Self, PlanError> {
         let mut options = Options::default();

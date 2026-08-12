@@ -239,11 +239,6 @@ impl Options {
     }
 
     #[must_use]
-    pub fn defines(name: &str) -> bool {
-        DEFINITIONS.iter().any(|definition| definition.name == name)
-    }
-
-    #[must_use]
     pub fn get(&self, name: &str) -> Option<&str> {
         self.get_bytes(name).and_then(|value| std::str::from_utf8(value).ok())
     }
@@ -292,27 +287,6 @@ impl Options {
             self.store_size -= old.len() + 1;
         }
         Ok(())
-    }
-
-    #[must_use]
-    pub fn store_size(&self) -> usize {
-        self.store_size
-    }
-
-    pub fn integer(&self, name: &str) -> Result<Option<u64>, OptionError> {
-        let index = self.index(name).ok_or(OptionError::UnknownName)?;
-        if DEFINITIONS[index].shape != Shape::Integer {
-            return Err(OptionError::InvalidValue);
-        }
-        self.values[index]
-            .as_deref()
-            .map(|value| {
-                std::str::from_utf8(value)
-                    .ok()
-                    .and_then(|text| text.parse::<u64>().ok())
-                    .ok_or(OptionError::InvalidValue)
-            })
-            .transpose()
     }
 
     fn index(&self, name: &str) -> Option<usize> {
@@ -367,14 +341,11 @@ mod tests {
         let mut options = Options::default();
         options.set("HL_UID", "1000", true).unwrap();
         assert_eq!(options.get("HL_UID"), Some("1000"));
-        assert_eq!(options.store_size(), 5);
         options.set("HL_UID", "7", false).unwrap();
         assert_eq!(options.get("HL_UID"), Some("1000"));
         options.set("HL_UID", "7", true).unwrap();
-        assert_eq!(options.store_size(), 2);
         options.unset("HL_UID").unwrap();
         assert_eq!(options.get("HL_UID"), None);
-        assert_eq!(options.store_size(), 0);
     }
 
     #[test]
@@ -400,10 +371,8 @@ mod tests {
         let mut options = Options::default();
         for value in ["", "-1", "+1", " 1", "1x", "18446744073709551616"] {
             assert_eq!(options.set("HL_UID", value, true), Err(OptionError::InvalidValue),);
-            assert_eq!(options.integer("HL_UID"), Ok(None));
         }
         options.set("HL_UID", "4294967295", true).unwrap();
-        assert_eq!(options.integer("HL_UID"), Ok(Some(4_294_967_295)));
-        assert_eq!(options.integer("HL_CWD"), Err(OptionError::InvalidValue));
+        assert_eq!(options.get("HL_UID"), Some("4294967295"));
     }
 }
