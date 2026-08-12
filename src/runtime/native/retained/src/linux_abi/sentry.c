@@ -1999,6 +1999,20 @@ static void sentry_process_release(void) {
     ring_release();
 }
 
+// Rust-owned AArch64 exit(93) returns directly from the target syscall trap and therefore never enters
+// syscall_route's exit branch.  Mirror that branch before the trap marks the CPU exited, while this worker
+// can still publish the sentry lifecycle request needed to close a fork child's duplicated descriptors.
+static void sentry_trapped_exit(void) {
+    if (!g_untrusted) return;
+    int process_exit = atomic_fetch_sub(&g_worker_threads, 1) == 1;
+    if (process_exit) {
+        if (getpid() != g_sentry_owner_pid) sentry_process_release();
+    } else if (t_ring >= 0) {
+        sentry_ctl_op(SENTRY_OP_THREAD_EXIT, 0, 0);
+    }
+    ring_release();
+}
+
 static void sentry_shutdown(void) {
     if (!g_shm || !g_sentry_pid) return;
     // A forked-CHILD worker inherited g_sentry_pid but does NOT own the shared sentry: it must never set

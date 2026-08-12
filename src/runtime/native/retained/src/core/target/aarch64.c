@@ -73,6 +73,7 @@ void hl_target_syscall_trap_install(void *context, hl_syscall_trap_fn dispatch) 
 
 struct cpu;
 static int hl_target_syscall_trap(struct cpu *c);
+static void sentry_trapped_exit(void);
 static int hl_target_credentials_publish(struct cpu *c);
 static int jit_guest_soft_activate(void);
 static void jit_guest_soft_restore_activate(void);
@@ -124,6 +125,7 @@ static int hl_target_syscall_trap(struct cpu *c) {
     c->tls = snapshot.tls;
     c->nzcv = snapshot.nzcv;
     if (result.outcome == HL_SYSCALL_TRAP_EXIT) {
+        sentry_trapped_exit();
         c->exited = 1;
         c->exit_code = result.exit_status;
     } else if (result.outcome == HL_SYSCALL_TRAP_FAULT) {
