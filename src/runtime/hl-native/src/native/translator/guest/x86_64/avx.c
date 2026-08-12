@@ -1252,6 +1252,43 @@ static enum avx_dispatch_result avx_dispatch_map2_qword_comparison(const hl_x86_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_saturating_pack(const hl_x86_avx_state *state, struct cpu *c,
+                                                             struct insn *instruction, uint64_t next, int map,
+                                                             int op, int destination, int first_register,
+                                                             int width) {
+    int unsigned_output = (map == 1 && op == 0x67) || (map == 2 && op == 0x2B);
+    int source_size = (map == 1 && (op == 0x63 || op == 0x67)) ? 2 : 4;
+    if (!((map == 1 && (op == 0x63 || op == 0x67 || op == 0x6B)) || (map == 2 && op == 0x2B)))
+        return AVX_DISPATCH_UNMATCHED;
+
+    int destination_size = source_size / 2;
+    int elements_per_source = 16 / source_size;
+    int64_t minimum = unsigned_output ? 0 : destination_size == 1 ? INT8_MIN : INT16_MIN;
+    int64_t maximum = unsigned_output ? (destination_size == 1 ? UINT8_MAX : UINT16_MAX)
+                                      : (destination_size == 1 ? INT8_MAX : INT16_MAX);
+    uint8_t first[64], second[64], output[64];
+    avx_get(c, first_register, first);
+    avx_get_rm(state, c, instruction, next, width, second);
+    for (int lane = 0; lane < width; lane += 16)
+        for (int element = 0; element < elements_per_source; element++) {
+            int64_t values[2] = {0, 0};
+            memcpy(&values[0], first + lane + element * source_size, (size_t)source_size);
+            memcpy(&values[1], second + lane + element * source_size, (size_t)source_size);
+            for (int source = 0; source < 2; source++) {
+                uint64_t sign = UINT64_C(1) << (source_size * 8 - 1);
+                uint64_t value = (uint64_t)values[source];
+                if (value & sign) value |= ~(sign * 2 - 1);
+                int64_t signed_value = (int64_t)value;
+                int64_t clamped = signed_value < minimum ? minimum : signed_value > maximum ? maximum : signed_value;
+                int output_element = source * elements_per_source + element;
+                memcpy(output + lane + output_element * destination_size, &clamped, (size_t)destination_size);
+            }
+        }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1703,6 +1740,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_immediate_permutation(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_qword_comparison(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
         return;
+    if (avx_dispatch_saturating_pack(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2351,33 +2389,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             avx_put(c, rd, d, W);
             goto done;
         }
-        case 0x63: // vpacksswb: signed word -> signed byte, saturate
-        case 0x67: // vpackuswb: signed word -> unsigned byte, saturate
-        case 0x6B: // vpackssdw: signed dword -> signed word, saturate  (per-128-lane; a low, b high)
-        {
-            int src_es = (op == 0x6B) ? 4 : 2, dst_es = src_es / 2, usat = (op == 0x67);
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16) {
-                int nper = 16 / src_es;
-                for (int k = 0; k < nper; k++) {
-                    int64_t va = 0, vb = 0;
-                    memcpy(&va, a + lane + k * src_es, (size_t)src_es);
-                    memcpy(&vb, b + lane + k * src_es, (size_t)src_es);
-                    int sh = 64 - src_es * 8; // sign-extend the source element
-                    va = (va << sh) >> sh;
-                    vb = (vb << sh) >> sh;
-                    int64_t lo = usat ? 0 : (dst_es == 1 ? -128 : -32768);
-                    int64_t hiv = usat ? (dst_es == 1 ? 255 : 65535) : (dst_es == 1 ? 127 : 32767);
-                    int64_t ca = va < lo ? lo : va > hiv ? hiv : va;
-                    int64_t cb = vb < lo ? lo : vb > hiv ? hiv : vb;
-                    memcpy(d + lane + k * dst_es, &ca, (size_t)dst_es);
-                    memcpy(d + lane + (nper + k) * dst_es, &cb, (size_t)dst_es);
-                }
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
         case 0x77: { // vzeroupper (L=0): zero bits[128:256) of ymm0..15. vzeroall (L=1): zero all of 0..15.
             uint8_t z[64];
             memset(z, 0, 64);
@@ -2643,22 +2654,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             uint8_t zero[64];
             memset(zero, 0, 64);
             avx_put(c, vv, zero, W); // the entire mask register is cleared after a completed gather
-            goto done;
-        }
-        case 0x2B: { // vpackusdw: signed dword -> unsigned word, saturate (per-128-lane; a low, b high)
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16)
-                for (int k = 0; k < 4; k++) {
-                    int32_t va, vb;
-                    memcpy(&va, a + lane + 4 * k, 4);
-                    memcpy(&vb, b + lane + 4 * k, 4);
-                    uint16_t ca = va < 0 ? 0 : va > 65535 ? 65535 : (uint16_t)va;
-                    uint16_t cb = vb < 0 ? 0 : vb > 65535 ? 65535 : (uint16_t)vb;
-                    memcpy(d + lane + 2 * k, &ca, 2);
-                    memcpy(d + lane + 8 + 2 * k, &cb, 2);
-                }
-            avx_put(c, rd, d, W);
             goto done;
         }
         case 0x40: { // vpmulld: 32-bit low product, dst = src1(vvvv) * rm
