@@ -437,7 +437,7 @@ static hl_host_result tree_seek(void *context, hl_host_handle file, int64_t offs
     else if (whence == HL_HOST_FILE_SEEK_CUR)
         base = slot->offset;
     else if (whence == HL_HOST_FILE_SEEK_END) {
-        hl_host_file_metadata metadata;
+        hl_host_file_metadata metadata = {0};
         pthread_mutex_unlock(&lock);
         result = tree_metadata(context, file, &metadata);
         if (result.status != HL_STATUS_OK) return result;
