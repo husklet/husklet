@@ -10,7 +10,7 @@ use std::{
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Document {
+struct BenchmarkDefinition {
     image: String,
     #[serde(default)]
     execution: Execution,
@@ -18,7 +18,7 @@ struct Document {
     workload: Option<Workload>,
     #[serde(default = "lifecycle_phases")]
     phases: Vec<LifecyclePhase>,
-    cases: Vec<Case>,
+    cases: Vec<BenchmarkSpecification>,
 }
 
 #[derive(Deserialize)]
@@ -76,7 +76,7 @@ struct Build {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Case {
+struct BenchmarkSpecification {
     id: String,
     #[serde(default)]
     build_flags: Vec<String>,
@@ -145,7 +145,7 @@ impl Benchmark {
     }
 
     pub fn load(directory: &Path, definition: &Path) -> Result<Self, Error> {
-        let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
+        let document: BenchmarkDefinition = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
         let rootfs_executable = document.workload.map(|workload| workload.rootfs.executable);
         if document.build.is_some() == rootfs_executable.is_some() {
             return Err(format!(
@@ -270,11 +270,11 @@ impl Benchmark {
 
 #[cfg(test)]
 mod tests {
-    use super::{Benchmark, Document, LifecyclePhase};
+    use super::{Benchmark, BenchmarkDefinition, LifecyclePhase};
 
     #[test]
     fn legacy_repetitions_maps_to_measured_samples() {
-        let document: Document = serde_yaml::from_str(
+        let document: BenchmarkDefinition = serde_yaml::from_str(
             "image: alpine\nbuild:\n  source: main.c\n  compiler: { arm64: cc, amd64: cc }\n  flags: []\ncases:\n  - id: wall\n    repetitions: 7\n    expect: { stdout_contains: marker.txt }\n",
         )
         .unwrap();
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn rootfs_workload_rejects_an_ambiguous_build() {
         let yaml = "image: alpine\nworkload: { rootfs: { executable: /bin/true } }\nbuild: { source: main.c, compiler: { arm64: cc, amd64: cc } }\ncases: []\n";
-        let document: Document = serde_yaml::from_str(yaml).unwrap();
+        let document: BenchmarkDefinition = serde_yaml::from_str(yaml).unwrap();
         assert!(document.build.is_some() && document.workload.is_some());
     }
 }

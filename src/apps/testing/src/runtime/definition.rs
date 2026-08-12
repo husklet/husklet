@@ -12,7 +12,7 @@ pub(crate) use environment::EnvironmentEntry;
 pub(crate) use host::EngineHost;
 use host::HostExclusion;
 use input::ManifestPath;
-use manifest::{CompatClass, Document, Oracle, Status};
+use manifest::{CompatClass, Oracle, RuntimeManifest, Status};
 pub(crate) use manifest::{GuestFile, GuestLibrary};
 use std::{
     collections::BTreeSet,
@@ -98,7 +98,7 @@ impl App {
     }
 
     pub fn load(directory: &Path, definition: &Path) -> Result<Self, Error> {
-        let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
+        let document: RuntimeManifest = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
         if document.image.trim().is_empty() || document.targets.is_empty() || document.cases.is_empty() {
             return Err(format!("{} has an invalid image or case list", definition.display()).into());
         }

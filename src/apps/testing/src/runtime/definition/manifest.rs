@@ -8,7 +8,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Document {
+pub(super) struct RuntimeManifest {
     pub(super) targets: BTreeSet<Target>,
     pub(super) image: String,
     #[serde(default)]
@@ -19,7 +19,7 @@ pub(super) struct Document {
     pub(super) artifact: Option<Artifact>,
     pub(super) build: Build,
     pub(super) oracle: Option<Oracle>,
-    pub(super) cases: Vec<Case>,
+    pub(super) cases: Vec<RuntimeSpecification>,
 }
 
 #[derive(Deserialize)]
@@ -66,7 +66,7 @@ pub(super) struct CaseBuild {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Case {
+pub(super) struct RuntimeSpecification {
     pub(super) id: String,
     pub(super) build: Option<CaseBuild>,
     pub(super) artifact: Option<Artifact>,
