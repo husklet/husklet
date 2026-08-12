@@ -294,6 +294,7 @@
           buildPhase = ''
             runHook preBuild
             export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+            export RUSTFLAGS="''${RUSTFLAGS:-} --remap-path-prefix=/build/cargo-vendor-dir=/rust/vendor --remap-path-prefix=$PWD=/rust/source"
             cargo build --release -p engine --bins --locked --offline
             ${lib.optionalString pkgs.stdenv.isLinux ''
               native_libraries=(target/release/build/hl-native-*/out/libhl_native_engine.so)
@@ -345,6 +346,8 @@
             runHook postInstall
           '';
           postFixup = lib.optionalString pkgs.stdenv.isLinux ''
+            strip --strip-unneeded "$out/bin/hl-engine" "$out/bin/hl-aarch64" \
+              "$out/bin/hl-x86_64" "$out/lib/libhl_native_engine.so"
             for binary in "$out/bin/hl-engine" "$out/bin/hl-aarch64" "$out/bin/hl-x86_64"
             do
               existing_rpath=$(patchelf --print-rpath "$binary")
@@ -493,6 +496,11 @@
             cp -a ${engine}/. "$prefix"/
 
             library="$prefix/lib/libhl_native_engine.so"
+            for artifact in "$prefix"/bin/* "$prefix"/lib/*; do
+              test "$(stat -c %a "$artifact")" = 555
+              ! readelf -S "$artifact" | grep -E '\.(debug|symtab)' >/dev/null
+              ! strings "$artifact" | grep -E '/build/|/cargo-vendor-dir/' >/dev/null
+            done
             readelf -d "$library" |
               grep -F 'Library soname: [libhl_native_engine.so]' >/dev/null
             readelf --dyn-syms --wide "$library" |
