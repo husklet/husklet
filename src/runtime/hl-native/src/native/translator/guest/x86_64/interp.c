@@ -1317,6 +1317,29 @@ static int interp_one_byte_flags(struct cpu *cpu, struct insn *insn, uint64_t ne
     return STEP_NEXT;
 }
 
+static int interp_one_byte_test_immediate(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op == 0x80 || op == 0x81 || op == 0x83) {
+        int width = op == 0x80 ? 1 : insn->opsize;
+        interp_operand operand = interp_rm(cpu, insn, next);
+        interp_alu_to_rm(cpu, insn, &operand, insn->reg & 7, width, (uint64_t)insn->imm);
+    } else if (op == 0x84 || op == 0x85) {
+        int width = (op & 1) ? insn->opsize : 1;
+        interp_operand operand = interp_rm(cpu, insn, next);
+        uint64_t left = interp_rm_read(cpu, insn, &operand, width);
+        uint64_t right = interp_reg_read(cpu, insn, insn->reg, width);
+        interp_flags_logic(cpu, (left & right) & interp_mask(width), width);
+    } else if (op == 0xA8 || op == 0xA9) {
+        int width = (op & 1) ? insn->opsize : 1;
+        uint64_t value = interp_reg_read(cpu, insn, RAX, width) & (uint64_t)insn->imm & interp_mask(width);
+        interp_flags_logic(cpu, value, width);
+    } else {
+        return -1;
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_one_byte_alu(cpu, insn, next);
@@ -1330,6 +1353,8 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     delegated = interp_one_byte_string(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_one_byte_flags(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_one_byte_test_immediate(cpu, insn, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -1350,29 +1375,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         uint64_t source = interp_rm_read(cpu, insn, &operand, insn->opsize);
         interp_reg_write(cpu, insn, insn->reg, insn->opsize,
                          interp_imul_truncating(cpu, source, (uint64_t)insn->imm, insn->opsize));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // Group 1: ALU r/m, imm
-    case 0x80:
-    case 0x81:
-    case 0x83: {
-        int width = (op == 0x80) ? 1 : insn->opsize;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        interp_alu_to_rm(cpu, insn, &operand, insn->reg & 7, width, (uint64_t)insn->imm);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // TEST r/m, r
-    case 0x84:
-    case 0x85: {
-        int width = (op & 1) ? insn->opsize : 1;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t left = interp_rm_read(cpu, insn, &operand, width);
-        uint64_t right = interp_reg_read(cpu, insn, insn->reg, width);
-        interp_flags_logic(cpu, (left & right) & interp_mask(width), width);
         cpu->rip = next;
         return STEP_NEXT;
     }
@@ -1439,16 +1441,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
             interp_reg_write(cpu, insn, RAX, width, interp_load(address, width));
         else
             interp_store(address, width, interp_reg_read(cpu, insn, RAX, width));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // TEST AL/eAX, imm
-    case 0xA8:
-    case 0xA9: {
-        int width = (op & 1) ? insn->opsize : 1;
-        interp_flags_logic(cpu, interp_reg_read(cpu, insn, RAX, width) & (uint64_t)insn->imm & interp_mask(width),
-                           width);
         cpu->rip = next;
         return STEP_NEXT;
     }
