@@ -240,7 +240,7 @@ impl Measurement {
             Path::new("/var/tmp/husklet-box.lock"),
             quiet,
             timeout,
-            || host_quiet(max_load),
+            |lock_held| host_quiet(max_load, Path::new("/var/tmp/husklet-box.lock"), lock_held),
         )
     }
 
@@ -249,12 +249,13 @@ impl Measurement {
         box_path: &Path,
         quiet: u64,
         timeout: u64,
-        mut probe: impl FnMut() -> Result<bool, Error>,
+        mut probe: impl FnMut(bool) -> Result<bool, Error>,
     ) -> Result<Self, Error> {
         let intent = lock(intent_path, timeout)?;
+        drop(open_lock(box_path)?);
         sustained_quiet(quiet, timeout, &mut probe)?;
         let box_lock = lock(box_path, timeout)?;
-        if !probe()? {
+        if !probe(true)? {
             return Err("box became busy while acquiring the measurement lock".into());
         }
         Ok(Self {
@@ -265,12 +266,7 @@ impl Measurement {
 }
 
 fn lock(path: &Path, timeout: u64) -> Result<File, Error> {
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)?;
+    let file = open_lock(path)?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
     while file.try_lock_exclusive().is_err() {
         if Instant::now() >= deadline {
@@ -281,11 +277,24 @@ fn lock(path: &Path, timeout: u64) -> Result<File, Error> {
     Ok(file)
 }
 
-fn sustained_quiet(seconds: u64, timeout: u64, probe: &mut impl FnMut() -> Result<bool, Error>) -> Result<(), Error> {
+fn open_lock(path: &Path) -> Result<File, Error> {
+    Ok(OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?)
+}
+
+fn sustained_quiet(
+    seconds: u64,
+    timeout: u64,
+    probe: &mut impl FnMut(bool) -> Result<bool, Error>,
+) -> Result<(), Error> {
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut quiet_since = None;
     while Instant::now() < deadline {
-        if !probe()? {
+        if !probe(false)? {
             quiet_since = None;
         } else if seconds == 0 {
             return Ok(());
@@ -299,7 +308,7 @@ fn sustained_quiet(seconds: u64, timeout: u64, probe: &mut impl FnMut() -> Resul
     Err("box did not remain quiet before measurement timeout".into())
 }
 
-fn host_quiet(max_load: f64) -> Result<bool, Error> {
+fn host_quiet(max_load: f64, box_path: &Path, lock_held: bool) -> Result<bool, Error> {
     let load = fs::read_to_string("/proc/loadavg")
         .ok()
         .and_then(|value| value.split_ascii_whitespace().next()?.parse::<f64>().ok())
@@ -308,7 +317,71 @@ fn host_quiet(max_load: f64) -> Result<bool, Error> {
     for (name, allowance) in [("testing", 1_u64), ("cargo", 0), ("hl-aarch64", 0), ("hl-x86_64", 0)] {
         busy |= HostProcess::exact_process_count(name)? > allowance;
     }
-    Ok(!busy && load <= max_load)
+    let allowed_holders = u64::from(lock_held);
+    Ok(!busy && load <= max_load && box_lock_holder_count(box_path)? == allowed_holders)
+}
+
+#[cfg(target_os = "linux")]
+fn box_lock_holder_count(path: &Path) -> Result<u64, Error> {
+    let target = fs::metadata(path)?;
+    let mut holders = 0_u64;
+    for process in fs::read_dir("/proc")? {
+        let process = process?;
+        if !process.file_name().as_encoded_bytes().iter().all(u8::is_ascii_digit) {
+            continue;
+        }
+        holders += process_lock_holders(&process, &target)?;
+    }
+    Ok(holders)
+}
+
+#[cfg(target_os = "linux")]
+fn process_lock_holders(process: &fs::DirEntry, target: &fs::Metadata) -> Result<u64, Error> {
+    let descriptors = match fs::read_dir(process.path().join("fd")) {
+        Ok(descriptors) => descriptors,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            return Ok(0);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let mut holders = 0;
+    for descriptor in descriptors {
+        holders += u64::from(descriptor_matches_lock(descriptor, target)?);
+    }
+    Ok(holders)
+}
+
+#[cfg(target_os = "linux")]
+fn descriptor_matches_lock(descriptor: std::io::Result<fs::DirEntry>, target: &fs::Metadata) -> Result<bool, Error> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let descriptor = match descriptor {
+        Ok(descriptor) => descriptor,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    match fs::metadata(descriptor.path()) {
+        Ok(metadata) => Ok(metadata.dev() == target.dev() && metadata.ino() == target.ino()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn box_lock_holder_count(_path: &Path) -> Result<u64, Error> {
+    Err("box-lock holder counting requires Linux procfs".into())
 }
 
 #[cfg(test)]
@@ -322,11 +395,13 @@ mod measurement_tests {
         let intent = directory.path().join("wanted");
         let box_lock = directory.path().join("box");
         let probes = Cell::new(0);
-        let result = Measurement::acquire_with(&intent, &box_lock, 0, 1, || {
+        let result = Measurement::acquire_with(&intent, &box_lock, 0, 1, |lock_held| {
             probes.set(probes.get() + 1);
             if probes.get() == 1 {
+                assert!(!lock_held);
                 return Ok(true);
             }
+            assert!(lock_held);
             let competing = OpenOptions::new().read(true).write(true).open(&box_lock).unwrap();
             assert!(fs2::FileExt::try_lock_shared(&competing).is_err());
             Ok(false)
@@ -336,6 +411,19 @@ mod measurement_tests {
         };
         assert!(error.to_string().contains("became busy"));
         assert_eq!(probes.get(), 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn holder_count_observes_the_box_descriptor() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("box");
+        let held = super::open_lock(&path).unwrap();
+        assert_eq!(super::box_lock_holder_count(&path).unwrap(), 1);
+        fs2::FileExt::lock_shared(&held).unwrap();
+        assert_eq!(super::box_lock_holder_count(&path).unwrap(), 1);
+        drop(held);
+        assert_eq!(super::box_lock_holder_count(&path).unwrap(), 0);
     }
 }
 
