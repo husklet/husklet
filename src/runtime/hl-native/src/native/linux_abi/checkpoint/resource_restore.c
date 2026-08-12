@@ -726,6 +726,12 @@ static int ckpt_restore_socket_queue_load(struct ckpt_restore_socket_endpoint *e
             message.msg_controllen = CMSG_SPACE((size_t)combo_count * sizeof(int));
             memset(control, 0, message.msg_controllen);
             struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+            if (header == NULL) {
+                cmsg_tmpfds_close();
+                free(payload);
+                ckpt_source_fclose(file);
+                return -1;
+            }
             header->cmsg_level = SOL_SOCKET;
             header->cmsg_type = SCM_RIGHTS;
             header->cmsg_len = CMSG_LEN((size_t)combo_count * sizeof(int));

@@ -689,6 +689,7 @@
               -Werror=implicit-function-declaration \
               -Werror=incompatible-pointer-types \
               -Werror=int-conversion -Werror=return-type -Werror=type-limits \
+              -Werror=null-dereference \
               -DHL_SHARED -DHL_BUILDING_ENGINE -DHL_ENABLE_LOGGING=0 \
               -DHL_TRANSLIT_DEFAULT=0 -D_GNU_SOURCE -DHL_EMBEDDED_BUILD=1 \
               -DHL_ENGINE_NO_MAIN=1 -DHL_ENGINE_NO_STANDALONE=1 \
