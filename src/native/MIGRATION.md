@@ -142,8 +142,8 @@ files or their linked symbols from returning.
 
 | Retained source | Retained responsibility | Current owner | Status | Permanent evidence and retirement condition |
 | --- | --- | --- | --- | --- |
-| `translator/cache.c`, `cache_abi.h` | Translation lookup/publication, source provenance, invalidation, generations, chaining, and indirect-target caching | Retained production core; `src/runtime/native/exec/cache/cache.{c,h}` and `exec/src/{translation,executor}.c` are unselected replacement mechanisms | **Retained; replacement Open** | Retained lifecycle and compatibility tests are product evidence. Candidate evidence includes `exec/test/{cache,provenance,ibtc_rollover,control_metadata,indirect_metadata}.c`, `aarch64_{read_cache,store_cache,stale_site,stitch}.c`, and x86 chain tests. `exec/test/translation.c` is currently allowlisted as a known failure, so it is not replacement-parity evidence until fixed and removed from `KNOWN_FAILING`. |
-| `translator/reloc.{c,h}` | Record and resolve translation relocations | Retained production core; `src/runtime/native/exec/cache/relocation.c` and architecture block/stitch emitters are replacement candidates | **Retained; replacement Open** | Candidate evidence includes `exec/test/cache.c`, `translation.c`, `aarch64_stitch.c`, `pcrel_materialization.c`, and integration tests. Replacement closure is blocked while `translation.c` remains known-failing. |
+| `translator/cache.c`, `cache_abi.h` | Translation lookup/publication, source provenance, invalidation, generations, chaining, and indirect-target caching | Retained production core; `src/runtime/native/exec/cache/cache.{c,h}` and `exec/src/{translation,executor}.c` are unselected replacement mechanisms | **Retained; replacement Open** | Retained lifecycle and compatibility tests are product evidence. Candidate evidence includes `exec/test/{cache,provenance,ibtc_rollover,control_metadata,indirect_metadata,translation}.c`, `aarch64_{read_cache,store_cache,stale_site,stitch}.c`, and x86 chain tests. |
+| `translator/reloc.{c,h}` | Record and resolve translation relocations | Retained production core; `src/runtime/native/exec/cache/relocation.c` and architecture block/stitch emitters are replacement candidates | **Retained; replacement Open** | Candidate evidence includes `exec/test/cache.c`, `translation.c`, `aarch64_stitch.c`, `pcrel_materialization.c`, and integration tests. |
 | `translator/guest/aarch64/cache.c` | AArch64 persistent-cache image validation, load/save, and architecture relocation | Retained production core; the candidate kernel represents only in-memory architecture metadata and relocation | **Retained; replacement Open** | Before replacing the production owner, classify each retained field as represented, recomputed, or intentionally discarded and assert that a cold rebuild produces the same guest-visible result. Candidate in-memory tests do not prove persistent-format parity. |
 | `translator/{digest,identity,persist}.{c,h}` | Content identity and persistent translation-cache storage | Retained production core; no equivalent exists in the unselected replacement kernel | **Retained; replacement Omitted** | This is a replacement performance omission, not a product semantic fallback. Before selecting that kernel, an engine test must prove cache absence, invalid data, and a fresh process rebuild safely without stale execution. A benchmark may justify adding persistence later but cannot close semantic parity. |
 | Retained stop-the-world, fork, and self-modifying-code cache coordination | Prevent execution or reuse while mappings/code identities change | Retained production lifecycle/cache code; Rust mapping leases and `exec` generations are replacement-boundary evidence | **Retained, Open** | Lifecycle, fault, provenance, fork-gap, executable-version, and engine mapping tests must all pass before this coordination can move. |
@@ -160,16 +160,11 @@ cargo test -p hl-native --test exec_c
 
 Use `make gate` for the complete pinned-toolchain gate. The direct Cargo commands
 above must be run in the pinned development shell as described by `AGENTS.md`.
-The second command is implemented by `src/native/tests/exec_c.rs`; it discovers
-standalone C programs in `src/runtime/native/exec/test` and
-fails on build failures and unexpected passes. Two exclusions matter to this
-manifest:
-
-- `translation.c` is in `KNOWN_FAILING`; its expected failure is anti-rot, not a
-  passing cache/relocation assertion.
-- `memory_lifecycle.c` is skipped because it needs the malloc-interposing archive
-  built by `memory_lifecycle.sh`; the shell script is useful targeted evidence,
-  but it is not yet part of the permanent gate.
+The second command discovers standalone C programs in `src/runtime/native/exec/test` and
+fails on build failures and unexpected passes. `translation.c` now runs as a
+normal cache/relocation assertion, and `memory_lifecycle.c` links the dedicated
+malloc-interposing test archive produced by the build adapter, so neither is an
+exclusion from the permanent gate.
 
 The differential fixtures for `src/runtime/native/exec` remain development
 evidence for a possible retained-core replacement; they are not a production

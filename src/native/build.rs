@@ -77,6 +77,22 @@ fn emit_test_environment(root: &Path, allocation_test: bool) {
         display(out.join("libhl_native_execution.a"))
     );
     println!(
+        "cargo:rustc-env=HL_NATIVE_TEST_ALLOCATION_ARCHIVE={}",
+        if allocation_test {
+            String::new()
+        } else {
+            display(out.join("libhl_native_execution_allocation.a"))
+        }
+    );
+    println!(
+        "cargo:rustc-env=HL_NATIVE_TEST_ALLOCATION_ENTRY={}",
+        if !allocation_test && std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") {
+            display(out.join("libhl_native_execution_allocation_entry.a"))
+        } else {
+            String::new()
+        }
+    );
+    println!(
         "cargo:rustc-env=HL_NATIVE_TEST_SOURCES={}",
         display(manifest.join(root).join("test"))
     );
@@ -177,6 +193,19 @@ fn main() {
         println!("cargo:rustc-link-lib=asan");
     }
     println!("cargo:rerun-if-env-changed=HL_NATIVE_ASAN");
+    let mut allocation_build = (!allocation_test).then(|| {
+        let mut allocation = build.clone();
+        allocation
+            .file(root.join("test/allocation.c"))
+            .flag("-include")
+            .flag(
+                root.join("test/allocation.h")
+                    .to_str()
+                    .expect("allocation test include"),
+            )
+            .cargo_metadata(false);
+        allocation
+    });
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") && !allocation_test {
         build.files(
             inputs
@@ -186,6 +215,27 @@ fn main() {
         );
     }
     build.compile("hl_native_execution");
+    if let Some(allocation) = allocation_build.as_mut() {
+        allocation.compile("hl_native_execution_allocation");
+        if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") {
+            let mut assembly = cc::Build::new();
+            assembly
+                .files(
+                    inputs
+                        .assembly
+                        .iter()
+                        .filter(|path| path.ends_with("arch/aarch64/entry.S") || path.ends_with("arch/x86_64/entry.S")),
+                )
+                .include(root.join("include"))
+                .include(root.join("src"))
+                .include("../runtime/native/cpu/include")
+                .warnings(true)
+                .extra_warnings(true)
+                .flag_if_supported("-Werror")
+                .cargo_metadata(false)
+                .compile("hl_native_execution_allocation_entry");
+        }
+    }
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") && allocation_test {
         let mut assembly = cc::Build::new();
         assembly

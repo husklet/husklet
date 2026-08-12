@@ -1,6 +1,6 @@
 //! Descendant process cleanup on container and exec teardown.
 
-use crate::api::support::{alive, containers_for, read_pid, require, unpack, wait_dead};
+use crate::api::support::{containers_for, unpack, wait_changing, wait_stopped};
 use hl_container::{ContainerSpec, ExitStatus, Process};
 use std::{env, path::PathBuf};
 use tempfile::TempDir;
@@ -19,20 +19,21 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &rootfs,
                 Process::new("/bin/sh").args([
                     "-c",
-                    "setsid sh -c 'sleep 60 </dev/null >/dev/null 2>&1 & echo $! >/tmp/init-domain.pid'",
+                    ": >/tmp/init-domain.heartbeat; setsid sh -c 'while :; do printf x >>/tmp/init-domain.heartbeat; sleep 0.05; done' </dev/null >/dev/null 2>&1 & while [ ! -s /tmp/init-domain.heartbeat ]; do sleep 0.01; done",
                 ]),
             )
             .name("descendant-cleanup"),
         )
         .await?;
     containers.start("descendant-cleanup").await?;
+    let heartbeat = rootfs.join("tmp/init-domain.heartbeat");
+    wait_changing(&heartbeat, "init descendant").await?;
     let status = containers.wait("descendant-cleanup").await?;
     containers.remove("descendant-cleanup").await?;
     if status != ExitStatus::Code(0) {
         return Err(format!("cleanup probe exited as {status:?}").into());
     }
-    let init_pid = read_pid(&rootfs.join("tmp/init-domain.pid")).await?;
-    wait_dead(init_pid, "init descendant").await?;
+    wait_stopped(&heartbeat, "init descendant").await?;
 
     containers
         .create(
@@ -50,13 +51,13 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
             "exec-domain",
             hl_container::ExecSpec::new(Process::new("/bin/sh").args([
                 "-c",
-                "setsid sh -c 'sleep 60 </dev/null >/dev/null 2>&1 & echo $! >/tmp/exec-domain.pid'",
+                ": >/tmp/exec-domain.heartbeat; setsid sh -c 'while :; do printf x >>/tmp/exec-domain.heartbeat; sleep 0.05; done' </dev/null >/dev/null 2>&1 & while [ ! -s /tmp/exec-domain.heartbeat ]; do sleep 0.01; done",
             ])),
         )
         .await?;
     drop(containers.executions().start(&execution.id).await?);
-    let exec_pid = read_pid(&rootfs.join("tmp/exec-domain.pid")).await?;
-    require(alive(exec_pid).await?, "exec descendant exited with its leader")?;
+    let heartbeat = rootfs.join("tmp/exec-domain.heartbeat");
+    wait_changing(&heartbeat, "exec descendant").await?;
     containers.remove_force("exec-domain").await?;
-    wait_dead(exec_pid, "exec descendant").await
+    wait_stopped(&heartbeat, "exec descendant").await
 }

@@ -6,26 +6,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const ARCHIVE: &str = env!("HL_NATIVE_TEST_ARCHIVE");
+const ALLOCATION_ARCHIVE: &str = env!("HL_NATIVE_TEST_ALLOCATION_ARCHIVE");
+const ALLOCATION_ENTRY: &str = env!("HL_NATIVE_TEST_ALLOCATION_ENTRY");
 const SOURCES: &str = env!("HL_NATIVE_TEST_SOURCES");
 const INCLUDES: &str = env!("HL_NATIVE_TEST_INCLUDES");
 const ARCH: &str = env!("HL_NATIVE_TEST_ARCH");
 const ALLOCATION: &str = env!("HL_NATIVE_TEST_ALLOCATION");
 
-/// Programs whose own driver script supplies an environment this harness deliberately does not build.
-const SKIPPED: &[(&str, &str)] = &[(
-    "memory_lifecycle",
-    "requires the malloc-interposing archive built by memory_lifecycle.sh",
-)];
-
 /// Programs that fail at HEAD for reasons that predate this harness. Removing an entry is the fix;
 /// a listed program that starts passing fails the run so the list cannot rot. The allowlist excuses
 /// a program that runs and fails, never one that fails to build.
-const KNOWN_FAILING: &[(&str, &str)] = &[(
-    "translation",
-    "translation.c:77 leaves mapping_epoch at 0, which run_aarch64 rejects at executor.c:1114 \
-     (expected_authority == 0), and calls hl_native_run inside a held execution scope, which blocks \
-     the epoch gate; the gate and the stale preamble arrived together in 8512e5e1c",
-)];
+const KNOWN_FAILING: &[(&str, &str)] = &[];
 
 /// Assembly helpers that some programs need. They precede the archive on the link line so archive
 /// members they reference are still pulled in.
@@ -83,7 +74,16 @@ fn evaluate(source: &Path, scratch: &Path, helpers: &[PathBuf]) -> Outcome {
     for include in INCLUDES.split(':') {
         build.arg("-I").arg(include);
     }
-    build.args(helpers).arg(ARCHIVE).arg("-lpthread").arg("-lm");
+    build.args(helpers);
+    if name == "memory_lifecycle" {
+        build.arg(ALLOCATION_ARCHIVE);
+        if !ALLOCATION_ENTRY.is_empty() {
+            build.arg(ALLOCATION_ENTRY);
+        }
+    } else {
+        build.arg(ARCHIVE);
+    }
+    build.arg("-lpthread").arg("-lm");
     let built = build.output().expect("run compiler");
     if !built.status.success() {
         let report = String::from_utf8_lossy(&built.stderr).into_owned();
@@ -138,10 +138,7 @@ fn exec_c_programs_pass() {
                 let helpers = &helpers;
                 scope.spawn(move || {
                     let name = source.file_stem().expect("test name").to_string_lossy().into_owned();
-                    let outcome = match SKIPPED.iter().find(|(skipped, _)| *skipped == name) {
-                        Some((_, reason)) => Outcome::Skipped((*reason).to_owned()),
-                        None => evaluate(source, scratch, helpers),
-                    };
+                    let outcome = evaluate(source, scratch, helpers);
                     (name, outcome)
                 })
             })

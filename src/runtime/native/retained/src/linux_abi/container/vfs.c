@@ -3722,6 +3722,53 @@ static void launch_reg_unlink(void) {
     g_launch_reg_birth_file[0] = 0;
 }
 
+/* Linux tears down every remaining member of a PID namespace when its init
+ * exits.  Each retained-C launch is one such guest domain even though its host
+ * processes may escape the initial session with setsid().  Kill only members
+ * whose recorded birth identity still matches the live host process, so a
+ * recycled host pid can never inherit authority from a stale record.  Two
+ * scans close the child-publication race: fork publishes the birth record in
+ * the parent before returning to guest code. */
+static void launch_reg_terminate_peers(void) {
+    char directory[80];
+    if (!g_init_hostpid || getpid() != g_init_hostpid || !launch_reg_key(directory, sizeof directory)) return;
+    for (unsigned round = 0; round < 2; ++round) {
+        DIR *entries = opendir(directory);
+        if (entries == NULL) return;
+        struct dirent *entry;
+        while ((entry = readdir(entries)) != NULL) {
+            char *end;
+            char path[160];
+            char text[32];
+            long raw;
+            uint64_t expected;
+            hl_host_process_info process;
+            if (entry->d_name[0] != 'b' || entry->d_name[1] < '1' || entry->d_name[1] > '9') continue;
+            errno = 0;
+            raw = strtol(entry->d_name + 1, &end, 10);
+            if (errno != 0 || *end != 0 || raw <= 0 || raw > INT32_MAX || raw == (long)getpid()) continue;
+            snprintf(path, sizeof path, "%s/%s", directory, entry->d_name);
+            int descriptor = open(path, O_RDONLY | O_CLOEXEC);
+            if (descriptor < 0) continue;
+            ssize_t count;
+            do {
+                count = read(descriptor, text, sizeof text - 1);
+            } while (count < 0 && errno == EINTR);
+            (void)close(descriptor);
+            if (count <= 0) continue;
+            text[count] = 0;
+            errno = 0;
+            char *birth_end;
+            expected = strtoull(text, &birth_end, 10);
+            if (errno != 0 || birth_end == text || (*birth_end != '\n' && *birth_end != 0) || expected == 0) continue;
+            if (!hl_host_process_read(raw, &process) || process.start_time_ns != expected) continue;
+            (void)kill((pid_t)raw, SIGKILL);
+        }
+        (void)closedir(entries);
+        if (round == 0) (void)poll(NULL, 0, 10);
+    }
+}
+
 // This process's own registry file (unlinked on exit; the exit_group path calls proc_reg_unlink since
 // _exit bypasses atexit). Stale files from a crash are pruned lazily by the enumerator (dead-pid check).
 static char g_reg_file[128];

@@ -56,10 +56,20 @@ pub(crate) fn run(
         send_error(&mut control, FailureStage::Decode, 1);
         return Err(WorkerError::Plan);
     }
-    let (isa, plan) = wire::decode(&bytes).map_err(|_| {
+    let (isa, mut plan) = wire::decode(&bytes).map_err(|_| {
         send_error(&mut control, FailureStage::Decode, 2);
         WorkerError::Plan
     })?;
+    let launch_domain = launch_domain().map_err(|_| {
+        send_error(&mut control, FailureStage::Create, 2);
+        WorkerError::Create
+    })?;
+    plan.options
+        .set("HL_LAUNCH_DOMAIN", &launch_domain, true)
+        .map_err(|_| {
+            send_error(&mut control, FailureStage::Create, 3);
+            WorkerError::Create
+        })?;
     let executor = Arc::new(
         CGuestExecutor::create_with_provider(
             isa,
@@ -93,6 +103,16 @@ pub(crate) fn run(
     let exit = executor.exit();
     write_message(&mut control, Message::Exit(exit))?;
     Ok(exit.process_status())
+}
+
+fn launch_domain() -> Result<String, std::io::Error> {
+    loop {
+        let mut identity = [0_u8; 16];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut identity)?;
+        if identity.iter().any(|byte| *byte != 0) {
+            return Ok(identity.iter().map(|byte| format!("{byte:02x}")).collect());
+        }
+    }
 }
 
 fn serve_requests(mut control: std::os::unix::net::UnixStream, executor: Arc<CGuestExecutor>) {

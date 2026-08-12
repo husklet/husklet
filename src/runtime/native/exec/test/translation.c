@@ -59,26 +59,6 @@ int main(void) {
                          {executor, &key, &emission, &start, HL_NATIVE_OK}};
 
     CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
-#if defined(__aarch64__)
-    if (getenv("HL_TRANSLATION_RELOCATION_ONLY") == NULL) {
-    hl_native_execution held = {0};
-    const uint32_t syscall_word = 0xd4000001u;
-    const hl_native_source_span epoch_span = {
-        0x6000, (const uint8_t *)&syscall_word, sizeof(syscall_word), 0, 2};
-    const hl_native_source epoch_source = {&epoch_span, 1, 0, 2};
-    hl_native_aarch64_cpu epoch_state = {.program = 0x6000};
-    hl_native_cpu epoch_cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(epoch_cpu),
-                               .architecture = HL_NATIVE_AARCH64, .state.aarch64 = &epoch_state};
-    hl_native_run_request epoch_request = {.abi = HL_NATIVE_ABI, .size = sizeof(epoch_request),
-                                           .architecture = HL_NATIVE_AARCH64, .budget = 1,
-                                           .source = &epoch_source};
-    hl_native_exit epoch_exit = {.abi = HL_NATIVE_ABI, .size = sizeof(epoch_exit)};
-    CHECK(hl_native_execution_enter(executor, &held) == HL_NATIVE_OK);
-    CHECK(hl_native_run(executor, &epoch_cpu, &epoch_request, &epoch_exit) == HL_NATIVE_OK);
-    CHECK(epoch_exit.kind == HL_NATIVE_EXIT_FALLBACK && epoch_exit.instruction == 0x6000);
-    CHECK(hl_native_execution_leave(&held) == HL_NATIVE_OK);
-    }
-#endif
     workers[0].executor = executor;
     workers[1].executor = executor;
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);

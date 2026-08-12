@@ -86,8 +86,7 @@ gate:
 # HL_ALPINE_ARCHIVE. Deliberately not part of `gate`: they need the fixture and a host `cc` that can
 # link `-static`, so they are environment-conditional in a way the sweep is not. Each case runs alone
 # under a hard timeout because a stuck guest otherwise hangs the whole invocation. Promote a case into
-# FIXTURE_CASES only once it has been proven green and non-vacuous; `descendant_cleanup` stays out
-# because it never terminates and its liveness assertions probe host pids for guest processes.
+# FIXTURE_CASES only once it has been proven green and non-vacuous.
 FIXTURE_TIMEOUT ?= 180
 FIXTURE_CASES = \
   hl-container:filesystem_coherence:new_file_is_visible \
@@ -101,6 +100,7 @@ FIXTURE_CASES = \
   hl-container:process_contract:sigterm_stop \
   hl-container:process_contract:exec_contracts \
   hl-container:run_options:process_run_options \
+  hl-daemon:daemon-api:descendant_cleanup \
   hl-daemon:daemon-api:shared_mount_lock_contention
 
 gate-fixture:
