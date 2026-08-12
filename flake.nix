@@ -548,6 +548,18 @@
             grep -F "calling init: $prefix/bin/../lib/libhl_native_engine.so" \
               "$TMPDIR/loader.log" >/dev/null
 
+            chmod u+w "$prefix/lib"
+            mv "$library" "$TMPDIR/libhl_native_engine.so"
+            if env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
+              "$prefix/bin/hl-engine" --backend-receipt \
+              > "$TMPDIR/missing-library.stdout" 2> "$TMPDIR/missing-library.stderr"; then
+              printf '%s\n' 'engine started without its packaged sibling native library' >&2
+              exit 1
+            fi
+            test ! -s "$TMPDIR/missing-library.stdout"
+            grep -F 'libhl_native_engine.so' "$TMPDIR/missing-library.stderr" >/dev/null
+            mv "$TMPDIR/libhl_native_engine.so" "$library"
+
             mkdir -p "$out"
             cp "$TMPDIR/receipt.json" "$out/backend-receipt.json"
             (cd "$prefix" && sha256sum bin/hl-engine bin/hl-aarch64 bin/hl-x86_64 \
