@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::{Path, PathBuf};
 #[cfg(hl_retained_c)]
 use std::process::Command;
 
@@ -44,6 +45,161 @@ fn product_build_does_not_depend_on_sibling_engines() {
             );
         }
     }
+}
+
+fn repository_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("hl-engine lives below src/containers")
+        .to_owned()
+}
+
+fn walk(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) {
+    let mut entries = fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap_or_else(|error| panic!("enumerate {}: {error}", directory.display()));
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            walk(root, &path, output);
+        } else {
+            output.push(path.strip_prefix(root).expect("repository path").to_owned());
+        }
+    }
+}
+
+fn production_inputs(root: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![PathBuf::from("Cargo.toml"), PathBuf::from("flake.nix")];
+    walk(root, &root.join("src"), &mut candidates);
+    let workflows = root.join(".github");
+    if workflows.is_dir() {
+        walk(root, &workflows, &mut candidates);
+    }
+    candidates
+        .into_iter()
+        .filter(|path| {
+            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+            let extension = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or_default();
+            name == "Cargo.toml"
+                || name == "CMakeLists.txt"
+                || name == "build.rs"
+                || matches!(extension, "cmake" | "manifest" | "nix" | "sh" | "tsv" | "yaml" | "yml")
+        })
+        .collect()
+}
+
+fn sibling_dependency_violations(root: &Path) -> Vec<PathBuf> {
+    production_inputs(root)
+        .into_iter()
+        .filter(|path| {
+            let source =
+                fs::read_to_string(root.join(path)).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            source.contains("../engine") || source.contains("../engine_rust")
+        })
+        .collect()
+}
+
+fn native_locality_violations(root: &Path) -> Vec<PathBuf> {
+    let mut sources = Vec::new();
+    walk(root, &root.join("src"), &mut sources);
+    sources
+        .into_iter()
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("c" | "h" | "s" | "S")
+            ) && !path.starts_with("src/runtime/native")
+        })
+        .collect()
+}
+
+#[test]
+fn every_production_input_is_independent_of_sibling_engines() {
+    let root = repository_root();
+    assert_eq!(
+        sibling_dependency_violations(&root),
+        Vec::<PathBuf>::new(),
+        "production manifests, build scripts, packaging scripts, and workflows must be repository-local"
+    );
+
+    let makefile = fs::read_to_string(root.join("Makefile")).expect("read Makefile");
+    for (line_number, line) in makefile.lines().enumerate() {
+        if line.contains("../engine") || line.contains("../engine_rust") {
+            assert!(
+                line.starts_with("BENCH_C_BUILD ?="),
+                "Makefile:{} gives a normal target a sibling-engine dependency: {line}",
+                line_number + 1
+            );
+        }
+        if line.contains("BENCH_C_BUILD") {
+            assert!(
+                line.starts_with("BENCH_C_BUILD ?=")
+                    || line.trim() == "--c-build $(BENCH_C_BUILD) --rust-engine $(CURDIR)/target/release/hl-engine \\",
+                "Makefile:{} exposes the optional C oracle outside its benchmark adapter: {line}",
+                line_number + 1
+            );
+        }
+    }
+}
+
+#[test]
+fn production_native_sources_have_one_authoritative_root() {
+    let root = repository_root();
+    assert_eq!(
+        native_locality_violations(&root),
+        Vec::<PathBuf>::new(),
+        "production C, headers, and assembly must live below src/runtime/native; tests/ remains the fixture boundary"
+    );
+}
+
+#[test]
+fn repository_boundary_checks_are_non_vacuous() {
+    let fixture = std::env::temp_dir().join(format!(
+        "husklet-repository-boundary-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    let _ = fs::remove_dir_all(&fixture);
+    fs::create_dir_all(fixture.join("src/example")).expect("create fixture");
+    fs::write(
+        fixture.join("Cargo.toml"),
+        "[dependencies]\nretired = { path = \"../engine\" }\n",
+    )
+    .expect("write forbidden manifest");
+    fs::write(fixture.join("flake.nix"), "{}\n").expect("write flake fixture");
+    fs::write(
+        fixture.join("src/example/Cargo.toml"),
+        "[package]\nname = \"example\"\n",
+    )
+    .expect("write package");
+    fs::write(
+        fixture.join("src/example/foreign.c"),
+        "int foreign(void) { return 0; }\n",
+    )
+    .expect("write C fixture");
+
+    assert_eq!(sibling_dependency_violations(&fixture), [PathBuf::from("Cargo.toml")]);
+    assert_eq!(
+        native_locality_violations(&fixture),
+        [PathBuf::from("src/example/foreign.c")]
+    );
+    fs::remove_dir_all(&fixture).expect("remove fixture");
+}
+
+#[test]
+fn retired_rust_differential_executor_stays_deleted() {
+    assert!(
+        !repository_root()
+            .join("src/containers/hl-engine/src/native/executor_differential.rs")
+            .exists(),
+        "the retired Rust executor is neither production code nor a differential fixture"
+    );
 }
 
 #[test]
