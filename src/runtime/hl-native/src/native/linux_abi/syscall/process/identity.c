@@ -29,7 +29,7 @@ static int svc_proc_90(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
             break;
         }
         uint32_t ver = header[0];
-        int u32s; // number of __user_cap_data_struct the version spans
+        int u32s = 0; // number of __user_cap_data_struct the version spans
         switch (ver) {
         case 0x19980330: u32s = 1; break; // _LINUX_CAPABILITY_VERSION_1 (1 u32 mask)
         case 0x20071026:                  // _LINUX_CAPABILITY_VERSION_2 (deprecated)

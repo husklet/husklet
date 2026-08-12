@@ -17,7 +17,10 @@ static int svc_proc_118(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             break;
         }
         int lo, hi;
-        sched_prio_band(g_sched_policy, &lo, &hi); // current policy is always valid
+        if (sched_prio_band(g_sched_policy, &lo, &hi) < 0) {
+            G_RET(c) = (uint64_t)(-EINVAL);
+            break;
+        }
         if (prio < lo || prio > hi) {
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
