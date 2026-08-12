@@ -774,6 +774,7 @@
           cp -a ${engine}/. "$prefix"/
           library="$prefix/lib/libhl_native_engine.dylib"
           test -s "$library"
+          lipo -archs "$library" | grep -Fx 'arm64' >/dev/null
           otool -D "$library" | grep -Fx '@rpath/libhl_native_engine.dylib' >/dev/null
           nm -gjU "$library" | sort -u > "$TMPDIR/actual-exports"
           printf '%s\n' \
@@ -794,13 +795,14 @@
           for name in hl-engine hl-aarch64 hl-x86_64; do
             binary="$prefix/bin/$name"
             test -x "$binary"
+            lipo -archs "$binary" | grep -Fx 'arm64' >/dev/null
             otool -L "$binary" | grep -F '@rpath/libhl_native_engine.dylib' >/dev/null
             otool -l "$binary" | grep -A2 LC_RPATH | grep -F '@loader_path/../lib' >/dev/null
             env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
               "$binary" --backend-receipt | grep -F '"backend":"retained-c"' >/dev/null
           done
           mkdir -p "$out"
-          printf '%s\n' 'native Darwin copied-prefix install name, exports, rpath, and backend receipts passed' > "$out/evidence"
+          printf '%s\n' 'native Darwin copied-prefix exact ARM64 architecture, install name, exports, rpath, and backend receipts passed' > "$out/evidence"
         '';
 
       darwinCrossContractFor =
