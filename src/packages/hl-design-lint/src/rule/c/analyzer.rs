@@ -107,6 +107,9 @@ fn source_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     for root in roots {
         collect(root, &mut files)?;
     }
+    if files.is_empty() {
+        return Err("requested analyzer roots contain no C source or header".into());
+    }
     Ok(files.into_iter().collect())
 }
 
@@ -198,6 +201,15 @@ mod tests {
         fs::write(root.join("src/a.rs"), "fn a() {}\n").unwrap();
         let files = source_files(&[root.join("src")]).unwrap();
         assert_eq!(files, [root.join("src/a.c"), root.join("src/a.h")]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_vacuous_analyzer_roots() {
+        let root = fixture("no-c-sources");
+        fs::write(root.join("src/lib.rs"), "pub fn value() -> usize { 1 }\n").unwrap();
+        let error = source_files(&[root.join("src")]).unwrap_err();
+        assert!(error.contains("no C source or header"));
         fs::remove_dir_all(root).unwrap();
     }
 
