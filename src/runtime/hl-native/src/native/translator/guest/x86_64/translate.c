@@ -5539,6 +5539,30 @@ static int lower_sse_nontemporal_store(struct insn *instruction, uint64_t guest_
     return TX_NEXT;
 }
 
+static int lower_sse_word_lane(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm,
+                               int mmx, int *mmx_writeback) {
+    if (instruction->op != 0xC4 && instruction->op != 0xC5) return TX_FALL;
+    int lane = (int)instruction->imm & (mmx ? 3 : 7);
+    if (instruction->op == 0xC5) { // pextrw: extract H lane to r32, zero-extended
+        *mmx_writeback = -1;
+        emit32(0x0E003C00u | ((((unsigned)lane << 2) | 2u) << 16) | (vm << 5) | instruction->reg);
+        return TX_NEXT;
+    }
+
+    // pinsrw: insert the low 16 bits of r/m16 into the selected H lane.
+    int source;
+    if (instruction->is_mem) {
+        emit_ea(instruction, next);
+        if (emit_soft_memory_active()) emit_memory_guard(17, 2, guest_pc, X86_SOFT_READ);
+        e_load(2, 16, 17);
+        source = 16;
+    } else {
+        source = instruction->rm_reg;
+    }
+    emit32(0x4E001C00u | ((((unsigned)lane << 2) | 2u) << 16) | (source << 5) | vd);
+    return TX_NEXT;
+}
+
 static int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t op = I.op;
     if (op != 0x2E && op != 0x2F) return TX_FALL;
@@ -6426,24 +6450,8 @@ static void *translate_block(uint64_t gpc) {
                     // The helper emitted the complete packed or scalar floating-point operation.
                 } else if (lower_sse_precision_conversion(I, gpc, next, vd, vm) == TX_NEXT) {
                     // The helper emitted the scalar or packed precision conversion.
-                } else if (op == 0xC4) { // pinsrw: insert low 16 bits of r/m16 into xmm H-lane (imm8 & 7)
-                    int lane = (int)I.imm & (mmx ? 3 : 7); // mm has 4 words: hardware wraps $4 to lane 0
-                    int src;
-                    if (I.is_mem) {
-                        emit_ea(&I, next);
-                        if (emit_soft_memory_active()) emit_memory_guard(17, 2, gpc, X86_SOFT_READ);
-                        e_load(2, 16, 17); // w16 = [addr] (16-bit)
-                        src = 16;
-                    } else {
-                        src = I.rm_reg; // guest GPR mapped to host reg
-                    }
-                    // INS vd.H[lane], Wsrc  (imm5 = lane<<2 | 0b10 selects H)
-                    emit32(0x4E001C00u | ((((unsigned)lane << 2) | 2u) << 16) | (src << 5) | vd);
-                } else if (op == 0xC5) { // pextrw: extract xmm H-lane (imm8 & 7) -> r32, zero-extended (reg src only)
-                    int lane = (int)I.imm & (mmx ? 3 : 7); // mm has 4 words (see pinsrw)
-                    mmx_wb = -1;                           // destination is a GPR
-                    // UMOV Wreg, Vm.H[lane]  (imm5 = lane<<2 | 0b10 selects H; zero-extends into the GPR)
-                    emit32(0x0E003C00u | ((((unsigned)lane << 2) | 2u) << 16) | (vm << 5) | I.reg);
+                } else if (lower_sse_word_lane(&I, gpc, next, vd, vm, mmx, &mmx_wb) == TX_NEXT) {
+                    // The helper emitted PINSRW or PEXTRW.
                 } else if (lower_sse_compare(I, gpc, next, vd, vm) == TX_NEXT) {
                     // The helper emitted the complete packed or scalar comparison.
                 } else if (lower_sse_flag_compare(I, gpc, next, vd, vm) == TX_NEXT) {
