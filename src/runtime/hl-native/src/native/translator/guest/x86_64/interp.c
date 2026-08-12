@@ -3932,6 +3932,71 @@ static int interp_sse_integer_pack_compare(struct cpu *cpu, struct insn *insn, u
     return STEP_NEXT;
 }
 
+static int interp_sse_permute_extract(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op != 0x50 && op != 0x70 && op != 0xC4 && op != 0xC5 && op != 0xC6 && op != 0xD7) return -1;
+    int prefix = interp_sse_prefix(insn);
+    int mmx = prefix == SSE_NP && op != 0x50 && op != 0xC6;
+    int wide = mmx ? 8 : 16;
+    uint8_t d[16], s[16];
+    if (op == 0x50 || op == 0xD7) {
+        if (op == 0x50)
+            interp_xmm_get(cpu, insn->rm_reg, s);
+        else
+            interp_simd_get(cpu, mmx, insn->rm_reg, s);
+        uint64_t mask = 0;
+        if (op == 0x50 && prefix == SSE_66) {
+            for (int i = 0; i < 2; i++) mask |= (uint64_t)((interp_lane64(s, i) >> 63) & 1) << i;
+        } else if (op == 0x50) {
+            for (int i = 0; i < 4; i++) mask |= (uint64_t)((interp_lane32(s, i) >> 31) & 1) << i;
+        } else {
+            for (int i = 0; i < wide; i++) mask |= (uint64_t)((s[i] >> 7) & 1) << i;
+        }
+        interp_reg_write(cpu, insn, insn->reg, 4, mask);
+    } else if (op == 0x70) {
+        interp_simd_rm_get(cpu, insn, mmx, next, s);
+        unsigned control = (unsigned)(insn->imm & 0xff);
+        memset(d, 0, 16);
+        if (prefix == SSE_66) {
+            for (int i = 0; i < 4; i++) interp_put32(d, i, interp_lane32(s, (int)((control >> (2 * i)) & 3)));
+        } else if (prefix == SSE_F3) {
+            memcpy(d, s, 8);
+            for (int i = 0; i < 4; i++)
+                interp_put16(d, 4 + i, interp_lane16(s, 4 + (int)((control >> (2 * i)) & 3)));
+        } else {
+            if (prefix == SSE_F2) memcpy(d + 8, s + 8, 8);
+            for (int i = 0; i < 4; i++) interp_put16(d, i, interp_lane16(s, (int)((control >> (2 * i)) & 3)));
+        }
+        interp_simd_put(cpu, mmx, insn->reg, d);
+    } else if (op == 0xC4) {
+        interp_operand operand = interp_rm(cpu, insn, next);
+        uint64_t value = interp_rm_read(cpu, insn, &operand, 2);
+        interp_simd_get(cpu, mmx, insn->reg, d);
+        interp_put16(d, (int)(insn->imm & (mmx ? 3 : 7)), (uint16_t)value);
+        interp_simd_put(cpu, mmx, insn->reg, d);
+    } else if (op == 0xC5) {
+        interp_simd_get(cpu, mmx, insn->rm_reg, s);
+        interp_reg_write(cpu, insn, insn->reg, 4, interp_lane16(s, (int)(insn->imm & (mmx ? 3 : 7))));
+    } else {
+        unsigned control = (unsigned)(insn->imm & 0xff);
+        uint8_t out[16];
+        interp_xmm_get(cpu, insn->reg, d);
+        interp_sse_rm_get(cpu, insn, next, 16, s);
+        if (prefix == SSE_66) {
+            interp_put64(out, 0, interp_lane64(d, (int)(control & 1)));
+            interp_put64(out, 1, interp_lane64(s, (int)((control >> 1) & 1)));
+        } else {
+            interp_put32(out, 0, interp_lane32(d, (int)(control & 3)));
+            interp_put32(out, 1, interp_lane32(d, (int)((control >> 2) & 3)));
+            interp_put32(out, 2, interp_lane32(s, (int)((control >> 4) & 3)));
+            interp_put32(out, 3, interp_lane32(s, (int)((control >> 6) & 3)));
+        }
+        interp_xmm_put(cpu, insn->reg, out);
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int prefix = interp_sse_prefix(insn);
@@ -3946,6 +4011,8 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
     delegated = interp_sse_integer_shift(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
     delegated = interp_sse_integer_pack_compare(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_sse_permute_extract(cpu, insn, next);
     if (delegated >= 0) return delegated;
 
     // These have both MMX (no prefix, 64-bit) and SSE2 (0x66, 128-bit xmm) encodings. The MMX half of the
@@ -4064,22 +4131,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         cpu->rip = next;
         return STEP_NEXT;
 
-    // MOVMSKPS / MOVMSKPD
-    case 0x50: {
-        interp_xmm_get(cpu, insn->rm_reg, s);
-        uint64_t mask = 0;
-        if (prefix == SSE_66) {
-            for (int i = 0; i < 2; i++)
-                mask |= (uint64_t)((interp_lane64(s, i) >> 63) & 1) << i;
-        } else {
-            for (int i = 0; i < 4; i++)
-                mask |= (uint64_t)((interp_lane32(s, i) >> 31) & 1) << i;
-        }
-        interp_reg_write(cpu, insn, destination, 4, mask); // 32-bit dest: zero-extends
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
     // Bitwise, so single/double carries no difference.
     case 0x54:
     case 0x55:
@@ -4153,65 +4204,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         }
         return interp_undefined(cpu, insn, pc, "reserved (F2 0F 7E)");
 
-    // PSHUFD (66) / PSHUFHW (F3) / PSHUFLW (F2) / PSHUFW (none)
-    case 0x70: {
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        unsigned control = (unsigned)(insn->imm & 0xff);
-        memset(d, 0, 16);
-        if (prefix == SSE_66) {
-            for (int i = 0; i < 4; i++)
-                interp_put32(d, i, interp_lane32(s, (int)((control >> (2 * i)) & 3)));
-        } else if (prefix == SSE_F3) { // PSHUFHW: the HIGH four words
-            memcpy(d, s, 8);
-            for (int i = 0; i < 4; i++)
-                interp_put16(d, 4 + i, interp_lane16(s, 4 + (int)((control >> (2 * i)) & 3)));
-        } else { // PSHUFLW: the LOW four words, the high qword passed through. PSHUFW is the same
-                 // permutation over an operand that has no high qword.
-            if (prefix == SSE_F2) memcpy(d + 8, s + 8, 8);
-            for (int i = 0; i < 4; i++)
-                interp_put16(d, i, interp_lane16(s, (int)((control >> (2 * i)) & 3)));
-        }
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // PINSRW and PEXTRW
-    case 0xC4: {
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t value = interp_rm_read(cpu, insn, &operand, 2); // GPR low 16, or m16
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_put16(d, (int)(insn->imm & (mmx ? 3 : 7)), (uint16_t)value);
-        interp_simd_put(cpu, mmx, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    case 0xC5:
-        interp_simd_get(cpu, mmx, insn->rm_reg, s); // always a register here
-        interp_reg_write(cpu, insn, destination, 4, interp_lane16(s, (int)(insn->imm & (mmx ? 3 : 7))));
-        cpu->rip = next;
-        return STEP_NEXT;
-
-    case 0xC6: {
-        unsigned control = (unsigned)(insn->imm & 0xff);
-        uint8_t out[16];
-        interp_xmm_get(cpu, destination, d);
-        interp_sse_rm_get(cpu, insn, next, 16, s);
-        if (prefix == SSE_66) { // SHUFPD: one bit per qword
-            interp_put64(out, 0, interp_lane64(d, (int)(control & 1)));
-            interp_put64(out, 1, interp_lane64(s, (int)((control >> 1) & 1)));
-        } else { // SHUFPS: low two dwords from dest, high two from src
-            interp_put32(out, 0, interp_lane32(d, (int)(control & 3)));
-            interp_put32(out, 1, interp_lane32(d, (int)((control >> 2) & 3)));
-            interp_put32(out, 2, interp_lane32(s, (int)((control >> 4) & 3)));
-            interp_put32(out, 3, interp_lane32(s, (int)((control >> 6) & 3)));
-        }
-        interp_xmm_put(cpu, destination, out);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
     // 0F D6: MOVQ xmm/m64, xmm (66) / MOVQ2DQ xmm, mm (F3) / MOVDQ2Q mm, xmm (F2). The prefix picks which
     // REGISTER FILE each side names, so ignoring it wrote the right bytes to the wrong place. F3/F2 name a
     // register-only operand (Nq / Uq) and NP 0F D6 has no encoding at all: both are #UD, verified native.
@@ -4240,17 +4232,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
             // MOVQ zeroes the upper 64 bits.
             interp_xmm_put(cpu, insn->rm_reg, half);
         }
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // PMOVMSKB: top bit of each byte of the operand
-    case 0xD7: {
-        interp_simd_get(cpu, mmx, insn->rm_reg, s);
-        uint64_t mask = 0;
-        for (int i = 0; i < wide; i++)
-            mask |= (uint64_t)((s[i] >> 7) & 1) << i;
-        interp_reg_write(cpu, insn, destination, 4, mask);
         cpu->rip = next;
         return STEP_NEXT;
     }
