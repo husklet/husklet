@@ -3132,6 +3132,72 @@ static void sse42_mask(struct cpu *c, int res, int imm, int n) {
     memcpy(&c->v[0], out, 16); // XMM0 == c->v[0..1]; legacy SSE leaves the upper YMM bits intact
 }
 
+static enum avx_dispatch_result sse_dispatch_floating(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
+                                                      uint64_t next, uint8_t destination[16]) {
+    int op = I->op;
+    if (I->two && I->map3 == 0 && (op == 0x58 || op == 0x59 || op == 0x5C || op == 0x5E)) {
+        int packed = !I->repne && !I->rep;
+        int dbl = packed ? I->p66 : I->repne;
+        int element_size = dbl ? 8 : 4;
+        uint8_t operand[64];
+        avx_get_rm(state, c, I, next, packed ? 16 : element_size, operand);
+        int bytes = packed ? 16 : element_size;
+        for (int offset = 0; offset < bytes; offset += element_size) {
+            if (dbl) {
+                double x, y;
+                memcpy(&x, destination + offset, 8);
+                memcpy(&y, operand + offset, 8);
+                double result = avx_fp_arith_f64(op, x, y);
+                memcpy(destination + offset, &result, 8);
+            } else {
+                float x, y;
+                memcpy(&x, destination + offset, 4);
+                memcpy(&y, operand + offset, 4);
+                float result = avx_fp_arith_f32(op, x, y);
+                memcpy(destination + offset, &result, 4);
+            }
+        }
+        c->rip = next;
+        return AVX_DISPATCH_HANDLED;
+    }
+    if (!(I->two && I->map3 == 0 && (op == 0x7C || op == 0x7D || op == 0xD0))) return AVX_DISPATCH_UNMATCHED;
+
+    int dbl = I->p66 != 0;
+    int subtract = op == 0x7D;
+    uint8_t operand[64], output[16];
+    avx_get_rm(state, c, I, next, 16, operand);
+    if (dbl) {
+        double x[2], y[2], result[2];
+        memcpy(x, destination, 16);
+        memcpy(y, operand, 16);
+        if (op == 0xD0) {
+            result[0] = avx_dnan_f64(x[0] - y[0], x[0], y[0]);
+            result[1] = avx_dnan_f64(x[1] + y[1], x[1], y[1]);
+        } else {
+            result[0] = subtract ? avx_dnan_f64(x[0] - x[1], x[0], x[1]) : avx_dnan_f64(x[0] + x[1], x[0], x[1]);
+            result[1] = subtract ? avx_dnan_f64(y[0] - y[1], y[0], y[1]) : avx_dnan_f64(y[0] + y[1], y[0], y[1]);
+        }
+        memcpy(output, result, 16);
+    } else {
+        float x[4], y[4], result[4];
+        memcpy(x, destination, 16);
+        memcpy(y, operand, 16);
+        if (op == 0xD0) {
+            for (int i = 0; i < 4; i++)
+                result[i] = (i & 1) ? avx_dnan_f32(x[i] + y[i], x[i], y[i]) : avx_dnan_f32(x[i] - y[i], x[i], y[i]);
+        } else {
+            result[0] = subtract ? avx_dnan_f32(x[0] - x[1], x[0], x[1]) : avx_dnan_f32(x[0] + x[1], x[0], x[1]);
+            result[1] = subtract ? avx_dnan_f32(x[2] - x[3], x[2], x[3]) : avx_dnan_f32(x[2] + x[3], x[2], x[3]);
+            result[2] = subtract ? avx_dnan_f32(y[0] - y[1], y[0], y[1]) : avx_dnan_f32(y[0] + y[1], y[0], y[1]);
+            result[3] = subtract ? avx_dnan_f32(y[2] - y[3], y[2], y[3]) : avx_dnan_f32(y[2] + y[3], y[2], y[3]);
+        }
+        memcpy(output, result, 16);
+    }
+    memcpy(destination, output, 16);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3141,82 +3207,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     uint8_t *D = (uint8_t *)&c->v[2 * I.reg]; // dst xmm == src1 (destructive)
     uint8_t s[16], r[16];
 
-    // ---- Legacy (non-VEX) SSE packed/scalar FP add/mul/sub/div (0F 58/59/5C/5E) --------------------------
-    // The JIT fast path (translate.c) inlines these as NEON FADD/FMUL/FSUB/FDIV but GATES OUT any NaN input
-    // to here: x86's per-lane two-NaN operand selection (QNaN-priority, else src2) is the mirror of ARM's
-    // (SNaN-priority, else src1), a silent divergence. avx_fp_arith_* / avx_dnan_* reproduce x86 exactly.
-    // src1 == dst (destructive); prefix picks type (none=ps, 66=pd, F3=ss, F2=sd). Legacy SSE PRESERVES the
-    // upper (VEX/AVX) bits of the register, so we write only the low 128 bits (D), never avx_put's zero-fill.
-    if (I.two && map == 0 && (op == 0x58 || op == 0x59 || op == 0x5C || op == 0x5E)) {
-        int packed = !I.repne && !I.rep;
-        int dbl = packed ? I.p66 : I.repne;
-        int es = dbl ? 8 : 4;
-        uint8_t b[64];
-        avx_get_rm(state, c, &I, next, packed ? 16 : es, b); // src2 (r/m)
-        int n = packed ? 16 : es;                            // scalar: low element only, rest of dst kept
-        for (int i = 0; i < n; i += es) {
-            if (dbl) {
-                double x, y;
-                memcpy(&x, D + i, 8);
-                memcpy(&y, b + i, 8);
-                double z = avx_fp_arith_f64(op, x, y);
-                memcpy(D + i, &z, 8);
-            } else {
-                float x, y;
-                memcpy(&x, D + i, 4);
-                memcpy(&y, b + i, 4);
-                float z = avx_fp_arith_f32(op, x, y);
-                memcpy(D + i, &z, 4);
-            }
-        }
-        c->rip = next;
-        return;
-    }
-
-    // ---- Legacy (non-VEX) SSE3 horizontal / addsub FP (0F 7C haddp*, 0F 7D hsubp*, 0F D0 addsubp*) ------
-    // Same NaN-INPUT gate as the vertical arithmetic above: the JIT inlines these as NEON UZP+FADD/FSUB
-    // (translate.c), which selects the ARM way (SNaN-priority, else src1) when a result lane has two NaN
-    // inputs, where x86 takes src1 unconditionally. translate.c exits here whenever any checked input lane
-    // is a NaN. Both HADD and HSUB take the EVEN lane of the pair as src1 (measured on Zen 4 -- and the
-    // order IS observable, since the x86 rule is not commutative). 66 -> double lanes, F2 -> single.
-    // Legacy SSE preserves the upper YMM bits -> write only D.
-    if (I.two && map == 0 && (op == 0x7C || op == 0x7D || op == 0xD0)) {
-        int dbl = I.p66 != 0;
-        int sub = (op == 0x7D);
-        uint8_t b[64];
-        avx_get_rm(state, c, &I, next, 16, b); // src2 (r/m)
-        uint8_t out[16];
-        if (dbl) {
-            double x[2], y[2], o[2];
-            memcpy(x, D, 16);
-            memcpy(y, b, 16);
-            if (op == 0xD0) { // addsub: even lane subtracts, odd lane adds
-                o[0] = avx_dnan_f64(x[0] - y[0], x[0], y[0]);
-                o[1] = avx_dnan_f64(x[1] + y[1], x[1], y[1]);
-            } else {
-                o[0] = sub ? avx_dnan_f64(x[0] - x[1], x[0], x[1]) : avx_dnan_f64(x[0] + x[1], x[0], x[1]);
-                o[1] = sub ? avx_dnan_f64(y[0] - y[1], y[0], y[1]) : avx_dnan_f64(y[0] + y[1], y[0], y[1]);
-            }
-            memcpy(out, o, 16);
-        } else {
-            float x[4], y[4], o[4];
-            memcpy(x, D, 16);
-            memcpy(y, b, 16);
-            if (op == 0xD0) {
-                for (int i = 0; i < 4; i++)
-                    o[i] = (i & 1) ? avx_dnan_f32(x[i] + y[i], x[i], y[i]) : avx_dnan_f32(x[i] - y[i], x[i], y[i]);
-            } else {
-                o[0] = sub ? avx_dnan_f32(x[0] - x[1], x[0], x[1]) : avx_dnan_f32(x[0] + x[1], x[0], x[1]);
-                o[1] = sub ? avx_dnan_f32(x[2] - x[3], x[2], x[3]) : avx_dnan_f32(x[2] + x[3], x[2], x[3]);
-                o[2] = sub ? avx_dnan_f32(y[0] - y[1], y[0], y[1]) : avx_dnan_f32(y[0] + y[1], y[0], y[1]);
-                o[3] = sub ? avx_dnan_f32(y[2] - y[3], y[2], y[3]) : avx_dnan_f32(y[2] + y[3], y[2], y[3]);
-            }
-            memcpy(out, o, 16);
-        }
-        memcpy(D, out, 16);
-        c->rip = next;
-        return;
-    }
+    if (sse_dispatch_floating(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     // ---- CRC32 (F2 0F38 F0/F1) and MOVBE (no-F2 0F38 F0/F1): GENERAL-register / memory ops -----------
     if (map == 2 && (op == 0xF0 || op == 0xF1)) {
