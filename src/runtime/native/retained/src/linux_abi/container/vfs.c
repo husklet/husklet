@@ -3350,6 +3350,7 @@ static int proc_stat_text(char *b, size_t n) {
 // with getenv. Using this blob makes them consistent. (build_stack in elf.c is compiled after vfs.c.)
 static char g_self_environ[16384];
 static int g_self_environ_len = 0;
+static int g_self_environ_valid = 0;
 
 static void set_guest_environ(const char *const *env, int envc) {
     int o = 0;
@@ -3361,13 +3362,14 @@ static void set_guest_environ(const char *const *env, int envc) {
         g_self_environ[o++] = 0;
     }
     g_self_environ_len = o;
+    g_self_environ_valid = 1;
 }
 
 static int proc_environ_text(char *b, size_t n) {
     int o = 0;
     // Prefer the FINAL environment build_stack placed (== getenv), so procfs and getenv agree; this includes
     // the engine defaults (HOME/LANG/GLIBC_TUNABLES) the raw HL_GUEST_ENV path below omitted.
-    if (g_self_environ_len > 0) {
+    if (g_self_environ_valid) {
         int L = g_self_environ_len > (int)n ? (int)n : g_self_environ_len;
         memcpy(b, g_self_environ, (size_t)L);
         return L;

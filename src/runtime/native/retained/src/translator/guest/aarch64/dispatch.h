@@ -180,7 +180,10 @@ static uint64_t g_smc_flushes;
         if (g_prof) g_prof_sys++;                                                                                      \
         uint64_t _service_begin = g_prof ? now_ns() : 0;                                                               \
         if (hl_target_syscall_trap_selected(c)) {                                                                      \
-            if (!hl_target_syscall_trap(c)) {                                                                          \
+            /* Rust-owned syscall traps still enter through the guest's seccomp policy first. */                       \
+            if (seccomp_gate(c)) {                                                                                     \
+                /* The gate supplied the result, signal, or fatal process state. */                                    \
+            } else if (!hl_target_syscall_trap(c)) {                                                                   \
                 (c)->exited = 1;                                                                                       \
                 (c)->exit_code = 70;                                                                                   \
             }                                                                                                          \

@@ -346,7 +346,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // defaults then fill ONLY the keys the container didn't set (match on the "KEY=" prefix). Mirrors the
     // shared aarch64 build_stack (linux_abi/elf.c) -- without this, x86 guests ignored the container env.
     const char *estr[256];
-    const char *ge = hl_option_get("HL_GUEST_ENV");
+    const char *ge = hl_process_guest_environment_get();
     char *gecopy = NULL;
     // execve() escape-encodes records (HL_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
     // record separator -- unescape "\\n"->'\n' and "\\\\"->'\\' after splitting. Mirrors linux_abi/elf.c.
