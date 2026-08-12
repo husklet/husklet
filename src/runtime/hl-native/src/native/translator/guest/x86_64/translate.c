@@ -5514,6 +5514,31 @@ static int lower_sse_packed_conversion(struct insn I, uint64_t next, int vd, int
     return TX_NEXT;
 }
 
+static int lower_sse_nontemporal_store(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd,
+                                       int vm) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0xE7 && instruction->p66) { // movntdq: non-temporal store xmm -> m128
+        g_str_q_ea(vd, instruction, next);
+        return TX_NEXT;
+    }
+    if (opcode == 0x2B && instruction->is_mem) { // movntps/movntpd: non-temporal store xmm -> m128
+        g_str_q_ea(vd, instruction, next);
+        return TX_NEXT;
+    }
+    if (opcode != 0xF7 || !instruction->p66) return TX_FALL;
+
+    // maskmovdqu: each mask byte's MSB selects a byte from vd for the implicit [RDI]
+    // destination. Blend with the existing bytes so unselected locations remain unchanged.
+    e_vshr_imm(18, vm, 8, 7, 1);
+    e_mov_rr(17, RDI, 1);
+    emit_memory_guard(17, 16, guest_pc, X86_SOFT_READ | X86_SOFT_WRITE);
+    g_ldr_q(16, 17, 0);
+    e_v3(0x6E601C00u, 18, vd, 16);
+    g_str_q(18, 17, 0);
+    if (emit_soft_memory_active()) emit_soft_store_commit(16);
+    return TX_NEXT;
+}
+
 static int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t op = I.op;
     if (op != 0x2E && op != 0x2F) return TX_FALL;
@@ -6441,21 +6466,8 @@ static void *translate_block(uint64_t gpc) {
                     emit32(0x6E602800u | (17 << 5) | 17);             // uaddlp v17.4s,  v17.8h
                     emit32(0x6EA02800u | (17 << 5) | 17);             // uaddlp v17.2d,  v17.4s
                     e_vmov(vd, 17);
-                } else if (op == 0xE7 && I.p66) { // movntdq (66): non-temporal store xmm -> m128
-                    g_str_q_ea(vd, &I, next);
-                } else if (op == 0xF7 && I.p66) { // maskmovdqu (66): per-byte masked store xmm(vd) -> [RDI],
-                    // mask = xmm(vm); only each mask byte's MSB selects. Read-modify-write blend at [RDI]
-                    // (the region is writable; unselected bytes keep their memory value == architecturally
-                    // "not stored"). sel = sshr(mask,#7) -> 0xFF where store; BSL sel?src:mem; store back.
-                    e_vshr_imm(18, vm, 8, 7, 1); // sshr v18.16b, vmask.16b, #7
-                    e_mov_rr(17, RDI, 1);        // x17 = RDI (guest addr == host addr, in-process)
-                    emit_memory_guard(17, 16, gpc, X86_SOFT_READ | X86_SOFT_WRITE);
-                    g_ldr_q(16, 17, 0);            // v16 = [RDI]
-                    e_v3(0x6E601C00u, 18, vd, 16); // bsl v18.16b, vsrc.16b, v16.16b (sel?src:mem)
-                    g_str_q(18, 17, 0);            // [RDI] = blended
-                    if (emit_soft_memory_active()) emit_soft_store_commit(16);
-                } else if (op == 0x2B && I.is_mem) { // movntps (NP) / movntpd (66): non-temporal store xmm -> m128
-                    g_str_q_ea(vd, &I, next);        // aligned, non-temporal -> a plain 128-bit store on ARM
+                } else if (lower_sse_nontemporal_store(&I, gpc, next, vd, vm) == TX_NEXT) {
+                    // The helper emitted the explicit or implicit-destination store.
                 } else
                     handled = 0;
                 if (handled) {
