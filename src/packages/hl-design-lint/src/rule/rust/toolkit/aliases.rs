@@ -30,23 +30,29 @@ impl Aliases {
             }
         }
         for item in &source.syntax.items {
-            match item {
-                Item::Use(item) => collect_use(&item.tree, None, &mut aliases),
-                Item::ExternCrate(item) => {
-                    let original = item.ident.to_string();
-                    if TOOLKITS.contains(&original.as_str()) {
-                        aliases.crates.insert(
-                            item.rename
-                                .as_ref()
-                                .map_or_else(|| original.clone(), |(_, name)| name.to_string()),
-                            original,
-                        );
-                    }
-                }
-                _ => {}
-            }
+            aliases.collect_item(item);
         }
         aliases
+    }
+
+    fn collect_item(&mut self, item: &Item) {
+        match item {
+            Item::Use(item) => collect_use(&item.tree, None, self),
+            Item::ExternCrate(item) => self.collect_extern(item),
+            _ => {}
+        }
+    }
+
+    fn collect_extern(&mut self, item: &syn::ItemExternCrate) {
+        let original = item.ident.to_string();
+        if !TOOLKITS.contains(&original.as_str()) {
+            return;
+        }
+        let local = item
+            .rename
+            .as_ref()
+            .map_or_else(|| original.clone(), |(_, name)| name.to_string());
+        self.crates.insert(local, original);
     }
 
     pub(super) fn toolkit(&self, path: &Path) -> Option<String> {
