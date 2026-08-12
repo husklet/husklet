@@ -115,6 +115,7 @@ fn native_locality_violations(root: &Path) -> Vec<PathBuf> {
                 path.extension().and_then(|extension| extension.to_str()),
                 Some("c" | "h" | "s" | "S")
             ) && !path.starts_with("src/runtime/native")
+                && !path.starts_with("src/apps/testing/tests/fixtures")
         })
         .collect()
 }
@@ -187,7 +188,7 @@ fn production_native_sources_have_one_authoritative_root() {
     assert_eq!(
         native_locality_violations(&root),
         Vec::<PathBuf>::new(),
-        "production C, headers, and assembly must live below src/runtime/native; tests/ remains the fixture boundary"
+        "production C, headers, and assembly must live below src/runtime/native; testing fixtures remain testing-owned"
     );
 }
 

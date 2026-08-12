@@ -43,7 +43,7 @@ pub struct Quality {
 }
 
 impl Quality {
-    /// Creates the native quality rule for a configured CMake build directory.
+    /// Creates the native quality rule for a configured `CMake` build directory.
     #[must_use]
     pub fn new(compile_commands: PathBuf) -> Self {
         Self { compile_commands }
@@ -137,7 +137,8 @@ fn inventory_findings(root: &Path, files: &[PathBuf]) -> Result<Vec<Finding>> {
             ));
             continue;
         };
-        if !matches!(class, "source" | "fixture" | "assembly") || (class == "assembly") != path.ends_with(".S") {
+        let is_assembly = Path::new(path).extension() == Some(std::ffi::OsStr::new("S"));
+        if !matches!(class, "source" | "fixture" | "assembly") || (class == "assembly") != is_assembly {
             findings.push(finding(
                 &manifest,
                 index + 1,
@@ -267,7 +268,7 @@ fn has_call(line: &str, name: &str) -> bool {
         let right = rest
             .as_bytes()
             .first()
-            .map_or(true, |byte| !byte.is_ascii_alphanumeric() && *byte != b'_');
+            .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_');
         left && right && rest.trim_start().starts_with('(')
     })
 }
@@ -321,7 +322,7 @@ fn run_analyzers(files: &[PathBuf], compile_commands: &Path) -> Result<()> {
         if let Some(file) = row
             .get("file")
             .and_then(serde_json::Value::as_str)
-            .filter(|file| file.ends_with(".c"))
+            .filter(|file| Path::new(file).extension() == Some(std::ffi::OsStr::new("c")))
         {
             translation_units.insert(file.to_owned());
         }

@@ -107,10 +107,10 @@ fn functions(lines: &[String]) -> Vec<Function> {
                 signature.clear();
             }
         }
-        if let Some(current) = function.as_mut() {
-            if !trimmed.is_empty() {
-                current.lines += 1;
-            }
+        if let Some(current) = function.as_mut()
+            && !trimmed.is_empty()
+        {
+            current.lines += 1;
         }
         for byte in line.bytes() {
             match byte {
@@ -122,10 +122,10 @@ fn functions(lines: &[String]) -> Vec<Function> {
                 }
                 b'}' => {
                     depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        if let Some(current) = function.take() {
-                            output.push(current);
-                        }
+                    if depth == 0
+                        && let Some(current) = function.take()
+                    {
+                        output.push(current);
                     }
                 }
                 _ => {}
