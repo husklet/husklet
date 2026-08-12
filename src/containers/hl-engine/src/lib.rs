@@ -76,8 +76,6 @@ pub fn retained_c_link_anchor() -> usize {
 }
 pub mod options;
 pub mod program;
-#[cfg(test)]
-mod retained_platform;
 pub mod retained_worker;
 #[cfg(target_os = "linux")]
 #[path = "runtime/api.rs"]
