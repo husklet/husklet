@@ -880,22 +880,16 @@ static void *translate_block(uint64_t gpc) {
             emit_exit_const(gpc, R_SYSCALL);
             break;
         }
-        // b
-        if ((in & 0xFC000000u) == 0x14000000u) {
-            int64_t off = sext(in & 0x3FFFFFF, 26) << 2;
-            uint64_t tgt = gpc + off;
-            // opt4: follow the unconditional edge INLINE if its target is a fresh block (not the
-            // region head, not already inlined, not already translated) -> the inter-block `b`
-            // disappears. Otherwise chain normally (existing block / loop back-edge).
-            if (STITCH_OK && tgt != start && !seen_has(seen, nseen, tgt) && !map_body(tgt)) {
-                seen[nseen++] = tgt;
-                trace_blk++;
-                gpc = tgt;
-                continue;
-            }
-            emit_chain_exit(tgt);
-            break;
-        }
+        struct unconditional_branch_state direct_branch_state = {
+            .start = start,
+            .seen = seen,
+            .seen_count = &nseen,
+            .trace_blocks = &trace_blk,
+            .stitch_allowed = STITCH_OK,
+        };
+        enum translation_step direct_branch_step = translate_unconditional_branch(&gpc, in, &direct_branch_state);
+        if (direct_branch_step == TRANSLATION_CONTINUE) continue;
+        if (direct_branch_step == TRANSLATION_STOP) break;
         // bl
         if ((in & 0xFC000000u) == 0x94000000u) {
             int64_t off = sext(in & 0x3FFFFFF, 26) << 2;
