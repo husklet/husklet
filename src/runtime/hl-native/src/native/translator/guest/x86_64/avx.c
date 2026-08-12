@@ -913,6 +913,69 @@ static enum avx_dispatch_result avx_dispatch_fma(const hl_x86_avx_state *state, 
     return AVX_DISPATCH_HANDLED;
 }
 
+// Keep the AES and carryless-multiply families together: they share the AES-NI
+// opcode maps and are easier to audit here than among the general packed lanes.
+static enum avx_dispatch_result avx_dispatch_crypto(const hl_x86_avx_state *state, struct cpu *c,
+                                                    struct insn *instruction, uint64_t next, int map, int op,
+                                                    int destination, int source, int width) {
+    uint8_t left[64], right[64], output[64];
+    if (map == 2 && op == 0xDB) { // vaesimc xmm, xmm/m128
+        avx_get_rm(state, c, instruction, next, 16, right);
+        memcpy(output, right, 16);
+        aes_mixcolumns(output, 1);
+        avx_put(c, destination, output, 16);
+    } else if (map == 2 && op >= 0xDC && op <= 0xDF) { // vaesenc/last, vaesdec/last
+        avx_get(c, source, left);
+        avx_get_rm(state, c, instruction, next, 16, right);
+        uint8_t transformed[16];
+        int decrypt = op == 0xDE || op == 0xDF;
+        aes_shiftrows(left, transformed, decrypt);
+        aes_subbytes(transformed, decrypt ? k_aes_isbox : k_aes_sbox);
+        if (op == 0xDC) aes_mixcolumns(transformed, 0);
+        if (op == 0xDE) aes_mixcolumns(transformed, 1);
+        for (int index = 0; index < 16; index++)
+            output[index] = transformed[index] ^ right[index];
+        avx_put(c, destination, output, 16);
+    } else if (map == 3 && op == 0x44) { // vpclmulqdq
+        avx_get(c, source, left);
+        avx_get_rm(state, c, instruction, next, width, right);
+        for (int lane = 0; lane < width; lane += 16) {
+            uint64_t lhs, rhs;
+            memcpy(&lhs, left + lane + 8 * (instruction->imm & 1), 8);
+            memcpy(&rhs, right + lane + 8 * ((instruction->imm >> 4) & 1), 8);
+// __int128: pre-C23 GNU/clang extension needed for the PCLMULQDQ carryless product; scope -Wpedantic.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+            unsigned __int128 product = 0;
+            for (int bit = 0; bit < 64; bit++)
+                if ((rhs >> bit) & 1) product ^= (unsigned __int128)lhs << bit;
+#pragma GCC diagnostic pop
+            memcpy(output + lane, &product, 16);
+        }
+        avx_put(c, destination, output, width);
+    } else if (map == 3 && op == 0xDF) { // vaeskeygenassist
+        avx_get_rm(state, c, instruction, next, 16, right);
+        uint32_t words[4], result[4];
+        memcpy(words, right, 16);
+        uint32_t rcon = (uint32_t)(instruction->imm & 0xff);
+        for (int index = 1; index <= 3; index += 2) {
+            uint32_t word = words[index];
+            uint32_t substituted = (uint32_t)k_aes_sbox[word & 0xff] | ((uint32_t)k_aes_sbox[(word >> 8) & 0xff] << 8) |
+                                   ((uint32_t)k_aes_sbox[(word >> 16) & 0xff] << 16) |
+                                   ((uint32_t)k_aes_sbox[(word >> 24) & 0xff] << 24);
+            uint32_t rotated = (substituted >> 8) | (substituted << 24);
+            result[index - 1] = substituted;
+            result[index] = rotated ^ rcon;
+        }
+        memcpy(output, result, 16);
+        avx_put(c, destination, output, 16);
+    } else {
+        return AVX_DISPATCH_UNMATCHED;
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1187,6 +1250,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (bmi == AVX_DISPATCH_HANDLED) return;
     if (bmi == AVX_DISPATCH_UNIMPLEMENTED) goto avx_unimpl;
     if (avx_dispatch_fma(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_crypto(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
 
     // ---- map 1 (0F) ----
@@ -2393,30 +2457,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 if (a[i + es - 1] & 0x80) (void)avx_memory_write(state, ea + (uint64_t)i, b + i, (size_t)es);
             goto done;
         }
-        case 0xDB: { // vaesimc xmm, xmm/m128: dst = InvMixColumns(src) (2-operand, no vvvv)
-            avx_get_rm(state, c, &I, next, 16, b);
-            memcpy(d, b, 16);
-            aes_mixcolumns(d, 1);
-            avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0xDC:             // vaesenc     dst = MixColumns(SubBytes(ShiftRows(src1))) ^ src2(key)
-        case 0xDD:             // vaesenclast dst = SubBytes(ShiftRows(src1)) ^ key (no MixColumns)
-        case 0xDE:             // vaesdec     inverse round with MixColumns
-        case 0xDF: {           // vaesdeclast inverse round, no InvMixColumns
-            avx_get(c, vv, a); // src1 (state)
-            avx_get_rm(state, c, &I, next, 16, b); // src2 (round key)
-            uint8_t t[16];
-            int dec = (op == 0xDE || op == 0xDF);
-            aes_shiftrows(a, t, dec);
-            aes_subbytes(t, dec ? k_aes_isbox : k_aes_sbox);
-            if (op == 0xDC) aes_mixcolumns(t, 0);
-            if (op == 0xDE) aes_mixcolumns(t, 1);
-            for (int i = 0; i < 16; i++)
-                d[i] = t[i] ^ b[i];
-            avx_put(c, rd, d, 16);
-            goto done;
-        }
         case 0x20: // vpmovsxbw   vpmov{s,z}x{b,w,d}{w,d,q}: widen a smaller source element with
         case 0x21: // vpmovsxbd   sign(2x)/zero(3x) extension. dst holds W/dst_es elements.
         case 0x22: // vpmovsxbq
@@ -2706,44 +2746,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + lane, o, 16);
             }
             avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x44: { // vpclmulqdq imm8: per-128-lane carryless multiply of selected 64-bit halves.
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16) {
-                uint64_t a64, b64;
-                memcpy(&a64, a + lane + 8 * (I.imm & 1), 8);
-                memcpy(&b64, b + lane + 8 * ((I.imm >> 4) & 1), 8);
-// __int128: pre-C23 GNU/clang extension needed for the PCLMULQDQ carryless product; scope -Wpedantic.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
-                unsigned __int128 prod = 0;
-                for (int i = 0; i < 64; i++)
-                    if ((b64 >> i) & 1) prod ^= (unsigned __int128)a64 << i;
-#pragma GCC diagnostic pop
-                memcpy(d + lane, &prod, 16);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0xDF: { // vaeskeygenassist xmm, xmm/m128, imm8 (2-operand: SubWord+RotWord+RCON on dw1/dw3)
-            avx_get_rm(state, c, &I, next, 16, b);
-            uint32_t x[4];
-            memcpy(x, b, 16);
-            uint32_t rcon = (uint32_t)(I.imm & 0xff);
-            uint32_t o[4];
-            for (int j = 1; j <= 3; j += 2) {
-                uint32_t X = x[j];
-                uint32_t sub = (uint32_t)k_aes_sbox[X & 0xff] | ((uint32_t)k_aes_sbox[(X >> 8) & 0xff] << 8) |
-                               ((uint32_t)k_aes_sbox[(X >> 16) & 0xff] << 16) |
-                               ((uint32_t)k_aes_sbox[(X >> 24) & 0xff] << 24);
-                uint32_t ror = (sub >> 8) | (sub << 24); // ROTWORD (rotr by one byte)
-                o[j - 1] = sub;
-                o[j] = ror ^ rcon;
-            }
-            memcpy(d, o, 16);
-            avx_put(c, rd, d, 16);
             goto done;
         }
         }
