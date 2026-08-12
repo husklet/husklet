@@ -53,35 +53,49 @@ pub(super) fn reexported_items(
     public_files: &BTreeSet<PathBuf>,
 ) -> BTreeMap<PathBuf, BTreeSet<String>> {
     let mut exposed = BTreeMap::<PathBuf, BTreeSet<String>>::new();
-    for source in sources {
-        if !public_files.contains(&source.path) {
-            continue;
-        }
-        for item in &source.syntax.items {
-            let Item::Use(item) = item else { continue };
-            if !matches!(item.vis, Visibility::Public(_)) {
-                continue;
-            }
-            let mut paths = Vec::new();
-            flatten_use(&item.tree, Vec::new(), &mut paths);
-            for mut path in paths {
-                while matches!(path.first().map(String::as_str), Some("self" | "crate")) {
-                    path.remove(0);
-                }
-                if path.len() < 2 {
-                    continue;
-                }
-                let module = path.remove(0);
-                let name = path.remove(0);
-                for candidate in module_paths_named(source, &module) {
-                    if sources.iter().any(|source| source.path == candidate) {
-                        exposed.entry(candidate).or_default().insert(name.clone());
-                    }
-                }
-            }
-        }
+    for (path, name) in public_reexports(sources, public_files) {
+        exposed.entry(path).or_default().insert(name);
     }
     exposed
+}
+
+fn public_reexports(sources: &[&Source], public_files: &BTreeSet<PathBuf>) -> Vec<(PathBuf, String)> {
+    sources
+        .iter()
+        .filter(|source| public_files.contains(&source.path))
+        .flat_map(|source| source_reexports(source, sources))
+        .collect()
+}
+
+fn source_reexports(source: &Source, sources: &[&Source]) -> Vec<(PathBuf, String)> {
+    source
+        .syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Use(item) if matches!(item.vis, Visibility::Public(_)) => Some(item),
+            _ => None,
+        })
+        .flat_map(|item| {
+            let mut paths = Vec::new();
+            flatten_use(&item.tree, Vec::new(), &mut paths);
+            paths
+        })
+        .filter_map(normalized_reexport)
+        .flat_map(|(module, name)| {
+            module_paths_named(source, &module)
+                .into_iter()
+                .filter(|candidate| sources.iter().any(|source| source.path == *candidate))
+                .map(move |candidate| (candidate, name.clone()))
+        })
+        .collect()
+}
+
+fn normalized_reexport(mut path: Vec<String>) -> Option<(String, String)> {
+    while matches!(path.first().map(String::as_str), Some("self" | "crate")) {
+        path.remove(0);
+    }
+    (path.len() >= 2).then(|| (path.remove(0), path.remove(0)))
 }
 
 pub(super) fn item_name(item: &Item) -> Option<String> {
