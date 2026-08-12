@@ -3860,6 +3860,48 @@ static int interp_sse_integer_multiply_reduce(struct cpu *cpu, struct insn *insn
     return STEP_NEXT;
 }
 
+static int interp_sse_integer_shift(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    int immediate = op >= 0x71 && op <= 0x73;
+    int variable = op == 0xD1 || op == 0xD2 || op == 0xD3 || op == 0xE1 || op == 0xE2 || op == 0xF1 ||
+                   op == 0xF2 || op == 0xF3;
+    if (!immediate && !variable) return -1;
+    int mmx = interp_sse_prefix(insn) == SSE_NP;
+    uint8_t value[16];
+    if (immediate) {
+        int sub = insn->reg & 7;
+        unsigned count = (unsigned)(insn->imm & 0xff);
+        int lane = op == 0x71 ? 2 : op == 0x72 ? 4 : 8;
+        interp_simd_get(cpu, mmx, insn->rm_reg, value);
+        if (op == 0x73 && !mmx && (sub == 3 || sub == 7))
+            interp_pshift_bytes(value, count, sub == 3);
+        else if (sub == 2)
+            interp_pshift(value, lane, count, 1, 0);
+        else if (sub == 4 && op != 0x73)
+            interp_pshift(value, lane, count, 1, 1);
+        else if (sub == 6)
+            interp_pshift(value, lane, count, 0, 0);
+        else
+            return interp_undefined(cpu, insn, pc, "unallocated SSE shift-group sub-opcode");
+        interp_simd_put(cpu, mmx, insn->rm_reg, value);
+    } else {
+        uint8_t count_operand[16];
+        interp_simd_get(cpu, mmx, insn->reg, value);
+        interp_simd_rm_get(cpu, insn, mmx, next, count_operand);
+        uint64_t raw = interp_lane64(count_operand, 0);
+        unsigned count = raw > 255 ? 255u : (unsigned)raw;
+        int lane = (op == 0xD1 || op == 0xE1 || op == 0xF1) ? 2
+                   : (op == 0xD2 || op == 0xE2 || op == 0xF2) ? 4
+                                                               : 8;
+        int arithmetic = op == 0xE1 || op == 0xE2;
+        int right = arithmetic || op == 0xD1 || op == 0xD2 || op == 0xD3;
+        interp_pshift(value, lane, count, right, arithmetic);
+        interp_simd_put(cpu, mmx, insn->reg, value);
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int prefix = interp_sse_prefix(insn);
@@ -3870,6 +3912,8 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
     int delegated = interp_sse_integer_arithmetic(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_sse_integer_multiply_reduce(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_sse_integer_shift(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
 
     // These have both MMX (no prefix, 64-bit) and SSE2 (0x66, 128-bit xmm) encodings. The MMX half of the
@@ -4143,29 +4187,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         return STEP_NEXT;
     }
 
-    // ModRM.reg is the sub-opcode; the operand is the mm/xmm in rm.
-    case 0x71:
-    case 0x72:
-    case 0x73: {
-        int sub = insn->reg & 7;
-        unsigned count = (unsigned)(insn->imm & 0xff);
-        int lane = op == 0x71 ? 2 : op == 0x72 ? 4 : 8;
-        interp_simd_get(cpu, mmx, insn->rm_reg, d);
-        if (op == 0x73 && !mmx && (sub == 3 || sub == 7)) // PSRLDQ / PSLLDQ: whole-register bytes, no MMX form
-            interp_pshift_bytes(d, count, sub == 3);
-        else if (sub == 2)
-            interp_pshift(d, lane, count, 1, 0); // PSRLW/D/Q
-        else if (sub == 4 && op != 0x73)
-            interp_pshift(d, lane, count, 1, 1); // PSRAW/D only: no PSRAQ, and 73 /4 is AVX-512
-        else if (sub == 6)
-            interp_pshift(d, lane, count, 0, 0); // PSLLW/D/Q
-        else
-            return interp_undefined(cpu, insn, pc, "unallocated SSE shift-group sub-opcode");
-        interp_simd_put(cpu, mmx, insn->rm_reg, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
     // PCMPEQB/W/D
     case 0x74:
     case 0x75:
@@ -4209,28 +4230,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
             interp_put32(out, 3, interp_lane32(s, (int)((control >> 6) & 3)));
         }
         interp_xmm_put(cpu, destination, out);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // The count is the FULL low 64 bits: 0x100 is a count of 256, not 0.
-    case 0xD1:
-    case 0xD2:
-    case 0xD3:
-    case 0xE1:
-    case 0xE2:
-    case 0xF1:
-    case 0xF2:
-    case 0xF3: {
-        interp_simd_get(cpu, mmx, destination, d);
-        interp_simd_rm_get(cpu, insn, mmx, next, s);
-        uint64_t raw = interp_lane64(s, 0);
-        unsigned count = raw > 255 ? 255u : (unsigned)raw;
-        int lane = (op == 0xD1 || op == 0xE1 || op == 0xF1) ? 2 : (op == 0xD2 || op == 0xE2 || op == 0xF2) ? 4 : 8;
-        int arithmetic = (op == 0xE1 || op == 0xE2);
-        int right = arithmetic || op == 0xD1 || op == 0xD2 || op == 0xD3;
-        interp_pshift(d, lane, count, right, arithmetic);
-        interp_simd_put(cpu, mmx, destination, d);
         cpu->rip = next;
         return STEP_NEXT;
     }
