@@ -44,11 +44,36 @@ pub trait ActivationChannel: Send + Sync {
 /// Transactional destination for a checkpoint image.
 pub trait CheckpointSink: Send + Sync {
     fn replace(&self, image: &[u8]) -> Result<(), CompositionError>;
+
+    /// Stores one named object in the unpublished checkpoint generation.
+    ///
+    /// The retained C engine emits a process-tree image as independently
+    /// addressable objects. Legacy single-image transports may leave this
+    /// unsupported; construction does not advertise retained-C checkpointing
+    /// until the complete object-store contract is available.
+    fn put(&self, _name: &str, _bytes: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    /// Atomically publishes the generation after every object is durable.
+    fn commit(&self, _manifest: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
 }
 
 /// Bounded source for a checkpoint image.
 pub trait CheckpointSource: Send + Sync {
     fn read(&self, maximum: usize) -> Result<Vec<u8>, CompositionError>;
+
+    /// Reads one named object from the committed checkpoint generation.
+    fn get(&self, _name: &str) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    /// Lists every object in the committed checkpoint generation.
+    fn list(&self) -> Result<Vec<String>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
 }
 
 /// Host-facing byte transport for one terminal master.

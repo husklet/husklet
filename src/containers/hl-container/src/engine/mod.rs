@@ -46,6 +46,18 @@ impl hl_engine::composition::CheckpointSink for CheckpointTransport {
             .commit(&manifest)
             .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
     }
+
+    fn put(&self, name: &str, bytes: &[u8]) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+        self.image
+            .put(name, bytes)
+            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
+    }
+
+    fn commit(&self, manifest: &[u8]) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+        self.image
+            .commit(manifest)
+            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
+    }
 }
 
 impl hl_engine::composition::CheckpointSource for CheckpointTransport {
@@ -74,6 +86,18 @@ impl hl_engine::composition::CheckpointSource for CheckpointTransport {
         (bytes.len() == length)
             .then_some(bytes)
             .ok_or(hl_engine::composition::CompositionError::RuntimeConstruction)
+    }
+
+    fn get(&self, name: &str) -> std::result::Result<Vec<u8>, hl_engine::composition::CompositionError> {
+        self.image
+            .get(name)
+            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
+    }
+
+    fn list(&self) -> std::result::Result<Vec<String>, hl_engine::composition::CompositionError> {
+        self.image
+            .list()
+            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
     }
 }
 

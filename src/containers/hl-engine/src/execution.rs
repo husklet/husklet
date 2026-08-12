@@ -5,6 +5,7 @@ pub(crate) mod control;
 pub(crate) mod process;
 pub(crate) mod worker;
 
+mod checkpoint_broker;
 mod environment;
 mod ffi;
 mod options;
