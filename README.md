@@ -105,9 +105,7 @@ a nonzero storage bias while exercising PC identity, static data and pointers,
 direct calls, indirect calls, and syscall output on both guest ISAs. Production
 C no longer inspects Go metadata or V8 symbols to make that path work.
 
-Performance work uses `tests/bench/eri_matrix.py` to compare the external C
-oracle, explicit C selection, and the integrated product default with immutable
-artifacts, null arms, exact output, and unique resumable ledgers. Historical
+Performance measurements belong to the typed Rust test runner. Historical
 Rust-vs-C records are not current product baselines.
 
 ## Contact
