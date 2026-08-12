@@ -66,50 +66,14 @@ impl Builder {
     }
 
     #[must_use]
-    pub fn with_option(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.options.push((name.into(), value.into()));
-        self
-    }
-
-    #[must_use]
     pub fn with_argument(mut self, value: impl Into<Vec<u8>>) -> Self {
         self.arguments.push(value.into());
         self
     }
 
     #[must_use]
-    pub fn with_environment(mut self, name: impl AsRef<[u8]>, value: impl AsRef<[u8]>) -> Self {
-        self.environment.push((name.as_ref().to_vec(), value.as_ref().to_vec()));
-        self
-    }
-
-    #[must_use]
-    pub fn with_entry(mut self, relative: impl Into<PathBuf>) -> Self {
-        self.entry = Some(relative.into());
-        self
-    }
-
-    #[must_use]
     pub fn with_rootfs(mut self, rootfs: Rootfs) -> Self {
         self.rootfs = Some(rootfs);
-        self
-    }
-
-    #[must_use]
-    pub fn with_base_system(mut self, system: BaseSystem) -> Self {
-        self.base_system = system;
-        self
-    }
-
-    #[must_use]
-    pub fn with_trace(mut self, path: impl Into<PathBuf>) -> Self {
-        self.trace = Some(path.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_guest_executable(mut self, path: impl Into<PathBuf>) -> Self {
-        self.guest_executable = Some(path.into());
         self
     }
 
