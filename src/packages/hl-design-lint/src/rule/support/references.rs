@@ -97,7 +97,7 @@ impl<'a> References<'a> {
                     dotted = false;
                 }
                 proc_macro2::TokenTree::Group(group) => {
-                    self.group(pending.take(), group);
+                    self.group(pending.take(), &group);
                     dotted = false;
                 }
                 proc_macro2::TokenTree::Punct(punct) => {
@@ -112,7 +112,7 @@ impl<'a> References<'a> {
         }
     }
 
-    fn group(&mut self, pending: Option<proc_macro2::Ident>, group: proc_macro2::Group) {
+    fn group(&mut self, pending: Option<proc_macro2::Ident>, group: &proc_macro2::Group) {
         if group.delimiter() == proc_macro2::Delimiter::Parenthesis
             && let Some(ident) = pending
         {

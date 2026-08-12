@@ -39,21 +39,21 @@ int small(void) { return 0; }
 
 #[test]
 fn embedded_parser_handles_preprocessor_and_counts_control_flow_not_braces() {
-    let source = r#"
+    let source = r"
 #define WRAP(value) do { value; } while (0)
 int sample(int value) {
     struct Local { int nested[8]; } local = {0};
     if (value) { while (value) { for (;;) { switch (value) { default: do { value--; } while (value); } } } }
     return local.nested[0];
 }
-"#;
+";
     let findings = analyze(Path::new("portable.c"), source).unwrap();
     assert!(findings.iter().all(|finding| finding.rule != "c-maximum-nesting"));
 }
 
 #[test]
 fn else_if_chain_is_one_decision_level() {
-    let source = r#"
+    let source = r"
 int classify(int value) {
     if (value == 1) return 1;
     else if (value == 2) return 2;
@@ -64,7 +64,7 @@ int classify(int value) {
     else if (value == 7) return 7;
     else return 0;
 }
-"#;
+";
     let findings = analyze(Path::new("classification.c"), source).unwrap();
     assert!(findings.iter().all(|finding| finding.rule != "c-maximum-nesting"));
 }

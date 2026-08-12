@@ -51,7 +51,7 @@ pub(crate) fn hash(options: HashOptions) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) async fn run(options: Options) -> Result<(), Error> {
+pub(crate) fn run(options: Options) -> Result<(), Error> {
     let workspace = crate::runtime::workspace()?;
     let config_path = workspace.join(&options.config);
     let campaign = Campaign::load(&config_path)?;

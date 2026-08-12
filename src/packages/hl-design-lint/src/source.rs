@@ -535,7 +535,7 @@ mod tests {
             ..Default::default()
         };
         let workspace = Workspace::load_with_policy([root.clone()], &policy).unwrap();
-        assert_eq!(workspace.empty_directories(), &[root.clone()]);
+        assert_eq!(workspace.empty_directories(), std::slice::from_ref(&root));
         fs::remove_dir_all(root).unwrap();
     }
 

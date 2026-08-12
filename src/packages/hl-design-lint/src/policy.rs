@@ -82,7 +82,8 @@ pub struct DocumentationPolicy {
     pub examples: Vec<String>,
 }
 
-/// A set of portable source selectors. Selectors are ORed; fields within one selector are ANDed.
+/// Portable source selectors. A source matches any selector, while each selector requires every
+/// configured field to match.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoundaryPolicy {

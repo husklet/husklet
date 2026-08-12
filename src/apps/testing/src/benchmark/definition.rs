@@ -71,7 +71,7 @@ impl Campaign {
     }
 
     fn validate(&self) -> Result<(), Error> {
-        if self.schema != SCHEMA || self.rounds < 4 || self.rounds % 4 != 0 || self.samples_per_row < 3 {
+        if self.schema != SCHEMA || self.rounds < 4 || !self.rounds.is_multiple_of(4) || self.samples_per_row < 3 {
             return Err("benchmark schema, rounds, or samples_per_row is invalid".into());
         }
         if self.arms.keys().map(String::as_str).collect::<Vec<_>>() != ["E", "I", "R"] {

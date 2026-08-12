@@ -152,7 +152,7 @@ impl OwnedWorkspace {
             (Path::new("etc/group"), b"root:x:0:\n".as_slice()),
         ] {
             self.reserve(u64::try_from(contents.len()).map_err(|_| EngineError::WorkspaceFailed)?)?;
-            let destination = self.destination(&relative)?;
+            let destination = self.destination(relative)?;
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent).map_err(|_| EngineError::WorkspaceFailed)?;
             }
@@ -161,7 +161,7 @@ impl OwnedWorkspace {
                 .write(true)
                 .open(&destination)
                 .map_err(|_| EngineError::WorkspaceFailed)?;
-            file.write_all(&contents).map_err(|_| EngineError::WorkspaceFailed)?;
+            file.write_all(contents).map_err(|_| EngineError::WorkspaceFailed)?;
             file.set_permissions(fs::Permissions::from_mode(0o644))
                 .map_err(|_| EngineError::WorkspaceFailed)?;
         }

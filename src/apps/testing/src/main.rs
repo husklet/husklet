@@ -84,7 +84,7 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     match Cli::parse().command {
-        Command::Benchmark(options) => benchmark::run(options).await,
+        Command::Benchmark(options) => benchmark::run(options),
         Command::BenchmarkHash(options) => benchmark::hash(options),
         Command::Runtime(options) => runtime::run(options).await,
         Command::RuntimeWorker(options) => runtime::worker(options).await,

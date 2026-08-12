@@ -411,7 +411,7 @@ fn serialized_name(default: String, attributes: &[Attribute]) -> String {
         .iter()
         .filter(|attribute| attribute.path().is_ident("serde"))
         .filter_map(serde_rename)
-        .last()
+        .next_back()
         .unwrap_or(default)
 }
 

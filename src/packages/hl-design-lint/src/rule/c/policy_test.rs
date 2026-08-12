@@ -8,7 +8,7 @@ use crate::{Rule, source::Workspace};
 
 use super::{CallPolicy, Policy};
 
-fn findings(source: &str, policy: Policy) -> Vec<crate::Finding> {
+fn findings(source: &str, policy: &Policy) -> Vec<crate::Finding> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
         "hl-c-policy-{}-{}",
@@ -35,7 +35,7 @@ fn shell() -> Policy {
 
 #[test]
 fn embedded_parser_finds_real_calls_with_exact_locations() {
-    let result = findings("int f(void) { return system(\"x\"); }\n", shell());
+    let result = findings("int f(void) { return system(\"x\"); }\n", &shell());
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].rule, "shell-execution");
     assert_eq!((result[0].location.line, result[0].location.column), (1, 22));
@@ -46,7 +46,7 @@ fn embedded_parser_finds_real_calls_with_exact_locations() {
 fn strings_comments_members_and_larger_identifiers_are_not_calls() {
     let result = findings(
         "// system(\"x\")\nconst char *s = \"popen(x)\";\nint f(void) { object.system(); return subsystem(); }\n",
-        shell(),
+        &shell(),
     );
     assert!(result.is_empty(), "{result:#?}");
 }
@@ -55,7 +55,7 @@ fn strings_comments_members_and_larger_identifiers_are_not_calls() {
 fn annotation_spelling_inside_a_string_is_not_a_directive() {
     let result = findings(
         "const char *s = \"hl-lint: allow(shell-execution) -- forged\";\nint f(void) { return system(\"x\"); }\n",
-        shell(),
+        &shell(),
     );
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].rule, "shell-execution");
@@ -63,7 +63,7 @@ fn annotation_spelling_inside_a_string_is_not_a_directive() {
 
 #[test]
 fn standard_environment_access_is_allowed_by_default() {
-    assert!(findings("char *f(void) { return getenv(\"HOME\"); }\n", shell()).is_empty());
+    assert!(findings("char *f(void) { return getenv(\"HOME\"); }\n", &shell()).is_empty());
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn caller_can_prohibit_environment_access_explicitly() {
         "inject configuration",
     ));
     assert_eq!(
-        findings("char *f(void) { return getenv(\"HOME\"); }\n", policy)[0].rule,
+        findings("char *f(void) { return getenv(\"HOME\"); }\n", &policy)[0].rule,
         "ambient-environment"
     );
 }
@@ -84,7 +84,7 @@ fn caller_can_prohibit_environment_access_explicitly() {
 fn one_reasoned_annotation_suppresses_one_finding_on_next_code_line() {
     let result = findings(
         "// hl-lint: allow(shell-execution) -- compatibility launcher has no argv API\nint f(void) { return system(\"x\"); }\n",
-        shell(),
+        &shell(),
     );
     assert!(result.is_empty(), "{result:#?}");
 }
@@ -109,7 +109,7 @@ fn suppression_validation_rejects_unknown_malformed_stale_and_overbroad() {
             "overbroad suppression",
         ),
     ] {
-        let result = findings(source, shell());
+        let result = findings(source, &shell());
         assert!(
             result.iter().any(|finding| finding.message == message),
             "missing {message}: {result:#?}"

@@ -13,7 +13,7 @@ pub(crate) use execution::{ProductionFactory, ProductionMachine};
 mod terminal;
 
 use crate::activation::GuestIsa;
-use crate::composition::{EngineBackend, RuntimeServices};
+use crate::composition::{CompositionError, EngineBackend, RuntimeServices};
 use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::launch_plan::RuntimePlan;
 use crate::options::Options;

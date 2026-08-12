@@ -28,13 +28,13 @@ fn findings(source: &str) -> Vec<crate::Finding> {
 #[test]
 fn detached_concrete_and_wrapped_constructors_are_reported() {
     let values = findings(
-        r#"
+        r"
 struct Lease { value: usize }
 struct Token(usize);
 fn open() -> Result<Lease, Error> { Ok(Lease { value: 1 }) }
 fn token() -> Option<Token> { Some(Token(1)) }
 struct Error;
-"#,
+",
     );
     assert_eq!(
         values
@@ -49,13 +49,13 @@ struct Error;
 #[test]
 fn associated_constructor_returning_self_is_already_owned() {
     let values = findings(
-        r#"
+        r"
 struct Leases;
 impl Leases {
     fn open() -> Result<Self, Error> { Ok(Self) }
 }
 struct Error;
-"#,
+",
     );
     assert!(values.is_empty(), "got {values:?}");
 }
@@ -63,7 +63,7 @@ struct Error;
 #[test]
 fn uncertain_ownership_is_not_reported() {
     let values = findings(
-        r#"
+        r"
 struct Local;
 struct Other;
 fn generic<T>() -> T { todo!() }
@@ -74,7 +74,7 @@ fn orchestrated() -> Local { let _other = Other; Local }
 fn converted(value: usize) -> Local { Local::from(value) }
 mod other { pub(super) fn make() -> super::Local { super::Local } }
 impl From<usize> for Local { fn from(_: usize) -> Self { Self } }
-"#,
+",
     );
     // The outer forwarding and multi-type orchestration are intentionally conservative; the
     // nested function that actually constructs `Local` is the only detached constructor.
@@ -90,7 +90,7 @@ impl From<usize> for Local { fn from(_: usize) -> Self { Self } }
 #[test]
 fn same_owner_factory_wrapper_is_reported_but_other_owner_is_not() {
     let values = findings(
-        r#"
+        r"
 struct Session;
 impl Session { fn create() -> Self { Self } }
 fn session() -> Session { Session::create() }
@@ -98,7 +98,7 @@ struct Plan;
 struct Builder;
 impl Builder { fn plan() -> Plan { Plan } }
 fn plan() -> Plan { Builder::plan() }
-"#,
+",
     );
     assert_eq!(
         values

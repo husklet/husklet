@@ -98,9 +98,7 @@ fn layer_directory(path: &Path) -> Option<&str> {
         .components()
         .filter_map(|component| component.as_os_str().to_str())
         .collect::<Vec<_>>();
-    let Some(index) = components.iter().rposition(|component| *component == "src") else {
-        return None;
-    };
+    let index = components.iter().rposition(|component| *component == "src")?;
     components.get(index + 1).copied()
 }
 

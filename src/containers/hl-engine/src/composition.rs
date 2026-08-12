@@ -139,7 +139,7 @@ impl Drop for Terminal {
 /// Construction rejects a populated request until the runtime can bind its
 /// master transport and resize operations to native descriptors. This keeps a
 /// terminal from silently using the supervisor's standard descriptors.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct StandardStreams {
     terminal: Option<Arc<Terminal>>,
 }
@@ -153,12 +153,6 @@ impl StandardStreams {
 
     pub(crate) fn terminal(&self) -> Option<Arc<Terminal>> {
         self.terminal.clone()
-    }
-}
-
-impl Default for StandardStreams {
-    fn default() -> Self {
-        Self { terminal: None }
     }
 }
 
