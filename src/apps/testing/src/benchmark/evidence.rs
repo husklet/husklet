@@ -144,30 +144,37 @@ fn parse_phase(
     phases: &mut BTreeMap<String, Phase>,
     canonical: &mut Vec<String>,
 ) -> Result<(), Error> {
-    let mut words = rest.split_ascii_whitespace();
-    let name = words.next().ok_or("PHASE omitted its name")?;
-    let mut micros = None;
-    let mut ok = None;
-    for word in words {
-        match word.split_once('=') {
-            Some(("us", value)) => micros = Some(value.parse::<u64>()?),
-            Some(("ok", value)) => ok = Some(value.to_owned()),
-            _ => return Err(format!("unaccounted PHASE field {word:?}").into()),
-        }
-    }
-    let measured = micros.ok_or("PHASE omitted us")?;
+    let (name, measured, ok) = phase_fields(rest)?;
     let timed_by_wall = campaign.workloads[&step.workload].wall_time
         && campaign.workloads[&step.workload]
             .phases
             .iter()
             .any(|phase| phase == name);
     let us = if timed_by_wall { wall_us } else { measured };
-    let ok = ok.ok_or("PHASE omitted ok")?;
-    if phases.insert(name.to_owned(), Phase { us, ok: ok.clone() }).is_some() {
+    if phases
+        .insert(name.to_owned(), Phase { us, ok: ok.to_owned() })
+        .is_some()
+    {
         return Err(format!("duplicate PHASE {name}").into());
     }
     canonical.push(format!("PHASE {name} us=<time> ok={ok}"));
     Ok(())
+}
+
+fn phase_fields(rest: &str) -> Result<(&str, u64, &str), Error> {
+    let fields = rest.split_ascii_whitespace().collect::<Vec<_>>();
+    let [name, micros, ok] = fields.as_slice() else {
+        return Err("PHASE must be exactly `<name> us=<u64> ok=<value>`".into());
+    };
+    let micros = micros
+        .strip_prefix("us=")
+        .ok_or("PHASE second field must be us")?
+        .parse::<u64>()?;
+    let ok = ok.strip_prefix("ok=").ok_or("PHASE third field must be ok")?;
+    if name.is_empty() || ok.is_empty() {
+        return Err("PHASE name and ok must be nonempty".into());
+    }
+    Ok((name, micros, ok))
 }
 
 fn counter_metadata(line: &str) -> Option<Result<String, Error>> {
@@ -648,7 +655,7 @@ mod ledger_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{Measurement, require_line_framing, require_metadata};
+    use super::{Measurement, phase_fields, require_line_framing, require_metadata};
     use std::{
         cell::Cell,
         fs::OpenOptions,
@@ -666,6 +673,19 @@ mod tests {
         require_line_framing("META guest=plain\nPHASE malloc us=1 ok=1\n").unwrap();
         assert!(require_line_framing("META guest=plain\nPHASE malloc us=1 ok=1").is_err());
         assert!(require_line_framing("META guest=plain\r\nPHASE malloc us=1 ok=1\r\n").is_err());
+    }
+
+    #[test]
+    fn phase_output_has_one_exact_field_order() {
+        assert_eq!(phase_fields("malloc us=42 ok=7").unwrap(), ("malloc", 42, "7"));
+        for invalid in [
+            "malloc ok=7 us=42",
+            "malloc us=42 us=43 ok=7",
+            "malloc us=42 ok=7 extra=1",
+            "malloc us=42 ok=",
+        ] {
+            assert!(phase_fields(invalid).is_err(), "accepted {invalid:?}");
+        }
     }
 
     #[test]
