@@ -194,22 +194,31 @@ impl Application {
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "manager");
 
-        // Debug: jump straight to a surface for headless screenshotting.
+        self.open_configured_view();
+    }
+
+    /// Opens the view selected by the headless screenshot configuration.
+    fn open_configured_view(&self) {
         match AppConfig::get().view.as_deref() {
             Some("terminal") => {
-                if let Ok(store) = WorkspaceStore::load(Home::current().workspaces_config()) {
-                    let want = AppConfig::get().workspace.as_deref();
-                    let ws = want.and_then(|n| store.get(n)).or_else(|| store.all().first());
-                    if let Some(ws) = ws {
-                        self.open_terminal(ws);
-                    }
-                }
+                self.open_configured_terminal();
             }
             Some("newws") => {
                 let noop: Rc<dyn Fn()> = Rc::new(|| {});
                 Form::open(&self.0, &noop);
             }
             _ => {}
+        }
+    }
+
+    fn open_configured_terminal(&self) {
+        let Ok(store) = WorkspaceStore::load(Home::current().workspaces_config()) else {
+            return;
+        };
+        let want = AppConfig::get().workspace.as_deref();
+        let workspace = want.and_then(|name| store.get(name)).or_else(|| store.all().first());
+        if let Some(workspace) = workspace {
+            self.open_terminal(workspace);
         }
     }
 
@@ -441,29 +450,30 @@ impl Screenshot {
         let ms = AppConfig::get().screenshot_ms;
         let win = window.clone();
         glib::timeout_add_local_once(std::time::Duration::from_millis(ms), move || {
-            let w = win.width().max(400);
-            let h = win.height().max(300);
-            let paintable = gtk::WidgetPaintable::new(Some(win.upcast_ref::<gtk::Widget>()));
-            let snapshot = gtk::Snapshot::new();
-            paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), w as f64, h as f64);
-            match (snapshot.to_node(), win.renderer()) {
-                (Some(node), Some(renderer)) => {
-                    let tex = renderer.render_texture(&node, None);
-                    match tex.save_to_png(&path) {
-                        Ok(()) => eprintln!("[husklet] wrote screenshot {path} ({w}x{h})"),
-                        Err(error) => {
-                            eprintln!("[husklet] screenshot write failed for {path}: {error}");
-                        }
-                    }
-                }
-                _ => eprintln!("[husklet] screenshot failed: no render node/renderer"),
-            }
+            Self::capture(&win, &path);
             let application = win.application();
             win.close();
             if let Some(application) = application {
                 application.quit();
             }
         });
+    }
+
+    fn capture(window: &gtk::ApplicationWindow, path: &str) {
+        let width = window.width().max(400);
+        let height = window.height().max(300);
+        let paintable = gtk::WidgetPaintable::new(Some(window.upcast_ref::<gtk::Widget>()));
+        let snapshot = gtk::Snapshot::new();
+        paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), width as f64, height as f64);
+        let (Some(node), Some(renderer)) = (snapshot.to_node(), window.renderer()) else {
+            eprintln!("[husklet] screenshot failed: no render node/renderer");
+            return;
+        };
+        let texture = renderer.render_texture(&node, None);
+        match texture.save_to_png(path) {
+            Ok(()) => eprintln!("[husklet] wrote screenshot {path} ({width}x{height})"),
+            Err(error) => eprintln!("[husklet] screenshot write failed for {path}: {error}"),
+        }
     }
 }
 

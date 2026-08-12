@@ -178,17 +178,25 @@ pub(crate) fn fill_proc_table(body: &gtk::Box, workspace: &str, rows: &[Vec<Stri
         return;
     }
     for r in rows {
+        ProcessTable::append_row(body, workspace, r);
+    }
+}
+
+struct ProcessTable;
+
+impl ProcessTable {
+    fn append_row(body: &gtk::Box, workspace: &str, row_data: &[String]) {
         let Some(pid) = crate::host::process::ProcessId::parse(
-            r.first().map(String::as_str).unwrap_or_default(),
+            row_data.first().map(String::as_str).unwrap_or_default(),
             &hl_ws::Workspace::storage_component(workspace),
         ) else {
-            continue;
+            return;
         };
-        let name = r.get(2).cloned().unwrap_or_default();
+        let name = row_data.get(2).cloned().unwrap_or_default();
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         row.add_css_class("trow");
         row.add_css_class("tbody");
-        let pl = gtk::Label::new(Some(&r[0]));
+        let pl = gtk::Label::new(Some(&row_data[0]));
         pl.set_xalign(0.0);
         pl.set_width_chars(10);
         pl.add_css_class("tcell");

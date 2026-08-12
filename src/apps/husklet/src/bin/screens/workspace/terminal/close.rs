@@ -20,53 +20,75 @@ impl CloseRequest {
                     let Some(choice) = crate::components::dialog::CloseWorkspace::choice(&event) else {
                         return;
                     };
-                    terminal.closing.set(true);
-                    let preparation = match choice {
-                        crate::components::dialog::CloseChoice::Continue => WindowSession::new(&terminal).save(),
-                        crate::components::dialog::CloseChoice::Kill => {
-                            Session::clear(&terminal.ws.storage_dir(&Home::current().root()))
-                        }
-                    };
-                    if let Err(error) = preparation {
-                        terminal.closing.set(false);
-                        Self::failure(&parent, &error);
-                        return;
-                    }
-
-                    let result = std::sync::Arc::new(std::sync::Mutex::new(None));
-                    let completed = result.clone();
-                    let workspace = terminal.ws.clone();
-                    std::thread::spawn(move || {
-                        let disposition = match choice {
-                            crate::components::dialog::CloseChoice::Kill => hl::runtime::domain::Close::Kill,
-                            crate::components::dialog::CloseChoice::Continue => hl::runtime::domain::Close::Continue,
-                        };
-                        let closed = hl::runtime::domain::Domain::new(&workspace).close(disposition);
-                        if let Ok(mut result) = completed.lock() {
-                            *result = Some(closed);
-                        }
-                    });
-
-                    let terminal = terminal.clone();
-                    let parent = parent.clone();
-                    glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
-                        let completed = result.lock().ok().and_then(|mut value| value.take());
-                        let Some(completed) = completed else {
-                            return glib::ControlFlow::Continue;
-                        };
-                        match completed {
-                            Ok(()) => parent.close(),
-                            Err(error) => {
-                                terminal.closing.set(false);
-                                Self::failure(&parent, &error);
-                            }
-                        }
-                        glib::ControlFlow::Break
-                    });
+                    Self::close(&parent, &terminal, choice);
                 },
             );
             glib::Propagation::Stop
         });
+    }
+
+    fn close(parent: &gtk::ApplicationWindow, terminal: &Rc<TermWin>, choice: crate::components::dialog::CloseChoice) {
+        terminal.closing.set(true);
+        let preparation = match choice {
+            crate::components::dialog::CloseChoice::Continue => WindowSession::new(terminal).save(),
+            crate::components::dialog::CloseChoice::Kill => {
+                Session::clear(&terminal.ws.storage_dir(&Home::current().root()))
+            }
+        };
+        if let Err(error) = preparation {
+            terminal.closing.set(false);
+            Self::failure(parent, &error);
+            return;
+        }
+        let result = std::sync::Arc::new(std::sync::Mutex::new(None));
+        Self::spawn_close(terminal, choice, &result);
+        Self::poll_close(parent, terminal, result);
+    }
+
+    fn spawn_close(
+        terminal: &Rc<TermWin>,
+        choice: crate::components::dialog::CloseChoice,
+        result: &std::sync::Arc<std::sync::Mutex<Option<std::io::Result<()>>>>,
+    ) {
+        let completed = result.clone();
+        let workspace = terminal.ws.clone();
+        std::thread::spawn(move || {
+            let disposition = match choice {
+                crate::components::dialog::CloseChoice::Kill => hl::runtime::domain::Close::Kill,
+                crate::components::dialog::CloseChoice::Continue => hl::runtime::domain::Close::Continue,
+            };
+            let closed = hl::runtime::domain::Domain::new(&workspace).close(disposition);
+            if let Ok(mut result) = completed.lock() {
+                *result = Some(closed);
+            }
+        });
+    }
+
+    fn poll_close(
+        parent: &gtk::ApplicationWindow,
+        terminal: &Rc<TermWin>,
+        result: std::sync::Arc<std::sync::Mutex<Option<std::io::Result<()>>>>,
+    ) {
+        let terminal = terminal.clone();
+        let parent = parent.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+            let completed = result.lock().ok().and_then(|mut value| value.take());
+            let Some(completed) = completed else {
+                return glib::ControlFlow::Continue;
+            };
+            Self::complete(&parent, &terminal, completed);
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn complete(parent: &gtk::ApplicationWindow, terminal: &Rc<TermWin>, completed: std::io::Result<()>) {
+        match completed {
+            Ok(()) => parent.close(),
+            Err(error) => {
+                terminal.closing.set(false);
+                Self::failure(parent, &error);
+            }
+        }
     }
 
     fn failure(parent: &gtk::ApplicationWindow, error: &std::io::Error) {

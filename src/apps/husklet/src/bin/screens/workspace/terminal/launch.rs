@@ -109,15 +109,15 @@ pub(crate) fn make_terminal_ex(
     let envv: Vec<&str> = env.iter().map(std::string::String::as_str).collect();
     // Replay saved scrollback/screen history (freeze/restore persistence) ABOVE the live shell, before
     // spawning, so the user's prior screen is visible the instant the window reopens.
-    if let Some(text) = history {
-        // Old sessions may contain launch diagnostics written before transient-output filtering was
-        // introduced. Sanitize on read as well as write so a successful retry never appears to have
-        // inherited the previous process's failure state.
-        let history = HistorySnapshot::persistent(&text);
-        let bytes = session::History::new(&history).replay();
-        if !bytes.is_empty() {
-            term.feed(&bytes);
-        }
+    // Old sessions may contain launch diagnostics written before transient-output filtering was
+    // introduced. Sanitize on read as well as write so a successful retry never appears to have
+    // inherited the previous process's failure state.
+    let replay = history
+        .map(|text| HistorySnapshot::persistent(&text))
+        .map(|history| session::History::new(&history).replay())
+        .unwrap_or_default();
+    if !replay.is_empty() {
+        term.feed(&replay);
     }
     // NOTE: we deliberately do NOT use VTE's spawn_async — on macOS it fork()s inside the multithreaded
     // GTK process and does non-async-signal-safe work before exec, which crashes the child before it

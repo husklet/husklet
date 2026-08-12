@@ -12,6 +12,16 @@ use hl_runtime::{
 
 use super::{Native, SwitchPath};
 
+struct SwitchAliases<'a> {
+    anchor: &'a Arc<hl_fs::Anchor>,
+    path: &'a [u8],
+    interface: &'a hl_network::EgressInterface,
+    aliases: &'a [hl_network::EgressInterface],
+    port: u16,
+    ipv6_only: bool,
+    wildcard_stream: bool,
+}
+
 impl RuntimeNetworkHost for Native {
     type Attachment = OwnedFd;
 
@@ -215,24 +225,18 @@ impl RuntimeNetworkHost for Native {
                 publication
                     .adopt(&anchor, Self::switch_name(&path)?, path.clone())
                     .map_err(Self::publication_error)?;
-                if address == [0; 4] && kind == libc::SOCK_STREAM {
-                    for alias in &route.aliases {
-                        let (alias_anchor, alias_path) = Self::switch_reservation(alias, candidate, ipv6_only)?;
-                        let alias_name = Self::switch_name(&alias_path)?.to_vec();
-                        publication
-                            .reserve_link(&alias_anchor, &alias_name, alias_path, &path)
-                            .map_err(Self::publication_error)?;
-                    }
-                    // Linux serves one wildcard listener at every local address, so the same
-                    // publication carries the namespace-private loopback name.
-                    if !ipv6_only {
-                        let loopback = Self::switch_loopback_path(&interface, candidate)?;
-                        let loopback_name = Self::switch_name(&loopback)?.to_vec();
-                        publication
-                            .reserve_link(&anchor, &loopback_name, loopback, &path)
-                            .map_err(Self::publication_error)?;
-                    }
-                }
+                Self::stage_switch_aliases(
+                    &mut publication,
+                    SwitchAliases {
+                        anchor: &anchor,
+                        path: &path,
+                        interface: &interface,
+                        aliases: &route.aliases,
+                        port: candidate,
+                        ipv6_only,
+                        wildcard_stream: address == [0; 4] && kind == libc::SOCK_STREAM,
+                    },
+                )?;
                 publication.commit().map_err(Self::publication_error)
             })();
             if let Err(error) = staged {
@@ -272,6 +276,32 @@ impl RuntimeNetworkHost for Native {
             self.restore_inet_socket(token, kind)?;
         }
         Err(RuntimeNetworkError::AddressInUse)
+    }
+
+    fn stage_switch_aliases(
+        publication: &mut hl_fs::Publication,
+        aliases: SwitchAliases<'_>,
+    ) -> Result<(), RuntimeNetworkError> {
+        if !aliases.wildcard_stream {
+            return Ok(());
+        }
+        for alias in aliases.aliases {
+            let (alias_anchor, alias_path) = Self::switch_reservation(alias, aliases.port, aliases.ipv6_only)?;
+            let alias_name = Self::switch_name(&alias_path)?.to_vec();
+            publication
+                .reserve_link(&alias_anchor, &alias_name, alias_path, aliases.path)
+                .map_err(Self::publication_error)?;
+        }
+        if aliases.ipv6_only {
+            return Ok(());
+        }
+        // Linux serves one wildcard listener at every local address, so the same publication
+        // carries the namespace-private loopback name.
+        let loopback = Self::switch_loopback_path(aliases.interface, aliases.port)?;
+        let loopback_name = Self::switch_name(&loopback)?.to_vec();
+        publication
+            .reserve_link(aliases.anchor, &loopback_name, loopback, aliases.path)
+            .map_err(Self::publication_error)
     }
 
     fn prepare_connect(&self, token: u64, address: SocketAddress) -> Result<(), RuntimeNetworkError> {
