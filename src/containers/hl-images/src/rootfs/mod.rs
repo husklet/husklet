@@ -177,10 +177,6 @@ impl OverlayView {
         self.upper.ownership()
     }
     #[must_use]
-    pub fn lower_names(&self) -> &crate::snapshot::Names {
-        self.lower.names()
-    }
-    #[must_use]
     pub fn upper_names(&self) -> &crate::snapshot::Names {
         self.upper.names()
     }
