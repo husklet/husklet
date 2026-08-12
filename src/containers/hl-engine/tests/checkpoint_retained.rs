@@ -110,7 +110,7 @@ fn wait_ready(path: &Path) {
     panic!("guest process tree did not become ready");
 }
 
-fn checkpoint_round_trip(isa: GuestIsa, executable: PathBuf) {
+fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
     let output = temporary.path().join("release.output");
@@ -118,7 +118,7 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: PathBuf) {
 
     let capture = Engine::with_checkpoint(
         isa,
-        plan(&executable, &release, "HL_CHECKPOINT"),
+        plan(executable, &release, "HL_CHECKPOINT"),
         StandardStreams::default(),
         store.clone(),
         store.clone(),
@@ -143,7 +143,7 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: PathBuf) {
     std::fs::write(&release, []).unwrap();
     let restore = Engine::with_checkpoint(
         isa,
-        plan(&executable, &release, "HL_RESTORE"),
+        plan(executable, &release, "HL_RESTORE"),
         StandardStreams::default(),
         store.clone(),
         store,
@@ -168,6 +168,6 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
             "missing checkpoint fixture: {}",
             executable.display()
         );
-        checkpoint_round_trip(isa, executable);
+        checkpoint_round_trip(isa, &executable);
     }
 }
