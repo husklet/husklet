@@ -2,5 +2,6 @@
 #include "translate/fold.c"
 #include "translate/trace.c"
 #include "translate/analysis.c"
+#include "translate/control.c"
 #include "translate/block.c"
 #include "translate/promotion.c"

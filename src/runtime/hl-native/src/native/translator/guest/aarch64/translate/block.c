@@ -137,12 +137,6 @@ static int translate_tls_instruction(uint32_t instruction) {
     return 1;
 }
 
-enum translation_step {
-    TRANSLATION_UNHANDLED,
-    TRANSLATION_CONTINUE,
-    TRANSLATION_STOP,
-};
-
 static enum translation_step translate_system_instruction(uint64_t guest_pc, uint32_t instruction) {
     /* Keep the guest CPU/cache model independent of host EL0 access and cache geometry. DC ZVA lowers to
        the advertised 64-byte zero operation; cache maintenance either queues invalidation or commits it. */
@@ -1049,21 +1043,12 @@ static void *translate_block(uint64_t gpc) {
             continue;
         }
 
-        // pointer authentication (ubuntu 24.04 -mbranch-protection): we don't enforce PAC, and signing
-        // x30 on the PAC-capable host would corrupt the §B shadow-stack return match (it expects an
-        // UNSIGNED guest x30) -> wild branch to a signed address. Neutralize PAC (hardening, not
-        // semantics): paci*/auti* hints -> nop (x30 stays unsigned); retaa/retab -> a plain x30 ret.
-        // paciasp/autiasp/paci?z/... -> nop
-        if ((in & 0xFFFFFF1Fu) == 0xD503231Fu) {
-            emit32(0xD503201Fu);
+        enum translation_step authentication_step = translate_pointer_authentication(in);
+        if (authentication_step == TRANSLATION_CONTINUE) {
             gpc += 4;
             continue;
         }
-        // retaa/retab -> shadow ret (x30)
-        if ((in & 0xFFFFFBFFu) == 0xD65F0BFFu) {
-            shadowgate() == -1 ? emit_ibranch(30) : emit_shadow_ret();
-            break;
-        }
+        if (authentication_step == TRANSLATION_STOP) break;
 
         translate_memory_or_fallback(gpc, in, in_excl);
         gpc += 4;
