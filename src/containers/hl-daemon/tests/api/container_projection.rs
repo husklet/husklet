@@ -1,6 +1,6 @@
 //! Raw Docker create, list, and inspect projection of durable process and lifecycle state.
 
-use crate::api::support::{raw_http, require, wait_for_path, write_named_image_archive};
+use crate::api::support::{raw_http, require, wait_for_path, write_named_executable_image_archive};
 use hl_container::{Config, Containers};
 use hl_daemon::Daemon;
 use hl_images::{
@@ -15,7 +15,24 @@ use tokio::sync::oneshot;
 pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let work = TempDir::new()?;
     let archive = work.path().join("process.tar");
-    write_named_image_archive(&archive, "scenario/process:v1", b"fixture\n")?;
+    let executable = work.path().join("process");
+    let compiler = std::env::var_os("HL_COMPAT_ARM64_CC").unwrap_or_else(|| "aarch64-linux-gnu-gcc".into());
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/process_loop.c");
+    let status = std::process::Command::new(compiler)
+        .args([
+            "-O2",
+            "-ffreestanding",
+            "-fno-stack-protector",
+            "-nostdlib",
+            "-static",
+            "-Wl,--build-id=none",
+            "-o",
+        ])
+        .arg(&executable)
+        .arg(source)
+        .status()?;
+    require(status.success(), "failed to compile restart signal probe guest")?;
+    write_named_executable_image_archive(&archive, "scenario/process:v1", &std::fs::read(executable)?)?;
     let images = Images::open(work.path().join("images"))?;
     Archive::load(std::fs::File::open(&archive)?, &images, Limits::default())?;
     let containers = Containers::builder(Config::new(work.path().join("state")))
