@@ -193,25 +193,12 @@ fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error>
     Ok(planned.remove(0))
 }
 
-async fn execute(work: Work) -> Completion {
-    let started = std::time::Instant::now();
-    let result = execution::run_case(Arc::clone(&work.app), work.case_index, work.target)
-        .await
-        .map_err(|error| error.to_string());
-    Completion {
-        key: work.key,
-        elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        host_load: load::sample(),
-        result,
-    }
-}
-
 async fn drain(
     running: &mut crate::pool::Pool<Work, Completion>,
     ledger: &Arc<ledger::Ledger>,
 ) -> Result<Vec<Completion>, Error> {
     let mut completed = Vec::new();
-    while let Some(result) = running.next(execute).await? {
+    while let Some(result) = running.next(Work::execute).await? {
         let row = result.row();
         let recording = Arc::clone(ledger);
         tokio::task::spawn_blocking(move || recording.record(row).map_err(|error| error.to_string())).await??;
@@ -231,6 +218,21 @@ struct Work {
     app: Arc<App>,
     case_index: usize,
     target: Target,
+}
+
+impl Work {
+    async fn execute(self) -> Completion {
+        let started = std::time::Instant::now();
+        let result = execution::run_case(Arc::clone(&self.app), self.case_index, self.target)
+            .await
+            .map_err(|error| error.to_string());
+        Completion {
+            key: self.key,
+            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            host_load: load::sample(),
+            result,
+        }
+    }
 }
 
 struct Completion {

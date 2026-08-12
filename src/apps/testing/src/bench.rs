@@ -19,7 +19,7 @@ pub async fn run(options: Options) -> Result<(), Error> {
     let planned = plan(options.benchmarks()?, &options);
     let mut preparations = crate::pool::Pool::new(planned, options.jobs);
     let mut work = Vec::new();
-    while let Some(prepared) = preparations.next(prepare_work).await? {
+    while let Some(prepared) = preparations.next(PlannedWork::prepare).await? {
         work.push(prepared?);
     }
     work.sort_by(|left, right| left.planned.key.cmp(&right.planned.key));
@@ -37,7 +37,7 @@ pub async fn run(options: Options) -> Result<(), Error> {
     work.retain(|item| !opened.prior.contains_key(&item.planned.key));
     let mut pool = crate::pool::Pool::new(work, options.jobs);
     let mut rows = opened.prior;
-    while let Some(completed) = pool.next(execute_work).await? {
+    while let Some(completed) = pool.next(Work::execute).await? {
         let row = completed.row();
         let recording = Arc::clone(&ledger);
         let saved = row.clone();
@@ -46,17 +46,6 @@ pub async fn run(options: Options) -> Result<(), Error> {
     }
     tokio::task::spawn_blocking(move || ledger.finish().map_err(|error| error.to_string())).await??;
     Report::finish(&rows)
-}
-
-async fn execute_work(work: Work) -> Completion {
-    let started = std::time::Instant::now();
-    let planned = work.planned;
-    let result = execution::run(planned.benchmark, planned.case_index, planned.key.target, work.prepared).await;
-    Completion {
-        key: planned.key,
-        elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        result,
-    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -72,21 +61,36 @@ struct PlannedWork {
     case_index: usize,
 }
 
+impl PlannedWork {
+    /// Preparation discovers provenance, so the key is only complete afterwards.
+    async fn prepare(mut self) -> Result<Work, String> {
+        let prepared = execution::prepare(&self.benchmark, self.case_index, self.key.target)
+            .await
+            .map_err(|error| error.to_string())?;
+        prepared.identity.clone_into(&mut self.key.provenance);
+        Ok(Work {
+            planned: self,
+            prepared,
+        })
+    }
+}
+
 struct Work {
     planned: PlannedWork,
     prepared: execution::Preparation,
 }
 
-/// Preparation is what discovers the provenance, so the key is only complete once it has run.
-async fn prepare_work(mut work: PlannedWork) -> Result<Work, String> {
-    let prepared = execution::prepare(&work.benchmark, work.case_index, work.key.target)
-        .await
-        .map_err(|error| error.to_string())?;
-    prepared.identity.clone_into(&mut work.key.provenance);
-    Ok(Work {
-        planned: work,
-        prepared,
-    })
+impl Work {
+    async fn execute(self) -> Completion {
+        let started = std::time::Instant::now();
+        let planned = self.planned;
+        let result = execution::run(planned.benchmark, planned.case_index, planned.key.target, self.prepared).await;
+        Completion {
+            key: planned.key,
+            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            result,
+        }
+    }
 }
 
 struct Completion {

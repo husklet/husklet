@@ -12,10 +12,29 @@ pub(super) enum Provider {
     Rust,
 }
 
+impl Provider {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::C => "c-engine",
+            Self::Rust => "rust-engine",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum Mode {
     DiagnosticsProof,
     Timing,
+}
+
+impl Mode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::DiagnosticsProof => "diagnostics-proof",
+            Self::Timing => "timing",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -122,8 +141,8 @@ where
             output,
             "{}\t{}\t{}\t{}",
             step.cycle,
-            provider(step.provider),
-            mode(step.mode),
+            step.provider.label(),
+            step.mode.label(),
             crate::record::FramedIdentity::hex(evidence.as_bytes())
         )
         .map_err(|error| error.to_string())?;
@@ -159,19 +178,6 @@ fn load(path: &Path, identity: &str, expected: &BTreeSet<Step>) -> Result<BTreeS
     Ok(completed)
 }
 
-const fn provider(value: Provider) -> &'static str {
-    match value {
-        Provider::Native => "native",
-        Provider::C => "c-engine",
-        Provider::Rust => "rust-engine",
-    }
-}
-const fn mode(value: Mode) -> &'static str {
-    match value {
-        Mode::DiagnosticsProof => "diagnostics-proof",
-        Mode::Timing => "timing",
-    }
-}
 fn parse_provider(value: &str) -> Result<Provider, String> {
     match value {
         "native" => Ok(Provider::Native),

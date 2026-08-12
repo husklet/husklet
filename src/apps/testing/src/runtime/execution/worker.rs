@@ -51,7 +51,11 @@ pub(crate) async fn execute(options: Options) -> Result<(), Error> {
     // A worker outlives its supervisor whenever the sweep is killed, and the deadline inside
     // `CaseExecution::wait` covers neither the build, the image materialization, nor a container
     // removal whose guest refuses to stop. This bound owns the whole worker and needs nobody alive.
-    backstop(super::declared_timeout(&work.app.cases[work.case_index]).saturating_add(BACKSTOP_ALLOWANCE))?;
+    backstop(
+        work.app.cases[work.case_index]
+            .declared_timeout()
+            .saturating_add(BACKSTOP_ALLOWANCE),
+    )?;
     let result = super::run_case_inner(work.app, work.case_index, work.target)
         .await
         .map_err(|error| error.to_string());

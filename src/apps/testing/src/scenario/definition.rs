@@ -373,7 +373,7 @@ fn load_case(
     if stdout_contains.is_empty() && stdout_exact.is_none() {
         return Err(format!("{} defines no output oracle", case.id).into());
     }
-    let readiness = case.readiness.map(validate_readiness).transpose()?;
+    let readiness = case.readiness.map(Readiness::validate).transpose()?;
     Ok(ScenarioCase {
         id: case.id,
         image: case.image,
@@ -526,23 +526,25 @@ fn validate_environment(id: &str, environment: &BTreeMap<String, String>) -> Res
     }
 }
 
-fn validate_readiness(value: Readiness) -> Result<Readiness, Error> {
-    if !bounded_text(&value.startup)
-        || !bounded_text(&value.probe)
-        || !(1..=1000).contains(&value.attempts)
-        || value.delay_ms > 60_000
-        || value.logs.len() > 32
-    {
-        return Err("readiness requires startup, probe, and positive attempts".into());
+impl Readiness {
+    fn validate(self) -> Result<Self, Error> {
+        if !bounded_text(&self.startup)
+            || !bounded_text(&self.probe)
+            || !(1..=1000).contains(&self.attempts)
+            || self.delay_ms > 60_000
+            || self.logs.len() > 32
+        {
+            return Err("readiness requires startup, probe, and positive attempts".into());
+        }
+        if self
+            .logs
+            .iter()
+            .any(|path| path.len() > MAX_FIELD || path.contains('\0') || !Path::new(path).is_absolute())
+        {
+            return Err("readiness log paths must be absolute guest paths".into());
+        }
+        Ok(self)
     }
-    if value
-        .logs
-        .iter()
-        .any(|path| path.len() > MAX_FIELD || path.contains('\0') || !Path::new(path).is_absolute())
-    {
-        return Err("readiness log paths must be absolute guest paths".into());
-    }
-    Ok(value)
 }
 
 fn bounded_text(value: &str) -> bool {

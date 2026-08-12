@@ -76,6 +76,13 @@ impl RuntimeCase {
     pub(crate) fn inactive(&self, host: EngineHost) -> Option<(&'static str, &str, &str)> {
         self.status.inactive(host)
     }
+
+    /// The single reading of the declared bound shared by supervisor and worker.
+    pub(crate) fn declared_timeout(&self) -> Duration {
+        self.soak
+            .as_ref()
+            .map_or_else(|| Duration::from_secs(self.timeout), scheduler::Plan::total_duration)
+    }
 }
 
 impl App {

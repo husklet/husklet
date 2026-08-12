@@ -529,7 +529,7 @@ fn record_regression(
 type Series = BTreeMap<(String, String), Vec<u64>>;
 
 /// Work done per `(phase, provider)`: the summed `ok=` checksum and the rows it came from.
-type Totals = BTreeMap<(String, String), (u64, usize)>;
+struct Totals(BTreeMap<(String, String), (u64, usize)>);
 
 /// Pins each provider to the one `guest/engine` pair its first row was measured with.
 ///
@@ -547,7 +547,7 @@ fn record_build_identity(builds: &mut BTreeMap<String, String>, provider: &str, 
 
 fn collect(paths: &[PathBuf]) -> Result<Series, String> {
     let mut series: Series = BTreeMap::new();
-    let mut totals: Totals = BTreeMap::new();
+    let mut totals = Totals(BTreeMap::new());
     let mut builds: BTreeMap<String, String> = BTreeMap::new();
     for path in paths {
         let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -581,49 +581,51 @@ fn collect(paths: &[PathBuf]) -> Result<Series, String> {
             let arm = field(provider)?;
             super::timebase_verdict(field(phase)?, value, checksum).map_err(|error| format!("{arm}: {error}"))?;
             let key = (field(phase)?.to_owned(), field(provider)?.to_owned());
-            let done = totals.entry(key.clone()).or_insert((0, 0));
+            let done = totals.0.entry(key.clone()).or_insert((0, 0));
             *done = (done.0.saturating_add(checksum), done.1 + 1);
             series.entry(key).or_default().push(value);
         }
     }
-    identical_work(&totals)?;
+    totals.validate_identical_work()?;
     Ok(series)
 }
 
 /// Refuses a verdict unless every arm ran every phase to the same completion, so a
 /// run that aborted partway cannot be read as a smaller-is-faster win.
-fn identical_work(totals: &Totals) -> Result<(), String> {
-    let providers = totals.keys().map(|(_, provider)| provider).collect::<BTreeSet<_>>();
-    let mut phases: BTreeMap<&String, BTreeMap<&String, (u64, usize)>> = BTreeMap::new();
-    for ((phase, provider), done) in totals {
-        phases.entry(phase).or_default().insert(provider, *done);
+impl Totals {
+    fn validate_identical_work(&self) -> Result<(), String> {
+        let providers = self.0.keys().map(|(_, provider)| provider).collect::<BTreeSet<_>>();
+        let mut phases: BTreeMap<&String, BTreeMap<&String, (u64, usize)>> = BTreeMap::new();
+        for ((phase, provider), done) in &self.0 {
+            phases.entry(phase).or_default().insert(provider, *done);
+        }
+        for (phase, measured) in phases {
+            let absent = providers
+                .iter()
+                .filter(|provider| !measured.contains_key(**provider))
+                .map(|provider| provider.as_str())
+                .collect::<Vec<_>>();
+            if !absent.is_empty() {
+                return Err(format!(
+                    "refusing the verdict: phase {phase} has no rows for {}; that arm stopped before it ran",
+                    absent.join(", ")
+                ));
+            }
+            if measured.values().map(|(_, rows)| *rows).collect::<BTreeSet<_>>().len() > 1 {
+                return Err(format!(
+                    "refusing the verdict: phase {phase} has unequal sample counts across arms ({}); an arm stopped early",
+                    describe(&measured, |(_, rows)| format!("n={rows}"))
+                ));
+            }
+            if measured.values().map(|(ok, _)| *ok).collect::<BTreeSet<_>>().len() > 1 {
+                return Err(format!(
+                    "refusing the verdict: phase {phase} did unequal work across arms ({}); an arm stopped early and its smaller ok= is not a speedup",
+                    describe(&measured, |(ok, rows)| format!("ok={ok} over {rows} samples"))
+                ));
+            }
+        }
+        Ok(())
     }
-    for (phase, measured) in phases {
-        let absent = providers
-            .iter()
-            .filter(|provider| !measured.contains_key(**provider))
-            .map(|provider| provider.as_str())
-            .collect::<Vec<_>>();
-        if !absent.is_empty() {
-            return Err(format!(
-                "refusing the verdict: phase {phase} has no rows for {}; that arm stopped before it ran",
-                absent.join(", ")
-            ));
-        }
-        if measured.values().map(|(_, rows)| *rows).collect::<BTreeSet<_>>().len() > 1 {
-            return Err(format!(
-                "refusing the verdict: phase {phase} has unequal sample counts across arms ({}); an arm stopped early",
-                describe(&measured, |(_, rows)| format!("n={rows}"))
-            ));
-        }
-        if measured.values().map(|(ok, _)| *ok).collect::<BTreeSet<_>>().len() > 1 {
-            return Err(format!(
-                "refusing the verdict: phase {phase} did unequal work across arms ({}); an arm stopped early and its smaller ok= is not a speedup",
-                describe(&measured, |(ok, rows)| format!("ok={ok} over {rows} samples"))
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// Renders one clause per arm so a refusal names every side of the disagreement.
