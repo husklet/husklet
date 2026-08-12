@@ -406,8 +406,8 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
             hl_host_result inspected;
             unsigned char target;
             if (probe.status != HL_STATUS_OK) return vfs_host_error((hl_status)probe.status);
-            inspected = g_host_services->file->readlink(
-                g_host_services->context, probe.value, (hl_host_bytes){.data = &target, .size = sizeof(target)});
+            inspected = g_host_services->file->readlink(g_host_services->context, probe.value,
+                                                        (hl_host_bytes){.data = &target, .size = sizeof(target)});
             (void)g_host_services->file->close(g_host_services->context, probe.value);
             if (inspected.status == HL_STATUS_OK) return -ELOOP;
             if (inspected.status != HL_STATUS_INVALID_ARGUMENT) return vfs_host_error((hl_status)inspected.status);
