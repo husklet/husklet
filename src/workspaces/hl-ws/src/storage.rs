@@ -107,11 +107,6 @@ impl<S> Namespace<S> {
     pub fn prefix(&self) -> &Key {
         &self.prefix
     }
-
-    #[must_use]
-    pub fn into_storage(self) -> S {
-        self.storage
-    }
 }
 
 impl<S: Storage> Storage for Namespace<S> {
