@@ -1148,23 +1148,6 @@ static inline ssize_t hl_linux_socket_write(int descriptor, const void *buffer, 
     return send(descriptor, buffer, length, 0);
 }
 
-static inline ssize_t hl_linux_socket_readv(int descriptor, const struct iovec *vectors, int count) {
-    int out_flags = 0;
-    if (count < 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    return hl_linux_socket_message(descriptor, vectors, (unsigned int)count, 0, NULL, 0, NULL, NULL, &out_flags);
-}
-
-static inline ssize_t hl_linux_socket_writev(int descriptor, const struct iovec *vectors, int count) {
-    if (count < 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    return hl_linux_socket_message(descriptor, vectors, (unsigned int)count, 0, NULL, 0, NULL, NULL, NULL);
-}
-
 static inline int hl_linux_socket_close(int descriptor) {
     const hl_host_services *host = hl_linux_socket_services();
     hl_host_handle handle;
