@@ -8,7 +8,7 @@ mod execution;
 pub(crate) use execution::{ProductionFactory, ProductionMachine};
 
 use crate::activation::GuestIsa;
-use crate::composition::{ActivationChannel, CompositionError, EngineBackend, RuntimeServices};
+use crate::composition::{EngineBackend, RuntimeServices};
 use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::launch_plan::RuntimePlan;
 use crate::options::Options;
@@ -121,7 +121,6 @@ impl Builder {
         };
         let factory = ProductionFactory;
         let services = RuntimeServices {
-            activation: Arc::new(Activation),
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: crate::composition::StandardStreams::default(),
@@ -165,7 +164,6 @@ impl Engine {
         streams: crate::composition::StandardStreams,
     ) -> Result<Self, EngineError> {
         let services = RuntimeServices {
-            activation: Arc::new(Activation),
             checkpoint_sink: None,
             checkpoint_source: None,
             streams,
@@ -182,7 +180,6 @@ impl Engine {
         source: Arc<dyn crate::composition::CheckpointSource>,
     ) -> Result<Self, EngineError> {
         let services = RuntimeServices {
-            activation: Arc::new(Activation),
             checkpoint_sink: Some(sink),
             checkpoint_source: Some(source),
             streams,
@@ -244,16 +241,6 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         let _ = self.backend.destroy();
-    }
-}
-
-struct Activation;
-impl ActivationChannel for Activation {
-    fn send(&self, _: &[u8]) -> Result<(), CompositionError> {
-        Ok(())
-    }
-    fn receive(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
-        Ok(Vec::new())
     }
 }
 

@@ -20,31 +20,6 @@ impl super::TerminalPort for TerminalPort {
 }
 
 #[derive(Default)]
-struct Channel {
-    messages: Mutex<Vec<Vec<u8>>>,
-}
-
-impl ActivationChannel for Channel {
-    fn send(&self, message: &[u8]) -> Result<(), CompositionError> {
-        self.messages.lock().unwrap().push(message.to_vec());
-        Ok(())
-    }
-
-    fn receive(&self, maximum: usize) -> Result<Vec<u8>, CompositionError> {
-        Ok(self
-            .messages
-            .lock()
-            .unwrap()
-            .last()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .take(maximum)
-            .collect())
-    }
-}
-
-#[derive(Default)]
 struct Checkpoints {
     image: Mutex<Vec<u8>>,
 }
@@ -172,7 +147,6 @@ impl RuntimeFactory for Factory {
         state.observed.push((request.isa, request.plan.arguments.clone()));
         state.construct_domains()?;
         drop(state);
-        request.services.activation.send(b"constructed")?;
         if let Some(sink) = &request.services.checkpoint_sink {
             sink.replace(b"checkpoint")?;
         }
@@ -210,17 +184,14 @@ impl Fixture {
         }
     }
 
-    fn services() -> (RuntimeServices, Arc<Channel>, Arc<Checkpoints>) {
-        let activation = Arc::new(Channel::default());
+    fn services() -> (RuntimeServices, Arc<Checkpoints>) {
         let checkpoints = Arc::new(Checkpoints::default());
         (
             RuntimeServices {
-                activation: activation.clone(),
                 checkpoint_sink: Some(checkpoints.clone()),
                 checkpoint_source: Some(checkpoints.clone()),
                 streams: StandardStreams::default(),
             },
-            activation,
             checkpoints,
         )
     }
@@ -233,7 +204,6 @@ fn validates_required_checkpoint() {
     let mut plan = Fixture::plan(&[b"guest"]);
     plan.options.set("HL_CHECKPOINT", "1", true).unwrap();
     let services = RuntimeServices {
-        activation: Arc::new(Channel::default()),
         checkpoint_sink: None,
         checkpoint_source: None,
         streams: StandardStreams::default(),
@@ -269,7 +239,7 @@ fn rejects_terminal_before_native_construction() {
 fn factory_failure_rolls() {
     let factory = Factory::new(Machine::default());
     factory.state.lock().unwrap().fail_at = Some(2);
-    let (services, _, _) = Fixture::services();
+    let (services, _) = Fixture::services();
     let result = EngineBackend::construct(
         GuestIsa::X86_64,
         Fixture::plan(&[b"guest"]),
@@ -297,8 +267,8 @@ fn dual_engines_keep() {
     let x86_machine = Machine::default();
     let arm_factory = Factory::new(arm_machine.clone());
     let x86_factory = Factory::new(x86_machine.clone());
-    let (arm_services, _, _) = Fixture::services();
-    let (x86_services, _, _) = Fixture::services();
+    let (arm_services, _) = Fixture::services();
+    let (x86_services, _) = Fixture::services();
     let arm = EngineBackend::construct(
         GuestIsa::Aarch64,
         Fixture::plan(&[b"arm"]),
@@ -330,7 +300,7 @@ fn dual_engines_keep() {
 fn concurrent_start_stop() {
     let machine = Machine::default();
     let factory = Factory::new(machine.clone());
-    let (services, activation, checkpoints) = Fixture::services();
+    let (services, checkpoints) = Fixture::services();
     let backend = Arc::new(
         EngineBackend::construct(
             GuestIsa::Aarch64,
@@ -340,10 +310,6 @@ fn concurrent_start_stop() {
             WorkspacePort,
         )
         .unwrap(),
-    );
-    assert_eq!(
-        activation.messages.lock().unwrap().as_slice(),
-        [b"constructed".to_vec()]
     );
     assert_eq!(checkpoints.image.lock().unwrap().as_slice(), b"checkpoint");
     let starter = {

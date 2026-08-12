@@ -34,12 +34,6 @@ impl CompositionError {
     }
 }
 
-/// Safe activation transport presented to a constructed runtime.
-pub trait ActivationChannel: Send + Sync {
-    fn send(&self, message: &[u8]) -> Result<(), CompositionError>;
-    fn receive(&self, maximum: usize) -> Result<Vec<u8>, CompositionError>;
-}
-
 /// Transactional destination for a checkpoint image.
 pub trait CheckpointSink: Send + Sync {
     fn replace(&self, image: &[u8]) -> Result<(), CompositionError>;
@@ -153,7 +147,6 @@ impl Default for StandardStreams {
 
 #[derive(Clone)]
 pub struct RuntimeServices {
-    pub activation: Arc<dyn ActivationChannel>,
     pub checkpoint_sink: Option<Arc<dyn CheckpointSink>>,
     pub checkpoint_source: Option<Arc<dyn CheckpointSource>>,
     pub streams: StandardStreams,
