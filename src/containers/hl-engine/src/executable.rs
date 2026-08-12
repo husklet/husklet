@@ -43,6 +43,8 @@ impl ExecutableAuthority {
             iov_len: byte.len(),
         };
         let mut control = ControlBuffer::default();
+        // SAFETY: `msghdr` is a C aggregate whose all-zero representation is a
+        // valid empty message; the required buffer fields are populated below.
         let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
         message.msg_iov = &raw mut vector;
         message.msg_iovlen = 1;
@@ -82,6 +84,8 @@ impl ExecutableAuthority {
             iov_len: byte.len(),
         };
         let mut control = ControlBuffer::default();
+        // SAFETY: `msghdr` is a C aggregate whose all-zero representation is a
+        // valid empty message; the writable buffers are installed below.
         let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
         message.msg_iov = &raw mut vector;
         message.msg_iovlen = 1;
@@ -102,11 +106,16 @@ impl ExecutableAuthority {
         }
         // SAFETY: recvmsg initialized ancillary headers within the aligned buffer.
         let header = unsafe { libc::CMSG_FIRSTHDR(&raw const message) };
-        if header.is_null()
-            || unsafe { (*header).cmsg_level } != libc::SOL_SOCKET
-            || unsafe { (*header).cmsg_type } != libc::SCM_RIGHTS
-            || unsafe { (*header).cmsg_len } != unsafe { libc::CMSG_LEN(size_of::<i32>() as _) } as usize
-        {
+        // SAFETY: the null check precedes dereferencing `header`; `recvmsg`
+        // initialized the header in the live control buffer, and `CMSG_LEN`
+        // only computes the required record length.
+        let valid_descriptor_header = unsafe {
+            !header.is_null()
+                && (*header).cmsg_level == libc::SOL_SOCKET
+                && (*header).cmsg_type == libc::SCM_RIGHTS
+                && (*header).cmsg_len == libc::CMSG_LEN(size_of::<i32>() as _) as usize
+        };
+        if !valid_descriptor_header {
             return Err(TransferError::Descriptor);
         }
         // SAFETY: the validated SCM_RIGHTS record contains exactly one newly
@@ -115,6 +124,8 @@ impl ExecutableAuthority {
         if descriptor < 0 {
             return Err(TransferError::Descriptor);
         }
+        // SAFETY: a successful SCM_RIGHTS receive transfers ownership of this
+        // new descriptor to the process, and no other `OwnedFd` wraps it here.
         Ok(Some(Self::new(unsafe { OwnedFd::from_raw_fd(descriptor) })))
     }
 }
