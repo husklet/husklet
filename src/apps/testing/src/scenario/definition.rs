@@ -11,12 +11,12 @@ use std::{
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Definition {
-    cases: Vec<Specification>,
+    cases: Vec<Input>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Specification {
+struct Input {
     id: String,
     image: String,
     #[serde(default)]
@@ -294,7 +294,7 @@ impl Scenario {
 fn load_case(
     directory: &Path,
     definition: &Path,
-    case: Specification,
+    case: Input,
     ids: &mut BTreeSet<String>,
 ) -> Result<Sample, Error> {
     if !ids.insert(case.id.clone())

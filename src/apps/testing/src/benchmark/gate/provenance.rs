@@ -116,12 +116,14 @@ pub(super) fn slot(affinity: &str, requested: Option<usize>, seed: usize) -> Res
     Ok((cpu, allowed.as_slice() == [cpu]))
 }
 
-/// The guest lowering a run actually exercises, so nobody proves an x86-64
-/// change by measuring an ARM64 guest.
-pub(crate) const fn lowering(isa: Isa) -> &'static str {
-    match isa {
-        Isa::Aarch64 => "src/runtime/native/exec/src/arch/aarch64",
-        Isa::X86 => "src/runtime/native/exec/src/arch/x86_64",
+impl Isa {
+    /// The guest lowering a run actually exercises, so nobody proves an
+    /// x86-64 change by measuring an ARM64 guest.
+    pub(crate) const fn lowering(self) -> &'static str {
+        match self {
+            Self::Aarch64 => "src/runtime/native/exec/src/arch/aarch64",
+            Self::X86 => "src/runtime/native/exec/src/arch/x86_64",
+        }
     }
 }
 

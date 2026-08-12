@@ -66,9 +66,9 @@ fn defaulted_pins_spread_across_the_allowed_set() {
 
 #[test]
 fn each_guest_arch_names_the_lowering_it_covers() {
-    assert!(super::lowering(Isa::X86).ends_with("x86_64"));
-    assert!(super::lowering(Isa::Aarch64).ends_with("aarch64"));
-    assert_ne!(super::lowering(Isa::X86), super::lowering(Isa::Aarch64));
+    assert!(Isa::X86.lowering().ends_with("x86_64"));
+    assert!(Isa::Aarch64.lowering().ends_with("aarch64"));
+    assert_ne!(Isa::X86.lowering(), Isa::Aarch64.lowering());
 }
 
 #[test]

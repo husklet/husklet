@@ -7,13 +7,13 @@ enum ChildStatus {
     Unknown(i32),
 }
 
-struct TerminalLaunch<'a> {
+struct Launch<'a> {
     window: &'a Rc<TermWin>,
     terminal: &'a vte4::Terminal,
     pid: &'a Rc<Cell<i32>>,
 }
 
-impl TerminalLaunch<'_> {
+impl Launch<'_> {
     fn attach(&self, child: i32, pty: vte4::Pty) {
         self.pid.set(child);
         // Keep the FOREIGN pty sized to the terminal grid — VTE doesn't resize a foreign pty itself,
@@ -176,7 +176,7 @@ pub(crate) fn make_terminal_ex(
     // GTK process and does non-async-signal-safe work before exec, which crashes the child before it
     // runs (every command "exits 11"). Instead spawn via posix_spawn (async-safe) onto a PTY we own.
     match PtyProcess::spawn(&term, &argv, &envv) {
-        Ok((child, pty)) => TerminalLaunch {
+        Ok((child, pty)) => Launch {
             window: tw,
             terminal: &term,
             pid: &pid,

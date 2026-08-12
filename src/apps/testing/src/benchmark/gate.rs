@@ -142,7 +142,7 @@ impl Baseline {
 mod provenance;
 #[cfg(test)]
 use provenance::{ENGINE_BUILD, artifact, slot};
-pub(crate) use provenance::{Provenance, lowering, missing, pinning, revision, wiring};
+pub(crate) use provenance::{Provenance, missing, pinning, revision, wiring};
 use provenance::{build_engine, ratio};
 impl Gate {
     pub(super) fn execute(self, process: &super::adapter::Process) -> Result<(), String> {
@@ -158,7 +158,7 @@ impl Gate {
         println!(
             "coverage\tguest_arch={}\tlowering={}\thost_arch={}",
             self.isa.public(),
-            lowering(self.isa),
+            self.isa.lowering(),
             std::env::consts::ARCH
         );
         let foreign = !matches!(
