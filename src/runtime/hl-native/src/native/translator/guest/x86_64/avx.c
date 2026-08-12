@@ -1157,6 +1157,36 @@ static enum avx_dispatch_result avx_dispatch_map2_test(const hl_x86_avx_state *s
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_fp16_conversion(const hl_x86_avx_state *state, struct cpu *c,
+                                                             struct insn *instruction, uint64_t next, int map,
+                                                             int op, int destination, int width) {
+    uint8_t input[64], output[64];
+    int count = width / 4;
+    if (map == 2 && op == 0x13) { // vcvtph2ps
+        avx_get_rm(state, c, instruction, next, width / 2, input);
+        for (int element = 0; element < count; element++) {
+            uint16_t bits;
+            memcpy(&bits, input + 2 * element, 2);
+            float value = avx_f16_to_f32(bits);
+            memcpy(output + 4 * element, &value, 4);
+        }
+        avx_put(c, destination, output, width);
+    } else if (map == 3 && op == 0x1D) { // vcvtps2ph
+        avx_get(c, destination, input);
+        for (int element = 0; element < count; element++) {
+            float value;
+            memcpy(&value, input + 4 * element, 4);
+            uint16_t bits = avx_f32_to_f16(value, (int)instruction->imm);
+            memcpy(output + 2 * element, &bits, 2);
+        }
+        avx_put_rm(state, c, instruction, next, width / 2, output);
+    } else {
+        return AVX_DISPATCH_UNMATCHED;
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1603,6 +1633,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
         return;
     if (avx_dispatch_map2_variable_shift(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_test(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_fp16_conversion(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2506,18 +2537,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             avx_put(c, rd, (uint8_t *)o, 16);
             goto done;
         }
-        case 0x13: { // vcvtph2ps: rm holds W/2 bytes of packed fp16 -> W/4 fp32 in dst
-            int nf = W / 4;
-            avx_get_rm(state, c, &I, next, W / 2, b);
-            for (int i = 0; i < nf; i++) {
-                uint16_t h;
-                memcpy(&h, b + 2 * i, 2);
-                float f = avx_f16_to_f32(h);
-                memcpy(d + 4 * i, &f, 4);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
         case 0x90:   // vpgatherd{d,q}: 32-bit (dword) indices
         case 0x92:   // vgatherd{ps,pd}: 32-bit indices (same addressing; element bits are float)
         case 0x91:   // vpgatherq{d,q}: 64-bit (qword) indices
@@ -2652,18 +2671,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             for (int i = 0; i < W / 8; i++)
                 memcpy(d + 8 * i, ((imm >> i) & 1) ? b + 8 * i : a + 8 * i, 8);
             avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x1D: { // vcvtps2ph: reg holds W/4 fp32 -> W/2 bytes of fp16 in rm (imm[2:0] rounding control)
-            int nf = W / 4;
-            avx_get(c, rd, a);
-            for (int i = 0; i < nf; i++) {
-                float f;
-                memcpy(&f, a + 4 * i, 4);
-                uint16_t h = avx_f32_to_f16(f, (int)I.imm);
-                memcpy(d + 2 * i, &h, 2);
-            }
-            avx_put_rm(state, c, &I, next, W / 2, d);
             goto done;
         }
         case 0x0F: { // vpalignr imm8: per-128-lane byte concat(src1:src2) >> imm
