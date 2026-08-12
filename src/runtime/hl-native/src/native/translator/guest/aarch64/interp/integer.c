@@ -669,8 +669,8 @@ static uint64_t interp_extend_operand(const struct cpu *cpu, int rm, unsigned op
     return sf ? extended : (uint64_t)(uint32_t)extended;
 }
 
-// Data processing -- register; sub-class from insn[28:21] plus insn[30], in ARM ARM table order.
-static int interp_exec_dp_register(struct cpu *cpu, uint32_t insn) {
+// Add, logical, and multiply register forms.
+static int interp_exec_dp_register_arithmetic(struct cpu *cpu, uint32_t insn) {
     uint64_t gpc = cpu->pc;
     unsigned sf = (insn >> 31) & 1;
     int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
@@ -785,6 +785,15 @@ static int interp_exec_dp_register(struct cpu *cpu, uint32_t insn) {
         return INTERP_NEXT;
     }
 
+    return interp_undefined(cpu, insn, "data-processing register -- unallocated arithmetic encoding");
+}
+
+// Carry and conditional-compare forms, which update NZCV.
+static int interp_exec_dp_register_flags(struct cpu *cpu, uint32_t insn) {
+    uint64_t gpc = cpu->pc;
+    unsigned sf = (insn >> 31) & 1;
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
+
     if ((insn & 0x1FE00000u) == 0x1A000000u) { // ADC / ADCS / SBC / SBCS
         unsigned op = (insn >> 30) & 1, setflags = (insn >> 29) & 1;
         if ((insn & 0x0000FC00u) != 0)
@@ -834,6 +843,15 @@ static int interp_exec_dp_register(struct cpu *cpu, uint32_t insn) {
         cpu->pc = gpc + 4;
         return INTERP_NEXT;
     }
+
+    return interp_undefined(cpu, insn, "data-processing register -- unallocated flag encoding");
+}
+
+// Conditional selection and unary/binary register forms.
+static int interp_exec_dp_register_select(struct cpu *cpu, uint32_t insn) {
+    uint64_t gpc = cpu->pc;
+    unsigned sf = (insn >> 31) & 1;
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
 
     if ((insn & 0x1FE00000u) == 0x1A800000u) { // CSEL / CSINC / CSINV / CSNEG
         unsigned op = (insn >> 30) & 1, setflags = (insn >> 29) & 1, op2 = (insn >> 10) & 3;
@@ -975,6 +993,17 @@ static int interp_exec_dp_register(struct cpu *cpu, uint32_t insn) {
         return INTERP_NEXT;
     }
 
+    return interp_undefined(cpu, insn, "data-processing register -- unallocated selection encoding");
+}
+
+// Data processing -- register; dispatch sub-classes before executing one bounded encoding family.
+static int interp_exec_dp_register(struct cpu *cpu, uint32_t insn) {
+    uint32_t group = insn & 0x1FE00000u;
+    if ((insn & 0x1F000000u) == 0x0B000000u || (insn & 0x1F000000u) == 0x0A000000u ||
+        (insn & 0x1F000000u) == 0x1B000000u)
+        return interp_exec_dp_register_arithmetic(cpu, insn);
+    if (group == 0x1A000000u || group == 0x1A400000u) return interp_exec_dp_register_flags(cpu, insn);
+    if (group == 0x1A800000u || group == 0x1AC00000u) return interp_exec_dp_register_select(cpu, insn);
     return interp_undefined(cpu, insn, "data-processing register -- unallocated encoding");
 }
 

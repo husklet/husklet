@@ -1,4 +1,4 @@
-#include "interp/core.c"
+#include "interp/integer.c"
 #include "interp/vector.c"
 #include "interp/floating.c"
 #include "interp/simd.c"
