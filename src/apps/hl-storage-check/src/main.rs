@@ -34,7 +34,7 @@ fn main() {
             std::process::exit(64);
         }
     };
-    let (mut findings, exhausted) = inspect(&config);
+    let (mut findings, exhausted) = config.inspect();
     findings.sort_by(|left, right| right.bytes.cmp(&left.bytes).then_with(|| left.path.cmp(&right.path)));
     for finding in &findings {
         println!(
@@ -96,44 +96,46 @@ fn value<T: std::str::FromStr>(arguments: &mut impl Iterator<Item = String>, opt
         .map_err(|_| format!("invalid value for {option}"))
 }
 
-fn inspect(config: &Config) -> (Vec<Finding>, bool) {
-    let mut queue = config
-        .roots
-        .iter()
-        .cloned()
-        .map(|path| (path, 0))
-        .collect::<VecDeque<_>>();
-    let mut findings = Vec::new();
-    let mut visited = 0;
-    while let Some((directory, depth)) = queue.pop_front() {
-        if visited >= config.max_entries {
-            return (findings, true);
-        }
-        visited += 1;
-        if directory.file_name().is_some_and(|name| name == "target") {
-            let (bytes, complete, consumed) = directory_size(&directory, config.max_entries - visited);
-            visited += consumed;
-            if bytes >= config.limit {
-                findings.push(Finding {
-                    path: directory,
-                    bytes,
-                    complete,
-                });
+impl Config {
+    fn inspect(&self) -> (Vec<Finding>, bool) {
+        let mut queue = self
+            .roots
+            .iter()
+            .cloned()
+            .map(|path| (path, 0))
+            .collect::<VecDeque<_>>();
+        let mut findings = Vec::new();
+        let mut visited = 0;
+        while let Some((directory, depth)) = queue.pop_front() {
+            if visited >= self.max_entries {
+                return (findings, true);
             }
-            continue;
-        }
-        if depth >= config.max_depth {
-            continue;
-        }
-        if let Ok(entries) = fs::read_dir(&directory) {
-            for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|kind| kind.is_dir() && !kind.is_symlink()) {
-                    queue.push_back((entry.path(), depth + 1));
+            visited += 1;
+            if directory.file_name().is_some_and(|name| name == "target") {
+                let (bytes, complete, consumed) = directory_size(&directory, self.max_entries - visited);
+                visited += consumed;
+                if bytes >= self.limit {
+                    findings.push(Finding {
+                        path: directory,
+                        bytes,
+                        complete,
+                    });
+                }
+                continue;
+            }
+            if depth >= self.max_depth {
+                continue;
+            }
+            if let Ok(entries) = fs::read_dir(&directory) {
+                for entry in entries.flatten() {
+                    if entry.file_type().is_ok_and(|kind| kind.is_dir() && !kind.is_symlink()) {
+                        queue.push_back((entry.path(), depth + 1));
+                    }
                 }
             }
         }
+        (findings, false)
     }
-    (findings, false)
 }
 
 fn directory_size(root: &Path, budget: usize) -> (u64, bool, usize) {
@@ -175,7 +177,7 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, inspect};
+    use super::Config;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -219,7 +221,7 @@ mod tests {
             max_depth: 4,
             check: false,
         };
-        let (findings, exhausted) = inspect(&config);
+        let (findings, exhausted) = config.inspect();
         assert!(!exhausted);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].path, target);
@@ -237,6 +239,6 @@ mod tests {
             max_depth: 4,
             check: false,
         };
-        assert!(inspect(&config).1);
+        assert!(config.inspect().1);
     }
 }
