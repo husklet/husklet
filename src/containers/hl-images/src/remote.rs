@@ -104,36 +104,6 @@ impl Registry {
         Ok(())
     }
 
-    /// List descriptors referring to a subject, using the OCI fallback implemented by `oci-client`.
-    ///
-    /// # Errors
-    /// Returns an error for invalid references, authentication, or registry responses.
-    pub async fn referrers(
-        &self,
-        repository: &Reference,
-        subject: &Digest,
-        artifact_type: Option<&str>,
-    ) -> Result<Vec<Descriptor>> {
-        let reference: oci_client::Reference =
-            format!("{}/{}@{subject}", repository.registry(), repository.repository())
-                .parse()
-                .map_err(|error| Error::InvalidReference(format!("{error}")))?;
-        self.client
-            .auth(&reference, &self.auth.registry(), oci_client::RegistryOperation::Pull)
-            .await
-            .map_err(Self::error)?;
-        let index = self
-            .client
-            .pull_referrers(&reference, artifact_type)
-            .await
-            .map_err(Self::error)?;
-        index
-            .manifests
-            .into_iter()
-            .map(|entry| serde_json::from_value(serde_json::to_value(entry)?).map_err(Into::into))
-            .collect()
-    }
-
     fn manifest(bytes: &[u8], digest: &str) -> Result<Descriptor> {
         let _: Digest = digest.parse()?;
         let document: serde_json::Value = serde_json::from_slice(bytes)?;
