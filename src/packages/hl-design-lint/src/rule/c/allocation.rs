@@ -68,8 +68,13 @@ fn visit_functions(
         let mut declarations = Vec::new();
         allocations(node, source, allocators, &mut declarations);
         for (name, declaration) in declarations {
-            let evidence = source.get(declaration.end_byte()..node.end_byte()).unwrap_or_default();
-            if dereferenced(node, source, &name) && !null_checked(evidence, &name) {
+            let Some(dereference) = first_dereference(node, source, &name, declaration.end_byte()) else {
+                continue;
+            };
+            let evidence = source
+                .get(declaration.end_byte()..dereference.start_byte())
+                .unwrap_or_default();
+            if !null_checked(evidence, &name) {
                 output.push(finding(path, declaration, &name));
             }
         }
@@ -114,20 +119,25 @@ fn identifier(node: Node<'_>, source: &str) -> Option<String> {
         .find_map(|child| identifier(child, source))
 }
 
-fn dereferenced(node: Node<'_>, source: &str, name: &str) -> bool {
+fn first_dereference<'tree>(node: Node<'tree>, source: &str, name: &str, after: usize) -> Option<Node<'tree>> {
+    if node.end_byte() <= after || node.kind() == "sizeof_expression" {
+        return None;
+    }
     let text = node.utf8_text(source.as_bytes()).unwrap_or_default().replace(' ', "");
-    if matches!(
-        node.kind(),
-        "subscript_expression" | "field_expression" | "pointer_expression"
-    ) && (text.starts_with(&format!("{name}["))
-        || text.starts_with(&format!("{name}->"))
-        || text.starts_with(&format!("*{name}")))
+    if node.start_byte() >= after
+        && matches!(
+            node.kind(),
+            "subscript_expression" | "field_expression" | "pointer_expression"
+        )
+        && (text.starts_with(&format!("{name}["))
+            || text.starts_with(&format!("{name}->"))
+            || text.starts_with(&format!("*{name}")))
     {
-        return true;
+        return Some(node);
     }
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
-        .any(|child| dereferenced(child, source, name))
+        .find_map(|child| first_dereference(child, source, name, after))
 }
 
 fn null_checked(function: &str, name: &str) -> bool {
