@@ -3925,6 +3925,27 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     G_RET(c) = l;
                     break;
                 }
+                // Typed descriptors live in the Rust host-service table, not at the same native descriptor
+                // number in this isolated C worker. Ask that authority for the path before inspecting the
+                // worker's unrelated native fd table.
+                if (!bound_source_is_native()) {
+                    hl_linux_fd_snapshot typed;
+                    char target[4200];
+                    if (g_linux_box != NULL &&
+                        hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)pfn, &typed) == HL_STATUS_OK &&
+                        bound_handle_host_path(typed.host_handle, target, sizeof target) == 0) {
+                        int mapped = proc_fd_rebase(target, sizeof target);
+                        if (mapped < 0 || (g_rootfs && mapped == 0)) {
+                            G_RET(c) = (uint64_t)(int64_t)(mapped < 0 ? mapped : -EACCES);
+                        } else {
+                            size_t copied = strlen(target);
+                            if (copied > bs) copied = bs;
+                            memcpy(buf, target, copied);
+                            G_RET(c) = (uint64_t)copied;
+                        }
+                        break;
+                    }
+                }
                 /* A descriptor supplied through the engine API may deliberately
                  * have no native descriptor at the same number (typed stdio is
                  * the important case).  Resolve its published logical identity
@@ -4076,6 +4097,16 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                         G_RET(c) = (uint64_t)l;
                         break;
                     }
+                }
+                if (aleaf && (!strcmp(aleaf, "root") || !strcmp(aleaf, "cwd")) && proc_pid_member(peer, &hp)) {
+                    // The process registry does not expose a peer's host cwd capability. Forked peers inherit
+                    // the container root/cwd, and returning the confined root is both useful and non-leaking.
+                    const char *target = "/";
+                    size_t copied = strlen(target);
+                    if (copied > bs) copied = bs;
+                    memcpy(buf, target, copied);
+                    G_RET(c) = (uint64_t)copied;
+                    break;
                 }
                 // Peer /proc/<pid>/fd/<N> -> the fd's target (symlink-target view), read from the peer's libproc
                 // fd table (its fds live in another hl worker process; procfd_num rejected the foreign pid above).

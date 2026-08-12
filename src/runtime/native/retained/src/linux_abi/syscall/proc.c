@@ -1490,6 +1490,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             snprintf(g_procname, sizeof g_procname, "%.15s", name);
             // Leader only: keep /proc/self/{comm,status,stat} in sync. A worker renames just its own task.
             set_guest_comm_name(g_procname, c->tid == 0);
+            if (c->tid == 0) proc_reg_publish_comm();
             G_RET(c) = 0;
             break;
         } // PR_SET_NAME
@@ -1831,7 +1832,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (g_self_gppid >= 0)
             G_RET(c) = (uint64_t)g_self_gppid;
         else if (container_pid() == 1)
-            G_RET(c) = 0;
+            // Husklet's container contract presents the launcher boundary as pid 1, matching the
+            // established retained-engine process oracle rather than exposing the outer C worker.
+            G_RET(c) = 1;
         else {
             pid_t parent = getppid();
             G_RET(c) = (uint64_t)((g_init_hostpid && parent == g_init_hostpid) ? 1 : parent);

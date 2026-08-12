@@ -2349,12 +2349,14 @@ static int proc_text_host_path(const char *path) {
 // separately: set_guest_comm() records the exec-name at boot and on every execve; g_exe_path holds the
 // canonical exe path (see exe_canon below).
 static char g_comm_store[16];
+static int g_comm_store_set;
 
 static void set_guest_comm(const char *execpath) {
     const char *b = (execpath && execpath[0]) ? execpath : "init";
     const char *s = strrchr(b, '/');
     if (s) b = s + 1;
     snprintf(g_comm_store, sizeof g_comm_store, "%.15s", b[0] ? b : "init");
+    g_comm_store_set = 1;
 #if defined(__linux__)
     // Mirror onto the host task name so a peer reading /proc/<pid>/{stat,status,comm} sees this comm
     // (each guest process is its own host process; without this a peer read reports the engine binary).
@@ -2371,8 +2373,11 @@ static void set_guest_comm(const char *execpath) {
 // what a peer's /proc/<pid>/task/<tid>/comm reads.
 static void set_guest_comm_name(const char *name, int leader) {
     char resolved[16];
-    snprintf(resolved, sizeof resolved, "%.15s", (name && name[0]) ? name : "init");
-    if (leader) memcpy(g_comm_store, resolved, sizeof resolved);
+    snprintf(resolved, sizeof resolved, "%.15s", name ? name : "");
+    if (leader) {
+        memcpy(g_comm_store, resolved, sizeof resolved);
+        g_comm_store_set = 1;
+    }
 #if defined(__linux__)
     (void)prctl(PR_SET_NAME, (unsigned long)resolved, 0, 0, 0); // keep the host task name in sync (see set_guest_comm)
 #endif
@@ -2461,7 +2466,7 @@ static void exe_canon(const char *guest, char *out, size_t n) {
 // The guest task name (Linux comm, max 15 chars): the recorded exec-name (set_guest_comm), falling back
 // to the basename of the running image (g_exe_path) for paths that never went through an exec hook.
 static void proc_comm(char *out, size_t n) {
-    if (g_comm_store[0]) {
+    if (g_comm_store_set) {
         snprintf(out, n, "%s", g_comm_store);
         return;
     }
@@ -3896,6 +3901,25 @@ static void proc_reg_publish(const char *exe, int argc, char *const argv[]) {
     else
         g_reg_last_exe[0] = 0;
     proc_reg_write_files(dir, buf, o, g_reg_last_exe);
+}
+
+// Publish a task-name change without replacing the argv snapshot. prctl(PR_SET_NAME) and a write to
+// /proc/self/comm change only comm; peers must observe that change through the process registry too.
+static void proc_reg_publish_comm(void) {
+    if (!g_init_hostpid || g_reg_last_len <= 0) return;
+    char comm[16];
+    proc_comm(comm, sizeof comm);
+    char *newline = memchr(g_reg_last_buf, '\n', (size_t)g_reg_last_len);
+    int tail = newline ? g_reg_last_len - (int)(newline - g_reg_last_buf) - 1 : 0;
+    char updated[sizeof g_reg_last_buf];
+    int head = snprintf(updated, sizeof updated, "%s\n", comm);
+    if (head < 0 || head + tail > (int)sizeof updated) return;
+    if (tail > 0) memcpy(updated + head, newline + 1, (size_t)tail);
+    memcpy(g_reg_last_buf, updated, (size_t)(head + tail));
+    g_reg_last_len = head + tail;
+    char dir[80];
+    proc_reg_key(dir, sizeof dir);
+    proc_reg_write_files(dir, g_reg_last_buf, g_reg_last_len, g_reg_last_exe);
 }
 
 static void proc_reg_after_fork(void) {
@@ -7058,6 +7082,33 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
         s->st_mode = S_IFDIR | 0555;
         s->st_nlink = 2;
         return 1;
+    }
+    // stat(2) follows proc namespace magic links and reports the nsfs object's inode. Keep that inode
+    // identical to the one rendered by readlink(".../ns/name") so namespace comparison is coherent even
+    // though the synthetic link has no host pathname inside the retained worker.
+    {
+        char self_path[4200];
+        int pid = 0, host = 0;
+        const char *leaf = proc_any_leaf(proc_deself(gp, self_path, sizeof self_path), &pid);
+        if (leaf && !strncmp(leaf, "ns/", 3) && leaf[3] &&
+            (pid == container_pid() || pid == (int)getpid() || proc_pid_member(pid, &host))) {
+            char target[64];
+            int length = ns_link_target(leaf + 3, target, sizeof target);
+            char *open = length > 0 ? strchr(target, '[') : NULL;
+            char *close = open ? strchr(open + 1, ']') : NULL;
+            if (open && close && close[1] == 0) {
+                *close = 0;
+                char *end = NULL;
+                unsigned long long inode = strtoull(open + 1, &end, 10);
+                if (end != open + 1 && *end == 0) {
+                    memset(s, 0, sizeof *s);
+                    s->st_mode = S_IFREG | 0444;
+                    s->st_nlink = 1;
+                    s->st_ino = (ino_t)inode;
+                    return 1;
+                }
+            }
+        }
     }
     // The controlling terminal, named /dev/pts/0 in the container: fstat the real pty slave so it reports as
     // a character device with the correct rdev. ttyname(3) reads /proc/self/fd/0 -> "/dev/pts/0", then

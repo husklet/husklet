@@ -1391,6 +1391,14 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // this the write landed in the synthetic backing file and the task name never changed.
         if (wfd >= 0 && wfd < HL_NFD && !strcmp(g_proc_text_desc[wfd], "self:comm")) {
             if (!a2) {
+                int replaced = proc_text_replace(wfd, "\n", 1);
+                if (replaced != 0) {
+                    G_RET(c) = (uint64_t)replaced;
+                    break;
+                }
+                g_procname[0] = 0;
+                set_guest_comm_name("", c->tid == 0);
+                if (c->tid == 0) proc_reg_publish_comm();
                 G_RET(c) = 0;
                 break;
             }
@@ -1401,8 +1409,6 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 break;
             }
             name[take] = 0;
-            char *nl = strchr(name, '\n');
-            if (nl) *nl = 0;
             char normalized[sizeof g_procname];
             snprintf(normalized, sizeof normalized, "%.15s", name);
             char rendered[32];
@@ -1414,6 +1420,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             memcpy(g_procname, normalized, sizeof g_procname);
             set_guest_comm_name(g_procname, c->tid == 0);
+            if (c->tid == 0) proc_reg_publish_comm();
             G_RET(c) = a2; // Linux consumes the whole write even when it truncated the stored name
             break;
         }
