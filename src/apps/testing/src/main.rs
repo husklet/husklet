@@ -97,7 +97,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::SyscallAudit(options) => syscall_audit::run(options),
         Command::Leaks(options) => leaks::run(options),
         Command::LeakProbe => {
-            let _ = hl_native::Native.leak_check_nonvacuity();
+            let _ = hl_native::leak_check_nonvacuity();
             Ok(())
         }
     }

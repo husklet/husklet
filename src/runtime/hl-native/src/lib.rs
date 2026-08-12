@@ -14,19 +14,20 @@ mod provider;
 mod artifact;
 
 pub use engine::{Engine, EngineConfig, Exit};
-pub use provider::Native;
+pub use provider::leak_check_nonvacuity;
 
 #[cfg(test)]
 mod platform;
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        bindings,
-        provider::{LIBRARY_NAME, LIBRARY_PATH},
-    };
+    use super::bindings;
+
+    const LIBRARY_NAME: &str = env!("HL_NATIVE_LIBRARY_NAME");
+    const LIBRARY_PATH: &str = env!("HL_NATIVE_LIBRARY_PATH");
 
     #[test]
+    #[allow(unsafe_code)]
     fn shared_engine_exports_matching_abi() {
         assert!(bindings::engine_metadata_is_valid());
         assert!(LIBRARY_NAME.contains("hl_native_engine"));

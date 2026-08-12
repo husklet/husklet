@@ -78,7 +78,7 @@ fn link_engine_native_archives() {}
 #[test]
 #[ignore = "non-vacuity fixture for the external Valgrind Memcheck gate"]
 fn deliberate_native_leak_is_visible_to_memcheck() {
-    assert_eq!(hl_native::Native.leak_check_nonvacuity(), 0);
+    assert_eq!(hl_native::leak_check_nonvacuity(), 0);
 }
 
 struct State {
