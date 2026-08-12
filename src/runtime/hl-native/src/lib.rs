@@ -22,14 +22,17 @@ mod platform;
 #[cfg(test)]
 mod tests {
     use super::{
-        Native,
+        bindings,
         provider::{LIBRARY_NAME, LIBRARY_PATH},
     };
 
     #[test]
     fn shared_engine_exports_matching_abi() {
-        assert_eq!(Native.abi(), 5);
-        assert!(!Native.version().to_bytes().is_empty());
+        // SAFETY: package-owned linkage tests call the immutable metadata exports directly.
+        unsafe {
+            assert_eq!(bindings::hl_engine_abi(), 5);
+            assert!(!bindings::hl_engine_version().is_null());
+        }
         assert!(LIBRARY_NAME.contains("hl_native_engine"));
         let library = std::path::Path::new(LIBRARY_PATH);
         assert!(
