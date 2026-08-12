@@ -13,12 +13,6 @@ pub fn hl_root() -> PathBuf {
     home().join(".hl")
 }
 
-/// `~/.hl/run` — runtime dir holding the socket.
-#[must_use]
-pub fn run_dir() -> PathBuf {
-    hl_root().join("run")
-}
-
 /// `~/.hl/images` — image rootfs dirs (== `HL_IMAGES`).
 #[must_use]
 pub fn images_dir() -> PathBuf {
