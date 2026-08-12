@@ -422,6 +422,33 @@
               cargo test --workspace --all-targets --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
               ${lib.optionalString pkgs.stdenv.isLinux ''
+                # Exercise bounded production-engine authority ownership under
+                # LeakSanitizer. Then prove the instrumentation is live with a
+                # deliberate 4,096-byte native leak.
+                export HL_C_SANITIZER=leak
+                export LSAN_OPTIONS="suppressions=$PWD/tests/lsan.supp:print_suppressions=1:exitcode=97:log_path=$TMPDIR/lsan-clean"
+                cargo test -p hl-native --test executable_authority --locked --offline
+                if compgen -G "$TMPDIR/lsan-clean*" >/dev/null; then
+                  printf 'LeakSanitizer reported an error in the clean lifecycle tests\n' >&2
+                  cat "$TMPDIR"/lsan-clean* >&2
+                  exit 1
+                fi
+
+                export LSAN_OPTIONS="suppressions=$PWD/tests/lsan.supp:print_suppressions=1:exitcode=97:log_path=$TMPDIR/lsan-non-vacuity"
+                set +e
+                cargo test -p hl-native --test executable_authority --locked --offline -- \
+                  --ignored --exact deliberate_native_leak_is_visible_to_memcheck
+                lsan_probe_status=$?
+                set -e
+                if [ "$lsan_probe_status" -ne 97 ] ||
+                   ! grep -Eq 'LeakSanitizer: detected memory leaks' "$TMPDIR"/lsan-non-vacuity* ||
+                   ! grep -Eq '4096 byte\(s\) leaked in 1 allocation\(s\)' "$TMPDIR"/lsan-non-vacuity*; then
+                  printf 'LeakSanitizer did not reject the deliberate native leak (exit=%s)\n' "$lsan_probe_status" >&2
+                  cat "$TMPDIR"/lsan-non-vacuity* >&2
+                  exit 1
+                fi
+                unset LSAN_OPTIONS
+
                 # Memcheck is deliberately independent of compiler sanitizers. These
                 # bounded authority lifecycle tests do not execute generated guest
                 # code, which Valgrind cannot reliably inspect.
