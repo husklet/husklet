@@ -1210,6 +1210,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hl-storage-check"
+version = "0.1.0"
+
+[[package]]
 name = "hl-ws"
 version = "0.1.0"
 
