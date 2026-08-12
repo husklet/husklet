@@ -1,9 +1,7 @@
 //! Host-neutral runtime construction and lifecycle composition.
 
 use crate::activation::GuestIsa;
-use crate::engine::{
-    Engine, EngineError, EngineExit, EnginePhase, Launcher, ProcessId, StopRequest, Workspace, WorkspaceId,
-};
+use crate::engine::{Engine, EngineError, EngineExit, Launcher, ProcessId, StopRequest, Workspace, WorkspaceId};
 use crate::launch_plan::RuntimeLaunchPlan;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -156,7 +154,6 @@ impl Default for StandardStreams {
 #[derive(Clone)]
 pub struct RuntimeServices {
     pub activation: Arc<dyn ActivationChannel>,
-    pub executable_authority: Option<crate::executable::ExecutableAuthority>,
     pub checkpoint_sink: Option<Arc<dyn CheckpointSink>>,
     pub checkpoint_source: Option<Arc<dyn CheckpointSource>>,
     pub streams: StandardStreams,
@@ -305,10 +302,6 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
 
     pub fn destroy(&self) -> Result<Option<EngineExit>, EngineError> {
         self.engine.destroy()
-    }
-
-    pub fn phase(&self) -> Result<EnginePhase, EngineError> {
-        self.engine.phase()
     }
 
     fn validate_services(plan: &RuntimeLaunchPlan, services: &RuntimeServices) -> Result<(), CompositionError> {

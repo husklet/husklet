@@ -37,8 +37,6 @@ pub mod composition;
 pub mod config;
 pub mod domain;
 pub mod engine;
-#[cfg(target_os = "linux")]
-pub mod executable;
 pub mod launcher;
 /// Compatibility surface for callers using the former flat launch-plan module.
 pub mod launch_plan {
