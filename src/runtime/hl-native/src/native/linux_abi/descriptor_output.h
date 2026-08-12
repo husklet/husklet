@@ -9,4 +9,9 @@ static inline int hl_linux_fd_output_prepare(hl_linux_fd *out_fd) {
     return 1;
 }
 
+static inline hl_status hl_linux_fd_output_validate_context(const hl_linux_abi *linux_abi, hl_linux_fd *out_fd) {
+    if (!hl_linux_fd_output_prepare(out_fd) || linux_abi == NULL) return HL_STATUS_INVALID_ARGUMENT;
+    return HL_STATUS_OK;
+}
+
 #endif

@@ -1,8 +1,11 @@
+#include "descriptor_output.h"
+
 hl_status hl_linux_fd_dup(hl_linux_abi *linux_abi, hl_linux_fd source, uint32_t descriptor_flags, hl_linux_fd *out_fd) {
     const hl_linux_fd_entry *source_entry;
     hl_linux_fd fd;
     hl_status status;
-    if (linux_abi == NULL || out_fd == NULL) return HL_STATUS_INVALID_ARGUMENT;
+    status = hl_linux_fd_output_validate_context(linux_abi, out_fd);
+    if (status != HL_STATUS_OK) return status;
     hl_linux_lock(linux_abi);
     status = hl_linux_fd_get_unlocked(linux_abi, source, &source_entry, NULL);
     if (status != HL_STATUS_OK) goto done;

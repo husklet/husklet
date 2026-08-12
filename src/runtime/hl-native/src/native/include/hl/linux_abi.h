@@ -256,6 +256,7 @@ HL_API hl_status hl_linux_fd_install_at(hl_linux_abi *linux_abi, hl_linux_fd fd,
  * therefore never leaves a token which cancel or commit can interpret as authority. */
 HL_API hl_status hl_linux_fd_reserve_at(hl_linux_abi *linux_abi, hl_linux_fd fd, hl_linux_fd_reservation *reservation);
 HL_API hl_status hl_linux_fd_cancel(hl_linux_abi *linux_abi, const hl_linux_fd_reservation *reservation);
+/* out_fd is required and becomes HL_LINUX_FD_LIMIT before lookup; failure never exposes a duplicate. */
 HL_API hl_status hl_linux_fd_dup(hl_linux_abi *linux_abi, hl_linux_fd source, uint32_t descriptor_flags,
                                  hl_linux_fd *out_fd);
 HL_API hl_status hl_linux_fd_close(hl_linux_abi *linux_abi, hl_linux_fd fd, hl_host_handle *last_host_handle);
