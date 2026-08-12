@@ -1237,7 +1237,14 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                     status = gsig;
                 }
                 // si_status carries a signal number for kill/dump/stop/cont -> translate macOS->Linux
-                else if (code == CLD_KILLED || code == CLD_DUMPED || code == CLD_STOPPED || code == CLD_CONTINUED)
+                else if (code == CLD_STOPPED) {
+                    int guest_stop;
+                    status = sigstop_lookup((int)si.si_pid, &guest_stop, 0) ? guest_stop : sig_m2l(status);
+                } else if (code == CLD_CONTINUED) {
+                    int ignored_stop;
+                    (void)sigstop_lookup((int)si.si_pid, &ignored_stop, 1);
+                    status = sig_m2l(status);
+                } else if (code == CLD_KILLED || code == CLD_DUMPED)
                     status = sig_m2l(status);
                 // Linux reports CLD_DUMPED (not CLD_KILLED) when a core-dumping signal killed the child with
                 // cores enabled. macOS rarely dumps the host child, so synthesize it the way wait4 encodes

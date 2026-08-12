@@ -281,6 +281,7 @@ struct sigexit_ent {
 
 #define SIGEXIT_SLOTS 4096
 static struct sigexit_ent *g_sigexit;
+static struct sigexit_ent *g_sigstop;
 
 static void sigexit_init(void) {
     void *arena = NULL;
@@ -288,6 +289,35 @@ static void sigexit_init(void) {
     if (hl_linux_shared_create(effective_host_services(), sizeof(struct sigexit_ent) * SIGEXIT_SLOTS, &arena) ==
         HL_STATUS_OK)
         g_sigexit = (struct sigexit_ent *)arena;
+    arena = NULL;
+    if (hl_linux_shared_create(effective_host_services(), sizeof(struct sigexit_ent) * SIGEXIT_SLOTS, &arena) ==
+        HL_STATUS_OK)
+        g_sigstop = (struct sigexit_ent *)arena;
+}
+
+static void sigstop_record(int signo) {
+    if (!g_sigstop) return;
+    int me = (int)getpid();
+    for (int i = 0; i < SIGEXIT_SLOTS; i++) {
+        int expect = 0;
+        if (__atomic_compare_exchange_n(&g_sigstop[i].pid, &expect, -1, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+            g_sigstop[i].signo = signo;
+            __atomic_store_n(&g_sigstop[i].pid, me, __ATOMIC_RELEASE);
+            return;
+        }
+    }
+}
+
+static int sigstop_lookup(int pid, int *signo, int consume) {
+    if (!g_sigstop || pid <= 0) return 0;
+    for (int i = 0; i < SIGEXIT_SLOTS; i++) {
+        if (__atomic_load_n(&g_sigstop[i].pid, __ATOMIC_ACQUIRE) == pid) {
+            *signo = g_sigstop[i].signo;
+            if (consume) __atomic_store_n(&g_sigstop[i].pid, 0, __ATOMIC_RELEASE);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 // Dying child: publish (signo, core) for its own pid. Claim a free slot (0 -> -1), fill the payload, then
@@ -753,6 +783,15 @@ static void raise_guest_signal_info(struct cpu *c, int sig, int error, int code,
     // instead of the child's real exit status. Only fall back to termination when raise() could not deliver
     // the stop (an invalid host signo returns nonzero).
     int host_stop = sig_l2m(sig);
+#if defined(__linux__)
+    // The engine process group can be orphaned relative to its launcher, in
+    // which case Linux discards SIGTSTP/TTIN/TTOU. SIGSTOP cannot be ignored;
+    // retain the guest signal in the shared wait-status relay.
+    if (sig != 19) {
+        sigstop_record(sig);
+        host_stop = SIGSTOP;
+    }
+#endif
     signal(host_stop, SIG_DFL);
     if (raise(host_stop) == 0) return; // stopped, then continued by SIGCONT -> resume guest execution
     c->exited = 1;

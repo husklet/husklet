@@ -38,7 +38,10 @@ static void exec_forward_env(uint64_t envp_guest) {
         hl_option_set("HL_GUEST_ENV_EXACT", "1", 1);
         return;
     }
-    uint64_t *ev = (uint64_t *)nonpie_p(envp_guest);
+    // The dispatcher already rebases the envp array base for a displaced
+    // ET_EXEC image. Rebase only its pointer elements here; applying the
+    // projection twice loses an x86 exec's environment.
+    uint64_t *ev = (uint64_t *)envp_guest;
     size_t cap = 4096, len = 0;
     char *buf = malloc(cap);
     if (!buf) return;
@@ -251,6 +254,7 @@ static void exec_close_cloexec(void) {
 // returns in the parent while the child is still using that stack to enter
 // execve, producing an intermittent pre-exec SIGILL under compiler load.
 static int g_vfork_release_fd = -1;
+static int g_vfork_ack_fd = -1;
 
 static void vfork_release_parent(void) {
     if (g_vfork_release_fd < 0) return;
@@ -258,6 +262,33 @@ static void vfork_release_parent(void) {
     while (write(g_vfork_release_fd, &committed, sizeof committed) < 0 && errno == EINTR) {}
     close(g_vfork_release_fd);
     g_vfork_release_fd = -1;
+}
+
+static void vfork_publish_exit(void) {
+    if (g_vfork_release_fd < 0) return;
+    unsigned char committed = 2;
+    while (write(g_vfork_release_fd, &committed, sizeof committed) < 0 && errno == EINTR) {}
+    if (g_vfork_ack_fd >= 0) {
+        while (read(g_vfork_ack_fd, &committed, sizeof committed) < 0 && errno == EINTR) {}
+        close(g_vfork_ack_fd);
+        g_vfork_ack_fd = -1;
+    }
+    close(g_vfork_release_fd);
+    g_vfork_release_fd = -1;
+}
+
+static void vfork_import_guest_memory(pid_t child) {
+#if defined(__linux__)
+    for (size_t index = 0; index < hl_gmap_count(); index++) {
+        hl_gmap_entry entry;
+        if (!hl_gmap_get(index, &entry) || entry.physical_length == 0) continue;
+        struct iovec local = {(void *)(uintptr_t)entry.physical_address, (size_t)entry.physical_length};
+        struct iovec remote = local;
+        (void)process_vm_readv(child, &local, 1, &remote, 1, 0);
+    }
+#else
+    (void)child;
+#endif
 }
 
 // ---- fork child-side engine hooks (shared by clone/case-220 and clone3/case-435) -----------------
@@ -728,6 +759,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     }
     case 93:
+        vfork_publish_exit();
         c->exited = 1;
         // Linux exposes only the low eight bits of an exit status to waiters.
         // Preserve that contract on the translated `exit` path too: unlike the
@@ -738,6 +770,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         break;
     // exit_group: end the whole process
     case 94:
+        vfork_publish_exit();
         HL_LOGF(&g_jit_log, HL_LOG_TAG_NETWORK, "exit_group pid=%d code=%d", (int)getpid(), (int)a0);
         hl_dispatch_profile_report(&g_dispatch_profile, &g_jit_log, translation_log_summary);
         if (g_prof)
@@ -1908,8 +1941,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         int vfork_pipe[2] = {-1, -1};
+        int vfork_ack[2] = {-1, -1};
         int is_vfork = (a0 & 0x4000) != 0;
-        if (is_vfork && pipe(vfork_pipe) != 0) {
+        if (is_vfork && (pipe(vfork_pipe) != 0 || pipe(vfork_ack) != 0)) {
             bound_fork_complete(&bound_fork, 0, -1);
             G_RET(c) = (uint64_t)(int64_t)(-errno);
             break;
@@ -1933,9 +1967,12 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         if (is_vfork) {
             if (pid == 0) {
                 close(vfork_pipe[0]);
+                close(vfork_ack[1]);
                 g_vfork_release_fd = vfork_pipe[1];
+                g_vfork_ack_fd = vfork_ack[0];
             } else {
                 close(vfork_pipe[1]);
+                close(vfork_ack[0]);
             }
         }
         bound_status = bound_fork_complete(&bound_fork, pid == 0, pid == 0 ? (int)getpid() : (int)pid);
@@ -2006,10 +2043,19 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         if (pid > 0 && is_vfork) {
             unsigned char committed;
-            while (read(vfork_pipe[0], &committed, sizeof committed) < 0 && errno == EINTR) {}
+            ssize_t received;
+            do
+                received = read(vfork_pipe[0], &committed, sizeof committed);
+            while (received < 0 && errno == EINTR);
+            if (received == 1 && committed == 2) {
+                vfork_import_guest_memory(pid);
+                while (write(vfork_ack[1], &committed, sizeof committed) < 0 && errno == EINTR) {}
+            }
             close(vfork_pipe[0]);
+            close(vfork_ack[1]);
         } else if (pid < 0 && is_vfork) {
             close(vfork_pipe[0]);
+            close(vfork_ack[1]);
         }
         // CLONE_PARENT_SETTID(0x00100000): store the child's tid (its pid) into the PARENT's *ptid (a2).
         // Mutually exclusive with CLONE_PIDFD (which also uses the ptid slot), so it never clobbers a pidfd.
@@ -2514,6 +2560,8 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // (low byte 0x7f, high byte 19); Linux uses the sentinel status 0xffff. Check this BEFORE the stopped
         // branch below, which would otherwise mistranslate it as a stop.
         if ((st & 0xff) == 0x7f && ((st >> 8) & 0xff) == SIGCONT) {
+            int ignored_stop;
+            (void)sigstop_lookup(r, &ignored_stop, 1);
             st = 0xffff;
         } else if (rawsig != 0 && rawsig != 0x7f) {
 #if defined(__APPLE__)
@@ -2527,8 +2575,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             st = (st & ~0xff) | lsig | (core ? 0x80 : 0);
         }
         // WIFSTOPPED: macOS stopsig -> Linux
-        else if ((st & 0xff) == 0x7f)
-            st = (st & ~0xff00) | ((sig_m2l((st >> 8) & 0xff) & 0xff) << 8);
+        else if ((st & 0xff) == 0x7f) {
+            int guest_stop;
+            int stop = sigstop_lookup(r, &guest_stop, 0) ? guest_stop : sig_m2l((st >> 8) & 0xff);
+            st = (st & ~0xff00) | ((stop & 0xff) << 8);
+        }
         // WIFEXITED from the host, but the child may have relayed a guest signal death: a fatal-default
         // signal with no faithful fatal host mapping is delivered by the child _exit()ing after recording its
         // Linux signo in the shared table. Reconstruct the SIGNALED status here. A genuine guest _exit(n)
