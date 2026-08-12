@@ -9,7 +9,10 @@ mod repository;
 mod rust;
 mod support;
 
-pub use c::{CallPolicy as CCallPolicy, Policy as CPolicy, Structure as CStructure};
+pub use c::{
+    CallPolicy as CCallPolicy, Policy as CPolicy, Structure as CStructure,
+    analyzer::{AnalyzerConfig as CAnalyzerConfig, run as run_c_analyzers},
+};
 pub use repository::{
     CatchAllSourcePath, DependencyDirection, Documentation, EmptyDirectory, FileLength, FileName, FolderNoun,
     ModulePrefix, ParentName, PrefixDirectory, RepositoryEscape, RuntimeTool, SingleFileDirectory, TestDependency,

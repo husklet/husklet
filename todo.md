@@ -115,7 +115,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 
 - [x] Register C lint and structure checks in the standard Rust linter.
 - [x] Preserve strict C compiler warnings and Cargo-owned source discovery.
-- [ ] Integrate or replace clang-format verification, clang-tidy, and cppcheck without Make/CMake; document which are embedded versus Nix-provided analyzers.
+- [x] Integrate clang-format verification, clang-tidy, and cppcheck without Make/CMake. Cargo owns C compilation and the embedded tree-sitter rules; Nix supplies Bear, clang-format, clang-tidy, and cppcheck, and the normal verification derivation runs them through `hl-design-lint` with Cargo's real compilation database and file-level diagnostics.
 - [ ] Make the complete `hl-design-lint` suite green.
 - [ ] Run `cargo check --workspace --all-targets` on the final merged tip.
 - [ ] Run `cargo test --workspace --lib --bins` on the final merged tip.

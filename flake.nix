@@ -157,6 +157,8 @@
         fileset = lib.fileset.unions [
           ./Cargo.lock
           ./Cargo.toml
+          ./lint.toml
+          ./lint
           ./rust-toolchain.toml
           ./rustfmt.toml
           ./src
@@ -165,6 +167,7 @@
       };
 
       commonNativeInputs = pkgs: [
+        pkgs.bear
         pkgs.clang-tools
         pkgs.cppcheck
         pkgs.pkg-config
@@ -317,7 +320,10 @@
               cargo fmt --all --check --message-format short
               cargo run --locked --offline -q -p hl-design-lint -- --policy lint.toml src tests
               cargo run --locked --offline -q -p hl-design-lint -- --policy lint.toml --cases lint src tests
-              cargo build -p engine -p testing --bins --locked --offline
+              bear --output "$TMPDIR/compile_commands.json" -- \
+                cargo build -p engine -p testing --bins --locked --offline
+              cargo run --locked --offline -q -p hl-design-lint -- \
+                --c-analyzers "$TMPDIR" src tests
               export HL_TEST_ENGINE_APP_BIN_DIR="$PWD/target/debug"
               cargo check --workspace --all-targets --locked --offline
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings

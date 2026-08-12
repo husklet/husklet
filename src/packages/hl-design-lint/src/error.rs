@@ -40,9 +40,19 @@ pub enum LintError {
     #[error("{0}")]
     /// Command-line arguments are invalid.
     Argument(&'static str),
+
+    #[error("{0}")]
+    /// External analyzer configuration or execution failed.
+    Configuration(String),
 }
 
 impl LintError {
+    /// Creates an error for invalid analyzer configuration or failed execution.
+    #[must_use]
+    pub fn configuration(message: impl Into<String>) -> Self {
+        Self::Configuration(message.into())
+    }
+
     pub(crate) fn io(action: &'static str, path: impl Into<PathBuf>, source: io::Error) -> Self {
         Self::Io {
             action,

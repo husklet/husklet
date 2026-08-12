@@ -9,6 +9,15 @@ struct Arguments {
     /// Runs the portable C rules on the requested paths.
     #[arg(long, conflicts_with_all = ["markdown", "cases"])]
     c: bool,
+    /// Runs clang-format, clang-tidy, and cppcheck using a compilation database.
+    #[arg(long, value_name = "DIRECTORY", conflicts_with_all = ["c", "markdown", "cases"])]
+    c_analyzers: Option<PathBuf>,
+    #[arg(long, default_value = "clang-format", requires = "c_analyzers")]
+    clang_format: PathBuf,
+    #[arg(long, default_value = "clang-tidy", requires = "c_analyzers")]
+    clang_tidy: PathBuf,
+    #[arg(long, default_value = "cppcheck", requires = "c_analyzers")]
+    cppcheck: PathBuf,
     #[arg(long, value_name = "FILE")]
     policy: Option<PathBuf>,
     #[arg(long, conflicts_with = "cases")]
@@ -41,6 +50,17 @@ impl Arguments {
         let output = self.output();
         if self.paths.is_empty() {
             self.paths.push(PathBuf::from("src"));
+        }
+
+        if let Some(compilation_database) = self.c_analyzers {
+            let config = hl_design_lint::CAnalyzerConfig {
+                clang_format: self.clang_format,
+                clang_tidy: self.clang_tidy,
+                cppcheck: self.cppcheck,
+                compilation_database,
+            };
+            return hl_design_lint::run_c_analyzers(&config, &self.paths)
+                .map_err(hl_design_lint::LintError::configuration);
         }
 
         let cases = matches!(output, Output::Cases(_));
@@ -113,5 +133,30 @@ mod tests {
 
         let trailing = Arguments::try_parse_from(["hl-design-lint", "--", "--literal"]).unwrap();
         assert_eq!(trailing.paths, [PathBuf::from("--literal")]);
+    }
+
+    #[test]
+    fn c_analyzers_require_a_database_and_accept_tool_overrides() {
+        let arguments = Arguments::try_parse_from([
+            "hl-design-lint",
+            "--c-analyzers",
+            "build",
+            "--clang-format",
+            "format",
+            "--clang-tidy",
+            "tidy",
+            "--cppcheck",
+            "check",
+            "native",
+        ])
+        .unwrap();
+        assert_eq!(arguments.c_analyzers, Some(PathBuf::from("build")));
+        assert_eq!(arguments.clang_format, PathBuf::from("format"));
+        assert_eq!(arguments.clang_tidy, PathBuf::from("tidy"));
+        assert_eq!(arguments.cppcheck, PathBuf::from("check"));
+        assert_eq!(arguments.paths, [PathBuf::from("native")]);
+
+        assert!(Arguments::try_parse_from(["hl-design-lint", "--clang-tidy", "tidy"]).is_err());
+        assert!(Arguments::try_parse_from(["hl-design-lint", "--c", "--c-analyzers", "build"]).is_err());
     }
 }

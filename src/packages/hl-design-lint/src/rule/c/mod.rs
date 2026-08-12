@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::{LintError, Result, source::Workspace};
+pub mod analyzer;
 mod policy;
 mod structure;
 mod suppression;

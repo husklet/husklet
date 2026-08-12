@@ -22,13 +22,13 @@ pub use policy::{
 };
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
-    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CCallPolicy, CPolicy, CStructure, CatchAllModule,
-    CatchAllSourcePath, CeremonialStructure, ConstructorOwnership, DependencyDirection, Documentation, DuplicateEntity,
-    EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject,
-    GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication,
-    ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule,
-    RuntimeTool, SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory, TestName,
-    UnsafeBoundary,
+    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CAnalyzerConfig, CCallPolicy, CPolicy, CStructure,
+    CatchAllModule, CatchAllSourcePath, CeremonialStructure, ConstructorOwnership, DependencyDirection, Documentation,
+    DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun,
+    FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting,
+    ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry,
+    RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory,
+    TestName, UnsafeBoundary, run_c_analyzers,
 };
 pub use source::{Source, Workspace};
 
