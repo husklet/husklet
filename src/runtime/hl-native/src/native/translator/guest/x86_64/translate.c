@@ -5563,6 +5563,27 @@ static int lower_sse_word_lane(struct insn *instruction, uint64_t guest_pc, uint
     return TX_NEXT;
 }
 
+static int lower_sse_widening_integer(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0xF4 && opcode != 0xF6) return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    if (opcode == 0xF4) { // pmuludq: multiply even unsigned 32-bit lanes into 64-bit products
+        emit32(0x4E801800u | (vd << 16) | (vd << 5) | 17);
+        emit32(0x4E801800u | (source << 16) | (source << 5) | 18);
+        emit32(0x2EA0C000u | (18 << 16) | (17 << 5) | vd);
+        return TX_NEXT;
+    }
+
+    // psadbw: widen and pairwise-add absolute byte differences into each 64-bit half.
+    emit32(0x6E207400u | (source << 16) | (vd << 5) | 17);
+    emit32(0x6E202800u | (17 << 5) | 17);
+    emit32(0x6E602800u | (17 << 5) | 17);
+    emit32(0x6EA02800u | (17 << 5) | 17);
+    e_vmov(vd, 17);
+    return TX_NEXT;
+}
+
 static int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t op = I.op;
     if (op != 0x2E && op != 0x2F) return TX_FALL;
@@ -6456,24 +6477,12 @@ static void *translate_block(uint64_t gpc) {
                     // The helper emitted the complete packed or scalar comparison.
                 } else if (lower_sse_flag_compare(I, gpc, next, vd, vm) == TX_NEXT) {
                     // The helper emitted COMIS/UCOMIS and published its EFLAGS result.
-                } else if (op == 0xF4) { // pmuludq: multiply even unsigned 32-bit lanes to 64-bit products
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    emit32(0x4E801800u | (vd << 16) | (vd << 5) | 17);
-                    emit32(0x4E801800u | (s << 16) | (s << 5) | 18);
-                    emit32(0x2EA0C000u | (18 << 16) | (17 << 5) | vd);
+                } else if (lower_sse_widening_integer(&I, next, vd, vm, mmx) == TX_NEXT) {
+                    // The helper emitted PMULUDQ or PSADBW.
                 } else if (op == 0x50) {
                     (void)lower_sse_sign_mask(&I, vm, mmx);
                 } else if (lower_sse_packed_conversion(I, next, vd, vm) == TX_NEXT) {
                     // The helper emitted the packed integer/float conversion.
-                } else if (op == 0xF6) { // psadbw (66): sum of abs byte diffs per 64-bit half
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    emit32(0x6E207400u | (s << 16) | (vd << 5) | 17); // uabd   v17.16b, vd.16b, s.16b
-                    emit32(0x6E202800u | (17 << 5) | 17);             // uaddlp v17.8h,  v17.16b
-                    emit32(0x6E602800u | (17 << 5) | 17);             // uaddlp v17.4s,  v17.8h
-                    emit32(0x6EA02800u | (17 << 5) | 17);             // uaddlp v17.2d,  v17.4s
-                    e_vmov(vd, 17);
                 } else if (lower_sse_nontemporal_store(&I, gpc, next, vd, vm) == TX_NEXT) {
                     // The helper emitted the explicit or implicit-destination store.
                 } else
