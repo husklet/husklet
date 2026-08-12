@@ -3132,6 +3132,35 @@ static void sse42_mask(struct cpu *c, int res, int imm, int n) {
     memcpy(&c->v[0], out, 16); // XMM0 == c->v[0..1]; legacy SSE leaves the upper YMM bits intact
 }
 
+static enum avx_dispatch_result sse_dispatch_string_compare(const hl_x86_avx_state *state, struct cpu *c,
+                                                            struct insn *I, uint64_t next, const uint8_t operand1[16]) {
+    int op = I->op;
+    if (I->map3 != 3 || (op != 0x60 && op != 0x61 && op != 0x62 && op != 0x63)) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t operand2[16];
+    sse_get_rm(state, c, I, next, operand2);
+    int immediate = (int)I->imm;
+    int element_width = (immediate & 1) ? 2 : 1;
+    int elements = 16 / element_width;
+    int operand1_length;
+    int operand2_length;
+    if (op == 0x60 || op == 0x61) {
+        operand1_length = sse42_elen(I->rexW ? (int64_t)c->r[RAX] : (int32_t)c->r[RAX], elements);
+        operand2_length = sse42_elen(I->rexW ? (int64_t)c->r[RDX] : (int32_t)c->r[RDX], elements);
+    } else {
+        operand1_length = sse42_ilen(operand1, element_width, elements);
+        operand2_length = sse42_ilen(operand2, element_width, elements);
+    }
+    int result = sse42_intres(operand1, operand2, operand1_length, operand2_length, immediate, elements);
+    if (op == 0x60 || op == 0x62)
+        sse42_mask(c, result, immediate, elements);
+    else
+        sse42_index(c, result, immediate, elements);
+    sse42_flags(c, result, operand1_length, operand2_length, elements);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result sse_dispatch_floating(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
                                                       uint64_t next, uint8_t destination[16]) {
     int op = I->op;
@@ -3320,32 +3349,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     if (sse_dispatch_floating(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_crc_movbe(state, c, &I, next) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_lane_transfer(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
-
-    // ---- PCMP{I,E}STR{I,M} (0F3A 60/61/62/63): SSE4.2 packed string compare -------------------------
-    // 60=PCMPESTRM (explicit len -> mask in xmm0), 61=PCMPESTRI (explicit len -> index in ECX),
-    // 62=PCMPISTRM (implicit len -> mask in xmm0), 63=PCMPISTRI (implicit len -> index in ECX).
-    if (map == 3 && (op == 0x60 || op == 0x61 || op == 0x62 || op == 0x63)) {
-        sse_get_rm(state, c, &I, next, s); // s = operand2 (r/m), D = operand1 (reg/xmm1)
-        int imm = (int)I.imm;
-        int wordsz = (imm & 1) ? 2 : 1;
-        int n = 16 / wordsz;
-        int la, lb;
-        if (op == 0x60 || op == 0x61) { // explicit lengths from EAX (op1) / EDX (op2)
-            la = sse42_elen(I.rexW ? (int64_t)c->r[RAX] : (int32_t)c->r[RAX], n);
-            lb = sse42_elen(I.rexW ? (int64_t)c->r[RDX] : (int32_t)c->r[RDX], n);
-        } else { // implicit lengths: first null element
-            la = sse42_ilen(D, wordsz, n);
-            lb = sse42_ilen(s, wordsz, n);
-        }
-        int res = sse42_intres(D, s, la, lb, imm, n);
-        if (op == 0x60 || op == 0x62)
-            sse42_mask(c, res, imm, n);
-        else
-            sse42_index(c, res, imm, n);
-        sse42_flags(c, res, la, lb, n);
-        c->rip = next;
-        return;
-    }
+    if (sse_dispatch_string_compare(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     // ---- PTEST (66 0F38 17, SSE4.1): read-only flag-setter. ZF=(D & s)==0, CF=(s & ~D)==0, OF/SF/AF/PF=0.
     // D = operand1 (reg/xmm1), s = operand2 (r/m). node/V8 startup branches on these. Substrate: x86 CF=NOT stored-C.
