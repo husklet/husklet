@@ -4826,6 +4826,52 @@ static int lower_x87_register_arithmetic(struct insn *instruction, uint64_t gues
     return TX_NEXT;
 }
 
+static int lower_scalar_two_byte(struct insn *instruction, uint64_t guest_pc, uint64_t next, int sf,
+                                 const hl_x86_trace_state *trace_state) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0xC3) {
+        emit_ea(instruction, next);
+        emit_memory_guard(17, (uint64_t)instruction->opsize, guest_pc, X86_SOFT_WRITE);
+        e_store(instruction->opsize, instruction->reg, 17);
+        if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)instruction->opsize);
+        return TX_NEXT;
+    }
+    if (opcode == 0xAF) {
+        int memory;
+        int source = rm_load(instruction, next, instruction->opsize, &memory);
+        int carry_overflow_live = !trace_state->flag_elision ||
+                                  (hl_x86_trace_flags_livein(trace_state, next, guest_pc) & HL_X86_FLAG_NZCV);
+        e_imul2(instruction->reg, instruction->reg, source, instruction->opsize, carry_overflow_live);
+        return TX_NEXT;
+    }
+    if (opcode >= 0xC8 && opcode <= 0xCF) {
+        int reg = (opcode - 0xC8) | (instruction->rexB << 3);
+        emit32((sf ? 0xDAC00C00u : 0x5AC00800u) | (reg << 5) | reg);
+        return TX_NEXT;
+    }
+    if (opcode != 0xB6 && opcode != 0xB7 && opcode != 0xBE && opcode != 0xBF) return TX_FALL;
+    int source_width = (opcode & 1) ? 2 : 1;
+    int signed_extension = opcode >= 0xBE;
+    int destination_width = instruction->opsize;
+    int destination = destination_width == 2 ? 16 : instruction->reg;
+    if (instruction->is_mem) {
+        emit_ea(instruction, next);
+        emit_bus_guard(17, (uint64_t)source_width, guest_pc);
+        if (signed_extension)
+            e_ldrs_w(source_width, destination, 17, destination_width == 8);
+        else
+            e_load(source_width, destination, 17);
+    } else {
+        int source = source_width == 1 ? byte_val(instruction, instruction->rm_reg, 16) : instruction->rm_reg;
+        if (signed_extension)
+            e_sxt_to(destination, source, source_width, destination_width == 8);
+        else
+            e_uxt(destination, source, source_width);
+    }
+    if (destination_width == 2) e_bfi(instruction->reg, 16, 0, 16, 1);
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6416,11 +6462,8 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             if (system_query_result == TX_BREAK) break;
-            if (op == 0xC3) { // movnti: non-temporal store r32/r64 -> m
-                emit_ea(&I, next);
-                emit_memory_guard(17, (uint64_t)I.opsize, gpc, X86_SOFT_WRITE);
-                e_store(I.opsize, I.reg, 17);
-                if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)I.opsize);
+            int scalar_two_byte_result = lower_scalar_two_byte(&I, gpc, next, sf, &trace_state);
+            if (scalar_two_byte_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
@@ -6437,23 +6480,6 @@ static void *translate_block(uint64_t gpc) {
             }
             int double_shift_result = lower_double_shift(&I, next);
             if (double_shift_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            // imul reg, r/m (0F AF)
-            if (op == 0xAF) {
-                int mem;
-                int rmv = rm_load(&I, next, I.opsize, &mem);
-                int af_co_live = !trace_state.flag_elision ||
-                                 (hl_x86_trace_flags_livein(&trace_state, next, gpc) & HL_X86_FLAG_NZCV);
-                e_imul2(I.reg, I.reg, rmv, I.opsize, af_co_live); // reg *= r/m, sets x86 CF/OF on overflow
-                gpc = next;
-                continue;
-            }
-            // bswap (0F C8+r): byte-reverse a register -> ARM REV
-            if (op >= 0xC8 && op <= 0xCF) {
-                int r = (op - 0xC8) | (I.rexB << 3);
-                emit32((sf ? 0xDAC00C00u : 0x5AC00800u) | (r << 5) | r);
                 gpc = next;
                 continue;
             }
@@ -6511,32 +6537,6 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             if (conditional_move_result == TX_BREAK) break;
-            // movzx/movsx (0F B6/B7 zero, BE/BF sign). The dest operand size (I.opsize: 2/4/8) governs how
-            // the extended value lands: a 32-bit dest must extend to 32 and ZERO bits 63:32; a 64-bit dest
-            // extends to 64; a 16-bit dest (66 prefix) inserts the low 16 and preserves bits 63:16.
-            if (op == 0xB6 || op == 0xB7 || op == 0xBE || op == 0xBF) {
-                int w = (op & 1) ? 2 : 1; // source width: B6/BE byte, B7/BF word
-                int signd = (op >= 0xBE);
-                int dw = I.opsize;                // dest width 2/4/8
-                int dst = (dw == 2) ? 16 : I.reg; // 16-bit dest extends into scratch, then bfi-merges
-                if (I.is_mem) {
-                    emit_ea(&I, next);
-                    emit_bus_guard(17, (uint64_t)w, gpc);
-                    if (signd)
-                        e_ldrs_w(w, dst, 17, dw == 8); // sign-extend; W form (dw<=4) clears bits 63:32
-                    else
-                        e_load(w, dst, 17); // ldrb/ldrh zero-extend into the full register
-                } else {
-                    int src = (w == 1) ? byte_val(&I, I.rm_reg, 16) : I.rm_reg; // byte source: ah/bh/ch/dh -> bits 8-15
-                    if (signd)
-                        e_sxt_to(dst, src, w, dw == 8); // sxtb/sxth into W (clears 63:32) or X
-                    else
-                        e_uxt(dst, src, w); // uxtb/uxth: 32-bit op clears bits 63:32
-                }
-                if (dw == 2) e_bfi(I.reg, 16, 0, 16, 1); // 16-bit dest: merge low 16, preserve bits 63:16
-                gpc = next;
-                continue;
-            }
         }
         report_unimpl(gpc, &I);
         break;
