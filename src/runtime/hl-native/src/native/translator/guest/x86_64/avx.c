@@ -1,7 +1,7 @@
 #include "avx.h"
 #include "cpu.h"
 #include "decoder.h"
-#include "rep_runtime.h"            // the bound guest-access validators + X86_SOFT_READ/WRITE
+#include "rep_runtime.h"       // the bound guest-access validators + X86_SOFT_READ/WRITE
 #include "../../../host/cpu.h" // HL_HOST_CPU_*: the half-precision converter forks per host CPU
 
 #include <fenv.h>
@@ -760,6 +760,107 @@ static int simd_element_negative(uint64_t value, int size) {
 static void do_avx(const hl_x86_avx_state *state, struct cpu *c);
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c);
 
+enum avx_dispatch_result {
+    AVX_DISPATCH_UNIMPLEMENTED = -1,
+    AVX_DISPATCH_UNMATCHED = 0,
+    AVX_DISPATCH_HANDLED = 1,
+};
+
+// BMI instructions share VEX decoding with AVX but operate exclusively on the general register file.
+// Keep that integer family outside the vector dispatcher so its flag and destination rules are reviewable
+// independently from the packed-vector opcode maps.
+static enum avx_dispatch_result avx_dispatch_bmi(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
+                                                 uint64_t next, int map, int op, int pp, int rd, int vv) {
+    if (!((map == 2 && (op == 0xf2 || op == 0xf3 || op == 0xf5 || op == 0xf6 || op == 0xf7)) ||
+          (map == 3 && op == 0xf0)))
+        return AVX_DISPATCH_UNMATCHED;
+
+    int wb = I->vex_w ? 64 : 32;
+    uint64_t M = I->vex_w ? ~0ull : 0xffffffffull;
+    uint64_t rm;
+    if (I->is_mem) {
+        uint64_t ea = avx_ea(state, c, I, next, I->vex_w ? 8 : 4);
+        rm = 0;
+        (void)avx_memory_read(state, ea, &rm, I->vex_w ? 8u : 4u);
+    } else
+        rm = c->r[I->rm_reg] & M;
+    uint64_t v2 = c->r[vv] & M, res = 0;
+    int setfl = 0, cf = 0, zf, sf, dest = rd;
+    if (map == 2 && op == 0xf5 && pp == 0) { // BZHI rd, rm, vvvv: zero bits >= index(vvvv&0xff)
+        int idx = (int)(v2 & 0xff);
+        res = (idx >= wb) ? rm : (rm & ((idx == 0) ? 0 : ((1ull << idx) - 1)));
+        cf = (idx > wb - 1);
+        setfl = 1;
+    } else if (map == 2 && op == 0xf7 && pp == 0) { // BEXTR rd, rm, vvvv(start:len in al:ah of vvvv)
+        int start = (int)(v2 & 0xff), len = (int)((v2 >> 8) & 0xff);
+        uint64_t t = (start >= wb) ? 0 : (rm >> start);
+        res = (len >= wb) ? t : (t & ((len == 0) ? 0 : ((1ull << len) - 1)));
+        setfl = 1;
+    } else if (map == 2 && op == 0xf7 && pp == 1) { // SHLX rd, rm, vvvv
+        res = rm << (v2 & (uint64_t)(wb - 1));
+    } else if (map == 2 && op == 0xf7 && pp == 2) { // SARX rd, rm, vvvv (arithmetic)
+        int sh = (int)(v2 & (uint64_t)(wb - 1));
+        res = (uint64_t)(I->vex_w ? ((int64_t)rm >> sh) : ((int32_t)rm >> sh));
+    } else if (map == 2 && op == 0xf7 && pp == 3) { // SHRX rd, rm, vvvv
+        res = rm >> (v2 & (uint64_t)(wb - 1));
+    } else if (map == 2 && op == 0xf6 && pp == 3) { // MULX rd(hi):vvvv(lo) = rdx * rm
+// __int128 is a pre-C23 GNU/clang extension the widening multiply/carryless paths need; scope the
+// -Wpedantic silence to the declaration rather than dropping the type.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+        unsigned __int128 p = (unsigned __int128)(c->r[RDX] & M) * (unsigned __int128)rm;
+#pragma GCC diagnostic pop
+        c->r[vv] = (uint64_t)p & M;
+        res = (uint64_t)(I->vex_w ? (p >> 64) : ((p >> 32) & 0xffffffff));
+    } else if (map == 3 && op == 0xf0 && pp == 3) { // RORX rd, rm, imm8 (no flags)
+        int sh = (int)(I->imm & (wb - 1));
+        res = sh ? ((rm >> sh) | (rm << (wb - sh))) : rm;
+        if (!I->vex_w) res &= M;
+    } else if (map == 2 && op == 0xf5 && pp == 2) { // PEXT rd, vvvv(src), rm(mask) -- F3 prefix => pp=2
+        uint64_t src = v2, msk = rm, bit = 1;
+        for (uint64_t m = msk; m; m &= m - 1) {
+            if (src & (m & (~m + 1))) res |= bit;
+            bit <<= 1;
+        }
+    } else if (map == 2 && op == 0xf5 && pp == 3) { // PDEP rd, vvvv(src), rm(mask) -- F2 prefix => pp=3
+        uint64_t src = v2, msk = rm, bit = 1;
+        for (uint64_t m = msk; m; m &= m - 1) {
+            if (src & bit) res |= (m & (~m + 1));
+            bit <<= 1;
+        }
+    } else if (map == 2 && op == 0xf2 && pp == 0) { // ANDN rd, vvvv, rm: (~src1) & src2; SF/ZF, CF=OF=0
+        res = (~v2) & rm;
+        cf = 0;
+        setfl = 1;
+    } else if (map == 2 && op == 0xf3 && pp == 0) { // BMI1 BLS group (ModRM.reg = opcode ext; dest in vvvv)
+        int grp = I->reg & 7;
+        dest = vv;
+        if (grp == 1) { // BLSR vvvv, rm: (rm-1) & rm; CF=(rm==0)
+            res = (rm - 1) & rm;
+            cf = (rm == 0);
+        } else if (grp == 2) { // BLSMSK vvvv, rm: (rm-1) ^ rm; CF=(rm==0)
+            res = (rm - 1) ^ rm;
+            cf = (rm == 0);
+        } else if (grp == 3) { // BLSI vvvv, rm: (-rm) & rm; CF=(rm!=0)
+            res = (0 - rm) & rm;
+            cf = (rm != 0);
+        } else {
+            return AVX_DISPATCH_UNIMPLEMENTED;
+        }
+        setfl = 1;
+    } else {
+        return AVX_DISPATCH_UNIMPLEMENTED;
+    }
+    c->r[dest] = res & M; // 32-bit dest zero-extends to 64
+    if (setfl) {          // BZHI/BEXTR/ANDN/BLS* set ZF/SF, CF as computed, OF=0
+        zf = ((res & M) == 0);
+        sf = (int)((res >> (wb - 1)) & 1);
+        c->nzcv = ((uint64_t)sf << 31) | ((uint64_t)zf << 30) | ((uint64_t)(!cf) << 29);
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -787,95 +888,9 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     xs_note(1, map, op, c->rip); // EXITSTAT diagnostic (no-op unless env set)
     uint8_t a[64], b[64], d[64];
 
-    // ---- BMI2 / BMI1: VEX-encoded but operate on GENERAL registers (not vector). Routed here by the VEX
-    // decoder; handle on cpu->r[]. wbits per VEX.W. rm = ModRM.r/m (reg or mem); the 2nd source is VEX.vvvv.
-    if ((map == 2 && (op == 0xf2 || op == 0xf3 || op == 0xf5 || op == 0xf6 || op == 0xf7)) ||
-        (map == 3 && op == 0xf0)) {
-        int wb = I.vex_w ? 64 : 32;
-        uint64_t M = I.vex_w ? ~0ull : 0xffffffffull;
-        uint64_t rm;
-        if (I.is_mem) {
-            uint64_t ea = avx_ea(state, c, &I, next, I.vex_w ? 8 : 4);
-            rm = 0;
-            (void)avx_memory_read(state, ea, &rm, I.vex_w ? 8u : 4u);
-        } else
-            rm = c->r[I.rm_reg] & M;
-        uint64_t v2 = c->r[vv] & M, res = 0;
-        int setfl = 0, cf = 0, zf, sf, dest = rd;
-        if (map == 2 && op == 0xf5 && pp == 0) { // BZHI rd, rm, vvvv: zero bits >= index(vvvv&0xff)
-            int idx = (int)(v2 & 0xff);
-            res = (idx >= wb) ? rm : (rm & ((idx == 0) ? 0 : ((1ull << idx) - 1)));
-            cf = (idx > wb - 1);
-            setfl = 1;
-        } else if (map == 2 && op == 0xf7 && pp == 0) { // BEXTR rd, rm, vvvv(start:len in al:ah of vvvv)
-            int start = (int)(v2 & 0xff), len = (int)((v2 >> 8) & 0xff);
-            uint64_t t = (start >= wb) ? 0 : (rm >> start);
-            res = (len >= wb) ? t : (t & ((len == 0) ? 0 : ((1ull << len) - 1)));
-            setfl = 1;
-        } else if (map == 2 && op == 0xf7 && pp == 1) { // SHLX rd, rm, vvvv
-            res = rm << (v2 & (uint64_t)(wb - 1));
-        } else if (map == 2 && op == 0xf7 && pp == 2) { // SARX rd, rm, vvvv (arithmetic)
-            int sh = (int)(v2 & (uint64_t)(wb - 1));
-            res = (uint64_t)(I.vex_w ? ((int64_t)rm >> sh) : ((int32_t)rm >> sh));
-        } else if (map == 2 && op == 0xf7 && pp == 3) { // SHRX rd, rm, vvvv
-            res = rm >> (v2 & (uint64_t)(wb - 1));
-        } else if (map == 2 && op == 0xf6 && pp == 3) { // MULX rd(hi):vvvv(lo) = rdx * rm
-// __int128 is a pre-C23 GNU/clang extension the widening multiply/carryless paths need; scope the
-// -Wpedantic silence to the declaration rather than dropping the type.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
-            unsigned __int128 p = (unsigned __int128)(c->r[RDX] & M) * (unsigned __int128)rm;
-#pragma GCC diagnostic pop
-            c->r[vv] = (uint64_t)p & M;
-            res = (uint64_t)(I.vex_w ? (p >> 64) : ((p >> 32) & 0xffffffff));
-        } else if (map == 3 && op == 0xf0 && pp == 3) { // RORX rd, rm, imm8 (no flags)
-            int sh = (int)(I.imm & (wb - 1));
-            res = sh ? ((rm >> sh) | (rm << (wb - sh))) : rm;
-            if (!I.vex_w) res &= M;
-        } else if (map == 2 && op == 0xf5 && pp == 2) { // PEXT rd, vvvv(src), rm(mask) -- F3 prefix => pp=2
-            uint64_t src = v2, msk = rm, bit = 1;
-            for (uint64_t m = msk; m; m &= m - 1) {
-                if (src & (m & (~m + 1))) res |= bit;
-                bit <<= 1;
-            }
-        } else if (map == 2 && op == 0xf5 && pp == 3) { // PDEP rd, vvvv(src), rm(mask) -- F2 prefix => pp=3
-            uint64_t src = v2, msk = rm, bit = 1;
-            for (uint64_t m = msk; m; m &= m - 1) {
-                if (src & bit) res |= (m & (~m + 1));
-                bit <<= 1;
-            }
-        } else if (map == 2 && op == 0xf2 && pp == 0) { // ANDN rd, vvvv, rm: (~src1) & src2; SF/ZF, CF=OF=0
-            res = (~v2) & rm;
-            cf = 0;
-            setfl = 1;
-        } else if (map == 2 && op == 0xf3 && pp == 0) { // BMI1 BLS group (ModRM.reg = opcode ext; dest in vvvv)
-            int grp = I.reg & 7;
-            dest = vv;
-            if (grp == 1) { // BLSR vvvv, rm: (rm-1) & rm; CF=(rm==0)
-                res = (rm - 1) & rm;
-                cf = (rm == 0);
-            } else if (grp == 2) { // BLSMSK vvvv, rm: (rm-1) ^ rm; CF=(rm==0)
-                res = (rm - 1) ^ rm;
-                cf = (rm == 0);
-            } else if (grp == 3) { // BLSI vvvv, rm: (-rm) & rm; CF=(rm!=0)
-                res = (0 - rm) & rm;
-                cf = (rm != 0);
-            } else {
-                goto avx_unimpl;
-            }
-            setfl = 1;
-        } else {
-            goto avx_unimpl;
-        }
-        c->r[dest] = res & M; // 32-bit dest zero-extends to 64
-        if (setfl) {          // BZHI/BEXTR/ANDN/BLS* set ZF/SF, CF as computed, OF=0
-            zf = ((res & M) == 0);
-            sf = (int)((res >> (wb - 1)) & 1);
-            c->nzcv = ((uint64_t)sf << 31) | ((uint64_t)zf << 30) | ((uint64_t)(!cf) << 29);
-        }
-        c->rip = next;
-        return;
-    }
+    enum avx_dispatch_result bmi = avx_dispatch_bmi(state, c, &I, next, map, op, pp, rd, vv);
+    if (bmi == AVX_DISPATCH_HANDLED) return;
+    if (bmi == AVX_DISPATCH_UNIMPLEMENTED) goto avx_unimpl;
 
     // ---- map 1 (0F) ----
     if (map == 1) {
