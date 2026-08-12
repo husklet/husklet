@@ -64,8 +64,8 @@ fn main() {
         return;
     }
     println!("cargo:supported=1");
-    println!("cargo:host_os={}", target.os.cfg_name());
-    println!("cargo:host_arch={}", target.arch.cfg_name());
+    println!("cargo:host_os={target_os}");
+    println!("cargo:host_arch={target_arch}");
 
     println!("cargo:rerun-if-changed={NATIVE_ROOT}");
     let runtime_sources = discover_runtime_roots(&target_os, &target_arch);

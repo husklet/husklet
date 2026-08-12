@@ -18,15 +18,6 @@ impl HostOs {
             _ => None,
         }
     }
-
-    #[must_use]
-    pub const fn cfg_name(self) -> &'static str {
-        match self {
-            Self::Linux => "linux",
-            Self::Macos => "macos",
-            Self::Windows => "windows",
-        }
-    }
 }
 
 /// CPUs for which the native engine can run as a host process.
@@ -43,14 +34,6 @@ impl HostArch {
             b"aarch64" => Some(Self::Aarch64),
             b"x86_64" => Some(Self::X86_64),
             _ => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn cfg_name(self) -> &'static str {
-        match self {
-            Self::Aarch64 => "aarch64",
-            Self::X86_64 => "x86_64",
         }
     }
 }
