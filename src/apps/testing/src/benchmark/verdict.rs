@@ -106,6 +106,13 @@ fn verify_phase_coverage(row: &Row, expected: &[String]) -> Result<(), Error> {
         )
         .into());
     }
+    if row.phases.values().any(|phase| phase.us == 0) {
+        return Err(format!(
+            "benchmark evidence contains a zero duration for {}/{}",
+            row.workload, row.layout
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -431,5 +438,14 @@ mod tests {
             },
         );
         assert!(super::verify_phase_coverage(&extra, &expected).is_err());
+    }
+
+    #[test]
+    fn evidence_duration_must_be_positive() {
+        let expected = ["malloc".to_owned()];
+        let mut zero = row("malloc|plain|EE|0|0", "E", 0);
+        assert!(super::verify_phase_coverage(&zero, &expected).is_err());
+        zero.phases.get_mut("malloc").unwrap().us = 1;
+        super::verify_phase_coverage(&zero, &expected).unwrap();
     }
 }
