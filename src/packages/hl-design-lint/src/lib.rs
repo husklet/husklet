@@ -213,6 +213,7 @@ mod tests {
             "runtime-tool-ownership",
             "unsafe-boundary",
             "unclassified-free-function",
+            "detached-constructor",
             "duplicate-entity-base",
             "boolean-state-cluster",
             "broad-trait-responsibilities",
@@ -292,6 +293,8 @@ struct DiscoveredImage { id: u64, name: String, path: String, score: u8 }
 
 struct Subject;
 fn unclassified(value: &Subject) -> usize { let _ = value; 1 }
+struct Constructed;
+fn construct() -> Constructed { Constructed }
 #[hl_design::classify(pkg)]
 fn classified(value: &Subject) -> usize { let _ = value; 1 }
 fn once(value: usize) -> usize { value + 1 }
@@ -308,7 +311,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 41);
+        assert_eq!(summaries.len(), 43);
         assert!(
             reporter
                 .0
@@ -316,6 +319,12 @@ fn caller() {
                 .any(|finding| finding.rule == "unclassified-free-function"
                     && finding.subject == "unclassified"
                     && finding.is_violation())
+        );
+        assert!(
+            reporter
+                .0
+                .iter()
+                .any(|finding| finding.rule == "detached-constructor" && finding.subject == "construct")
         );
         assert!(
             reporter
