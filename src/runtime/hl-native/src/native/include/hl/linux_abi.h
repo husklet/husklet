@@ -263,6 +263,7 @@ HL_API hl_status hl_linux_fd_close(hl_linux_abi *linux_abi, hl_linux_fd fd, hl_h
  * Apply Linux close-on-exec policy to one descriptor. The descriptor table is
  * authoritative: out_closed is one only when this call removed fd. A final OFD
  * reference also closes its host file handle through the host-service seam.
+ * out_closed is required and resets to zero before other validation.
  */
 HL_API hl_status hl_linux_fd_exec(hl_linux_abi *linux_abi, hl_linux_fd fd, uint32_t *out_closed);
 typedef void (*hl_linux_fd_exec_callback)(void *context, hl_linux_fd fd);
@@ -270,6 +271,7 @@ typedef void (*hl_linux_fd_exec_callback)(void *context, hl_linux_fd fd);
  * Remove every close-on-exec descriptor without scanning through host-native fd numbers.
  * The table lock is released before host close and callback; failures do not stop later removals.
  */
+/* out_closed is required and resets to zero before other validation. */
 HL_API hl_status hl_linux_fd_exec_all(hl_linux_abi *linux_abi, hl_linux_fd_exec_callback callback, void *context,
                                       uint32_t *out_closed);
 /* Quiescent-state diagnostic for descriptor/OFD ownership invariants. */

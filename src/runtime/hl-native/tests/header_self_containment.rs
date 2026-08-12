@@ -577,6 +577,43 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove reservation output probe directory");
 }
 
+#[test]
+fn descriptor_exec_failure_clears_stale_close_count() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-count-output-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("count output probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "linux_abi/count_output.h"
+
+int main(void) {
+    uint32_t output = 42;
+    if (!hl_linux_count_output_prepare(&output)) return 1;
+    if (output != 0) return 2;
+    return hl_linux_count_output_prepare(0) == 0 ? 0 : 3;
+}
+"#,
+    )
+    .expect("count output probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("count output probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("count output probe execution");
+    assert!(run.success(), "count output probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove count output probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {

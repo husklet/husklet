@@ -141,14 +141,16 @@ hl_status hl_linux_fd_close(hl_linux_abi *linux_abi, hl_linux_fd fd, hl_host_han
                                                   : HL_STATUS_OK;
 }
 
+#include "count_output.h"
+
 hl_status hl_linux_fd_exec(hl_linux_abi *linux_abi, hl_linux_fd fd, uint32_t *out_closed) {
     const hl_host_file_services *files;
     hl_host_handle handle = HL_HOST_HANDLE_INVALID;
     hl_status status;
     hl_host_result result;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || out_closed == NULL)
+    if (!hl_linux_count_output_prepare(out_closed)) return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION)
         return HL_STATUS_INVALID_ARGUMENT;
-    *out_closed = 0;
     hl_linux_lock(linux_abi);
     if (fd >= linux_abi->fd_capacity || linux_abi->fds[fd].ofd == 0 || linux_abi->fds[fd].ofd == HL_LINUX_FD_RESERVED) {
         hl_linux_unlock(linux_abi);
@@ -174,9 +176,9 @@ hl_status hl_linux_fd_exec_all(hl_linux_abi *linux_abi, hl_linux_fd_exec_callbac
     hl_status first = HL_STATUS_OK;
     hl_linux_fd cursor = 0;
     uint32_t count = 0;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || out_closed == NULL)
+    if (!hl_linux_count_output_prepare(out_closed)) return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION)
         return HL_STATUS_INVALID_ARGUMENT;
-    *out_closed = 0;
     while (cursor < linux_abi->fd_capacity) {
         hl_linux_fd candidate;
         uint32_t removed = 0;
@@ -254,4 +256,3 @@ static int64_t hl_linux_pread64_owned(hl_linux_abi *linux_abi, hl_linux_ofd_entr
     if (result.value > size || result.value > (uint64_t)INT64_MAX) return -HL_LINUX_EIO;
     return (int64_t)result.value;
 }
-
