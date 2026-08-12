@@ -23,14 +23,8 @@ pub struct Builder {
     isa: GuestIsa,
     executable: PathBuf,
     inputs: Vec<Input>,
-    options: Vec<(String, String)>,
     arguments: Vec<Vec<u8>>,
-    environment: Vec<(Vec<u8>, Vec<u8>)>,
-    entry: Option<PathBuf>,
     rootfs: Option<Rootfs>,
-    base_system: BaseSystem,
-    trace: Option<PathBuf>,
-    guest_executable: Option<PathBuf>,
 }
 
 impl Builder {
@@ -48,14 +42,8 @@ impl Builder {
             isa,
             executable: executable.into(),
             inputs: Vec::new(),
-            options: Vec::new(),
             arguments: Vec::new(),
-            environment: Vec::new(),
-            entry: None,
             rootfs: None,
-            base_system: BaseSystem::linux(),
-            trace: None,
-            guest_executable: None,
         }
     }
 
@@ -78,18 +66,15 @@ impl Builder {
     }
 
     pub fn build(self) -> Result<Engine, EngineError> {
-        let Some(environment) = Self::environment(self.environment) else {
-            return Err(EngineError::LaunchFailed);
-        };
         let workspace = OwnedWorkspace::create().inspect_err(|error| {
             hl_log::hl_error!(hl_log::tag::EXEC, "engine workspace creation failed: error={error:?}");
         })?;
-        let prepared = match workspace.prepare_rootfs(&self.executable, self.rootfs, self.guest_executable.as_deref()) {
+        let prepared = match workspace.prepare_rootfs(&self.executable, self.rootfs, None) {
             Ok(value) => value,
             Err(error) => return workspace.fail(error),
         };
         if prepared.rootfs.is_none()
-            && let Err(error) = workspace.stage_base_system(self.base_system)
+            && let Err(error) = workspace.stage_base_system(BaseSystem::linux())
         {
             return workspace.fail(error);
         }
@@ -98,43 +83,25 @@ impl Builder {
                 return workspace.fail(error);
             }
         }
-        let guest_launch = self.entry.as_ref().map_or_else(
-            || prepared.guest_entry.clone(),
-            |relative| Path::new("/").join(relative),
-        );
-        let launch = self
-            .entry
-            .map_or(prepared.executable.clone(), |relative| workspace.root.join(relative));
+        let guest_launch = prepared.guest_entry;
+        let launch = prepared.executable;
         let filesystem_root = prepared.rootfs.as_ref().unwrap_or(&workspace.root);
         if fs::create_dir_all(filesystem_root.join("tmp")).is_err() {
             return workspace.fail(EngineError::WorkspaceFailed);
         }
-        let default_working = !self.options.iter().any(|(name, _)| name == "HL_CWD");
-        let working = if default_working {
-            let path = match Self::initial_working_directory(prepared.rootfs.is_some()) {
-                Ok(path) => path,
-                Err(error) => return workspace.fail(error),
-            };
-            if let Err(error) = workspace.stage_working_directory(filesystem_root, &path) {
-                return workspace.fail(error);
-            }
-            Some(path)
-        } else {
-            None
+        let working = match Self::initial_working_directory(prepared.rootfs.is_some()) {
+            Ok(path) => path,
+            Err(error) => return workspace.fail(error),
         };
+        if let Err(error) = workspace.stage_working_directory(filesystem_root, &working) {
+            return workspace.fail(error);
+        }
         let rootfs = prepared.rootfs.map(|path| path.as_os_str().as_encoded_bytes().to_vec());
         let workspace_text = workspace.root.to_string_lossy();
         let mut options = Options::default();
-        for (name, value) in self.options {
-            let value = value.replace("{workspace}", &workspace_text);
-            if options.set(&name, &value, true).is_err() {
-                return workspace.fail(EngineError::LaunchFailed);
-            }
-        }
-        if let Some(working) = working
-            && options
-                .set_bytes("HL_CWD", working.as_os_str().as_encoded_bytes(), true)
-                .is_err()
+        if options
+            .set_bytes("HL_CWD", working.as_os_str().as_encoded_bytes(), true)
+            .is_err()
         {
             return workspace.fail(EngineError::LaunchFailed);
         }
@@ -148,8 +115,8 @@ impl Builder {
                         .into_bytes()
                 }))
                 .collect(),
-            environment,
-            result_path: self.trace.map(|path| path.as_os_str().as_encoded_bytes().to_vec()),
+            environment: Vec::new(),
+            result_path: None,
             options,
         };
         let factory = ProductionFactory;
@@ -168,34 +135,6 @@ impl Builder {
             workspace,
             terminal: None,
         })
-    }
-
-    fn environment(values: Vec<(Vec<u8>, Vec<u8>)>) -> Option<Vec<Vec<u8>>> {
-        if values.len() > 4096 {
-            return None;
-        }
-        let mut bytes = 0_usize;
-        let mut records = Vec::with_capacity(values.len());
-        for (name, value) in values {
-            if name.is_empty() || name.contains(&b'=') || name.contains(&0) || value.contains(&0) {
-                return None;
-            }
-            let Some(length) = name.len().checked_add(value.len()).and_then(|size| size.checked_add(2)) else {
-                return None;
-            };
-            let Some(total) = bytes.checked_add(length) else {
-                return None;
-            };
-            if total > 64 * 1024 * 1024 {
-                return None;
-            }
-            bytes = total;
-            let mut record = name;
-            record.push(b'=');
-            record.extend(value);
-            records.push(record);
-        }
-        Some(records)
     }
 }
 
@@ -343,23 +282,5 @@ mod tests {
             Builder::initial_working_directory(false).unwrap(),
             std::env::current_dir().unwrap()
         );
-    }
-
-    #[test]
-    fn environment_exact() {
-        assert_eq!(
-            Builder::environment(vec![(b"TZ".to_vec(), b"UTC\xff".to_vec())]),
-            Some(vec![b"TZ=UTC\xff".to_vec()]),
-        );
-        assert_eq!(Builder::environment(Vec::new()), Some(Vec::new()));
-    }
-
-    #[test]
-    fn environment_invalid() {
-        for name in [b"".as_slice(), b"A=B", b"A\0B"] {
-            assert_eq!(Builder::environment(vec![(name.to_vec(), b"x".to_vec())]), None);
-        }
-        assert_eq!(Builder::environment(vec![(b"A".to_vec(), b"x\0y".to_vec())]), None);
-        assert_eq!(Builder::environment(vec![(b"A".to_vec(), Vec::new()); 4097]), None);
     }
 }
