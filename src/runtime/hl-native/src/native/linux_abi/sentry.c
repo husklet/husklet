@@ -1230,48 +1230,466 @@ static void sentry_service_control(struct sentry_ring *R) {
     }
 }
 
+struct sentry_fd_state {
+    uint8_t psel_save[3][128];
+    uint32_t psel_nfds;
+    uint8_t psel_present[3];
+    uint8_t poll_nval[SENTRY_DATACAP / 8u / 8u + 1u];
+};
+
+static __thread struct sentry_fd_state g_sentry_fd_state;
+
+static int sentry_translate_path(struct sentry_proc *p, struct cpu *tmp, int64_t *local_ret) {
+    int path_fd = vfd_proc_path(p, (char *)G_A1(tmp), SENTRY_PATHCAP);
+    if (path_fd < 0) {
+        *local_ret = -ENOENT;
+        return 1;
+    }
+    if (path_fd == 2) g_bound_source_native = 1;
+    int d = (int)(int64_t)G_A0(tmp);
+    if (d < 0) return 0;
+    int r = vfd_real(p, d);
+    if (r < 0) return -1;
+    char *relative = (char *)G_A1(tmp);
+    int procfd_directory = p->procfd_dir[d];
+    if (!procfd_directory && relative[0] != '/') {
+        char descriptor_path[64];
+        char backing[HL_LINUX_PATH_MAX + 1];
+        int descriptor_length = snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", r);
+        ssize_t backing_length = descriptor_length > 0 && (size_t)descriptor_length < sizeof descriptor_path
+                                     ? readlink(descriptor_path, backing, sizeof backing - 1u)
+                                     : -1;
+        if (backing_length > 0) {
+            backing[backing_length] = 0;
+            procfd_directory = strstr(backing, "/.hl-proc-fd") != NULL;
+        }
+    }
+    if (relative[0] != '/' && procfd_directory) {
+        char joined[SENTRY_PATHCAP];
+        int length = snprintf(joined, sizeof joined, "/proc/self/fd/%s", relative);
+        if (length < 0 || (size_t)length >= sizeof joined) {
+            *local_ret = -ENAMETOOLONG;
+            return 1;
+        }
+        memcpy(relative, joined, (size_t)length + 1u);
+        int translated = vfd_proc_path(p, relative, SENTRY_PATHCAP);
+        if (translated < 0) {
+            *local_ret = -ENOENT;
+            return 1;
+        }
+        if (translated == 2) g_bound_source_native = 1;
+        G_A0(tmp) = (uint64_t)(int64_t)-100;
+        return 0;
+    }
+    const char *directory = r < HL_NFD ? g_fdpath[r] : NULL;
+    if (relative[0] != '/' && directory != NULL && directory[0]) {
+        if (g_rootfs && !strncmp(directory, g_rootfs_canon, g_rootfs_canon_len)) directory += g_rootfs_canon_len;
+        if (!strncmp(directory, "/proc/", 6) || !strcmp(directory, "/proc") || !strncmp(directory, "/dev/fd", 7)) {
+            char joined[SENTRY_PATHCAP];
+            int length = snprintf(joined, sizeof joined, "%s/%s", directory, relative);
+            if (length < 0 || (size_t)length >= sizeof joined) {
+                *local_ret = -ENAMETOOLONG;
+                return 1;
+            }
+            memcpy(relative, joined, (size_t)length + 1u);
+            G_A0(tmp) = (uint64_t)(int64_t)-100;
+            return 0;
+        }
+    }
+    G_A0(tmp) = (uint64_t)(int64_t)r;
+    return 0;
+}
+
+static int sentry_translate_inputs(struct sentry_ring *R, struct cpu *tmp, uint64_t snr, const int have[6],
+                                   struct sentry_fd_state *state) {
+    // ---- per-process VIRTUAL fd translation (P1): map every guest fd ARGUMENT to its real sentry fd. A guest
+    //      fd not in THIS process's table (a sentry-internal fd, another guest's fd, a stale fd) translates to
+    //      -EBADF and never reaches the kernel. close + dup3 also mutate the table here (handled fully, then
+    //      short-circuit); fds the call CREATES are virtualized on the OUT-path after service_local. ----
+    // ppoll: bit k set = pollfd[k] named a POSITIVE virtual fd that is not mapped (stale/closed) -> the
+    // OUT-path reports POLLNVAL for it (Linux), rather than the kernel silently ignoring a -1 entry.
+    int handled_local = 0;
+    int64_t local_ret = 0;
+    {
+        pthread_mutex_lock(&g_fd_lock);
+        struct sentry_proc *p = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
+        int eb = (p == NULL);
+        g_bound_source_native = 0;
+        g_bound_second_native = 0;
+        if (p && (fd_in_a0(snr) || snr == 48 || snr == 56 || snr == 78 || snr == 79 || snr == 291 || snr == 439)) {
+            int v = (int)(int64_t)G_A0(tmp);
+            if (v >= 0 && (uint32_t)v < SENTRY_VFD_MAX && p->real[v] >= 0 && !p->typed[v]) g_bound_source_native = 1;
+        }
+        if (p) switch (snr) {
+            case 71: { // sendfile: a0=output, a1=input; both are virtual descriptors
+                int output = (int)(int64_t)G_A0(tmp);
+                int input = (int)(int64_t)G_A1(tmp);
+                int real_output = vfd_real(p, output);
+                int real_input = vfd_real(p, input);
+                if (real_output < 0 || real_input < 0) {
+                    eb = 1;
+                } else {
+                    g_bound_source_native = !p->typed[output];
+                    g_bound_second_native = !p->typed[input];
+                    G_A0(tmp) = (uint64_t)(int64_t)real_output;
+                    G_A1(tmp) = (uint64_t)(int64_t)real_input;
+                }
+                break;
+            }
+            case 48:
+            case 56:
+            case 78:
+            case 79:
+            case 291:
+            case 439: { // *at path operations: a0 = dirfd; AT_FDCWD (<0) passes through
+                int status = sentry_translate_path(p, tmp, &local_ret);
+                if (status < 0) eb = 1;
+                if (status > 0) handled_local = 1;
+                break;
+            }
+            case 57: { // close: translate + drop the mapping. A BORROWED (stdio) fd is unmapped but NOT closed.
+                int v = (int)(int64_t)G_A0(tmp);
+                int r = vfd_real(p, v);
+                if (r < 0) {
+                    eb = 1;
+                    break;
+                }
+                int typed = p->typed[v];
+                if (vfd_drop(p, v) < 0) {
+                    handled_local = 1;
+                    local_ret = 0;
+                    break;
+                } // borrowed: success, real fd stays
+                sentry_owned_close(r, typed);
+                handled_local = 1;
+                local_ret = 0;
+                break;
+            }
+            case 24: { // dup3(oldfd, newfd, flags): handled ENTIRELY here -- never let the kernel use the guest's
+                       //   virtual newfd as a real target. dup the real oldfd, then bind the guest's chosen virtual
+                       //   newfd to the result (closing whatever it named). (fscache flush is skipped -- a pure
+                       //   fd-table op.)
+                int oldv = (int)(int64_t)G_A0(tmp), newv = (int)(int64_t)G_A1(tmp), flags = (int)G_A2(tmp);
+                int rold = vfd_real(p, oldv);
+                if (rold < 0) {
+                    eb = 1;
+                    break;
+                }
+                handled_local = 1;
+                if (oldv == newv) {
+                    local_ret = -EINVAL;
+                    break;
+                } // Linux dup3 EINVAL on equal fds
+                if (newv < 0 || (uint32_t)newv >= SENTRY_VFD_MAX) {
+                    local_ret = -EBADF;
+                    break;
+                }
+                int rnew;
+                if (p->typed[oldv]) {
+                    hl_linux_fd_snapshot typed;
+                    if (!bound_snapshot((uint64_t)(uint32_t)rold, &typed)) {
+                        local_ret = -EBADF;
+                        break;
+                    }
+                    rnew = (int)bound_dup_at_least(typed.fd, 0, (flags & LX_O_CLOEXEC) ? HL_LINUX_FD_CLOEXEC : 0);
+                } else {
+                    rnew = fcntl(rold, (flags & O_CLOEXEC) ? F_DUPFD_CLOEXEC : F_DUPFD, 0);
+                }
+                if (rnew < 0) {
+                    local_ret = -errno;
+                    break;
+                }
+                int prev_typed = p->typed[newv];
+                int prev = vfd_drop(p, newv);
+                if (prev >= 0) sentry_owned_close(prev, prev_typed);
+                p->real[newv] = rnew;
+                p->borrowed[newv] = 0;
+                p->typed[newv] = p->typed[oldv];
+                p->procfd_dir[newv] = p->procfd_dir[oldv];
+                p->cloexec[newv] = (flags & LX_O_CLOEXEC) != 0; // dup3 sets FD_CLOEXEC iff LX_O_CLOEXEC given
+                local_ret = newv;
+                break;
+            }
+            case 76:
+            case 285: { // splice/copy_file_range(fd_in=a0, fd_out=a2): translate BOTH virtual descriptors
+                int r0 = vfd_real(p, (int)(int64_t)G_A0(tmp));
+                int r2 = vfd_real(p, (int)(int64_t)G_A2(tmp));
+                if (r0 < 0 || r2 < 0)
+                    eb = 1;
+                else {
+                    G_A0(tmp) = (uint64_t)(int64_t)r0;
+                    G_A2(tmp) = (uint64_t)(int64_t)r2;
+                }
+                break;
+            }
+            case 21: { // epoll_ctl(epfd, op, fd, ev): translate BOTH the epoll fd (a0) and the target fd (a2)
+                int r0 = vfd_real(p, (int)(int64_t)G_A0(tmp));
+                int r2 = vfd_real(p, (int)(int64_t)G_A2(tmp));
+                if (r0 < 0 || r2 < 0)
+                    eb = 1;
+                else {
+                    G_A0(tmp) = (uint64_t)(int64_t)r0;
+                    G_A2(tmp) = (uint64_t)(int64_t)r2;
+                }
+                break;
+            }
+            case 73: { // ppoll: translate each pollfd.fd (8B/entry, fd at +0) in the ring array to its real fd
+                uint32_t nfds = (uint32_t)G_A1(tmp);
+                memset(state->poll_nval, 0, sizeof state->poll_nval);
+                for (uint32_t k = 0; k < nfds; k++) {
+                    int *fdp = (int *)(R->buf + (size_t)k * 8u);
+                    int ofd = *fdp;
+                    int r = vfd_real(p, ofd);
+                    // A POSITIVE fd the sentry never handed this guest is stale/closed -> Linux reports
+                    // POLLNVAL for it (remembered here, applied on the OUT-path). A NEGATIVE fd is a
+                    // caller-requested ignore and legitimately polls as -1 (revents 0).
+                    if (r < 0 && ofd >= 0 && k < sizeof(state->poll_nval) * 8u) state->poll_nval[k >> 3] |= (uint8_t)(1u << (k & 7));
+                    *fdp = (r < 0) ? -1 : r; // never forward a wrong fd
+                }
+                break;
+            }
+            case 72: { // pselect6: rebuild REAL fd_sets from the virtual ones in place; save the originals so the
+                       //   result can be remapped back to virtual fds on the OUT-path
+                uint32_t nfds = (uint32_t)G_A0(tmp);
+                if (nfds > SENTRY_VFD_MAX) nfds = SENTRY_VFD_MAX;
+                state->psel_nfds = nfds;
+                uint8_t *win[3] = {R->buf + SENTRY_PSEL_RD, R->buf + SENTRY_PSEL_WR, R->buf + SENTRY_PSEL_EX};
+                state->psel_present[0] = (uint8_t)have[1];
+                state->psel_present[1] = (uint8_t)have[2];
+                state->psel_present[2] = (uint8_t)have[3];
+                int maxreal = -1;
+                for (int s = 0; s < 3; s++) {
+                    if (!state->psel_present[s]) continue;
+                    memcpy(state->psel_save[s], win[s], 128); // stash the ORIGINAL virtual set
+                    memset(win[s], 0, 128);            // rebuild it as the REAL set
+                    for (uint32_t v = 0; v < nfds; v++) {
+                        if (!(state->psel_save[s][v >> 3] & (1u << (v & 7)))) continue;
+                        int r = vfd_real(p, (int)v);
+                        if (r < 0) {
+                            eb = 1; // Linux select/pselect: an invalid fd in any set -> EBADF, not a silent skip
+                            break;
+                        }
+                        if ((uint32_t)r >= 1024u) continue; // unrepresentable in the real fd_set -> not selectable
+                        win[s][r >> 3] |= (uint8_t)(1u << (r & 7));
+                        if (r > maxreal) maxreal = r;
+                    }
+                    if (eb) break;
+                }
+                G_A0(tmp) = (uint64_t)(maxreal + 1); // real nfds
+                break;
+            }
+            default:
+                if (fd_in_a0(snr)) {
+                    int r = vfd_real(p, (int)(int64_t)G_A0(tmp));
+                    if (r < 0)
+                        eb = 1;
+                    else
+                        G_A0(tmp) = (uint64_t)(int64_t)r;
+                }
+                break;
+            }
+        pthread_mutex_unlock(&g_fd_lock);
+        if (eb) {
+            R->ret = -EBADF;
+            R->nserved++;
+            return 1;
+        }
+        if (handled_local) {
+            R->ret = local_ret;
+            R->nserved++;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static void sentry_translate_outputs(struct sentry_ring *R, struct cpu *tmp, uint64_t snr, int64_t ret,
+                                     uint64_t coff, struct sentry_fd_state *state) {
+    // ---- VIRTUALIZE newly-created fds (P1): every real fd service_local just produced is mapped to a fresh
+    //      per-process virtual fd, so the worker only ever sees virtual numbers. Also remap pselect's narrowed
+    //      result fd_sets back to the guest's virtual fd positions. (close drops its mapping on the IN-path;
+    //      dup3 is fully handled there.) ----
+    {
+        pthread_mutex_lock(&g_fd_lock);
+        struct sentry_proc *p = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
+        if (p) switch (snr) {
+            case 56:
+            case 198:
+            case 202:
+            case 242:
+            case 19:
+            case 23:
+            case 279: // memfd_create: an anonymous sentry-owned file enters the virtual table like an open
+            case 20:  // openat/socket/accept*/dup/eventfd2/epoll_create1
+                if (ret >= 0) {
+                    int v = vfd_alloc(p, (int)ret, 0);
+                    if (v < 0) {
+                        sentry_created_close((int)ret);
+                        R->ret = -EMFILE;
+                    } else {
+                        // Track the guest's FD_CLOEXEC intent so a later guest execve sweeps this fd. The
+                        // CLOEXEC bit (O_CLOEXEC == SOCK_CLOEXEC == EFD_CLOEXEC == EPOLL_CLOEXEC == 0x80000)
+                        // rides a different arg per syscall; dup(23)/accept(202) never set it.
+                        int cx = 0;
+                        switch (snr) {
+                        case 56: cx = (R->a[2] & LX_O_CLOEXEC) != 0; break;  // openat flags
+                        case 198: cx = (R->a[1] & LX_O_CLOEXEC) != 0; break; // socket type
+                        case 242: cx = (R->a[3] & LX_O_CLOEXEC) != 0; break; // accept4 flags
+                        case 19: cx = (R->a[1] & LX_O_CLOEXEC) != 0; break;  // eventfd2 flags
+                        case 20: cx = (R->a[0] & LX_O_CLOEXEC) != 0; break;  // epoll_create1 flags
+                        case 279: cx = (R->a[1] & 1u) != 0; break;           // memfd_create MFD_CLOEXEC
+                        default: cx = 0; break;                              // dup(23) / accept(202)
+                        }
+                        p->cloexec[v] = (uint8_t)cx;
+                        if (snr == 56) {
+                            const char *opened = (const char *)G_A1(tmp);
+                            p->procfd_dir[v] = opened != NULL && !strcmp(opened, "/proc/self/fd");
+                        }
+                        R->ret = v;
+                    }
+                }
+                break;
+            case 25: // fcntl F_DUPFD(0)/F_DUPFD_CLOEXEC(1030): the result is a new real fd -> virtualize it,
+                     //   honoring the guest's minimum-fd hint (a2, a virtual lower bound)
+                if ((G_A1(tmp) == 0 || G_A1(tmp) == 1030) && ret >= 0) {
+                    uint32_t minv = (uint32_t)R->a[2];
+                    int v = vfd_alloc(p, (int)ret, minv < SENTRY_VFD_MAX ? minv : 0);
+                    if (v < 0) {
+                        sentry_created_close((int)ret);
+                        R->ret = -EMFILE;
+                    } else {
+                        p->cloexec[v] = (G_A1(tmp) == 1030); // F_DUPFD_CLOEXEC sets FD_CLOEXEC on the new fd
+                        int source_vfd = (int)(int64_t)R->a[0];
+                        if (source_vfd >= 0 && (uint32_t)source_vfd < SENTRY_VFD_MAX) {
+                            p->typed[v] = p->typed[source_vfd];
+                            p->procfd_dir[v] = p->procfd_dir[source_vfd];
+                        }
+                        R->ret = v;
+                    }
+                } else if (G_A1(tmp) == 2 /* F_SETFD */) {
+                    // Track FD_CLOEXEC on the guest's virtual fd (the real sentry fd's flag is irrelevant to a
+                    // guest execve, which is a local image reload). Serve success without a real-fd flag change.
+                    int v = (int)(int64_t)R->a[0];
+                    if (v >= 0 && (uint32_t)v < SENTRY_VFD_MAX && p->real[v] >= 0) {
+                        p->cloexec[v] = (R->a[2] & 1 /* FD_CLOEXEC */) != 0;
+                        R->ret = 0;
+                    }
+                } else if (G_A1(tmp) == 1 /* F_GETFD */) {
+                    // Return the guest's tracked FD_CLOEXEC, not the real sentry fd's.
+                    int v = (int)(int64_t)R->a[0];
+                    if (v >= 0 && (uint32_t)v < SENTRY_VFD_MAX && p->real[v] >= 0) R->ret = p->cloexec[v] ? 1 : 0;
+                }
+                break;
+            case 59:
+            case 199: // pipe2 / socketpair: two real fds at buf[0..8) -> virtualize both in place
+                if (ret == 0) {
+                    int r0 = *(int *)(R->buf), r1 = *(int *)(R->buf + 4);
+                    int v0 = vfd_alloc(p, r0, 0), v1 = (v0 >= 0) ? vfd_alloc(p, r1, 0) : -1;
+                    if (v0 < 0 || v1 < 0) {
+                        if (v0 >= 0) vfd_drop(p, v0);
+                        sentry_native_close(r0);
+                        sentry_native_close(r1);
+                        R->ret = -EMFILE;
+                    } else {
+                        // pipe2(fds,flags): flags=a1; socketpair(dom,type,proto,fds): SOCK_CLOEXEC rides type=a1.
+                        uint8_t cx = (R->a[1] & LX_O_CLOEXEC) != 0;
+                        p->typed[v0] = 0;
+                        p->typed[v1] = 0;
+                        p->cloexec[v0] = cx;
+                        p->cloexec[v1] = cx;
+                        *(int *)(R->buf) = v0;
+                        *(int *)(R->buf + 4) = v1;
+                    }
+                }
+                break;
+            case 212: // recvmsg: virtualize any SCM_RIGHTS real fds the sentry received in the control window
+                if (ret >= 0 && coff) sentry_cmsg_translate_in(p, R->buf + coff, (size_t)*(uint64_t *)(R->buf + 40));
+                break;
+            case 73: // ppoll: stamp POLLNVAL(0x20) into revents(+6,2B) for each entry that named a stale/closed
+                     //   positive virtual fd (marked on the IN-path). The kernel returned revents 0 for the -1
+                     //   we substituted; Linux reports POLLNVAL so an event loop notices the invalidation. A
+                     //   POLLNVAL entry also counts toward the ready-fd return value.
+            {
+                uint32_t nf = (uint32_t)R->a[1];
+                for (uint32_t k = 0; k < nf; k++) {
+                    if (!(state->poll_nval[k >> 3] & (1u << (k & 7)))) continue;
+                    uint16_t *rev = (uint16_t *)(R->buf + (size_t)k * 8u + 6u);
+                    if (!(*rev & 0x20u)) {
+                        *rev |= 0x20u; // POLLNVAL
+                        if (R->ret >= 0) R->ret++;
+                    }
+                }
+            } break;
+            case 72: // pselect6: remap the kernel-narrowed REAL fd_sets back to the guest's VIRTUAL fd positions
+                if (ret >= 0) {
+                    uint8_t *win[3] = {R->buf + SENTRY_PSEL_RD, R->buf + SENTRY_PSEL_WR, R->buf + SENTRY_PSEL_EX};
+                    for (int s = 0; s < 3; s++) {
+                        if (!state->psel_present[s]) continue;
+                        uint8_t out[128];
+                        memset(out, 0, sizeof out);
+                        for (uint32_t v = 0; v < state->psel_nfds; v++) {
+                            if (!(state->psel_save[s][v >> 3] & (1u << (v & 7)))) continue; // only originally-requested fds
+                            int r = vfd_real(p, (int)v);
+                            if (r < 0 || (uint32_t)r >= 1024u) continue;
+                            if (win[s][r >> 3] & (1u << (r & 7))) out[v >> 3] |= (uint8_t)(1u << (v & 7));
+                        }
+                        memcpy(win[s], out, 128); // worker copies the window -> guest fd_set
+                    }
+                }
+                break;
+            default: break;
+            }
+        pthread_mutex_unlock(&g_fd_lock);
+    }
+}
+
+static int sentry_prepare_call(struct sentry_ring *R, struct cpu *tmp, uint32_t off[6], int have[6],
+                               uint32_t *iovn) {
+    memset(tmp, 0, sizeof *tmp);
+    G_RAWNR(tmp) = R->rawnr;
+    G_A0(tmp) = R->a[0];
+    G_A1(tmp) = R->a[1];
+    G_A2(tmp) = R->a[2];
+    G_A3(tmp) = R->a[3];
+    G_A4(tmp) = R->a[4];
+    G_A5(tmp) = R->a[5];
+    int32_t redir[6];
+    for (int i = 0; i < 6; i++) redir[i] = R->redir[i];
+    *iovn = R->iovn;
+    uint64_t *args[6] = {&G_A0(tmp), &G_A1(tmp), &G_A2(tmp), &G_A3(tmp), &G_A4(tmp), &G_A5(tmp)};
+    for (int i = 0; i < 6; i++) {
+        if (redir[i] < 0) continue;
+        uint32_t offset = (uint32_t)redir[i];
+        if (offset >= SENTRY_BUFSZ) return -1;
+        off[i] = offset;
+        have[i] = 1;
+        *args[i] = (uint64_t)(R->buf + offset);
+    }
+    return 0;
+}
+
+static void sentry_copy_private_outputs(struct sentry_ring *R, socklen_t pslen, int slen_back, int msg_built,
+                                        uint64_t snr, const uint8_t ph[64]) {
+    if (slen_back) *(socklen_t *)(R->buf + SENTRY_SLEN_OFF) = pslen;
+    if (msg_built && snr == 212) {
+        *(uint32_t *)(R->buf + 8) = *(const uint32_t *)(ph + 8);
+        *(uint64_t *)(R->buf + 40) = *(const uint64_t *)(ph + 40);
+        *(uint32_t *)(R->buf + 48) = *(const uint32_t *)(ph + 48);
+    }
+}
+
 static void sentry_service_one(struct sentry_ring *R) {
     if (sentry_control_operation(R->rawnr)) {
         sentry_service_control(R);
         return;
     }
     struct cpu tmp;
-    memset(&tmp, 0, sizeof tmp);
-    G_RAWNR(&tmp) = R->rawnr; // service_local() re-runs G_NORMALIZE on this as a no-op (already *at)
-    G_A0(&tmp) = R->a[0];
-    G_A1(&tmp) = R->a[1];
-    G_A2(&tmp) = R->a[2];
-    G_A3(&tmp) = R->a[3];
-    G_A4(&tmp) = R->a[4];
-    G_A5(&tmp) = R->a[5];
-    // Snapshot the pointer-redirect metadata into sentry-PRIVATE locals: from here on every validation reads
-    // these copies, NEVER the attacker-writable shared ring, so a racing worker thread cannot rewrite a
-    // field between our check and the kernel's use of it (the validate-in-place TOCTOU, finding E). Scalars
-    // are already snapshotted into `tmp`; this extends the same discipline to the redir table + iovn.
-    int32_t redir[6];
-    for (int i = 0; i < 6; i++)
-        redir[i] = R->redir[i];
-    uint32_t iovn = R->iovn;
-
-    // Redirect each flagged pointer arg into the ring buffer (THE crossing point: from here on
-    // service_local() touches only ring/private memory). Bounds-check every worker-supplied offset first --
-    // an out-of-range offset is a hijacked/buggy worker and faults the call rather than the sentry.
-    int bad = 0;
+    // Snapshot scalars and pointer redirects before validation to avoid shared-ring TOCTOU races.
+    uint32_t iovn;
     uint32_t off[6] = {0, 0, 0, 0, 0, 0};
     int have[6] = {0, 0, 0, 0, 0, 0};
-    uint64_t *ta[6] = {&G_A0(&tmp), &G_A1(&tmp), &G_A2(&tmp), &G_A3(&tmp), &G_A4(&tmp), &G_A5(&tmp)};
-    for (int i = 0; i < 6; i++) {
-        if (redir[i] < 0) continue;
-        uint32_t o = (uint32_t)redir[i];
-        if (o >= SENTRY_BUFSZ) {
-            bad = 1;
-            break;
-        }
-        off[i] = o;
-        have[i] = 1;
-        *ta[i] = (uint64_t)(R->buf + o);
-    }
-
+    int bad = sentry_prepare_call(R, &tmp, off, have, &iovn) < 0;
     uint64_t snr = bad ? 0 : G_NR(&tmp);
     if (snr == 220 || snr == 435) {
         // Process creation is worker-local memory authority. A stale or corrupted mailbox request must
@@ -1280,7 +1698,6 @@ static void sentry_service_one(struct sentry_ring *R) {
         R->nserved++;
         return;
     }
-
     // Per-servicer-thread PRIVATE iovec[] -- the kernel scatters/gathers through THIS, not the shared ring,
     // so a racing worker thread cannot move a segment after we validated it (finding E). 16B/seg * IOVMAX.
     static __thread struct iovec piov[SENTRY_IOVMAX];
@@ -1484,423 +1901,16 @@ static void sentry_service_one(struct sentry_ring *R) {
         return;
     }
 
-    // ---- per-process VIRTUAL fd translation (P1): map every guest fd ARGUMENT to its real sentry fd. A guest
-    //      fd not in THIS process's table (a sentry-internal fd, another guest's fd, a stale fd) translates to
-    //      -EBADF and never reaches the kernel. close + dup3 also mutate the table here (handled fully, then
-    //      short-circuit); fds the call CREATES are virtualized on the OUT-path after service_local. ----
-    static __thread uint8_t psel_save[3][128]; // pselect: saved ORIGINAL virtual fd_sets, for the result remap
-    static __thread uint32_t psel_nfds;        // pselect: guest nfds (bounded to the table)
-    static __thread uint8_t psel_present[3];   // pselect: which of rd/wr/ex sets were supplied
-    // ppoll: bit k set = pollfd[k] named a POSITIVE virtual fd that is not mapped (stale/closed) -> the
-    // OUT-path reports POLLNVAL for it (Linux), rather than the kernel silently ignoring a -1 entry.
-    static __thread uint8_t poll_nval[SENTRY_DATACAP / 8u / 8u + 1u];
-    int handled_local = 0;
-    int64_t local_ret = 0;
-    {
-        pthread_mutex_lock(&g_fd_lock);
-        struct sentry_proc *p = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
-        int eb = (p == NULL);
-        g_bound_source_native = 0;
-        g_bound_second_native = 0;
-        if (p && (fd_in_a0(snr) || snr == 48 || snr == 56 || snr == 78 || snr == 79 || snr == 291 || snr == 439)) {
-            int v = (int)(int64_t)G_A0(&tmp);
-            if (v >= 0 && (uint32_t)v < SENTRY_VFD_MAX && p->real[v] >= 0 && !p->typed[v]) g_bound_source_native = 1;
-        }
-        if (p) switch (snr) {
-            case 71: { // sendfile: a0=output, a1=input; both are virtual descriptors
-                int output = (int)(int64_t)G_A0(&tmp);
-                int input = (int)(int64_t)G_A1(&tmp);
-                int real_output = vfd_real(p, output);
-                int real_input = vfd_real(p, input);
-                if (real_output < 0 || real_input < 0) {
-                    eb = 1;
-                } else {
-                    g_bound_source_native = !p->typed[output];
-                    g_bound_second_native = !p->typed[input];
-                    G_A0(&tmp) = (uint64_t)(int64_t)real_output;
-                    G_A1(&tmp) = (uint64_t)(int64_t)real_input;
-                }
-                break;
-            }
-            case 48:
-            case 56:
-            case 78:
-            case 79:
-            case 291:
-            case 439: { // *at path operations: a0 = dirfd; AT_FDCWD (<0) passes through
-                int path_fd = vfd_proc_path(p, (char *)G_A1(&tmp), SENTRY_PATHCAP);
-                if (path_fd < 0) {
-                    handled_local = 1;
-                    local_ret = -ENOENT;
-                    break;
-                }
-                if (path_fd == 2) g_bound_source_native = 1;
-                int d = (int)(int64_t)G_A0(&tmp);
-                if (d >= 0) {
-                    int r = vfd_real(p, d);
-                    if (r < 0)
-                        eb = 1;
-                    else {
-                        char *relative = (char *)G_A1(&tmp);
-                        int procfd_directory = p->procfd_dir[d];
-                        if (!procfd_directory && relative[0] != '/') {
-                            char descriptor_path[64];
-                            char backing[HL_LINUX_PATH_MAX + 1];
-                            int descriptor_length =
-                                snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", r);
-                            ssize_t backing_length =
-                                descriptor_length > 0 && (size_t)descriptor_length < sizeof descriptor_path
-                                    ? readlink(descriptor_path, backing, sizeof backing - 1u)
-                                    : -1;
-                            if (backing_length > 0) {
-                                backing[backing_length] = 0;
-                                procfd_directory = strstr(backing, "/.hl-proc-fd") != NULL;
-                            }
-                        }
-                        if (relative[0] != '/' && procfd_directory) {
-                            char joined[SENTRY_PATHCAP];
-                            int length = snprintf(joined, sizeof joined, "/proc/self/fd/%s", relative);
-                            if (length < 0 || (size_t)length >= sizeof joined) {
-                                handled_local = 1;
-                                local_ret = -ENAMETOOLONG;
-                                break;
-                            }
-                            memcpy(relative, joined, (size_t)length + 1u);
-                            int translated = vfd_proc_path(p, relative, SENTRY_PATHCAP);
-                            if (translated < 0) {
-                                handled_local = 1;
-                                local_ret = -ENOENT;
-                                break;
-                            }
-                            if (translated == 2) g_bound_source_native = 1;
-                            G_A0(&tmp) = (uint64_t)(int64_t)-100;
-                            break;
-                        }
-                        const char *directory = r < HL_NFD ? g_fdpath[r] : NULL;
-                        if (relative[0] != '/' && directory != NULL && directory[0]) {
-                            if (g_rootfs && !strncmp(directory, g_rootfs_canon, g_rootfs_canon_len))
-                                directory += g_rootfs_canon_len;
-                            if (!strncmp(directory, "/proc/", 6) || !strcmp(directory, "/proc") ||
-                                !strncmp(directory, "/dev/fd", 7)) {
-                                char joined[SENTRY_PATHCAP];
-                                int length = snprintf(joined, sizeof joined, "%s/%s", directory, relative);
-                                if (length < 0 || (size_t)length >= sizeof joined) {
-                                    handled_local = 1;
-                                    local_ret = -ENAMETOOLONG;
-                                    break;
-                                }
-                                memcpy(relative, joined, (size_t)length + 1u);
-                                G_A0(&tmp) = (uint64_t)(int64_t)-100;
-                                break;
-                            }
-                        }
-                        G_A0(&tmp) = (uint64_t)(int64_t)r;
-                    }
-                }
-                break;
-            }
-            case 57: { // close: translate + drop the mapping. A BORROWED (stdio) fd is unmapped but NOT closed.
-                int v = (int)(int64_t)G_A0(&tmp);
-                int r = vfd_real(p, v);
-                if (r < 0) {
-                    eb = 1;
-                    break;
-                }
-                int typed = p->typed[v];
-                if (vfd_drop(p, v) < 0) {
-                    handled_local = 1;
-                    local_ret = 0;
-                    break;
-                } // borrowed: success, real fd stays
-                sentry_owned_close(r, typed);
-                handled_local = 1;
-                local_ret = 0;
-                break;
-            }
-            case 24: { // dup3(oldfd, newfd, flags): handled ENTIRELY here -- never let the kernel use the guest's
-                       //   virtual newfd as a real target. dup the real oldfd, then bind the guest's chosen virtual
-                       //   newfd to the result (closing whatever it named). (fscache flush is skipped -- a pure
-                       //   fd-table op.)
-                int oldv = (int)(int64_t)G_A0(&tmp), newv = (int)(int64_t)G_A1(&tmp), flags = (int)G_A2(&tmp);
-                int rold = vfd_real(p, oldv);
-                if (rold < 0) {
-                    eb = 1;
-                    break;
-                }
-                handled_local = 1;
-                if (oldv == newv) {
-                    local_ret = -EINVAL;
-                    break;
-                } // Linux dup3 EINVAL on equal fds
-                if (newv < 0 || (uint32_t)newv >= SENTRY_VFD_MAX) {
-                    local_ret = -EBADF;
-                    break;
-                }
-                int rnew;
-                if (p->typed[oldv]) {
-                    hl_linux_fd_snapshot typed;
-                    if (!bound_snapshot((uint64_t)(uint32_t)rold, &typed)) {
-                        local_ret = -EBADF;
-                        break;
-                    }
-                    rnew = (int)bound_dup_at_least(typed.fd, 0, (flags & LX_O_CLOEXEC) ? HL_LINUX_FD_CLOEXEC : 0);
-                } else {
-                    rnew = fcntl(rold, (flags & O_CLOEXEC) ? F_DUPFD_CLOEXEC : F_DUPFD, 0);
-                }
-                if (rnew < 0) {
-                    local_ret = -errno;
-                    break;
-                }
-                int prev_typed = p->typed[newv];
-                int prev = vfd_drop(p, newv);
-                if (prev >= 0) sentry_owned_close(prev, prev_typed);
-                p->real[newv] = rnew;
-                p->borrowed[newv] = 0;
-                p->typed[newv] = p->typed[oldv];
-                p->procfd_dir[newv] = p->procfd_dir[oldv];
-                p->cloexec[newv] = (flags & LX_O_CLOEXEC) != 0; // dup3 sets FD_CLOEXEC iff LX_O_CLOEXEC given
-                local_ret = newv;
-                break;
-            }
-            case 76:
-            case 285: { // splice/copy_file_range(fd_in=a0, fd_out=a2): translate BOTH virtual descriptors
-                int r0 = vfd_real(p, (int)(int64_t)G_A0(&tmp));
-                int r2 = vfd_real(p, (int)(int64_t)G_A2(&tmp));
-                if (r0 < 0 || r2 < 0)
-                    eb = 1;
-                else {
-                    G_A0(&tmp) = (uint64_t)(int64_t)r0;
-                    G_A2(&tmp) = (uint64_t)(int64_t)r2;
-                }
-                break;
-            }
-            case 21: { // epoll_ctl(epfd, op, fd, ev): translate BOTH the epoll fd (a0) and the target fd (a2)
-                int r0 = vfd_real(p, (int)(int64_t)G_A0(&tmp));
-                int r2 = vfd_real(p, (int)(int64_t)G_A2(&tmp));
-                if (r0 < 0 || r2 < 0)
-                    eb = 1;
-                else {
-                    G_A0(&tmp) = (uint64_t)(int64_t)r0;
-                    G_A2(&tmp) = (uint64_t)(int64_t)r2;
-                }
-                break;
-            }
-            case 73: { // ppoll: translate each pollfd.fd (8B/entry, fd at +0) in the ring array to its real fd
-                uint32_t nfds = (uint32_t)G_A1(&tmp);
-                memset(poll_nval, 0, sizeof poll_nval);
-                for (uint32_t k = 0; k < nfds; k++) {
-                    int *fdp = (int *)(R->buf + (size_t)k * 8u);
-                    int ofd = *fdp;
-                    int r = vfd_real(p, ofd);
-                    // A POSITIVE fd the sentry never handed this guest is stale/closed -> Linux reports
-                    // POLLNVAL for it (remembered here, applied on the OUT-path). A NEGATIVE fd is a
-                    // caller-requested ignore and legitimately polls as -1 (revents 0).
-                    if (r < 0 && ofd >= 0 && k < sizeof(poll_nval) * 8u) poll_nval[k >> 3] |= (uint8_t)(1u << (k & 7));
-                    *fdp = (r < 0) ? -1 : r; // never forward a wrong fd
-                }
-                break;
-            }
-            case 72: { // pselect6: rebuild REAL fd_sets from the virtual ones in place; save the originals so the
-                       //   result can be remapped back to virtual fds on the OUT-path
-                uint32_t nfds = (uint32_t)G_A0(&tmp);
-                if (nfds > SENTRY_VFD_MAX) nfds = SENTRY_VFD_MAX;
-                psel_nfds = nfds;
-                uint8_t *win[3] = {R->buf + SENTRY_PSEL_RD, R->buf + SENTRY_PSEL_WR, R->buf + SENTRY_PSEL_EX};
-                psel_present[0] = (uint8_t)have[1];
-                psel_present[1] = (uint8_t)have[2];
-                psel_present[2] = (uint8_t)have[3];
-                int maxreal = -1;
-                for (int s = 0; s < 3; s++) {
-                    if (!psel_present[s]) continue;
-                    memcpy(psel_save[s], win[s], 128); // stash the ORIGINAL virtual set
-                    memset(win[s], 0, 128);            // rebuild it as the REAL set
-                    for (uint32_t v = 0; v < nfds; v++) {
-                        if (!(psel_save[s][v >> 3] & (1u << (v & 7)))) continue;
-                        int r = vfd_real(p, (int)v);
-                        if (r < 0) {
-                            eb = 1; // Linux select/pselect: an invalid fd in any set -> EBADF, not a silent skip
-                            break;
-                        }
-                        if ((uint32_t)r >= 1024u) continue; // unrepresentable in the real fd_set -> not selectable
-                        win[s][r >> 3] |= (uint8_t)(1u << (r & 7));
-                        if (r > maxreal) maxreal = r;
-                    }
-                    if (eb) break;
-                }
-                G_A0(&tmp) = (uint64_t)(maxreal + 1); // real nfds
-                break;
-            }
-            default:
-                if (fd_in_a0(snr)) {
-                    int r = vfd_real(p, (int)(int64_t)G_A0(&tmp));
-                    if (r < 0)
-                        eb = 1;
-                    else
-                        G_A0(&tmp) = (uint64_t)(int64_t)r;
-                }
-                break;
-            }
-        pthread_mutex_unlock(&g_fd_lock);
-        if (eb) {
-            R->ret = -EBADF;
-            R->nserved++;
-            return;
-        }
-        if (handled_local) {
-            R->ret = local_ret;
-            R->nserved++;
-            return;
-        }
-    }
+    if (sentry_translate_inputs(R, &tmp, snr, have, &g_sentry_fd_state)) return;
 
     service_local(&tmp); // real host authority + container policy (touches only ring + private memory now)
     int64_t ret = (int64_t)G_RET(&tmp);
     R->ret = ret;
 
-    // Mirror PRIVATE out-values back into the ring so the worker's copy-back into guest memory sees them.
-    if (slen_back) *(socklen_t *)(R->buf + SENTRY_SLEN_OFF) = pslen;
-    if (msg_built && snr == 212) {
-        *(uint32_t *)(R->buf + 8) = *(uint32_t *)(ph + 8);   // updated msg_namelen
-        *(uint64_t *)(R->buf + 40) = *(uint64_t *)(ph + 40); // updated msg_controllen
-        *(uint32_t *)(R->buf + 48) = *(uint32_t *)(ph + 48); // updated msg_flags
-    }
+    sentry_copy_private_outputs(R, pslen, slen_back, msg_built, snr, ph);
 
-    // ---- VIRTUALIZE newly-created fds (P1): every real fd service_local just produced is mapped to a fresh
-    //      per-process virtual fd, so the worker only ever sees virtual numbers. Also remap pselect's narrowed
-    //      result fd_sets back to the guest's virtual fd positions. (close drops its mapping on the IN-path;
-    //      dup3 is fully handled there.) ----
-    {
-        pthread_mutex_lock(&g_fd_lock);
-        struct sentry_proc *p = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
-        if (p) switch (snr) {
-            case 56:
-            case 198:
-            case 202:
-            case 242:
-            case 19:
-            case 23:
-            case 279: // memfd_create: an anonymous sentry-owned file enters the virtual table like an open
-            case 20:  // openat/socket/accept*/dup/eventfd2/epoll_create1
-                if (ret >= 0) {
-                    int v = vfd_alloc(p, (int)ret, 0);
-                    if (v < 0) {
-                        sentry_created_close((int)ret);
-                        R->ret = -EMFILE;
-                    } else {
-                        // Track the guest's FD_CLOEXEC intent so a later guest execve sweeps this fd. The
-                        // CLOEXEC bit (O_CLOEXEC == SOCK_CLOEXEC == EFD_CLOEXEC == EPOLL_CLOEXEC == 0x80000)
-                        // rides a different arg per syscall; dup(23)/accept(202) never set it.
-                        int cx = 0;
-                        switch (snr) {
-                        case 56: cx = (R->a[2] & LX_O_CLOEXEC) != 0; break;  // openat flags
-                        case 198: cx = (R->a[1] & LX_O_CLOEXEC) != 0; break; // socket type
-                        case 242: cx = (R->a[3] & LX_O_CLOEXEC) != 0; break; // accept4 flags
-                        case 19: cx = (R->a[1] & LX_O_CLOEXEC) != 0; break;  // eventfd2 flags
-                        case 20: cx = (R->a[0] & LX_O_CLOEXEC) != 0; break;  // epoll_create1 flags
-                        case 279: cx = (R->a[1] & 1u) != 0; break;           // memfd_create MFD_CLOEXEC
-                        default: cx = 0; break;                              // dup(23) / accept(202)
-                        }
-                        p->cloexec[v] = (uint8_t)cx;
-                        if (snr == 56) {
-                            const char *opened = (const char *)G_A1(&tmp);
-                            p->procfd_dir[v] = opened != NULL && !strcmp(opened, "/proc/self/fd");
-                        }
-                        R->ret = v;
-                    }
-                }
-                break;
-            case 25: // fcntl F_DUPFD(0)/F_DUPFD_CLOEXEC(1030): the result is a new real fd -> virtualize it,
-                     //   honoring the guest's minimum-fd hint (a2, a virtual lower bound)
-                if ((G_A1(&tmp) == 0 || G_A1(&tmp) == 1030) && ret >= 0) {
-                    uint32_t minv = (uint32_t)R->a[2];
-                    int v = vfd_alloc(p, (int)ret, minv < SENTRY_VFD_MAX ? minv : 0);
-                    if (v < 0) {
-                        sentry_created_close((int)ret);
-                        R->ret = -EMFILE;
-                    } else {
-                        p->cloexec[v] = (G_A1(&tmp) == 1030); // F_DUPFD_CLOEXEC sets FD_CLOEXEC on the new fd
-                        int source_vfd = (int)(int64_t)R->a[0];
-                        if (source_vfd >= 0 && (uint32_t)source_vfd < SENTRY_VFD_MAX) {
-                            p->typed[v] = p->typed[source_vfd];
-                            p->procfd_dir[v] = p->procfd_dir[source_vfd];
-                        }
-                        R->ret = v;
-                    }
-                } else if (G_A1(&tmp) == 2 /* F_SETFD */) {
-                    // Track FD_CLOEXEC on the guest's virtual fd (the real sentry fd's flag is irrelevant to a
-                    // guest execve, which is a local image reload). Serve success without a real-fd flag change.
-                    int v = (int)(int64_t)R->a[0];
-                    if (v >= 0 && (uint32_t)v < SENTRY_VFD_MAX && p->real[v] >= 0) {
-                        p->cloexec[v] = (R->a[2] & 1 /* FD_CLOEXEC */) != 0;
-                        R->ret = 0;
-                    }
-                } else if (G_A1(&tmp) == 1 /* F_GETFD */) {
-                    // Return the guest's tracked FD_CLOEXEC, not the real sentry fd's.
-                    int v = (int)(int64_t)R->a[0];
-                    if (v >= 0 && (uint32_t)v < SENTRY_VFD_MAX && p->real[v] >= 0) R->ret = p->cloexec[v] ? 1 : 0;
-                }
-                break;
-            case 59:
-            case 199: // pipe2 / socketpair: two real fds at buf[0..8) -> virtualize both in place
-                if (ret == 0) {
-                    int r0 = *(int *)(R->buf), r1 = *(int *)(R->buf + 4);
-                    int v0 = vfd_alloc(p, r0, 0), v1 = (v0 >= 0) ? vfd_alloc(p, r1, 0) : -1;
-                    if (v0 < 0 || v1 < 0) {
-                        if (v0 >= 0) vfd_drop(p, v0);
-                        sentry_native_close(r0);
-                        sentry_native_close(r1);
-                        R->ret = -EMFILE;
-                    } else {
-                        // pipe2(fds,flags): flags=a1; socketpair(dom,type,proto,fds): SOCK_CLOEXEC rides type=a1.
-                        uint8_t cx = (R->a[1] & LX_O_CLOEXEC) != 0;
-                        p->typed[v0] = 0;
-                        p->typed[v1] = 0;
-                        p->cloexec[v0] = cx;
-                        p->cloexec[v1] = cx;
-                        *(int *)(R->buf) = v0;
-                        *(int *)(R->buf + 4) = v1;
-                    }
-                }
-                break;
-            case 212: // recvmsg: virtualize any SCM_RIGHTS real fds the sentry received in the control window
-                if (ret >= 0 && coff) sentry_cmsg_translate_in(p, R->buf + coff, (size_t)*(uint64_t *)(R->buf + 40));
-                break;
-            case 73: // ppoll: stamp POLLNVAL(0x20) into revents(+6,2B) for each entry that named a stale/closed
-                     //   positive virtual fd (marked on the IN-path). The kernel returned revents 0 for the -1
-                     //   we substituted; Linux reports POLLNVAL so an event loop notices the invalidation. A
-                     //   POLLNVAL entry also counts toward the ready-fd return value.
-            {
-                uint32_t nf = (uint32_t)R->a[1];
-                for (uint32_t k = 0; k < nf; k++) {
-                    if (!(poll_nval[k >> 3] & (1u << (k & 7)))) continue;
-                    uint16_t *rev = (uint16_t *)(R->buf + (size_t)k * 8u + 6u);
-                    if (!(*rev & 0x20u)) {
-                        *rev |= 0x20u; // POLLNVAL
-                        if (R->ret >= 0) R->ret++;
-                    }
-                }
-            } break;
-            case 72: // pselect6: remap the kernel-narrowed REAL fd_sets back to the guest's VIRTUAL fd positions
-                if (ret >= 0) {
-                    uint8_t *win[3] = {R->buf + SENTRY_PSEL_RD, R->buf + SENTRY_PSEL_WR, R->buf + SENTRY_PSEL_EX};
-                    for (int s = 0; s < 3; s++) {
-                        if (!psel_present[s]) continue;
-                        uint8_t out[128];
-                        memset(out, 0, sizeof out);
-                        for (uint32_t v = 0; v < psel_nfds; v++) {
-                            if (!(psel_save[s][v >> 3] & (1u << (v & 7)))) continue; // only originally-requested fds
-                            int r = vfd_real(p, (int)v);
-                            if (r < 0 || (uint32_t)r >= 1024u) continue;
-                            if (win[s][r >> 3] & (1u << (r & 7))) out[v >> 3] |= (uint8_t)(1u << (v & 7));
-                        }
-                        memcpy(win[s], out, 128); // worker copies the window -> guest fd_set
-                    }
-                }
-                break;
-            default: break;
-            }
-        pthread_mutex_unlock(&g_fd_lock);
-    }
+    sentry_translate_outputs(R, &tmp, snr, ret, coff, &g_sentry_fd_state);
+
     R->nserved++;
 }
 
