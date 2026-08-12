@@ -624,7 +624,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 // permitted = the docker default 14-cap set (HL_CAP_DEFAULT), NOT a blanket all-ones: a
                 // default `docker run` root container has CapPrm=00000000a80425fb, matching /proc/self/status
                 // exactly. The old 0xffffffff over-reported caps (e.g. CAP_SYS_ADMIN) the container lacks.
-                uint32_t prm = (i == 0) ? (uint32_t)HL_CAP_DEFAULT : (uint32_t)(HL_CAP_DEFAULT >> 32);
+                uint32_t prm = (i == 0) ? (uint32_t)g_cap_prm : (uint32_t)(g_cap_prm >> 32);
                 d[i * 3 + 0] = eff; // effective: the guest's live effective set (respects drops)
                 d[i * 3 + 1] = prm; // permitted: the docker default bounding/permitted set
                 d[i * 3 + 2] = 0;   // inheritable: empty (Docker default)
@@ -657,10 +657,6 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
-        // a capset re-raises EFFECTIVE caps from the PERMITTED set (the only bits it may set). After a
-        // KEEPCAPS uid drop this is how setpriv restores effective CAP_SETGID so its following setresgid works.
-        cred_init();
-        g_cap_setid_eff = g_cap_setid_perm;
         // Track the effective set the guest just asked for, so a capability-gated prctl (PR_SET_SECUREBITS /
         // PR_CAPBSET_DROP) reflects a dropped CAP_SETPCAP. datap is {effective,permitted,inheritable}[u32s];
         // effective words are at data[i*3+0]. v1 spans the low 32 caps, v3 the full 64.
@@ -673,7 +669,17 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         uint64_t eff = d[0];
         if (u32s == 2) eff |= (uint64_t)d[3] << 32;
+        uint64_t prm = d[1];
+        if (u32s == 2) prm |= (uint64_t)d[4] << 32;
+        cred_init();
+        if ((eff & ~prm) != 0 || (prm & ~g_cap_prm) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)-EPERM;
+            break;
+        }
         g_cap_eff = eff;
+        g_cap_prm = prm;
+        g_cap_setid_perm = (prm & ((1ull << 6) | (1ull << 7))) != 0;
+        g_cap_setid_eff = (eff & ((1ull << 6) | (1ull << 7))) != 0;
         G_RET(c) = 0;
         break;
     }
@@ -1235,7 +1241,13 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 151: {
         cred_init();
         int prev = newfile_uid(), u = (int)a0;
-        if (u != -1 && uid_permitted(u)) g_fsuid_ovr = (u == g_euid) ? -1 : u;
+        if (u != -1 && uid_permitted(u)) {
+            g_fsuid_ovr = (u == g_euid) ? -1 : u;
+            if (prev == 0 && u != 0)
+                g_cap_eff &= ~HL_CAP_FS_MASK;
+            else if (prev != 0 && u == 0)
+                g_cap_eff |= g_cap_prm & HL_CAP_FS_MASK;
+        }
         if (!credential_publish_or_fault(c)) break;
         G_RET(c) = (uint64_t)(uint32_t)prev;
         break;
@@ -1306,7 +1318,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // rejects it but the container is its own session and guest groups are virtual. Gate the swallow on
         // the guest having named group 1; a genuine EPERM (setpgid02 case 3: joining a NONEXISTENT group)
         // must propagate, along with EINVAL/ESRCH (bad pgid / target that is neither caller nor its child).
-        if (errno == EPERM && (pid_t)a1 == 1) {
+        if (errno == EPERM && (pid_t)a1 == 1 && getpid() == g_init_hostpid) {
             G_RET(c) = 0;
             break;
         }

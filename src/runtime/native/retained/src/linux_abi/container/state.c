@@ -534,14 +534,7 @@ static void cred_init(void) {
 // Recompute the CAP_SETID state after a uid change, per the kernel's credential rules (call from every
 // set*uid handler AFTER it mutates g_ruid/euid/suid). effective is cleared the moment euid != 0; permitted
 // is cleared once all three uids are nonzero unless KEEPCAPS is armed; root (euid 0) holds both.
-static void cred_uid_changed(void) {
-    if (g_euid == 0) {
-        g_cap_setid_perm = g_cap_setid_eff = 1;
-        return;
-    }
-    g_cap_setid_eff = 0; // euid left 0 -> effective caps dropped (a capset can re-raise from permitted)
-    if (g_ruid != 0 && g_suid != 0 && !g_keepcaps) g_cap_setid_perm = 0; // all-nonzero, no keepcaps -> gone
-}
+static void cred_uid_changed(void);
 
 // Apply Linux exec credential transitions using guest-visible mode and ownership. Host ownership is not
 // authoritative for image files: extracted roots use virtual ownership metadata. no_new_privs suppresses
@@ -595,9 +588,26 @@ static int gid_permitted(int id) {
 #define HL_CAP_DEFAULT                                                                                                 \
     0x00000000a80425fbull                   // chown,dac_override,fowner,fsetid,kill,setgid,setuid,setpcap,
                                             // net_bind_service,net_raw,sys_chroot,mknod,audit_write,setfcap
+#define HL_CAP_FS_MASK (0x1full | (1ull << 9) | (1ull << 27) | (1ull << 32) | (1ull << 33))
 static uint64_t g_cap_eff = HL_CAP_DEFAULT; // process EFFECTIVE cap set (capset(2) may narrow it)
+static uint64_t g_cap_prm = HL_CAP_DEFAULT; // process PERMITTED cap set (uid transitions/capset may narrow it)
 static uint64_t g_cap_bnd = HL_CAP_DEFAULT; // process BOUNDING cap set (PR_CAPBSET_DROP clears bits)
 static int g_securebits;                    // PR_SET/GET_SECUREBITS
+
+static void cred_uid_changed(void) {
+    if (g_euid == 0) {
+        g_cap_eff = g_cap_prm;
+        g_cap_setid_perm = (g_cap_prm & ((1ull << 6) | (1ull << 7))) != 0;
+        g_cap_setid_eff = (g_cap_eff & ((1ull << 6) | (1ull << 7))) != 0;
+        return;
+    }
+    g_cap_eff = 0;
+    g_cap_setid_eff = 0;
+    if (g_ruid != 0 && g_suid != 0 && !g_keepcaps) {
+        g_cap_prm = 0;
+        g_cap_setid_perm = 0;
+    }
+}
 // The file-mode creation mask. Forwarded to the host on umask(2) so real inode creation honours it, but ALSO
 // tracked here so /proc/self/status `Umask:` reflects the guest's current value (it was hardcoded 0022, so a
 // guest umask(2) changed real file modes yet the status line stayed 0022 -- a syscall-vs-/proc disagreement).
@@ -629,6 +639,7 @@ static void cred_reset_initial(void) {
     g_fsuid_ovr = -1;
     g_fsgid_ovr = -1;
     g_cap_eff = HL_CAP_DEFAULT;
+    g_cap_prm = HL_CAP_DEFAULT;
     g_cap_bnd = HL_CAP_DEFAULT;
     g_securebits = 0;
     g_ngroups = 0;
