@@ -112,100 +112,12 @@ static int svc_dup3(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     return svc_done(c);
 }
 
-static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
-    switch (nr) {
-    case 25: {
-        struct fdvis_reservation fdvis;
-        // fcntl -- Linux cmd# -> macOS (they diverge!)
-        int lcmd = (int)a1;
-        // F_DUPFD(_CLOEXEC): the floor arg must be a valid descriptor index -- Linux rejects a negative or
-        // >= RLIMIT_NOFILE floor with EINVAL (before allocating). (LTP: fcntl bad-arg matrix.)
-        if (lcmd == 0 || lcmd == 1030) {
-            int floor = (int)a2;
-            if (floor < 0 || floor >= guest_nofile_cur()) {
-                G_RET(c) = (uint64_t)(-EINVAL);
-                break;
-            }
-        }
-        // F_DUPFD(_CLOEXEC) makes a 2nd fd sharing the description; F_SETFL O_APPEND changes write-offset
-        // semantics. Either way, flush a RAM-backed fd so the real host fd takes over with correct bytes.
-        if (lcmd == 0 || lcmd == 1030 || (lcmd == 4 && ((int)a2 & 0x400))) memf_materialize((int)a0);
-        // F_GETFL: macOS O_* -> Linux O_*
-        if (lcmd == 3) {
-            int r = fcntl((int)a0, F_GETFL, 0);
-            if (r < 0) {
-                G_RET(c) = (uint64_t)(-errno);
-                break;
-            }
-            // access mode identical
-            int lf = r & 0x3;
-            if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_proc_text_ro[(int)a0]) lf = 0;
-            char fgetpath_buf[4096] = {0};
-            int have_fgetpath = 0;
-            if ((lf & 0x3) && hl_native_fd_path((int)a0, fgetpath_buf, sizeof fgetpath_buf) == 0) {
-                have_fgetpath = 1;
-                if (proc_text_host_path(fgetpath_buf)) lf &= ~0x3;
-            }
-            // Preserve the architecture's native F_GETFL representation (see G_O_LARGEFILE above).
-            lf |= G_O_LARGEFILE;
-            if (r & O_APPEND) lf |= 0x400;
-            if (r & O_NONBLOCK) lf |= 0x800;
-            // APPEND/NONBLOCK/ASYNC
-            if (r & O_ASYNC) lf |= 0x2000;
-#if defined(__linux__) && defined(O_DIRECT)
-            // O_DIRECT is a settable status flag on Linux; the guest fd is a real host fd whose kernel
-            // O_DIRECT bit is authoritative. Translate host O_DIRECT -> the guest-arch G_O_DIRECT so an
-            // fd opened (or F_SETFL'd) O_DIRECT round-trips instead of being silently dropped.
-            if (r & O_DIRECT) lf |= G_O_DIRECT;
-#endif
-            // eventfd: the host read end is kept permanently O_NONBLOCK internally, so report the guest's
-            // OWN blocking/non-blocking intent (g_eventfd_gnb), not the host flag. See vfs.c g_eventfd_gnb.
-            if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
-                lf = eventfd_guest_nb((int)a0) ? (lf | 0x800) : (lf & ~0x800);
-            }
-            int proc_text_for_log = ((int)a0 >= 0 && (int)a0 < HL_NFD && g_proc_text_ro[(int)a0]) ||
-                                    (have_fgetpath && proc_text_host_path(fgetpath_buf));
-            if (0 && proc_text_for_log) {
-                char p[4096] = {0};
-                if (have_fgetpath) {
-                    snprintf(p, sizeof p, "%s", fgetpath_buf);
-                } else {
-                    (void)hl_native_fd_path((int)a0, p, sizeof p);
-                }
-                fprintf(stderr, "[HLFCNTL] pid=%d cpid=%d fd=%d mflags=0x%x lflags=0x%x path=%s\n", getpid(),
-                        container_pid(), (int)a0, r, lf, p);
-            }
-            G_RET(c) = (uint64_t)(unsigned)lf;
-            break;
-        }
-        // F_SETFL: Linux O_* -> macOS O_*
-        if (lcmd == 4) {
-            int la = (int)a2, mf = 0;
-            if (la & 0x400) mf |= O_APPEND;
-            if (la & 0x800) mf |= O_NONBLOCK;
-            // APPEND/NONBLOCK/ASYNC
-            if (la & 0x2000) mf |= O_ASYNC;
-#if defined(__linux__) && defined(O_DIRECT)
-            // Forward an O_DIRECT status-flag change straight to the real host fd (guest-arch G_O_DIRECT ->
-            // host O_DIRECT). Previously the bit was dropped, so F_SETFL(O_DIRECT) wrongly returned success
-            // without setting it (and a filesystem that rejects O_DIRECT never produced the EINVAL Linux does).
-            if (la & G_O_DIRECT) mf |= O_DIRECT;
-#endif
-            // eventfd: record the guest's blocking/non-blocking intent in the shadow and NEVER clear the
-            // host read end's O_NONBLOCK (the internal drains rely on it; clearing it would let a drain
-            // block). Other flag changes still apply to the host fd. See vfs.c g_eventfd_gnb.
-            if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
-                eventfd_guest_nb_set((int)a0, (la & 0x800) != 0);
-                mf |= O_NONBLOCK; // keep host O_NONBLOCK on regardless of the guest's request
-            }
-            int r = fcntl((int)a0, F_SETFL, mf);
-            G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
-            break;
-        }
-        // F_GETLK/SETLK/SETLKW: xlate struct flock + cmd
-        if (lcmd == 5 || lcmd == 6 || lcmd == 7) {
+static int svc_fcntl_lock(struct cpu *c, int descriptor, int command, uint64_t address) {
+    if (command != 5 && command != 6 && command != 7) return 0;
+    int lcmd = command;
+    uint64_t a0 = (uint64_t)(unsigned)descriptor;
+    uint64_t a2 = address;
+    do {
             // macOS F_GETLK=7,SETLK=8,SETLKW=9
             int mc = lcmd == 5 ? F_GETLK : lcmd == 6 ? F_SETLK : F_SETLKW;
             uint8_t lf[32];
@@ -294,7 +206,304 @@ static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             }
             G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
             break;
+    } while (0);
+    return 1;
+}
+
+static int svc_fcntl_get_flags(struct cpu *c, int descriptor, uint64_t argument, int command) {
+    if (!(command == 3)) return 0;
+    uint64_t a0 = (uint64_t)(unsigned)descriptor;
+    uint64_t a2 = argument;
+    int lcmd = command;
+    do {
+            int r = fcntl((int)a0, F_GETFL, 0);
+            if (r < 0) {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+            // access mode identical
+            int lf = r & 0x3;
+            if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_proc_text_ro[(int)a0]) lf = 0;
+            char fgetpath_buf[4096] = {0};
+            int have_fgetpath = 0;
+            if ((lf & 0x3) && hl_native_fd_path((int)a0, fgetpath_buf, sizeof fgetpath_buf) == 0) {
+                have_fgetpath = 1;
+                if (proc_text_host_path(fgetpath_buf)) lf &= ~0x3;
+            }
+            // Preserve the architecture's native F_GETFL representation (see G_O_LARGEFILE above).
+            lf |= G_O_LARGEFILE;
+            if (r & O_APPEND) lf |= 0x400;
+            if (r & O_NONBLOCK) lf |= 0x800;
+            // APPEND/NONBLOCK/ASYNC
+            if (r & O_ASYNC) lf |= 0x2000;
+#if defined(__linux__) && defined(O_DIRECT)
+            // O_DIRECT is a settable status flag on Linux; the guest fd is a real host fd whose kernel
+            // O_DIRECT bit is authoritative. Translate host O_DIRECT -> the guest-arch G_O_DIRECT so an
+            // fd opened (or F_SETFL'd) O_DIRECT round-trips instead of being silently dropped.
+            if (r & O_DIRECT) lf |= G_O_DIRECT;
+#endif
+            // eventfd: the host read end is kept permanently O_NONBLOCK internally, so report the guest's
+            // OWN blocking/non-blocking intent (g_eventfd_gnb), not the host flag. See vfs.c g_eventfd_gnb.
+            if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
+                lf = eventfd_guest_nb((int)a0) ? (lf | 0x800) : (lf & ~0x800);
+            }
+            int proc_text_for_log = ((int)a0 >= 0 && (int)a0 < HL_NFD && g_proc_text_ro[(int)a0]) ||
+                                    (have_fgetpath && proc_text_host_path(fgetpath_buf));
+            if (0 && proc_text_for_log) {
+                char p[4096] = {0};
+                if (have_fgetpath) {
+                    snprintf(p, sizeof p, "%s", fgetpath_buf);
+                } else {
+                    (void)hl_native_fd_path((int)a0, p, sizeof p);
+                }
+                fprintf(stderr, "[HLFCNTL] pid=%d cpid=%d fd=%d mflags=0x%x lflags=0x%x path=%s\n", getpid(),
+                        container_pid(), (int)a0, r, lf, p);
+            }
+            G_RET(c) = (uint64_t)(unsigned)lf;
+            break;
+    } while (0);
+    return 1;
+}
+
+static int svc_fcntl_set_flags(struct cpu *c, int descriptor, uint64_t argument, int command) {
+    if (!(command == 4)) return 0;
+    uint64_t a0 = (uint64_t)(unsigned)descriptor;
+    uint64_t a2 = argument;
+    int lcmd = command;
+    do {
+            int la = (int)a2, mf = 0;
+            if (la & 0x400) mf |= O_APPEND;
+            if (la & 0x800) mf |= O_NONBLOCK;
+            // APPEND/NONBLOCK/ASYNC
+            if (la & 0x2000) mf |= O_ASYNC;
+#if defined(__linux__) && defined(O_DIRECT)
+            // Forward an O_DIRECT status-flag change straight to the real host fd (guest-arch G_O_DIRECT ->
+            // host O_DIRECT). Previously the bit was dropped, so F_SETFL(O_DIRECT) wrongly returned success
+            // without setting it (and a filesystem that rejects O_DIRECT never produced the EINVAL Linux does).
+            if (la & G_O_DIRECT) mf |= O_DIRECT;
+#endif
+            // eventfd: record the guest's blocking/non-blocking intent in the shadow and NEVER clear the
+            // host read end's O_NONBLOCK (the internal drains rely on it; clearing it would let a drain
+            // block). Other flag changes still apply to the host fd. See vfs.c g_eventfd_gnb.
+            if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
+                eventfd_guest_nb_set((int)a0, (la & 0x800) != 0);
+                mf |= O_NONBLOCK; // keep host O_NONBLOCK on regardless of the guest's request
+            }
+            int r = fcntl((int)a0, F_SETFL, mf);
+            G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+            break;
+    } while (0);
+    return 1;
+}
+
+static int svc_fcntl_add_seals(struct cpu *c, int descriptor, int lcmd, uint64_t argument) {
+    if (lcmd != 1033) return 0;
+    uint64_t a0 = (uint64_t)(unsigned)descriptor;
+    uint64_t a2 = argument;
+    do {
+        if (lcmd == 1033) { // F_ADD_SEALS(fd, seals)
+            int fd = (int)a0;
+            memfd_ensure_fd(fd);
+            if (fd < 0 || fd >= HL_NFD || !g_memfd_is[fd]) {
+#if defined(__linux__) && defined(F_ADD_SEALS)
+                // A memfd not tracked here (e.g. a real host memfd whose host fd landed >= HL_NFD) would
+                // otherwise let the HOST KERNEL decide the F_SEAL_WRITE-while-mapped verdict. That verdict
+                // depends on whether the ENGINE happens to hold a writable host-side MAP_SHARED alias of the
+                // object, which varies by host kernel/fs -- EBUSY on this VM but 0 on the CI runner (the
+                // memfd-seal-busy divergence). Make F_SEAL_WRITE (0x8) deterministic from the engine's OWN
+                // mapping registry, exactly like the emulated branch below: if a live MAP_SHARED mapping of
+                // this object exists, refuse with EBUSY (Linux mm/shmem.c writable-mapping guard), host
+                // independent. With no outstanding shared mapping, forward so the host still applies the seal
+                // and reports the real seal state (F_GET_SEALS / a later writable-shared-mmap EPERM keep working).
+                if (((int)a2 & 0x8) && filemap_has_shared_mapping(fd)) {
+                    G_RET(c) = (uint64_t)(-EBUSY);
+                    break;
+                }
+                int r = fcntl(fd, F_ADD_SEALS, (int)a2);
+                G_RET(c) = r < 0 ? (uint64_t)(int64_t)(-errno) : 0;
+#else
+                G_RET(c) = (uint64_t)(-EINVAL);
+#endif
+                break;
+            }
+            if (g_memfd_seal[fd] & 0x1) {
+                G_RET(c) = (uint64_t)(-EPERM);
+                break;
+            } // already F_SEAL_SEAL'd
+            // F_SEAL_WRITE (0x8) is refused with EBUSY while an outstanding MAP_SHARED mapping of this memfd
+            // is live (Linux mm/shmem.c writable-mapping guard). F_SEAL_FUTURE_WRITE (0x10) only blocks new
+            // writable maps, so it is unaffected.
+            if (((int)a2 & 0x8) && !(g_memfd_seal[fd] & 0x8) && filemap_has_shared_mapping(fd)) {
+                G_RET(c) = (uint64_t)(-EBUSY);
+                break;
+            }
+            g_memfd_seal[fd] |= (int)a2 & 0x1f; // SEAL|SHRINK|GROW|WRITE|FUTURE_WRITE
+            memfd_reg_set_fd(fd, g_memfd_seal[fd]);
+            G_RET(c) = 0;
+            break;
         }
+    } while (0);
+    return 1;
+}
+
+static int svc_fcntl_get_seals(struct cpu *c, int descriptor, int lcmd, uint64_t argument) {
+    if (lcmd != 1034) return 0;
+    uint64_t a0 = (uint64_t)(unsigned)descriptor;
+    uint64_t a2 = argument;
+    do {
+        if (lcmd == 1034) { // F_GET_SEALS(fd)
+            int fd = (int)a0;
+            memfd_ensure_fd(fd);
+            if (fd < 0 || fd >= HL_NFD || !g_memfd_is[fd]) {
+#if defined(__linux__) && defined(F_GET_SEALS)
+                int r = fcntl(fd, F_GET_SEALS);
+                G_RET(c) = r < 0 ? (uint64_t)(int64_t)(-errno) : (uint64_t)(unsigned)r;
+#else
+                G_RET(c) = (uint64_t)(-EINVAL);
+#endif
+                break;
+            }
+            G_RET(c) = (uint64_t)(unsigned)g_memfd_seal[fd];
+            break;
+        }
+    } while (0);
+    return 1;
+}
+
+static int svc_fcntl_set_lease(struct cpu *c, int descriptor, int lcmd, uint64_t argument) {
+    if (lcmd != 1024) return 0;
+    uint64_t a0 = (uint64_t)(unsigned)descriptor;
+    uint64_t a2 = argument;
+    do {
+        if (lcmd == 1024) { // F_SETLEASE(fd, F_RDLCK|F_WRLCK|F_UNLCK)
+            int fd = (int)a0, arg = (int)a2;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            if (arg != 0 && arg != 1 && arg != 2) { // not F_RDLCK/F_WRLCK/F_UNLCK -> EINVAL (Linux)
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            struct stat lst;
+            if (fstat(fd, &lst) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            if (!S_ISREG(lst.st_mode)) { // leases are only for regular files (Linux: EINVAL)
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            // A read lease (F_RDLCK) may only be taken on a descriptor NOT open for writing -- Linux
+            // generic_add_lease returns EAGAIN when the inode has a writer, and the requesting fd itself
+            // counts (an O_RDWR/O_WRONLY fd -> EAGAIN). This single-fd check matches the kernel exactly for
+            // the common case. A write lease (F_WRLCK) requires the fd be the SOLE opener; hl cannot
+            // enumerate other openers across guest processes, so it is tracked but its BREAK on a conflicting
+            // open is never delivered (see syscall-compat.md). Both states round-trip through F_GETLEASE.
+            if (arg == 0) { // F_RDLCK
+                int fl = fcntl(fd, F_GETFL);
+                if (fl >= 0 && (fl & O_ACCMODE) != O_RDONLY) {
+                    G_RET(c) = (uint64_t)(int64_t)(-EAGAIN);
+                    break;
+                }
+            }
+            if (fd < HL_NFD) g_lease[fd] = (arg == 2) ? 0 : (int8_t)(arg + 1); // F_UNLCK clears
+            G_RET(c) = 0;
+            break;
+        }
+    } while (0);
+    return 1;
+}
+
+static int svc_fcntl_extended(struct cpu *c, int descriptor, int lcmd, uint64_t argument) {
+    if (lcmd != 1033 && lcmd != 1034 && lcmd != 1025 && lcmd != 1024 && lcmd != 1026 && lcmd != 10 && lcmd != 11)
+        return 0;
+    uint64_t a0 = (uint64_t)(unsigned)descriptor;
+    uint64_t a2 = argument;
+    if (svc_fcntl_set_lease(c, descriptor, lcmd, argument)) return 1;
+    do {
+        if (svc_fcntl_add_seals(c, descriptor, lcmd, argument)) break;
+        if (svc_fcntl_get_seals(c, descriptor, lcmd, argument)) break;
+        if (lcmd == 1025) { // F_GETLEASE: report the tracked lease for this fd (F_UNLCK if none).
+            // Returning a fixed value fabricated/erased lease state; consult g_lease so F_GETLEASE round-trips
+            // whatever F_SETLEASE last set on this fd. Encoding: g_lease[fd] = type+1, 0 = no lease -> F_UNLCK(2).
+            int fd = (int)a0;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            int held = (fd < HL_NFD && g_lease[fd]) ? g_lease[fd] - 1 : 2; // stored type, else F_UNLCK
+            G_RET(c) = (uint64_t)(unsigned)held;
+            break;
+        } else if (lcmd == 1026) { // F_NOTIFY(fd, DN_* mask): arm a real host directory-change watch.
+            int fd = (int)a0;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            int sig = (fd < HL_NFD && g_fsig[fd]) ? g_fsig[fd] : 0; // F_SETSIG override, else default SIGIO
+            G_RET(c) = (uint64_t)(int64_t)dnotify_apply(fd, (uint32_t)a2, sig);
+            break;
+        } else if (lcmd == 10) { // F_SETSIG(fd, signo): record the signal for O_ASYNC/dnotify on this fd.
+            int fd = (int)a0, sig = (int)a2;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            if (sig < 0 || sig > 64) { // 0 restores the SIGIO default; anything above the signal range is EINVAL
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                break;
+            }
+            if (fd < HL_NFD) g_fsig[fd] = (uint8_t)sig;
+#if defined(__linux__)
+            // The guest fd is a REAL host fd; forward F_SETSIG so the host's own O_ASYNC signal-driven I/O
+            // delivers the requested signal (with SI_SIGIO siginfo) instead of the default SIGIO, which the
+            // engine then routes to the guest. Without this the custom async signal is silently ignored and
+            // an app arming F_SETSIG waits for a signal that never comes. g_fsig is still recorded for the
+            // engine-serviced dnotify path (F_NOTIFY), which raises the signal itself. Errors are non-fatal.
+            (void)fcntl(fd, F_SETSIG, sig);
+#endif
+            G_RET(c) = 0;
+            break;
+        } else if (lcmd == 11) { // F_GETSIG(fd): the signal set by F_SETSIG (0 = default SIGIO).
+            int fd = (int)a0;
+            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                break;
+            }
+            G_RET(c) = (uint64_t)(unsigned)((fd < HL_NFD) ? g_fsig[fd] : 0);
+            break;
+        }
+    } while (0);
+    return 1;
+}
+
+static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                     uint64_t a4, uint64_t a5) {
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    switch (nr) {
+    case 25: {
+        struct fdvis_reservation fdvis;
+        // fcntl -- Linux cmd# -> macOS (they diverge!)
+        int lcmd = (int)a1;
+        // F_DUPFD(_CLOEXEC): the floor arg must be a valid descriptor index -- Linux rejects a negative or
+        // >= RLIMIT_NOFILE floor with EINVAL (before allocating). (LTP: fcntl bad-arg matrix.)
+        if (lcmd == 0 || lcmd == 1030) {
+            int floor = (int)a2;
+            if (floor < 0 || floor >= guest_nofile_cur()) {
+                G_RET(c) = (uint64_t)(-EINVAL);
+                break;
+            }
+        }
+        // F_DUPFD(_CLOEXEC) makes a 2nd fd sharing the description; F_SETFL O_APPEND changes write-offset
+        // semantics. Either way, flush a RAM-backed fd so the real host fd takes over with correct bytes.
+        if (lcmd == 0 || lcmd == 1030 || (lcmd == 4 && ((int)a2 & 0x400))) memf_materialize((int)a0);
+        // F_GETFL: macOS O_* -> Linux O_*
+        if (svc_fcntl_get_flags(c, (int)a0, a2, lcmd)) break;
+        // F_SETFL: Linux O_* -> macOS O_*
+        if (svc_fcntl_set_flags(c, (int)a0, a2, lcmd)) break;
+        // F_GETLK/SETLK/SETLKW: xlate struct flock + cmd
+        if (svc_fcntl_lock(c, (int)a0, lcmd, a2)) break;
         // F_SETPIPE_SZ(1031)/F_GETPIPE_SZ(1032). The guest's non-O_DIRECT pipe fd is a REAL host pipe
         // (case 59 pipe()), so on a Linux host the kernel already implements these with exact Linux
         // semantics: power-of-two rounding (roundup_pow_of_two, NOT page rounding), a real capacity change
@@ -375,145 +584,7 @@ static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         // (born F_SEAL_SEAL, so F_GET_SEALS -> 1 and a further F_ADD_SEALS -> EPERM) while a non-sealing fs
         // (ext4/overlay) answers EINVAL -- exactly like native. The old unconditional EINVAL shadowed that,
         // returning EINVAL where native tmpfs returns the real seal set. macOS keeps EINVAL (no host seals).
-        else if (lcmd == 1033) { // F_ADD_SEALS(fd, seals)
-            int fd = (int)a0;
-            memfd_ensure_fd(fd);
-            if (fd < 0 || fd >= HL_NFD || !g_memfd_is[fd]) {
-#if defined(__linux__) && defined(F_ADD_SEALS)
-                // A memfd not tracked here (e.g. a real host memfd whose host fd landed >= HL_NFD) would
-                // otherwise let the HOST KERNEL decide the F_SEAL_WRITE-while-mapped verdict. That verdict
-                // depends on whether the ENGINE happens to hold a writable host-side MAP_SHARED alias of the
-                // object, which varies by host kernel/fs -- EBUSY on this VM but 0 on the CI runner (the
-                // memfd-seal-busy divergence). Make F_SEAL_WRITE (0x8) deterministic from the engine's OWN
-                // mapping registry, exactly like the emulated branch below: if a live MAP_SHARED mapping of
-                // this object exists, refuse with EBUSY (Linux mm/shmem.c writable-mapping guard), host
-                // independent. With no outstanding shared mapping, forward so the host still applies the seal
-                // and reports the real seal state (F_GET_SEALS / a later writable-shared-mmap EPERM keep working).
-                if (((int)a2 & 0x8) && filemap_has_shared_mapping(fd)) {
-                    G_RET(c) = (uint64_t)(-EBUSY);
-                    break;
-                }
-                int r = fcntl(fd, F_ADD_SEALS, (int)a2);
-                G_RET(c) = r < 0 ? (uint64_t)(int64_t)(-errno) : 0;
-#else
-                G_RET(c) = (uint64_t)(-EINVAL);
-#endif
-                break;
-            }
-            if (g_memfd_seal[fd] & 0x1) {
-                G_RET(c) = (uint64_t)(-EPERM);
-                break;
-            } // already F_SEAL_SEAL'd
-            // F_SEAL_WRITE (0x8) is refused with EBUSY while an outstanding MAP_SHARED mapping of this memfd
-            // is live (Linux mm/shmem.c writable-mapping guard). F_SEAL_FUTURE_WRITE (0x10) only blocks new
-            // writable maps, so it is unaffected.
-            if (((int)a2 & 0x8) && !(g_memfd_seal[fd] & 0x8) && filemap_has_shared_mapping(fd)) {
-                G_RET(c) = (uint64_t)(-EBUSY);
-                break;
-            }
-            g_memfd_seal[fd] |= (int)a2 & 0x1f; // SEAL|SHRINK|GROW|WRITE|FUTURE_WRITE
-            memfd_reg_set_fd(fd, g_memfd_seal[fd]);
-            G_RET(c) = 0;
-            break;
-        } else if (lcmd == 1034) { // F_GET_SEALS(fd)
-            int fd = (int)a0;
-            memfd_ensure_fd(fd);
-            if (fd < 0 || fd >= HL_NFD || !g_memfd_is[fd]) {
-#if defined(__linux__) && defined(F_GET_SEALS)
-                int r = fcntl(fd, F_GET_SEALS);
-                G_RET(c) = r < 0 ? (uint64_t)(int64_t)(-errno) : (uint64_t)(unsigned)r;
-#else
-                G_RET(c) = (uint64_t)(-EINVAL);
-#endif
-                break;
-            }
-            G_RET(c) = (uint64_t)(unsigned)g_memfd_seal[fd];
-            break;
-        } else if (lcmd == 1025) { // F_GETLEASE: report the tracked lease for this fd (F_UNLCK if none).
-            // Returning a fixed value fabricated/erased lease state; consult g_lease so F_GETLEASE round-trips
-            // whatever F_SETLEASE last set on this fd. Encoding: g_lease[fd] = type+1, 0 = no lease -> F_UNLCK(2).
-            int fd = (int)a0;
-            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
-                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                break;
-            }
-            int held = (fd < HL_NFD && g_lease[fd]) ? g_lease[fd] - 1 : 2; // stored type, else F_UNLCK
-            G_RET(c) = (uint64_t)(unsigned)held;
-            break;
-        } else if (lcmd == 1024) { // F_SETLEASE(fd, F_RDLCK|F_WRLCK|F_UNLCK)
-            int fd = (int)a0, arg = (int)a2;
-            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
-                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                break;
-            }
-            if (arg != 0 && arg != 1 && arg != 2) { // not F_RDLCK/F_WRLCK/F_UNLCK -> EINVAL (Linux)
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                break;
-            }
-            struct stat lst;
-            if (fstat(fd, &lst) < 0) {
-                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                break;
-            }
-            if (!S_ISREG(lst.st_mode)) { // leases are only for regular files (Linux: EINVAL)
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                break;
-            }
-            // A read lease (F_RDLCK) may only be taken on a descriptor NOT open for writing -- Linux
-            // generic_add_lease returns EAGAIN when the inode has a writer, and the requesting fd itself
-            // counts (an O_RDWR/O_WRONLY fd -> EAGAIN). This single-fd check matches the kernel exactly for
-            // the common case. A write lease (F_WRLCK) requires the fd be the SOLE opener; hl cannot
-            // enumerate other openers across guest processes, so it is tracked but its BREAK on a conflicting
-            // open is never delivered (see syscall-compat.md). Both states round-trip through F_GETLEASE.
-            if (arg == 0) { // F_RDLCK
-                int fl = fcntl(fd, F_GETFL);
-                if (fl >= 0 && (fl & O_ACCMODE) != O_RDONLY) {
-                    G_RET(c) = (uint64_t)(int64_t)(-EAGAIN);
-                    break;
-                }
-            }
-            if (fd < HL_NFD) g_lease[fd] = (arg == 2) ? 0 : (int8_t)(arg + 1); // F_UNLCK clears
-            G_RET(c) = 0;
-            break;
-        } else if (lcmd == 1026) { // F_NOTIFY(fd, DN_* mask): arm a real host directory-change watch.
-            int fd = (int)a0;
-            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
-                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                break;
-            }
-            int sig = (fd < HL_NFD && g_fsig[fd]) ? g_fsig[fd] : 0; // F_SETSIG override, else default SIGIO
-            G_RET(c) = (uint64_t)(int64_t)dnotify_apply(fd, (uint32_t)a2, sig);
-            break;
-        } else if (lcmd == 10) { // F_SETSIG(fd, signo): record the signal for O_ASYNC/dnotify on this fd.
-            int fd = (int)a0, sig = (int)a2;
-            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
-                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                break;
-            }
-            if (sig < 0 || sig > 64) { // 0 restores the SIGIO default; anything above the signal range is EINVAL
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                break;
-            }
-            if (fd < HL_NFD) g_fsig[fd] = (uint8_t)sig;
-#if defined(__linux__)
-            // The guest fd is a REAL host fd; forward F_SETSIG so the host's own O_ASYNC signal-driven I/O
-            // delivers the requested signal (with SI_SIGIO siginfo) instead of the default SIGIO, which the
-            // engine then routes to the guest. Without this the custom async signal is silently ignored and
-            // an app arming F_SETSIG waits for a signal that never comes. g_fsig is still recorded for the
-            // engine-serviced dnotify path (F_NOTIFY), which raises the signal itself. Errors are non-fatal.
-            (void)fcntl(fd, F_SETSIG, sig);
-#endif
-            G_RET(c) = 0;
-            break;
-        } else if (lcmd == 11) { // F_GETSIG(fd): the signal set by F_SETSIG (0 = default SIGIO).
-            int fd = (int)a0;
-            if (fd < 0 || fcntl(fd, F_GETFD) < 0) {
-                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                break;
-            }
-            G_RET(c) = (uint64_t)(unsigned)((fd < HL_NFD) ? g_fsig[fd] : 0);
-            break;
-        }
+        if (svc_fcntl_extended(c, (int)a0, lcmd, a2)) break;
         // A command this kernel does not recognize is EINVAL (Linux do_fcntl default), NOT forwarded to
         // macOS -- whose fcntl cmd numbering DIVERGES, so a stray Linux cmd# would mean a different op there.
         // Everything valid was handled above or is one of these benign pass-throughs; reject the rest. (LTP
