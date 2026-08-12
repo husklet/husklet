@@ -766,7 +766,7 @@
             runHook preBuild
             export CC_x86_64_pc_windows_gnu=${lib.escapeShellArg compiler}
             export CARGO_TARGET_${targetKey}_LINKER=${lib.escapeShellArg compiler}
-            cargo check --locked --offline --target ${target} -p hl-native 2>&1 |
+            cargo check --locked --offline --target ${target} -p hl-native -p hl-engine 2>&1 |
               tee "$TMPDIR/windows-contract.log"
             grep -F 'native C engine planned but not yet verified for x86_64-windows' \
               "$TMPDIR/windows-contract.log" >/dev/null
@@ -811,7 +811,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows Rust target, exact x86-64 COFF host/public-consumer architecture, C/C++ public-header layout/linkage/signature checks, and ABI fixture DLL/import-library link; this is not MSVC SDK or runtime proof' \
+              'GNU Windows hl-native/hl-engine Rust target compile, exact x86-64 COFF host/public-consumer architecture, C/C++ public-header layout/linkage/signature checks, and ABI fixture DLL/import-library link; this is not MSVC SDK or runtime proof' \
               > "$out/evidence"
           '';
         };

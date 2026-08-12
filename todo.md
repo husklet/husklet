@@ -48,6 +48,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
   The Windows GNU cross-check pins the host bridge and both public-header
   consumers to x86-64 COFF, so a 32-bit object cannot satisfy the AMD64 lane;
   it remains compile/link evidence rather than Windows runtime evidence.
+  That lane cross-checks both `hl-native` and its `hl-engine` Rust consumer so
+  Windows-only type or composition drift cannot hide behind a leaf-crate build.
   Native macOS CI requires the installed dylib and all three launchers to be
   ARM64-only Mach-O artifacts before exercising their loader and receipt
   contracts; a wrong-architecture or accidental universal artifact fails.

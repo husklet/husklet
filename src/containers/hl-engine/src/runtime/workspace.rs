@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -162,8 +163,7 @@ impl OwnedWorkspace {
                 .open(&destination)
                 .map_err(|_| EngineError::WorkspaceFailed)?;
             file.write_all(contents).map_err(|_| EngineError::WorkspaceFailed)?;
-            file.set_permissions(fs::Permissions::from_mode(0o644))
-                .map_err(|_| EngineError::WorkspaceFailed)?;
+            Self::regular_permissions(&file)?;
         }
         Ok(())
     }
@@ -296,16 +296,47 @@ impl OwnedWorkspace {
         if !resolved.starts_with(self.root.as_ref()) || !resolved.exists() {
             return Err(EngineError::WorkspaceFailed);
         }
+        Self::symlink(target, &destination, &resolved)
+    }
+
+    #[cfg(unix)]
+    fn regular_permissions(file: &fs::File) -> Result<(), EngineError> {
+        file.set_permissions(fs::Permissions::from_mode(0o644))
+            .map_err(|_| EngineError::WorkspaceFailed)
+    }
+
+    #[cfg(windows)]
+    fn regular_permissions(_: &fs::File) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn symlink(target: &Path, destination: &Path, _: &Path) -> Result<(), EngineError> {
         std::os::unix::fs::symlink(target, destination).map_err(|_| EngineError::WorkspaceFailed)
     }
 
+    #[cfg(windows)]
+    fn symlink(target: &Path, destination: &Path, resolved: &Path) -> Result<(), EngineError> {
+        let result = if resolved.is_dir() {
+            std::os::windows::fs::symlink_dir(target, destination)
+        } else {
+            std::os::windows::fs::symlink_file(target, destination)
+        };
+        result.map_err(|_| EngineError::WorkspaceFailed)
+    }
+
+    #[cfg(unix)]
     fn executable(path: &Path) -> Result<(), EngineError> {
-        use std::os::unix::fs::PermissionsExt;
         let mut permissions = fs::metadata(path)
             .map_err(|_| EngineError::WorkspaceFailed)?
             .permissions();
         permissions.set_mode(permissions.mode() | 0o111);
         fs::set_permissions(path, permissions).map_err(|_| EngineError::WorkspaceFailed)
+    }
+
+    #[cfg(windows)]
+    fn executable(_: &Path) -> Result<(), EngineError> {
+        Ok(())
     }
 }
 
