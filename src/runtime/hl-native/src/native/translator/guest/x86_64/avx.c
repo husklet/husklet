@@ -3239,6 +3239,75 @@ static enum avx_dispatch_result sse_dispatch_crc_movbe(const hl_x86_avx_state *s
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result sse_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
+                                                           uint64_t next, uint8_t destination[16]) {
+    int op = I->op;
+    if (I->map3 != 3) return AVX_DISPATCH_UNMATCHED;
+
+    if (op == 0x14 || op == 0x15 || op == 0x16 || op == 0x17) { // PEXTR* / EXTRACTPS
+        uint8_t immediate = (uint8_t)I->imm;
+        uint64_t value;
+        int width;
+        if (op == 0x14) {
+            width = 1;
+            value = destination[immediate & 15];
+        } else if (op == 0x15) {
+            uint16_t word;
+            width = 2;
+            memcpy(&word, destination + 2 * (immediate & 7), 2);
+            value = word;
+        } else if (op == 0x16) {
+            width = I->rexW ? 8 : 4;
+            memcpy(&value, destination + (I->rexW ? 8 * (immediate & 1) : 4 * (immediate & 3)), (size_t)width);
+        } else {
+            uint32_t word;
+            width = 4;
+            memcpy(&word, destination + 4 * (immediate & 3), 4);
+            value = word;
+        }
+        if (I->is_mem) {
+            uint64_t address = avx_ea(state, c, I, next, width);
+            (void)avx_memory_write(state, address, &value, (size_t)width);
+        } else if (width == 8) {
+            c->r[I->rm_reg] = value;
+        } else {
+            c->r[I->rm_reg] = (uint32_t)value;
+        }
+        c->rip = next;
+        return AVX_DISPATCH_HANDLED;
+    }
+
+    if (op != 0x20 && op != 0x21 && op != 0x22) return AVX_DISPATCH_UNMATCHED;
+
+    int immediate = (int)I->imm;
+    if (op == 0x20) { // PINSRB
+        uint8_t value = (uint8_t)c->r[I->rm_reg];
+        if (I->is_mem) (void)avx_memory_read(state, avx_ea(state, c, I, next, 1), &value, 1);
+        destination[immediate & 15] = value;
+    } else if (op == 0x22) { // PINSRD / PINSRQ
+        if (I->rexW) {
+            uint64_t value = c->r[I->rm_reg];
+            if (I->is_mem) (void)avx_memory_read(state, avx_ea(state, c, I, next, 8), &value, 8);
+            memcpy(destination + 8 * (immediate & 1), &value, 8);
+        } else {
+            uint32_t value = (uint32_t)c->r[I->rm_reg];
+            if (I->is_mem) (void)avx_memory_read(state, avx_ea(state, c, I, next, 4), &value, 4);
+            memcpy(destination + 4 * (immediate & 3), &value, 4);
+        }
+    } else { // INSERTPS
+        uint32_t source;
+        if (I->is_mem)
+            (void)avx_memory_read(state, avx_ea(state, c, I, next, 4), &source, 4);
+        else
+            memcpy(&source, (uint8_t *)&c->v[2 * I->rm_reg] + 4 * ((immediate >> 6) & 3), 4);
+        memcpy(destination + 4 * ((immediate >> 4) & 3), &source, 4);
+        for (int lane = 0; lane < 4; lane++)
+            if (immediate & (1 << lane)) memset(destination + 4 * lane, 0, 4);
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3250,72 +3319,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
 
     if (sse_dispatch_floating(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_crc_movbe(state, c, &I, next) == AVX_DISPATCH_HANDLED) return;
-
-    // ---- PEXTR* / EXTRACTPS (0F3A 14/15/16/17): xmm -> GPR/memory -----------------------------------
-    if (map == 3 && (op == 0x14 || op == 0x15 || op == 0x16 || op == 0x17)) {
-        uint8_t imm = (uint8_t)I.imm;
-        uint64_t val;
-        int nb;
-        if (op == 0x14) {
-            nb = 1;
-            val = D[imm & 15];
-        } else if (op == 0x15) {
-            nb = 2;
-            uint16_t w;
-            memcpy(&w, D + 2 * (imm & 7), 2);
-            val = w;
-        } else if (op == 0x16) {
-            nb = I.rexW ? 8 : 4;
-            memcpy(&val, D + (I.rexW ? 8 * (imm & 1) : 4 * (imm & 3)), (size_t)nb);
-        } else { // 0x17 extractps -> 32-bit float lane as raw dword
-            nb = 4;
-            uint32_t w;
-            memcpy(&w, D + 4 * (imm & 3), 4);
-            val = w;
-        }
-        if (I.is_mem) {
-            uint64_t a = avx_ea(state, c, &I, next, nb);
-            (void)avx_memory_write(state, a, &val, (size_t)nb);
-        } else if (nb == 8) {
-            c->r[I.rm_reg] = val;
-        } else {
-            c->r[I.rm_reg] = (uint32_t)val; // pextrb/w/d/extractps zero-extend into the GPR
-        }
-        c->rip = next;
-        return;
-    }
-
-    // ---- PINSR* / INSERTPS (0F3A 20/21/22): GPR/memory -> xmm ---------------------------------------
-    if (map == 3 && (op == 0x20 || op == 0x21 || op == 0x22)) {
-        int imm = (int)I.imm;
-        if (op == 0x20) { // pinsrb: r/m8 -> byte lane imm[3:0]
-            uint8_t v = (uint8_t)c->r[I.rm_reg];
-            if (I.is_mem) (void)avx_memory_read(state, avx_ea(state, c, &I, next, 1), &v, 1);
-            D[imm & 15] = v;
-        } else if (op == 0x22) { // pinsrd/q: r/m32/64 -> dword/qword lane
-            if (I.rexW) {
-                uint64_t v = c->r[I.rm_reg];
-                if (I.is_mem) (void)avx_memory_read(state, avx_ea(state, c, &I, next, 8), &v, 8);
-                memcpy(D + 8 * (imm & 1), &v, 8);
-            } else {
-                uint32_t v = (uint32_t)c->r[I.rm_reg];
-                if (I.is_mem) (void)avx_memory_read(state, avx_ea(state, c, &I, next, 4), &v, 4);
-                memcpy(D + 4 * (imm & 3), &v, 4);
-            }
-        } else { // 0x21 insertps: select src dword, insert at dst lane, then zero per imm[3:0]
-            uint32_t src;
-            if (I.is_mem)
-                (void)avx_memory_read(state, avx_ea(state, c, &I, next, 4), &src, 4);
-            else
-                memcpy(&src, (uint8_t *)&c->v[2 * I.rm_reg] + 4 * ((imm >> 6) & 3), 4); // src dword via imm[7:6]
-            int dlane = (imm >> 4) & 3;
-            memcpy(D + 4 * dlane, &src, 4);
-            for (int i = 0; i < 4; i++)
-                if (imm & (1 << i)) memset(D + 4 * i, 0, 4);
-        }
-        c->rip = next;
-        return;
-    }
+    if (sse_dispatch_lane_transfer(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     // ---- PCMP{I,E}STR{I,M} (0F3A 60/61/62/63): SSE4.2 packed string compare -------------------------
     // 60=PCMPESTRM (explicit len -> mask in xmm0), 61=PCMPESTRI (explicit len -> index in ECX),
