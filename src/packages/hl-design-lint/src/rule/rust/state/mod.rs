@@ -304,22 +304,7 @@ impl<'ast> Visit<'ast> for Strings<'_> {
 
     fn visit_expr_match(&mut self, item: &'ast ExprMatch) {
         if let Some(concept) = self.concept(&item.expr) {
-            let open = item
-                .arms
-                .iter()
-                .any(|arm| preserves_unknown(&arm.pat, &arm.body, &concept.name));
-            for arm in &item.arms {
-                for (value, span) in pattern_literals(&arm.pat) {
-                    self.concepts.entry(concept.clone()).or_default().record(
-                        value,
-                        self.source.location(span),
-                        EvidenceKind::Match,
-                    );
-                }
-            }
-            if open {
-                self.concepts.entry(concept).or_default().preserves_unknown = true;
-            }
+            self.record_match(item, concept);
         }
         syn::visit::visit_expr_match(self, item);
     }
@@ -331,6 +316,37 @@ impl<'ast> Visit<'ast> for Strings<'_> {
             self.record_target(&item.method.to_string(), argument);
         }
         syn::visit::visit_expr_method_call(self, item);
+    }
+}
+
+impl Strings<'_> {
+    fn struct_owner(&self, item: &ExprStruct) -> Option<String> {
+        let owner = item.path.segments.last()?.ident.to_string();
+        if owner == "Self" {
+            self.owner.clone()
+        } else {
+            Some(owner)
+        }
+    }
+
+    fn record_match(&mut self, item: &ExprMatch, concept: Concept) {
+        let open = item
+            .arms
+            .iter()
+            .any(|arm| preserves_unknown(&arm.pat, &arm.body, &concept.name));
+        item.arms
+            .iter()
+            .flat_map(|arm| pattern_literals(&arm.pat))
+            .for_each(|(value, span)| {
+                self.concepts.entry(concept.clone()).or_default().record(
+                    value,
+                    self.source.location(span),
+                    EvidenceKind::Match,
+                );
+            });
+        if open {
+            self.concepts.entry(concept).or_default().preserves_unknown = true;
+        }
     }
 }
 
