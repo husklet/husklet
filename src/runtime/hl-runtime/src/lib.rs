@@ -25,8 +25,6 @@
     clippy::verbose_bit_mask
 )]
 
-mod aio;
-
 mod assembly;
 mod atomic_read;
 mod checkpoint;
@@ -330,7 +328,5 @@ mod process_image_tests;
 #[cfg(test)]
 #[path = "router_test.rs"]
 mod syscall_router_tests;
-pub use aio::RuntimeAioSyscalls;
-pub use hl_aio::Catalog as AioCatalog;
 mod fs_context;
 pub use fs_context::FsContext;
