@@ -1,3 +1,8 @@
+#ifndef HL_TRANSLATOR_GUEST_X86_64_CPU_H
+#define HL_TRANSLATOR_GUEST_X86_64_CPU_H
+
+#include <stdint.h>
+
 // translator/guest/x86_64 -- guest CPU state. r[16]=rax..r15, rip, nzcv (ARM-flag substrate for
 // x86 EFLAGS), fs/gs_base, xmm in v[32], x87 ST(0..7) at double precision. Offsets baked into emitted
 // code. Differs entirely from the aarch64 cpu.h -- why the guest state cannot be shared.
@@ -299,3 +304,5 @@ enum { X87ENV_STORE, X87ENV_LOAD, X87ENV_SAVE, X87ENV_RESTORE };
 
 // x86 register encodings (== host reg numbers)
 enum { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI };
+
+#endif

@@ -27,6 +27,10 @@
 // the interpreter, which already implements both directions. This is a refusal, not an implementation.
 
 #include "../../host/x86_asm.h"
+#include "cpu.h"
+#include "frame.h"
+
+struct interp_block;
 
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
 #include <sys/syscall.h>
