@@ -64,19 +64,35 @@ static uint8_t g_flock_type[HL_NFD]; // per guest fd: 0 none, else LOCK_SH / LOC
 static struct {
     dev_t dev;
     ino_t ino;
-    int fd;   // host fd of the companion lock file (kept open for the process lifetime)
+    int fd;   // host fd of the companion lock file (kept while this process has a lock reference)
     int refs; // guest fds in THIS process currently holding a flock on this file (for release-on-close)
 } g_flkcomp[256];
 
 static int g_nflkcomp;
 static int flock_broker_apply(const hl_linux_fd_snapshot *source, uint64_t device, uint64_t object, int operation);
 
+static int flock_companion_find(uint64_t device, uint64_t object) {
+    for (int i = 0; i < g_nflkcomp; i++)
+        if ((uint64_t)g_flkcomp[i].dev == device && (uint64_t)g_flkcomp[i].ino == object) return i;
+    return -1;
+}
+
+// No guest descriptor stores a companion index; every lookup uses the stable file identity. Swap-delete is
+// therefore safe and lets a long-lived process reuse the bounded table after the last lock reference leaves.
+static void flock_companion_forget(int index) {
+    if (index < 0 || index >= g_nflkcomp || g_flkcomp[index].refs != 0) return;
+    close(g_flkcomp[index].fd);
+    --g_nflkcomp;
+    if (index != g_nflkcomp) g_flkcomp[index] = g_flkcomp[g_nflkcomp];
+    memset(&g_flkcomp[g_nflkcomp], 0, sizeof g_flkcomp[g_nflkcomp]);
+}
+
 // Companion index for the file underlying guest `fd` (opening/caching it on first use). -1 (errno set) on
 // failure. The companion is pushed to a high descriptor so it never collides with the guest's low fds
 // (mirrors engine_fd_reloc); CLOEXEC keeps it out of any real host exec while still inheriting across fork.
 static int flock_companion_identity(uint64_t device, uint64_t object) {
-    for (int i = 0; i < g_nflkcomp; i++)
-        if ((uint64_t)g_flkcomp[i].dev == device && (uint64_t)g_flkcomp[i].ino == object) return i;
+    int found = flock_companion_find(device, object);
+    if (found >= 0) return found;
     if (g_nflkcomp >= (int)(sizeof g_flkcomp / sizeof g_flkcomp[0])) {
         errno = ENOLCK;
         return -1;
@@ -162,18 +178,36 @@ static int flock_companion_set(int comp, int base, int nonblock) {
 static int hl_flock_identity(const hl_linux_fd_snapshot *source, uint64_t device, uint64_t object, int op) {
     if (flock_broker_apply(source, device, object, op) != 0) return -1;
     int fd = (int)source->fd;
-    int idx = flock_companion_identity(device, object);
-    if (idx < 0) return -1;
-    int comp = g_flkcomp[idx].fd, base = op & ~LOCK_NB;
+    int base = op & ~LOCK_NB;
     if (base != LOCK_SH && base != LOCK_EX && base != LOCK_UN) {
         errno = EINVAL;
         return -1;
     }
+    int idx = flock_companion_find(device, object);
+    if (idx < 0 && base == LOCK_UN) return 0;
+    if (idx < 0) {
+        idx = flock_companion_identity(device, object);
+        if (idx < 0) {
+            int saved = errno;
+            (void)flock_broker_apply(source, device, object, LOCK_UN);
+            errno = saved;
+            return -1;
+        }
+    }
+    int comp = g_flkcomp[idx].fd;
     int r = flock_companion_set(comp, base, op & LOCK_NB);
-    if (r == 0 && fd >= 0 && fd < HL_NFD) {
+    if (r != 0) {
+        int saved = errno;
+        (void)flock_broker_apply(source, device, object, LOCK_UN);
+        if (g_flkcomp[idx].refs == 0) flock_companion_forget(idx);
+        errno = saved;
+        return -1;
+    }
+    if (fd >= 0 && fd < HL_NFD) {
         if (base == LOCK_UN) {
             if (g_flock_type[fd] && --g_flkcomp[idx].refs < 0) g_flkcomp[idx].refs = 0;
             g_flock_type[fd] = 0;
+            if (g_flkcomp[idx].refs == 0) flock_companion_forget(idx);
         } else {
             if (!g_flock_type[fd]) g_flkcomp[idx].refs++;
             g_flock_type[fd] = (uint8_t)base;
@@ -185,11 +219,12 @@ static int hl_flock_identity(const hl_linux_fd_snapshot *source, uint64_t device
 static void flock_on_close_identity(int fd, uint64_t device, uint64_t object) {
     if (fd < 0 || fd >= HL_NFD || !g_flock_type[fd]) return;
     g_flock_type[fd] = 0;
-    int idx = flock_companion_identity(device, object);
+    int idx = flock_companion_find(device, object);
     if (idx < 0) return;
     if (--g_flkcomp[idx].refs <= 0) {
         g_flkcomp[idx].refs = 0;
-        (void)flock_companion_set(g_flkcomp[idx].fd, LOCK_UN, 1);
+        // close(), rather than LOCK_UN, preserves a fork parent's lock on the shared open description.
+        flock_companion_forget(idx);
     }
 }
 
@@ -198,12 +233,15 @@ static void flock_on_close_identity(int fd, uint64_t device, uint64_t object) {
 static void flock_on_close(int fd) {
     if (fd < 0 || fd >= HL_NFD || !g_flock_type[fd]) return;
     g_flock_type[fd] = 0;
-    int idx = flock_companion(fd);
+    struct stat st;
+    if (fstat(fd, &st) < 0) return;
+    int idx = flock_companion_find((uint64_t)st.st_dev, (uint64_t)st.st_ino);
     if (idx < 0) return;
     if (--g_flkcomp[idx].refs <= 0) {
         g_flkcomp[idx].refs = 0;
-        struct flock fl = {.l_type = F_UNLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0};
-        fcntl(g_flkcomp[idx].fd, F_SETLK, &fl);
+        // The companion descriptor can be inherited across fork; closing this process's copy must not
+        // explicitly unlock the parent's shared open description.
+        flock_companion_forget(idx);
     }
 }
 
@@ -381,7 +419,12 @@ static int flock_broker_apply(const hl_linux_fd_snapshot *source, uint64_t devic
                 conflict = 1;
         }
         if (!conflict && base == LOCK_UN) {
-            if (own != NULL) own->mode = 0;
+            // BSD LOCK_UN releases the lock owned by this open file description
+            // immediately, including for every dup/fork alias.  The descriptor
+            // may remain open, but it no longer owns broker state; retaining a
+            // zero-mode record until last close exhausts the bounded table after
+            // enough distinct lock/unlock pairs (the Go build-cache trim path).
+            if (own != NULL) memset(own, 0, sizeof(*own));
         } else if (!conflict) {
             if (own == NULL) {
                 if (free_record == NULL) {
