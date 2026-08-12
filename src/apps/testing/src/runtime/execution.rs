@@ -470,9 +470,13 @@ impl CaseExecution<'_> {
             tokio::select! {
                 result = &mut waiting => return Ok(result?),
                 () = tokio::time::sleep_until(deadline) => {
+                    let logs = self.containers.logs(name).await?;
+                    logs.bounded()?;
                     return Err(format!(
-                        "guest exit wait timed out after {} milliseconds",
-                        timeout.as_millis()
+                        "guest exit wait timed out after {} milliseconds; stderr={}; stdout={}",
+                        timeout.as_millis(),
+                        logs.stderr.preview(),
+                        logs.stdout.preview()
                     ).into());
                 }
                 () = tokio::time::sleep(Duration::from_millis(10)) => {
