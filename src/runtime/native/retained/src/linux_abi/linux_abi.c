@@ -2052,6 +2052,11 @@ int64_t hl_linux_lseek(hl_linux_abi *linux_abi, hl_linux_fd fd, int64_t offset, 
     files = hl_linux_files(linux_abi);
     if (whence < HL_LINUX_SEEK_SET || whence > HL_LINUX_SEEK_HOLE)
         result = -HL_LINUX_EINVAL;
+    else if (offset < 0 && (whence == HL_LINUX_SEEK_DATA || whence == HL_LINUX_SEEK_HOLE))
+        /* Linux rejects negative sparse-seek offsets with ENXIO before asking the filesystem.  Keeping
+           this ABI range check here also prevents a provider which represents positions as unsigned
+           values from accepting -1 as an implementation-defined cursor (and returning offset zero). */
+        result = -HL_LINUX_ENXIO;
     else if (files == NULL || files->seek == NULL)
         result = -HL_LINUX_ENOSYS;
     else if (hl_linux_metadata_owned(linux_abi, ofd, &metadata) != 0)

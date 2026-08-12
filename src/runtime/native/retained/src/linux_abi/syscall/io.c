@@ -655,6 +655,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // lseek -- SEEK_SET/CUR/END(0/1/2) match. SEEK_DATA/SEEK_HOLE use host-native constants because
         // Darwin swaps their numeric values while Linux consumes the guest values directly.
         int whence = (int)a2;
+        if ((int64_t)a1 < 0 && (whence == 3 || whence == 4)) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENXIO);
+            break;
+        }
         // Directory streams are read via getdents, backed by a private DIR* (fdopendir(dup(fd))) in the
         // plain path or a merged snapshot in the overlay path -- neither moves when the guest lseeks its
         // own fd. glibc rewinddir()/seekdir() ARE exactly this lseek, so redirect it here or the
