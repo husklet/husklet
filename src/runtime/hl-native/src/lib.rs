@@ -13,7 +13,7 @@ mod provider;
 #[cfg(test)]
 mod artifact;
 
-pub use bindings::SyscallDispatch;
+pub use bindings::{SyscallCpuAarch64, SyscallDispatch, SyscallTrapResult};
 pub use engine::{Engine, EngineConfig, Exit};
 pub use provider::{LIBRARY_NAME, Native};
 

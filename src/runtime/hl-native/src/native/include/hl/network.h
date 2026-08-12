@@ -12,6 +12,8 @@ typedef struct hl_engine_publish_rule {
     uint16_t guest_port;
 } hl_engine_publish_rule;
 
+HL_STATIC_ASSERT(sizeof(hl_engine_publish_rule) == 8, "publish rule ABI drifted");
+
 HL_EXTERN_C_END
 
 #endif

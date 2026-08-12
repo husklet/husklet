@@ -161,6 +161,13 @@ typedef struct hl_engine_exit {
     uint64_t detail;
 } hl_engine_exit;
 
+HL_STATIC_ASSERT(sizeof(hl_engine_fd_binding) == 32, "engine descriptor binding ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_engine_fd_binding, host_handle) == 24, "engine descriptor handle ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_engine_executable) == 40, "engine executable ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_engine_main_image_plan) == 48, "engine main-image plan ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_engine_exit) == 24, "engine exit ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_engine_exit, detail) == 16, "engine exit detail ABI drifted");
+
 HL_API uint32_t hl_engine_abi(void);
 HL_API const char *hl_engine_version(void);
 /* host, its callback-group tables, and its context remain valid until destroy. Config strings are copied. */

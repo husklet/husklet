@@ -65,6 +65,12 @@ typedef struct hl_activation_process_info {
     uint32_t reserved;
 } hl_activation_process_info;
 
+HL_STATIC_ASSERT(sizeof(hl_activation_streams) == 24, "activation streams ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_activation_stdio) == 12, "activation stdio ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_terminal_size) == 4, "terminal size ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_process_domain) == 16, "process domain ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_activation_process_info) == 16, "activation process info ABI drifted");
+
 HL_API hl_status hl_activation_start(const char *executable, uint32_t guest_isa, const char *config_path,
                                      hl_activation_process **out_process);
 HL_API hl_status hl_activation_start_with_stdio(const char *executable, uint32_t guest_isa, const char *config_path,

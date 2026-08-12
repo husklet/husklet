@@ -106,6 +106,12 @@ typedef struct hl_ckpt_stream_digest {
     uint64_t bytes;
 } hl_ckpt_stream_digest;
 
+HL_STATIC_ASSERT(sizeof(hl_ckpt_hello) == 16, "checkpoint hello ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_ckpt_request) == 48, "checkpoint request ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_ckpt_request, stream) == 16, "checkpoint request stream ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_ckpt_reply) == 32, "checkpoint reply ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_ckpt_stream_digest) == 24, "checkpoint digest ABI drifted");
+
 HL_EXTERN_C_END
 
 #endif

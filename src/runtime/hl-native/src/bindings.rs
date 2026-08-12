@@ -32,7 +32,37 @@ const _: () = assert!(size_of::<MainImagePlan>() == 48);
 const _: () = assert!(offset_of!(MainImagePlan, link_start) == 16);
 const _: () = assert!(offset_of!(MainImagePlan, interpreter_identity) == 40);
 
-pub type SyscallDispatch = unsafe extern "C" fn(*mut c_void, c_uint, *mut c_void, *mut c_void) -> c_int;
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct SyscallCpuAarch64 {
+    pub abi: u32,
+    pub size: u32,
+    pub x: [u64; 31],
+    pub sp: u64,
+    pub pc: u64,
+    pub tls: u64,
+    pub nzcv: u64,
+    pub task: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct SyscallTrapResult {
+    pub abi: u32,
+    pub size: u32,
+    pub outcome: u32,
+    pub exit_status: i32,
+    pub image_generation: u64,
+}
+
+const _: () = assert!(size_of::<SyscallCpuAarch64>() == 296);
+const _: () = assert!(offset_of!(SyscallCpuAarch64, x) == 8);
+const _: () = assert!(offset_of!(SyscallCpuAarch64, task) == 288);
+const _: () = assert!(size_of::<SyscallTrapResult>() == 24);
+const _: () = assert!(offset_of!(SyscallTrapResult, image_generation) == 16);
+
+pub type SyscallDispatch =
+    unsafe extern "C" fn(*mut c_void, c_uint, *mut SyscallCpuAarch64, *mut SyscallTrapResult) -> c_int;
 
 unsafe extern "C" {
     pub(super) fn hl_engine_abi() -> c_uint;
