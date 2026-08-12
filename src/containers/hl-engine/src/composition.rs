@@ -134,9 +134,17 @@ fn write_all_to_port(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
 }
 
 /// One application-owned terminal transport attached to one runtime PTY.
+#[derive(Clone, Copy)]
+pub(crate) struct TerminalWindow {
+    pub(crate) rows: u16,
+    pub(crate) columns: u16,
+    pub(crate) pixel_width: u16,
+    pub(crate) pixel_height: u16,
+}
+
 pub struct Terminal {
     port: Arc<dyn TerminalPort>,
-    initial: hl_runtime::TerminalWindow,
+    initial: TerminalWindow,
     bridge: Mutex<Option<AttachedTerminal>>,
 }
 
@@ -148,7 +156,7 @@ impl Terminal {
         }
         Ok(Arc::new(Self {
             port,
-            initial: hl_runtime::TerminalWindow {
+            initial: TerminalWindow {
                 rows,
                 columns,
                 pixel_width: 0,
@@ -158,7 +166,7 @@ impl Terminal {
         }))
     }
 
-    pub(crate) fn initial(&self) -> hl_runtime::TerminalWindow {
+    pub(crate) fn initial(&self) -> TerminalWindow {
         self.initial
     }
 
@@ -307,7 +315,6 @@ impl Default for StandardStreams {
 pub struct RuntimeServices {
     pub activation: Arc<dyn ActivationChannel>,
     pub executable_authority: Option<crate::executable::ExecutableAuthority>,
-    pub projected_root_authority: Option<Arc<Mutex<crate::native::AuthorityWorker>>>,
     pub checkpoint_sink: Option<Arc<dyn CheckpointSink>>,
     pub checkpoint_source: Option<Arc<dyn CheckpointSource>>,
     pub streams: StandardStreams,

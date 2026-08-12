@@ -106,7 +106,6 @@ pub enum EngineError {
     Synchronization,
     Unsupported,
     AuthorityFailed,
-    Load(hl_loader::LoadError),
 }
 
 impl EngineError {

@@ -5,23 +5,13 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
-build = "build.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
-hl-descriptor = { path = "../../runtime/hl-descriptor" }
-hl-network = { path = "../../runtime/hl-network" }
-hl-fs = { path = "../../packages/hl-fs", default-features = false }
-hl-event = { path = "../../runtime/hl-event" }
-hl-isa = { path = "../../runtime/hl-isa" }
-hl-loader = { path = "../../runtime/hl-loader" }
 hl-log = { path = "../../packages/hl-log" }
-hl-native = { path = "../../runtime/hl-native", optional = true }
-hl-linux = { path = "../../runtime/hl-linux" }
-hl-provider = { path = "../../runtime/hl-provider" }
-hl-runtime = { path = "../../runtime/hl-runtime" }
+hl-native = { path = "../../runtime/hl-native" }
 ring = "0.17.14"
 zeroize = "1.9"
 [dev-dependencies]
@@ -36,8 +26,8 @@ name = "hl_engine"
 path = "src/lib.rs"
 
 [features]
-default = ["c-execution"]
+default = []
 # Counts host heap allocations per native crossing; see `native::allocations`.
 alloc-count = []
-# Production retained-C execution backend; build.rs admits only source-complete targets.
-c-execution = ["dep:hl-native"]
+# Kept as a source-compatible no-op while callers migrate to the unconditional native engine.
+c-execution = []

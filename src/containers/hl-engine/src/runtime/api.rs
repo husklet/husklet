@@ -194,7 +194,6 @@ impl Builder {
         let services = RuntimeServices {
             activation: Arc::new(Activation),
             executable_authority: None,
-            projected_root_authority: None,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams: crate::composition::StandardStreams::default(),
@@ -275,7 +274,6 @@ impl Engine {
         let services = RuntimeServices {
             activation: Arc::new(Activation),
             executable_authority,
-            projected_root_authority: None,
             checkpoint_sink: None,
             checkpoint_source: None,
             streams,
@@ -294,7 +292,6 @@ impl Engine {
         let services = RuntimeServices {
             activation: Arc::new(Activation),
             executable_authority: None,
-            projected_root_authority: None,
             checkpoint_sink: Some(sink),
             checkpoint_source: Some(source),
             streams,
