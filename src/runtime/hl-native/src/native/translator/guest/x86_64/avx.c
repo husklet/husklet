@@ -861,6 +861,58 @@ static enum avx_dispatch_result avx_dispatch_bmi(const hl_x86_avx_state *state, 
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_fma(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
+                                                 uint64_t next, int map, int op, int rd, int vv, int width) {
+    int alternating = op == 0x96 || op == 0x97 || op == 0xA6 || op == 0xA7 || op == 0xB6 || op == 0xB7;
+    int arithmetic = (op >= 0x98 && op <= 0x9F) || (op >= 0xA8 && op <= 0xAF) || (op >= 0xB8 && op <= 0xBF);
+    if (map != 2 || (!alternating && !arithmetic)) return AVX_DISPATCH_UNMATCHED;
+
+    int form = (op >> 4) - 9; // 0=132, 1=213, 2=231
+    int dbl = I->vex_w;
+    int element_size = dbl ? 8 : 4;
+    uint8_t destination[64], vvvv[64], operand[64], output[64];
+    avx_get(c, rd, destination);
+    avx_get(c, vv, vvvv);
+    avx_get_rm(state, c, I, next, width, operand);
+    uint8_t *multiplier1 = (form == 0) ? destination : vvvv;
+    uint8_t *multiplier2 = (form == 0) ? operand : (form == 1) ? destination : operand;
+    uint8_t *addend = (form == 0) ? vvvv : (form == 1) ? operand : destination;
+    int scalar = arithmetic && (op & 1);
+    int count = scalar ? element_size : width;
+    memcpy(output, destination, sizeof(output));
+    for (int offset = 0; offset < count; offset += element_size) {
+        int negate_product = 0;
+        int negate_addend;
+        if (alternating) {
+            int subtract_on_odd = op & 1;
+            int even = ((offset / element_size) & 1) == 0;
+            negate_addend = subtract_on_odd ? !even : even;
+        } else {
+            int base = op & 0x0E; // 8=madd,A=msub,C=nmadd,E=nmsub
+            negate_product = base == 0x0C || base == 0x0E;
+            negate_addend = base == 0x0A || base == 0x0E;
+        }
+        if (dbl) {
+            double x, y, z;
+            memcpy(&x, multiplier1 + offset, 8);
+            memcpy(&y, multiplier2 + offset, 8);
+            memcpy(&z, addend + offset, 8);
+            double result = fma_x86_f64(x, y, z, negate_product, negate_addend);
+            memcpy(output + offset, &result, 8);
+        } else {
+            float x, y, z;
+            memcpy(&x, multiplier1 + offset, 4);
+            memcpy(&y, multiplier2 + offset, 4);
+            memcpy(&z, addend + offset, 4);
+            float result = fma_x86_f32(x, y, z, negate_product, negate_addend);
+            memcpy(output + offset, &result, 4);
+        }
+    }
+    avx_put(c, rd, output, scalar ? 16 : width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -891,6 +943,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     enum avx_dispatch_result bmi = avx_dispatch_bmi(state, c, &I, next, map, op, pp, rd, vv);
     if (bmi == AVX_DISPATCH_HANDLED) return;
     if (bmi == AVX_DISPATCH_UNIMPLEMENTED) goto avx_unimpl;
+    if (avx_dispatch_fma(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
 
     // ---- map 1 (0F) ----
     if (map == 1) {
@@ -2364,107 +2417,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + i, &z, (size_t)es);
             }
             avx_put(c, rd, d, W);
-            goto done;
-        }
-        // ---- FMA (VEX 0F38 0x98..0xBF): fused multiply-add. reg=dst, vvvv, rm. W=0 ps, W=1 pd; odd op=scalar.
-        case 0x96: // vfmaddsub132 ps/pd: even lanes m1*m2 - add, odd lanes m1*m2 + add
-        case 0x97: // vfmsubadd132 ps/pd: even lanes m1*m2 + add, odd lanes m1*m2 - add
-        case 0xA6: // vfmaddsub213 / vfmsubadd213
-        case 0xA7:
-        case 0xB6: // vfmaddsub231 / vfmsubadd231
-        case 0xB7: {
-            int form = (op >> 4) - 9; // 0=132, 1=213, 2=231
-            int subadd = op & 1;      // 0=maddsub (even sub), 1=msubadd (even add)
-            int dbl = I.vex_w;
-            int es = dbl ? 8 : 4;
-            uint8_t dst[64];
-            avx_get(c, rd, dst);
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            uint8_t *m1 = (form == 0) ? dst : a;
-            uint8_t *m2 = (form == 0) ? b : (form == 1) ? dst : b;
-            uint8_t *ad = (form == 0) ? a : (form == 1) ? b : dst;
-            for (int i = 0; i < W; i += es) {
-                int even = ((i / es) & 1) == 0;
-                int sub = subadd ? !even : even; // maddsub subtracts on even; msubadd subtracts on odd
-                if (dbl) {
-                    double x, y, z;
-                    memcpy(&x, m1 + i, 8);
-                    memcpy(&y, m2 + i, 8);
-                    memcpy(&z, ad + i, 8);
-                    double res = fma_x86_f64(x, y, z, 0, sub);
-                    memcpy(d + i, &res, 8);
-                } else {
-                    float x, y, z;
-                    memcpy(&x, m1 + i, 4);
-                    memcpy(&y, m2 + i, 4);
-                    memcpy(&z, ad + i, 4);
-                    float res = fma_x86_f32(x, y, z, 0, sub);
-                    memcpy(d + i, &res, 4);
-                }
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x98:
-        case 0x99:
-        case 0x9A:
-        case 0x9B:
-        case 0x9C:
-        case 0x9D:
-        case 0x9E:
-        case 0x9F:
-        case 0xA8:
-        case 0xA9:
-        case 0xAA:
-        case 0xAB:
-        case 0xAC:
-        case 0xAD:
-        case 0xAE:
-        case 0xAF:
-        case 0xB8:
-        case 0xB9:
-        case 0xBA:
-        case 0xBB:
-        case 0xBC:
-        case 0xBD:
-        case 0xBE:
-        case 0xBF: {
-            int form = (op >> 4) - 9; // 0=132, 1=213, 2=231
-            int base = op & 0x0E;     // 8=madd,A=msub,C=nmadd,E=nmsub
-            int scalar = op & 1;
-            int dbl = I.vex_w;
-            int es = dbl ? 8 : 4;
-            int nmul = (base == 0x0C || base == 0x0E); // fnmadd/fnmsub negate the product
-            int nadd = (base == 0x0A || base == 0x0E); // fmsub/fnmsub negate the addend
-            uint8_t dst[64];
-            avx_get(c, rd, dst);
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            // per form pick (mul1, mul2, add) from {dst, vvvv=a, rm=b}
-            uint8_t *m1 = (form == 0) ? dst : a;
-            uint8_t *m2 = (form == 0) ? b : (form == 1) ? dst : b;
-            uint8_t *ad = (form == 0) ? a : (form == 1) ? b : dst;
-            int n = scalar ? es : W;
-            memcpy(d, dst, 64); // scalar keeps dst's upper bits; packed overwrites fully
-            for (int i = 0; i < n; i += es) {
-                if (dbl) {
-                    double x, y, z;
-                    memcpy(&x, m1 + i, 8);
-                    memcpy(&y, m2 + i, 8);
-                    memcpy(&z, ad + i, 8);
-                    double res = fma_x86_f64(x, y, z, nmul, nadd);
-                    memcpy(d + i, &res, 8);
-                } else {
-                    float x, y, z;
-                    memcpy(&x, m1 + i, 4);
-                    memcpy(&y, m2 + i, 4);
-                    memcpy(&z, ad + i, 4);
-                    float res = fma_x86_f32(x, y, z, nmul, nadd);
-                    memcpy(d + i, &res, 4);
-                }
-            }
-            avx_put(c, rd, d, scalar ? 16 : W);
             goto done;
         }
         }
