@@ -13,6 +13,7 @@
 )]
 #![forbid(unsafe_code)]
 
+mod benchmark;
 mod journal;
 mod leaks;
 mod nested;
@@ -35,6 +36,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run a controlled C-engine performance acceptance campaign.
+    Benchmark(benchmark::Options),
+    /// Print the exact artifact identity accepted by a benchmark campaign.
+    BenchmarkHash(benchmark::HashOptions),
     /// Run self-contained runtime compatibility cases.
     Runtime(runtime::Options),
     #[command(hide = true)]
@@ -79,6 +84,8 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     match Cli::parse().command {
+        Command::Benchmark(options) => benchmark::run(options).await,
+        Command::BenchmarkHash(options) => benchmark::hash(options),
         Command::Runtime(options) => runtime::run(options).await,
         Command::RuntimeWorker(options) => runtime::worker(options).await,
         Command::Oracle(options) => runtime::oracle(options),
@@ -105,6 +112,8 @@ mod cli_tests {
     fn help_exposes_all_typed_commands() {
         let help = Cli::command().render_long_help().to_string();
         for command in [
+            "benchmark",
+            "benchmark-hash",
             "runtime",
             "oracle",
             "scenarios",

@@ -494,7 +494,7 @@ mod oracle;
 pub(crate) use oracle::{OracleOptions, oracle};
 use oracle::{apps, validate_case_ids};
 
-pub(super) fn workspace() -> Result<PathBuf, Error> {
+pub(crate) fn workspace() -> Result<PathBuf, Error> {
     let mut path = Path::new(env!("CARGO_MANIFEST_DIR"));
     while !path.join("tests/runtime").is_dir() {
         path = path.parent().ok_or("workspace root not found")?;
