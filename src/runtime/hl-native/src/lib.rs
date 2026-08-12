@@ -15,15 +15,17 @@ mod artifact;
 
 pub use bindings::{SyscallCpuAarch64, SyscallDispatch, SyscallTrapResult};
 pub use engine::{Engine, EngineConfig, Exit};
-pub use provider::{LIBRARY_NAME, Native};
+pub use provider::Native;
 
-pub use platform::{HostArch, HostOs, HostTarget};
-
+#[cfg(test)]
 mod platform;
 
 #[cfg(test)]
 mod tests {
-    use super::{LIBRARY_NAME, Native, provider::LIBRARY_PATH};
+    use super::{
+        Native,
+        provider::{LIBRARY_NAME, LIBRARY_PATH},
+    };
 
     #[test]
     fn shared_engine_exports_matching_abi() {
