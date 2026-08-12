@@ -106,7 +106,7 @@ impl Campaign {
             }
             for command in workload.commands.values() {
                 let guest = Path::new(&command[0]);
-                if !guest.is_absolute() || !guest.starts_with(&self.rootfs.path) || !guest.is_file() {
+                if !guest_is_hashed(&self.rootfs.path, guest) {
                     return Err(format!("benchmark workload {name} guest is not a rootfs-contained file").into());
                 }
             }
@@ -150,6 +150,16 @@ impl Campaign {
     }
 }
 
+fn guest_is_hashed(rootfs: &Path, guest: &Path) -> bool {
+    guest.is_absolute()
+        && guest.starts_with(rootfs)
+        && guest.is_file()
+        && fs::canonicalize(rootfs)
+            .ok()
+            .zip(fs::canonicalize(guest).ok())
+            .is_some_and(|(rootfs, guest)| guest.starts_with(rootfs))
+}
+
 fn verify_artifact(label: &str, artifact: &Artifact, directory: bool) -> Result<(), Error> {
     let metadata = fs::symlink_metadata(&artifact.path)?;
     let expected_type = if directory {
@@ -177,7 +187,7 @@ fn verify_artifact(label: &str, artifact: &Artifact, directory: bool) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{Artifact, verify_artifact};
+    use super::{Artifact, guest_is_hashed, verify_artifact};
     use crate::record::FramedIdentity;
     use std::fs;
 
@@ -208,6 +218,27 @@ mod tests {
             sha256: FramedIdentity::of(b"engine"),
         };
         assert!(verify_artifact("engine", &artifact, false).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guest_symlink_cannot_escape_the_hashed_rootfs() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs");
+        fs::create_dir(&rootfs).unwrap();
+        let outside = directory.path().join("outside-guest");
+        fs::write(&outside, b"guest").unwrap();
+        let escaping = rootfs.join("escaping-guest");
+        symlink(&outside, &escaping).unwrap();
+        assert!(!guest_is_hashed(&rootfs, &escaping));
+
+        let inside = rootfs.join("inside-guest");
+        fs::write(&inside, b"guest").unwrap();
+        let contained = rootfs.join("contained-guest");
+        symlink(&inside, &contained).unwrap();
+        assert!(guest_is_hashed(&rootfs, &contained));
     }
 }
 
