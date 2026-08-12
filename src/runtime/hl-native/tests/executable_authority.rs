@@ -1,4 +1,4 @@
-#![cfg(all(any(target_os = "linux", target_os = "macos"), target_arch = "aarch64"))]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(unsafe_code)]
 
 use std::{ffi::c_void, os::raw::c_char, ptr};
@@ -73,6 +73,14 @@ unsafe extern "C" {
 // supplies the native C archives used by the direct ABI assertions below.
 fn link_engine_native_archives() {
     assert!(hl_native::HostTarget::from_cfg(std::env::consts::OS, std::env::consts::ARCH).is_some());
+}
+
+/// Kept ignored in every normal test invocation. The Linux Valgrind gate runs
+/// this test alone and must observe its native allocation as definitely lost.
+#[test]
+#[ignore = "non-vacuity fixture for the external Valgrind Memcheck gate"]
+fn deliberate_native_leak_is_visible_to_memcheck() {
+    assert_eq!(hl_native::Native.leak_check_nonvacuity(), 0);
 }
 
 struct State {

@@ -113,6 +113,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Add leak-sanitizer build support and testing leak integration.
 - [x] Restore testing compilation against only the new `hl-native`/`hl-engine` public APIs and remove obsolete deleted-Rust-engine adapters.
 - [x] Expose and execute the native C leak non-vacuity probe through the slim `hl-native::Native` boundary.
+- [x] Add an independent Linux Valgrind Memcheck gate for bounded non-JIT executable-authority lifecycle tests, with a deliberate 4,096-byte native leak proving non-vacuity.
 - [ ] Audit every package/root test for correct unit, package integration, compatibility, or testing-app ownership.
 
 ## Quality gates
@@ -120,6 +121,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Register C lint and structure checks in the standard Rust linter.
 - [x] Preserve strict C compiler warnings and Cargo-owned source discovery.
 - [x] Integrate clang-format verification, clang-tidy, and cppcheck without Make/CMake. Cargo owns C compilation and the embedded tree-sitter rules; Nix supplies Bear, clang-format, clang-tidy, and cppcheck, and the normal verification derivation runs them through `hl-design-lint` with Cargo's real compilation database and file-level diagnostics.
+- [ ] Classify and fix the 17 path-sensitive reports found by `scan-build` 21.1.8 before making it a hard gate: dead stores in translator cache (including AMD64 cache), ARM64 translation, SysV, memory, descriptor IO, networking, filesystem access, syscall dispatch, and checkpoint memory restore.
 - [ ] Make the complete `hl-design-lint` suite green.
 - [x] Run `cargo check --workspace --all-targets` successfully on the integrated C-backed workspace; rerun on the final delivery tip.
 - [x] Run `cargo test --workspace --lib --bins` successfully after restoring the C-backed engine/testing applications; rerun again on the final delivery tip.

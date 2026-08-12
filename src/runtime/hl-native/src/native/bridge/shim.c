@@ -68,11 +68,15 @@ static void hl_c_backend_leak_check_probe(void) {
     }
 }
 
+#if defined(HL_LEAK_SANITIZER)
 extern int __lsan_do_recoverable_leak_check(void);
-
 static void hl_c_backend_leak_check_verdict(void) {
     if (getenv("HL_LEAK_CHECK_PROBE") != NULL && __lsan_do_recoverable_leak_check() != 0) _exit(97);
 }
+#else
+static void hl_c_backend_leak_check_verdict(void) {
+}
+#endif
 #else
 static void hl_c_backend_leak_check_probe(void) {
 }

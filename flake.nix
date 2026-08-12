@@ -172,7 +172,7 @@
         pkgs.clang-tools
         pkgs.cppcheck
         pkgs.pkg-config
-      ];
+      ] ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.valgrind ];
 
       lintCasesFor =
         pkgs:
@@ -356,6 +356,62 @@
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings
               cargo test --workspace --all-targets --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
+              ${lib.optionalString pkgs.stdenv.isLinux ''
+                # Memcheck is deliberately independent of compiler sanitizers. These
+                # bounded authority lifecycle tests do not execute generated guest
+                # code, which Valgrind cannot reliably inspect.
+                export HL_C_SANITIZER=memcheck
+                cargo test -p hl-native --test executable_authority --locked --offline --no-run
+                authority_tests=(target/debug/deps/executable_authority-*)
+                authority_test=""
+                for candidate in "''${authority_tests[@]}"; do
+                  if [ -x "$candidate" ] && [ "''${candidate##*.}" != d ]; then
+                    if [ -n "$authority_test" ]; then
+                      printf 'multiple executable-authority test binaries found\n' >&2
+                      exit 1
+                    fi
+                    authority_test="$candidate"
+                  fi
+                done
+                if [ -z "$authority_test" ]; then
+                  printf 'executable-authority test binary is absent\n' >&2
+                  exit 1
+                fi
+                valgrind \
+                  --quiet \
+                  --leak-check=full \
+                  --show-leak-kinds=definite,indirect \
+                  --errors-for-leak-kinds=definite,indirect \
+                  --error-exitcode=97 \
+                  --log-file="$TMPDIR/memcheck-clean.log" \
+                  "$authority_test"
+                if ! grep -q 'ERROR SUMMARY: 0 errors' "$TMPDIR/memcheck-clean.log"; then
+                  printf 'Valgrind clean lifecycle verdict is absent\n' >&2
+                  cat "$TMPDIR/memcheck-clean.log" >&2
+                  exit 1
+                fi
+
+                set +e
+                valgrind \
+                  --quiet \
+                  --leak-check=full \
+                  --show-leak-kinds=definite,indirect \
+                  --errors-for-leak-kinds=definite,indirect \
+                  --error-exitcode=97 \
+                  --log-file="$TMPDIR/memcheck-non-vacuity.log" \
+                  "$authority_test" \
+                  --ignored \
+                  --exact deliberate_native_leak_is_visible_to_memcheck
+                memcheck_probe_status=$?
+                set -e
+                if [ "$memcheck_probe_status" -ne 97 ] ||
+                   ! grep -Eq 'definitely lost: 4,096 bytes in 1 blocks' "$TMPDIR/memcheck-non-vacuity.log"; then
+                  printf 'Valgrind did not reject the deliberate native leak (exit=%s)\n' "$memcheck_probe_status" >&2
+                  cat "$TMPDIR/memcheck-non-vacuity.log" >&2
+                  exit 1
+                fi
+                unset HL_C_SANITIZER
+              ''}
               runHook postBuild
             '';
             installPhase = ''

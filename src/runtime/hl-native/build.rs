@@ -238,9 +238,16 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
                 .opt_level(1)
                 .flag("-fsanitize=leak")
                 .flag("-fno-omit-frame-pointer")
-                .define("HL_LEAK_CHECK_PROBE", None);
+                .define("HL_LEAK_CHECK_PROBE", None)
+                .define("HL_LEAK_SANITIZER", None);
         }
-        Ok(value) => panic!("unsupported HL_C_SANITIZER={value:?}; expected leak"),
+        Ok("memcheck") => {
+            // Valgrind supplies the instrumentation itself. This definition
+            // only retains the deliberately leaking non-vacuity hook in the
+            // otherwise ordinary native build used by that independent gate.
+            build.define("HL_LEAK_CHECK_PROBE", None);
+        }
+        Ok(value) => panic!("unsupported HL_C_SANITIZER={value:?}; expected leak or memcheck"),
         Err(env::VarError::NotPresent) => {}
         Err(error) => panic!("invalid HL_C_SANITIZER: {error}"),
     }
