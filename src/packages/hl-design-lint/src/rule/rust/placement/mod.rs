@@ -31,19 +31,23 @@ impl Rule for IntegrationCandidate {
         let mut findings = Vec::new();
         for source in workspace.sources() {
             let api = public.get(&source.package).cloned().unwrap_or_default();
-            if source.test {
-                inspect_unit(self.id(), source, &source.syntax.items, &api, &mut findings);
-            }
-            for item in &source.syntax.items {
-                let Item::Mod(module) = item else { continue };
-                if requires_test(&module.attrs)
-                    && let Some((_, items)) = &module.content
-                {
-                    inspect_module(self.id(), source, module, items, &api, &mut findings);
-                }
-            }
+            inspect_source(self.id(), source, &api, &mut findings);
         }
         Ok(findings)
+    }
+}
+
+fn inspect_source(rule: &'static str, source: &Source, public: &BTreeSet<String>, findings: &mut Vec<Finding>) {
+    if source.test {
+        inspect_unit(rule, source, &source.syntax.items, public, findings);
+    }
+    for item in &source.syntax.items {
+        let Item::Mod(module) = item else { continue };
+        if requires_test(&module.attrs)
+            && let Some((_, items)) = &module.content
+        {
+            inspect_module(rule, source, module, items, public, findings);
+        }
     }
 }
 
@@ -55,40 +59,44 @@ fn public_api(workspace: &Workspace) -> BTreeMap<String, BTreeSet<String>> {
     {
         let names = packages.entry(source.package.clone()).or_default();
         for item in &source.syntax.items {
-            match item {
-                Item::Const(value) if public_visibility(&value.vis) => {
-                    names.insert(value.ident.to_string());
-                }
-                Item::Enum(value) if public_visibility(&value.vis) => {
-                    names.insert(value.ident.to_string());
-                }
-                Item::Fn(value) if public_visibility(&value.vis) => {
-                    names.insert(value.sig.ident.to_string());
-                }
-                Item::Mod(value) if public_visibility(&value.vis) => {
-                    names.insert(value.ident.to_string());
-                }
-                Item::Static(value) if public_visibility(&value.vis) => {
-                    names.insert(value.ident.to_string());
-                }
-                Item::Struct(value) if public_visibility(&value.vis) => {
-                    names.insert(value.ident.to_string());
-                }
-                Item::Trait(value) if public_visibility(&value.vis) => {
-                    names.insert(value.ident.to_string());
-                }
-                Item::Type(value) if public_visibility(&value.vis) => {
-                    names.insert(value.ident.to_string());
-                }
-                Item::Union(value) if public_visibility(&value.vis) => {
-                    names.insert(value.ident.to_string());
-                }
-                Item::Use(value) if public_visibility(&value.vis) => public_use_names(&value.tree, names),
-                _ => {}
-            }
+            record_public_item(item, names);
         }
     }
     packages
+}
+
+fn record_public_item(item: &Item, names: &mut BTreeSet<String>) {
+    match item {
+        Item::Const(value) if public_visibility(&value.vis) => {
+            names.insert(value.ident.to_string());
+        }
+        Item::Enum(value) if public_visibility(&value.vis) => {
+            names.insert(value.ident.to_string());
+        }
+        Item::Fn(value) if public_visibility(&value.vis) => {
+            names.insert(value.sig.ident.to_string());
+        }
+        Item::Mod(value) if public_visibility(&value.vis) => {
+            names.insert(value.ident.to_string());
+        }
+        Item::Static(value) if public_visibility(&value.vis) => {
+            names.insert(value.ident.to_string());
+        }
+        Item::Struct(value) if public_visibility(&value.vis) => {
+            names.insert(value.ident.to_string());
+        }
+        Item::Trait(value) if public_visibility(&value.vis) => {
+            names.insert(value.ident.to_string());
+        }
+        Item::Type(value) if public_visibility(&value.vis) => {
+            names.insert(value.ident.to_string());
+        }
+        Item::Union(value) if public_visibility(&value.vis) => {
+            names.insert(value.ident.to_string());
+        }
+        Item::Use(value) if public_visibility(&value.vis) => public_use_names(&value.tree, names),
+        _ => {}
+    }
 }
 
 fn public_visibility(visibility: &Visibility) -> bool {
