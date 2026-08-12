@@ -1,6 +1,513 @@
+static int ckpt_restore_prior_kind(const struct ckpt_fd *records, int index, int kind, uint64_t object_id) {
+    for (int prior = 0; prior < index; ++prior)
+        if (records[prior].kind == kind && records[prior].object_id == object_id) return records[prior].gfd;
+    return -1;
+}
+
+static int ckpt_restore_prior_ofd(const struct ckpt_fd *records, int index, uint64_t ofd_id) {
+    for (int prior = 0; prior < index; ++prior)
+        if (records[prior].ofd_id == ofd_id) return records[prior].gfd;
+    return -1;
+}
+
+static void ckpt_restore_reset_inherited_fds(const struct ckpt_fd *records, int count) {
+    static unsigned char desired_pipe[HL_NFD];
+    for (int fd = 0; fd < HL_NFD; fd++) {
+        if (!g_eventfd_peer[fd]) continue;
+        proc_fdvis_close(fd);
+        close(fd);
+        g_eventfd_peer[fd] = 0;
+        g_eventfd_cslot[fd] = 0;
+        g_eventfd_sema[fd] = 0;
+        g_eventfd_gnb[fd] = 0;
+    }
+    memset(g_eventfd_refs, 0, sizeof g_eventfd_refs);
+    memset(desired_pipe, 0, sizeof desired_pipe);
+    for (int i = 0; i < count; i++)
+        if (records[i].kind == CKF_PIPE && records[i].gfd >= 0 && records[i].gfd < HL_NFD)
+            desired_pipe[records[i].gfd] = 1;
+    for (int fd = 0; fd < HL_NFD; fd++) {
+        if (g_pipe_identity[fd] == 0 || desired_pipe[fd]) continue;
+        proc_fdvis_close(fd);
+        g_pipe_identity[fd] = 0;
+        close(fd);
+    }
+}
+
+static void ckpt_restore_retire_typed_fd(const struct ckpt_fd *record) {
+    int kind = record->kind;
+    int native_kind = kind == CKF_FILE || kind == CKF_PIPE || kind == CKF_BLOB || kind == CKF_MEMFD ||
+                      kind == CKF_EVENTFD || kind == CKF_TIMERFD || kind == CKF_INOTIFY || kind == CKF_EPOLL ||
+                      kind == CKF_SOCKETPAIR || kind == CKF_SOCKET || kind == CKF_SIGNALFD;
+    if (!native_kind || g_linux_box == NULL ||
+        hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)record->gfd, &(hl_linux_fd_snapshot){0}) != HL_STATUS_OK)
+        return;
+    (void)hl_linux_close(g_linux_box, (hl_linux_fd)record->gfd);
+    proc_fdvis_close(record->gfd);
+    (void)close(record->gfd);
+}
+
+static void ckpt_restore_socket_state(int fd, const struct ckpt_socket_state *state) {
+    g_tcp_listen[fd] = state->listening != 0;
+    g_sock_backlog[fd] = state->backlog;
+    g_lo_port[fd] = state->lo_port;
+    g_lo_v6[fd] = state->lo_v6;
+    g_lo_v6only[fd] = state->lo_v6only;
+    g_br_port[fd] = state->br_port;
+    g_br_ip[fd] = state->br_ip;
+    g_br_interface[fd] = state->br_interface;
+    g_tcp_lport[fd] = state->tcp_local_port;
+    g_tcp_laddr[fd] = state->tcp_local_address;
+    g_tcp_l6[fd] = state->tcp_local_v6;
+    memcpy(g_tcp_laddr6[fd], state->tcp_local_address_v6, sizeof state->tcp_local_address_v6);
+    g_so_error[fd] = state->pending_error;
+    g_so_reuseport[fd] = state->shadow_reuse_port;
+    memcpy(g_tcp_optval[fd], state->tcp_option_value, sizeof state->tcp_option_value);
+    memcpy(g_tcp_optset[fd], state->tcp_option_set, sizeof state->tcp_option_set);
+    memcpy(g_ipopt_val[fd], state->ip_option_value, sizeof state->ip_option_value);
+    memcpy(g_ipopt_set[fd], state->ip_option_set, sizeof state->ip_option_set);
+}
+
+static int ckpt_restore_socketpair_fd(const struct ckpt_fd *records, int count, const struct ckpt_fd *record) {
+    struct ckpt_restore_socket_endpoint *endpoint = ckpt_restore_socket_find(record->object_id);
+    int fd = record->gfd;
+    if (endpoint == NULL || endpoint->fd < 0 || fd < 0 || fd >= HL_NFD || dup2(endpoint->fd, fd) < 0) return -1;
+    int live_flags = fcntl(fd, F_GETFL);
+    if (live_flags < 0 || fcntl(fd, F_SETFL, (live_flags & ~O_NONBLOCK) | (record->flags & O_NONBLOCK)) != 0 ||
+        fcntl(fd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
+        return -1;
+    const struct ckpt_socket_state *state = &endpoint->state;
+    g_sock_object[fd] = record->object_id;
+    g_sock_peer_object[fd] = record->auxiliary;
+    g_sock_fam[fd] = endpoint->state_loaded ? (uint16_t)state->guest_family : AF_UNIX;
+    g_sock_stream[fd] = record->offset == SOCK_STREAM;
+    g_sock_dgram[fd] = record->offset == SOCK_DGRAM || record->offset == SOCK_SEQPACKET;
+    g_sock_seqpacket[fd] = record->offset == SOCK_SEQPACKET;
+    g_sock_conn[fd] = 1;
+    if (endpoint->state_loaded) ckpt_restore_socket_state(fd, state);
+    int peer = ckpt_restore_prior_kind(records, count, CKF_SOCKETPAIR, record->auxiliary);
+    if (peer >= 0) g_sock_pair_peer[fd] = peer + 1;
+    return proc_fdvis_publish_native_fd(fd);
+}
+
+static int ckpt_restore_bound_socket_fd(const struct ckpt_fd *records, int index, const struct ckpt_fd *record) {
+    struct ckpt_restore_socket *saved = ckpt_restore_socket_state_find(record->object_id);
+    int fd = record->gfd;
+    if (saved == NULL || saved->fd < 0 || fd < 0 || fd >= HL_NFD || dup2(saved->fd, fd) < 0) return -1;
+    int live_flags = fcntl(fd, F_GETFL);
+    if (live_flags < 0 || fcntl(fd, F_SETFL, (live_flags & ~O_NONBLOCK) | (record->flags & O_NONBLOCK)) != 0 ||
+        fcntl(fd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
+        return -1;
+    const struct ckpt_socket_state *state = &saved->state;
+    g_sock_object[fd] = record->object_id;
+    g_sock_peer_object[fd] = 0;
+    g_sock_fam[fd] = (uint16_t)state->guest_family;
+    g_sock_stream[fd] = state->type == SOCK_STREAM;
+    g_sock_dgram[fd] = state->type == SOCK_DGRAM;
+    g_sock_conn[fd] = 0;
+    ckpt_restore_socket_state(fd, state);
+    g_udp_local_port[fd] = (uint16_t)state->udp_local_port;
+    g_udp_peer_port[fd] = (uint16_t)state->udp_peer_port;
+    g_udp_local_ip[fd] = state->udp_local_ip;
+    g_udp_peer_ip[fd] = state->udp_peer_ip;
+    g_udp_local_v6[fd] = state->udp_local_v6;
+    g_udp_peer_v6[fd] = state->udp_peer_v6;
+    g_udp_local_interface[fd] = state->udp_local_interface;
+    g_udp_peer_interface[fd] = state->udp_peer_interface;
+    if (state->udp_local_port != 0 && state->host_family == AF_UNIX) {
+        int source = ckpt_restore_prior_kind(records, index, CKF_SOCKET, record->object_id);
+        if (source >= 0) {
+            udp_ref_dup(fd, source);
+        } else {
+            const struct sockaddr_un *address = (const void *)&state->local;
+            if (udp_ref_create(fd, address->sun_path) != 0) return -1;
+        }
+    }
+    return proc_fdvis_publish_native_fd(fd);
+}
+
+static int ckpt_restore_signalfd_fd(const struct ckpt_fd *records, int index, const struct ckpt_fd *record) {
+    struct ckpt_restore_signalfd *object = ckpt_restore_signalfd_find(record->object_id);
+    int fd = record->gfd;
+    if (object == NULL || dup2(object->reader, fd) < 0) return -1;
+    int source = ckpt_restore_prior_kind(records, index, CKF_SIGNALFD, record->object_id);
+    int slot;
+    if (source >= 0) {
+        slot = g_sigfd_slot[source] - 1;
+        if (slot < 0 || slot >= HL_SFD_MAX) return -1;
+        g_sfd[slot].refs++;
+    } else {
+        slot = sfd_alloc();
+        int writer = slot >= 0 ? fcntl(object->writer, F_DUPFD, 1 << 20) : -1;
+        if (writer < 0 && slot >= 0) writer = fcntl(object->writer, F_DUPFD, 64);
+        if (slot < 0 || writer < 0 || hl_host_process_fd_private_adopt(writer) < 0) {
+            if (writer >= 0) close(writer);
+            if (slot >= 0) g_sfd[slot].refs = 0;
+            return -1;
+        }
+        g_sfd[slot].rd = fd;
+        g_sfd[slot].wr = writer;
+        g_sfd[slot].mask = object->mask;
+    }
+    g_sigfd_slot[fd] = (uint8_t)(slot + 1);
+    int live_flags = fcntl(fd, F_GETFL);
+    if (live_flags < 0 || fcntl(fd, F_SETFL, (live_flags & ~O_NONBLOCK) | (record->flags & O_NONBLOCK)) != 0 ||
+        fcntl(fd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
+        return -1;
+    g_ofd_id[fd] = record->ofd_id;
+    return proc_fdvis_publish_native_fd(fd);
+}
+
+static int ckpt_restore_eventfd_fd(const struct ckpt_fd *record) {
+    struct ckpt_restore_eventfd *object = ckpt_restore_eventfd_find(record->object_id);
+    int fd = record->gfd;
+    if (object == NULL || object->slot < 0 || object->slot >= HL_NFD || fd < 0 || fd >= HL_NFD ||
+        dup2(object->reader, fd) < 0)
+        return -1;
+    if (fcntl(fd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0) return -1;
+    int live_flags = fcntl(fd, F_GETFL);
+    if (live_flags < 0 || fcntl(fd, F_SETFL, live_flags | O_NONBLOCK) != 0) return -1;
+    g_eventfd_peer[fd] = object->writer + 1;
+    g_eventfd_cslot[fd] = object->slot + 1;
+    g_eventfd_sema[fd] = object->semaphore;
+    eventfd_guest_nb_set(fd, object->guest_nonblock);
+    g_eventfd_refs[object->slot]++;
+    return proc_fdvis_publish_native_fd(fd);
+}
+
+static int ckpt_restore_timerfd_state(const struct ckpt_fd *record, int source, int slot, int first,
+                                      struct ckpt_restore_timerfd *restored) {
+    if (source >= 0) {
+        g_tfd_deadline[record->gfd] = g_tfd_deadline[slot];
+        g_tfd_interval[record->gfd] = g_tfd_interval[slot];
+        g_tfd_first_oneshot[record->gfd] = g_tfd_first_oneshot[slot];
+        return 0;
+    }
+    struct timespec now;
+    hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
+    int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+    timerfd_shared_lock(restored->state);
+    int64_t next = restored->state->deadline;
+    int64_t interval = restored->state->interval;
+    uint64_t pending = restored->state->pending;
+    timerfd_shared_unlock(restored->state);
+    g_tfd_deadline[slot] = next;
+    g_tfd_interval[slot] = interval;
+    g_tfd_pending[slot] = pending;
+    g_tfd_first_oneshot[slot] = interval > 0 ? 1 : (uint8_t)first;
+    if (pending == 0 && next <= now_ns) return 0;
+    struct kevent event;
+    int64_t delay = pending != 0 ? 1 : next - now_ns;
+    EV_SET(&event, 1, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_NSECONDS, delay, NULL);
+    if (kevent(record->gfd, &event, 1, NULL, 0, NULL) >= 0) return 0;
+    fprintf(stderr, "[restore] timerfd %d arm failed: %s\n", record->gfd, strerror(errno));
+    return -1;
+}
+
+static int ckpt_restore_timerfd_fd(const struct ckpt_fd *records, int index, const struct ckpt_fd *record) {
+    int clock_id = 0, first = 0;
+    unsigned long long pending_value = 0;
+    long long captured_ns = 0;
+    if (sscanf(record->path, "%d %llu %u %lld", &clock_id, &pending_value, (unsigned *)&first, &captured_ns) != 4) {
+        fprintf(stderr, "[restore] timerfd %d has invalid metadata '%s'\n", record->gfd, record->path);
+        return -1;
+    }
+    int source = ckpt_restore_prior_kind(records, index, CKF_TIMERFD, record->object_id);
+    struct ckpt_restore_timerfd *restored = ckpt_restore_timerfd_find(record->object_id);
+    if (restored == NULL || restored->state == NULL) return -1;
+    int timer = source >= 0 ? dup(source) : kqueue();
+    if (timer < 0) {
+        fprintf(stderr, "[restore] timerfd %d create/dup failed: %s\n", record->gfd, strerror(errno));
+        return -1;
+    }
+    if (source >= 0) hl_native_kqueue_duplicate(source, timer);
+    if (timer != record->gfd) {
+        if (dup2(timer, record->gfd) < 0) {
+            fprintf(stderr, "[restore] timerfd %d target dup failed: %s\n", record->gfd, strerror(errno));
+            close(timer);
+            return -1;
+        }
+        hl_native_kqueue_relocate(timer, record->gfd);
+        close(timer);
+    }
+    if (fcntl(record->gfd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0) {
+        fprintf(stderr, "[restore] timerfd %d flag restore failed: %s\n", record->gfd, strerror(errno));
+        return -1;
+    }
+    int slot = source >= 0 ? timerfd_slot(source) : record->gfd;
+    if (slot < 0 || slot >= HL_NFD) {
+        fprintf(stderr, "[restore] timerfd %d invalid canonical slot %d\n", record->gfd, slot);
+        return -1;
+    }
+    g_timerfd[record->gfd] = 1;
+    g_epoll_family_seen = 1;
+    g_tfd_cslot[record->gfd] = slot + 1;
+    g_tfd_object[record->gfd] = record->object_id;
+    g_tfd_clock[record->gfd] = clock_id;
+    g_tfd_nb[record->gfd] = (record->flags & O_NONBLOCK) != 0;
+    g_tfd_shared[record->gfd] = restored->state;
+    g_tfd_refs[slot]++;
+    if (ckpt_restore_timerfd_state(record, source, slot, first, restored) != 0) return -1;
+    if (proc_fdvis_publish_native_fd(record->gfd) == 0) return 0;
+    fprintf(stderr, "[restore] timerfd %d publication failed\n", record->gfd);
+    return -1;
+}
+
+static int ckpt_restore_typed_inotify(const char *procdir, const struct ckpt_fd *record, int source) {
+    if (source >= 0) {
+        if (dup2(source, record->gfd) < 0 ||
+            hl_linux_dup3(g_linux_box, (hl_linux_fd)source, (hl_linux_fd)record->gfd,
+                          (record->descriptor_flags & FD_CLOEXEC) ? HL_LINUX_O_CLOEXEC : 0) < 0)
+            return -1;
+    } else {
+        char image_path[1400];
+        snprintf(image_path, sizeof image_path, "%s/%s", procdir, record->path);
+        int64_t stored = ckpt_source_object_size(image_path);
+        if (stored <= 0) {
+            fprintf(stderr, "[restore] inotify %d image %s is invalid: %s\n", record->gfd, image_path, strerror(errno));
+            return -1;
+        }
+        size_t image_size = (size_t)stored;
+        void *image = malloc(image_size);
+        if (image == NULL || ckpt_source_load(image_path, image, image_size) != 0) {
+            fprintf(stderr, "[restore] inotify %d cannot load %s\n", record->gfd, image_path);
+            free(image);
+            return -1;
+        }
+        int flags = O_RDONLY | ((record->descriptor_flags & FD_CLOEXEC) ? O_CLOEXEC : 0);
+        int shadow = open(HL_LINUX_HOST_NULL_DEVICE, flags);
+        if (shadow < 0 || (shadow != record->gfd && dup2(shadow, record->gfd) < 0)) {
+            fprintf(stderr, "[restore] inotify %d cannot reserve native shadow: %s\n", record->gfd, strerror(errno));
+            if (shadow >= 0) close(shadow);
+            free(image);
+            return -1;
+        }
+        if (shadow != record->gfd) close(shadow);
+        void *provider = bound_inotify_provider_create(g_host_services);
+        int64_t imported = provider == NULL
+                               ? -HL_LINUX_ENOMEM
+                               : hl_linux_inotify_import_at(g_linux_box, (hl_linux_fd)record->gfd, &bound_inotify_ops,
+                                                            provider, (uint32_t)record->descriptor_flags,
+                                                            (uint32_t)record->flags, image, image_size);
+        free(image);
+        if (imported < 0) {
+            fprintf(stderr, "[restore] inotify %d typed import failed: %lld\n", record->gfd, (long long)imported);
+            close(record->gfd);
+            return -1;
+        }
+    }
+    if (proc_fdvis_publish(record->gfd, HL_HOST_FD_OTHER, 0, 0) == 0) return 0;
+    fprintf(stderr, "[restore] inotify %d fd visibility publication failed\n", record->gfd);
+    return -1;
+}
+
+static int ckpt_restore_native_inotify(const struct ckpt_fd *record, int source) {
+#if defined(__linux__)
+    int instance =
+        source >= 0
+            ? dup(source)
+            : inotify_init1((record->flags & O_NONBLOCK) | ((record->descriptor_flags & FD_CLOEXEC) ? 0x80000 : 0));
+#else
+    int instance = source >= 0 ? dup(source) : kqueue();
+#endif
+    if (instance < 0) return -1;
+    if (source >= 0) hl_native_kqueue_duplicate(source, instance);
+    if (instance != record->gfd) {
+        if (dup2(instance, record->gfd) < 0) {
+            close(instance);
+            return -1;
+        }
+        if (source >= 0) hl_native_kqueue_duplicate(source, record->gfd);
+        close(instance);
+    }
+    if (fcntl(record->gfd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0) return -1;
+    g_inotify[record->gfd] = 1;
+    g_inotify_nb[record->gfd] = (record->flags & O_NONBLOCK) != 0;
+    g_inotify_object[record->gfd] = record->object_id;
+    g_epoll_family_seen = 1;
+    return proc_fdvis_publish_native_fd(record->gfd);
+}
+
+static int ckpt_restore_inotify_fd(const char *procdir, const struct ckpt_fd *records, int index,
+                                   const struct ckpt_fd *record) {
+    int source = ckpt_restore_prior_kind(records, index, CKF_INOTIFY, record->object_id);
+    return record->path[0] != 0 ? ckpt_restore_typed_inotify(procdir, record, source)
+                                : ckpt_restore_native_inotify(record, source);
+}
+
+static int ckpt_restore_existing_ofd(const struct ckpt_fd *records, int index, const struct ckpt_fd *record) {
+    if (record->ofd_id == 0 || record->kind == CKF_PIPE || record->kind == CKF_TTY) return 0;
+    int source = ckpt_restore_prior_ofd(records, index, record->ofd_id);
+    if (source < 0) return 0;
+    if (dup2(source, record->gfd) < 0) return -1;
+    fcntl(record->gfd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0);
+    if (record->kind == CKF_MEMFD && record->gfd >= 0 && record->gfd < HL_NFD) {
+        g_memfd_is[record->gfd] = 1;
+        g_memfd_seal[record->gfd] = (int)record->auxiliary;
+        memfd_reg_set_fd(record->gfd, g_memfd_seal[record->gfd]);
+    }
+    if (record->gfd >= 0 && record->gfd < HL_NFD) g_ofd_id[record->gfd] = record->ofd_id;
+    return proc_fdvis_publish_native_fd(record->gfd) == 0 ? 1 : -1;
+}
+
+static int ckpt_restore_saved_ofd(const struct ckpt_fd *record) {
+    if ((record->kind != CKF_FILE && record->kind != CKF_BLOB && record->kind != CKF_MEMFD) || record->ofd_id == 0)
+        return 0;
+    struct ckpt_restore_right *right = ckpt_restore_right_find(record->ofd_id);
+    if (right == NULL) return 0;
+    if (right->object_id != record->object_id || dup2(right->fd, record->gfd) < 0 ||
+        fcntl(record->gfd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
+        return -1;
+    g_ofd_id[record->gfd] = record->ofd_id;
+    if (record->kind == CKF_MEMFD) {
+        g_memfd_is[record->gfd] = 1;
+        g_memfd_seal[record->gfd] = (int)record->auxiliary;
+        memfd_reg_set_fd(record->gfd, g_memfd_seal[record->gfd]);
+    }
+    return proc_fdvis_publish_native_fd(record->gfd) == 0 ? 1 : -1;
+}
+
+static int ckpt_restore_tty_fd(const struct ckpt_fd *record) {
+    if (record->gfd > 2) {
+        int ctty = ckpt_ctty_open();
+        if (ctty >= 0 && record->gfd != ctty && dup2(ctty, record->gfd) >= 0 && (record->flags & FD_CLOEXEC))
+            fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
+        ckpt_ctty_close(ctty);
+    }
+    if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
+    return 0;
+}
+
+static int ckpt_restore_pipe_fd(const struct ckpt_fd *record) {
+    uint64_t identity = (uint64_t)record->offset;
+    struct ckpt_restore_pipe *pipe = ckpt_restore_pipe_find(identity);
+    int source = ((record->flags & O_ACCMODE) == O_WRONLY) ? (pipe ? pipe->writer : -1) : (pipe ? pipe->reader : -1);
+    if (source < 0 || dup2(source, record->gfd) < 0) return -1;
+    int live_flags = fcntl(record->gfd, F_GETFL);
+    if (live_flags < 0 || fcntl(record->gfd, F_SETFL, (live_flags & ~O_NONBLOCK) | (record->flags & O_NONBLOCK)) != 0)
+        return -1;
+    if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
+    g_pipe_identity[record->gfd] = identity;
+    g_pipesz[record->gfd] = pipe->size;
+    return proc_fdvis_publish(record->gfd, HL_HOST_FD_PIPE, 1, identity);
+}
+
+static int ckpt_restore_memfd_fd(const char *procdir, const struct ckpt_fd *record) {
+    int seed = ckpt_restore_backing_find(record->object_id);
+    if (seed >= 0) {
+        if (dup2(seed, record->gfd) < 0) return -1;
+        int live_flags = fcntl(record->gfd, F_GETFL);
+        if (live_flags < 0 ||
+            fcntl(record->gfd, F_SETFL, (live_flags & ~O_NONBLOCK) | (record->flags & O_NONBLOCK)) != 0 ||
+            lseek(record->gfd, (off_t)record->offset, SEEK_SET) < 0)
+            return -1;
+        if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
+        if (proc_fdvis_publish_native_fd(record->gfd) != 0) return -1;
+    } else if (ckpt_restore_file_blob(procdir, record) != 0) {
+        return -1;
+    }
+    if (record->gfd < 0 || record->gfd >= HL_NFD) return -1;
+    g_memfd_is[record->gfd] = 1;
+    g_memfd_seal[record->gfd] = (int)record->auxiliary;
+    memfd_reg_set_fd(record->gfd, g_memfd_seal[record->gfd]);
+    return 0;
+}
+
+static int ckpt_restore_file_fd(const struct ckpt_fd *record) {
+    int flags = record->flags & ~(O_CREAT | O_EXCL | O_TRUNC);
+    int host_fd = open(record->path, flags);
+    if (host_fd < 0) {
+        fprintf(stderr, "[restore] cannot reopen fd %d (%s): %s\n", record->gfd, record->path, strerror(errno));
+        return -1;
+    }
+    if (host_fd != record->gfd) {
+        dup2(host_fd, record->gfd);
+        close(host_fd);
+    }
+    if (record->offset > 0) lseek(record->gfd, (off_t)record->offset, SEEK_SET);
+    if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
+    if (record->gfd >= 0 && record->gfd < 1024 &&
+        path_copy(g_fdpath[record->gfd], sizeof g_fdpath[record->gfd], record->path) != 0)
+        g_fdpath[record->gfd][0] = 0;
+    return proc_fdvis_publish_native_fd(record->gfd);
+}
+
+static int ckpt_restore_device_fd(const struct ckpt_fd *record) {
+    int flags = record->flags & ~(O_CREAT | O_EXCL | O_TRUNC);
+    int host_fd = open(record->path, flags);
+    if (host_fd < 0 || (host_fd != record->gfd && dup2(host_fd, record->gfd) < 0)) {
+        if (host_fd >= 0) close(host_fd);
+        return -1;
+    }
+    if (host_fd != record->gfd) close(host_fd);
+    if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
+    return proc_fdvis_publish_native_fd(record->gfd);
+}
+
+static int ckpt_restore_fd_record(const char *procdir, const struct ckpt_fd *records, int count, int index) {
+    const struct ckpt_fd *record = &records[index];
+    ckpt_restore_retire_typed_fd(record);
+    if (record->kind == CKF_EPOLL) return 0;
+    if (record->kind == CKF_SOCKETPAIR) return ckpt_restore_socketpair_fd(records, count, record);
+    if (record->kind == CKF_SOCKET) return ckpt_restore_bound_socket_fd(records, index, record);
+    if (record->kind == CKF_SIGNALFD) return ckpt_restore_signalfd_fd(records, index, record);
+    if (record->kind == CKF_EVENTFD) return ckpt_restore_eventfd_fd(record);
+    if (record->kind == CKF_TIMERFD) return ckpt_restore_timerfd_fd(records, index, record);
+    if (record->kind == CKF_INOTIFY) return ckpt_restore_inotify_fd(procdir, records, index, record);
+    int restored = ckpt_restore_existing_ofd(records, index, record);
+    if (restored != 0) return restored < 0 ? -1 : 0;
+    restored = ckpt_restore_saved_ofd(record);
+    if (restored != 0) return restored < 0 ? -1 : 0;
+    if (record->kind == CKF_TTY) return ckpt_restore_tty_fd(record);
+    if (record->kind == CKF_PIPE) return ckpt_restore_pipe_fd(record);
+    if (record->kind == CKF_BLOB) return ckpt_restore_file_blob(procdir, record);
+    if (record->kind == CKF_MEMFD) return ckpt_restore_memfd_fd(procdir, record);
+    if (record->kind == CKF_FILE) return ckpt_restore_file_fd(record);
+    if (record->kind == CKF_DEVICE) return ckpt_restore_device_fd(record);
+    return 0;
+}
+
+static int ckpt_restore_epoll_fd(const struct ckpt_fd *records, int index) {
+    const struct ckpt_fd *record = &records[index];
+    int source = ckpt_restore_prior_kind(records, index, CKF_EPOLL, record->object_id);
+    int instance = source >= 0 ? dup(source) : kqueue();
+    if (instance < 0) return -1;
+    if (source >= 0) hl_native_kqueue_duplicate(source, instance);
+    if (instance != record->gfd) {
+        if (dup2(instance, record->gfd) < 0) {
+            close(instance);
+            return -1;
+        }
+        hl_native_kqueue_relocate(instance, record->gfd);
+        close(instance);
+    }
+    if (fcntl(record->gfd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0) return -1;
+    g_ep_provider_generations[record->gfd] = ep_provider_next(g_ep_provider_generations[record->gfd]);
+    g_epoll[record->gfd] = 1;
+    g_ep_cslot[record->gfd] = (uint16_t)((source >= 0 ? epoll_slot(source) : record->gfd) + 1);
+    g_ep_dupd[record->gfd] = source >= 0;
+    if (source >= 0) {
+        g_ep_dupd[source] = 1;
+        ofd_link_dup(record->gfd, source);
+    }
+    g_epoll_family_seen = 1;
+    ep_mem_clear(record->gfd);
+    return proc_fdvis_publish_native_fd(record->gfd);
+}
+
+static int ckpt_restore_epoll_fds(const char *procdir, const struct ckpt_fd *records, int count) {
+    for (int index = 0; index < count; ++index)
+        if (records[index].kind == CKF_EPOLL && ckpt_restore_epoll_fd(records, index) != 0) return -1;
+    for (int index = 0; index < count; ++index) {
+        if (records[index].kind != CKF_EPOLL) continue;
+        int source = ckpt_restore_prior_kind(records, index, CKF_EPOLL, records[index].object_id);
+        if (source < 0 && ckpt_restore_epoll_watches(procdir, &records[index]) != 0) return -1;
+    }
+    return 0;
+}
+
 static int ckpt_restore_fds_dir(const char *procdir) {
     struct ckpt_fd *records = NULL;
-    static unsigned char desired_pipe[HL_NFD];
     char pf[1300];
     snprintf(pf, sizeof pf, "%s/fds", procdir);
     FILE *f = ckpt_source_fopen(pf);
@@ -23,527 +530,15 @@ static int ckpt_restore_fds_dir(const char *procdir) {
     }
     ckpt_source_fclose(f);
     ckpt_fd_terminate_all(records, (size_t)count);
-    /* A restored child inherits its restorer parent's public eventfd descriptors and process-local routing
-     * tables. They are not part of the child's saved fd table merely because the parent owned them. Drop
-     * those public copies without closing the inherited hidden writer seeds, then rebuild exactly this
-     * process's aliases below. The counter arena is shared across the whole restored tree and is deliberately
-     * not modified here. */
-    for (int fd = 0; fd < HL_NFD; fd++) {
-        if (!g_eventfd_peer[fd]) continue;
-        proc_fdvis_close(fd);
-        close(fd);
-        g_eventfd_peer[fd] = 0;
-        g_eventfd_cslot[fd] = 0;
-        g_eventfd_sema[fd] = 0;
-        g_eventfd_gnb[fd] = 0;
-    }
-    memset(g_eventfd_refs, 0, sizeof g_eventfd_refs);
-    memset(desired_pipe, 0, sizeof desired_pipe);
-    for (int i = 0; i < count; i++)
-        if (records[i].kind == CKF_PIPE && records[i].gfd >= 0 && records[i].gfd < HL_NFD)
-            desired_pipe[records[i].gfd] = 1;
-    for (int fd = 0; fd < HL_NFD; fd++) {
-        if (g_pipe_identity[fd] == 0 || desired_pipe[fd]) continue;
-        proc_fdvis_close(fd);
-        g_pipe_identity[fd] = 0;
-        close(fd);
-    }
-    for (int i = 0; i < count; i++) {
-        struct ckpt_fd r = records[i];
-        /* Embedded/Rust launches seed stdio in the typed hl_linux_abi table.
-         * A checkpoint may contain a later native dup2 replacement at the same
-         * guest number.  Retire the fresh-launch typed binding before installing
-         * serialized native state; otherwise typed syscall dispatch continues to
-         * route to the launch object (typically /dev/null) and masks the restored
-         * descriptor. */
-        if ((r.kind == CKF_FILE || r.kind == CKF_PIPE || r.kind == CKF_BLOB || r.kind == CKF_MEMFD ||
-             r.kind == CKF_EVENTFD || r.kind == CKF_TIMERFD || r.kind == CKF_INOTIFY || r.kind == CKF_EPOLL ||
-             r.kind == CKF_SOCKETPAIR || r.kind == CKF_SOCKET || r.kind == CKF_SIGNALFD) &&
-            g_linux_box != NULL &&
-            hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)r.gfd, &(hl_linux_fd_snapshot){0}) == HL_STATUS_OK) {
-            (void)hl_linux_close(g_linux_box, (hl_linux_fd)r.gfd);
-            proc_fdvis_close(r.gfd);
-            (void)close(r.gfd); /* retire the legacy same-number native shadow */
+    ckpt_restore_reset_inherited_fds(records, count);
+    for (int index = 0; index < count; ++index)
+        if (ckpt_restore_fd_record(procdir, records, count, index) != 0) {
+            free(records);
+            return -1;
         }
-        if (r.kind == CKF_EPOLL) continue;
-        if (r.kind == CKF_SOCKETPAIR) {
-            struct ckpt_restore_socket_endpoint *endpoint = ckpt_restore_socket_find(r.object_id);
-            if (endpoint == NULL || endpoint->fd < 0 || r.gfd < 0 || r.gfd >= HL_NFD || dup2(endpoint->fd, r.gfd) < 0)
-                return -1;
-            int live_flags = fcntl(r.gfd, F_GETFL);
-            if (live_flags < 0 || fcntl(r.gfd, F_SETFL, (live_flags & ~O_NONBLOCK) | (r.flags & O_NONBLOCK)) != 0 ||
-                fcntl(r.gfd, F_SETFD, (r.descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
-                return -1;
-            g_sock_object[r.gfd] = r.object_id;
-            g_sock_peer_object[r.gfd] = r.auxiliary;
-            const struct ckpt_socket_state *state = &endpoint->state;
-            g_sock_fam[r.gfd] = endpoint->state_loaded ? (uint16_t)state->guest_family : AF_UNIX;
-            g_sock_stream[r.gfd] = r.offset == SOCK_STREAM;
-            g_sock_dgram[r.gfd] = r.offset == SOCK_DGRAM || r.offset == SOCK_SEQPACKET;
-            g_sock_seqpacket[r.gfd] = r.offset == SOCK_SEQPACKET;
-            g_sock_conn[r.gfd] = 1;
-            if (endpoint->state_loaded) {
-                g_tcp_listen[r.gfd] = state->listening != 0;
-                g_sock_backlog[r.gfd] = state->backlog;
-                g_lo_port[r.gfd] = state->lo_port;
-                g_lo_v6[r.gfd] = state->lo_v6;
-                g_lo_v6only[r.gfd] = state->lo_v6only;
-                g_br_port[r.gfd] = state->br_port;
-                g_br_ip[r.gfd] = state->br_ip;
-                g_br_interface[r.gfd] = state->br_interface;
-                g_tcp_lport[r.gfd] = state->tcp_local_port;
-                g_tcp_laddr[r.gfd] = state->tcp_local_address;
-                g_tcp_l6[r.gfd] = state->tcp_local_v6;
-                memcpy(g_tcp_laddr6[r.gfd], state->tcp_local_address_v6, sizeof state->tcp_local_address_v6);
-                g_so_error[r.gfd] = state->pending_error;
-                g_so_reuseport[r.gfd] = state->shadow_reuse_port;
-                memcpy(g_tcp_optval[r.gfd], state->tcp_option_value, sizeof state->tcp_option_value);
-                memcpy(g_tcp_optset[r.gfd], state->tcp_option_set, sizeof state->tcp_option_set);
-                memcpy(g_ipopt_val[r.gfd], state->ip_option_value, sizeof state->ip_option_value);
-                memcpy(g_ipopt_set[r.gfd], state->ip_option_set, sizeof state->ip_option_set);
-            }
-            for (int peer_index = 0; peer_index < count; ++peer_index)
-                if (records[peer_index].kind == CKF_SOCKETPAIR && records[peer_index].object_id == r.auxiliary) {
-                    g_sock_pair_peer[r.gfd] = records[peer_index].gfd + 1;
-                    break;
-                }
-            if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-            continue;
-        }
-        if (r.kind == CKF_SOCKET) {
-            struct ckpt_restore_socket *saved = ckpt_restore_socket_state_find(r.object_id);
-            if (saved == NULL || saved->fd < 0 || r.gfd < 0 || r.gfd >= HL_NFD || dup2(saved->fd, r.gfd) < 0) return -1;
-            int live_flags = fcntl(r.gfd, F_GETFL);
-            if (live_flags < 0 || fcntl(r.gfd, F_SETFL, (live_flags & ~O_NONBLOCK) | (r.flags & O_NONBLOCK)) != 0 ||
-                fcntl(r.gfd, F_SETFD, (r.descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
-                return -1;
-            const struct ckpt_socket_state *state = &saved->state;
-            g_sock_object[r.gfd] = r.object_id;
-            g_sock_peer_object[r.gfd] = 0;
-            g_sock_fam[r.gfd] = (uint16_t)state->guest_family;
-            g_sock_stream[r.gfd] = state->type == SOCK_STREAM;
-            g_sock_dgram[r.gfd] = state->type == SOCK_DGRAM;
-            g_sock_conn[r.gfd] = 0;
-            g_tcp_listen[r.gfd] = state->listening != 0;
-            g_sock_backlog[r.gfd] = state->backlog;
-            g_lo_port[r.gfd] = state->lo_port;
-            g_lo_v6[r.gfd] = state->lo_v6;
-            g_lo_v6only[r.gfd] = state->lo_v6only;
-            g_br_port[r.gfd] = state->br_port;
-            g_br_ip[r.gfd] = state->br_ip;
-            g_br_interface[r.gfd] = state->br_interface;
-            g_tcp_lport[r.gfd] = state->tcp_local_port;
-            g_tcp_laddr[r.gfd] = state->tcp_local_address;
-            g_tcp_l6[r.gfd] = state->tcp_local_v6;
-            memcpy(g_tcp_laddr6[r.gfd], state->tcp_local_address_v6, sizeof state->tcp_local_address_v6);
-            g_so_error[r.gfd] = state->pending_error;
-            g_so_reuseport[r.gfd] = state->shadow_reuse_port;
-            memcpy(g_tcp_optval[r.gfd], state->tcp_option_value, sizeof state->tcp_option_value);
-            memcpy(g_tcp_optset[r.gfd], state->tcp_option_set, sizeof state->tcp_option_set);
-            memcpy(g_ipopt_val[r.gfd], state->ip_option_value, sizeof state->ip_option_value);
-            memcpy(g_ipopt_set[r.gfd], state->ip_option_set, sizeof state->ip_option_set);
-            g_udp_local_port[r.gfd] = (uint16_t)state->udp_local_port;
-            g_udp_peer_port[r.gfd] = (uint16_t)state->udp_peer_port;
-            g_udp_local_ip[r.gfd] = state->udp_local_ip;
-            g_udp_peer_ip[r.gfd] = state->udp_peer_ip;
-            g_udp_local_v6[r.gfd] = state->udp_local_v6;
-            g_udp_peer_v6[r.gfd] = state->udp_peer_v6;
-            g_udp_local_interface[r.gfd] = state->udp_local_interface;
-            g_udp_peer_interface[r.gfd] = state->udp_peer_interface;
-            if (state->udp_local_port != 0 && state->host_family == AF_UNIX) {
-                int source = -1;
-                for (int prior = 0; prior < i; ++prior)
-                    if (records[prior].kind == CKF_SOCKET && records[prior].object_id == r.object_id) {
-                        source = records[prior].gfd;
-                        break;
-                    }
-                if (source >= 0) {
-                    udp_ref_dup(r.gfd, source);
-                } else {
-                    const struct sockaddr_un *address = (const void *)&state->local;
-                    if (udp_ref_create(r.gfd, address->sun_path) != 0) return -1;
-                }
-            }
-            if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-            continue;
-        }
-        if (r.kind == CKF_SIGNALFD) {
-            struct ckpt_restore_signalfd *object = ckpt_restore_signalfd_find(r.object_id);
-            if (object == NULL || dup2(object->reader, r.gfd) < 0) return -1;
-            int source = -1;
-            for (int prior = 0; prior < i; ++prior)
-                if (records[prior].kind == CKF_SIGNALFD && records[prior].object_id == r.object_id) {
-                    source = records[prior].gfd;
-                    break;
-                }
-            int slot;
-            if (source >= 0) {
-                slot = g_sigfd_slot[source] - 1;
-                if (slot < 0 || slot >= HL_SFD_MAX) return -1;
-                g_sfd[slot].refs++;
-            } else {
-                slot = sfd_alloc();
-                int writer = slot >= 0 ? fcntl(object->writer, F_DUPFD, 1 << 20) : -1;
-                if (writer < 0 && slot >= 0) writer = fcntl(object->writer, F_DUPFD, 64);
-                if (slot < 0 || writer < 0 || hl_host_process_fd_private_adopt(writer) < 0) {
-                    if (writer >= 0) close(writer);
-                    if (slot >= 0) g_sfd[slot].refs = 0;
-                    return -1;
-                }
-                g_sfd[slot].rd = r.gfd;
-                g_sfd[slot].wr = writer;
-                g_sfd[slot].mask = object->mask;
-            }
-            g_sigfd_slot[r.gfd] = (uint8_t)(slot + 1);
-            int live_flags = fcntl(r.gfd, F_GETFL);
-            if (live_flags < 0 || fcntl(r.gfd, F_SETFL, (live_flags & ~O_NONBLOCK) | (r.flags & O_NONBLOCK)) != 0 ||
-                fcntl(r.gfd, F_SETFD, (r.descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
-                return -1;
-            g_ofd_id[r.gfd] = r.ofd_id;
-            if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-            continue;
-        }
-        if (r.kind == CKF_EVENTFD) {
-            struct ckpt_restore_eventfd *object = ckpt_restore_eventfd_find(r.object_id);
-            if (!object || object->slot < 0 || object->slot >= HL_NFD || r.gfd < 0 || r.gfd >= HL_NFD ||
-                dup2(object->reader, r.gfd) < 0)
-                return -1;
-            if (fcntl(r.gfd, F_SETFD, (r.descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0) return -1;
-            int live_flags = fcntl(r.gfd, F_GETFL);
-            if (live_flags < 0 || fcntl(r.gfd, F_SETFL, live_flags | O_NONBLOCK) != 0) return -1;
-            g_eventfd_peer[r.gfd] = object->writer + 1;
-            g_eventfd_cslot[r.gfd] = object->slot + 1;
-            g_eventfd_sema[r.gfd] = object->semaphore;
-            eventfd_guest_nb_set(r.gfd, object->guest_nonblock);
-            g_eventfd_refs[object->slot]++;
-            if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-            continue;
-        }
-        if (r.kind == CKF_TIMERFD) {
-            int clock_id = 0, first = 0;
-            unsigned long long pending_value = 0;
-            long long captured_ns = 0;
-            if (sscanf(r.path, "%d %llu %u %lld", &clock_id, &pending_value, (unsigned *)&first, &captured_ns) != 4) {
-                fprintf(stderr, "[restore] timerfd %d has invalid metadata '%s'\n", r.gfd, r.path);
-                return -1;
-            }
-            int source = -1;
-            for (int j = 0; j < i; j++)
-                if (records[j].kind == CKF_TIMERFD && records[j].object_id == r.object_id) {
-                    source = records[j].gfd;
-                    break;
-                }
-            struct ckpt_restore_timerfd *restored = ckpt_restore_timerfd_find(r.object_id);
-            if (!restored || !restored->state) return -1;
-            int timer = source >= 0 ? dup(source) : kqueue();
-            if (timer < 0) {
-                fprintf(stderr, "[restore] timerfd %d create/dup failed: %s\n", r.gfd, strerror(errno));
-                return -1;
-            }
-            if (source >= 0) hl_native_kqueue_duplicate(source, timer);
-            if (timer != r.gfd) {
-                if (dup2(timer, r.gfd) < 0) {
-                    fprintf(stderr, "[restore] timerfd %d target dup failed: %s\n", r.gfd, strerror(errno));
-                    close(timer);
-                    return -1;
-                }
-                // dup2 moved the timer onto the guest's fd number; a shim kqueue keys its queue by descriptor
-                // NUMBER, so it must be told or the arming kevent() below is EBADF.
-                hl_native_kqueue_relocate(timer, r.gfd);
-                close(timer);
-            }
-            if (fcntl(r.gfd, F_SETFD, (r.descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0) {
-                fprintf(stderr, "[restore] timerfd %d flag restore failed: %s\n", r.gfd, strerror(errno));
-                return -1;
-            }
-            int slot = source >= 0 ? timerfd_slot(source) : r.gfd;
-            if (slot < 0 || slot >= HL_NFD) {
-                fprintf(stderr, "[restore] timerfd %d invalid canonical slot %d\n", r.gfd, slot);
-                return -1;
-            }
-            g_timerfd[r.gfd] = 1;
-            g_epoll_family_seen = 1;
-            g_tfd_cslot[r.gfd] = slot + 1;
-            g_tfd_object[r.gfd] = r.object_id;
-            g_tfd_clock[r.gfd] = clock_id;
-            g_tfd_nb[r.gfd] = (r.flags & O_NONBLOCK) != 0;
-            g_tfd_shared[r.gfd] = restored->state;
-            g_tfd_refs[slot]++;
-            if (source < 0) {
-                struct timespec now;
-                hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
-                int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
-                timerfd_shared_lock(restored->state);
-                int64_t next = restored->state->deadline;
-                int64_t interval = restored->state->interval;
-                uint64_t pending = restored->state->pending;
-                timerfd_shared_unlock(restored->state);
-                g_tfd_deadline[slot] = next;
-                g_tfd_interval[slot] = interval;
-                g_tfd_pending[slot] = pending;
-                g_tfd_first_oneshot[slot] = interval > 0 ? 1 : (uint8_t)first;
-                if (pending != 0 || next > now_ns) {
-                    struct kevent event;
-                    int64_t delay = pending != 0 ? 1 : next - now_ns;
-                    EV_SET(&event, 1, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_NSECONDS, delay, NULL);
-                    if (kevent(r.gfd, &event, 1, NULL, 0, NULL) < 0) {
-                        fprintf(stderr, "[restore] timerfd %d arm failed: %s\n", r.gfd, strerror(errno));
-                        return -1;
-                    }
-                }
-            } else {
-                g_tfd_deadline[r.gfd] = g_tfd_deadline[slot];
-                g_tfd_interval[r.gfd] = g_tfd_interval[slot];
-                g_tfd_first_oneshot[r.gfd] = g_tfd_first_oneshot[slot];
-            }
-            if (proc_fdvis_publish_native_fd(r.gfd) != 0) {
-                fprintf(stderr, "[restore] timerfd %d publication failed\n", r.gfd);
-                return -1;
-            }
-            continue;
-        }
-        if (r.kind == CKF_INOTIFY) {
-            int source = -1;
-            for (int j = 0; j < i; j++)
-                if (records[j].kind == CKF_INOTIFY && records[j].object_id == r.object_id) {
-                    source = records[j].gfd;
-                    break;
-                }
-            if (r.path[0] != 0) {
-                if (source >= 0) {
-                    if (dup2(source, r.gfd) < 0 ||
-                        hl_linux_dup3(g_linux_box, (hl_linux_fd)source, (hl_linux_fd)r.gfd,
-                                      (r.descriptor_flags & FD_CLOEXEC) ? HL_LINUX_O_CLOEXEC : 0) < 0)
-                        return -1;
-                } else {
-                    char image_path[1400];
-                    snprintf(image_path, sizeof image_path, "%s/%s", procdir, r.path);
-                    int64_t stored = ckpt_source_object_size(image_path);
-                    if (stored <= 0) {
-                        fprintf(stderr, "[restore] inotify %d image %s is invalid: %s\n", r.gfd, image_path,
-                                strerror(errno));
-                        return -1;
-                    }
-                    size_t image_size = (size_t)stored;
-                    void *image = malloc(image_size);
-                    if (image == NULL || ckpt_source_load(image_path, image, image_size) != 0) {
-                        fprintf(stderr, "[restore] inotify %d cannot load %s\n", r.gfd, image_path);
-                        free(image);
-                        return -1;
-                    }
-                    int shadow =
-                        open(HL_LINUX_HOST_NULL_DEVICE, O_RDONLY | ((r.descriptor_flags & FD_CLOEXEC) ? O_CLOEXEC : 0));
-                    if (shadow < 0 || (shadow != r.gfd && dup2(shadow, r.gfd) < 0)) {
-                        fprintf(stderr, "[restore] inotify %d cannot reserve native shadow: %s\n", r.gfd,
-                                strerror(errno));
-                        if (shadow >= 0) close(shadow);
-                        free(image);
-                        return -1;
-                    }
-                    if (shadow != r.gfd) close(shadow);
-                    void *provider = bound_inotify_provider_create(g_host_services);
-                    int64_t imported = provider == NULL
-                                           ? -HL_LINUX_ENOMEM
-                                           : hl_linux_inotify_import_at(
-                                                 g_linux_box, (hl_linux_fd)r.gfd, &bound_inotify_ops, provider,
-                                                 (uint32_t)r.descriptor_flags, (uint32_t)r.flags, image, image_size);
-                    free(image);
-                    if (imported < 0) {
-                        fprintf(stderr, "[restore] inotify %d typed import failed: %lld\n", r.gfd, (long long)imported);
-                        close(r.gfd);
-                        return -1;
-                    }
-                }
-                if (proc_fdvis_publish(r.gfd, HL_HOST_FD_OTHER, 0, 0) != 0) {
-                    fprintf(stderr, "[restore] inotify %d fd visibility publication failed\n", r.gfd);
-                    return -1;
-                }
-                continue;
-            }
-#if defined(__linux__)
-            int instance =
-                source >= 0 ? dup(source)
-                            : inotify_init1((r.flags & O_NONBLOCK) | ((r.descriptor_flags & FD_CLOEXEC) ? 0x80000 : 0));
-#else
-            int instance = source >= 0 ? dup(source) : kqueue();
-#endif
-            if (instance < 0) return -1;
-            if (source >= 0) hl_native_kqueue_duplicate(source, instance);
-            if (instance != r.gfd) {
-                if (dup2(instance, r.gfd) < 0) {
-                    close(instance);
-                    return -1;
-                }
-                if (source >= 0) hl_native_kqueue_duplicate(source, r.gfd);
-                close(instance);
-            }
-            if (fcntl(r.gfd, F_SETFD, (r.descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0) return -1;
-            g_inotify[r.gfd] = 1;
-            g_inotify_nb[r.gfd] = (r.flags & O_NONBLOCK) != 0;
-            g_inotify_object[r.gfd] = r.object_id;
-            g_epoll_family_seen = 1;
-            if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-            continue;
-        }
-        if (r.ofd_id != 0 && r.kind != CKF_PIPE && r.kind != CKF_TTY) {
-            int source = -1;
-            for (int j = 0; j < i; j++)
-                if (records[j].ofd_id == r.ofd_id) {
-                    source = records[j].gfd;
-                    break;
-                }
-            if (source >= 0) {
-                if (dup2(source, r.gfd) < 0) return -1;
-                if (r.descriptor_flags & FD_CLOEXEC)
-                    fcntl(r.gfd, F_SETFD, FD_CLOEXEC);
-                else
-                    fcntl(r.gfd, F_SETFD, 0);
-                if (r.kind == CKF_MEMFD && r.gfd >= 0 && r.gfd < HL_NFD) {
-                    g_memfd_is[r.gfd] = 1;
-                    g_memfd_seal[r.gfd] = (int)r.auxiliary;
-                    memfd_reg_set_fd(r.gfd, g_memfd_seal[r.gfd]);
-                }
-                if (r.gfd >= 0 && r.gfd < HL_NFD) g_ofd_id[r.gfd] = r.ofd_id;
-                if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-                continue;
-            }
-        }
-        if ((r.kind == CKF_FILE || r.kind == CKF_BLOB || r.kind == CKF_MEMFD) && r.ofd_id != 0) {
-            struct ckpt_restore_right *right = ckpt_restore_right_find(r.ofd_id);
-            if (right != NULL) {
-                if (right->object_id != r.object_id || dup2(right->fd, r.gfd) < 0 ||
-                    fcntl(r.gfd, F_SETFD, (r.descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
-                    return -1;
-                g_ofd_id[r.gfd] = r.ofd_id;
-                if (r.kind == CKF_MEMFD) {
-                    g_memfd_is[r.gfd] = 1;
-                    g_memfd_seal[r.gfd] = (int)r.auxiliary;
-                    memfd_reg_set_fd(r.gfd, g_memfd_seal[r.gfd]);
-                }
-                if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-                continue;
-            }
-        }
-        if (r.kind == CKF_TTY) {
-            // 0/1/2 are inherited from the launcher pty. But an interactive shell also keeps a HIGH-fd dup of
-            // the controlling terminal for job control (bash uses fd 255); the launcher doesn't provide it, so
-            // recreate it by duping the ctty onto that number -- else the shell's tcsetattr/tcgetattr on it
-            // fails EBADF after restore ("tcsetattr: Bad file descriptor" when a foreground job finishes).
-            if (r.gfd > 2) {
-                int ct = ckpt_ctty_open();
-                if (ct >= 0 && r.gfd != ct && dup2(ct, r.gfd) >= 0 && (r.flags & FD_CLOEXEC))
-                    fcntl(r.gfd, F_SETFD, FD_CLOEXEC);
-                ckpt_ctty_close(ct);
-            }
-            if (r.descriptor_flags & FD_CLOEXEC) fcntl(r.gfd, F_SETFD, FD_CLOEXEC);
-            continue;
-        }
-        if (r.kind == CKF_PIPE) {
-            uint64_t identity = (uint64_t)r.offset;
-            struct ckpt_restore_pipe *pipe = ckpt_restore_pipe_find(identity);
-            int source = ((r.flags & O_ACCMODE) == O_WRONLY) ? (pipe ? pipe->writer : -1) : (pipe ? pipe->reader : -1);
-            if (source < 0 || dup2(source, r.gfd) < 0) return -1;
-            int live_flags = fcntl(r.gfd, F_GETFL);
-            if (live_flags < 0 || fcntl(r.gfd, F_SETFL, (live_flags & ~O_NONBLOCK) | (r.flags & O_NONBLOCK)) != 0)
-                return -1;
-            if (r.descriptor_flags & FD_CLOEXEC) fcntl(r.gfd, F_SETFD, FD_CLOEXEC);
-            g_pipe_identity[r.gfd] = identity;
-            g_pipesz[r.gfd] = pipe->size;
-            if (proc_fdvis_publish(r.gfd, HL_HOST_FD_PIPE, 1, identity) != 0) return -1;
-            continue;
-        }
-        if (r.kind == CKF_BLOB) {
-            if (ckpt_restore_file_blob(procdir, &r) != 0) return -1;
-            continue;
-        }
-        if (r.kind == CKF_MEMFD) {
-            int seed = ckpt_restore_backing_find(r.object_id);
-            if (seed >= 0) {
-                if (dup2(seed, r.gfd) < 0) return -1;
-                int live_flags = fcntl(r.gfd, F_GETFL);
-                if (live_flags < 0 || fcntl(r.gfd, F_SETFL, (live_flags & ~O_NONBLOCK) | (r.flags & O_NONBLOCK)) != 0 ||
-                    lseek(r.gfd, (off_t)r.offset, SEEK_SET) < 0)
-                    return -1;
-                if (r.descriptor_flags & FD_CLOEXEC) fcntl(r.gfd, F_SETFD, FD_CLOEXEC);
-                if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-            } else if (ckpt_restore_file_blob(procdir, &r) != 0) {
-                return -1;
-            }
-            if (r.gfd < 0 || r.gfd >= HL_NFD) return -1;
-            g_memfd_is[r.gfd] = 1;
-            g_memfd_seal[r.gfd] = (int)r.auxiliary;
-            memfd_reg_set_fd(r.gfd, g_memfd_seal[r.gfd]);
-            continue;
-        }
-        if (r.kind == CKF_FILE) {
-            int flags = r.flags & ~(O_CREAT | O_EXCL | O_TRUNC);
-            int hf = open(r.path, flags);
-            if (hf < 0) {
-                fprintf(stderr, "[restore] cannot reopen fd %d (%s): %s\n", r.gfd, r.path, strerror(errno));
-                return -1;
-            }
-            if (hf != r.gfd) {
-                dup2(hf, r.gfd);
-                close(hf);
-            }
-            if (r.offset > 0) lseek(r.gfd, (off_t)r.offset, SEEK_SET);
-            if (r.descriptor_flags & FD_CLOEXEC) fcntl(r.gfd, F_SETFD, FD_CLOEXEC);
-            if (r.gfd >= 0 && r.gfd < 1024 && path_copy(g_fdpath[r.gfd], sizeof g_fdpath[r.gfd], r.path) != 0)
-                g_fdpath[r.gfd][0] = 0;
-            if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-        }
-        if (r.kind == CKF_DEVICE) {
-            int flags = r.flags & ~(O_CREAT | O_EXCL | O_TRUNC);
-            int host_fd = open(r.path, flags);
-            if (host_fd < 0 || (host_fd != r.gfd && dup2(host_fd, r.gfd) < 0)) {
-                if (host_fd >= 0) close(host_fd);
-                return -1;
-            }
-            if (host_fd != r.gfd) close(host_fd);
-            if (r.descriptor_flags & FD_CLOEXEC) fcntl(r.gfd, F_SETFD, FD_CLOEXEC);
-            if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-        }
-    }
-    for (int i = 0; i < count; ++i) {
-        struct ckpt_fd r = records[i];
-        if (r.kind != CKF_EPOLL) continue;
-        int source = -1;
-        for (int prior = 0; prior < i; ++prior)
-            if (records[prior].kind == CKF_EPOLL && records[prior].object_id == r.object_id) {
-                source = records[prior].gfd;
-                break;
-            }
-        int instance = source >= 0 ? dup(source) : kqueue();
-        if (instance < 0) return -1;
-        if (source >= 0) hl_native_kqueue_duplicate(source, instance);
-        if (instance != r.gfd) {
-            if (dup2(instance, r.gfd) < 0) {
-                close(instance);
-                return -1;
-            }
-            // Same shim-kqueue descriptor-number identity as the timerfd path above.
-            hl_native_kqueue_relocate(instance, r.gfd);
-            close(instance);
-        }
-        if (fcntl(r.gfd, F_SETFD, (r.descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0) return -1;
-        g_ep_provider_generations[r.gfd] = ep_provider_next(g_ep_provider_generations[r.gfd]);
-        g_epoll[r.gfd] = 1;
-        g_ep_cslot[r.gfd] = (uint16_t)((source >= 0 ? epoll_slot(source) : r.gfd) + 1);
-        g_ep_dupd[r.gfd] = source >= 0;
-        if (source >= 0) {
-            g_ep_dupd[source] = 1;
-            ofd_link_dup(r.gfd, source);
-        }
-        g_epoll_family_seen = 1;
-        ep_mem_clear(r.gfd);
-        if (proc_fdvis_publish_native_fd(r.gfd) != 0) return -1;
-    }
-    for (int i = 0; i < count; ++i) {
-        if (records[i].kind != CKF_EPOLL) continue;
-        int duplicate = 0;
-        for (int prior = 0; prior < i; ++prior)
-            if (records[prior].kind == CKF_EPOLL && records[prior].object_id == records[i].object_id) duplicate = 1;
-        if (!duplicate && ckpt_restore_epoll_watches(procdir, &records[i]) != 0) return -1;
+    if (ckpt_restore_epoll_fds(procdir, records, count) != 0) {
+        free(records);
+        return -1;
     }
     int restored = ckpt_restore_inotify_sidecar(procdir);
     free(records);
@@ -1101,4 +1096,3 @@ static int ckpt_restore_preflight(int policy) {
     }
     return 0;
 }
-
