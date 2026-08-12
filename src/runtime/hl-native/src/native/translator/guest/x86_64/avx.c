@@ -1120,6 +1120,43 @@ static enum avx_dispatch_result avx_dispatch_map2_variable_shift(const hl_x86_av
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_test(const hl_x86_avx_state *state, struct cpu *c,
+                                                       struct insn *instruction, uint64_t next, int map, int op,
+                                                       int value_register, int width) {
+    if (map != 2 || (op != 0x0E && op != 0x0F && op != 0x17)) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t values[64], masks[64];
+    avx_get(c, value_register, values);
+    avx_get_rm(state, c, instruction, next, width, masks);
+    uint64_t zero_accumulator = 0, carry_accumulator = 0;
+    if (op == 0x17) { // vptest: inspect every bit
+        for (int offset = 0; offset < width; offset += 8) {
+            uint64_t value, mask;
+            memcpy(&value, values + offset, 8);
+            memcpy(&mask, masks + offset, 8);
+            zero_accumulator |= value & mask;
+            carry_accumulator |= mask & ~value;
+        }
+    } else { // vtestps/vtestpd: inspect each element's sign bit
+        int element_size = op == 0x0E ? 4 : 8;
+        uint64_t sign_mask = UINT64_C(1) << (element_size * 8 - 1);
+        for (int offset = 0; offset < width; offset += element_size) {
+            uint64_t value = 0, mask = 0;
+            memcpy(&value, values + offset, (size_t)element_size);
+            memcpy(&mask, masks + offset, (size_t)element_size);
+            zero_accumulator |= value & mask & sign_mask;
+            carry_accumulator |= mask & ~value & sign_mask;
+        }
+    }
+    int zero = zero_accumulator == 0;
+    int carry = carry_accumulator == 0;
+    c->nzcv = ((uint64_t)zero << 30) | ((uint64_t)(!carry) << 29);
+    c->pf = 1;
+    c->af = 0;
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1565,6 +1602,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map2_variable_permutation(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
         return;
     if (avx_dispatch_map2_variable_shift(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map2_test(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2467,38 +2505,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             uint16_t o[32] = {best, (uint16_t)idx};
             avx_put(c, rd, (uint8_t *)o, 16);
             goto done;
-        }
-        case 0x0E:             // vtestps: like vptest but tests only the per-dword sign bits
-        case 0x0F:             // vtestpd: per-qword sign bits
-        case 0x17: {           // vptest: ZF=(op1 & op2)==0, CF=(op2 & ~op1)==0 over the full width; op1=reg, op2=rm
-            avx_get(c, rd, a); // op1 (ModRM.reg); VPTEST/VTEST take no vvvv
-            avx_get_rm(state, c, &I, next, W, b);
-            uint64_t zacc = 0, cacc = 0;
-            if (op == 0x17) { // full-width bitwise
-                for (int i = 0; i < W; i += 8) {
-                    uint64_t x, y;
-                    memcpy(&x, a + i, 8);
-                    memcpy(&y, b + i, 8);
-                    zacc |= (x & y);
-                    cacc |= (y & ~x);
-                }
-            } else { // sign-bit only, per dword (ps) / qword (pd)
-                int es = (op == 0x0E) ? 4 : 8;
-                uint64_t smask = 1ull << (es * 8 - 1);
-                for (int i = 0; i < W; i += es) {
-                    uint64_t x = 0, y = 0;
-                    memcpy(&x, a + i, (size_t)es);
-                    memcpy(&y, b + i, (size_t)es);
-                    zacc |= (x & y & smask);
-                    cacc |= (y & ~x & smask);
-                }
-            }
-            int zf = (zacc == 0), cf = (cacc == 0);
-            c->nzcv = ((uint64_t)zf << 30) | ((uint64_t)(!cf) << 29);
-            c->pf = 1;
-            c->af = 0;
-            c->rip = next;
-            return;
         }
         case 0x13: { // vcvtph2ps: rm holds W/2 bytes of packed fp16 -> W/4 fp32 in dst
             int nf = W / 4;
