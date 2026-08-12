@@ -7,14 +7,7 @@
 pub const STORE_LIMIT: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Ownership {
-    LaunchInput,
-    InternalState,
-    DebugOnly,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Shape {
+enum Shape {
     Text,
     Path,
     Integer,
@@ -23,35 +16,29 @@ pub enum Shape {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Definition {
-    pub name: &'static str,
-    pub purpose: &'static str,
-    pub ownership: Ownership,
-    pub shape: Shape,
+struct Definition {
+    name: &'static str,
+    shape: Shape,
 }
 
 macro_rules! launch {
-    ($name:literal, $purpose:literal, $shape:ident) => {
+    ($name:literal, $_purpose:literal, $shape:ident) => {
         Definition {
             name: $name,
-            purpose: $purpose,
-            ownership: Ownership::LaunchInput,
             shape: Shape::$shape,
         }
     };
 }
 macro_rules! internal {
-    ($name:literal, $purpose:literal, $shape:ident) => {
+    ($name:literal, $_purpose:literal, $shape:ident) => {
         Definition {
             name: $name,
-            purpose: $purpose,
-            ownership: Ownership::InternalState,
             shape: Shape::$shape,
         }
     };
 }
 
-pub const DEFINITIONS: &[Definition] = &[
+const DEFINITIONS: &[Definition] = &[
     launch!("HL_CHECKPOINT", "arm checkpoint capture over the store channel", Flag),
     launch!(
         "HL_CHECKPOINT_POLICY",
@@ -197,8 +184,6 @@ pub const DEFINITIONS: &[Definition] = &[
     ),
     Definition {
         name: "HL_LOG",
-        purpose: "debug-build logging tag selector",
-        ownership: Ownership::DebugOnly,
         shape: Shape::Text,
     },
 ];
@@ -244,7 +229,7 @@ impl Options {
     }
 
     #[must_use]
-    pub fn get_bytes(&self, name: &str) -> Option<&[u8]> {
+    pub(crate) fn get_bytes(&self, name: &str) -> Option<&[u8]> {
         self.index(name).and_then(|index| self.values[index].as_deref())
     }
 
@@ -305,7 +290,7 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), DEFINITIONS.len());
         assert_eq!(DEFINITIONS[0].name, "HL_CHECKPOINT");
-        assert_eq!(DEFINITIONS.last().unwrap().ownership, Ownership::DebugOnly);
+        assert_eq!(DEFINITIONS.last().unwrap().name, "HL_LOG");
     }
 
     #[test]
@@ -313,7 +298,6 @@ mod tests {
         let mut options = Options::default();
         for name in ["HL_A64_DIRTY_OVERFLOW_CONTINUE", "HL_A64_DIRTY_OVERFLOW_EXIT"] {
             let definition = DEFINITIONS.iter().find(|definition| definition.name == name).unwrap();
-            assert_eq!(definition.ownership, Ownership::LaunchInput);
             assert_eq!(definition.shape, Shape::Flag);
             assert_eq!(options.get(name), None);
             options.set(name, "1", true).unwrap();
@@ -327,7 +311,6 @@ mod tests {
             .iter()
             .find(|definition| definition.name == "HL_NATIVE_SPLIT_MODE_EXECUTORS")
             .unwrap();
-        assert_eq!(definition.ownership, Ownership::LaunchInput);
         assert_eq!(definition.shape, Shape::Flag);
 
         let mut options = Options::default();
