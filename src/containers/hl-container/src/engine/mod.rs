@@ -471,7 +471,7 @@ mod tests {
         let mut launch = launch();
         launch.execution = crate::Execution::retained_c();
         let spec = Spec::try_from(&launch).unwrap();
-        assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), Some("c"));
+        assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), None);
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
         assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), None);
@@ -483,13 +483,13 @@ mod tests {
         let mut launch = launch();
         launch.execution = crate::Execution::retained_c_diagnostics();
         let spec = Spec::try_from(&launch).unwrap();
-        assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), Some("c"));
+        assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), None);
         assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_C_EXECUTION_ATTESTATION"), Some("1"));
     }
 
     #[test]
-    fn legacy_execution_modes_leave_product_backend_unselected() {
+    fn every_execution_mode_leaves_product_backend_unselected() {
         for execution in [crate::Execution::default(), crate::Execution::native(false)] {
             let mut launch = launch();
             launch.execution = execution;

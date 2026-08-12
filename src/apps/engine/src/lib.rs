@@ -47,8 +47,6 @@ pub struct Worker;
 
 #[derive(Parser)]
 struct BackendReceiptArguments {
-    #[arg(long = "engine-option")]
-    engine_options: Vec<String>,
     #[arg(long = "guest-isa")]
     guest: Option<String>,
 }
@@ -148,15 +146,10 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
     if arguments.get(1).map(String::as_str) != Some("--backend-receipt") {
         return Err(());
     }
-    let mut options = hl_engine::options::Options::default();
     let parsed = BackendReceiptArguments::try_parse_from(
         std::iter::once("backend-receipt").chain(arguments[2..].iter().map(String::as_str)),
     )
     .map_err(|_| ())?;
-    for assignment in parsed.engine_options {
-        let (name, value) = assignment.split_once('=').ok_or(())?;
-        options.set(name, value, true).map_err(|_| ())?;
-    }
     let selected = match (forced_guest, parsed.guest.as_deref()) {
         (Some(_), Some(_)) => return Err(()),
         (Some(guest), None) => Some(guest),
@@ -174,7 +167,7 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
         arguments: vec![b"backend-receipt".to_vec()],
         environment: Vec::new(),
         result_path: None,
-        options,
+        options: hl_engine::options::Options::default(),
     };
     // This is the production selector itself.  A receipt is emitted only when
     // it constructs the backend named below for the requested guest ISA.
@@ -247,22 +240,6 @@ mod tests {
             hash.bytes()
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         );
-    }
-
-    #[test]
-    fn backend_receipt_honors_production_selection() {
-        let arguments = |backend: &str| {
-            vec![
-                "hl-aarch64".into(),
-                "--backend-receipt".into(),
-                "--engine-option".into(),
-                format!("HL_EXECUTION_BACKEND={backend}"),
-            ]
-        };
-        assert!(backend_receipt(&arguments("c"), Some(Guest::Aarch64)).is_ok());
-        assert!(backend_receipt(&arguments("rust"), Some(Guest::Aarch64)).is_err());
-        assert!(backend_receipt(&arguments("bogus"), Some(Guest::Aarch64)).is_err());
-        assert!(backend_receipt(&arguments("c"), Some(Guest::X86_64)).is_ok());
     }
 
     #[test]

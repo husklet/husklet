@@ -122,28 +122,14 @@ fn receipt_is_machine_readable_and_hash_bound() {
 }
 
 #[test]
-fn receipt_accepts_both_guests_and_fails_closed_for_unselected_backends() {
+fn receipt_accepts_both_guests_and_rejects_retired_selector_arguments() {
     let aarch64 = env!("CARGO_BIN_EXE_hl-aarch64");
-    let accepted = Command::new(aarch64)
+    let rejected = Command::new(aarch64)
         .args(["--backend-receipt", "--engine-option", "HL_EXECUTION_BACKEND=c"])
         .output()
         .unwrap();
-    assert!(accepted.status.success());
-    assert!(accepted.stderr.is_empty());
-
-    for backend in ["rust", "bogus"] {
-        let rejected = Command::new(aarch64)
-            .args([
-                "--backend-receipt",
-                "--engine-option",
-                &format!("HL_EXECUTION_BACKEND={backend}"),
-            ])
-            .output()
-            .unwrap();
-        assert_eq!(rejected.status.code(), Some(125));
-        assert!(rejected.stdout.is_empty());
-        assert!(rejected.stderr.is_empty());
-    }
+    assert_eq!(rejected.status.code(), Some(125));
+    assert!(rejected.stdout.is_empty());
 
     let x86 = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
         .arg("--backend-receipt")

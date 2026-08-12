@@ -105,9 +105,7 @@ def main(argv=None):
         "I": executable(args.integrated, "integrated engine"),
     }
     receipts = {
-        "R": backend_receipt(engines["R"], "retained-c", ("HL_EXECUTION_BACKEND=c",)),
-        # The current integrated product deliberately embeds the retained-C backend. R/I are a
-        # selector/default no-op control until a distinct integrated backend receipts its own name.
+        "R": backend_receipt(engines["R"], "retained-c"),
         "I": backend_receipt(engines["I"], "retained-c"),
     }
     rootfs = Path(args.rootfs).resolve()
@@ -152,7 +150,7 @@ def main(argv=None):
         "rootfs": {"path": str(rootfs), "sha256": tree_digest(rootfs)},
         "arms": {
             "E": arm("E", "external"),
-            "R": arm("R", "product", ("--engine-option", "HL_EXECUTION_BACKEND=c")),
+            "R": arm("R", "product"),
             "I": arm("I", "product"),
         },
         "workloads": {

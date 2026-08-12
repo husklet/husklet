@@ -171,7 +171,6 @@ mod tests {
     fn plan() -> RuntimeLaunchPlan {
         let mut options = Options::default();
         options.set("HL_CWD", "/work", true).unwrap();
-        options.set("HL_EXECUTION_BACKEND", "c", true).unwrap();
         RuntimeLaunchPlan {
             rootfs: Some(b"/root".to_vec()),
             executable_host: None,

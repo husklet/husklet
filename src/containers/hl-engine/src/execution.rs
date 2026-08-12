@@ -56,7 +56,7 @@ const TASK_EVENT_REAP_PROCESS: u64 = u64::MAX - 6;
 const TASK_EVENT_CREDENTIALS_CHANGED: u64 = u64::MAX - 7;
 
 #[cfg(test)]
-static EVENT_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static EVENT_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
 
 #[repr(C)]
 struct CSyscallCpuAarch64 {
@@ -859,7 +859,6 @@ mod tests {
         options.set("HL_UID", "7", true).unwrap();
         options.set("HL_UID", "8", false).unwrap();
         options.set("HL_UID", "9", true).unwrap();
-        options.set("HL_EXECUTION_BACKEND", "c", true).unwrap();
         assert_eq!(
             options.set("HL_UID", "18446744073709551616", true),
             Err(crate::options::OptionError::InvalidValue)

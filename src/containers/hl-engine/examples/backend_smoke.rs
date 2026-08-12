@@ -10,10 +10,6 @@ fn run() -> Result<i32, EngineError> {
     let arguments = std::iter::once(guest.as_encoded_bytes().to_vec())
         .chain(arguments.map(|value| value.as_encoded_bytes().to_vec()))
         .collect();
-    let mut options = Options::default();
-    options
-        .set("HL_EXECUTION_BACKEND", "c", true)
-        .map_err(|_| EngineError::LaunchFailed)?;
     let engine = Engine::from_plan(
         GuestIsa::Aarch64,
         RuntimePlan {
@@ -22,7 +18,7 @@ fn run() -> Result<i32, EngineError> {
             arguments,
             environment: Vec::new(),
             result_path: None,
-            options,
+            options: Options::default(),
         },
     )?;
     let runs = std::env::var("HL_C_BACKEND_SMOKE_RUNS")

@@ -90,7 +90,7 @@ class AdapterTests(unittest.TestCase):
             engine.write_text("#!/bin/sh\nexit 0\n")
             engine.chmod(0o755)
             with self.assertRaisesRegex(ValueError, "backend receipt"):
-                config.backend_receipt(engine, "retained-c", ("HL_EXECUTION_BACKEND=c",))
+                config.backend_receipt(engine, "retained-c")
 
 
 if __name__ == "__main__":

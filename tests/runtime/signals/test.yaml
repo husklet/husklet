@@ -189,7 +189,6 @@ cases:
     build: { source: go_preempt.c, output: sigurg-go-preempt, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/signals-sigurg-go-preempt }
     run: []
-    environment: [{ name: HL_EXECUTION_BACKEND, value: c }]
     expect: { exit: 0, stdout: golden/go_preempt.out, diagnostics: [] }
   - id: runtime/signals/sa-nodefer
     status: active

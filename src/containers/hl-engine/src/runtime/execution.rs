@@ -86,13 +86,11 @@ impl RuntimeFactory for ProductionFactory {
     type Machine = ProductionMachine;
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
-        match request.plan.options.get("HL_EXECUTION_BACKEND") {
-            #[cfg(hl_retained_c_default)]
-            None => Self::c(request),
-            #[cfg(hl_retained_c)]
-            Some("c") => Self::c(request),
-            Some(_) => Err(CompositionError::RuntimeConstruction),
-        }
+        #[cfg(hl_retained_c)]
+        return Self::c(request);
+
+        #[cfg(not(hl_retained_c))]
+        Err(CompositionError::RuntimeConstruction)
     }
 }
 
@@ -138,7 +136,6 @@ mod tests {
     use crate::{
         activation::GuestIsa,
         composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStreams},
-        engine::EngineError,
         launch_plan::RuntimePlan,
         options::Options,
         runtime::Engine,
@@ -154,15 +151,13 @@ mod tests {
     }
 
     fn c_plan() -> RuntimePlan {
-        let mut options = Options::default();
-        options.set("HL_EXECUTION_BACKEND", "c", true).unwrap();
         RuntimePlan {
             rootfs: None,
             executable_host: None,
             arguments: vec![b"guest".to_vec()],
             environment: Vec::new(),
             result_path: None,
-            options,
+            options: Options::default(),
         }
     }
 
@@ -189,14 +184,18 @@ mod tests {
 
     #[test]
     fn retained_backend_selection_is_operator_visible() {
+        let _guard = crate::execution::EVENT_CAPTURE_LOCK.lock().unwrap();
         let output = Arc::new(Mutex::new(String::new()));
+        let tags = hl_log::Logging::global().tags();
+        let level = hl_log::Logging::global().level();
         hl_log::Output::global().set(Box::new(LogCapture(Arc::clone(&output))));
         hl_log::Logging::global().set(hl_log::tag::EXEC);
         hl_log::Logging::global().set_level(hl_log::Level::Info);
 
         assert!(Engine::from_plan(GuestIsa::Aarch64, c_plan()).is_ok());
 
-        hl_log::Logging::global().set(hl_log::Tags::NONE);
+        hl_log::Logging::global().set(tags);
+        hl_log::Logging::global().set_level(level);
         hl_log::Output::global().reset();
         assert!(
             output
@@ -209,9 +208,7 @@ mod tests {
     #[test]
     fn product_default_constructs_both_compiled_guest_isas() {
         for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-            let mut plan = c_plan();
-            plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
-            assert!(Engine::from_plan(isa, plan).is_ok(), "failed to construct {isa:?}");
+            assert!(Engine::from_plan(isa, c_plan()).is_ok(), "failed to construct {isa:?}");
         }
     }
 
@@ -234,7 +231,6 @@ mod tests {
         for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
             for option in ["HL_CHECKPOINT", "HL_RESTORE"] {
                 let mut plan = c_plan();
-                plan.options.unset("HL_EXECUTION_BACKEND").unwrap();
                 plan.options.set(option, "1", true).unwrap();
                 assert!(
                     Engine::with_checkpoint(isa, plan, StandardStreams::default(), Arc::new(Store), Arc::new(Store),)
@@ -245,22 +241,10 @@ mod tests {
     }
 
     #[test]
-    fn production_build_rejects_retired_rust_backend() {
+    fn production_build_has_no_backend_selector() {
         let mut plan = c_plan();
-        plan.options.set("HL_EXECUTION_BACKEND", "rust", true).unwrap();
-        assert!(matches!(
-            Engine::from_plan(GuestIsa::Aarch64, plan),
-            Err(EngineError::LaunchFailed)
-        ));
-    }
-
-    #[test]
-    fn production_build_rejects_unknown_backend() {
-        let mut plan = c_plan();
-        plan.options.set("HL_EXECUTION_BACKEND", "bogus", true).unwrap();
-        assert!(matches!(
-            Engine::from_plan(GuestIsa::Aarch64, plan),
-            Err(EngineError::LaunchFailed)
-        ));
+        assert!(plan.options.set("HL_EXECUTION_BACKEND", "rust", true).is_err());
+        assert_eq!(plan.options.get("HL_EXECUTION_BACKEND"), None);
+        assert!(Engine::from_plan(GuestIsa::Aarch64, plan).is_ok());
     }
 }

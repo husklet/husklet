@@ -3,13 +3,13 @@
 use super::super::Error;
 use super::environment::EnvironmentEntry;
 use hl_container::{
-    EndpointSpec, Execution, Isolation, Mount, NetworkMode, NetworkSpec, ResourceLimit, Resources, Sandbox,
-    SeccompBaseline, Subnet,
+    EndpointSpec, Isolation, Mount, NetworkMode, NetworkSpec, ResourceLimit, Resources, Sandbox, SeccompBaseline,
+    Subnet,
 };
 use std::path::PathBuf;
 
 /// Names hl-container can honour, and the ones it cannot express yet.
-const SUPPORTED: [&str; 18] = [
+const SUPPORTED: [&str; 17] = [
     "HL_NETNS",
     "HL_NETBR",
     "HL_IP",
@@ -27,7 +27,6 @@ const SUPPORTED: [&str; 18] = [
     "HL_SECCOMP_BASELINE",
     "HL_ULIMITS",
     "HL_HOSTNAME",
-    "HL_EXECUTION_BACKEND",
 ];
 /// Recognised engine options with no hl-container expression; a case asking for one cannot run.
 const UNWIRED: [&str; 0] = [];
@@ -49,7 +48,6 @@ pub(crate) struct EngineOptions {
     hostname: Option<String>,
     bridge: Option<String>,
     address: Option<std::net::Ipv4Addr>,
-    execution_backend: Option<ExecutionBackend>,
     /// Recognised but unwired names, retained so the case fails by name rather than silently.
     unwired: Vec<String>,
 }
@@ -96,12 +94,6 @@ impl EngineOptions {
             "HL_HOSTNAME" if value.is_empty() => return Err("HL_HOSTNAME is empty".into()),
             "HL_HOSTNAME" => self.hostname = Some(value.to_owned()),
             "HL_PCACHE_DIR" => self.translation_cache = Some(PathBuf::from(value)),
-            "HL_EXECUTION_BACKEND" => {
-                self.execution_backend = Some(match value {
-                    "c" => ExecutionBackend::RetainedC,
-                    _ => return Err(format!("HL_EXECUTION_BACKEND only supports c: {value:?}").into()),
-                });
-            }
             "HL_SECCOMP_BASELINE" => {
                 self.seccomp_baseline = Some(match value {
                     "container" => SeccompBaseline::Container,
@@ -151,14 +143,6 @@ impl EngineOptions {
 
     pub(crate) fn translation_cache(&self) -> Option<&std::path::Path> {
         self.translation_cache.as_deref()
-    }
-
-    /// Applies the explicit C-backend spelling retained for compatibility.
-    pub(crate) const fn execution(&self, base: Execution) -> Execution {
-        match self.execution_backend {
-            None => base,
-            Some(ExecutionBackend::RetainedC) => Execution::RetainedC,
-        }
     }
 
     pub(crate) const fn user(&self) -> Option<(i32, i32)> {
@@ -226,11 +210,6 @@ impl EngineOptions {
             limits: self.limits.clone(),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ExecutionBackend {
-    RetainedC,
 }
 
 /// One option's raw text, kept beside its name so every parse failure can say which option failed.
@@ -311,7 +290,7 @@ impl VolumeRecord<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EngineOptions, EnvironmentEntry, Execution, Isolation, NetworkMode, Sandbox};
+    use super::{EngineOptions, EnvironmentEntry, Isolation, NetworkMode, Sandbox};
 
     fn entries(pairs: &[(&str, &str)]) -> Vec<EnvironmentEntry> {
         pairs
@@ -394,13 +373,9 @@ mod tests {
     }
 
     #[test]
-    fn backend_option_selects_product_arm_without_entering_the_guest() {
-        assert!(EngineOptions::split(&entries(&[("HL_EXECUTION_BACKEND", "rust")])).is_err());
-        let (_, retained) = EngineOptions::split(&entries(&[("HL_EXECUTION_BACKEND", "c")])).unwrap();
-        assert_eq!(
-            retained.execution(Execution::Native { diagnostics: true }),
-            Execution::RetainedC
-        );
-        assert!(EngineOptions::split(&entries(&[("HL_EXECUTION_BACKEND", "other")])).is_err());
+    fn retired_backend_option_is_rejected() {
+        for value in ["c", "rust", "other"] {
+            assert!(EngineOptions::split(&entries(&[("HL_EXECUTION_BACKEND", value)])).is_err());
+        }
     }
 }

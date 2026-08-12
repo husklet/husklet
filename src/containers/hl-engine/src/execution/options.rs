@@ -3,8 +3,7 @@ use crate::engine::EngineError;
 pub(super) fn c_option(name: &str) -> bool {
     !matches!(
         name,
-        "HL_EXECUTION_BACKEND"
-            | "HL_C_EXECUTION_ATTESTATION"
+        "HL_C_EXECUTION_ATTESTATION"
             | "HL_A64_DIRTY_OVERFLOW_CONTINUE"
             | "HL_A64_DIRTY_OVERFLOW_EXIT"
             | "HL_A64_NO_WRITE_COMMIT"

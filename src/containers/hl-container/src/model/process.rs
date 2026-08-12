@@ -634,13 +634,6 @@ impl Execution {
         }
     }
 
-    pub(crate) const fn engine_backend(self) -> Option<&'static str> {
-        match self {
-            Self::Interpreted | Self::Native { .. } => None,
-            Self::RetainedC | Self::RetainedCDiagnostics => Some("c"),
-        }
-    }
-
     pub(crate) const fn retained_c_diagnostics_enabled(self) -> bool {
         matches!(self, Self::RetainedCDiagnostics)
     }
