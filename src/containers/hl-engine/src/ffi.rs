@@ -11,8 +11,6 @@ mod macos;
 mod macos_plan;
 
 #[cfg(target_os = "linux")]
-pub use linux::{AddressSpaceAdapter, Reservation};
-#[cfg(target_os = "linux")]
-pub use linux::{LinuxHost, MappingHostAdapter, MemoryError, VirtualMemory};
+pub use linux::LinuxHost;
 #[cfg(target_os = "macos")]
 pub use macos::DarwinHost;

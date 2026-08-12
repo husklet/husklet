@@ -12,16 +12,12 @@ use hl_runtime::{
 };
 
 use super::Native;
-use super::transfer::NativeTransfer;
-use crate::ffi::linux::file_transfer::FileTransferRegistry;
 
 /// Process-owned composition of live network routing and checkpoint authority.
 pub struct CheckpointRuntime {
     host: Arc<Native>,
-    sockets: Arc<RuntimeSocketRegistry<Native>>,
     bindings: Arc<NetworkObjectBindings<Native>>,
     catalog: Arc<CheckpointNetworkCatalog>,
-    files: Arc<FileTransferRegistry>,
     policy: hl_network::NetworkPolicy,
 }
 
@@ -42,13 +38,10 @@ impl CheckpointRuntime {
             Arc::clone(&sockets),
             Some(Arc::clone(&host)),
         ));
-        let files = Arc::new(FileTransferRegistry::default());
         Arc::new(Self {
             host,
-            sockets,
             bindings,
             catalog,
-            files,
             policy,
         })
     }
@@ -57,50 +50,6 @@ impl CheckpointRuntime {
     pub fn publish(&self, records: &[u8]) {
         self.host
             .set_publications(super::native::publish::Publication::parse(records));
-    }
-
-    pub(super) fn host(&self) -> Arc<Native> {
-        Arc::clone(&self.host)
-    }
-
-    pub(super) fn sockets(&self) -> Arc<RuntimeSocketRegistry<Native>> {
-        Arc::clone(&self.sockets)
-    }
-
-    pub(super) fn policy(&self) -> hl_network::NetworkPolicy {
-        self.policy.clone()
-    }
-
-    pub(in crate::ffi::linux) fn unix_namespace(&self) -> Arc<hl_network::UnixNamespace> {
-        self.sockets.unix_namespace()
-    }
-
-    pub(in crate::ffi::linux) fn bindings(&self) -> Arc<NetworkObjectBindings<Native>> {
-        Arc::clone(&self.bindings)
-    }
-
-    pub(super) fn catalog(&self) -> Arc<CheckpointNetworkCatalog> {
-        Arc::clone(&self.catalog)
-    }
-
-    pub(in crate::ffi::linux) fn files(&self) -> Arc<FileTransferRegistry> {
-        Arc::clone(&self.files)
-    }
-
-    pub(in crate::ffi::linux) fn socket_ioctl(&self) -> Arc<hl_runtime::SocketIoctl<Native>> {
-        Arc::new(
-            hl_runtime::SocketIoctl::new(Arc::clone(&self.host), Arc::clone(&self.sockets))
-                .with_policy(self.policy.clone()),
-        )
-    }
-
-    pub(super) fn transfer(&self) -> Arc<NativeTransfer> {
-        Arc::new(NativeTransfer::new(
-            Arc::clone(&self.host),
-            Arc::clone(&self.sockets),
-            self.catalog.current(),
-            Arc::clone(&self.files),
-        ))
     }
 
     pub fn adopt_listener(

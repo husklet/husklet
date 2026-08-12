@@ -23,68 +23,17 @@ pub(crate) use open_how::OpenHow;
 mod confinement;
 pub(crate) use authority::{InheritedDatagram, InheritedFile, InheritedListener, InheritedStream, PinnedRoot};
 pub(crate) use confinement::Seccomp;
-mod arena;
-#[cfg(test)]
-mod arena_test;
 #[path = "linux/event.rs"]
 mod event;
-pub(in crate::ffi::linux) mod file_transfer;
-mod loader;
-mod mapping;
-mod mapping_access;
-#[cfg(test)]
-mod mapping_test;
-mod memory_control;
 pub(crate) mod network;
-#[path = "linux/virtual/backing.rs"]
-mod shared_backing;
 #[path = "linux/signal.rs"]
 mod signal;
 #[path = "linux/socket.rs"]
 mod socket;
 #[path = "linux/transfer.rs"]
 pub(crate) mod transfer;
-#[path = "linux/virtual/access.rs"]
-mod virtual_access;
-#[path = "linux/virtual/advice.rs"]
-mod virtual_advice;
-#[path = "linux/virtual/file.rs"]
-mod virtual_file;
-#[path = "linux/virtual/host.rs"]
-mod virtual_host;
-#[path = "linux/virtual/lock.rs"]
-mod virtual_lock;
-#[path = "linux/virtual/memory.rs"]
-mod virtual_memory;
-#[path = "linux/virtual/remap.rs"]
-mod virtual_remap;
-#[path = "linux/virtual/reservation.rs"]
-mod virtual_reservation;
-#[path = "linux/virtual/sparse.rs"]
-mod virtual_sparse;
-#[path = "linux/virtual/transaction.rs"]
-mod virtual_transaction;
 #[path = "linux/watch.rs"]
 mod watch;
-pub use loader::{AddressSpaceAdapter, Reservation};
-pub use mapping::MappingHostAdapter;
-pub use virtual_memory::{Memory as VirtualMemory, MemoryError};
-
-/// Shared-backing plumbing is private to this module, so crate tests that need one object
-/// mapped through two guest ranges get the wired store and arena from here.
-#[cfg(test)]
-pub(crate) fn shared_backed_arena(bytes: usize) -> (Arc<hl_memory::SharedObjectStore>, VirtualMemory) {
-    let registry = Arc::new(shared_backing::Registry::default());
-    let factory = Arc::new(shared_backing::Factory::new(Arc::clone(&registry)));
-    let store =
-        Arc::new(hl_memory::SharedObjectStore::with_factory(hl_memory::SharedLimits::default(), factory).unwrap());
-    let arena = VirtualMemory::reserve(bytes)
-        .unwrap()
-        .with_shared_store(Arc::clone(&store))
-        .with_shared_backings(registry);
-    (store, arena)
-}
-
 #[derive(Default)]
 pub struct LinuxHost;
 
@@ -356,12 +305,12 @@ mod abi {
     pub const AT_EMPTY_PATH: i32 = 0x1000;
     pub const O_CLOEXEC: i32 = 0x80000;
     pub const F_DUPFD_CLOEXEC: i32 = 1030;
+    #[cfg(test)]
     pub const O_RDONLY: i32 = 0;
     #[cfg(test)]
     pub const O_RDWR: i32 = 2;
     #[cfg(test)]
     pub const O_CREAT: i32 = 0x40;
-    pub const O_NONBLOCK: i32 = 0x800;
     #[cfg(test)]
     pub const O_TRUNC: i32 = 0x200;
     pub const CLOCK_REALTIME: i32 = 0;
@@ -372,10 +321,7 @@ mod abi {
     pub const SEEK_SET: i32 = 0;
     pub const _SC_PAGESIZE: i32 = 30;
     pub const MAP_PRIVATE: i32 = 2;
-    pub const MAP_SHARED: i32 = 1;
-    pub const MAP_FIXED: i32 = 0x10;
     pub const MAP_ANONYMOUS: i32 = 0x20;
-    pub const PROT_NONE: i32 = 0;
     pub const DT_DIR: u8 = 4;
     pub const DT_REG: u8 = 8;
     pub const DT_LNK: u8 = 10;
@@ -414,43 +360,6 @@ mod abi {
     #[cfg(target_arch = "x86_64")]
     pub const SYS_statx: i64 = 332;
     pub const SYS_pidfd_open: i64 = 434;
-    #[cfg(target_arch = "aarch64")]
-    pub const SYS_memfd_create: i64 = 279;
-    #[cfg(target_arch = "x86_64")]
-    pub const SYS_memfd_create: i64 = 319;
-
-    pub struct Memfd;
-
-    impl Memfd {
-        #[allow(unsafe_code)]
-        pub fn create(name: &std::ffi::CStr) -> Result<std::fs::File, ()> {
-            use std::os::fd::FromRawFd;
-            // SAFETY: the name is terminated, MFD_CLOEXEC requests an owned fd,
-            // and a successful descriptor is transferred immediately to File.
-            let descriptor = unsafe { syscall(SYS_memfd_create, name.as_ptr(), 3_u32) };
-            let descriptor = i32::try_from(descriptor).map_err(|_| ())?;
-            if descriptor < 0 {
-                return Err(());
-            }
-            // SAFETY: memfd_create returned a new descriptor owned by this call.
-            Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
-        }
-    }
-
-    pub struct PageLock;
-
-    impl PageLock {
-        pub fn lock(address: *const c_void, size: usize) -> bool {
-            // SAFETY: callers prove the range is a retained mapping; libc keeps no pointer.
-            unsafe { mlock(address, size) == 0 }
-        }
-
-        pub fn unlock(address: *const c_void, size: usize) -> bool {
-            // SAFETY: callers prove the range is retained; libc keeps no pointer.
-            unsafe { munlock(address, size) == 0 }
-        }
-    }
-
     unsafe extern "C" {
         pub fn openat(directory: i32, path: *const core::ffi::c_char, flags: i32, ...) -> i32;
         pub fn close(descriptor: i32) -> i32;
@@ -471,8 +380,6 @@ mod abi {
             offset: i64,
         ) -> *mut c_void;
         pub fn mprotect(address: *mut c_void, size: usize, protection: i32) -> i32;
-        pub fn mlock(address: *const c_void, size: usize) -> i32;
-        pub fn munlock(address: *const c_void, size: usize) -> i32;
         pub fn munmap(address: *mut c_void, size: usize) -> i32;
         pub fn syscall(number: i64, ...) -> i64;
         pub fn posix_spawnp(

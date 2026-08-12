@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "alloc-count")]
+pub mod allocations;
 mod authority;
 #[cfg(target_os = "linux")]
 mod confinement;
 mod descriptor;
 mod event;
-#[cfg(feature = "alloc-count")]
-pub mod allocations;
 mod fixture;
 mod fork_wire;
 #[cfg(target_os = "linux")]
@@ -24,9 +24,7 @@ mod watch;
 #[cfg(target_os = "macos")]
 pub use crate::ffi::DarwinHost;
 #[cfg(target_os = "linux")]
-pub use crate::ffi::{
-    AddressSpaceAdapter, LinuxHost, MappingHostAdapter, MemoryError, Reservation, VirtualMemory,
-};
+pub use crate::ffi::LinuxHost;
 #[cfg(target_os = "linux")]
 pub use authority::NetworkClient;
 pub use authority::{AuthorityAccess, AuthorityChannel, ProjectionError};

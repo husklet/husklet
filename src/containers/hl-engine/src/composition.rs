@@ -8,7 +8,6 @@ use crate::launch_plan::RuntimeLaunchPlan;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConstructionError {
@@ -65,16 +64,6 @@ pub trait TerminalPort: Send + Sync {
     fn close(&self);
 }
 
-pub(crate) trait TerminalWindowNotification: Send + Sync {
-    fn changed(&self) -> Result<(), CompositionError>;
-}
-
-struct RuntimeTerminalBridge {
-    master: Arc<hl_runtime::TerminalDescription>,
-    window_notification: Arc<dyn TerminalWindowNotification>,
-    workers: Vec<JoinHandle<()>>,
-}
-
 #[cfg(hl_retained_c)]
 pub(crate) trait NativeTerminalWindowNotification: Send + Sync {
     fn resize(&self, master: &std::fs::File, rows: u16, columns: u16) -> Result<(), CompositionError>;
@@ -88,62 +77,8 @@ struct NativeTerminalBridge {
 }
 
 enum AttachedTerminal {
-    Runtime(RuntimeTerminalBridge),
     #[cfg(hl_retained_c)]
     Native(NativeTerminalBridge),
-}
-
-/// Copies everything the port produces into the master until either end closes.
-fn pump_port_to_master(
-    port: &dyn TerminalPort,
-    master: &hl_runtime::TerminalDescription,
-    actor: hl_descriptor::OperationActor,
-) {
-    let mut bytes = [0_u8; 16 * 1024];
-    while let Ok(count) = port.read(&mut bytes) {
-        if count == 0 || !write_all_to_master(master, &bytes[..count], actor) {
-            return;
-        }
-    }
-}
-
-/// Copies everything the master produces into the port until either end closes.
-fn pump_master_to_port(master: &hl_runtime::TerminalDescription, port: &dyn TerminalPort) {
-    use hl_descriptor::OpenFileDescription as _;
-
-    let mut bytes = [0_u8; 16 * 1024];
-    loop {
-        let Ok(count) = master.read(&mut bytes) else {
-            return;
-        };
-        if count == 0 || !write_all_to_port(port, &bytes[..count]) {
-            return;
-        }
-    }
-}
-
-/// Writes the whole slice, parking briefly whenever the master accepts nothing, and reports
-/// whether it stayed writable. A partial write leaves the unconsumed suffix for the next round.
-fn write_all_to_master(
-    master: &hl_runtime::TerminalDescription,
-    bytes: &[u8],
-    actor: hl_descriptor::OperationActor,
-) -> bool {
-    use hl_descriptor::OpenFileDescription as _;
-
-    let mut offset = 0;
-    while offset < bytes.len() {
-        let context = hl_descriptor::OperationContext {
-            actor: Some(actor),
-            cancellation: None,
-        };
-        match master.write_context(&bytes[offset..], context) {
-            Ok(0) => std::thread::park_timeout(Duration::from_millis(1)),
-            Ok(written) => offset += written,
-            Err(_) => return false,
-        }
-    }
-    true
 }
 
 /// Writes the whole slice and reports whether the port stayed writable; unlike the master, a port
@@ -186,43 +121,6 @@ impl Terminal {
 
     pub(crate) fn initial(&self) -> hl_runtime::TerminalWindow {
         self.initial
-    }
-
-    pub(crate) fn attach(
-        &self,
-        master: Arc<hl_runtime::TerminalDescription>,
-        actor: hl_descriptor::OperationActor,
-        window_notification: Arc<dyn TerminalWindowNotification>,
-    ) -> Result<(), CompositionError> {
-        use hl_descriptor::OpenFileDescription as _;
-
-        let mut bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
-        if bridge.is_some() {
-            return Err(CompositionError::RuntimeConstruction);
-        }
-        let input_master = Arc::clone(&master);
-        let input_port = Arc::clone(&self.port);
-        let input = std::thread::Builder::new()
-            .name("hl-terminal-input".into())
-            .spawn(move || pump_port_to_master(input_port.as_ref(), &input_master, actor))
-            .map_err(|_| CompositionError::RuntimeConstruction)?;
-        let output_master = Arc::clone(&master);
-        let output_port = Arc::clone(&self.port);
-        let output = std::thread::Builder::new()
-            .name("hl-terminal-output".into())
-            .spawn(move || pump_master_to_port(&output_master, output_port.as_ref()));
-        let Ok(output) = output else {
-            self.port.close();
-            master.close();
-            let _ = input.join();
-            return Err(CompositionError::RuntimeConstruction);
-        };
-        *bridge = Some(AttachedTerminal::Runtime(RuntimeTerminalBridge {
-            master,
-            window_notification,
-            workers: vec![input, output],
-        }));
-        Ok(())
     }
 
     #[cfg(hl_retained_c)]
@@ -283,21 +181,6 @@ impl Terminal {
         }
         let bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
         match bridge.as_ref().ok_or(CompositionError::RuntimeConstruction)? {
-            AttachedTerminal::Runtime(bridge) => {
-                let changed = bridge
-                    .master
-                    .pair()
-                    .set_window(hl_runtime::TerminalWindow {
-                        rows,
-                        columns,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    })
-                    .map_err(|_| CompositionError::RuntimeConstruction)?;
-                if changed {
-                    bridge.window_notification.changed()?;
-                }
-            }
             #[cfg(hl_retained_c)]
             AttachedTerminal::Native(bridge) => {
                 let master = bridge.master.as_ref().ok_or(CompositionError::RuntimeConstruction)?;
@@ -308,18 +191,10 @@ impl Terminal {
     }
 
     pub fn close(&self) {
-        use hl_descriptor::OpenFileDescription as _;
-
         let bridge = self.bridge.lock().ok().and_then(|mut bridge| bridge.take());
         self.port.close();
         if let Some(bridge) = bridge {
             match bridge {
-                AttachedTerminal::Runtime(bridge) => {
-                    bridge.master.close();
-                    for worker in bridge.workers {
-                        let _ = worker.join();
-                    }
-                }
                 #[cfg(hl_retained_c)]
                 AttachedTerminal::Native(mut bridge) => {
                     drop(bridge.master.take());
