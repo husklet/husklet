@@ -388,7 +388,7 @@ cases:
   - id: runtime/procfs/rng
     status: active
     compat: { class: compatibility }
-    build: { source: rng_procfs.c, output: rng_procfs, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: rng.c, output: rng_procfs, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/rng_procfs }
     run: []
     expect: { exit: 0, stdout: golden/shared/rng_procfs.out }

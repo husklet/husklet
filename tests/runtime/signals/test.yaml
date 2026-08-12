@@ -140,7 +140,7 @@ cases:
   - id: runtime/signals/signals-core
     status: active
     compat: { class: compatibility }
-    build: { source: signals_core.c, output: signals-core, flags: [-static-pie, -O2, -pthread, -lm] }
+    build: { source: core.c, output: signals-core, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/signals-signals-core }
     run: []
     expect: { exit: 0, stdout: golden/signals_core.out }

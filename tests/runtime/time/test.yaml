@@ -215,7 +215,7 @@ cases:
   - id: runtime/time/time-func
     status: active
     compat: { class: compatibility }
-    build: { source: time_func.c, output: time-func, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    build: { source: function.c, output: time-func, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
     artifact: { destination: /opt/husklet/time-time-func }
     run: []
     expect: { exit: 0, stdout: golden/time_func.out }

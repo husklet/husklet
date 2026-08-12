@@ -303,35 +303,35 @@ cases:
   - id: runtime/threads/threads-basic
     status: active
     compat: { class: compatibility }
-    build: { source: threads_basic.c, output: threads-basic, flags: [-static-pie, -O2, -pthread, -lm] }
+    build: { source: basic.c, output: threads-basic, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/threads-threads-basic }
     run: []
     expect: { exit: 0, stdout: golden/threads_basic.out }
   - id: runtime/threads/threads-many
     status: active
     compat: { class: compatibility }
-    build: { source: threads_many.c, output: threads-many, flags: [-static-pie, -O2, -pthread, -lm] }
+    build: { source: many.c, output: threads-many, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/threads-threads-many }
     run: []
     expect: { exit: 0, stdout: golden/threads_many.out }
   - id: runtime/threads/threads-mutex-queue
     status: active
     compat: { class: compatibility }
-    build: { source: threads_mutexqueue.c, output: threads-mutex-queue, flags: [-static-pie, -O2, -pthread, -lm] }
+    build: { source: mutex_queue.c, output: threads-mutex-queue, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/threads-threads-mutex-queue }
     run: []
     expect: { exit: 0, stdout: golden/threads_mutexqueue.out }
   - id: runtime/threads/threads-nopie-tls
     status: active
     compat: { class: compatibility }
-    build: { source: threads_nopietls.c, output: threads-nopie-tls, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    build: { source: nopie_tls.c, output: threads-nopie-tls, flags: [-static, -no-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/threads-threads-nopie-tls }
     run: []
     expect: { exit: 0, stdout: golden/threads_nopietls.out }
   - id: runtime/threads/threads-nopie-variant
     status: active
     compat: { class: compatibility }
-    build: { source: threads_mutexqueue2.c, output: threads-nopie-variant, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    build: { source: nopie_mutex_queue.c, output: threads-nopie-variant, flags: [-static, -no-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/threads-threads-nopie-variant }
     run: []
     expect: { exit: 0, stdout: golden/threads_mutexqueue2.out }
