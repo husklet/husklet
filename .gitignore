@@ -40,8 +40,10 @@ pclib_blob_*.bin
 **/.cache/scenario-runs/
 
 # `nix run .#lint-cases` regenerates these review queues from scratch; they are tool output.
-/lint/errors/
-/lint/check/
+/lint/errors/*
+!/lint/errors/.gitkeep
+/lint/check/*
+!/lint/check/.gitkeep
 
 # Compatibility ledgers create these transiently and remove them after a complete run.
 /tests/runtime/legacy/report/*.lock
