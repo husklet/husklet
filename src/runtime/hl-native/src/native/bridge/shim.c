@@ -74,7 +74,7 @@ __attribute__((noinline)) static void hl_c_backend_scrub_probe_stack(void) {
 }
 #endif
 
-int32_t hl_c_backend_leak_check_nonvacuity(void) {
+HL_API int32_t hl_c_backend_leak_check_nonvacuity(void) {
 #if defined(HL_LEAK_CHECK_PROBE)
     hl_c_backend_make_deliberate_leak();
     hl_c_backend_scrub_probe_stack();
@@ -84,7 +84,7 @@ int32_t hl_c_backend_leak_check_nonvacuity(void) {
 #endif
 }
 
-int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
+HL_API int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
     char broker_text[32];
     char trigger_text[32];
     if (broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
@@ -95,11 +95,11 @@ int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
 
 extern int hl_ckpt_interrupt_signal(void);
 
-int32_t hl_c_backend_checkpoint_interrupt_signal(void) {
+HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(void) {
     return hl_ckpt_interrupt_signal();
 }
 
-int32_t hl_c_backend_private_descriptor_add(int32_t descriptor) {
+HL_API int32_t hl_c_backend_private_descriptor_add(int32_t descriptor) {
     return hl_host_process_fd_private_add(descriptor) == 0 ? HL_STATUS_OK : HL_STATUS_PLATFORM_FAILURE;
 }
 
@@ -187,7 +187,7 @@ static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *pla
            interpreter_identity == plan->interpreter_identity;
 }
 
-int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
+HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
                             const hl_c_main_image_plan *image_plan, uint32_t option_count,
                             const char *const *option_names, const char *const *option_values,
                             const int32_t standard_fds[3], int32_t provider_fd, void *syscall_context,
@@ -347,35 +347,35 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
     return HL_STATUS_OK;
 }
 
-int32_t hl_c_backend_run(hl_c_backend *backend, int32_t argc, const char *const *argv) {
+HL_API int32_t hl_c_backend_run(hl_c_backend *backend, int32_t argc, const char *const *argv) {
     if (backend == NULL) return HL_STATUS_INVALID_ARGUMENT;
     return hl_engine_run(backend->engine, argc, argv, &backend->result);
 }
 
-int32_t hl_c_backend_request(hl_c_backend *backend, uint32_t request, int32_t signal) {
+HL_API int32_t hl_c_backend_request(hl_c_backend *backend, uint32_t request, int32_t signal) {
     if (backend == NULL) return HL_STATUS_INVALID_ARGUMENT;
     if (request == HL_ENGINE_REQUEST_SIGNAL)
         return hl_engine_request(backend->engine, request, &signal, sizeof(signal));
     return hl_engine_request(backend->engine, request, NULL, 0);
 }
 
-uint32_t hl_c_backend_exit_kind(const hl_c_backend *backend) {
+HL_API uint32_t hl_c_backend_exit_kind(const hl_c_backend *backend) {
     return backend == NULL ? 0 : backend->result.kind;
 }
 
-int32_t hl_c_backend_exit_status(const hl_c_backend *backend) {
+HL_API int32_t hl_c_backend_exit_status(const hl_c_backend *backend) {
     return backend == NULL ? -1 : backend->result.guest_status;
 }
 
-uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend) {
+HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend) {
     return backend == NULL ? 0 : backend->result.detail;
 }
 
-uint64_t hl_c_backend_translation_count(const hl_c_backend *backend) {
+HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend) {
     return backend == NULL ? 0 : hl_engine_translation_count(backend->engine);
 }
 
-void hl_c_backend_destroy(hl_c_backend *backend) {
+HL_API void hl_c_backend_destroy(hl_c_backend *backend) {
     if (backend == NULL) return;
     hl_engine_destroy(backend->engine);
     if (backend->options_initialized) hl_options_destroy(&backend->options);

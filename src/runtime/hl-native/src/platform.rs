@@ -141,6 +141,9 @@ pub const SUPPORTED_HOSTS: &[HostTarget] = &[
 /// system. Sources outside `host/<platform>/` are portable engine sources and
 /// remain selected on every host.
 pub fn source_matches(target_os: &str, source: &str) -> bool {
+    if source.starts_with("src/native/toolchain/msvc-posix/") {
+        return target_os == "windows";
+    }
     const HOST_PREFIX: &str = "src/native/host/";
     let Some(host_relative) = source.strip_prefix(HOST_PREFIX) else {
         return true;
@@ -150,6 +153,29 @@ pub fn source_matches(target_os: &str, source: &str) -> bool {
     };
     !matches!(platform, "linux" | "macos" | "windows") || platform == target_os
 }
+
+/// Returns the system import libraries required by the Windows host-services
+/// implementation. Kept here so the product matrix test exercises the same
+/// list consumed by Cargo's native shared-library linker.
+pub const WINDOWS_SYSTEM_LIBRARIES: &[&str] = &[
+    "kernel32",
+    "ntdll",
+    "advapi32",
+    "bcrypt",
+    "ws2_32",
+    "synchronization",
+    "userenv",
+];
+
+/// Names a compiler-produced static archive for the target object format.
+pub fn static_archive_filename(target_os: &str, name: &str) -> String {
+    if target_os == "windows" {
+        format!("{name}.lib")
+    } else {
+        format!("lib{name}.a")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ExecutionMode, GuestIsa, HostArch, HostOs, HostTarget, SUPPORTED_HOSTS};
@@ -210,6 +236,18 @@ mod tests {
             }
             assert!(super::source_matches(target, "src/native/engine/runtime.c"));
             assert!(super::source_matches(target, "src/native/host/sync.c"));
+            assert_eq!(
+                super::source_matches(target, "src/native/toolchain/msvc-posix/posix.c"),
+                target == "windows"
+            );
         }
+    }
+
+    #[test]
+    fn windows_link_inputs_use_msvc_archive_and_import_library_spelling() {
+        assert_eq!(super::static_archive_filename("windows", "hl_engine"), "hl_engine.lib");
+        assert_eq!(super::static_archive_filename("linux", "hl_engine"), "libhl_engine.a");
+        assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ws2_32"));
+        assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ntdll"));
     }
 }

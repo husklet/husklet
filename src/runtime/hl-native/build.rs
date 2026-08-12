@@ -108,10 +108,10 @@ fn main() {
         "hl_c_backend_lifecycle_x86_64",
         "hl_c_backend_runtime",
     ];
-    let system_libraries = if target_os == "macos" {
-        &["m", "pthread"][..]
-    } else {
-        &["atomic", "dl", "m", "pthread"][..]
+    let system_libraries = match target_os.as_str() {
+        "macos" => &["m", "pthread"][..],
+        "windows" => platform::WINDOWS_SYSTEM_LIBRARIES,
+        _ => &["atomic", "dl", "m", "pthread"][..],
     };
     link_shared_engine(&output, &target_os, &archives, system_libraries);
     println!("cargo:rustc-link-search=native={}", output.display());
@@ -201,6 +201,8 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         .pic(true)
         .warnings(strict)
         .std("c11")
+        .define("HL_SHARED", None)
+        .define("HL_BUILDING_ENGINE", None)
         .flag_if_supported("-fvisibility=hidden")
         .flag_if_supported("-fno-function-sections")
         .flag_if_supported("-fno-data-sections");
@@ -261,6 +263,15 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
             command.arg(format!(
                 "-Wl,-force_load,{}",
                 output.join(format!("lib{archive}.a")).display()
+            ));
+        }
+    } else if target_os == "windows" {
+        command.arg("-shared");
+        command.arg(format!("-Wl,/IMPLIB:{}", output.join("hl_native_engine.lib").display()));
+        for archive in archives {
+            command.arg(format!(
+                "-Wl,/WHOLEARCHIVE:{}",
+                output.join(platform::static_archive_filename(target_os, archive)).display()
             ));
         }
     } else {
