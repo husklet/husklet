@@ -415,6 +415,74 @@ static uint64_t translate_special_instruction(uint64_t guest_pc, uint64_t block_
     return 0;
 }
 
+struct conditional_branch_state {
+    uint64_t start;
+    void *body;
+    uint64_t *seen;
+    int *seen_count;
+    int *trace_blocks;
+    int *conditional_count;
+    struct deferred_branch *deferred;
+    int *deferred_count;
+    int in_exclusive_region;
+    int stitch_allowed;
+};
+
+static enum translation_step translate_test_bit_branch(uint64_t *guest_pc, uint32_t instruction,
+                                                       struct conditional_branch_state *state) {
+    if ((instruction & 0x7E000000u) != 0x36000000u) return TRANSLATION_UNHANDLED;
+
+    int bit_low = (instruction >> 19) & 0x1F;
+    int bit_high = (instruction >> 31) & 1;
+    int operation = (instruction >> 24) & 1;
+    int target_register = instruction & 31;
+    int64_t offset = sext((instruction >> 5) & 0x3FFF, 14) << 2;
+    uint64_t taken = *guest_pc + offset;
+    uint64_t fallthrough = *guest_pc + 4;
+    if (state->in_exclusive_region) {
+        int index = (*state->deferred_count)++;
+        state->deferred[index].patch = (uint32_t *)g_cp;
+        state->deferred[index].target = taken;
+        state->deferred[index].instruction = instruction;
+        emit32(0);
+        *guest_pc = fallthrough;
+        return TRANSLATION_CONTINUE;
+    }
+    if (taken == state->start && !g_notier2 && !is_stolen(target_register) &&
+        !loop_has_rmw_hazard(state->start, *guest_pc)) {
+        int slot = g_tier2_build ? 0 : t2_slot(state->start);
+        if (g_tier2_build || slot >= 0) {
+            emit_selfloop(instruction, state->start, fallthrough, state->body, slot);
+            return TRANSLATION_STOP;
+        }
+    }
+    if (state->stitch_allowed && !is_stolen(target_register) && fallthrough != state->start &&
+        !seen_has(state->seen, *state->seen_count, fallthrough) && !map_body(fallthrough)) {
+        stitch_cond(instruction ^ (1u << 24), taken);
+        state->seen[(*state->seen_count)++] = fallthrough;
+        (*state->trace_blocks)++;
+        (*state->conditional_count)++;
+        *guest_pc = fallthrough;
+        return TRANSLATION_CONTINUE;
+    }
+    int emitted_register = target_register;
+    if (is_stolen(target_register)) {
+        emitted_register = stealfast_on() ? 16 : 0;
+        if (!stealfast_on()) e_str(0, CPUREG, (int)OFF_MSCRATCH);
+        e_ldr(emitted_register, CPUREG, target_register * 8);
+    }
+    uint32_t *patch = (uint32_t *)g_cp;
+    emit32(0);
+    if (is_stolen(target_register) && !stealfast_on()) e_ldr(0, CPUREG, (int)OFF_MSCRATCH);
+    emit_chain_exit(fallthrough);
+    int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+    *patch = 0x36000000u | ((unsigned)bit_high << 31) | ((unsigned)operation << 24) | ((unsigned)bit_low << 19) |
+             ((uint32_t)(distance & 0x3FFF) << 5) | (unsigned)emitted_register;
+    if (is_stolen(target_register) && !stealfast_on()) e_ldr(0, CPUREG, (int)OFF_MSCRATCH);
+    emit_chain_exit(taken);
+    return TRANSLATION_STOP;
+}
+
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
        an executable view backed by an emulated host-page snapshot. */
@@ -945,79 +1013,22 @@ static void *translate_block(uint64_t gpc) {
             emit_chain_exit(taken);
             break;
         }
-        // tbz / tbnz
         if ((in & 0x7E000000u) == 0x36000000u) {
-            int b40 = (in >> 19) & 0x1F, bit5 = (in >> 31) & 1;
-            int64_t off = sext((in >> 5) & 0x3FFF, 14) << 2;
-            uint64_t taken = gpc + off, fall = gpc + 4;
-            int op = (in >> 24) & 1, rt = in & 31;
-            if (in_excl) {
-                defer[ndefer].patch = (uint32_t *)g_cp;
-                defer[ndefer].target = taken;
-                defer[ndefer].instruction = in;
-                ndefer++;
-                emit32(0);
-                gpc += 4;
-                continue;
-            }
-            // W4E tier-2: single-block self-loop (non-stolen tested reg). Before opt4; NOTIER2 -> skipped.
-            if (taken == start && !g_notier2 && !is_stolen(rt) && !loop_has_rmw_hazard(start, gpc)) {
-                int slot = g_tier2_build ? 0 : t2_slot(start);
-                if (g_tier2_build || slot >= 0) {
-                    emit_selfloop(in, start, fall, body, slot);
-                    break;
-                }
-            }
-            // opt4: lay the fall-through inline (non-stolen test reg only); invert op (tbz<->tbnz)
-            if (STITCH_OK && !is_stolen(rt) && fall != start && !seen_has(seen, nseen, fall) && !map_body(fall)) {
-                stitch_cond(in ^ (1u << 24), taken);
-                seen[nseen++] = fall;
-                trace_blk++;
-                ncond++;
-                gpc = fall;
-                continue;
-            }
-            // tested reg stolen -> test cpu->x[rt] via a saved scratch
-            if (is_stolen(rt)) {
-                // stealfast: x16 is engine-dead across both successor edges -> no spill/restore at all
-                if (stealfast_on()) {
-                    e_ldr(16, CPUREG, rt * 8);
-                    uint32_t *patch = (uint32_t *)g_cp;
-                    // tbz/tbnz x16,#bit -> taken
-                    emit32(0);
-                    emit_chain_exit(fall);
-                    int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-                    *patch = 0x36000000u | ((unsigned)bit5 << 31) | ((unsigned)op << 24) | ((unsigned)b40 << 19) |
-                             ((uint32_t)(d & 0x3FFF) << 5) | 16;
-                    emit_chain_exit(taken);
-                    break;
-                }
-                int S = 0;
-                e_str(S, CPUREG, (int)OFF_MSCRATCH);
-                e_ldr(S, CPUREG, rt * 8);
-                uint32_t *patch = (uint32_t *)g_cp;
-                // tbz/tbnz S,#bit -> taken
-                emit32(0);
-                e_ldr(S, CPUREG, (int)OFF_MSCRATCH);
-                // fall: restore S
-                emit_chain_exit(fall);
-                int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-                *patch = 0x36000000u | ((unsigned)bit5 << 31) | ((unsigned)op << 24) | ((unsigned)b40 << 19) |
-                         ((uint32_t)(d & 0x3FFF) << 5) | S;
-                e_ldr(S, CPUREG, (int)OFF_MSCRATCH);
-                emit_chain_exit(taken);
-                // taken: restore S
-                break;
-            }
-            uint32_t *patch = (uint32_t *)g_cp;
-            // tbz/tbnz rt,#bit -> taken
-            emit32(0);
-            emit_chain_exit(fall);
-            int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-            *patch = 0x36000000u | ((unsigned)bit5 << 31) | ((unsigned)op << 24) | ((unsigned)b40 << 19) |
-                     ((uint32_t)(d & 0x3FFF) << 5) | rt;
-            emit_chain_exit(taken);
-            break;
+            struct conditional_branch_state branch_state = {
+                .start = start,
+                .body = body,
+                .seen = seen,
+                .seen_count = &nseen,
+                .trace_blocks = &trace_blk,
+                .conditional_count = &ncond,
+                .deferred = defer,
+                .deferred_count = &ndefer,
+                .in_exclusive_region = in_excl,
+                .stitch_allowed = STITCH_OK,
+            };
+            enum translation_step test_bit_step = translate_test_bit_branch(&gpc, in, &branch_state);
+            if (test_bit_step == TRANSLATION_CONTINUE) continue;
+            if (test_bit_step == TRANSLATION_STOP) break;
         }
 
         if (translate_tls_instruction(in)) {
