@@ -30,6 +30,23 @@ def digest(path):
     return value.hexdigest()
 
 
+def tree_digest(root):
+    value = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: os.fsencode(item.relative_to(root))):
+        relative = os.fsencode(path.relative_to(root))
+        value.update(len(relative).to_bytes(8, "big"))
+        value.update(relative)
+        if path.is_symlink():
+            value.update(b"L" + os.fsencode(os.readlink(path)))
+        elif path.is_file():
+            value.update(b"F" + bytes.fromhex(digest(path)))
+        elif path.is_dir():
+            value.update(b"D")
+        else:
+            raise ValueError(f"unsupported rootfs entry: {path}")
+    return value.hexdigest()
+
+
 def canonical(stdout, stderr):
     """Timing is nondeterministic; every other output byte is contractual."""
     return hashlib.sha256(TIMING.sub(rb"\1us=<time>", stdout) + b"\0stderr\0" + stderr).hexdigest()
@@ -64,6 +81,18 @@ def validate(config):
             raise ValueError(f"arm {label} executable does not exist: {executable}")
         arm["command"][0] = str(executable)
         arm["sha256"] = digest(executable)
+        artifacts = arm.get("artifacts")
+        if not isinstance(artifacts, dict) or not artifacts:
+            raise ValueError(f"arm {label} must identify its executable artifacts")
+        for name, artifact in artifacts.items():
+            path = Path(artifact.get("path", "")).resolve()
+            if not path.is_file():
+                raise ValueError(f"arm {label} artifact {name} does not exist: {path}")
+            expected = artifact.get("sha256")
+            observed = digest(path)
+            if expected != observed:
+                raise ValueError(f"arm {label} artifact {name} sha256 changed")
+            artifact["path"] = str(path)
     for name, workload in config["workloads"].items():
         if not isinstance(workload.get("argv"), list) or not workload["argv"]:
             raise ValueError(f"workload {name} argv must be a nonempty array")
@@ -72,6 +101,15 @@ def validate(config):
             raise ValueError(f"workload {name} guest does not exist: {guest}")
         workload["argv"][0] = str(guest)
         workload["sha256"] = digest(guest)
+    rootfs = config.get("rootfs")
+    if not isinstance(rootfs, dict):
+        raise ValueError("rootfs identity is required")
+    root = Path(rootfs.get("path", "")).resolve()
+    if not root.is_dir():
+        raise ValueError(f"rootfs does not exist: {root}")
+    if rootfs.get("sha256") != tree_digest(root):
+        raise ValueError("rootfs sha256 changed")
+    rootfs["path"] = str(root)
     rounds = config.get("rounds", 8)
     if not isinstance(rounds, int) or rounds < 4 or rounds % 4:
         raise ValueError("rounds must be a positive multiple of four (minimum 4)")

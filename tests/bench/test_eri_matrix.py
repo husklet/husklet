@@ -60,6 +60,14 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(left, right)
         self.assertNotEqual(left, eri.canonical(b"PHASE malloc us=99 ok=8\n", b""))
 
+    def test_tree_identity_covers_contents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "value").write_text("one")
+            first = eri.tree_digest(root)
+            (root / "value").write_text("two")
+            self.assertNotEqual(first, eri.tree_digest(root))
+
 
 if __name__ == "__main__":
     unittest.main()

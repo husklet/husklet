@@ -7,8 +7,31 @@ ordering and therefore requires a multiple of four rounds.
 Four crossed warmup pairs run before recorded samples in every cell, including
 after resume.
 
-Copy `eri.example.json`, replace every absolute path and the backend selector
-values with those printed by the current build, then run:
+Generate a concrete configuration from separately copied and smoke-tested
+artifacts. The generator hashes the adapter, runner, every engine and guest,
+and the complete Python rootfs; it contains no backend-name placeholders:
+
+```sh
+tests/bench/eri_config.py \
+  --external /absolute/copied/hl-engine-linux-aarch64 \
+  --retained /absolute/copied/retained/hl-aarch64 \
+  --integrated /absolute/copied/integrated/hl-aarch64 \
+  --rootfs /absolute/python-rootfs \
+  --python /absolute/python-rootfs/usr/local/bin/python3 \
+  --combined /absolute/combined-plain-aarch64 \
+  --combined-sqlite /absolute/combined-sqlite-aarch64 \
+  --output /absolute/eri.json
+```
+
+`eri_adapter.py` runs each rootfs-aware engine directly and emits the matrix's
+strict `PHASE` protocol. The external engine receives the guest path inside the
+rootfs; the Husklet product receives the corresponding host-resolved path, so
+the two loader coordinate contracts are explicit. Python's `python` phase uses
+adapter wall time, covering interpreter startup, imports and work;
+sqlite and malloc retain their in-guest `us`. A successful adapter writes no
+stderr, so provider diagnostics cannot silently become guest-output identity.
+
+Then run:
 
 ```sh
 python3 tests/bench/eri_matrix.py \
