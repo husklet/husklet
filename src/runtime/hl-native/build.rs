@@ -7,7 +7,7 @@ use std::{
 #[path = "src/platform.rs"]
 mod platform;
 
-const NATIVE_ROOT: &str = ".";
+const NATIVE_ROOT: &str = "src/native";
 const COMMON_DEFINITIONS: &[&str] = &["HL_ENABLE_LOGGING=0", "HL_TRANSLIT_DEFAULT=0"];
 
 fn main() {
@@ -20,7 +20,7 @@ fn main() {
         return;
     }
 
-    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed={NATIVE_ROOT}");
     let runtime_sources = discover_runtime_roots(&target_os);
     let runtime_source_refs = runtime_sources.iter().map(String::as_str).collect::<Vec<_>>();
 
@@ -31,14 +31,18 @@ fn main() {
     };
     compile(
         "hl_c_backend_shim",
-        &["src/shim.c", "src/executable_authority.c", "src/address_projection.c"],
+        &[
+            "src/native/shim.c",
+            "src/native/executable_authority.c",
+            "src/native/address_projection.c",
+        ],
         &[platform_definition],
         false,
     );
     compile("hl_c_backend_runtime", &runtime_source_refs, COMMON_DEFINITIONS, true);
     compile(
         "hl_c_backend_target_aarch64",
-        &["src/core/target/aarch64.c"],
+        &["src/native/core/target/aarch64.c"],
         &[
             "HL_ENABLE_LOGGING=0",
             "HL_TRANSLIT_DEFAULT=0",
@@ -52,7 +56,7 @@ fn main() {
     );
     compile(
         "hl_c_backend_target_x86_64",
-        &["src/core/target/x86_64.c"],
+        &["src/native/core/target/x86_64.c"],
         &[
             "HL_ENABLE_LOGGING=0",
             "HL_TRANSLIT_DEFAULT=0",
@@ -66,7 +70,7 @@ fn main() {
     );
     compile(
         "hl_c_backend_lifecycle_aarch64",
-        &["src/core/lifecycle.c"],
+        &["src/native/core/lifecycle.c"],
         &[
             "HL_ENABLE_LOGGING=0",
             "HL_TRANSLIT_DEFAULT=0",
@@ -79,7 +83,7 @@ fn main() {
     );
     compile(
         "hl_c_backend_lifecycle_x86_64",
-        &["src/core/lifecycle.c"],
+        &["src/native/core/lifecycle.c"],
         &[
             "HL_ENABLE_LOGGING=0",
             "HL_TRANSLIT_DEFAULT=0",
@@ -92,44 +96,43 @@ fn main() {
     );
 
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
-    println!("cargo:rustc-link-search=native={}", output.display());
-    for archive in [
+    let archives = [
         "hl_c_backend_shim",
         "hl_c_backend_target_aarch64",
         "hl_c_backend_target_x86_64",
         "hl_c_backend_lifecycle_aarch64",
         "hl_c_backend_lifecycle_x86_64",
         "hl_c_backend_runtime",
-    ] {
-        println!("cargo:rustc-link-lib=static:+whole-archive={archive}");
-    }
-    for library in if target_os == "macos" {
+    ];
+    let system_libraries = if target_os == "macos" {
         &["m", "pthread"][..]
     } else {
         &["atomic", "dl", "m", "pthread"][..]
-    } {
-        println!("cargo:rustc-link-lib={library}");
-    }
+    };
+    link_shared_engine(&output, &target_os, &archives, system_libraries);
+    println!("cargo:rustc-link-search=native={}", output.display());
+    println!("cargo:rustc-link-lib=dylib=hl_native_engine");
+    emit_development_rpath(&output, &target_os);
     if env::var("HL_C_SANITIZER").as_deref() == Ok("leak") && target_os == "linux" {
         println!("cargo:rustc-link-lib=lsan");
     }
 }
 
 fn discover_runtime_roots(target_os: &str) -> Vec<String> {
-    let root = Path::new("src");
+    let root = Path::new(NATIVE_ROOT);
     let mut sources = BTreeSet::new();
-    collect_c_sources(root, root, &mut sources);
+    collect_c_sources(root, &mut sources);
     let included = sources
         .iter()
         .flat_map(|source| included_c_sources(source))
         .collect::<BTreeSet<_>>();
     let special = [
-        "src/shim.c",
-        "src/executable_authority.c",
-        "src/address_projection.c",
-        "src/core/lifecycle.c",
-        "src/core/target/aarch64.c",
-        "src/core/target/x86_64.c",
+        "src/native/shim.c",
+        "src/native/executable_authority.c",
+        "src/native/address_projection.c",
+        "src/native/core/lifecycle.c",
+        "src/native/core/target/aarch64.c",
+        "src/native/core/target/x86_64.c",
     ];
     sources
         .into_iter()
@@ -138,16 +141,16 @@ fn discover_runtime_roots(target_os: &str) -> Vec<String> {
         .filter(|source| {
             let value = source.to_string_lossy();
             if target_os == "macos" {
-                !value.starts_with("src/host/linux/")
+                !value.starts_with("src/native/host/linux/")
             } else {
-                !value.starts_with("src/host/macos/")
+                !value.starts_with("src/native/host/macos/")
             }
         })
         .map(|source| source.to_string_lossy().into_owned())
         .collect()
 }
 
-fn collect_c_sources(root: &Path, directory: &Path, output: &mut BTreeSet<PathBuf>) {
+fn collect_c_sources(directory: &Path, output: &mut BTreeSet<PathBuf>) {
     let mut entries = fs::read_dir(directory)
         .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
         .collect::<Result<Vec<_>, _>>()
@@ -156,13 +159,9 @@ fn collect_c_sources(root: &Path, directory: &Path, output: &mut BTreeSet<PathBu
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
-            collect_c_sources(root, &path, output);
+            collect_c_sources(&path, output);
         } else if path.extension().and_then(|value| value.to_str()) == Some("c") {
-            output.insert(
-                path.strip_prefix(root.parent().expect("src parent"))
-                    .expect("package source")
-                    .to_owned(),
-            );
+            output.insert(path);
         }
     }
 }
@@ -195,16 +194,22 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
     build
         .cargo_metadata(false)
         .include(NATIVE_ROOT)
-        .include("src/include")
-        .include("src")
+        .include("src/native/include")
+        .include("src/native")
         .opt_level(2)
         .debug(true)
-        .pic(false)
+        .pic(true)
         .warnings(strict)
         .std("c11")
         .flag_if_supported("-fvisibility=hidden")
         .flag_if_supported("-fno-function-sections")
         .flag_if_supported("-fno-data-sections");
+    if name == "hl_c_backend_shim" {
+        // This archive is the narrow Rust/C bridge. The engine itself stays
+        // hidden; only bridge entry points and the versioned public C ABI are
+        // visible from the shared object.
+        build.flag_if_supported("-fvisibility=default");
+    }
     match env::var("HL_C_SANITIZER").as_deref() {
         Ok("leak") => {
             build
@@ -243,4 +248,60 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         build.file(source);
     }
     build.compile(name);
+}
+
+fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], libraries: &[&str]) {
+    let compiler = cc::Build::new().get_compiler();
+    let filename = shared_library_filename(target_os);
+    let destination = output.join(filename);
+    let mut command = compiler.to_command();
+    if target_os == "macos" {
+        command.args(["-dynamiclib", "-Wl,-install_name,@rpath/libhl_native_engine.dylib"]);
+        for archive in archives {
+            command.arg(format!(
+                "-Wl,-force_load,{}",
+                output.join(format!("lib{archive}.a")).display()
+            ));
+        }
+    } else {
+        command.args([
+            "-shared",
+            "-Wl,-soname,libhl_native_engine.so",
+            "-Wl,-Bsymbolic-functions",
+            "-Wl,-z,defs",
+            "-Wl,--whole-archive",
+        ]);
+        for archive in archives {
+            command.arg(output.join(format!("lib{archive}.a")));
+        }
+        command.arg("-Wl,--no-whole-archive");
+    }
+    command.arg("-o").arg(&destination);
+    for library in libraries {
+        command.arg(format!("-l{library}"));
+    }
+    if env::var("HL_C_SANITIZER").as_deref() == Ok("leak") && target_os == "linux" {
+        command.arg("-fsanitize=leak");
+    }
+    let status = command
+        .status()
+        .unwrap_or_else(|error| panic!("link {}: {error}", destination.display()));
+    assert!(status.success(), "native shared-library link failed with {status}");
+    println!("cargo:rustc-env=HL_NATIVE_LIBRARY_NAME={filename}");
+}
+
+fn shared_library_filename(target_os: &str) -> &'static str {
+    match target_os {
+        "macos" => "libhl_native_engine.dylib",
+        "windows" => "hl_native_engine.dll",
+        _ => "libhl_native_engine.so",
+    }
+}
+
+fn emit_development_rpath(output: &Path, target_os: &str) {
+    if target_os == "macos" {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", output.display());
+    } else if target_os != "windows" {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", output.display());
+    }
 }
