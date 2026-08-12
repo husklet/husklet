@@ -2174,6 +2174,74 @@ static int64_t sentry_adopt_fd(int rfd, int cloexec) {
     return ret;
 }
 
+static void sentry_route_rebase(struct cpu *c, uint64_t nr) {
+    if (!g_nonpie_lo || !sentry_forwarded(nr)) return;
+    uint64_t reb[6] = {G_A0(c), G_A1(c), G_A2(c), G_A3(c), G_A4(c), G_A5(c)};
+    nonpie_rebase_args(nr, reb);
+    G_A0(c) = reb[0];
+    G_A1(c) = reb[1];
+    G_A2(c) = reb[2];
+    G_A3(c) = reb[3];
+    G_A4(c) = reb[4];
+    G_A5(c) = reb[5];
+}
+
+static int sentry_route_exit(struct cpu *c, uint64_t nr) {
+    if (nr != 93 && nr != 94) return 0;
+    int process_exit = nr == 94 || atomic_fetch_sub(&g_worker_threads, 1) == 1;
+    if (process_exit) {
+        if (getpid() != g_sentry_owner_pid) sentry_process_release();
+        sentry_shutdown();
+    } else if (t_ring >= 0) {
+        sentry_ctl_op(SENTRY_OP_THREAD_EXIT, 0, 0);
+    }
+    ring_release();
+    service_local(c);
+    return 1;
+}
+
+static int sentry_route_exec(struct cpu *c, uint64_t nr) {
+    if (nr != 221) return 0;
+    int64_t bound = sentry_ctl_op(SENTRY_OP_BIND, 0, 0);
+    if (bound < 0) {
+        G_RET(c) = (uint64_t)bound;
+        return 1;
+    }
+    service_local(c);
+    if (c->redirect) sentry_ctl_op(SENTRY_OP_EXEC, (uint64_t)(uint32_t)g_worker_pid, 0);
+    return 1;
+}
+
+static int sentry_route_wait(struct cpu *c, uint64_t nr) {
+    if (nr != 260) return 0;
+    int64_t wpid = (int64_t)(int)G_A0(c);
+    if (wpid <= 0 && atomic_load(&g_guest_children) <= 0) {
+        G_RET(c) = (uint64_t)(-ECHILD);
+        return 1;
+    }
+    service_local(c);
+    int64_t result = (int64_t)G_RET(c);
+    if (result <= 0) return 1;
+    if (g_sentry_pid && result == (int64_t)g_sentry_pid) {
+        G_RET(c) = (uint64_t)(-ECHILD);
+        return 1;
+    }
+    int terminated = (G_A2(c) & (2u | 8u)) == 0;
+    if (!terminated && G_A1(c)) {
+        int status;
+        if (guest_copy_from(&status, G_A1(c), sizeof status) == sizeof status)
+            terminated = (status & 0xff) != 0x7f && status != 0xffff;
+    } else if (!terminated && !G_A1(c)) {
+        errno = 0;
+        terminated = kill((pid_t)result, 0) < 0 && errno == ESRCH;
+    }
+    if (terminated) {
+        sentry_ctl_op(SENTRY_OP_REAP, (uint64_t)(uint32_t)result, 0);
+        atomic_fetch_sub(&g_guest_children, 1);
+    }
+    return 1;
+}
+
 // ------------------------------------------------------------------ the routed trust boundary
 // Replaces the direct service_local(c) call for untrusted guests. When g_untrusted is off this is a
 // transparent pass-through (trusted path byte-identical to baseline -- and service() already gated us
@@ -2195,36 +2263,12 @@ static void syscall_route(struct cpu *c) {
      * and gets it there. (Two independently maintained copies of this list is what let static x86 strings
      * and buffers be copied from their unmapped low link addresses: empty paths, zero-filled pipe writes.)
      * The fold is idempotent, so a forwarded call that also falls through to service_local is unharmed. */
-    if (g_nonpie_lo && sentry_forwarded(nr)) {
-        uint64_t reb[6] = {G_A0(c), G_A1(c), G_A2(c), G_A3(c), G_A4(c), G_A5(c)};
-        nonpie_rebase_args(nr, reb);
-        G_A0(c) = reb[0];
-        G_A1(c) = reb[1];
-        G_A2(c) = reb[2];
-        G_A3(c) = reb[3];
-        G_A4(c) = reb[4];
-        G_A5(c) = reb[5];
-        // No nonpie_rebase_iov here: readv/writev copy the payload into the ring instead of handing the
-        // array to a host syscall, and fold each iov_base inside the flatten (case 65/66 below).
-    }
+    sentry_route_rebase(c, nr);
 
     // exit(93)/exit_group(94): service_local() never returns.  exit(93) also ends the PROCESS when this is
     // its last thread, so release the process table in that case before entering the host syscall.  Missing
     // that distinction leaves the last child's duplicated pipe writers alive in the sentry forever.
-    if (nr == 93 || nr == 94) {
-        int process_exit = nr == 94 || atomic_fetch_sub(&g_worker_threads, 1) == 1;
-        if (process_exit) {
-            // exit_group ends the PROCESS. A forked CHILD worker releases its OWN sentry-side fd table (closing
-            // its inherited/owned real fds); the OWNER tears the whole sentry down (reclaiming everything).
-            if (getpid() != g_sentry_owner_pid) sentry_process_release();
-            sentry_shutdown();
-        } else if (t_ring >= 0) {
-            sentry_ctl_op(SENTRY_OP_THREAD_EXIT, 0, 0);
-        }
-        ring_release();
-        service_local(c);
-        return;
-    }
+    if (sentry_route_exit(c, nr)) return;
 
     // --- fork/exec/wait lane (item 1) -------------------------------------------------------------------
     // clone(220)/clone3(435): a guest THREAD is a host pthread (stays this process; gets its own lane
@@ -2303,19 +2347,7 @@ static void syscall_route(struct cpu *c) {
     // this worker's cloexec virtual fds first, so a guest that set FD_CLOEXEC before exec sees them gone
     // (pipe EOF for the peer, no leaked resources) exactly as on Linux. Only on a SUCCESSFUL exec — if the
     // image load fails (service_local returns with a negated errno in the return reg) the fds must survive.
-    if (nr == 221) {
-        int64_t bound = sentry_ctl_op(SENTRY_OP_BIND, 0, 0);
-        if (bound < 0) {
-            G_RET(c) = (uint64_t)bound;
-            return;
-        }
-        service_local(c);
-        // execve sets c->redirect on SUCCESS (the tail must not advance PC into the new image); a FAILED
-        // execve (ENOENT/EACCES/…) leaves redirect clear and returns -errno, in which case the fds must
-        // survive. Only on success sweep this worker's cloexec virtual fds sentry-side.
-        if (c->redirect) sentry_ctl_op(SENTRY_OP_EXEC, (uint64_t)(uint32_t)g_worker_pid, 0);
-        return;
-    }
+    if (sentry_route_exec(c, nr)) return;
     // openat(56)/readlinkat(78) of a per-process guest-state /proc file: serve it LOCALLY -- only this
     // worker holds the current image's identity (the sentry's copy is the pre-fork/pre-exec one; see
     // sentry_worker_proc_leaf). readlinkat is pure state (bytes into a guest buffer). openat yields a real
@@ -2338,40 +2370,7 @@ static void syscall_route(struct cpu *c) {
     // wait4(260): reap the guest's child WORKER processes locally. The sentry is ALSO a child of the owner,
     // so a blocking wait-any with no GUEST children would hang on it -> short-circuit to -ECHILD; and never
     // surface the sentry's own pid to the guest. A specific-pid wait passes straight through.
-    if (nr == 260) {
-        int64_t wpid = (int64_t)(int)G_A0(c);
-        if (wpid <= 0 && atomic_load(&g_guest_children) <= 0) {
-            G_RET(c) = (uint64_t)(-ECHILD);
-            return;
-        }
-        service_local(c);
-        int64_t r = (int64_t)G_RET(c);
-        if (r > 0) {
-            if (g_sentry_pid && r == (int64_t)g_sentry_pid) {
-                G_RET(c) = (uint64_t)(-ECHILD);
-                return;
-            }
-            // A normally exiting worker sends SENTRY_OP_EXIT itself. A worker killed by a signal cannot
-            // run that cleanup, so its sentry-owned descriptor copy would otherwise remain live forever
-            // (notably keeping pipe writers open after waitpid returned). A successful wait without
-            // WUNTRACED/WCONTINUED necessarily reaped a terminated child. With either reporting option,
-            // inspect the Linux status when supplied; for a NULL status, a reaped pid no longer exists.
-            int terminated = (G_A2(c) & (2u | 8u)) == 0;
-            if (!terminated && G_A1(c)) {
-                int status;
-                if (guest_copy_from(&status, G_A1(c), sizeof status) == sizeof status)
-                    terminated = (status & 0xff) != 0x7f && status != 0xffff;
-            } else if (!terminated && !G_A1(c)) {
-                errno = 0;
-                terminated = kill((pid_t)r, 0) < 0 && errno == ESRCH;
-            }
-            if (terminated) {
-                sentry_ctl_op(SENTRY_OP_REAP, (uint64_t)(uint32_t)r, 0);
-                atomic_fetch_sub(&g_guest_children, 1);
-            }
-        }
-        return;
-    }
+    if (sentry_route_wait(c, nr)) return;
     // file-backed mmap(222): the mapping must live in the WORKER (memory authority) but the fd is
     // sentry-owned and invalid here. Borrow the real fd over this lane's control socket (SCM_RIGHTS), map
     // it locally with the borrowed number, then drop it -- so the worker holds the real fd only for the
