@@ -4362,7 +4362,7 @@ static int interp_is_legacy_sse(uint8_t op) {
     if (op >= 0x28 && op <= 0x2F) return 1;
     if (op >= 0x50 && op <= 0x6D) return 1;
     if (op >= 0x6E && op <= 0x7F) return 1;
-    if (op >= 0xD0 && op <= 0xFF) return 1;
+    if (op >= 0xD0) return 1;
     if (op == 0xC2 || op == 0xC4 || op == 0xC5 || op == 0xC6) return 1;
     return 0;
 }
