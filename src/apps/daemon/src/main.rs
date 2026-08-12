@@ -10,6 +10,8 @@ use hl_images::Images;
 use hl_images::Platform;
 use hl_images::remote::{Auth, Registry};
 
+mod host;
+
 #[derive(Clone, Copy)]
 enum Disposition {
     Kill,
@@ -26,9 +28,7 @@ struct HostProcesses;
 
 impl ProcessSampler for HostProcesses {
     fn sample(&self, process_id: u64) -> ProcessSample {
-        let output = std::process::Command::new("ps")
-            .args(["-o", "rss=,time=", "-p", &process_id.to_string()])
-            .output();
+        let output = host::process_sample(process_id);
         let Ok(output) = output else {
             return ProcessSample::default();
         };

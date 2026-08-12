@@ -75,7 +75,7 @@ impl Daemon {
             .append(true)
             .open(dir.join("daemon.log"))?;
         let errlog = log.try_clone()?;
-        let mut cmd = std::process::Command::new(&bin);
+        let mut cmd = super::platform::daemon(&bin);
         cmd.arg("--root")
             .arg(dir)
             .arg("--images")

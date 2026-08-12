@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
 mod wire;
+mod platform;
 
 const STATUS_OK: c_int = 0;
 const REQUEST_INTERRUPT: c_uint = 1;

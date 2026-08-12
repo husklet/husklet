@@ -17,6 +17,7 @@ const ENVIRONMENT_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 
 #[cfg(unix)]
 mod unix;
+mod platform;
 #[cfg(windows)]
 mod windows;
 
@@ -124,7 +125,7 @@ impl Command {
     }
 
     fn standard(&self) -> StdCommand {
-        let mut command = StdCommand::new(&self.program);
+        let mut command = platform::command(&self.program);
         command.args(&self.arguments);
         command
     }

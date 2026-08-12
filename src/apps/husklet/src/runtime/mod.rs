@@ -1,6 +1,7 @@
 //! Application-owned composition of workspace execution and host services.
 
 mod checkpoint;
+mod platform;
 pub mod domain;
 pub mod execution;
 mod process;

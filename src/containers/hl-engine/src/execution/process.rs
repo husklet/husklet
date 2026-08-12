@@ -85,7 +85,7 @@ impl CWorker {
             std::env::var_os("HL_TEST_ENGINE_APP_BIN_DIR"),
             std::env::current_exe().ok(),
         )?;
-        let mut command = Command::new(executable);
+        let mut command = super::platform::worker(executable);
         command
             .arg("--c-worker")
             .env_clear()

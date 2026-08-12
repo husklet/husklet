@@ -101,7 +101,7 @@ impl Domain {
         // domain's output reads as this one's.
         Self::mark_restart(&output, workspace, &reason)?;
         let errors = output.try_clone()?;
-        let mut command = std::process::Command::new(std::env::current_exe()?);
+        let mut command = super::platform::current_application()?;
         command
             .args(["--worker", "domain", &workspace.name])
             .stdin(std::process::Stdio::null())
