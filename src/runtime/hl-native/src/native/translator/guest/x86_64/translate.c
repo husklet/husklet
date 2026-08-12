@@ -5488,6 +5488,32 @@ static int lower_x87_family(struct insn *instruction, uint64_t guest_pc, uint64_
     return result == TX_FALL ? TX_NEXT : result;
 }
 
+static int lower_sse_packed_conversion(struct insn I, uint64_t next, int vd, int vm) {
+    if (I.op != 0x5B) return TX_FALL;
+    int s = vm;
+    if (I.is_mem) {
+        g_ldr_q_ea(16, &I, next);
+        s = 16;
+    }
+    if (I.rep || I.p66) {
+        // Same emit as the VEX form: 66 cvtps2dq used to emit FCVTNS unconditionally and so
+        // ignored MXCSR.RC, while vcvtps2dq honoured it. emit_ps2dq_128 builds the
+        // "make-indefinite" mask from the SOURCE floats before converting, which the
+        // in-place `cvttps2dq %xmm7,%xmm7` form requires: reading it back from the integer
+        // result would see an all-ones lane (-1) as a NaN, and the indefinite (== -0.0f) as
+        // ordered.
+        e_movconst(19, 0x4F000000u);
+        emit32(0x4E040C00u | (19 << 5) | 25); // v25.4s = 2^31 (f32)
+        e_movconst(19, 0x80000000u);
+        emit32(0x4E040C00u | (19 << 5) | 26); // v26.4s = integer indefinite
+        emit_ps2dq_128(17, s, I.rep != 0, 25, 26, 27, 28);
+        e_vmov(vd, 17);
+    } else {
+        emit32(0x4E21D800u | (s << 5) | vd); // NP: cvtdq2ps -> SCVTF .4S (s32->f32)
+    }
+    return TX_NEXT;
+}
+
 static int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t op = I.op;
     if (op != 0x2E && op != 0x2F) return TX_FALL;
@@ -6405,28 +6431,8 @@ static void *translate_block(uint64_t gpc) {
                     emit32(0x2EA0C000u | (18 << 16) | (17 << 5) | vd);
                 } else if (op == 0x50) {
                     (void)lower_sse_sign_mask(&I, vm, mmx);
-                } else if (op == 0x5B) { // cvtdq2ps(NP)/cvtps2dq(66)/cvttps2dq(F3): packed 4-lane int<->float
-                    int s = vm;
-                    if (I.is_mem) {
-                        g_ldr_q_ea(16, &I, next);
-                        s = 16;
-                    }
-                    if (I.rep || I.p66) {
-                        // Same emit as the VEX form: 66 cvtps2dq used to emit FCVTNS unconditionally and so
-                        // ignored MXCSR.RC, while vcvtps2dq honoured it. emit_ps2dq_128 builds the
-                        // "make-indefinite" mask from the SOURCE floats before converting, which the
-                        // in-place `cvttps2dq %xmm7,%xmm7` form requires: reading it back from the integer
-                        // result would see an all-ones lane (-1) as a NaN, and the indefinite (== -0.0f) as
-                        // ordered.
-                        e_movconst(19, 0x4F000000u);
-                        emit32(0x4E040C00u | (19 << 5) | 25); // v25.4s = 2^31 (f32)
-                        e_movconst(19, 0x80000000u);
-                        emit32(0x4E040C00u | (19 << 5) | 26); // v26.4s = integer indefinite
-                        emit_ps2dq_128(17, s, I.rep != 0, 25, 26, 27, 28);
-                        e_vmov(vd, 17);
-                    } else {
-                        emit32(0x4E21D800u | (s << 5) | vd); // NP: cvtdq2ps -> SCVTF .4S (s32->f32)
-                    }
+                } else if (lower_sse_packed_conversion(I, next, vd, vm) == TX_NEXT) {
+                    // The helper emitted the packed integer/float conversion.
                 } else if (op == 0xF6) { // psadbw (66): sum of abs byte diffs per 64-bit half
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
