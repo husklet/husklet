@@ -7,6 +7,7 @@
 
 mod error;
 mod model;
+mod policy;
 mod report;
 mod rule;
 mod source;
@@ -15,6 +16,7 @@ use std::path::PathBuf;
 
 pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
+pub use policy::{DependencyKind, DependencyPolicy, EdgePolicy, LayerPolicy, Policy};
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CCallPolicy, CPolicy, CStructure, CatchAllModule,
@@ -41,9 +43,15 @@ impl Linter {
     /// Creates the repository's standard rule set.
     #[must_use]
     pub fn standard() -> Self {
+        Self::standard_with_policy(Policy::default())
+    }
+
+    /// Creates the standard generic rules with an explicit repository dependency policy.
+    #[must_use]
+    pub fn standard_with_policy(policy: Policy) -> Self {
         Self::new(
             Registry::new()
-                .register(rule::DependencyDirection)
+                .register(rule::DependencyDirection::new(policy.dependency))
                 .register(rule::RuntimeTool)
                 .register(rule::UnsafeBoundary)
                 .register(rule::FreeFunction)

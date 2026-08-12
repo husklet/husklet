@@ -7,6 +7,7 @@ use std::{
 use crate::{
     LintError, Result,
     model::{Finding, Related, Review, Severity},
+    policy::{DependencyKind, DependencyPolicy, LayerPolicy},
     rule::Rule,
     source::Workspace,
 };
@@ -19,7 +20,17 @@ mod module;
 #[path = "test.rs"]
 mod tests;
 /// Enforces crate and proven module dependency direction.
-pub struct Direction;
+pub struct Direction {
+    policy: DependencyPolicy,
+}
+
+impl Direction {
+    /// Creates a dependency analyzer from repository-owned policy.
+    #[must_use]
+    pub fn new(policy: DependencyPolicy) -> Self {
+        Self { policy }
+    }
+}
 impl Rule for Direction {
     fn id(&self) -> &'static str {
         "dependency-direction"
@@ -30,7 +41,7 @@ impl Rule for Direction {
     }
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
-        let graph = Graph::load(workspace.paths())?;
+        let graph = Graph::load(workspace.paths(), &self.policy)?;
         let mut findings = graph.direction_findings(self.id());
         findings.extend(graph.cycle_findings(self.id()));
         findings.extend(module::findings(workspace, self.id()));
@@ -49,6 +60,16 @@ enum Kind {
     Normal,
     Development,
     Build,
+}
+
+impl From<Kind> for DependencyKind {
+    fn from(value: Kind) -> Self {
+        match value {
+            Kind::Normal => Self::Normal,
+            Kind::Development => Self::Development,
+            Kind::Build => Self::Build,
+        }
+    }
 }
 
 impl Kind {
@@ -78,59 +99,29 @@ struct Package {
     name: String,
     manifest: PathBuf,
     text: String,
-    layer: Layer,
+    layer: Option<String>,
     dependencies: Vec<Dependency>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum Layer {
-    Application,
-    Container,
-    Package,
-    Runtime,
-    Workspace,
-    Other,
-}
-
-impl Layer {
-    fn from_manifest(path: &Path) -> Self {
-        let components = path
-            .components()
-            .filter_map(|component| component.as_os_str().to_str())
-            .collect::<Vec<_>>();
-        let Some(index) = components.iter().rposition(|component| *component == "src") else {
-            return Self::Other;
-        };
-        match components.get(index + 1).copied() {
-            Some("app" | "apps") => Self::Application,
-            Some("containers") => Self::Container,
-            Some("packages") => Self::Package,
-            Some("runtime") => Self::Runtime,
-            Some("workspaces") => Self::Workspace,
-            None => Self::Other,
-            Some(_) => Self::Other,
-        }
-    }
-
-    fn label(&self) -> &str {
-        match self {
-            Self::Application => "application",
-            Self::Container => "containers",
-            Self::Package => "packages",
-            Self::Runtime => "runtime",
-            Self::Workspace => "workspaces",
-            Self::Other => "other",
-        }
-    }
+fn layer_directory(path: &Path) -> Option<&str> {
+    let components = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    let Some(index) = components.iter().rposition(|component| *component == "src") else {
+        return None;
+    };
+    components.get(index + 1).copied()
 }
 
 struct Graph {
     packages: BTreeMap<String, Package>,
     manifests: HashMap<PathBuf, String>,
+    policy: DependencyPolicy,
 }
 
 impl Graph {
-    fn load(paths: &[PathBuf]) -> Result<Self> {
+    fn load(paths: &[PathBuf], policy: &DependencyPolicy) -> Result<Self> {
         let manifests = discovery::manifests(paths)?;
         let workspace_dependencies = workspace_dependencies(&manifests)?;
         let mut packages = BTreeMap::new();
@@ -151,7 +142,7 @@ impl Graph {
             else {
                 continue;
             };
-            if name == "hl-design-lint" {
+            if policy.ignored_packages.iter().any(|ignored| ignored == name) {
                 continue;
             }
             let dependencies = dependencies(&document, &manifest, &workspace_dependencies);
@@ -159,7 +150,9 @@ impl Graph {
                 name.to_owned(),
                 Package {
                     name: name.to_owned(),
-                    layer: Layer::from_manifest(&manifest),
+                    layer: layer_directory(&manifest)
+                        .and_then(|directory| policy.layer(directory))
+                        .map(|layer| layer.name.clone()),
                     manifest,
                     text,
                     dependencies,
@@ -170,7 +163,11 @@ impl Graph {
             .values()
             .filter_map(|package| normalized(&package.manifest).map(|manifest| (manifest, package.name.clone())))
             .collect();
-        Ok(Self { packages, manifests })
+        Ok(Self {
+            packages,
+            manifests,
+            policy: policy.clone(),
+        })
     }
 
     fn direction_findings(&self, rule: &'static str) -> Vec<Finding> {
@@ -180,28 +177,16 @@ impl Graph {
                 let Some(target) = self.target(dependency) else {
                     continue;
                 };
-                let layer_violation = match (&package.layer, &target.layer) {
-                    (Layer::Package, Layer::Runtime | Layer::Container | Layer::Workspace | Layer::Application) => {
-                        Some(
-                            "transferable packages must not depend on runtime, container, workspace, or application code",
-                        )
-                    }
-                    (Layer::Runtime, Layer::Container | Layer::Workspace | Layer::Application) => {
-                        Some("runtime packages must not depend on container, workspace, or application code")
-                    }
-                    (Layer::Container, Layer::Workspace | Layer::Application) => {
-                        Some("container packages must not depend on workspace or application code")
-                    }
-                    (Layer::Workspace, Layer::Container | Layer::Application) => {
-                        Some("workspace packages must not depend on container or application code")
-                    }
-                    (_, Layer::Application) => Some("the application composition root must never be a dependency"),
-                    _ => None,
-                };
-                let reviewed = allowed_edge(&package.name, &target.name)
-                    || (dependency.kind == Kind::Development && allowed_development_edge(&package.name, &target.name));
-                let policy_violation =
-                    (!reviewed).then_some("the local dependency is not present in the checked engine package graph");
+                let source_layer = package.layer.as_deref().and_then(|name| self.layer(name));
+                let layer_violation = source_layer
+                    .zip(target.layer.as_deref())
+                    .filter(|(source, target)| !source.may_depend_on.iter().any(|allowed| allowed == *target))
+                    .map(|_| "the repository layer policy forbids this dependency direction");
+                let reviewed = self
+                    .policy
+                    .permits_edge(&package.name, &target.name, dependency.kind.into());
+                let policy_violation = (self.policy.require_reviewed_edges && !reviewed)
+                    .then_some("the local dependency is absent from the repository policy");
                 let Some(message) = layer_violation.or(policy_violation) else {
                     continue;
                 };
@@ -221,22 +206,30 @@ impl Graph {
                         .map(|target| format!(" under target `{target}`"))
                         .unwrap_or_default(),
                 );
-                finding.help = match (layer_violation, &package.layer) {
-                    (Some(_), Layer::Package) => "move engine policy into `src/runtime`, retain only the transferable mechanism, or invert the edge through a runtime-owned port".into(),
-                    (Some(_), _) => "keep concrete composition in `src/app/hl-engine`; expose the required capability from its owning runtime package".into(),
-                    (None, _) => format!(
-                        "remove the edge, invert it through a consumer-owned port, or record the reviewed edge as `(\"{}\", \"{}\")` in `allowed_edge` at src/packages/hl-design-lint/src/rule/dependency/mod.rs",
+                finding.help = match layer_violation {
+                    Some(_) => "invert the edge through a lower-layer port or update the repository-owned layer policy after review".into(),
+                    None => format!(
+                        "remove the edge, invert it through a consumer-owned port, or record `{} -> {}` in the repository policy",
                         package.name, target.name
                     ),
                 };
                 finding.related.push(Related {
-                    label: format!("dependency target in {} layer", target.layer.label()),
+                    label: format!(
+                        "dependency target in {} layer",
+                        target.layer.as_deref().unwrap_or("unclassified")
+                    ),
                     location: location::package(target),
                 });
                 let mut review = Review::error();
                 review.metadata.extend([
-                    ("Source layer".into(), package.layer.label().into()),
-                    ("Target layer".into(), target.layer.label().into()),
+                    (
+                        "Source layer".into(),
+                        package.layer.clone().unwrap_or_else(|| "unclassified".into()),
+                    ),
+                    (
+                        "Target layer".into(),
+                        target.layer.clone().unwrap_or_else(|| "unclassified".into()),
+                    ),
                     ("Dependency kind".into(), dependency.kind.label().into()),
                     ("Cargo alias".into(), dependency.alias.clone()),
                     (
@@ -313,147 +306,10 @@ impl Graph {
         let name = self.manifests.get(&manifest)?;
         self.packages.get(name)
     }
-}
 
-/// The reviewed production graph from `AGENTS.md` and the integrated workspace.
-///
-/// This is deliberately an edge list rather than a layer ordering. Runtime
-/// packages are peers by placement, but their domain contracts still have one
-/// exact dependency direction. Normal, build, development, target-specific,
-/// renamed, and workspace-inherited local dependencies all resolve to this
-/// same source/target pair before reaching this check.
-// The graph is intentionally written as one flat, reviewable edge inventory;
-// nesting coincident source or target spellings would obscure individual edges.
-#[allow(clippy::unnested_or_patterns)]
-fn allowed_edge(source: &str, target: &str) -> bool {
-    matches!(
-        (source, target),
-        // Container services and Docker-compatible APIs.
-        (
-            "hl-client" | "hl-daemon" | "husklet" | "dockerd" | "testing",
-            "hl-container"
-        ) | ("hl-client" | "husklet" | "dockerd", "hl-daemon")
-            | (
-                "hl-client" | "hl-container" | "hl-daemon" | "husklet" | "dockerd" | "testing",
-                "hl-images"
-            )
-            | (
-                "hl-client"
-                    | "hl-container"
-                    | "hl-daemon"
-                    | "hl-images"
-                    | "husklet"
-                    | "dockerd"
-                    | "engine"
-                    | "testing"
-                    | "hl-runtime"
-                    | "hl-engine"
-                    | "hl-vfs"
-                    | "hl-sync"
-                    | "hl-ipc"
-                    | "hl-descriptor"
-                    | "hl-terminal"
-                    | "hl-linux"
-                    | "hl-memory"
-                    | "hl-task"
-                    | "hl-network"
-                    | "hl-checkpoint"
-                    | "hl-event"
-                    | "hl-aio",
-                "hl-log"
-            )
-            | ("hl-container" | "engine" | "testing", "hl-engine")
-            | ("hl-container", "hl-vfs")
-            | (
-                "hl-engine",
-                "hl-runtime"
-                    | "hl-checkpoint"
-                    | "hl-descriptor"
-                    | "hl-event"
-                    | "hl-network"
-                    | "hl-linux"
-                    | "hl-fs"
-                    | "hl-isa"
-                    | "hl-loader"
-                    | "hl-memory"
-                    | "hl-sync"
-                    | "hl-task"
-                    | "hl-time"
-                    | "hl-provider"
-                    | "hl-ipc"
-            )
-            | (
-                "hl-container" | "hl-images" | "hl-ws-term" | "husklet" | "hl-vfs",
-                "hl-fs"
-            )
-            | ("hl-daemon" | "husklet", "hl-client")
-            | ("hl-daemon" | "husklet" | "testing", "hl-design")
-            | ("hl-ws-term" | "husklet", "hl-ws")
-            | ("husklet", "hl-gui" | "hl-ws-term")
-            | ("testing" | "hl-runtime", "hl-checkpoint")
-            | (
-                "testing"
-                    | "hl-vfs"
-                    | "hl-terminal"
-                    | "hl-event"
-                    | "hl-network"
-                    | "hl-ipc"
-                    | "hl-task"
-                    | "hl-provider"
-                    | "hl-linux"
-                    | "hl-checkpoint"
-                    | "hl-runtime",
-                "hl-descriptor"
-            )
-            | (
-                "testing" | "hl-linux" | "hl-checkpoint" | "hl-runtime",
-                "hl-network"
-            )
-            | ("testing", "hl-process" | "hl-provider" | "hl-runtime")
-            | (
-                "hl-event" | "hl-sync" | "hl-ipc" | "hl-task" | "hl-linux" | "hl-runtime",
-                "hl-time"
-            )
-            | (
-                "hl-memory" | "hl-loader" | "hl-linux" | "hl-runtime",
-                "hl-isa"
-            )
-            | (
-                "hl-sync"
-                    | "hl-ipc"
-                    | "hl-task"
-                    | "hl-loader"
-                    | "hl-linux"
-                    | "hl-checkpoint"
-                    | "hl-runtime",
-                "hl-memory"
-            )
-            | (
-                "hl-network" | "hl-ipc" | "hl-task" | "hl-linux" | "hl-checkpoint" | "hl-runtime",
-                "hl-sync"
-            )
-            | (
-                "hl-loader" | "hl-linux" | "hl-checkpoint" | "hl-runtime",
-                "hl-vfs"
-            )
-            | (
-                "hl-linux" | "hl-checkpoint" | "hl-runtime",
-                "hl-event" | "hl-ipc" | "hl-task"
-            )
-            | ("hl-checkpoint" | "hl-runtime", "hl-provider")
-            | ("hl-runtime", "hl-aio" | "hl-linux" | "hl-loader" | "hl-terminal")
-    )
-}
-
-/// Test-only edges reviewed independently from the production package graph.
-///
-/// Cargo excludes these edges from production builds and permits development
-/// dependency cycles, but they still require an explicit ownership review.
-fn allowed_development_edge(source: &str, target: &str) -> bool {
-    matches!(
-        (source, target),
-        ("dockerd", "hl-client")
-    )
+    fn layer(&self, name: &str) -> Option<&LayerPolicy> {
+        self.policy.layers.iter().find(|layer| layer.name == name)
+    }
 }
 
 fn dependencies(document: &toml::Value, manifest: &Path, workspace: &WorkspaceDependencies) -> Vec<Dependency> {

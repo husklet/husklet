@@ -42,7 +42,7 @@ fn collect(path: &Path, output: &mut Vec<PathBuf>) -> std::io::Result<()> {
     if path
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, ".git" | "target" | "vendor" | "lint" | "hl-design-lint"))
+        .is_some_and(|name| matches!(name, ".git" | "target" | "vendor" | "lint"))
     {
         return Ok(());
     }

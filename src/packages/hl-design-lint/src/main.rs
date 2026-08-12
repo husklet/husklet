@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use hl_design_lint::{Cases, Diagnostic, Linter, Markdown, Reporter, Result, Severity};
+use hl_design_lint::{Cases, Diagnostic, Linter, Markdown, Policy, Reporter, Result, Severity};
 
 #[derive(Debug, Parser)]
 #[command(disable_version_flag = true)]
@@ -9,6 +9,8 @@ struct Arguments {
     /// Runs the portable C rules on the requested paths.
     #[arg(long, conflicts_with_all = ["markdown", "cases"])]
     c: bool,
+    #[arg(long, value_name = "FILE")]
+    policy: Option<PathBuf>,
     #[arg(long, conflicts_with = "cases")]
     markdown: bool,
     #[arg(long, value_name = "DIRECTORY", conflicts_with = "markdown")]
@@ -54,7 +56,8 @@ impl Arguments {
                     .register(hl_design_lint::CPolicy::new()),
             )
         } else {
-            Linter::standard()
+            let policy = self.policy.map(Policy::load).transpose()?.unwrap_or_default();
+            Linter::standard_with_policy(policy)
         };
         let summaries = linter.run(self.paths, reporter.as_mut())?;
         Ok(cases

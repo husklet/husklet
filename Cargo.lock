@@ -1146,6 +1146,7 @@ dependencies = [
  "english-pos-tagger",
  "proc-macro2",
  "quote",
+ "serde",
  "serde_json",
  "syn 2.0.119",
  "thiserror",
