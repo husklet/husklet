@@ -5,6 +5,8 @@ pub(crate) mod control;
 pub(crate) mod process;
 pub(crate) mod worker;
 
+mod environment;
+
 use crate::activation::GuestIsa;
 use crate::composition::RuntimeServices;
 use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};

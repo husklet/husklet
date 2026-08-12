@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 
 use super::control::{FRAME_SIZE, FailureStage, Message};
+use super::environment::worker_environment;
 use super::{StreamBridge, wire};
 use crate::activation::GuestIsa;
 use crate::composition::{CompositionError, NativeTerminalWindowNotification, RuntimeServices};
@@ -448,13 +449,6 @@ impl Drop for ChildGuard {
     }
 }
 
-fn worker_environment(get: impl Fn(&str) -> Option<OsString>) -> Vec<(&'static str, OsString)> {
-    [hl_log::LOG_TAGS, hl_log::LOG_LEVEL, hl_log::PROFILE_TAGS]
-        .into_iter()
-        .filter_map(|name| get(name).map(|value| (name, value)))
-        .collect()
-}
-
 fn signal_process_group(process: u32, signal: i32) -> Result<(), EngineError> {
     let process = i32::try_from(process).map_err(|_| EngineError::StopFailed)?;
     // SAFETY: the worker called setsid before exec, so its pid names its private process group.
@@ -526,8 +520,8 @@ fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) 
 #[cfg(test)]
 mod tests {
     use super::{
-        CWorker, ChildGuard, Startup, process_status_matches, read_message, report_worker_failure, worker_environment,
-        worker_executable, write_message,
+        CWorker, ChildGuard, Startup, process_status_matches, read_message, report_worker_failure, worker_executable,
+        write_message,
     };
     use crate::activation::GuestIsa;
     use crate::engine::StopRequest;
@@ -611,16 +605,6 @@ mod tests {
         assert!(process_status_matches(&seven, exit(7)));
         assert!(!process_status_matches(&success, exit(7)));
         assert!(!process_status_matches(&seven, exit(0)));
-    }
-
-    #[test]
-    fn worker_environment_forwards_only_structured_logging_controls() {
-        let environment = worker_environment(|name| Some(format!("value-for-{name}").into()));
-        assert_eq!(
-            environment.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
-            [hl_log::LOG_TAGS, hl_log::LOG_LEVEL, hl_log::PROFILE_TAGS]
-        );
-        assert!(environment.iter().all(|(_, value)| !value.is_empty()));
     }
 
     fn session_child(script: &str, stdout: Stdio) -> Child {
