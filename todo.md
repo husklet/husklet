@@ -35,7 +35,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Keep Linux `host.c` limited to registration/assembly.
 - [x] Integrate the macOS capability hierarchy onto the current native layout and verify its source/build selection on the merged tip.
 - [ ] Obtain authoritative macOS ARM64 compilation and runtime evidence from macOS CI.
-- [ ] Integrate the Windows AMD64 backend onto the current native layout.
+- [x] Restore the Windows AMD64 source backend, isolate its Cargo source closure, and wire its DLL/import-library boundary into the current native layout.
+- [ ] Replace the Linux-specific bridge lifecycle and descriptor imports with Windows host-service handles before enabling Windows support.
 - [ ] Prove Windows runtime behavior; previous oracle evidence was incomplete and is not production evidence. (Windows implementation is only priority if you are on windows and have powershell and tools.)
 - [ ] Eliminate the five remaining single-file-directory findings without undoing meaningful capability ownership.
 - [ ] Resolve `host/linux/memory/shared.c` consistently: parent context makes `shared.c` precise, so the generic catch-all rule must understand contextual ownership rather than forcing `shared_memory.c`.
@@ -45,13 +46,16 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Model Linux ARM64, Linux AMD64, macOS ARM64, and Windows AMD64 host targets in `hl-native`.
 - [x] Model both ARM64 and AMD64 Linux guests.
 - [x] Correctly report the optional same-ISA transliterator as Linux AMD64-only.
-- [ ] Merge the host-capability matrix commits onto the final shared-library/Windows tip and verify every target in CI.
+- [x] Merge the host-capability matrix and host-specific source selection onto the shared-library/Windows tip.
+- [ ] Verify every supported target through authoritative platform CI.
 - [ ] Compare ARM64 and AMD64 scheduler paths whenever either is changed; neither architecture may silently lag.
 
 ## Generic ELF and compatibility
 
 - [x] Move generic ELF inspection and executable-authority planning into `hl-native`; remove dependence on deleted Rust loader/runtime crates.
 - [x] Remove executable provenance/hash pinning and application-specific interpreter bookkeeping tests.
+- [x] Validate ELF metadata, program-table bounds, load spans/alignment, interpreter uniqueness, and executable entry authority before unsafe C loading.
+- [x] Audit production native sources and confirm ELF behavior is generic rather than selected by Go, V8, Node, Python, or executable names.
 - [ ] Finish generic ET_EXEC/non-PIE address placement and translation without Go-, V8-, Node-, Python-, sqlite-, or executable-name detection.
 - [ ] Prove PIE, static PIE, non-PIE, Go, V8/Node, Python, sqlite, self-modifying code, signals, threads, writes, atomics, and both guest ISAs.
 - [ ] Diagnose and repair the deterministic AMD64 static ET_EXEC/thread/TLS compatibility cluster.
@@ -65,7 +69,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Split IO syscall implementation into capability files below 1,500 lines.
 - [x] Split network namespace implementation below 1,500 lines.
 - [x] Begin sentry decomposition with isolated control operations.
-- [ ] Finish three remaining IO handlers: `svc_fcntl`, `svc_read`, and `svc_write` (in progress; write has a completed branch commit pending integration).
+- [x] Decompose `svc_fcntl`, `svc_read`, and `svc_write` below the configured function and nesting limits.
 - [ ] Finish netns ancillary/service function decomposition (in progress).
 - [ ] Split `container/vfs.c` and its oversized/nested functions (in progress).
 - [ ] Split `syscall/binding.c` and `bound_route` (in progress).
