@@ -399,6 +399,18 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
                             ? HL_PROVIDER_TREE_LINK
                             : HL_PROVIDER_TREE_FILE;
         if (reserve_result < 0) return reserve_result;
+        if ((intent & HL_OPEN_NOFOLLOW) != 0 && (intent & HL_OPEN_PATH_ONLY) == 0) {
+            hl_host_result probe = hl_provider_tree_open_root(
+                absolute, strlen(absolute), HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0,
+                HL_PROVIDER_TREE_LINK);
+            hl_host_file_metadata probe_metadata;
+            hl_host_result inspected;
+            if (probe.status != HL_STATUS_OK) return vfs_host_error((hl_status)probe.status);
+            inspected = g_host_services->file->metadata(g_host_services->context, probe.value, &probe_metadata);
+            (void)g_host_services->file->close(g_host_services->context, probe.value);
+            if (inspected.status != HL_STATUS_OK) return vfs_host_error((hl_status)inspected.status);
+            if (probe_metadata.type == HL_HOST_FILE_TYPE_SYMLINK) return -ELOOP;
+        }
         opened = hl_provider_tree_open_root(absolute, strlen(absolute), host_access, host_creation, permissions, kind);
         if (opened.status != HL_STATUS_OK) return vfs_host_error((hl_status)opened.status);
         if (g_host_services->file->metadata(g_host_services->context, opened.value, &metadata).status != HL_STATUS_OK) {
