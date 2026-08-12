@@ -1237,6 +1237,22 @@ static int interp_one_byte_modrm_transfer(struct cpu *cpu, struct insn *insn, ui
     return STEP_NEXT;
 }
 
+static int interp_one_byte_relative_control(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op >= 0x70 && op <= 0x7F) {
+        cpu->rip = interp_cond(cpu, op & 0xf) ? next + (uint64_t)insn->imm : next;
+    } else if (op == 0xE8) {
+        interp_push(cpu, interp_call_return_pc(next), interp_stack_width(insn));
+        cpu->rip = next + (uint64_t)insn->imm;
+    } else if (op == 0xE9 || op == 0xEB) {
+        cpu->rip = next + (uint64_t)insn->imm;
+    } else {
+        return -1;
+    }
+    cpu->reason = R_BRANCH;
+    return STEP_END;
+}
+
 static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_one_byte_alu(cpu, insn, next);
@@ -1244,6 +1260,8 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     delegated = interp_one_byte_stack(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
     delegated = interp_one_byte_modrm_transfer(cpu, insn, pc, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_one_byte_relative_control(cpu, insn, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -1267,28 +1285,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         cpu->rip = next;
         return STEP_NEXT;
     }
-
-    // Jcc rel8
-    case 0x70:
-    case 0x71:
-    case 0x72:
-    case 0x73:
-    case 0x74:
-    case 0x75:
-    case 0x76:
-    case 0x77:
-    case 0x78:
-    case 0x79:
-    case 0x7A:
-    case 0x7B:
-    case 0x7C:
-    case 0x7D:
-    case 0x7E:
-    case 0x7F:
-        // Both edges end the block: the fall-through too, or a guest loop never reaches the safepoints.
-        cpu->rip = interp_cond(cpu, op & 0xf) ? next + (uint64_t)insn->imm : next;
-        cpu->reason = R_BRANCH;
-        return STEP_END;
 
     // Group 1: ALU r/m, imm
     case 0x80:
@@ -1653,21 +1649,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         cpu->reason = R_BRANCH;
         return STEP_END;
     }
-
-    // CALL rel32
-    case 0xE8:
-        // interp_call_return_pc, not `next`: a biased non-PIE must push the LOW link address.
-        interp_push(cpu, interp_call_return_pc(next), interp_stack_width(insn));
-        cpu->rip = next + (uint64_t)insn->imm;
-        cpu->reason = R_BRANCH;
-        return STEP_END;
-
-    // JMP rel32 / rel8
-    case 0xE9:
-    case 0xEB:
-        cpu->rip = next + (uint64_t)insn->imm;
-        cpu->reason = R_BRANCH;
-        return STEP_END;
 
     // CMC / CLC / STC / CLD / STD
     case 0xF5:
