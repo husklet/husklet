@@ -78,7 +78,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Split `syscall/binding.c` into capability fragments and reduce `bound_route` to an ordered family router below all limits.
 - [x] Split sentry service, lifecycle, marshalling, copy-back, and worker routing below all configured C structure limits.
 - [ ] Split remaining oversized syscall domains: memory, network, process, rare, signal, SysV, and time.
-- [ ] Split remaining oversized Linux ABI sources: context, ELF, fork, socket ABI header, number translation, and thread support.
+- [ ] Split remaining oversized Linux ABI sources: ELF and thread support.
+- [x] Split Linux ABI context, fork monitoring, socket ABI vocabulary, and number translation below the configured limits.
 - [ ] Split ARM64 interpreter/translator units and oversized functions.
 - [ ] Split AMD64 AVX, interpreter, translator, legacy, crypto, move, and shift units/functions.
 - [ ] Refactor remaining oversized test C functions rather than suppressing them.
