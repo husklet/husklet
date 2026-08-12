@@ -130,16 +130,15 @@ fn every_production_input_is_independent_of_sibling_engines() {
 
     let makefile = fs::read_to_string(root.join("Makefile")).expect("read Makefile");
     for (line_number, line) in makefile.lines().enumerate() {
-        if line.contains("../engine") || line.contains("../engine_rust") {
-            assert!(
-                line.starts_with("BENCH_C_BUILD ?="),
-                "Makefile:{} gives a normal target a sibling-engine dependency: {line}",
-                line_number + 1
-            );
-        }
+        assert!(
+            !line.contains("../engine") && !line.contains("../engine_rust"),
+            "Makefile:{} gives a target a sibling-engine dependency: {line}",
+            line_number + 1
+        );
         if line.contains("BENCH_C_BUILD") {
             assert!(
                 line.starts_with("BENCH_C_BUILD ?=")
+                    || line.contains("test -n \"$(BENCH_C_BUILD)\"")
                     || line.trim() == "--c-build $(BENCH_C_BUILD) --rust-engine $(CURDIR)/target/release/hl-engine \\",
                 "Makefile:{} exposes the optional C oracle outside its benchmark adapter: {line}",
                 line_number + 1

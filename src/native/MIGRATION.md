@@ -113,8 +113,9 @@ ownership *and* frequency rather than replacing similarly named files in arbitra
 | `translator/*`, `core/dispatch.c`, target entry/stubs | Retained production core; `src/runtime/native/exec` is the unselected replacement candidate | `hl_run_linux_guest* -> run_guest -> cache lookup/translate_block -> emitted native code -> dispatcher exit` | **Keep retained C now.** Eliminate only by native-vs-retained instruction families and balanced malloc/mmap/sqlite evidence, never by source similarity. |
 
 The standalone CLI/config-file launch chain has been physically deleted from the retained tree. Its
-behavioral oracle remains available in read-only `../engine`; Husklet has only the Rust worker/wire/process
-owner. `c_standalone_retirement.rs` prevents either the files or their linked symbols from returning.
+behavioral oracle remains available in read-only `../engine`; Husklet owns the repository-local retained-C
+worker with Rust launch, wire, and process supervision. `c_standalone_retirement.rs` prevents either the
+files or their linked symbols from returning.
 
 ## Memory manifest
 

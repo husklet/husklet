@@ -1,4 +1,4 @@
-//! Build-time availability for the temporary retained-C production backend.
+//! Build-time availability for the integrated retained-C production backend.
 
 /// Returns whether the retained source manifest currently supplies every
 /// host-service, host-emitter, and guest-target translation unit required by

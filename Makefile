@@ -187,11 +187,12 @@ bench-direct-ab:
 	  --guest $(AB_GUEST) --rounds $(AB_ROUNDS) --results $(AB_RESULTS) \
 	  $(if $(AB_NULL_RESULTS),--null-arm-results $(AB_NULL_RESULTS))
 
-# Historical Rust-vs-retained-C development gate. Keep it available for reading
-# old ledgers and oracle investigations; it is not the C-primary product verdict.
+# Historical Rust-vs-retained-C development gate. It accepts an explicitly staged
+# oracle build for old-ledger investigations, but no repository target resolves or
+# builds a sibling checkout. It is not the C-primary product verdict.
 BENCH_WORKLOAD ?= compute
 BENCH_ARCH ?= arm64
-BENCH_C_BUILD ?= $(CURDIR)/../engine/build/unit-audit
+BENCH_C_BUILD ?=
 BENCH_GUEST ?= $(CURDIR)/target/testing/bench/combined/$(BENCH_ARCH)/combined-bench
 BENCH_REPEATS ?= 7
 BENCH_DIVISOR ?= 1
@@ -214,10 +215,12 @@ bench-guest:
 	$(BENCH_CC) -O2 -static -o $(BENCH_GUEST) tests/bench/combined/main.c
 
 bench-gate: bench-guest
+	@test -n "$(BENCH_C_BUILD)" || { echo "set BENCH_C_BUILD to an explicitly staged oracle build"; exit 1; }
 	cargo build --release -p engine -p testing --bins --locked
 	$(BENCH_GATE)
 
 bench-gate-update: bench-guest
+	@test -n "$(BENCH_C_BUILD)" || { echo "set BENCH_C_BUILD to an explicitly staged oracle build"; exit 1; }
 	cargo build --release -p engine -p testing --bins --locked
 	$(BENCH_GATE) --update
 

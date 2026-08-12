@@ -1,4 +1,4 @@
-//! Stable process entry for the temporary retained-C execution worker.
+//! Stable process entry for the production retained-C execution worker.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetainedWorkerError {
