@@ -103,13 +103,6 @@ static inline struct dirent *readdir(DIR *directory) {
     return NULL;
 }
 
-static inline int readdir_r(DIR *directory, struct dirent *entry, struct dirent **result) {
-    (void)directory;
-    (void)entry;
-    (void)result;
-    return ENOSYS;
-}
-
 static inline int closedir(DIR *directory) {
     (void)directory;
     errno = ENOSYS;
