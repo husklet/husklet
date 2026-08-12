@@ -7,31 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConstructionError {
-    Assembly,
-    Memory,
-    Task,
-    Ipc,
-    Descriptor,
-    Host,
-    Start,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompositionError {
     MissingCheckpointSink,
     MissingCheckpointSource,
     /// Native execution does not yet own a PTY/stdio bridge for the requested terminal.
     UnsupportedTerminal,
     RuntimeConstruction,
-    Construction(ConstructionError),
-}
-
-impl CompositionError {
-    #[must_use]
-    pub const fn construction(cause: ConstructionError) -> Self {
-        Self::Construction(cause)
-    }
 }
 
 /// Transactional destination for a checkpoint image.

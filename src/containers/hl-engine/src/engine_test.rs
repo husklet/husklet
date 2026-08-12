@@ -87,7 +87,7 @@ impl Launcher for Arc<FakeLauncher> {
 #[test]
 fn launch_error_preserved() {
     let (engine, launcher, _) = Fixture::engine(GuestIsa::X86_64);
-    let error = EngineError::Construction(crate::composition::ConstructionError::Start);
+    let error = EngineError::LaunchFailed;
     {
         let mut state = launcher.state.lock().unwrap();
         state.launch_released = true;
@@ -294,11 +294,11 @@ fn wait_failure_is_preserved() {
     {
         let mut state = launcher.state.lock().unwrap();
         state.launch_released = true;
-        state.wait_error = Some(EngineError::AuthorityFailed);
+        state.wait_error = Some(EngineError::WaitFailed);
     }
     engine.start().unwrap();
-    assert_eq!(engine.wait(), Err(EngineError::AuthorityFailed));
-    assert_eq!(engine.wait(), Err(EngineError::AuthorityFailed));
+    assert_eq!(engine.wait(), Err(EngineError::WaitFailed));
+    assert_eq!(engine.wait(), Err(EngineError::WaitFailed));
     assert_eq!(launcher.state.lock().unwrap().wait_calls, 1);
 }
 

@@ -99,13 +99,11 @@ pub enum EngineError {
     NotStarted,
     Destroyed,
     LaunchFailed,
-    Construction(crate::composition::ConstructionError),
     WorkspaceFailed,
     WaitFailed,
     StopFailed,
     Synchronization,
     Unsupported,
-    AuthorityFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
