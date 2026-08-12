@@ -200,6 +200,26 @@ impl Strings<'_> {
             .record(value, self.source.location(span), EvidenceKind::Assignment);
     }
 
+    fn record_struct(&mut self, item: &ExprStruct) {
+        let Some(owner) = self.struct_owner(item) else {
+            return;
+        };
+        for field in &item.fields {
+            if let Member::Named(name) = &field.member {
+                self.record_field(&owner, &name.to_string(), &field.expr, EvidenceKind::Assignment);
+            }
+        }
+    }
+
+    fn struct_owner(&self, item: &ExprStruct) -> Option<String> {
+        let owner = item.path.segments.last()?.ident.to_string();
+        if owner == "Self" {
+            self.owner.clone()
+        } else {
+            Some(owner)
+        }
+    }
+
     fn visit_scoped(&mut self, name: String, visit: impl FnOnce(&mut Self)) {
         self.scope.push(name);
         visit(self);
@@ -270,20 +290,7 @@ impl<'ast> Visit<'ast> for Strings<'_> {
     }
 
     fn visit_expr_struct(&mut self, item: &'ast ExprStruct) {
-        if let Some(mut owner) = item.path.segments.last().map(|segment| segment.ident.to_string()) {
-            if owner == "Self" {
-                let Some(current) = self.owner.clone() else {
-                    syn::visit::visit_expr_struct(self, item);
-                    return;
-                };
-                owner = current;
-            }
-            for field in &item.fields {
-                if let Member::Named(name) = &field.member {
-                    self.record_field(&owner, &name.to_string(), &field.expr, EvidenceKind::Assignment);
-                }
-            }
-        }
+        self.record_struct(item);
         syn::visit::visit_expr_struct(self, item);
     }
 
