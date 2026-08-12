@@ -3873,6 +3873,44 @@ static int lower_exchange_add(struct insn *instruction, uint64_t guest_pc, uint6
     return TX_NEXT;
 }
 
+static int lower_wide_compare_exchange(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    if (instruction->op != 0xC7 || (instruction->reg & 7) != 1 || !instruction->is_mem) return TX_FALL;
+    if (g_fl_pending) flags_materialize();
+    emit_ea(instruction, next);
+    if (instruction->opsize == 8) {
+        emit_memory_guard(17, 16, guest_pc, X86_SOFT_READ | X86_SOFT_WRITE);
+        if (emit_soft_memory_active()) {
+            emit_soft_store_commit(16);
+            e_ldr(17, 28, OFF_BUS_EA);
+        }
+        e_str(17, 28, OFF_X87EA);
+        emit_exit_const(next, R_CMPXCHG16);
+        return TX_BREAK;
+    }
+    emit_memory_guard(17, 8, guest_pc, X86_SOFT_READ | X86_SOFT_WRITE);
+    e_uxt(19, RAX, 4);
+    e_bfi(19, RDX, 32, 32, 1);
+    e_uxt(20, RBX, 4);
+    e_bfi(20, RCX, 32, 32, 1);
+    e_mov_rr(22, 19, 1);
+    e_cas(8, 19, 20, 17);
+    e_uxt(24, 19, 4);
+    e_lsr_i(25, 19, 32, 1);
+    e_rrr(A_SUBS, 31, 19, 22, 1, 0);
+    e_csel(RAX, RAX, 24, 0, 1);
+    e_csel(RDX, RDX, 25, 0, 1);
+    e_ldr(21, 28, OFF_NZCV);
+    e_movconst(23, 0x40000000u);
+    e_rrr(A_BIC, 21, 21, 23, 1, 0);
+    e_cset(23, 0, 1);
+    e_lsl_i(23, 23, 30, 1);
+    e_rrr(A_ORR, 21, 21, 23, 1, 0);
+    e_str(21, 28, OFF_NZCV);
+    emit32(0xD51B4200u | 21);
+    if (emit_soft_memory_active()) emit_soft_store_commit(8);
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -5930,56 +5968,12 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            if (op == 0xC7 && (I.reg & 7) == 1 && I.is_mem &&
-                I.opsize != 8) { // cmpxchg8b: 0F C7 /1 (64-bit compare+swap)
-                // Compare EDX:EAX with the 64-bit memory operand. If equal, store ECX:EBX and set ZF;
-                // else load memory into EDX:EAX and clear ZF. A LOCK prefix makes it atomic; CASAL (a
-                // single 64-bit atomic compare-exchange) is replay-immune and correct for both.
-                // CMPXCHG8B affects ONLY ZF (unlike 32-bit CMPXCHG), so materialize lazy flags first and
-                // edit ZF alone in the stored NZCV.
-                if (g_fl_pending) flags_materialize();
-                emit_ea(&I, next); // x17 = EA
-                emit_memory_guard(17, 8, gpc, X86_SOFT_READ | X86_SOFT_WRITE);
-                e_uxt(19, RAX, 4);
-                e_bfi(19, RDX, 32, 32, 1); // x19 = EDX:EAX (expected)
-                e_uxt(20, RBX, 4);
-                e_bfi(20, RCX, 32, 32, 1);       // x20 = ECX:EBX (new value)
-                e_mov_rr(22, 19, 1);             // x22 = expected (CASAL clobbers Rs with the old value)
-                e_cas(8, 19, 20, 17);            // x19 = old; if old==x22 then [m] = x20
-                e_uxt(24, 19, 4);                // old low 32  (EAX candidate, zero-extended)
-                e_lsr_i(25, 19, 32, 1);          // old high 32 (EDX candidate, zero-extended)
-                e_rrr(A_SUBS, 31, 19, 22, 1, 0); // host flags: Z = (old == expected)
-                e_csel(RAX, RAX, 24, 0, 1);      // mismatch -> EAX = old low  (equal keeps RAX)
-                e_csel(RDX, RDX, 25, 0, 1);      // mismatch -> EDX = old high (equal keeps RDX)
-                e_ldr(21, 28, OFF_NZCV);
-                e_movconst(23, 0x40000000u);
-                e_rrr(A_BIC, 21, 21, 23, 1, 0); // clear stored Z (bit 30)
-                e_cset(23, 0, 1);               // x23 = equal (EQ from the SUBS above)
-                e_lsl_i(23, 23, 30, 1);
-                e_rrr(A_ORR, 21, 21, 23, 1, 0); // set ZF from equality; other flags untouched
-                e_str(21, 28, OFF_NZCV);
-                emit32(0xD51B4200u | 21); // sync live ARM nzcv
-                if (emit_soft_memory_active()) emit_soft_store_commit(8);
+            int wide_compare_result = lower_wide_compare_exchange(&I, gpc, next);
+            if (wide_compare_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
-            if (op == 0xC7 && (I.reg & 7) == 1 && I.is_mem) { // cmpxchg16b: REX.W 0F C7 /1 (128-bit compare+swap)
-                // x86 `lock cmpxchg16b` must be a single ATOMIC 128-bit compare-exchange across guest threads.
-                // A two-loads-plus-stores sequence tears, and a hardware CASPAL LIVELOCKS on Apple Silicon
-                // (128-bit store-forwarding replay). So stash the operand EA and exit to do_cmpxchg16(), which
-                // does the DWCAS under a hashed spinlock (a 64-bit atomic lock is replay-immune + livelock-free).
-                // cmpxchg16b affects ONLY ZF, so materialize any lazy flags first (the C helper edits ZF alone).
-                if (g_fl_pending) flags_materialize();
-                emit_ea(&I, next); // x17 = EA
-                emit_memory_guard(17, 16, gpc, X86_SOFT_READ | X86_SOFT_WRITE);
-                if (emit_soft_memory_active()) {
-                    emit_soft_store_commit(16);
-                    e_ldr(17, 28, OFF_BUS_EA);
-                }
-                e_str(17, 28, OFF_X87EA);
-                emit_exit_const(next, R_CMPXCHG16);
-                break;
-            }
+            if (wide_compare_result == TX_BREAK) break;
             if (op == 0x1E && I.imm_bytes == 0) {
                 gpc = next;
                 continue;
