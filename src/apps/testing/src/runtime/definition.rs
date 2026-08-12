@@ -226,6 +226,7 @@ impl App {
         };
         let mut command = hl_process::Command::new(&compiler);
         command.arg("-o").arg(&output).arg(&source).args(&case.flags);
+        sanitizer_free_tool_environment(&mut command)?;
         let outcome = hl_process::run(&command, &capture, COMPILER_TIMEOUT, &AtomicBool::new(false))
             .map_err(|error| format!("run {compiler} on {}: {error}", source.display()))?;
         if outcome != hl_process::Outcome::Exited(Some(0)) {
@@ -321,6 +322,25 @@ impl App {
         let _provider = oracle.provider;
         oracle.commands.for_target(target)
     }
+}
+
+#[cfg(unix)]
+fn sanitizer_free_tool_environment(command: &mut hl_process::Command) -> Result<(), Error> {
+    use std::os::unix::ffi::OsStrExt as _;
+    if std::env::var_os("HL_C_SANITIZER").is_none() {
+        return Ok(());
+    }
+    let environment = std::env::vars_os()
+        .filter(|(name, _)| !matches!(name.to_str(), Some("LD_PRELOAD" | "ASAN_OPTIONS" | "LSAN_OPTIONS")))
+        .map(|(name, value)| hl_process::EnvironmentEntry::new(name.as_bytes(), value.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()?;
+    command.exact_environment(environment)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sanitizer_free_tool_environment(_command: &mut hl_process::Command) -> Result<(), Error> {
+    Ok(())
 }
 
 fn compatibility_compiler(target: Target, declared: &str) -> String {

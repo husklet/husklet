@@ -277,6 +277,11 @@ unsafe extern "C" {
     fn hl_c_backend_exit_detail(backend: *const c_void) -> c_ulonglong;
     fn hl_c_backend_translation_count(backend: *const c_void) -> c_ulonglong;
     fn hl_c_backend_destroy(backend: *mut c_void);
+    fn hl_c_backend_leak_check_nonvacuity() -> c_int;
+}
+
+pub(crate) fn leak_check_nonvacuity() -> i32 {
+    unsafe { hl_c_backend_leak_check_nonvacuity() }
 }
 
 pub(crate) fn retained_c_link_anchor() -> usize {

@@ -33,6 +33,11 @@
 )]
 
 pub mod activation;
+
+#[doc(hidden)]
+pub fn leak_check_nonvacuity() -> i32 {
+    execution::leak_check_nonvacuity()
+}
 pub mod cli;
 pub mod composition;
 pub mod config;

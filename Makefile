@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint gate gate-app gate-compat gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci engine app dmg install uninstall clean bench-product-ab-prepare bench-product-ab bench-direct-ab
+.PHONY: all check design-lint gate gate-app gate-compat gate-fixture gate-leaks lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci test-compiles containers engine app dmg install uninstall clean bench-product-ab-prepare bench-product-ab bench-direct-ab bench-workloads
 
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
@@ -140,6 +140,27 @@ gate-fixture:
 	      -- --exact --ignored --nocapture $$name || status=1; \
 	  done; \
 	  exit $$status'
+
+# Leak checking is deliberately separate from the fast correctness gate. Linux
+# instruments the production retained-C backend with ASan/LSan; macOS uses the
+# system leaks tool. Each invocation retains bounded per-case output and refuses
+# to overwrite a previous result directory.
+gate-leaks:
+	$(NIX_DEV) bash -euc '\
+	  run_id="$$(date -u +%Y%m%dT%H%M%SZ)-$$$$"; \
+	  artifacts="target/testing/leaks/$$run_id"; \
+	  export CARGO_TARGET_DIR="$(CURDIR)/target/leaks/build"; \
+	  if [ "$$(uname -s)" = Linux ]; then \
+	    export HL_C_SANITIZER=leak; \
+	    export RUSTFLAGS="-C link-arg=-fsanitize=leak"; \
+	    sanitizer_runtime="$$(cc -print-file-name=liblsan.so)"; \
+	  elif ! command -v leaks >/dev/null; then \
+	    echo "gate-leaks: macOS leaks tool is unavailable" >&2; exit 1; \
+	  fi; \
+	  cargo build -p engine -p testing --bins --locked --offline; \
+	  if [ "$$(uname -s)" = Linux ]; then export LD_PRELOAD="$$sanitizer_runtime"; fi; \
+	  export HL_TEST_ENGINE_APP_BIN_DIR="$$CARGO_TARGET_DIR/debug"; \
+	  "$$CARGO_TARGET_DIR/debug/testing" leaks --artifacts "$$artifacts"'
 
 # husklet's `runtime` feature is off by default and `gui` needs the macOS GTK stack, so the workspace
 # sweep alone never compiles the container-runtime surface.

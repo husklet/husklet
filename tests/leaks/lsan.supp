@@ -1,0 +1,16 @@
+# Suppressions require a named stack pattern, a rationale, and a regression
+# issue. The production C leak gate currently has no accepted leak suppression.
+
+# Cross-GCC intentionally retains driver/cc1 allocation pools until process
+# exit. These subprocesses only compile immutable guest fixtures; they never
+# load or execute the production C engine.
+leak:xmalloc
+leak:xrealloc
+leak:xcalloc
+leak:operator new(unsigned long)
+
+# GNU ld/BFD likewise keeps link graph and plugin pools until exit. This is the
+# guest-fixture linker process, not the linked production engine.
+leak:bfd_malloc
+leak:bfd_zmalloc
+leak:plugin_load_plugins

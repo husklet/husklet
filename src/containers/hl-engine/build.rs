@@ -18,6 +18,7 @@ struct TranslationUnit<'a> {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_C_EXECUTION");
+    println!("cargo:rerun-if-env-changed=HL_C_SANITIZER");
     println!("cargo:rustc-check-cfg=cfg(hl_retained_c)");
     println!("cargo:rustc-check-cfg=cfg(hl_retained_c_default)");
     if env::var_os("CARGO_FEATURE_C_EXECUTION").is_none() {
@@ -123,6 +124,9 @@ fn main() {
     for library in libraries {
         println!("cargo:rustc-link-lib={library}");
     }
+    if env::var("HL_C_SANITIZER").as_deref() == Ok("leak") && target_os == "linux" {
+        println!("cargo:rustc-link-lib=lsan");
+    }
 }
 
 fn parse_manifest(manifest: &str) -> Vec<TranslationUnit<'_>> {
@@ -199,6 +203,18 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         .flag_if_supported("-fvisibility=hidden")
         .flag_if_supported("-fno-function-sections")
         .flag_if_supported("-fno-data-sections");
+    match env::var("HL_C_SANITIZER").as_deref() {
+        Ok("leak") => {
+            build
+                .opt_level(1)
+                .flag("-fsanitize=leak")
+                .flag("-fno-omit-frame-pointer")
+                .define("HL_LEAK_CHECK_PROBE", None);
+        }
+        Ok(value) => panic!("unsupported HL_C_SANITIZER={value:?}; expected leak"),
+        Err(env::VarError::NotPresent) => {}
+        Err(error) => panic!("invalid HL_C_SANITIZER: {error}"),
+    }
     if strict {
         for flag in [
             "-Wall",

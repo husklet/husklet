@@ -37,6 +37,53 @@ typedef struct hl_c_backend {
     hl_engine_exit result;
 } hl_c_backend;
 
+#if defined(HL_LEAK_CHECK_PROBE)
+/* Non-vacuity hook for the dedicated sanitizer gate. It is compiled only into
+ * sanitizer artifacts and activated only by the gate's probe subprocess. */
+static void *volatile hl_leak_check_probe;
+
+static void hl_c_backend_leak_check_probe(void) {
+    if (getenv("HL_LEAK_CHECK_PROBE") != NULL && hl_leak_check_probe == NULL) {
+        hl_leak_check_probe = malloc(4096);
+        hl_leak_check_probe = NULL;
+    }
+}
+
+extern int __lsan_do_recoverable_leak_check(void);
+
+static void hl_c_backend_leak_check_verdict(void) {
+    if (getenv("HL_LEAK_CHECK_PROBE") != NULL && __lsan_do_recoverable_leak_check() != 0) _exit(97);
+}
+#else
+static void hl_c_backend_leak_check_probe(void) {
+}
+
+static void hl_c_backend_leak_check_verdict(void) {
+}
+#endif
+
+#if defined(HL_LEAK_CHECK_PROBE)
+__attribute__((noinline)) static void hl_c_backend_make_deliberate_leak(void) {
+    hl_leak_check_probe = malloc(4096);
+    hl_leak_check_probe = NULL;
+}
+
+__attribute__((noinline)) static void hl_c_backend_scrub_probe_stack(void) {
+    volatile uintptr_t scrub[8192];
+    memset((void *)scrub, 0, sizeof(scrub));
+}
+#endif
+
+int32_t hl_c_backend_leak_check_nonvacuity(void) {
+#if defined(HL_LEAK_CHECK_PROBE)
+    hl_c_backend_make_deliberate_leak();
+    hl_c_backend_scrub_probe_stack();
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
     char broker_text[32];
     char trigger_text[32];
@@ -152,6 +199,7 @@ int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *execut
     hl_engine_fd_binding bindings[3];
     hl_host_result imported[3];
     hl_engine_executable executable;
+    hl_c_backend_leak_check_probe();
     if (output == NULL) {
         if (provider_fd >= 0) close(provider_fd);
         return HL_STATUS_INVALID_ARGUMENT;
@@ -334,4 +382,5 @@ void hl_c_backend_destroy(hl_c_backend *backend) {
     hl_c_backend_provider_discard(backend);
     hl_host_linux_destroy(backend->host);
     free(backend);
+    hl_c_backend_leak_check_verdict();
 }

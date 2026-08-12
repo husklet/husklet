@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 mod journal;
+mod leaks;
 mod nested;
 #[cfg(target_os = "macos")]
 mod platform;
@@ -53,6 +54,10 @@ enum Command {
     Nested(nested::Options),
     /// Audit production syscall coverage against the typed router inventory.
     SyscallAudit(syscall_audit::Options),
+    /// Check the production C engine with the platform leak detector.
+    Leaks(leaks::Options),
+    #[command(hide = true)]
+    LeakProbe,
 }
 
 #[tokio::main]
@@ -84,6 +89,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::ScenarioCachePreflight(options) => scenario::cache_preflight(options),
         Command::Nested(options) => nested::run(options),
         Command::SyscallAudit(options) => syscall_audit::run(options),
+        Command::Leaks(options) => leaks::run(options),
+        Command::LeakProbe => {
+            let _ = hl_engine::leak_check_nonvacuity();
+            Ok(())
+        }
     }
 }
 
@@ -104,6 +114,7 @@ mod cli_tests {
             "scenario-cache-preflight",
             "nested",
             "syscall-audit",
+            "leaks",
         ] {
             assert!(help.contains(command), "missing {command} from help");
         }
