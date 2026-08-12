@@ -621,7 +621,10 @@
             runHook preBuild
             export CC_x86_64_pc_windows_gnu=${lib.escapeShellArg compiler}
             export CARGO_TARGET_${targetKey}_LINKER=${lib.escapeShellArg compiler}
-            cargo check --locked --offline --target ${target} -p hl-native
+            cargo check --locked --offline --target ${target} -p hl-native 2>&1 |
+              tee "$TMPDIR/windows-contract.log"
+            grep -F 'native C engine planned but not yet verified for x86_64-windows' \
+              "$TMPDIR/windows-contract.log" >/dev/null
             ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
               -Isrc/runtime/hl-native/src/native -Isrc/runtime/hl-native/src/native/include \
               -c src/runtime/hl-native/src/native/bridge/host.c -o host-bridge.obj
@@ -635,6 +638,44 @@
               > "$out/evidence"
           '';
         };
+
+      darwinInstalledProductFor =
+        pkgs: engine:
+        pkgs.runCommand "hl-engine-darwin-installed-product" { } ''
+          set -euo pipefail
+          prefix="$TMPDIR/installed-product"
+          mkdir -p "$prefix"
+          cp -a ${engine}/. "$prefix"/
+          library="$prefix/lib/libhl_native_engine.dylib"
+          test -s "$library"
+          otool -D "$library" | grep -Fx '@rpath/libhl_native_engine.dylib' >/dev/null
+          nm -gjU "$library" | sort -u > "$TMPDIR/actual-exports"
+          printf '%s\n' \
+            _hl_c_backend_create \
+            _hl_c_backend_destroy \
+            _hl_c_backend_executable_discard \
+            _hl_c_backend_executable_open \
+            _hl_c_backend_exit_detail \
+            _hl_c_backend_exit_kind \
+            _hl_c_backend_exit_status \
+            _hl_c_backend_leak_check_nonvacuity \
+            _hl_c_backend_request \
+            _hl_c_backend_run \
+            _hl_c_backend_translation_count \
+            _hl_engine_abi \
+            _hl_engine_version > "$TMPDIR/expected-exports"
+          diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
+          for name in hl-engine hl-aarch64 hl-x86_64; do
+            binary="$prefix/bin/$name"
+            test -x "$binary"
+            otool -L "$binary" | grep -F '@rpath/libhl_native_engine.dylib' >/dev/null
+            otool -l "$binary" | grep -A2 LC_RPATH | grep -F '@loader_path/../lib' >/dev/null
+            env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
+              "$binary" --backend-receipt | grep -F '"backend":"retained-c"' >/dev/null
+          done
+          mkdir -p "$out"
+          printf '%s\n' 'native Darwin copied-prefix install name, exports, rpath, and backend receipts passed' > "$out/evidence"
+        '';
 
       darwinCrossContractFor =
         pkgs:
@@ -690,6 +731,7 @@
         }
         // lib.optionalAttrs pkgs.stdenv.isDarwin {
           "host-darwin-aarch64-native" = verification;
+          "installed-product" = darwinInstalledProductFor pkgs engine;
         }
       );
 
