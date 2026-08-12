@@ -42,18 +42,6 @@ impl Process {
                 command.arg(&run.binary);
                 command
             }
-            Provider::Rust => {
-                let mut command = Command::new(run.engine.as_ref().expect("validated engine"));
-                command.args(["--guest-isa", run.isa.name()]);
-                for (name, value) in &run.engine_options {
-                    command.args(["--engine-option", &format!("{name}={value}")]);
-                }
-                if let Some(rootfs) = &run.rootfs {
-                    command.arg("--rootfs").arg(rootfs);
-                }
-                command.arg(&run.binary);
-                command
-            }
         };
         command
             .args(&run.guest)

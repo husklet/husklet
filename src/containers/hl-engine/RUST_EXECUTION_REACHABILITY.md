@@ -18,6 +18,6 @@ transfer is under `ffi/linux/file_transfer/**`. Neither depends on the deleted
 executor tree.
 
 Do not remove `program.rs`, loader inspection, container lifecycle, or the
-`hl-runtime`, `hl-execution`, `hl-memory`, and `hl-task` crates with this closure.
-The retained C adapter independently uses typed CPU snapshots, runtime syscall
-trap/task state, and loader services.
+remaining `hl-runtime`, `hl-memory`, and `hl-task` crates with this closure.
+The former `hl-execution` crate was part of the deleted executor and no longer
+exists. The retained C adapter still uses runtime, memory, task, and loader services.

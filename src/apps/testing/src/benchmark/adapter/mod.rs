@@ -90,20 +90,6 @@ impl Process {
             ));
         }
         let diagnostics_text = String::from_utf8_lossy(&stderr);
-        // A matrix first authenticates native execution with a diagnostics-on
-        // proof bound to its complete input identity, then removes diagnostics
-        // from timed rows. Requiring diagnostic text from those quiet rows
-        // both defeats the comparison contract and makes them impossible to
-        // run. Direct native runs still request diagnostics during validation.
-        if run.native_diagnostics_requested() {
-            match Self::native_runs(&diagnostics_text) {
-                Some(0) => {
-                    return Err("native execution was requested but diagnostics report zero native runs".into());
-                }
-                Some(_) => {}
-                None => return Err("native execution was requested but native diagnostics are missing".into()),
-            }
-        }
         let text = String::from_utf8(stdout).map_err(|_| "guest output is not UTF-8".to_string())?;
         let mut phases = BTreeMap::new();
         for line in text.lines() {
@@ -136,17 +122,6 @@ impl Process {
                 tree.push(process);
             }
         }
-    }
-
-    fn native_runs(diagnostics: &str) -> Option<u64> {
-        diagnostics
-            .lines()
-            .filter_map(|line| line.strip_prefix("hl-native-detail: "))
-            .flat_map(str::split_whitespace)
-            .filter_map(|field| field.split_once('='))
-            .filter(|(name, _)| matches!(*name, "branch" | "syscall" | "fallback" | "yield" | "completed"))
-            .filter_map(|(_, value)| value.parse::<u64>().ok())
-            .reduce(u64::saturating_add)
     }
 
     fn x86_diagnostics(diagnostics: &str) -> Result<Option<X86Diagnostics>, String> {
@@ -372,23 +347,6 @@ impl Process {
 #[cfg(test)]
 mod test {
     use super::{CausalDiagnostics, Process, X86Diagnostics};
-
-    #[test]
-    fn native_diagnostics() {
-        assert_eq!(
-            Process::native_runs(
-                "hl-native-detail: fills=1 site_collisions=0 shared_collisions=0 branch=7 syscall=2 fallback=0 yield=3 completed=1 operand_callbacks=0 operand_cache_hits=0"
-            ),
-            Some(13),
-        );
-        assert_eq!(
-            Process::native_runs(
-                "hl-native-detail: fills=4 site_collisions=0 shared_collisions=0 branch=0 syscall=0 fallback=0 yield=0 completed=0 operand_callbacks=0 operand_cache_hits=0"
-            ),
-            Some(0),
-        );
-        assert_eq!(Process::native_runs("unrelated diagnostic"), None);
-    }
 
     #[test]
     fn x86_diagnostics_are_optional_ordered_fields() {

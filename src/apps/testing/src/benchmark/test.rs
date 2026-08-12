@@ -17,8 +17,6 @@ fn command_run(provider: Provider, binary: PathBuf, engine: Option<PathBuf>) -> 
         timeout: Duration::from_secs(1),
         guest: vec!["--phase".into(), "compute".into()],
         environment: vec![("BENCH_SEED".into(), "7".into())],
-        engine_options: Vec::new(),
-        diagnostics_proven: false,
     }
 }
 
@@ -61,58 +59,9 @@ fn repeat_summary_rejects_divergent_syscall_checksums() {
 }
 
 #[test]
-fn diagnostic_proof() {
-    let run = Run {
-        provider: Provider::Rust,
-        isa: Isa::Aarch64,
-        binary: "/bin/sh".into(),
-        rootfs: None,
-        engine: Some("/bin/sh".into()),
-        c_runner: None,
-        output: None,
-        repeats: 5,
-        timeout: Duration::from_secs(120),
-        guest: Vec::new(),
-        environment: Vec::new(),
-        engine_options: vec![("HL_NATIVE_EXECUTION".into(), "1".into())],
-        diagnostics_proven: false,
-    }
-    .validate()
-    .unwrap();
-    assert!(run.native_requested());
-    assert!(!run.native_diagnostics_requested());
-    assert_eq!(run.execution_mode(), "native-verified");
-    assert_eq!(run.diagnostics_mode(), "off");
-    assert!(
-        !run.engine_options
-            .iter()
-            .any(|(name, _)| name == "HL_NATIVE_DIAGNOSTICS")
-    );
-    let probe = run.diagnostics_probe().expect("native run proves itself");
-    assert!(probe.native_diagnostics_requested());
-    assert_eq!(probe.repeats, 1);
-    assert!(probe.diagnostics_probe().is_none());
-    let command = adapter::Process::new(None).command(&probe).unwrap();
-    let arguments = command
-        .get_args()
-        .map(|value| value.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    assert!(
-        arguments
-            .windows(2)
-            .any(|pair| { pair == ["--engine-option", "HL_NATIVE_EXECUTION=1"] })
-    );
-    assert!(
-        arguments
-            .windows(2)
-            .any(|pair| { pair == ["--engine-option", "HL_NATIVE_DIAGNOSTICS=1"] })
-    );
-}
-
-#[test]
 fn engine_settings_are_rejected_where_they_would_not_apply() {
     for name in ["HL_NATIVE_EXECUTION", "HL_A64_DIRTY_OVERFLOW_CONTINUE"] {
-        let mut run = command_run(Provider::Rust, "/bin/sh".into(), Some("/bin/sh".into()));
+        let mut run = command_run(Provider::Native, "/bin/sh".into(), None);
         run.environment = vec![(name.into(), "1".into())];
         assert_eq!(
             run.validate().unwrap_err(),
@@ -215,16 +164,14 @@ fn providers_project_one_rootfs_without_host_execution_shortcuts() {
             OsStr::new("compute")
         ]
     );
-    for provider in [Provider::C, Provider::Rust] {
-        let command = process.command(&rooted(provider, Some(engine.clone()))).unwrap();
-        let arguments = command.get_args().collect::<Vec<_>>();
-        assert!(
-            arguments
-                .windows(2)
-                .any(|pair| pair == [OsStr::new("--rootfs"), rootfs.as_os_str()])
-        );
-        assert!(arguments.iter().any(|argument| *argument == OsStr::new("/bin/true")));
-    }
+    let command = process.command(&rooted(Provider::C, Some(engine.clone()))).unwrap();
+    let arguments = command.get_args().collect::<Vec<_>>();
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == [OsStr::new("--rootfs"), rootfs.as_os_str()])
+    );
+    assert!(arguments.iter().any(|argument| *argument == OsStr::new("/bin/true")));
     let wrapper = directory.path().join("runner");
     fs::write(&wrapper, b"ENGINE GUEST [args...]").unwrap();
     let mut wrapped = rooted(Provider::C, Some(engine.clone()));
@@ -270,8 +217,6 @@ fn timeout_contract() {
         timeout: Duration::from_secs(1),
         guest: vec!["-c".into(), "sleep 30 & echo 'PHASE wait us=1 ok=1'; wait".into()],
         environment: Vec::new(),
-        engine_options: Vec::new(),
-        diagnostics_proven: false,
     };
     let started = Instant::now();
     assert!(adapter::Process::new(None).sample(&run).is_err());

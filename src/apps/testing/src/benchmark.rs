@@ -8,13 +8,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 mod adapter;
-mod alternating;
-mod gate;
-mod matrix;
 pub(crate) mod report;
 mod workload;
-
-use matrix::Matrix;
 
 const LIMIT: usize = 128;
 
@@ -77,8 +72,6 @@ pub(crate) enum Provider {
     Qemu,
     #[value(name = "c-engine")]
     C,
-    #[value(name = "rust-engine")]
-    Rust,
 }
 
 impl Provider {
@@ -87,7 +80,6 @@ impl Provider {
             Self::Native => "native",
             Self::Qemu => "qemu",
             Self::C => "c-engine",
-            Self::Rust => "rust-engine",
         }
     }
 }
@@ -119,11 +111,6 @@ pub(crate) struct Run {
     guest: Vec<String>,
     #[arg(long = "env", value_parser = parse_assignment)]
     environment: Vec<(String, String)>,
-    #[arg(long = "engine-option", value_parser = parse_assignment)]
-    engine_options: Vec<(String, String)>,
-    /// The owning matrix recorded a diagnostics-on proof before this row.
-    #[arg(skip)]
-    diagnostics_proven: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -151,10 +138,6 @@ struct Summary {
 pub(crate) enum Command {
     /// Execute a benchmark provider directly.
     Run(Run),
-    /// Run the same guest through native, retained-C, and Rust engines.
-    Matrix(Matrix),
-    /// Judge one named workload against the committed Rust baseline.
-    Gate(gate::Gate),
     /// Report the named workloads and the surfaces they do and do not cover.
     Workloads,
     /// Report provider reachability.
@@ -171,8 +154,6 @@ pub(crate) struct List {
     binary: PathBuf,
     #[arg(long)]
     c_engine: Option<PathBuf>,
-    #[arg(long)]
-    rust_engine: Option<PathBuf>,
 }
 
 #[hl_design::adapter]
@@ -220,8 +201,6 @@ impl Application {
     pub fn execute(&self, command: Command) -> Result<(), String> {
         match command {
             Command::Run(run) => run.validate()?.execute(&self.process),
-            Command::Matrix(matrix) => matrix.validate()?.execute(&self.process),
-            Command::Gate(gate) => gate.execute(&self.process),
             Command::Workloads => {
                 workload::report();
                 Ok(())
@@ -232,12 +211,7 @@ impl Application {
     }
 
     fn list(&self, options: List) -> Result<(), String> {
-        let List {
-            isa,
-            binary,
-            c_engine,
-            rust_engine,
-        } = options;
+        let List { isa, binary, c_engine } = options;
         let host = std::env::consts::ARCH;
         let native = matches!((host, isa), ("aarch64", Isa::Aarch64) | ("x86_64", Isa::X86));
         let rows = [
@@ -256,12 +230,6 @@ impl Application {
                 adapter::Process::executable(&binary) && c_engine.as_deref().is_some_and(adapter::Process::executable),
                 c_engine.map_or_else(|| "not configured".into(), |path| path.display().to_string()),
             ),
-            (
-                "rust-engine",
-                adapter::Process::executable(&binary)
-                    && rust_engine.as_deref().is_some_and(adapter::Process::executable),
-                rust_engine.map_or_else(|| "not configured".into(), |path| path.display().to_string()),
-            ),
         ];
         println!("provider,arch,reachable,detail");
         for (provider, reachable, detail) in rows {
@@ -279,7 +247,7 @@ impl Run {
         if self.timeout.is_zero() {
             return Err("timeout must be positive".into());
         }
-        if matches!(self.provider, Provider::C | Provider::Rust) && self.engine.is_none() {
+        if self.provider == Provider::C && self.engine.is_none() {
             return Err("engine provider requires --engine".into());
         }
         if self.c_runner.is_some() && self.provider != Provider::C {
@@ -298,60 +266,21 @@ impl Run {
                 return Err("rootfs guest executable must be an absolute confined path".into());
             }
         }
-        if self.provider != Provider::Rust && !self.engine_options.is_empty() {
-            return Err("--engine-option is supported only by rust-engine".into());
-        }
         // The engine reads these only from --engine-option, so accepting them as
         // guest environment would apply nothing while looking like it did.
         reject_engine_only_environment(&self.environment)?;
         Ok(self)
     }
 
-    /// A native timing row must be proven native, but proving it turns on
-    /// per-boundary capture, so the proof runs as its own throwaway sample.
-    fn diagnostics_probe(&self) -> Option<Self> {
-        if !self.native_requested() || self.diagnostics_proven || self.native_diagnostics_requested() {
-            return None;
-        }
-        let mut probe = self.clone();
-        probe.engine_options.push(("HL_NATIVE_DIAGNOSTICS".into(), "1".into()));
-        probe.diagnostics_proven = true;
-        probe.repeats = 1;
-        probe.output = None;
-        Some(probe)
-    }
-
     fn diagnostics_mode(&self) -> &'static str {
-        if self.native_diagnostics_requested() {
-            "on"
-        } else {
-            "off"
-        }
-    }
-
-    fn native_requested(&self) -> bool {
-        self.provider == Provider::Rust
-            && self
-                .engine_options
-                .iter()
-                .any(|(name, value)| name == "HL_NATIVE_EXECUTION" && value == "1")
-    }
-
-    fn native_diagnostics_requested(&self) -> bool {
-        self.native_requested()
-            && self
-                .engine_options
-                .iter()
-                .any(|(name, value)| name == "HL_NATIVE_DIAGNOSTICS" && value == "1")
+        "off"
     }
 
     fn execution_mode(&self) -> &'static str {
-        match (self.provider, self.native_requested()) {
-            (Provider::Native, _) => "host-native",
-            (Provider::Qemu, _) => "qemu",
-            (Provider::C, _) => "c-engine",
-            (Provider::Rust, true) => "native-verified",
-            (Provider::Rust, false) => "interpreter",
+        match self.provider {
+            Provider::Native => "host-native",
+            Provider::Qemu => "qemu",
+            Provider::C => "c-engine",
         }
     }
 
@@ -368,10 +297,6 @@ impl Run {
             .map_err(|error| error.to_string())
             .and_then(|path| file_identity(&path))?;
         let options_identity = self.options_identity();
-        if let Some(probe) = self.diagnostics_probe() {
-            process.sample(&probe)?;
-            eprintln!("diagnostic native-proof=ok diagnostics=off-for-timed-samples");
-        }
         let mut phases: BTreeMap<String, Summary> = BTreeMap::new();
         let mut walls = Vec::with_capacity(self.repeats);
         for repetition in 0..self.repeats {
@@ -467,10 +392,6 @@ impl Run {
             identity_field(&mut digest, name.as_bytes());
             identity_field(&mut digest, value.as_bytes());
         }
-        for (name, value) in &self.engine_options {
-            identity_field(&mut digest, name.as_bytes());
-            identity_field(&mut digest, value.as_bytes());
-        }
         for argument in &self.guest {
             identity_field(&mut digest, argument.as_bytes());
         }
@@ -523,34 +444,6 @@ fn host_affinity() -> String {
 #[cfg(not(target_os = "linux"))]
 fn host_affinity() -> String {
     "unspecified".into()
-}
-
-#[cfg(target_os = "linux")]
-fn host_snapshot() -> String {
-    let load = std::fs::read_to_string("/proc/loadavg").ok().map_or_else(
-        || "unknown".into(),
-        |value| value.split_whitespace().take(3).collect::<Vec<_>>().join("/"),
-    );
-    let memory = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
-    let field = |name: &str| {
-        memory
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .map_or("unknown", str::trim)
-    };
-    format!(
-        "arch={} cpu_affinity={} load_1_5_15={} mem_available={} swap_free={}",
-        std::env::consts::ARCH,
-        host_affinity(),
-        load,
-        field("MemAvailable:"),
-        field("SwapFree:"),
-    )
-}
-
-#[cfg(not(target_os = "linux"))]
-fn host_snapshot() -> String {
-    format!("arch={} cpu_affinity={}", std::env::consts::ARCH, host_affinity())
 }
 
 impl Phase {

@@ -105,9 +105,7 @@ pub use syscall::{
     NumberTranslation, Operation as SyscallOperation, Ports as SyscallPorts, Route as SyscallRoute, SeccompDispatch,
     SeccompSyscalls, TaskSignalTimeSyscalls,
 };
-pub use syscall::{
-    CANONICAL_SYSCALLS, RETAINED_DISPATCH_ORACLE, RETAINED_NUMBER_ORACLE, X86_LEGACY_SYSCALLS, X86_TRANSLATIONS,
-};
+pub use syscall::{CANONICAL_SYSCALLS, X86_LEGACY_SYSCALLS, X86_TRANSLATIONS};
 pub use syscall::{
     Frame as SyscallFrame, FrameDecoder as SyscallFrameDecoder, FrameError, LinuxResult, RegisterView, RestartKind,
 };

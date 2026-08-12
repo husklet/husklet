@@ -47,13 +47,6 @@ pub(crate) struct Report {
 }
 
 impl Report {
-    pub(crate) fn new(baseline: impl Into<String>, paths: Vec<PathBuf>) -> Self {
-        Self {
-            baseline: baseline.into(),
-            paths,
-        }
-    }
-
     fn rows(path: &Path) -> Result<Vec<Row>, String> {
         let file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
         let mut lines = BufReader::new(file).lines();

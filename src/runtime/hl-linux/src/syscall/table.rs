@@ -15,9 +15,6 @@ pub struct LegacyDefinition {
     pub operation: Operation,
 }
 
-pub const RETAINED_NUMBER_ORACLE: &str = "../engine/src/linux_abi/number.c";
-pub const RETAINED_DISPATCH_ORACLE: &str = "../engine/src/linux_abi/syscall/dispatch.c";
-
 macro_rules! definitions {
     ($(($canonical:literal, $x86:literal, $name:literal, $family:ident)),+ $(,)?) => {
         pub const CANONICAL_SYSCALLS: &[Definition] = &[

@@ -21,19 +21,7 @@ guest binary. Generated guests and ordinary run evidence stay below the ignored
 `target/testing/bench/` tree. Export benchmark output to a reviewed path only when
 the resulting evidence is intentionally being published.
 
-For a controlled comparison of one already-built guest through the host, retained
-C engine, and Rust native engine, pin the runner to one CPU:
-
-```sh
-taskset -c 17 target/release/testing benchmark matrix \
-  --arch arm64 \
-  --binary /path/to/combined-bench-aarch64 \
-  --c-engine /path/to/c-engine \
-  --rust-engine target/release/hl-engine \
-  --out target/testing/benchmark-matrix \
-  --repeats 3 -- --divisor 1000 --phase compute
-```
-
-The matrix hashes the guest, each engine, the runner, options, and inherited CPU
-affinity. `PHASE` microseconds are measured inside the guest and exclude provider
-startup; `wall_us` deliberately includes process and provider startup.
+Use `testing product-ab` or `make bench-direct-ab` for controlled comparisons of
+already-built product artifacts. Both commands require explicit artifact and
+results paths so a comparison cannot silently select a sibling checkout or reuse
+an existing ledger.

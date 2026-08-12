@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint gate gate-app gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci test-compiles containers engine app dmg install uninstall clean bench-product-ab-prepare bench-product-ab bench-direct-ab bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
+.PHONY: all check design-lint gate gate-app gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci test-compiles containers engine app dmg install uninstall clean bench-product-ab-prepare bench-product-ab bench-direct-ab bench-workloads
 
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
@@ -186,49 +186,6 @@ bench-direct-ab:
 	target/release/testing ab --base $(AB_BASE) $(if $(AB_CANDIDATE),--candidate $(AB_CANDIDATE)) \
 	  --guest $(AB_GUEST) --rounds $(AB_ROUNDS) --results $(AB_RESULTS) \
 	  $(if $(AB_NULL_RESULTS),--null-arm-results $(AB_NULL_RESULTS))
-
-# Historical Rust-vs-retained-C development gate. It accepts an explicitly staged
-# oracle build for old-ledger investigations, but no repository target resolves or
-# builds a sibling checkout. It is not the C-primary product verdict.
-BENCH_WORKLOAD ?= compute
-BENCH_ARCH ?= arm64
-BENCH_C_BUILD ?=
-BENCH_GUEST ?= $(CURDIR)/target/testing/bench/combined/$(BENCH_ARCH)/combined-bench
-BENCH_REPEATS ?= 7
-BENCH_DIVISOR ?= 1
-BENCH_MAX_SPREAD ?= 0.05
-BENCH_GATE = target/release/testing benchmark gate \
-	  --workload $(BENCH_WORKLOAD) --arch $(BENCH_ARCH) --binary $(BENCH_GUEST) \
-	  --c-build $(BENCH_C_BUILD) --rust-engine $(CURDIR)/target/release/hl-engine \
-	  --repeats $(BENCH_REPEATS) --divisor $(BENCH_DIVISOR) --max-spread $(BENCH_MAX_SPREAD)
-
-# The guest ISA selects the lowering under test: arm64 covers
-# src/runtime/native/exec/src/arch/aarch64, amd64 covers .../x86_64. Prove an x86-64
-# change with bench-gate-amd64, never with bench-gate-arm64.
-BENCH_CC_arm64 = aarch64-linux-gnu-gcc
-BENCH_CC_amd64 = x86_64-linux-gnu-gcc
-BENCH_CC = $(BENCH_CC_$(BENCH_ARCH))
-
-bench-guest:
-	@mkdir -p $(dir $(BENCH_GUEST))
-	@command -v $(BENCH_CC) >/dev/null || { echo "install $(BENCH_CC) to build the $(BENCH_ARCH) guest"; exit 1; }
-	$(BENCH_CC) -O2 -static -o $(BENCH_GUEST) tests/bench/combined/main.c
-
-bench-gate: bench-guest
-	@test -n "$(BENCH_C_BUILD)" || { echo "set BENCH_C_BUILD to an explicitly staged oracle build"; exit 1; }
-	cargo build --release -p engine -p testing --bins --locked
-	$(BENCH_GATE)
-
-bench-gate-update: bench-guest
-	@test -n "$(BENCH_C_BUILD)" || { echo "set BENCH_C_BUILD to an explicitly staged oracle build"; exit 1; }
-	cargo build --release -p engine -p testing --bins --locked
-	$(BENCH_GATE) --update
-
-bench-gate-arm64:
-	$(MAKE) bench-gate BENCH_ARCH=arm64
-
-bench-gate-amd64:
-	$(MAKE) bench-gate BENCH_ARCH=amd64
 
 bench-workloads:
 	cargo run -q --release -p testing --bin testing -- benchmark workloads
