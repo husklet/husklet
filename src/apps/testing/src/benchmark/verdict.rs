@@ -68,15 +68,27 @@ fn collect_nulls<'a>(
     nulls: &mut BTreeMap<NullKey<'a>, f64>,
 ) -> Result<(), Error> {
     for layout in definition.commands.keys() {
-        for arm in ["E", "R", "I"] {
-            let cell = format!("{arm}{arm}");
-            for phase in phases(campaign, workload, layout) {
-                let ratios = paired(rows, workload, layout, &cell, arm, arm, phase, campaign.rounds)?;
-                nulls.insert(
-                    (workload, layout, arm, phase),
-                    qualify_null(&ratios, invariant.contains(phase.as_str()))?,
-                );
-            }
+        collect_layout_nulls(campaign, rows, invariant, workload, layout, nulls)?;
+    }
+    Ok(())
+}
+
+fn collect_layout_nulls<'a>(
+    campaign: &'a Campaign,
+    rows: &BTreeMap<&str, &Row>,
+    invariant: &BTreeSet<&str>,
+    workload: &'a str,
+    layout: &'a str,
+    nulls: &mut BTreeMap<NullKey<'a>, f64>,
+) -> Result<(), Error> {
+    for arm in ["E", "R", "I"] {
+        let cell = format!("{arm}{arm}");
+        for phase in phases(campaign, workload, layout) {
+            let ratios = paired(rows, workload, layout, &cell, arm, arm, phase, campaign.rounds)?;
+            nulls.insert(
+                (workload, layout, arm, phase),
+                qualify_null(&ratios, invariant.contains(phase.as_str()))?,
+            );
         }
     }
     Ok(())
