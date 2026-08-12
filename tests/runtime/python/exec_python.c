@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
@@ -14,11 +15,29 @@ int main(int argc, char **argv) {
     for (int index = 1; index < argc; ++index) {
         arguments[index] = argv[index];
     }
-    execv(interpreter, arguments);
-    const int error = errno;
-    fprintf(stderr, "exec-python: %s: ", interpreter);
-    errno = error;
-    perror(NULL);
+    const pid_t child = fork();
+    if (child == 0) {
+        execv(interpreter, arguments);
+        const int error = errno;
+        fprintf(stderr, "exec-python: %s: ", interpreter);
+        errno = error;
+        perror(NULL);
+        _exit(127);
+    }
+    if (child < 0) {
+        perror("exec-python: fork");
+        free(arguments);
+        return 126;
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child) {
+        perror("exec-python: waitpid");
+        free(arguments);
+        return 126;
+    }
     free(arguments);
-    return 127;
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    return 128 + WTERMSIG(status);
 }
