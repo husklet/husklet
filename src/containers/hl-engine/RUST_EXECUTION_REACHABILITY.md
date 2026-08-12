@@ -20,4 +20,11 @@ executor tree.
 Do not remove `program.rs`, loader inspection, container lifecycle, or the
 remaining `hl-runtime`, `hl-memory`, and `hl-task` crates with this closure.
 The former `hl-execution` crate was part of the deleted executor and no longer
-exists. The retained C adapter still uses runtime, memory, task, and loader services.
+exists. The retained C adapter is now under `execution/`; it still uses Rust
+runtime, memory, task, loader, provider, and worker-supervision services. Those
+host packages are not a second guest execution engine.
+
+The production workers are built wholly from this repository. The embedded C
+source root is `src/runtime/native`; `../engine` is a read-only oracle and
+`../engine_rust` is migration evidence, not a Cargo, CMake, link, or runtime
+dependency.

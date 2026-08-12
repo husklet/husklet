@@ -25,7 +25,7 @@ still present; it is not the current execution architecture. The final import
 restored the retained C engine as the production owner of guest execution,
 translation, Linux ABI service, guest signals, and in-worker lifecycle. Rust
 owns validated product launch, worker supervision, container/application
-composition, and the bounded `c_execution.rs` FFI/wire boundary.
+composition, and the bounded `execution/{wire,process,worker,ffi}` boundary.
 
 Consequently, oracle global logical-VMA pointers, identity-mapping fast paths,
 mutation-time peer stopping, standalone configuration reads, and signal/process
@@ -50,9 +50,16 @@ syscall, dirty-publication, compatibility, and performance evidence remain
 required regression coverage; they are no longer a statement that x86 is
 unwired.
 
-The standalone CLI/config/environment/launch files are last and remain
-unwired. Their purpose is a diagnostic standalone executable for oracle-floor
-measurement. They must never become the application or daemon launch path.
+The standalone CLI/config/launch chain is intentionally absent from the
+embedded source and guarded by `hl-engine`'s `c_standalone_retirement`
+integration test. Oracle-floor measurements use separately preserved binaries;
+standalone launch code must never become the application or daemon path.
+
+The generic Rust ELF inspector now supplies a typed `ET_EXEC`/`ET_DYN`
+main-image plan to the x86 worker. This is only the placement boundary: the
+retained x86 loader and translator still contain Go metadata rebasing and a V8
+embedded-blob repair for biased `ET_EXEC`. Removing those executable-specific
+branches without losing compatibility remains open.
 
 ## Conflict map
 

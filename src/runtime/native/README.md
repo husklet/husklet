@@ -9,8 +9,9 @@ container, direct-worker, and GUI APIs. Production selection is C-only and
 fails closed; there is no Rust execution fallback. The compiled host closure
 covers Linux/AArch64 and macOS/AArch64, and the product workers select both
 AArch64 and x86-64 guests. The Rust boundary in
-`src/containers/hl-engine/src/c_execution.rs` validates the launch plan and
-calls `hl_c_backend_create`/`hl_c_backend_run`; execution, Linux ABI service,
+`src/containers/hl-engine/src/execution/` validates and serializes the launch
+plan, supervises the worker, and calls `hl_c_backend_create`/
+`hl_c_backend_run` through `execution/ffi/`; execution, Linux ABI service,
 translation, and guest scheduling remain inside this C closure.
 
 The pinned, source-by-source expansion ledger is
@@ -26,6 +27,24 @@ inventory and its parity tests.
 Rust packages elsewhere under `src/runtime/` continue to own product services
 that have not moved into C.  This directory contains C only; Cargo explicitly
 excludes it from the `src/runtime/*` workspace member glob.
+
+The Rust loader classifies `ET_EXEC` and `ET_DYN` images and sends a bounded
+main-image placement plan to the x86 retained loader. That removes ELF parsing
+from the worker boundary, but it has not yet removed all executable-specific
+non-PIE repair from production C: Go metadata and a V8 embedded-blob path are
+still named there. Generic non-PIE compatibility therefore remains migration
+work; PIE and static PIE use the ordinary `ET_DYN` path.
+
+Build workers from the repository root with `make engine`. On Linux,
+`target/release/hl-aarch64 --backend-receipt` and
+`target/release/hl-x86_64 --backend-receipt` emit a hash-bound JSON receipt only
+after the production selector constructs the `retained-c` backend.
+
+The C quality entry points are `make lint-c`, `make fmt-c-check`, and
+`make fmt-c`. `make lint-c` checks the source manifest, builds every retained
+compile group with strict warnings, runs linter contract tests, and invokes
+clang-format, clang-tidy, cppcheck, and deterministic repository policies. It
+is also part of `make gate`.
 
 Current product-boundary measurements use `testing product-ab`: it stages and
 hashes completed product workers, verifies exact output, alternates explicit-C

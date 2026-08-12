@@ -1,5 +1,11 @@
 # AMD64 SIMD and string capability audit
 
+> Historical replacement-kernel record. References in this document to
+> `hl-execution`, `ExecutionMachine`, or a Rust native frontend describe the
+> deleted Rust guest executor. Current product x86 execution is owned by the
+> retained C closure under `src/runtime/native/retained`; this file remains
+> instruction-family and differential evidence for the unselected `exec/` tree.
+
 ## Retained implementation ownership
 
 The read-only oracle audit covered `../engine/src/translator/guest/x86_64/translate.c`

@@ -1,13 +1,19 @@
 # Native translated execution boundary
 
-This directory will retain the working native translated-block kernel while
-Rust takes ownership of lifecycle, Linux behavior, scheduling, and policy. It
-is not a runtime package. The application owns one opaque native executor per
-engine instance and crosses this boundary only at a fully spilled block exit.
+> Historical replacement design. The `exec/` kernel is not selected by the
+> product. Production uses the retained C closure in the sibling `retained/`
+> tree through Rust's `hl-engine/src/execution/` worker boundary. References
+> below to `hl-execution`, `ExecutionMachine`, `native/executor.rs`, or a Rust
+> production guest executor describe the deleted implementation and are kept
+> only as migration rationale.
+
+This directory preserves a candidate translated-block kernel designed while
+Rust owned guest lifecycle, scheduling, and policy. It is not a Cargo runtime
+package and must not be described as the current product engine.
 
 ## Why this boundary exists
 
-The Rust production path currently calls `ExecutionMachine::run_slice`. An
+The deleted Rust production path called `ExecutionMachine::run_slice`. An
 x86-64 instruction is fetched, decoded, and interpreted on every step.
 AArch64 retains a 256-slot cache of at most 64 decoded instructions, but only
 register-only instructions execute from it; any memory operation returns to
@@ -235,7 +241,7 @@ Performance evidence records guest instructions, translated blocks, cache hits,
 fallbacks, and wall time. `bigarr`, core workload, DBT, and soak keep their
 existing semantics and timeout budgets; a timeout increase is not evidence.
 
-## Rust dispatch ownership and retained fault seam
+## Historical Rust dispatch ownership and retained fault seam
 
 The instance cache accepts a bounded instruction-provenance batch when a
 reserved block is committed. Host publication completes first, every host
@@ -244,8 +250,9 @@ block identity become live. The compatibility `publish` entry point records one
 block-wide range; imported frontends must use `publish_map` and provide one
 record for each faultable instruction boundary.
 
-The former ordinary-C `dispatch/` and `hl_native_prepare` policy were removed.
-`hl-execution::DispatchDecision` now converts the native cache's mechanism-only
+The former ordinary-C `dispatch/` and `hl_native_prepare` policy were removed
+from this candidate kernel. The deleted `hl-execution::DispatchDecision` converted
+the native cache's mechanism-only
 observation into translate, enter immutable RX code, or retry after a mapping-
 epoch mismatch. `TranslationRequest` and `TranslationEmission` own source-range,
 capacity, body-offset, and nonempty-provenance admission before publication.
@@ -263,8 +270,10 @@ invalidation, live-block, and generation counters. Source and benchmark tests
 own threshold policy; it does not enter the production native ABI or replace
 the required pinned-C wall-time and nested-engine measurements.
 
-There is no production caller of this native tree and no Rust-to-C cache adapter
-yet. The next shared seam is therefore a coarse Rust-owned translation service
+There is no production caller of this candidate `exec/` tree. The retained C
+closure is separately selected through `execution/ffi`; it must not be confused
+with this unselected cache ABI. The proposed next seam was a coarse Rust-owned
+translation service
 made once on a miss: it receives one bounded request, produces native bytes plus
 instruction provenance, and asks the ABI shim to publish them. Frontend-private
 helper reasons must resolve to an architecture-neutral fully spilled exit before

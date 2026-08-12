@@ -53,8 +53,8 @@ flowchart TB
 ```
 
 The workspace sees Linux while Husklet translates execution, files, networking, and devices onto the host.
-This avoids the memory and startup cost of one complete virtual machine per workspace. macOS is the current
-host targets currently covered by the C engine are macOS/ARM64 and Linux/ARM64.
+This avoids the memory and startup cost of one complete virtual machine per workspace. The embedded C engine
+currently builds on macOS/ARM64 and Linux/ARM64 and runs both ARM64 and AMD64 Linux guests.
 
 ## Docker
 
@@ -77,10 +77,27 @@ terminal with reliable session restoration.
 The pinned Nix flake supplies the Rust, C, GTK, and fixture toolchain. Build the
 two production engine workers with `make engine`; the C engine source lives only
 under `src/runtime/native` and is linked into `hl-aarch64` and `hl-x86_64`.
-Run `make lint-c` for its inventory, format, analysis, and warning-strict checks,
-and `make gate` for the complete headless repository gate. `make gate-fixture`
-is optional and requires the documented Alpine fixture and a static-capable host
-C compiler.
+Rust remains the product host: it validates launch plans, supervises workers,
+and owns the container, filesystem, networking, image, daemon, and application
+services around the in-process C Linux ABI and translator. Neither build nor
+runtime reads `../engine` or `../engine_rust`.
+
+On Linux, verify a worker built by `make engine` with
+`target/release/hl-aarch64 --backend-receipt` or
+`target/release/hl-x86_64 --backend-receipt`. A successful JSON receipt names the
+`retained-c` backend and hashes the worker that actually performed selection;
+it is not a compatibility or performance result.
+
+Run `make lint-c` for its source inventory, strict-warning builds,
+clang-format, clang-tidy, cppcheck, and repository policy checks. Use
+`make fmt-c-check` for format-only verification and `make gate` for the complete
+headless repository gate. `make gate-fixture` is optional and requires the
+documented Alpine fixture and a static-capable host C compiler.
+
+ELF inspection and the main-image placement plan are generic for `ET_EXEC` and
+`ET_DYN` (PIE and static PIE), and the x86 worker consumes that typed plan. The
+remaining biased x86 `ET_EXEC` implementation still contains Go- and V8-specific
+repair paths, however, so executable-independent non-PIE support is unfinished.
 
 Performance work uses `make bench-product-ab-prepare PRODUCT_AB_RUN=<new-id>`
 followed by `make bench-product-ab PRODUCT_AB_RUN=<same-id>`. The harness refuses

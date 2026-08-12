@@ -1,5 +1,10 @@
 # AArch64 fallback boundary audit
 
+> Historical Rust-executor audit. The paths and ownership in “Rust ownership
+> and ordering” were deleted with the Rust guest executor. Production now runs
+> the retained C closure through `hl-engine/src/execution/`; the evidence below
+> applies only to the unselected `exec/` replacement candidate.
+
 ## Retained oracle
 
 The retained engine was inspected read-only at:
@@ -19,7 +24,7 @@ CPU image one instruction at a time. A store reads all source registers before
 the memory access, commits no register or PC change on an access fault, and
 advances PC only after the write. NZCV is unchanged by loads and stores.
 
-## Rust ownership and ordering
+## Historical Rust ownership and ordering
 
 - `src/runtime/native/exec/src/arch/aarch64/guard.c` owns projection checks, write
   reservation, dirty-range publication, and cold exits.
