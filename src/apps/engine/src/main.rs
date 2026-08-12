@@ -8,6 +8,15 @@ const C_CONTROL_DESCRIPTOR: &str = "HL_C_CONTROL_FD";
 
 fn main() {
     let mut arguments = std::env::args().collect::<Vec<_>>();
+    if arguments.get(1).map(String::as_str) == Some("--backend-receipt") {
+        match engine::backend_receipt(&arguments, None) {
+            Ok(receipt) => {
+                println!("{receipt}");
+                std::process::exit(0);
+            }
+            Err(_) => std::process::exit(125),
+        }
+    }
     if let Some(worker) = CWorker::capture(&arguments) {
         // The worker inherits the guest's stderr. Host diagnostics belong to the
         // supervising parent and travel over the bounded control protocol.

@@ -1,14 +1,12 @@
-//! Process entry composition for the production Rust execution path.
+//! Process entry composition for the production execution path.
 
 use crate::activation::{ActivationStreams, GuestIsa};
 use crate::composition::{ActivationChannel, CompositionError, EngineBackend, GuestMachine, RuntimeServices};
-use crate::engine::{EngineError, EngineExit, Workspace, WorkspaceId};
 #[cfg(test)]
 use crate::engine::ExitKind;
+use crate::engine::{EngineError, EngineExit, Workspace, WorkspaceId};
 use crate::launch_plan::{ConfigOrigin, DiagnosticsMode, Material, MaterialError, RuntimePlan};
 use crate::options::Options;
-use crate::runtime_machine::{HostServices, RustRuntimeFactory};
-use hl_runtime::{RuntimeAssembly, RuntimeAssemblyConfig, RuntimeDomain, RuntimeExecPort, RuntimeForkPort};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -135,11 +133,6 @@ impl Program {
             }
             _ => return Err(ProgramError::Engine(EngineError::AuthorityFailed)),
         };
-        let entropy = authority
-            .as_ref()
-            .map(|_| crate::native::GuestExecutor::prepare_entropy())
-            .transpose()
-            .map_err(ProgramError::Engine)?;
         let health = authority
             .as_ref()
             .map(|worker| {
@@ -155,7 +148,7 @@ impl Program {
         if authority.is_some() {
             crate::native::HostConfinement::apply().map_err(ProgramError::Engine)?;
         }
-        let result = Self::execute(isa, plan, authority.as_ref(), entropy, health);
+        let result = Self::execute(isa, plan, authority.as_ref(), health);
         if let Some(worker) = authority {
             worker
                 .lock()
@@ -307,46 +300,19 @@ impl Workspace for WorkspacePort {
     }
 }
 
-#[derive(Default)]
-struct LinuxServices;
-
-impl HostServices for LinuxServices {
-    fn exec_port(&self, _: &RuntimeAssembly) -> Result<Option<Arc<dyn RuntimeExecPort>>, CompositionError> {
-        Ok(None)
-    }
-
-    fn fork_port(&self, _: &RuntimeAssembly) -> Result<Option<Arc<dyn RuntimeForkPort>>, CompositionError> {
-        Ok(None)
-    }
-
-    fn validate(&self, assembly: &RuntimeAssembly) -> Result<(), CompositionError> {
-        assembly
-            .require(RuntimeDomain::Task)
-            .map_err(|_| CompositionError::RuntimeConstruction)
-    }
-}
-
 impl Program {
     #[cfg(target_os = "linux")]
     fn execute(
         isa: GuestIsa,
         plan: RuntimePlan,
         authority: Option<&Arc<std::sync::Mutex<crate::native::AuthorityWorker>>>,
-        entropy: Option<[u8; 16]>,
         health: Option<(crate::native::AuthorityHealth, crate::native::AuthorityHealth)>,
     ) -> Result<EngineExit, ProgramError> {
-        let executor = match authority {
-            Some(authority) => crate::native::GuestExecutor::authorized(
-                Arc::clone(authority),
-                entropy.ok_or(ProgramError::Engine(EngineError::LaunchFailed))?,
-            ),
-            None => crate::native::GuestExecutor::default(),
-        };
-        let factory = RustRuntimeFactory::new(
-            Arc::new(executor),
-            Arc::new(LinuxServices),
-            RuntimeAssemblyConfig::default(),
-        );
+        // Backend selection belongs to the production factory.  In particular,
+        // a direct architecture worker must not silently bypass retained C by
+        // constructing the retired Rust runtime itself.
+        let _ = authority;
+        let factory = crate::runtime::ProductionFactory;
         let services = RuntimeServices {
             activation: Arc::new(Activation),
             executable_authority: None,
@@ -373,14 +339,13 @@ impl Program {
         _: GuestIsa,
         _: RuntimePlan,
         _: Option<&Arc<std::sync::Mutex<crate::native::AuthorityWorker>>>,
-        _: Option<[u8; 16]>,
         _: Option<(crate::native::AuthorityHealth, crate::native::AuthorityHealth)>,
     ) -> Result<EngineExit, ProgramError> {
         Err(ProgramError::Unsupported)
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, target_os = "linux", feature = "rust-execution"))]
 #[path = "program_guest_test.rs"]
 mod guest_tests;
 

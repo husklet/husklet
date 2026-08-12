@@ -69,7 +69,6 @@ pub mod native_launcher {
 #[cfg(hl_retained_c)]
 mod c_execution;
 pub mod options;
-#[cfg(feature = "rust-execution")]
 pub mod program;
 #[cfg(test)]
 mod retained_platform;

@@ -1,0 +1,108 @@
+#![cfg(all(target_os = "linux", target_arch = "aarch64"))]
+
+use sha2::Digest as _;
+use std::{fs, process::Command};
+
+const LINK_BASE: u64 = 0x40_0000;
+const ENTRY_OFFSET: usize = 0x180;
+
+fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn static_aarch64(status: u16) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 4096];
+    bytes[..4].copy_from_slice(b"\x7fELF");
+    bytes[4] = 2;
+    bytes[5] = 1;
+    bytes[6] = 1;
+    put_u16(&mut bytes, 16, 2);
+    put_u16(&mut bytes, 18, 183);
+    put_u32(&mut bytes, 20, 1);
+    put_u64(&mut bytes, 24, LINK_BASE + ENTRY_OFFSET as u64);
+    put_u64(&mut bytes, 32, 64);
+    put_u16(&mut bytes, 52, 64);
+    put_u16(&mut bytes, 54, 56);
+    put_u16(&mut bytes, 56, 1);
+    put_u32(&mut bytes, 64, 1);
+    put_u32(&mut bytes, 68, 5);
+    put_u64(&mut bytes, 80, LINK_BASE);
+    put_u64(&mut bytes, 88, LINK_BASE);
+    let image_length = bytes.len() as u64;
+    put_u64(&mut bytes, 96, image_length);
+    put_u64(&mut bytes, 104, image_length);
+    put_u64(&mut bytes, 112, 4096);
+    put_u32(&mut bytes, ENTRY_OFFSET, 0xd280_0000 | u32::from(status) << 5);
+    put_u32(&mut bytes, ENTRY_OFFSET + 4, 0xd280_0ba8);
+    put_u32(&mut bytes, ENTRY_OFFSET + 8, 0xd400_0001);
+    bytes
+}
+
+#[test]
+fn direct_aarch64_worker_defaults_to_retained_c() {
+    let path = std::env::temp_dir().join(format!("hl-retained-direct-{}", std::process::id()));
+    fs::write(&path, static_aarch64(42)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hl-aarch64"))
+        .arg(&path)
+        .output()
+        .unwrap();
+    fs::remove_file(path).unwrap();
+    assert_eq!(output.status.code(), Some(42));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn receipt_is_machine_readable_and_hash_bound() {
+    let binary = env!("CARGO_BIN_EXE_hl-aarch64");
+    let output = Command::new(binary).arg("--backend-receipt").output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(receipt["schema"], "husklet-engine-backend-v1");
+    assert_eq!(receipt["backend"], "retained-c");
+    let expected = sha2::Sha256::digest(fs::read(binary).unwrap());
+    let expected = expected.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    assert_eq!(receipt["engine_sha256"], expected);
+}
+
+#[test]
+fn receipt_fails_closed_for_unselected_backends_and_guest() {
+    let aarch64 = env!("CARGO_BIN_EXE_hl-aarch64");
+    let accepted = Command::new(aarch64)
+        .args(["--backend-receipt", "--engine-option", "HL_EXECUTION_BACKEND=c"])
+        .output()
+        .unwrap();
+    assert!(accepted.status.success());
+    assert!(accepted.stderr.is_empty());
+
+    for backend in ["rust", "bogus"] {
+        let rejected = Command::new(aarch64)
+            .args([
+                "--backend-receipt",
+                "--engine-option",
+                &format!("HL_EXECUTION_BACKEND={backend}"),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(rejected.status.code(), Some(125));
+        assert!(rejected.stdout.is_empty());
+        assert!(rejected.stderr.is_empty());
+    }
+
+    let x86 = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+        .arg("--backend-receipt")
+        .output()
+        .unwrap();
+    assert_eq!(x86.status.code(), Some(125));
+    assert!(x86.stdout.is_empty());
+    assert!(x86.stderr.is_empty());
+}

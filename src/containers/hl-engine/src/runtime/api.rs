@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod execution;
-use execution::{ProductionFactory, ProductionMachine};
+pub(crate) use execution::{ProductionFactory, ProductionMachine};
 
 #[cfg(feature = "rust-execution")]
 use hl_runtime::{RuntimeAssembly, RuntimeDomain, RuntimeExecPort, RuntimeForkPort};

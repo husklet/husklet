@@ -11,7 +11,7 @@ use std::sync::Mutex;
 #[cfg(feature = "rust-execution")]
 type RustMachine = RustRuntimeMachine<crate::native::GuestExecutor>;
 
-pub(super) enum ProductionMachine {
+pub(crate) enum ProductionMachine {
     #[cfg(feature = "rust-execution")]
     Rust(Box<RustMachine>),
     #[cfg(hl_retained_c)]
@@ -19,7 +19,7 @@ pub(super) enum ProductionMachine {
 }
 
 #[cfg(hl_retained_c)]
-pub(super) struct CMachine {
+pub(crate) struct CMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launch_plan::RuntimeLaunchPlan,
     services: crate::composition::RuntimeServices,
@@ -61,7 +61,7 @@ impl CMachine {
     }
 }
 
-pub(super) struct ProductionFactory;
+pub(crate) struct ProductionFactory;
 
 #[cfg(hl_retained_c)]
 #[derive(Clone, Copy)]
@@ -344,6 +344,16 @@ mod tests {
     fn production_build_rejects_retired_rust_backend() {
         let mut plan = c_plan();
         plan.options.set("HL_EXECUTION_BACKEND", "rust", true).unwrap();
+        assert!(matches!(
+            Engine::from_plan(GuestIsa::Aarch64, plan),
+            Err(EngineError::LaunchFailed)
+        ));
+    }
+
+    #[test]
+    fn production_build_rejects_unknown_backend() {
+        let mut plan = c_plan();
+        plan.options.set("HL_EXECUTION_BACKEND", "bogus", true).unwrap();
         assert!(matches!(
             Engine::from_plan(GuestIsa::Aarch64, plan),
             Err(EngineError::LaunchFailed)

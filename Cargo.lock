@@ -552,6 +552,8 @@ dependencies = [
  "clap",
  "hl-engine",
  "hl-log",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

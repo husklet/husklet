@@ -1,5 +1,8 @@
 //! Process adapters for the packaged engine executables.
 
+use sha2::{Digest, Sha256};
+use std::io::Read as _;
+
 /// The fixed guest architecture selected by a worker executable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Guest {
@@ -21,6 +24,21 @@ impl Guest {
             Self::X86_64 => "hl-x86_64",
         }
     }
+
+    const fn isa(self) -> hl_engine::activation::GuestIsa {
+        match self {
+            Self::Aarch64 => hl_engine::activation::GuestIsa::Aarch64,
+            Self::X86_64 => hl_engine::activation::GuestIsa::X86_64,
+        }
+    }
+
+    fn named(value: &str) -> Option<Self> {
+        match value {
+            "aarch64" | "arm64" => Some(Self::Aarch64),
+            "x86_64" | "amd64" => Some(Self::X86_64),
+            _ => None,
+        }
+    }
 }
 
 /// Runs one architecture-specific engine worker process.
@@ -28,6 +46,16 @@ pub struct Worker;
 
 impl Worker {
     pub fn run(guest: Guest) -> ! {
+        let arguments = std::env::args().collect::<Vec<_>>();
+        if arguments.get(1).map(String::as_str) == Some("--backend-receipt") {
+            match backend_receipt(&arguments, Some(guest)) {
+                Ok(receipt) => {
+                    println!("{receipt}");
+                    std::process::exit(0);
+                }
+                Err(_) => std::process::exit(125),
+            }
+        }
         let logging = hl_log::EnvironmentConfig::parse(hl_log::Config::default(), std::env::vars());
         for warning in logging.warnings() {
             eprintln!("{}: {warning}", guest.program());
@@ -42,7 +70,6 @@ impl Worker {
             "engine.process.starting",
             isa = isa
         );
-        let arguments = std::env::args().collect::<Vec<_>>();
         if arguments.get(1).map(String::as_str) == Some("--c-worker") {
             let descriptor = |name: &str| {
                 let value = std::env::var(name).ok()?;
@@ -100,6 +127,77 @@ impl Worker {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Result<String, ()> {
+    if arguments.get(1).map(String::as_str) != Some("--backend-receipt") {
+        return Err(());
+    }
+    let mut options = hl_engine::options::Options::default();
+    let mut selected = forced_guest;
+    let mut index = 2;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--engine-option" => {
+                let assignment = arguments.get(index + 1).ok_or(())?;
+                let (name, value) = assignment.split_once('=').ok_or(())?;
+                options.set(name, value, true).map_err(|_| ())?;
+                index += 2;
+            }
+            "--guest-isa" if forced_guest.is_none() => {
+                selected = arguments.get(index + 1).and_then(|value| Guest::named(value));
+                if selected.is_none() {
+                    return Err(());
+                }
+                index += 2;
+            }
+            _ => return Err(()),
+        }
+    }
+    let guest = selected.unwrap_or(if cfg!(target_arch = "aarch64") {
+        Guest::Aarch64
+    } else {
+        Guest::X86_64
+    });
+    let plan = hl_engine::launch_plan::RuntimePlan {
+        rootfs: None,
+        executable_host: None,
+        arguments: vec![b"backend-receipt".to_vec()],
+        environment: Vec::new(),
+        result_path: None,
+        options,
+    };
+    // This is the production selector itself.  A receipt is emitted only when
+    // it constructs the backend named below for the requested guest ISA.
+    let selected = hl_engine::runtime::Engine::from_plan(guest.isa(), plan).map_err(|_| ())?;
+    drop(selected);
+
+    let executable = std::env::current_exe().map_err(|_| ())?;
+    let mut file = std::fs::File::open(executable).map_err(|_| ())?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|_| ())?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let hash = digest.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in hash {
+        use std::fmt::Write as _;
+        write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(format!(
+        "{{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"{hex}\"}}"
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn backend_receipt(_: &[String], _: Option<Guest>) -> Result<String, ()> {
+    Err(())
+}
+
 fn descriptor(value: hl_engine::environment::AuthorityDescriptor) -> Option<i32> {
     match value {
         hl_engine::environment::AuthorityDescriptor::Present(value) => i32::try_from(value).ok(),
@@ -109,7 +207,7 @@ fn descriptor(value: hl_engine::environment::AuthorityDescriptor) -> Option<i32>
 
 #[cfg(test)]
 mod tests {
-    use super::Guest;
+    use super::{Guest, backend_receipt};
 
     #[test]
     fn worker_identity_is_architecture_specific() {
@@ -117,5 +215,43 @@ mod tests {
         assert_eq!(Guest::Aarch64.program(), "hl-aarch64");
         assert_eq!(Guest::X86_64.name(), "x86_64");
         assert_eq!(Guest::X86_64.program(), "hl-x86_64");
+    }
+
+    #[test]
+    fn backend_receipt_is_exact_and_hash_bound() {
+        let receipt =
+            backend_receipt(&["hl-aarch64".into(), "--backend-receipt".into()], Some(Guest::Aarch64)).unwrap();
+        assert!(
+            receipt.starts_with(
+                "{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\""
+            )
+        );
+        assert!(receipt.ends_with("\"}"));
+        let hash = receipt
+            .strip_prefix("{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"")
+            .unwrap()
+            .strip_suffix("\"}")
+            .unwrap();
+        assert_eq!(hash.len(), 64);
+        assert!(
+            hash.bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        );
+    }
+
+    #[test]
+    fn backend_receipt_honors_production_selection() {
+        let arguments = |backend: &str| {
+            vec![
+                "hl-aarch64".into(),
+                "--backend-receipt".into(),
+                "--engine-option".into(),
+                format!("HL_EXECUTION_BACKEND={backend}"),
+            ]
+        };
+        assert!(backend_receipt(&arguments("c"), Some(Guest::Aarch64)).is_ok());
+        assert!(backend_receipt(&arguments("rust"), Some(Guest::Aarch64)).is_err());
+        assert!(backend_receipt(&arguments("bogus"), Some(Guest::Aarch64)).is_err());
+        assert!(backend_receipt(&arguments("c"), Some(Guest::X86_64)).is_err());
     }
 }
