@@ -1219,6 +1219,124 @@ static enum avx_dispatch_result avx_dispatch_map1_move(const hl_x86_avx_state *s
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_packed_integer_arithmetic(const hl_x86_avx_state *state,
+                                                                            struct cpu *c, struct insn *instruction,
+                                                                            uint64_t next, int width) {
+    int op = instruction->op;
+    int source = instruction->vvvv;
+    uint8_t left[64], right[64], result[64];
+    int supported = op == 0xFC || op == 0xFD || op == 0xFE || op == 0xD4 || (op >= 0xF8 && op <= 0xFB) || op == 0xEC ||
+                    op == 0xED || op == 0xE8 || op == 0xE9 || op == 0xDC || op == 0xDD || op == 0xD8 || op == 0xD9 ||
+                    op == 0xDA || op == 0xDE || op == 0xEA || op == 0xEE || op == 0xE0 || op == 0xE3 || op == 0xD5 ||
+                    op == 0xE5 || op == 0xE4 || op == 0xF5 || op == 0xF6;
+    if (!supported) return AVX_DISPATCH_UNMATCHED;
+    avx_get(c, source, left);
+    avx_get_rm(state, c, instruction, next, width, right);
+
+    if (op == 0xFC || op == 0xFD || op == 0xFE || op == 0xD4 ||
+        (op >= 0xF8 && op <= 0xFB)) { // vpaddb/w/d/q and vpsubb/w/d/q
+        int element = (op == 0xFC || op == 0xF8)   ? 1
+                      : (op == 0xFD || op == 0xF9) ? 2
+                      : (op == 0xFE || op == 0xFA) ? 4
+                                                   : 8;
+        int subtract = op >= 0xF8 && op <= 0xFB;
+        for (int offset = 0; offset < width; offset += element) {
+            uint64_t x = 0, y = 0;
+            memcpy(&x, left + offset, (size_t)element);
+            memcpy(&y, right + offset, (size_t)element);
+            uint64_t value = subtract ? x - y : x + y;
+            memcpy(result + offset, &value, (size_t)element);
+        }
+    } else if (op == 0xEC || op == 0xED || op == 0xE8 || op == 0xE9 || op == 0xDC || op == 0xDD || op == 0xD8 ||
+               op == 0xD9) { // signed/unsigned saturating add/sub
+        int word = op == 0xED || op == 0xE9 || op == 0xDD || op == 0xD9;
+        int uns = op == 0xDC || op == 0xDD || op == 0xD8 || op == 0xD9;
+        int subtract = op == 0xE8 || op == 0xE9 || op == 0xD8 || op == 0xD9;
+        int element = word ? 2 : 1;
+        for (int offset = 0; offset < width; offset += element) {
+            uint64_t x = 0, y = 0;
+            memcpy(&x, left + offset, (size_t)element);
+            memcpy(&y, right + offset, (size_t)element);
+            int64_t value;
+            if (uns) {
+                int64_t candidate = subtract ? (int64_t)x - (int64_t)y : (int64_t)x + (int64_t)y;
+                int64_t maximum = word ? 65535 : 255;
+                value = candidate < 0 ? 0 : candidate > maximum ? maximum : candidate;
+            } else {
+                int shift = 64 - element * 8;
+                int64_t signed_x = ((int64_t)x << shift) >> shift;
+                int64_t signed_y = ((int64_t)y << shift) >> shift;
+                int64_t candidate = subtract ? signed_x - signed_y : signed_x + signed_y;
+                int64_t minimum = word ? -32768 : -128;
+                int64_t maximum = word ? 32767 : 127;
+                value = candidate < minimum ? minimum : candidate > maximum ? maximum : candidate;
+            }
+            memcpy(result + offset, &value, (size_t)element);
+        }
+    } else if (op == 0xDA || op == 0xDE || op == 0xEA || op == 0xEE) { // pminub/pmaxub/pminsw/pmaxsw
+        int word = op == 0xEA || op == 0xEE;
+        int maximum = op == 0xDE || op == 0xEE;
+        if (word) {
+            for (int offset = 0; offset < width; offset += 2) {
+                int16_t x, y;
+                memcpy(&x, left + offset, 2);
+                memcpy(&y, right + offset, 2);
+                int16_t value = maximum ? (x > y ? x : y) : (x < y ? x : y);
+                memcpy(result + offset, &value, 2);
+            }
+        } else {
+            for (int offset = 0; offset < width; offset++) {
+                uint8_t x = left[offset], y = right[offset];
+                result[offset] = maximum ? (x > y ? x : y) : (x < y ? x : y);
+            }
+        }
+    } else if (op == 0xE0 || op == 0xE3) { // pavgb/pavgw
+        int element = op == 0xE0 ? 1 : 2;
+        for (int offset = 0; offset < width; offset += element) {
+            uint64_t x = 0, y = 0;
+            memcpy(&x, left + offset, (size_t)element);
+            memcpy(&y, right + offset, (size_t)element);
+            uint64_t value = (x + y + 1) >> 1;
+            memcpy(result + offset, &value, (size_t)element);
+        }
+    } else if (op == 0xD5 || op == 0xE5 || op == 0xE4) { // pmullw/pmulhw/pmulhuw
+        for (int offset = 0; offset < width; offset += 2) {
+            uint16_t x, y;
+            memcpy(&x, left + offset, 2);
+            memcpy(&y, right + offset, 2);
+            uint16_t value = op == 0xD5   ? (uint16_t)(x * y)
+                             : op == 0xE4 ? (uint16_t)(((uint32_t)x * (uint32_t)y) >> 16)
+                                          : (uint16_t)(((int32_t)(int16_t)x * (int32_t)(int16_t)y) >> 16);
+            memcpy(result + offset, &value, 2);
+        }
+    } else if (op == 0xF5) { // vpmaddwd
+        for (int offset = 0; offset < width; offset += 4) {
+            int16_t x0, x1, y0, y1;
+            memcpy(&x0, left + offset, 2);
+            memcpy(&x1, left + offset + 2, 2);
+            memcpy(&y0, right + offset, 2);
+            memcpy(&y1, right + offset + 2, 2);
+            int32_t value = (int32_t)x0 * (int32_t)y0 + (int32_t)x1 * (int32_t)y1;
+            memcpy(result + offset, &value, 4);
+        }
+    } else if (op == 0xF6) { // vpsadbw
+        memset(result, 0, sizeof(result));
+        for (int block = 0; block < width; block += 8) {
+            int sum = 0;
+            for (int offset = 0; offset < 8; offset++) {
+                int difference = (int)left[block + offset] - (int)right[block + offset];
+                sum += difference < 0 ? -difference : difference;
+            }
+            uint16_t value = (uint16_t)sum;
+            memcpy(result + block, &value, 2);
+        }
+    } else {
+        return AVX_DISPATCH_UNMATCHED;
+    }
+    avx_put(c, instruction->reg, result, width);
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -1252,6 +1370,8 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_fma(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_crypto(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
+        goto done;
 
     // ---- map 1 (0F) ----
     if (map == 1) {
@@ -1663,33 +1783,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             avx_put(c, rd, d, W);
             goto done;
         }
-        // integer add/sub by element width
-        case 0xFC:
-        case 0xFD:
-        case 0xFE:
-        case 0xD4: // vpaddb/w/d/q
-        case 0xF8:
-        case 0xF9:
-        case 0xFA:
-        case 0xFB: // vpsubb/w/d/q
-        {
-            int es = (op == 0xFC || op == 0xF8)   ? 1
-                     : (op == 0xFD || op == 0xF9) ? 2
-                     : (op == 0xFE || op == 0xFA) ? 4
-                                                  : 8;
-            int sub = (op >= 0xF8 && op <= 0xFB); // 0xF8..0xFB = psub b/w/d/q; 0xFC/FD/FE/D4 = padd
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += es) {
-                uint64_t x = 0, y = 0;
-                memcpy(&x, a + i, (size_t)es);
-                memcpy(&y, b + i, (size_t)es);
-                uint64_t r = sub ? (x - y) : (x + y);
-                memcpy(d + i, &r, (size_t)es);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
         // SSE3 horizontal FP + addsub: 7C haddps/pd, 7D hsubps/pd, D0 addsubps/pd. pp==1 => double,
         // pp==3 => single. src1=vvvv, src2=rm; horizontal ops pair within each 128-bit lane.
         case 0x7C:
@@ -1728,137 +1821,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                     }
                     memcpy(d + lane, o, 16);
                 }
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        // saturating integer add/sub, signed (EC/ED add, E8/E9 sub) and unsigned (DC/DD add, D8/D9 sub)
-        case 0xEC:
-        case 0xED:
-        case 0xE8:
-        case 0xE9:
-        case 0xDC:
-        case 0xDD:
-        case 0xD8:
-        case 0xD9: {
-            int word = (op == 0xED || op == 0xE9 || op == 0xDD || op == 0xD9);
-            int uns = (op == 0xDC || op == 0xDD || op == 0xD8 || op == 0xD9);
-            int sub = (op == 0xE8 || op == 0xE9 || op == 0xD8 || op == 0xD9);
-            int es = word ? 2 : 1;
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += es) {
-                uint64_t x = 0, y = 0;
-                memcpy(&x, a + i, (size_t)es);
-                memcpy(&y, b + i, (size_t)es);
-                int64_t o;
-                if (uns) {
-                    int64_t v = sub ? (int64_t)x - (int64_t)y : (int64_t)x + (int64_t)y;
-                    int64_t hi = word ? 65535 : 255;
-                    o = v < 0 ? 0 : v > hi ? hi : v;
-                } else {
-                    int sh = 64 - es * 8;
-                    int64_t sx = ((int64_t)x << sh) >> sh, sy = ((int64_t)y << sh) >> sh;
-                    int64_t v = sub ? sx - sy : sx + sy;
-                    int64_t lo = word ? -32768 : -128, hi = word ? 32767 : 127;
-                    o = v < lo ? lo : v > hi ? hi : v;
-                }
-                memcpy(d + i, &o, (size_t)es);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        // integer min/max: DA pminub, DE pmaxub, EA pminsw, EE pmaxsw
-        case 0xDA:
-        case 0xDE:
-        case 0xEA:
-        case 0xEE: {
-            int word = (op == 0xEA || op == 0xEE);
-            int is_max = (op == 0xDE || op == 0xEE);
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            if (word) { // signed word min/max
-                for (int i = 0; i < W; i += 2) {
-                    int16_t x, y;
-                    memcpy(&x, a + i, 2);
-                    memcpy(&y, b + i, 2);
-                    int16_t v = is_max ? (x > y ? x : y) : (x < y ? x : y);
-                    memcpy(d + i, &v, 2);
-                }
-            } else { // unsigned byte min/max
-                for (int i = 0; i < W; i++) {
-                    uint8_t x = a[i], y = b[i];
-                    d[i] = is_max ? (x > y ? x : y) : (x < y ? x : y);
-                }
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        // unsigned average, rounded: E0 pavgb, E3 pavgw
-        case 0xE0:
-        case 0xE3: {
-            int es = (op == 0xE0) ? 1 : 2;
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += es) {
-                uint64_t x = 0, y = 0;
-                memcpy(&x, a + i, (size_t)es);
-                memcpy(&y, b + i, (size_t)es);
-                uint64_t o = (x + y + 1) >> 1;
-                memcpy(d + i, &o, (size_t)es);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        // word multiply: D5 pmullw (low), E5 pmulhw (signed high), E4 pmulhuw (unsigned high)
-        case 0xD5:
-        case 0xE5:
-        case 0xE4: {
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += 2) {
-                uint16_t xu, yu;
-                memcpy(&xu, a + i, 2);
-                memcpy(&yu, b + i, 2);
-                uint16_t o;
-                if (op == 0xD5)
-                    o = (uint16_t)(xu * yu);
-                else if (op == 0xE4)
-                    o = (uint16_t)(((uint32_t)xu * (uint32_t)yu) >> 16);
-                else
-                    o = (uint16_t)(((int32_t)(int16_t)xu * (int32_t)(int16_t)yu) >> 16);
-                memcpy(d + i, &o, 2);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0xF5: { // vpmaddwd: dword = a.word[2i]*b.word[2i] + a.word[2i+1]*b.word[2i+1] (signed)
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += 4) {
-                int16_t x0, x1, y0, y1;
-                memcpy(&x0, a + i, 2);
-                memcpy(&x1, a + i + 2, 2);
-                memcpy(&y0, b + i, 2);
-                memcpy(&y1, b + i + 2, 2);
-                int32_t o = (int32_t)x0 * (int32_t)y0 + (int32_t)x1 * (int32_t)y1;
-                memcpy(d + i, &o, 4);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0xF6: { // vpsadbw: per 8-byte block, sum of |a-b| -> low word of each qword, rest zero
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            memset(d, 0, 64);
-            for (int q = 0; q < W; q += 8) {
-                int sum = 0;
-                for (int k = 0; k < 8; k++) {
-                    int diff = (int)a[q + k] - (int)b[q + k];
-                    sum += diff < 0 ? -diff : diff;
-                }
-                uint16_t o = (uint16_t)sum;
-                memcpy(d + q, &o, 2);
             }
             avx_put(c, rd, d, W);
             goto done;
