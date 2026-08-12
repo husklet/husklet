@@ -130,7 +130,8 @@ impl GuestMachine for ProductionMachine {
     }
 
     fn wait(&self) -> Result<EngineExit, EngineError> {
-        Ok(Self::exit(&self.current()?))
+        let engine = self.current()?;
+        Ok(Self::exit(engine.as_ref()))
     }
 
     fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
@@ -142,3 +143,4 @@ impl GuestMachine for ProductionMachine {
         self.current()?.request(kind, signal).map_err(|_| EngineError::StopFailed)
     }
 }
+#![allow(unsafe_code)]
