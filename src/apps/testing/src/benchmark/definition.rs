@@ -231,6 +231,17 @@ fn verify_artifact(label: &str, artifact: &Artifact, directory: bool) -> Result<
 }
 
 fn tree_hash(root: &Path) -> Result<String, Error> {
+    fn permissions(metadata: &fs::Metadata, identity: &mut FramedIdentity) -> Result<(), Error> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            identity.field(&(metadata.permissions().mode() & 0o7777).to_le_bytes())?;
+        }
+        #[cfg(not(unix))]
+        identity.field(&[u8::from(metadata.permissions().readonly())])?;
+        Ok(())
+    }
+
     fn walk(root: &Path, directory: &Path, identity: &mut FramedIdentity) -> Result<(), Error> {
         let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
         entries.sort_by_key(std::fs::DirEntry::file_name);
@@ -239,6 +250,7 @@ fn tree_hash(root: &Path) -> Result<String, Error> {
             let relative = path.strip_prefix(root)?;
             identity.field(relative.as_os_str().as_encoded_bytes())?;
             let metadata = fs::symlink_metadata(&path)?;
+            permissions(&metadata, identity)?;
             if metadata.file_type().is_symlink() {
                 identity.field(b"L")?;
                 identity.field(fs::read_link(path)?.as_os_str().as_encoded_bytes())?;
@@ -254,7 +266,8 @@ fn tree_hash(root: &Path) -> Result<String, Error> {
         }
         Ok(())
     }
-    let mut identity = FramedIdentity::new(b"husklet-rootfs-tree-v1")?;
+    let mut identity = FramedIdentity::new(b"husklet-rootfs-tree-v2")?;
+    permissions(&fs::symlink_metadata(root)?, &mut identity)?;
     walk(root, root, &mut identity)?;
     Ok(identity.finish())
 }
@@ -347,6 +360,21 @@ mod tests {
             sha256: FramedIdentity::of(b"engine"),
         };
         assert!(verify_artifact("engine", &artifact, false).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rootfs_identity_includes_executable_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let guest = directory.path().join("guest");
+        fs::write(&guest, b"same bytes").unwrap();
+        fs::set_permissions(&guest, fs::Permissions::from_mode(0o644)).unwrap();
+        let before = super::tree_hash(directory.path()).unwrap();
+        fs::set_permissions(&guest, fs::Permissions::from_mode(0o755)).unwrap();
+        let after = super::tree_hash(directory.path()).unwrap();
+        assert_ne!(before, after, "chmod must change the rootfs artifact identity");
     }
 
     #[cfg(unix)]
