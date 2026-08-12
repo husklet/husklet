@@ -1062,7 +1062,26 @@ static int fd_in_a0(uint64_t nr) {
 // ring pointers -- and runs the REAL service_local() -- identical jail/proc/overlay policy, identical
 // bytes. NOTE: it MUST call service_local() (the canonical switch), not service() -- service() would
 // re-enter syscall_route() in this (g_untrusted) process and recurse onto the ring.
-static void sentry_service_one(struct sentry_ring *R) {
+static int sentry_control_operation(uint64_t number) {
+    switch (number) {
+    case SENTRY_OP_FDPASS:
+    case SENTRY_OP_ADOPT:
+    case SENTRY_OP_FORK_PREPARE:
+    case SENTRY_OP_FORK:
+    case SENTRY_OP_FORK_CANCEL:
+    case SENTRY_OP_EXEC:
+    case SENTRY_OP_EXIT:
+    case SENTRY_OP_REAP:
+    case SENTRY_OP_THREAD_PREPARE:
+    case SENTRY_OP_BIND:
+    case SENTRY_OP_THREAD_CANCEL:
+    case SENTRY_OP_THREAD_EXIT:
+    case 436: return 1;
+    default: return 0;
+    }
+}
+
+static void sentry_service_control(struct sentry_ring *R) {
     // fd-lend (item 3): not a syscall -- lend a sentry-owned fd to the worker over THIS ring's control
     // socketpair (SCM_RIGHTS) for a file-backed mmap; the worker maps it locally then drops it. OWNERSHIP
     // (P1, finding F): the lendable fd MUST be one the sentry opened ON BEHALF OF THE GUEST (tracked at
@@ -1207,6 +1226,13 @@ static void sentry_service_one(struct sentry_ring *R) {
             R->ret = 0;
         }
         R->nserved++;
+        return;
+    }
+}
+
+static void sentry_service_one(struct sentry_ring *R) {
+    if (sentry_control_operation(R->rawnr)) {
+        sentry_service_control(R);
         return;
     }
     struct cpu tmp;
