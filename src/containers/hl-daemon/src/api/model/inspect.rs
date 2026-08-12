@@ -1,10 +1,10 @@
-use super::ContainerMetadata;
 #[cfg(feature = "runtime")]
 use super::format::{ImageName, PortKey, Ports, Signal};
 #[cfg(feature = "runtime")]
 use super::lifecycle::State as LifecycleState;
 #[cfg(feature = "runtime")]
 use super::timestamp::Timestamp;
+use super::{ContainerDetails, ContainerMetadata};
 #[cfg(feature = "runtime")]
 use hl_container::{ContainerState as RuntimeState, ExitStatus};
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "PascalCase")]
 pub struct InspectContainer {
     #[serde(flatten)]
-    pub metadata: ContainerMetadata,
+    pub details: ContainerDetails,
     pub path: String,
     pub args: Vec<String>,
     pub name: String,
@@ -24,10 +24,20 @@ pub struct InspectContainer {
     pub config: ContainerConfig,
     pub host_config: InspectHostConfig,
     pub network_settings: NetworkSettings,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size_rw: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size_root_fs: Option<i64>,
+}
+
+impl std::ops::Deref for InspectContainer {
+    type Target = ContainerDetails;
+
+    fn deref(&self) -> &Self::Target {
+        &self.details
+    }
+}
+
+impl std::ops::DerefMut for InspectContainer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.details
+    }
 }
 
 #[cfg(feature = "runtime")]
@@ -199,10 +209,14 @@ impl From<hl_container::Container> for InspectContainer {
         let image = ImageName::from(&value.spec).to_string();
         let health = value.health.as_ref().map(HealthState::from);
         Self {
-            metadata: ContainerMetadata {
-                id: value.id.to_string(),
-                image,
-                mounts: Vec::new(),
+            details: ContainerDetails {
+                metadata: ContainerMetadata {
+                    id: value.id.to_string(),
+                    image,
+                    mounts: Vec::new(),
+                },
+                size_rw: None,
+                size_root_fs: None,
             },
             path: value.spec.process.program.clone(),
             args: value.spec.process.args.clone(),
@@ -267,8 +281,6 @@ impl From<hl_container::Container> for InspectContainer {
                 ports: Ports::from(&value.spec).bindings(),
                 networks: BTreeMap::new(),
             },
-            size_rw: None,
-            size_root_fs: None,
         }
     }
 }

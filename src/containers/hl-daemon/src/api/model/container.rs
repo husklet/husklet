@@ -15,7 +15,7 @@ use std::fmt;
 #[serde(default)]
 pub struct Container {
     #[serde(flatten)]
-    pub metadata: ContainerMetadata,
+    pub details: ContainerDetails,
     pub names: Vec<String>,
     pub command: String,
     pub created: i64,
@@ -24,10 +24,32 @@ pub struct Container {
     pub ports: Vec<crate::api::PortSummary>,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+}
+
+/// Docker identity and filesystem usage shared by summary and inspection views.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, rename_all = "PascalCase")]
+pub struct ContainerDetails {
+    #[serde(flatten)]
+    pub metadata: ContainerMetadata,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_rw: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_root_fs: Option<i64>,
+}
+
+impl std::ops::Deref for Container {
+    type Target = ContainerDetails;
+
+    fn deref(&self) -> &Self::Target {
+        &self.details
+    }
+}
+
+impl std::ops::DerefMut for Container {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.details
+    }
 }
 
 /// Docker wire metadata shared by container summary and inspection views.
@@ -113,10 +135,14 @@ impl From<hl_container::Container> for Container {
             .collect::<Vec<_>>()
             .join(" ");
         Self {
-            metadata: ContainerMetadata {
-                id: value.id.to_string(),
-                image,
-                mounts: Vec::new(),
+            details: ContainerDetails {
+                metadata: ContainerMetadata {
+                    id: value.id.to_string(),
+                    image,
+                    mounts: Vec::new(),
+                },
+                size_rw: None,
+                size_root_fs: None,
             },
             names: value
                 .spec
@@ -130,8 +156,6 @@ impl From<hl_container::Container> for Container {
             status: lifecycle.status,
             ports: Ports::from(&value.spec).summaries(),
             labels: value.spec.labels,
-            size_rw: None,
-            size_root_fs: None,
         }
     }
 }

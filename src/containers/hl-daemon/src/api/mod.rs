@@ -21,15 +21,15 @@ mod volume;
 pub use event::{Actor, Event, EventFilter, EventQuery};
 pub use model::{
     Attachment, Authentication, BindOptions, BindReadOnly, BlockIo, BuildPrune, Change, ChangeKind, CommitOptions,
-    CompatibilityFields, Container, ContainerConfig, ContainerCreation, ContainerLogs, ContainerMetadata,
-    ContainerPrune, ContainerState, Cpu, CpuUsage, CreateContainer, Credentials, DiskUsage, Distribution, DockerError,
-    DockerMount, DriverConfig, EndpointSettings, EndpointsConfig, EnvError, EnvVar, EnvVars, ExecConfig, ExecCreated,
-    ExecInspect, ExecOpen, ExecProcess, ExecStart, HealthLog, HealthState, Healthcheck, HostConfig, ImageCommit,
-    ImageConfig, ImageDelete, ImageHistory, ImageLoad, ImagePrune, ImageSummary, InspectContainer, InspectHostConfig,
-    InspectImage, LogOptions, LogProtocolError, LogStreams, Memory, MountPoint, NetworkSettings, NetworkingConfig,
-    PathStat, Pids, Plugin, ProgressDetail, PullProgress, PushAux, PushProgress, RestartPolicy, Search, Stats,
-    SystemInfo, SystemPrune, Throttling, Top, Update, UpdateResult, UsageData, Version, VolumeOptions, VolumeUsage,
-    Wait,
+    CompatibilityFields, Container, ContainerConfig, ContainerCreation, ContainerDetails, ContainerLogs,
+    ContainerMetadata, ContainerPrune, ContainerState, Cpu, CpuUsage, CreateContainer, Credentials, DiskUsage,
+    Distribution, DockerError, DockerMount, DriverConfig, EndpointSettings, EndpointsConfig, EnvError, EnvVar, EnvVars,
+    ExecConfig, ExecCreated, ExecInspect, ExecOpen, ExecProcess, ExecStart, HealthLog, HealthState, Healthcheck,
+    HostConfig, ImageCommit, ImageConfig, ImageDelete, ImageHistory, ImageLoad, ImagePrune, ImageSummary,
+    InspectContainer, InspectHostConfig, InspectImage, LogOptions, LogProtocolError, LogStreams, Memory, MountPoint,
+    NetworkSettings, NetworkingConfig, PathStat, Pids, Plugin, ProgressDetail, PullProgress, PushAux, PushProgress,
+    RestartPolicy, Search, Stats, SystemInfo, SystemPrune, Throttling, Top, Update, UpdateResult, UsageData, Version,
+    VolumeOptions, VolumeUsage, Wait,
 };
 pub use network::{
     ConfigFrom, EndpointConfig, EndpointIpam, Ipam, IpamConfig, Network, NetworkConnect, NetworkContainer,

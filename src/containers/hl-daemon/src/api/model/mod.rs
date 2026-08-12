@@ -21,7 +21,7 @@ mod timestamp;
 
 pub use auth::{Authentication, Credentials};
 pub use configuration::{CompatibilityFields, Healthcheck, RestartPolicy, Update, UpdateResult};
-pub use container::{Container, ContainerMetadata, ContainerPrune, Wait};
+pub use container::{Container, ContainerDetails, ContainerMetadata, ContainerPrune, Wait};
 pub use create::{
     BindOptions, BindReadOnly, ContainerCreation, CreateContainer, DockerMount, DriverConfig, EndpointsConfig,
     HostConfig, NetworkingConfig, VolumeOptions,
