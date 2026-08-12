@@ -363,16 +363,11 @@ mod tests {
 
     #[test]
     fn an_idle_listener_yields_the_accept_loop_instead_of_parking_it() {
-        let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let host = reservation.local_addr().unwrap().port();
-        drop(reservation);
-        let listener = Publication {
-            address: [127, 0, 0, 1],
-            host,
-            guest: 1,
-        }
-        .bind()
-        .unwrap();
+        // Keep the kernel-selected ephemeral port continuously owned. Closing a reservation and
+        // rebinding its port leaves a race with every other test and service on the host. This
+        // listener is deliberately blocking: the assertion must catch a timeout path that falls
+        // through into accept() and parks instead of being masked by Publication's O_NONBLOCK.
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let started = std::time::Instant::now();
         assert!(matches!(accept(&listener), Accepted::Idle));
         assert!(
