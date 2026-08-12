@@ -52,14 +52,6 @@ impl Default for Cell {
     }
 }
 
-impl Cell {
-    /// Is this cell visually empty (a space with default colors/attrs)?
-    #[must_use]
-    pub fn is_blank(&self) -> bool {
-        self.ch == ' ' && self.bg == Color::Default && self.attrs.is_empty()
-    }
-}
-
 /// The screen grid + cursor. `(0,0)` is the top-left cell.
 #[derive(Clone, Debug)]
 pub struct Grid {
