@@ -42,6 +42,9 @@ This is the authoritative checklist for the C-primary production migration. Chec
   target's actual shared engine without executing foreign binaries. Native
   macOS CI links and runs the same consumers against its Cargo-built dylib;
   this proves public ABI loading, not Linux-guest compatibility behavior.
+  Each Linux ISA cross-check also requires the same exact thirteen-symbol
+  dynamic export set and SONAME, preventing ARM64/AMD64 ABI drift without
+  claiming that a foreign-target library was executed.
 
 ## Host architecture
 

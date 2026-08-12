@@ -599,6 +599,26 @@
             native_libraries=(target/${target}/debug/build/hl-native-*/out/libhl_native_engine.so)
             test "''${#native_libraries[@]}" -eq 1
             test -s "''${native_libraries[0]}"
+            ${targetPkgs.stdenv.cc.targetPrefix}readelf -d "''${native_libraries[0]}" \
+              | grep -F 'Library soname: [libhl_native_engine.so]' >/dev/null
+            ${targetPkgs.stdenv.cc.targetPrefix}readelf --dyn-syms --wide "''${native_libraries[0]}" \
+              | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
+              | sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
+            printf '%s\n' \
+              hl_c_backend_create \
+              hl_c_backend_destroy \
+              hl_c_backend_executable_discard \
+              hl_c_backend_executable_open \
+              hl_c_backend_exit_detail \
+              hl_c_backend_exit_kind \
+              hl_c_backend_exit_status \
+              hl_c_backend_leak_check_nonvacuity \
+              hl_c_backend_request \
+              hl_c_backend_run \
+              hl_c_backend_translation_count \
+              hl_engine_abi \
+              hl_engine_version > "$TMPDIR/expected-exports"
+            diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
             native_directory="$(dirname "''${native_libraries[0]}")"
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
               -Isrc/runtime/hl-native/src/native/include \
@@ -617,7 +637,7 @@
           '';
           installPhase = ''
             mkdir -p "$out"
-            printf '%s\n' ${lib.escapeShellArg "full Cargo/C shared-engine compile plus strict C/C++ LP64 public-ABI link contracts for ${target}"} > "$out/evidence"
+            printf '%s\n' ${lib.escapeShellArg "full Cargo/C shared-engine compile, exact SONAME/export parity, and strict C/C++ LP64 public-ABI link contracts for ${target}"} > "$out/evidence"
           '';
         };
 
