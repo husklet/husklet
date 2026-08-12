@@ -230,14 +230,14 @@ struct sentry_shm {
 
 static struct sentry_shm *g_shm;
 static pid_t g_sentry_pid;
-static int g_ctl[SENTRY_NRINGS][2];   // per-ring AF_UNIX control socketpair: [.][0]=worker end, [.][1]=sentry
-static pid_t g_worker_pid;            // this worker process's pid (changes in a forked-child worker)
-static pid_t g_sentry_owner_pid;      // ONLY the process that forked the sentry may signal-quit + reap it
-static _Atomic int g_guest_children;  // live guest-forked child WORKER processes owned by THIS worker proc
-static _Atomic int g_worker_threads;  // live guest threads in this worker; the initial thread contributes one
+static int g_ctl[SENTRY_NRINGS][2];           // per-ring AF_UNIX control socketpair: [.][0]=worker end, [.][1]=sentry
+static pid_t g_worker_pid;                    // this worker process's pid (changes in a forked-child worker)
+static pid_t g_sentry_owner_pid;              // ONLY the process that forked the sentry may signal-quit + reap it
+static _Atomic int g_guest_children;          // live guest-forked child WORKER processes owned by THIS worker proc
+static _Atomic int g_worker_threads;          // live guest threads in this worker; the initial thread contributes one
 static _Atomic int g_sentry_process_released; // child process table has been released exactly once
-static __thread int t_ring = -1;      // this worker thread's claimed ring index (claimed lazily on first use)
-static __thread uint32_t t_token = 0; // this worker thread's unique nonzero ring-ownership token
+static __thread int t_ring = -1;              // this worker thread's claimed ring index (claimed lazily on first use)
+static __thread uint32_t t_token = 0;         // this worker thread's unique nonzero ring-ownership token
 static int64_t sentry_ctl_op(uint32_t op, uint64_t a0, uint64_t a1);
 static void ring_release(void);
 
@@ -281,9 +281,7 @@ static void sentry_thread_enter(struct cpu *child) {
     if (!g_untrusted) return;
     pthread_mutex_lock(&g_thread_start_lock);
     uint32_t token = 0;
-    if (hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &token) == 0) {
-        t_token = token;
-    }
+    if (hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &token) == 0) { t_token = token; }
     pthread_mutex_unlock(&g_thread_start_lock);
 }
 
