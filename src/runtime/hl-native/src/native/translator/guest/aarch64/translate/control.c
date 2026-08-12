@@ -25,6 +25,11 @@ struct direct_call_state {
     int *context_count;
 };
 
+static enum translation_step translate_unconditional_branch(uint64_t *guest_pc, uint32_t instruction,
+                                                            struct unconditional_branch_state *state);
+static enum translation_step translate_direct_call(uint64_t *guest_pc, uint32_t instruction,
+                                                   struct direct_call_state *state);
+
 struct deferred_branch;
 
 struct conditional_branch_state {
@@ -46,6 +51,46 @@ static enum translation_step translate_compare_zero_branch(uint64_t *guest_pc, u
                                                            struct conditional_branch_state *state);
 static enum translation_step translate_test_bit_branch(uint64_t *guest_pc, uint32_t instruction,
                                                        struct conditional_branch_state *state);
+static enum translation_step translate_indirect_control(uint64_t *guest_pc, uint32_t instruction,
+                                                        struct inline_context *contexts, int *context_count);
+static int translate_tls_instruction(uint32_t instruction);
+static enum translation_step translate_system_instruction(uint64_t guest_pc, uint32_t instruction);
+static enum translation_step translate_pc_relative_address(uint64_t guest_pc, uint32_t instruction,
+                                                           uint64_t *guest_end);
+static int translate_literal_load(uint64_t guest_pc, uint32_t instruction);
+static enum translation_step translate_pointer_authentication(uint32_t instruction);
+
+static void prepare_vector_control(uint64_t start, uint64_t guest_pc, uint32_t instruction) {
+    if (g_blk_vdirty || !insn_touches_vreg(instruction)) return;
+
+    /* Mark the region before its first vector write so every later exit spills vector state. */
+    e_str(CPUREG, CPUREG, (int)OFF_VDIRTY);
+    g_blk_vdirty = 1;
+    if (g_tier2_build && guest_pc == start) {
+        /* The folded back-edge skips the idempotent dirty store but must retain its async IRQ poll. */
+        g_t2_loop_top = g_cp;
+        e_ldr(16, CPUREG, OFF_IRQ);
+        g_t2_irq_patch = (uint32_t *)g_cp;
+        emit32(0);
+    }
+}
+
+struct control_dispatch_state {
+    uint64_t start;
+    uint64_t *guest_end;
+    void *host;
+    void *body;
+    uint64_t *seen;
+    int *seen_count;
+    int *trace_blocks;
+    int *conditional_count;
+    struct deferred_branch *deferred;
+    int *deferred_count;
+    int in_exclusive_region;
+    int stitch_allowed;
+    struct inline_context *contexts;
+    int *context_count;
+};
 
 static enum translation_step translate_conditional_control(uint64_t *guest_pc, uint32_t instruction,
                                                            struct conditional_branch_state *state) {
@@ -54,6 +99,63 @@ static enum translation_step translate_conditional_control(uint64_t *guest_pc, u
     step = translate_compare_zero_branch(guest_pc, instruction, state);
     if (step != TRANSLATION_UNHANDLED) return step;
     return translate_test_bit_branch(guest_pc, instruction, state);
+}
+
+static enum translation_step translate_control_instruction(uint64_t *guest_pc, uint32_t instruction,
+                                                           struct control_dispatch_state *state) {
+    if (instruction == 0xD4000001u) {
+        emit_exit_const(*guest_pc, R_SYSCALL);
+        return TRANSLATION_STOP;
+    }
+    struct unconditional_branch_state direct_branch = {
+        .start = state->start,
+        .seen = state->seen,
+        .seen_count = state->seen_count,
+        .trace_blocks = state->trace_blocks,
+        .stitch_allowed = state->stitch_allowed,
+    };
+    enum translation_step step = translate_unconditional_branch(guest_pc, instruction, &direct_branch);
+    if (step != TRANSLATION_UNHANDLED) return step;
+    struct direct_call_state direct_call = {
+        .host = state->host,
+        .contexts = state->contexts,
+        .context_count = state->context_count,
+    };
+    step = translate_direct_call(guest_pc, instruction, &direct_call);
+    if (step != TRANSLATION_UNHANDLED) return step;
+    step = translate_indirect_control(guest_pc, instruction, state->contexts, state->context_count);
+    if (step != TRANSLATION_UNHANDLED) return step;
+    struct conditional_branch_state conditional = {
+        .start = state->start,
+        .body = state->body,
+        .seen = state->seen,
+        .seen_count = state->seen_count,
+        .trace_blocks = state->trace_blocks,
+        .conditional_count = state->conditional_count,
+        .deferred = state->deferred,
+        .deferred_count = state->deferred_count,
+        .in_exclusive_region = state->in_exclusive_region,
+        .stitch_allowed = state->stitch_allowed,
+    };
+    step = translate_conditional_control(guest_pc, instruction, &conditional);
+    if (step != TRANSLATION_UNHANDLED) return step;
+    if (translate_tls_instruction(instruction)) {
+        *guest_pc += 4;
+        return TRANSLATION_CONTINUE;
+    }
+    step = translate_system_instruction(*guest_pc, instruction);
+    if (step == TRANSLATION_CONTINUE) *guest_pc += 4;
+    if (step != TRANSLATION_UNHANDLED) return step;
+    step = translate_pc_relative_address(*guest_pc, instruction, state->guest_end);
+    if (step == TRANSLATION_CONTINUE) *guest_pc += 4;
+    if (step != TRANSLATION_UNHANDLED) return step;
+    if (translate_literal_load(*guest_pc, instruction)) {
+        *guest_pc += 4;
+        return TRANSLATION_CONTINUE;
+    }
+    step = translate_pointer_authentication(instruction);
+    if (step == TRANSLATION_CONTINUE) *guest_pc += 4;
+    return step;
 }
 
 static enum translation_step translate_unconditional_branch(uint64_t *guest_pc, uint32_t instruction,

@@ -822,28 +822,7 @@ static void *translate_block(uint64_t gpc) {
         provenance_fault_capable =
             ((in & 0x0A000000u) == 0x08000000u) || provenance_major == 0xA || provenance_major == 0xB;
         g_emit_gpc = gpc; // IRQSLIM: tag the current guest PC for the forward/backward edge test in emit_chain_exit
-        // at the FIRST vector-touching instruction of the region, store the (nonzero) cpu pointer
-        // into cpu->vdirty so a later (possibly chained-to) syscall exit takes the full V spill. Emitted
-        // once per region (g_blk_vdirty latch); flag-neutral `str` runs before the vector write. Regions are
-        // linear (taken branches exit, only fall-through continues), so the first write dominates all later
-        // vector writes -> one store covers every path. Zero cost on vector-free (integer/syscall) blocks.
-        if (!g_blk_vdirty && insn_touches_vreg(in)) {
-            e_str(CPUREG, CPUREG, (int)OFF_VDIRTY);
-            g_blk_vdirty = 1;
-            // W4E tier-2 vdirty hoist: only in the promoter recompile, and only when this V-writing
-            // insn is the block's FIRST (== the self-loop top). Emit a fresh inline async poll right
-            // after the store and record its address so the folded back-edge lands here -- skipping the
-            // idempotent store while still polling cpu->irq every iteration (IRQSLIM back-edge invariant).
-            // Every block ENTRY still runs the store first: the header poll path (body+0) falls straight
-            // in, and a forward chain (body+g_fwdskip) lands exactly on the store. Non-self-loop V-first
-            // blocks harmlessly gain one extra entry poll; g_t2_loop_top then goes unused.
-            if (g_tier2_build && gpc == start) {
-                g_t2_loop_top = g_cp;
-                e_ldr(16, CPUREG, OFF_IRQ); // ldr x16, [cpu, #irq]
-                g_t2_irq_patch = (uint32_t *)g_cp;
-                emit32(0); // cbnz x16, shared out-of-line Lirq
-            }
-        }
+        prepare_vector_control(start, gpc, in);
 
         uint64_t consumed = translate_special_instruction(gpc, start, tail_carry_ldp, in, &in_excl);
         if (consumed) {
@@ -855,30 +834,10 @@ static void *translate_block(uint64_t gpc) {
         // region here so the branches below take the normal exit path instead of overflowing defer[].
         if (in_excl && ndefer >= (int)(sizeof defer / sizeof defer[0])) in_excl = 0;
 
-        // svc #0
-        if (in == 0xD4000001u) {
-            emit_exit_const(gpc, R_SYSCALL);
-            break;
-        }
-        struct unconditional_branch_state direct_branch_state = {
+        struct control_dispatch_state control = {
             .start = start,
-            .seen = seen,
-            .seen_count = &nseen,
-            .trace_blocks = &trace_blk,
-            .stitch_allowed = STITCH_OK,
-        };
-        enum translation_step direct_branch_step = translate_unconditional_branch(&gpc, in, &direct_branch_state);
-        if (direct_branch_step == TRANSLATION_CONTINUE) continue;
-        if (direct_branch_step == TRANSLATION_STOP) break;
-        struct direct_call_state direct_call_state = {.host = host, .contexts = ctx, .context_count = &nctx};
-        enum translation_step direct_call_step = translate_direct_call(&gpc, in, &direct_call_state);
-        if (direct_call_step == TRANSLATION_CONTINUE) continue;
-        if (direct_call_step == TRANSLATION_STOP) break;
-        enum translation_step indirect_step = translate_indirect_control(&gpc, in, ctx, &nctx);
-        if (indirect_step == TRANSLATION_CONTINUE) continue;
-        if (indirect_step == TRANSLATION_STOP) break;
-        struct conditional_branch_state branch_state = {
-            .start = start,
+            .guest_end = &guest_end,
+            .host = host,
             .body = body,
             .seen = seen,
             .seen_count = &nseen,
@@ -888,40 +847,12 @@ static void *translate_block(uint64_t gpc) {
             .deferred_count = &ndefer,
             .in_exclusive_region = in_excl,
             .stitch_allowed = STITCH_OK,
+            .contexts = ctx,
+            .context_count = &nctx,
         };
-        enum translation_step conditional_step = translate_conditional_control(&gpc, in, &branch_state);
-        if (conditional_step == TRANSLATION_CONTINUE) continue;
-        if (conditional_step == TRANSLATION_STOP) break;
-
-        if (translate_tls_instruction(in)) {
-            gpc += 4;
-            continue;
-        }
-
-        enum translation_step system_step = translate_system_instruction(gpc, in);
-        if (system_step == TRANSLATION_CONTINUE) {
-            gpc += 4;
-            continue;
-        }
-        if (system_step == TRANSLATION_STOP) break;
-
-        enum translation_step address_step = translate_pc_relative_address(gpc, in, &guest_end);
-        if (address_step == TRANSLATION_CONTINUE) {
-            gpc += 4;
-            continue;
-        }
-        if (address_step == TRANSLATION_STOP) break;
-        if (translate_literal_load(gpc, in)) {
-            gpc += 4;
-            continue;
-        }
-
-        enum translation_step authentication_step = translate_pointer_authentication(in);
-        if (authentication_step == TRANSLATION_CONTINUE) {
-            gpc += 4;
-            continue;
-        }
-        if (authentication_step == TRANSLATION_STOP) break;
+        enum translation_step control_step = translate_control_instruction(&gpc, in, &control);
+        if (control_step == TRANSLATION_CONTINUE) continue;
+        if (control_step == TRANSLATION_STOP) break;
 
         translate_memory_or_fallback(gpc, in, in_excl);
         gpc += 4;
