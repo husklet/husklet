@@ -1,5 +1,0 @@
-path	type	target	sha256	size	mode	origin	license
-aarch64/lib/ld-linux-aarch64.so.1	file	-	058b11f959fd1006abfc289a7fa9e2df86892e8a05f2d8b79a137e6a29c11a78	201872	0755	Ubuntu glibc 2.43-2ubuntu2	LGPL-2.1-or-later
-aarch64/lib/aarch64-linux-gnu/libc.so.6	file	-	4306bea54c5862911d6ed2ee19adc0cdcb092cd1948ceb14a9c1e3592e8487d7	1788240	0755	Ubuntu glibc 2.43-2ubuntu2	LGPL-2.1-or-later
-x86_64/lib64/ld-linux-x86-64.so.2	file	-	1fef83ac85dff11667be793764a2eb87c87fd42d9893752de4901375c15c310b	253656	0755	Ubuntu cross-toolchain-base 80ubuntu3	LGPL-2.1-or-later
-x86_64/lib/x86_64-linux-gnu/libc.so.6	file	-	280b1f0828af541bee1f67a14e27a46756dcb996dc0e7d9bd3adc48b24c50f6f	2179544	0755	Ubuntu cross-toolchain-base 80ubuntu3	LGPL-2.1-or-later

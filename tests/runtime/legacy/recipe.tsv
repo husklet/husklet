@@ -1,2 +1,0 @@
-# recipe	flags
-freestanding-v1	-std=c11 -Os -nostdlib -static -fno-pie -no-pie -fno-ident -fno-stack-protector -ffreestanding -Wl,--build-id=none -Wl,-z,noexecstack -Wl,-e,_start

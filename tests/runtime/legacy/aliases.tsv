@@ -1,2 +1,0 @@
-# suite	case	declared_source	build_source	reason
-core/workload	ibtc-dispatch	tests/compat/core/workload/ibtc_dispatch.c	tests/compat/core/abi/ibtc_dispatch.c	retained workload manifest declares source ownership by sibling ABI directory
