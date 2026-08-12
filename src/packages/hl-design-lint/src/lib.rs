@@ -20,9 +20,9 @@ pub use rule::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, DependencyDirection,
     DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun,
     FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting,
-    ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry,
-    RepositoryEscape, Rule, SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory, TestName,
-    UnsafeBoundary,
+    ModelDuplication, ModulePrefix, NativeQuality, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition,
+    Registry, RepositoryEscape, Rule, SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory,
+    TestName, UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 

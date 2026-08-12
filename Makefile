@@ -30,10 +30,8 @@ lint-c:
 
 lint-c-inner:
 	$(C_LINT_CONFIGURE)
-	cmake --build $(C_LINT_BUILD)
-	cmake --build $(C_LINT_BUILD) --target source-manifest-check
-	ctest --test-dir $(C_LINT_BUILD) -L lint --no-tests=error --output-on-failure
-	cmake --build $(C_LINT_BUILD) --target lint-c
+	cmake --build $(C_LINT_BUILD) --target strict-warnings-c
+	cargo run -q -p hl-design-lint -- --native $(C_LINT_BUILD) src/runtime/native
 
 # Rustfmt ships with the pinned flake toolchain, not with a distribution Rust, so route formatting through
 # the same shell as Clippy rather than whatever `cargo fmt` a host happens to resolve.

@@ -15,6 +15,7 @@ english-pos-tagger = "0.1"
 wordnet-lemmatizer = "0.1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
+serde_json.workspace = true
 syn = { version = "2", features = ["full", "visit"] }
 thiserror = "2"
 toml = "1"
