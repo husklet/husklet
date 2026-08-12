@@ -276,8 +276,7 @@ static int gtimer_init(void) {
     return 0;
 }
 
-static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                    uint64_t a5) {
+static int svc_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1) {
     switch (nr) {
     // ===================== Time — clock_gettime/nanosleep/gettimeofday (Linux clock-id translation)
     // =====================
@@ -350,6 +349,13 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = r < 0 ? (uint64_t)(int64_t)(-errno) : 0;
         break;
     }
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_clock_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1) {
+    switch (nr) {
     case 113: {
         // clock_gettime -- Linux clockid -> macOS
         clockid_t mc;
@@ -431,6 +437,13 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = 0;
         break;
     }
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_clock_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3) {
+    switch (nr) {
     case 115: {
         // clock_nanosleep(clockid, flags, request, remain). macOS has no clock_nanosleep, and TIMER_ABSTIME
         // means "sleep UNTIL the absolute deadline" -- treating it as relative would sleep for ~uptime
@@ -569,6 +582,13 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = rr < 0 ? (uint64_t)(int64_t)(-errno) : 0;
         break;
     }
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_process_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1) {
+    switch (nr) {
     // times(struct tms*): real CPU accounting. The Linux + macOS struct tms layouts match (4 clock_t
     // fields), and both count in sysconf(_SC_CLK_TCK) ticks, so the host result drops straight in.
     case 153: {
@@ -613,6 +633,13 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = 0;
         break;
     }
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_timer_create(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2) {
+    switch (nr) {
     // ===================== POSIX per-process timers (aarch64 nrs; x86 normalized to these) ==========
     // 107 timer_create(clockid, sigevent*, timer_t*) -- allocate a slot, record clock + sigevent.
     case 107: {
@@ -731,6 +758,13 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_RET(c) = 0;
         break;
     }
+    default: return 0;
+    }
+    return 1;
+}
+
+static int svc_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3) {
+    switch (nr) {
     // 110 timer_settime(timerid, flags, new*, old*) -- arm/disarm via the itimerspec.
     case 110: {
         int id = (int)a0;
@@ -906,4 +940,16 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     default: return 0;
     }
     return 1;
+}
+
+static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                    uint64_t a5) {
+    (void)a4;
+    (void)a5;
+    if (svc_sleep(c, nr, a0, a1)) return 1;
+    if (svc_clock_read(c, nr, a0, a1)) return 1;
+    if (svc_clock_sleep(c, nr, a0, a1, a2, a3)) return 1;
+    if (svc_process_time(c, nr, a0, a1)) return 1;
+    if (svc_timer_create(c, nr, a0, a1, a2)) return 1;
+    return svc_timer_control(c, nr, a0, a1, a2, a3);
 }
