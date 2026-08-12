@@ -476,7 +476,11 @@ static int ckpt_dump_epoll(struct ckpt_sink *sink, const char *group, const stru
         for (int prior = 0; prior < record_index; ++prior)
             if (records[prior].kind == CKF_EPOLL && records[prior].object_id == record->object_id) duplicate = 1;
         if (duplicate) continue;
-        struct ckpt_epoll_watch watches[HL_NFD + EP_PROVIDER_WATCH_LIMIT + EP_OBJECT_WATCH_LIMIT];
+        size_t watch_capacity = HL_NFD + EP_PROVIDER_WATCH_LIMIT + EP_OBJECT_WATCH_LIMIT;
+        size_t image_capacity = sizeof(struct ckpt_epoll_header) + watch_capacity * sizeof(struct ckpt_epoll_watch);
+        unsigned char *image = malloc(image_capacity);
+        if (image == NULL) return -1;
+        struct ckpt_epoll_watch *watches = (void *)(image + sizeof(struct ckpt_epoll_header));
         uint32_t used = 0;
         for (uint32_t index = 0; index < EP_NATIVE_WATCH_LIMIT; ++index) {
             ep_native_watch *watch = &g_ep_native_watches[index];
@@ -505,11 +509,8 @@ static int ckpt_dump_epoll(struct ckpt_sink *sink, const char *group, const stru
                 (struct ckpt_epoll_watch){watch->descriptor, watch->events, watch->interests, 3u, watch->data};
         }
         size_t bytes = sizeof(struct ckpt_epoll_header) + (size_t)used * sizeof(*watches);
-        unsigned char *image = malloc(bytes);
-        if (image == NULL) return -1;
         struct ckpt_epoll_header header = {CKPT_EPOLL_MAGIC, used, 0};
         memcpy(image, &header, sizeof header);
-        memcpy(image + sizeof header, watches, (size_t)used * sizeof(*watches));
         int result = ckpt_sink_put(sink, group, record->path, 0, image, bytes);
         free(image);
         if (result != 0) return -1;
