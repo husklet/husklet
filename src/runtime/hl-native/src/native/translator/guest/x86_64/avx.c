@@ -3198,6 +3198,47 @@ static enum avx_dispatch_result sse_dispatch_floating(const hl_x86_avx_state *st
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result sse_dispatch_crc_movbe(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
+                                                       uint64_t next) {
+    int op = I->op;
+    if (I->map3 != 2 || (op != 0xF0 && op != 0xF1)) return AVX_DISPATCH_UNMATCHED;
+
+    if (I->repne) { // CRC32 r, r/m
+        int bytes = op == 0xF0 ? 1 : I->opsize;
+        uint64_t value;
+        if (I->is_mem) {
+            uint64_t address = avx_ea(state, c, I, next, bytes);
+            value = 0;
+            (void)avx_memory_read(state, address, &value, (size_t)bytes);
+        } else if (bytes == 1 && !I->has_rex && I->rm_reg >= 4 && I->rm_reg <= 7) {
+            value = (c->r[I->rm_reg - 4] >> 8) & 0xff; // AH/CH/DH/BH without REX
+        } else {
+            value = c->r[I->rm_reg];
+        }
+        c->r[I->reg] = crc32c_step((uint32_t)c->r[I->reg], value, bytes);
+    } else { // MOVBE: byte-swapping memory load/store
+        int bytes = I->opsize;
+        uint64_t address = avx_ea(state, c, I, next, bytes);
+        uint64_t value = 0;
+        if (op == 0xF0)
+            (void)avx_memory_read(state, address, &value, (size_t)bytes);
+        else
+            value = c->r[I->reg];
+        uint64_t swapped = 0;
+        for (int index = 0; index < bytes; index++)
+            swapped |= ((value >> (8 * index)) & 0xff) << (8 * (bytes - 1 - index));
+        if (op == 0xF1) {
+            (void)avx_memory_write(state, address, &swapped, (size_t)bytes);
+        } else if (bytes == 2) {
+            c->r[I->reg] = (c->r[I->reg] & ~0xffffull) | (swapped & 0xffff);
+        } else {
+            c->r[I->reg] = swapped;
+        }
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3208,47 +3249,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     uint8_t s[16], r[16];
 
     if (sse_dispatch_floating(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
-
-    // ---- CRC32 (F2 0F38 F0/F1) and MOVBE (no-F2 0F38 F0/F1): GENERAL-register / memory ops -----------
-    if (map == 2 && (op == 0xF0 || op == 0xF1)) {
-        if (I.repne) { // CRC32 r, r/m  (F0=r/m8, F1=r/m16/32/64 per operand size)
-            int nb = (op == 0xF0) ? 1 : I.opsize;
-            uint64_t v;
-            if (I.is_mem) {
-                uint64_t a = avx_ea(state, c, &I, next, nb);
-                v = 0;
-                (void)avx_memory_read(state, a, &v, (size_t)nb);
-            } else if (nb == 1 && !I.has_rex && I.rm_reg >= 4 && I.rm_reg <= 7) {
-                v = (c->r[I.rm_reg - 4] >> 8) & 0xff; // no REX: r/m8 4..7 is AH/CH/DH/BH, not SPL/BPL/SIL/DIL
-            } else {
-                v = c->r[I.rm_reg];
-            }
-            uint32_t crc = (uint32_t)c->r[I.reg];
-            crc = crc32c_step(crc, v, nb);
-            c->r[I.reg] = crc; // zero-extends into the 64-bit GPR (incl. the REX.W form)
-        } else {               // MOVBE: byte-swapping load (F0) / store (F1) of a memory operand
-            int nb = I.opsize;
-            uint64_t a = avx_ea(state, c, &I, next, nb);
-            if (op == 0xF0) { // MOVBE r, m  -> reg = bswap(load)
-                uint64_t v = 0;
-                (void)avx_memory_read(state, a, &v, (size_t)nb);
-                uint64_t sw = 0;
-                for (int i = 0; i < nb; i++)
-                    sw |= ((v >> (8 * i)) & 0xff) << (8 * (nb - 1 - i));
-                if (nb == 2)
-                    c->r[I.reg] = (c->r[I.reg] & ~0xffffull) | (sw & 0xffff);
-                else
-                    c->r[I.reg] = sw; // 32-bit zero-extends, 64-bit full
-            } else {                  // MOVBE m, r  -> [m] = bswap(reg)
-                uint64_t v = c->r[I.reg], sw = 0;
-                for (int i = 0; i < nb; i++)
-                    sw |= ((v >> (8 * i)) & 0xff) << (8 * (nb - 1 - i));
-                (void)avx_memory_write(state, a, &sw, (size_t)nb);
-            }
-        }
-        c->rip = next;
-        return;
-    }
+    if (sse_dispatch_crc_movbe(state, c, &I, next) == AVX_DISPATCH_HANDLED) return;
 
     // ---- PEXTR* / EXTRACTPS (0F3A 14/15/16/17): xmm -> GPR/memory -----------------------------------
     if (map == 3 && (op == 0x14 || op == 0x15 || op == 0x16 || op == 0x17)) {
