@@ -976,6 +976,54 @@ static enum avx_dispatch_result avx_dispatch_crypto(const hl_x86_avx_state *stat
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_memory(const hl_x86_avx_state *state, struct cpu *c,
+                                                         struct insn *instruction, uint64_t next, int map, int op,
+                                                         int destination, int mask_register, int width) {
+    if (map != 2) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t mask[64], source[64], output[64];
+    int element_size;
+    if (op == 0x78 || op == 0x79 || op == 0x58 || op == 0x59) { // vpbroadcastb/w/d/q
+        element_size = op == 0x78 ? 1 : op == 0x79 ? 2 : op == 0x58 ? 4 : 8;
+        avx_get_rm(state, c, instruction, next, element_size, source);
+        for (int offset = 0; offset < width; offset += element_size)
+            memcpy(output + offset, source, (size_t)element_size);
+        avx_put(c, destination, output, width);
+    } else if (op == 0x18 || op == 0x19) { // vbroadcastss/sd
+        element_size = op == 0x18 ? 4 : 8;
+        avx_get_rm(state, c, instruction, next, element_size, source);
+        for (int offset = 0; offset < width; offset += element_size)
+            memcpy(output + offset, source, (size_t)element_size);
+        avx_put(c, destination, output, width);
+    } else if (op == 0x1A || op == 0x5A) { // vbroadcastf128/i128
+        avx_get_rm(state, c, instruction, next, 16, source);
+        memcpy(output, source, 16);
+        memcpy(output + 16, source, 16);
+        avx_put(c, destination, output, 32);
+    } else if (op == 0x2C || op == 0x2D || op == 0x8C) { // vmaskmovps/pd, vpmaskmovd/q loads
+        element_size = op == 0x2C ? 4 : op == 0x2D ? 8 : instruction->vex_w ? 8 : 4;
+        avx_get(c, mask_register, mask);
+        memset(output, 0, sizeof(output));
+        uint64_t address = avx_ea(state, c, instruction, next, width);
+        for (int offset = 0; offset < width; offset += element_size)
+            if (mask[offset + element_size - 1] & 0x80)
+                (void)avx_memory_read(state, address + (uint64_t)offset, output + offset, (size_t)element_size);
+        avx_put(c, destination, output, width);
+    } else if (op == 0x2E || op == 0x2F || op == 0x8E) { // vmaskmovps/pd, vpmaskmovd/q stores
+        element_size = op == 0x2E ? 4 : op == 0x2F ? 8 : instruction->vex_w ? 8 : 4;
+        avx_get(c, mask_register, mask);
+        avx_get(c, destination, source);
+        uint64_t address = avx_ea(state, c, instruction, next, width);
+        for (int offset = 0; offset < width; offset += element_size)
+            if (mask[offset + element_size - 1] & 0x80)
+                (void)avx_memory_write(state, address + (uint64_t)offset, source + offset, (size_t)element_size);
+    } else {
+        return AVX_DISPATCH_UNMATCHED;
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -996,8 +1044,7 @@ static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_stat
         } else if (op == 0x16) {
             bytes = instruction->vex_w ? 8 : 4;
             value = 0;
-            memcpy(&value, source + (instruction->vex_w ? 8 * (immediate & 1) : 4 * (immediate & 3)),
-                   (size_t)bytes);
+            memcpy(&value, source + (instruction->vex_w ? 8 * (immediate & 1) : 4 * (immediate & 3)), (size_t)bytes);
         } else {
             uint32_t word;
             bytes = 4;
@@ -1369,6 +1416,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (bmi == AVX_DISPATCH_UNIMPLEMENTED) goto avx_unimpl;
     if (avx_dispatch_fma(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_crypto(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map2_memory(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
         goto done;
@@ -2350,74 +2398,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             c->af = 0;
             c->rip = next;
             return;
-        }
-        case 0x78:
-        case 0x79:
-        case 0x58:
-        case 0x59: { // vpbroadcastb/w/d/q: broadcast low element of rm across W
-            int es = (op == 0x78) ? 1 : (op == 0x79) ? 2 : (op == 0x58) ? 4 : 8;
-            avx_get_rm(state, c, &I, next, es, b);
-            for (int i = 0; i < W; i += es)
-                memcpy(d + i, b, (size_t)es);
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x18:
-        case 0x19: { // vbroadcastss(4)/sd(8)
-            int es = (op == 0x18) ? 4 : 8;
-            avx_get_rm(state, c, &I, next, es, b);
-            for (int i = 0; i < W; i += es)
-                memcpy(d + i, b, (size_t)es);
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x1A:                                 // vbroadcastf128: m128 -> both 128-bit lanes of ymm (256-bit only)
-        case 0x5A: {                               // vbroadcasti128: same m128 -> both lanes broadcast
-            avx_get_rm(state, c, &I, next, 16, b); // low m128 source
-            memcpy(d, b, 16);
-            memcpy(d + 16, b, 16);
-            avx_put(c, rd, d, 32);
-            goto done;
-        }
-        case 0x2C:   // vmaskmovps (load): per-dword mask in vvvv, data from mem, masked-off lanes = 0
-        case 0x2D: { // vmaskmovpd (load): per-qword mask
-            int es = (op == 0x2C) ? 4 : 8;
-            avx_get(c, vv, a); // mask register (VEX.vvvv)
-            memset(d, 0, 64);
-            uint64_t ea = avx_ea(state, c, &I, next, W);
-            for (int i = 0; i < W; i += es)
-                if (a[i + es - 1] & 0x80) (void)avx_memory_read(state, ea + (uint64_t)i, d + i, (size_t)es);
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x2E:   // vmaskmovps (store): mask in vvvv, source reg = ModRM.reg, dest = mem
-        case 0x2F: { // vmaskmovpd (store)
-            int es = (op == 0x2E) ? 4 : 8;
-            avx_get(c, vv, a); // mask
-            avx_get(c, rd, b); // source data (ModRM.reg is the src for the store form)
-            uint64_t ea = avx_ea(state, c, &I, next, W);
-            for (int i = 0; i < W; i += es)
-                if (a[i + es - 1] & 0x80) (void)avx_memory_write(state, ea + (uint64_t)i, b + i, (size_t)es);
-            goto done;
-        }
-        case 0x8C: { // vpmaskmovd/q (load): VEX.W selects dword/qword element; mask in vvvv
-            int es = I.vex_w ? 8 : 4;
-            avx_get(c, vv, a);
-            memset(d, 0, 64);
-            uint64_t ea = avx_ea(state, c, &I, next, W);
-            for (int i = 0; i < W; i += es)
-                if (a[i + es - 1] & 0x80) (void)avx_memory_read(state, ea + (uint64_t)i, d + i, (size_t)es);
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x8E: { // vpmaskmovd/q (store)
-            int es = I.vex_w ? 8 : 4;
-            avx_get(c, vv, a);
-            avx_get(c, rd, b);
-            uint64_t ea = avx_ea(state, c, &I, next, W);
-            for (int i = 0; i < W; i += es)
-                if (a[i + es - 1] & 0x80) (void)avx_memory_write(state, ea + (uint64_t)i, b + i, (size_t)es);
-            goto done;
         }
         case 0x20: // vpmovsxbw   vpmov{s,z}x{b,w,d}{w,d,q}: widen a smaller source element with
         case 0x21: // vpmovsxbd   sign(2x)/zero(3x) extension. dst holds W/dst_es elements.
