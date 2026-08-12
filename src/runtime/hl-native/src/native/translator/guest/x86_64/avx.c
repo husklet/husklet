@@ -993,6 +993,56 @@ static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_stat
     return AVX_DISPATCH_UNMATCHED;
 }
 
+static enum avx_dispatch_result avx_dispatch_lane_permutation(const hl_x86_avx_state *state, struct cpu *c,
+                                                              struct insn *instruction, uint64_t next, int width) {
+    int op = instruction->op;
+    int immediate = (int)instruction->imm;
+    uint8_t left[64], right[64], result[64];
+    if (op == 0x00 || op == 0x01) { // vpermq/vpermpd
+        avx_get_rm(state, c, instruction, next, width, right);
+        for (int lane = 0; lane < 4; lane++) {
+            int selected = (immediate >> (2 * lane)) & 3;
+            memcpy(result + 8 * lane, right + 8 * selected, 8);
+        }
+    } else if (op == 0x02 || op == 0x0E) { // vpblendd/vpblendw
+        int element = op == 0x02 ? 4 : 2;
+        avx_get(c, instruction->vvvv, left);
+        avx_get_rm(state, c, instruction, next, width, right);
+        memcpy(result, left, (size_t)width);
+        for (int offset = 0; offset < width; offset += element) {
+            int lane = op == 0x0E ? (offset % 16) / element : offset / element;
+            if ((immediate >> lane) & 1) memcpy(result + offset, right + offset, (size_t)element);
+        }
+    } else if (op >= 0x4A && op <= 0x4C) { // vblendvps/vblendvpd/vpblendvb
+        uint8_t mask[64];
+        int element = op == 0x4C ? 1 : op == 0x4A ? 4 : 8;
+        avx_get(c, instruction->vvvv, left);
+        avx_get_rm(state, c, instruction, next, width, right);
+        avx_get(c, (immediate >> 4) & 0xF, mask);
+        for (int offset = 0; offset < width; offset += element)
+            memcpy(result + offset, (mask[offset + element - 1] & 0x80) ? right + offset : left + offset,
+                   (size_t)element);
+    } else if (op == 0x06 || op == 0x46) { // vperm2f128/vperm2i128
+        uint8_t lanes[64];
+        avx_get(c, instruction->vvvv, left);
+        avx_get_rm(state, c, instruction, next, 32, right);
+        memcpy(lanes, left, 32);
+        memcpy(lanes + 32, right, 32);
+        for (int half = 0; half < 2; half++) {
+            int control = (immediate >> (half * 4)) & 0xF;
+            if (control & 0x8)
+                memset(result + half * 16, 0, 16);
+            else
+                memcpy(result + half * 16, lanes + (control & 3) * 16, 16);
+        }
+        width = 32;
+    } else {
+        return AVX_DISPATCH_UNMATCHED;
+    }
+    avx_put(c, instruction->reg, result, width);
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2504,6 +2554,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     // ---- map 3 (0F3A) ----
     if (map == 3) {
         if (avx_dispatch_lane_transfer(state, c, &I, next) == AVX_DISPATCH_HANDLED) goto done;
+        if (avx_dispatch_lane_permutation(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
         int imm = (int)I.imm;
         switch (op) {
         case 0x04: { // vpermilps imm: per-128-lane, dword j <- src.dword[imm[2j+1:2j]] (single src=rm)
@@ -2609,65 +2660,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + 8 * i, &o, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0x00: // vpermq (integer) / vpermpd (fp): imm8 selects 4 qwords across the full 256
-        case 0x01: {
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int k = 0; k < 4; k++) {
-                int sel = (I.imm >> (2 * k)) & 3;
-                memcpy(d + 8 * k, b + 8 * sel, 8);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x02: { // vpblendd: per 32-bit lane, imm bit i set -> take from rm (src2), else src1(vvvv)
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            memcpy(d, a, (size_t)W);
-            for (int i = 0; i < W / 4; i++)
-                if ((I.imm >> i) & 1) memcpy(d + 4 * i, b + 4 * i, 4);
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x0E: { // vpblendw: per-128-lane, 8 words, imm bit selects rm (repeats each lane)
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            memcpy(d, a, (size_t)W);
-            for (int lane = 0; lane < W; lane += 16)
-                for (int i = 0; i < 8; i++)
-                    if ((I.imm >> i) & 1) memcpy(d + lane + 2 * i, b + lane + 2 * i, 2);
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x4A:   // vblendvps (dword)
-        case 0x4B:   // vblendvpd (qword)
-        case 0x4C: { // vpblendvb (byte): mask register = is4 imm[7:4]; element taken from rm if mask top bit set
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            uint8_t m[64];
-            avx_get(c, (I.imm >> 4) & 0xF, m);
-            int es = (op == 0x4C) ? 1 : (op == 0x4A) ? 4 : 8;
-            for (int i = 0; i < W; i += es)
-                memcpy(d + i, (m[i + es - 1] & 0x80) ? b + i : a + i, (size_t)es);
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x46:   // vperm2i128 (integer form; identical 128-bit lane select semantics)
-        case 0x06: { // vperm2f128: select a 128-bit lane into each half (imm[3]/[7] zero the lane)
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, 32, b);
-            uint8_t src[64];
-            memcpy(src, a, 32);      // [0:16)=a.lo, [16:32)=a.hi
-            memcpy(src + 32, b, 32); // [32:48)=b.lo, [48:64)=b.hi
-            for (int half = 0; half < 2; half++) {
-                int ctl = (I.imm >> (half * 4)) & 0xF;
-                if (ctl & 0x8)
-                    memset(d + half * 16, 0, 16);
-                else
-                    memcpy(d + half * 16, src + (ctl & 3) * 16, 16);
-            }
-            avx_put(c, rd, d, 32);
             goto done;
         }
         case 0x1D: { // vcvtps2ph: reg holds W/4 fp32 -> W/2 bytes of fp16 in rm (imm[2:0] rounding control)
