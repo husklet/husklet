@@ -458,7 +458,9 @@ static hl_status hl_engine_apply_box(hl_engine *engine, const hl_engine_box_conf
 static hl_status hl_engine_create_validate(const hl_engine_config *config, const hl_host_services *host,
                                            const hl_options *source_options, uint32_t borrow_options,
                                            hl_engine **out_engine) {
-    if (config == NULL || host == NULL || out_engine == NULL) return HL_STATUS_INVALID_ARGUMENT;
+    if (out_engine == NULL) return HL_STATUS_INVALID_ARGUMENT;
+    *out_engine = NULL;
+    if (config == NULL || host == NULL) return HL_STATUS_INVALID_ARGUMENT;
     if (config->abi != HL_ENGINE_ABI || config->size < sizeof(*config)) return HL_STATUS_ABI_MISMATCH;
     if (config->guest_isa != HL_GUEST_ISA_AARCH64 && config->guest_isa != HL_GUEST_ISA_X86_64)
         return HL_STATUS_INVALID_ARGUMENT;
@@ -498,7 +500,6 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
     hl_status status;
     status = hl_engine_create_validate(config, host, source_options, borrow_options, out_engine);
     if (status != HL_STATUS_OK) return status;
-    *out_engine = NULL;
     engine = calloc(1, sizeof(*engine));
     if (engine == NULL) return HL_STATUS_OUT_OF_MEMORY;
     memcpy(&engine->config, config, sizeof(*config));

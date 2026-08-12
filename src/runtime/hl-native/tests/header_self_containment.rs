@@ -282,6 +282,56 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove service ABI probe directory");
 }
 
+#[test]
+fn engine_create_validation_clears_stale_output() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-engine-output-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("engine output probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "engine/runtime.c"
+
+int main(void) {
+    hl_engine *output = (hl_engine *)(uintptr_t)1;
+    hl_engine_config config = {0};
+    hl_host_services host = {0};
+    if (hl_engine_create_validate(&config, &host, 0, 0, &output) != HL_STATUS_ABI_MISMATCH) return 1;
+    if (output != 0) return 2;
+    output = (hl_engine *)(uintptr_t)1;
+    if (hl_engine_create_validate(0, &host, 0, 0, &output) != HL_STATUS_INVALID_ARGUMENT) return 3;
+    return output == 0 ? 0 : 4;
+}
+"#,
+    )
+    .expect("engine output probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args([
+            "-std=c11",
+            "-D_GNU_SOURCE",
+            "-ffunction-sections",
+            "-fdata-sections",
+            "-Wl,--gc-sections",
+        ])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("engine/host_services.c"))
+        .arg(native.join("engine/options.c"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("engine output probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("engine output probe execution");
+    assert!(run.success(), "engine output probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove engine output probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {
