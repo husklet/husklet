@@ -425,6 +425,14 @@ typedef struct hl_host_memory_mapping {
     uint64_t reserved;
 } hl_host_memory_mapping;
 
+HL_STATIC_ASSERT(sizeof(hl_host_bytes) == 16, "host byte span ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_const_bytes) == 16, "host constant byte span ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_result) == 24, "host result ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_host_result, value) == 8, "host result value ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_code_mapping) == 48, "host code mapping ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_file_mapping) == 40, "host file mapping ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_memory_mapping) == 40, "host memory mapping ABI drifted");
+
 typedef struct hl_host_memory_services {
     HL_ABI_HEADER;
     hl_host_result (*reserve)(void *context, uint64_t size, uint64_t alignment, uint32_t flags);

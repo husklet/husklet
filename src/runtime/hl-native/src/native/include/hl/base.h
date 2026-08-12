@@ -66,4 +66,6 @@ typedef enum hl_status {
     HL_STATUS_ADDRESS_IN_USE = 31
 } hl_status;
 
+HL_STATIC_ASSERT(sizeof(hl_status) == sizeof(int32_t), "status ABI requires a 32-bit enum");
+
 #endif

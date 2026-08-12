@@ -6,8 +6,8 @@ static void hl_c_backend_executable_clear(hl_engine_executable *executable) {
     *executable = (hl_engine_executable){0};
 }
 
-hl_status hl_c_backend_executable_open(const hl_host_services *services, const char *host_path,
-                                       hl_engine_executable *output) {
+HL_API hl_status hl_c_backend_executable_open(const hl_host_services *services, const char *host_path,
+                                              hl_engine_executable *output) {
     if (output == NULL) { return HL_STATUS_INVALID_ARGUMENT; }
     hl_c_backend_executable_clear(output);
     if (services == NULL || services->file == NULL || services->file->open_relative == NULL || host_path == NULL ||
@@ -32,7 +32,7 @@ hl_status hl_c_backend_executable_open(const hl_host_services *services, const c
     return HL_STATUS_OK;
 }
 
-void hl_c_backend_executable_discard(const hl_host_services *services, hl_engine_executable *executable) {
+HL_API void hl_c_backend_executable_discard(const hl_host_services *services, hl_engine_executable *executable) {
     if (executable == NULL) { return; }
     if (executable->host_handle != HL_HOST_HANDLE_INVALID && services != NULL && services->file != NULL &&
         services->file->close != NULL) {

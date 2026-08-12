@@ -22,6 +22,9 @@ typedef struct hl_log_context {
     uint32_t reserved;
 } hl_log_context;
 
+HL_STATIC_ASSERT(sizeof(hl_log_context) == 16, "log context ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_log_context, enabled_tags) == 8, "log context tags ABI drifted");
+
 HL_API hl_status hl_log_context_init(hl_log_context *context, const hl_host_services *host, const char *selector);
 HL_API int hl_log_enabled(const hl_log_context *context, uint32_t tag);
 HL_API void hl_log_message(const hl_log_context *context, uint32_t tag, const char *message, size_t message_size);
