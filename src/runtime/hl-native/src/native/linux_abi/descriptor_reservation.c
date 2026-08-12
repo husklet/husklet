@@ -1,6 +1,8 @@
+#include "reservation_output.h"
+
 hl_status hl_linux_fd_reserve_at(hl_linux_abi *linux_abi, hl_linux_fd fd, hl_linux_fd_reservation *reservation) {
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || reservation == NULL ||
-        fd >= linux_abi->fd_capacity)
+    if (!hl_linux_fd_reservation_output_prepare(reservation)) return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || fd >= linux_abi->fd_capacity)
         return HL_STATUS_INVALID_ARGUMENT;
     hl_linux_lock(linux_abi);
     if (linux_abi->fds[fd].ofd != 0) {

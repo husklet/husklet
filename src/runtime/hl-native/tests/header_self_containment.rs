@@ -539,6 +539,44 @@ int main(void) {
     fs::remove_dir_all(scratch).expect("remove snapshot output probe directory");
 }
 
+#[test]
+fn descriptor_reservation_failure_clears_stale_token() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-reservation-output-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("reservation output probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"#include "linux_abi/reservation_output.h"
+
+int main(void) {
+    hl_linux_fd_reservation output = {7, 42};
+    if (!hl_linux_fd_reservation_output_prepare(&output)) return 1;
+    if (output.fd != HL_LINUX_FD_LIMIT || output.generation != 0) return 2;
+    return hl_linux_fd_reservation_output_prepare(0) == 0 ? 0 : 3;
+}
+"#,
+    )
+    .expect("reservation output probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("reservation output probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("reservation output probe execution");
+    assert!(run.success(), "reservation output probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove reservation output probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cpp_bridge_declarations_retain_c_linkage() {

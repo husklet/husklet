@@ -252,6 +252,8 @@ HL_API hl_status hl_linux_fd_install(hl_linux_abi *linux_abi, hl_host_handle hos
 /* Installs only at the requested vacant guest descriptor; never exposes or duplicates a native descriptor. */
 HL_API hl_status hl_linux_fd_install_at(hl_linux_abi *linux_abi, hl_linux_fd fd, hl_host_handle host_handle,
                                         uint32_t status_flags, uint32_t descriptor_flags);
+/* reservation is required and resets to {HL_LINUX_FD_LIMIT, 0} before validation. A failed reserve
+ * therefore never leaves a token which cancel or commit can interpret as authority. */
 HL_API hl_status hl_linux_fd_reserve_at(hl_linux_abi *linux_abi, hl_linux_fd fd, hl_linux_fd_reservation *reservation);
 HL_API hl_status hl_linux_fd_cancel(hl_linux_abi *linux_abi, const hl_linux_fd_reservation *reservation);
 HL_API hl_status hl_linux_fd_dup(hl_linux_abi *linux_abi, hl_linux_fd source, uint32_t descriptor_flags,
