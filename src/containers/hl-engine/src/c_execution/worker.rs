@@ -18,6 +18,12 @@ pub(crate) enum WorkerError {
     Start,
 }
 
+impl WorkerError {
+    /// Deliberately consumes an error that cannot be reported without corrupting
+    /// the guest-owned stderr stream.
+    fn abandon(self) {}
+}
+
 pub(crate) fn run(plan_descriptor: RawFd, control_descriptor: RawFd) -> Result<i32, WorkerError> {
     // Lifecycle events belong to the supervising parent: this process's stderr is
     // the guest's stderr stream, so host diagnostics here would corrupt guest output.
@@ -117,7 +123,9 @@ fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) 
 }
 
 fn send_error(stream: &mut std::os::unix::net::UnixStream, stage: FailureStage, code: i32) {
-    let _ = write_message(stream, Message::Error { stage, code });
+    if let Err(error) = write_message(stream, Message::Error { stage, code }) {
+        error.abandon();
+    }
 }
 
 fn start_result(result: Result<i32, EngineError>) -> Result<(), i32> {

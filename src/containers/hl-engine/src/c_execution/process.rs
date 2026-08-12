@@ -417,7 +417,7 @@ impl Drop for CWorker {
                     "retained C worker failure stage=drop reason=worker_still_running pid={}", child.id()
                 );
             }
-            let _ = signal_process_group(child.id(), libc::SIGKILL);
+            signal_process_group_best_effort(child.id(), libc::SIGKILL);
             if running {
                 let _ = child.wait();
             }
@@ -441,7 +441,7 @@ impl Drop for ChildGuard {
                 "retained C worker failure stage=create reason=post_spawn_rollback pid={}", child.id()
             );
         }
-        let _ = signal_process_group(child.id(), libc::SIGKILL);
+        signal_process_group_best_effort(child.id(), libc::SIGKILL);
         if running {
             let _ = child.wait();
         }
@@ -466,6 +466,15 @@ fn signal_process_group(process: u32, signal: i32) -> Result<(), EngineError> {
         Ok(())
     } else {
         Err(EngineError::StopFailed)
+    }
+}
+
+fn signal_process_group_best_effort(process: u32, signal: i32) {
+    if signal_process_group(process, signal).is_err() {
+        hl_log::hl_debug!(
+            hl_log::tag::EXEC,
+            "retained C worker process group already unavailable pid={process} signal={signal}"
+        );
     }
 }
 
