@@ -229,7 +229,7 @@ static int interp_alignment_fault(struct cpu *cpu, uint64_t address) {
     return INTERP_END;
 }
 
-static int interp_exec_load_store(struct cpu *cpu, uint32_t insn) {
+static int interp_exec_load_store_structures(struct cpu *cpu, uint32_t insn) {
     uint64_t gpc = cpu->pc;
     int rt = (int)(insn & 31), rn = (int)((insn >> 5) & 31);
     int rt2 = (int)((insn >> 10) & 31), rm = (int)((insn >> 16) & 31);
@@ -393,6 +393,14 @@ static int interp_exec_load_store(struct cpu *cpu, uint32_t insn) {
         return INTERP_NEXT;
     }
 
+    return interp_undefined(cpu, insn, "loads and stores -- unallocated structure encoding");
+}
+
+static int interp_exec_load_store_literal_pair(struct cpu *cpu, uint32_t insn) {
+    uint64_t gpc = cpu->pc;
+    int rt = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rt2 = (int)((insn >> 10) & 31);
+    unsigned vector = (insn >> 26) & 1;
+
     if ((insn & 0x3B000000u) == 0x18000000u) {
         unsigned opc = (insn >> 30) & 3;
         int64_t offset = interp_sext((insn >> 5) & 0x7FFFFu, 19) << 2;
@@ -471,7 +479,15 @@ static int interp_exec_load_store(struct cpu *cpu, uint32_t insn) {
         return INTERP_NEXT;
     }
 
-    // Load/store exclusive, plus the ordered (LDAR/STLR) and CAS members of the box.
+    return interp_undefined(cpu, insn, "loads and stores -- unallocated literal/pair encoding");
+}
+
+// Load/store exclusive, plus the ordered (LDAR/STLR) and CAS members of the box.
+static int interp_exec_load_store_exclusive(struct cpu *cpu, uint32_t insn) {
+    uint64_t gpc = cpu->pc;
+    int rt = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rt2 = (int)((insn >> 10) & 31);
+    unsigned vector = (insn >> 26) & 1;
+
     if ((insn & 0x3F000000u) == 0x08000000u) {
         unsigned size = (insn >> 30) & 3, o2 = (insn >> 23) & 1, load = (insn >> 22) & 1;
         unsigned o1 = (insn >> 21) & 1, o0 = (insn >> 15) & 1;
@@ -684,6 +700,14 @@ static int interp_exec_load_store(struct cpu *cpu, uint32_t insn) {
         return INTERP_NEXT;
     }
 
+    return interp_undefined(cpu, insn, "loads and stores -- unallocated exclusive encoding");
+}
+
+static int interp_exec_load_store_atomic(struct cpu *cpu, uint32_t insn) {
+    uint64_t gpc = cpu->pc;
+    int rt = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
+    unsigned vector = (insn >> 26) & 1;
+
     // LDAPR (FEAT_LRCPC) sits inside the LSE atomic box below, so it must be recognised BEFORE that
     // decode. RCpc and RCsc come out the same here: SEQ_CST is stronger than either.
     if ((insn & 0x3FFFFC00u) == 0x38BFC000u && !vector) {
@@ -810,6 +834,14 @@ static int interp_exec_load_store(struct cpu *cpu, uint32_t insn) {
         return INTERP_NEXT;
     }
 
+    return interp_undefined(cpu, insn, "loads and stores -- unallocated atomic encoding");
+}
+
+static int interp_exec_load_store_single(struct cpu *cpu, uint32_t insn) {
+    uint64_t gpc = cpu->pc;
+    int rt = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
+    unsigned vector = (insn >> 26) & 1;
+
     // The three single-register integer addressing modes, sharing one size/opc layout:
     //   opc == 0  store of (1 << size) bytes        1  zero-extending load
     //   opc == 2  sign-extending load into Xt       3  sign-extending load into Wt   (2 with size 3 is PRFM)
@@ -877,3 +909,13 @@ static int interp_exec_load_store(struct cpu *cpu, uint32_t insn) {
     return INTERP_NEXT;
 }
 
+static int interp_exec_load_store(struct cpu *cpu, uint32_t insn) {
+    if ((insn & 0xBF200000u) == 0x0C000000u || (insn & 0xBF000000u) == 0x0D000000u)
+        return interp_exec_load_store_structures(cpu, insn);
+    if ((insn & 0x3B000000u) == 0x18000000u || (insn & 0x3A000000u) == 0x28000000u)
+        return interp_exec_load_store_literal_pair(cpu, insn);
+    if ((insn & 0x3F000000u) == 0x08000000u) return interp_exec_load_store_exclusive(cpu, insn);
+    if ((insn & 0x3FFFFC00u) == 0x38BFC000u || (insn & 0x3B200C00u) == 0x38200000u)
+        return interp_exec_load_store_atomic(cpu, insn);
+    return interp_exec_load_store_single(cpu, insn);
+}
