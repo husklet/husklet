@@ -448,13 +448,33 @@
         pkgs: engine:
         pkgs.runCommand "hl-engine-installed-product"
           {
-            nativeBuildInputs = [ pkgs.patchelf ];
+            nativeBuildInputs = [ pkgs.binutils pkgs.patchelf ];
           }
           ''
             set -euo pipefail
             prefix="$TMPDIR/installed-product"
             mkdir -p "$prefix"
             cp -a ${engine}/. "$prefix"/
+
+            library="$prefix/lib/libhl_native_engine.so"
+            readelf -d "$library" |
+              grep -F 'Library soname: [libhl_native_engine.so]' >/dev/null
+            readelf --dyn-syms --wide "$library" |
+              awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' |
+              sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
+            printf '%s\n' \
+              hl_c_backend_create \
+              hl_c_backend_destroy \
+              hl_c_backend_exit_detail \
+              hl_c_backend_exit_kind \
+              hl_c_backend_exit_status \
+              hl_c_backend_leak_check_nonvacuity \
+              hl_c_backend_request \
+              hl_c_backend_run \
+              hl_c_backend_translation_count \
+              hl_engine_abi \
+              hl_engine_version > "$TMPDIR/expected-exports"
+            diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
 
             for name in hl-engine hl-aarch64 hl-x86_64
             do

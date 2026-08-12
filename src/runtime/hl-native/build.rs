@@ -13,6 +13,19 @@ mod platform;
 
 const NATIVE_ROOT: &str = "src/native";
 const COMMON_DEFINITIONS: &[&str] = &["HL_ENABLE_LOGGING=0", "HL_TRANSLIT_DEFAULT=0"];
+const RUST_BRIDGE_EXPORTS: &[&str] = &[
+    "hl_engine_abi",
+    "hl_engine_version",
+    "hl_c_backend_leak_check_nonvacuity",
+    "hl_c_backend_create",
+    "hl_c_backend_run",
+    "hl_c_backend_request",
+    "hl_c_backend_exit_kind",
+    "hl_c_backend_exit_status",
+    "hl_c_backend_exit_detail",
+    "hl_c_backend_translation_count",
+    "hl_c_backend_destroy",
+];
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=HL_C_SANITIZER");
@@ -308,6 +321,16 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
             ));
         }
     } else {
+        let export_map = output.join("hl_native_engine.map");
+        let exported = RUST_BRIDGE_EXPORTS
+            .iter()
+            .map(|symbol| format!("    {symbol};\n"))
+            .collect::<String>();
+        fs::write(
+            &export_map,
+            format!("HL_NATIVE_1 {{\n  global:\n{exported}  local: *;\n}};\n"),
+        )
+        .expect("write Linux native export map");
         command.args([
             "-shared",
             "-Wl,-soname,libhl_native_engine.so",
@@ -315,6 +338,7 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
             "-Wl,-z,defs",
             "-Wl,--whole-archive",
         ]);
+        command.arg(format!("-Wl,--version-script={}", export_map.display()));
         for archive in archives {
             command.arg(output.join(format!("lib{archive}.a")));
         }
