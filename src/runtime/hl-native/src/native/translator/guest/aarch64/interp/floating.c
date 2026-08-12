@@ -1102,7 +1102,7 @@ static void interp_fp_write(struct cpu *cpu, int reg, unsigned fmt, uint64_t bit
 // The scalar FP encoding space: bits[30:29] == 00, bits[28:24] == 11110 (11111 for the three-source
 // multiply-adds). bit30 separates it from the AdvSIMD SCALAR boxes (bits[31:30] == 01); bit31 is `sf` in the
 // conversion boxes and M, which must be 0, elsewhere.
-static int interp_exec_fp_scalar(struct cpu *cpu, uint32_t insn) {
+static int interp_exec_fp_multiply_fixed(struct cpu *cpu, uint32_t insn) {
     uint64_t gpc = cpu->pc;
     int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
     unsigned type = (insn >> 22) & 3u, sf = (insn >> 31) & 1u;
@@ -1154,6 +1154,16 @@ static int interp_exec_fp_scalar(struct cpu *cpu, uint32_t insn) {
         cpu->pc = gpc + 4;
         return INTERP_NEXT;
     }
+
+    return interp_undefined(cpu, insn, "scalar FP -- unallocated multiply/fixed encoding");
+}
+
+// Conditional compare, binary arithmetic, and conditional select.
+static int interp_exec_fp_binary(struct cpu *cpu, uint32_t insn) {
+    uint64_t gpc = cpu->pc;
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
+    unsigned type = (insn >> 22) & 3u, sf = (insn >> 31) & 1u;
+    unsigned fmt = INTERP_FP_S;
 
     // bit21 == 1. The rest are selected by bits[11:10], the four 00 boxes most specific first.
     unsigned op_low = (insn >> 10) & 3u;
@@ -1207,6 +1217,16 @@ static int interp_exec_fp_scalar(struct cpu *cpu, uint32_t insn) {
         cpu->pc = gpc + 4;
         return INTERP_NEXT;
     }
+
+    return interp_undefined(cpu, insn, "scalar FP -- unallocated binary encoding");
+}
+
+// Moves and conversions between scalar floating-point and integer registers.
+static int interp_exec_fp_integer(struct cpu *cpu, uint32_t insn) {
+    uint64_t gpc = cpu->pc;
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31);
+    unsigned type = (insn >> 22) & 3u, sf = (insn >> 31) & 1u;
+    unsigned fmt = INTERP_FP_S;
 
     if ((insn & 0x0000FC00u) == 0) { // ---- FP <-> integer ----
         unsigned rmode = (insn >> 19) & 3u, opcode = (insn >> 16) & 7u;
@@ -1309,6 +1329,16 @@ static int interp_exec_fp_scalar(struct cpu *cpu, uint32_t insn) {
         return interp_undefined(cpu, insn, "scalar FP -- unallocated integer conversion");
     }
 
+    return interp_undefined(cpu, insn, "scalar FP -- unallocated integer encoding");
+}
+
+// Unary arithmetic, compare, and immediate forms.
+static int interp_exec_fp_unary(struct cpu *cpu, uint32_t insn) {
+    uint64_t gpc = cpu->pc;
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
+    unsigned type = (insn >> 22) & 3u, sf = (insn >> 31) & 1u;
+    unsigned fmt = INTERP_FP_S;
+
     if ((insn & 0x00007C00u) == 0x00004000u) { // ---- 1-source ----
         if (sf) return interp_undefined(cpu, insn, "scalar FP -- 1-source with M set");
         unsigned opcode = (insn >> 15) & 0x3Fu;
@@ -1404,7 +1434,16 @@ static int interp_exec_fp_scalar(struct cpu *cpu, uint32_t insn) {
         return INTERP_NEXT;
     }
 
-    return interp_undefined(cpu, insn, "scalar FP -- unallocated encoding");
+    return interp_undefined(cpu, insn, "scalar FP -- unallocated unary encoding");
+}
+
+static int interp_exec_fp_scalar(struct cpu *cpu, uint32_t insn) {
+    if ((insn & 0x7F000000u) == 0x1F000000u || ((insn >> 21) & 1u) == 0)
+        return interp_exec_fp_multiply_fixed(cpu, insn);
+    unsigned op_low = (insn >> 10) & 3u;
+    if (op_low != 0) return interp_exec_fp_binary(cpu, insn);
+    if ((insn & 0x0000FC00u) == 0) return interp_exec_fp_integer(cpu, insn);
+    return interp_exec_fp_unary(cpu, insn);
 }
 
 // Scalar floating-point and Advanced SIMD.
