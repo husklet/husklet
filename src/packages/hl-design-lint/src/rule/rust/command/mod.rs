@@ -258,26 +258,7 @@ impl<'ast> Visit<'ast> for Commands<'_> {
     }
 
     fn visit_local(&mut self, local: &'ast Local) {
-        if let (Pat::Ident(binding), Some(initializer)) = (&local.pat, &local.init) {
-            self.staged.remove(&binding.ident.to_string());
-            if let Expr::Call(call) = initializer.expr.as_ref() {
-                if self.program_path(call).is_some()
-                    && let Some(shell) = call
-                        .args
-                        .first()
-                        .and_then(string_literal)
-                        .filter(|program| shell_program(program))
-                {
-                    self.staged
-                        .insert(binding.ident.to_string(), Staged { shell, armed: false });
-                }
-            } else if let Expr::Path(alias) = initializer.expr.as_ref()
-                && let Some(original) = alias.path.get_ident().map(ToString::to_string)
-                && let Some(command) = self.staged.get(&original).cloned()
-            {
-                self.staged.insert(binding.ident.to_string(), command);
-            }
-        }
+        self.bind_local(local);
         syn::visit::visit_local(self, local);
     }
 
@@ -292,6 +273,36 @@ impl<'ast> Visit<'ast> for Commands<'_> {
         self.report_shell(expression);
         self.inspect_staged(expression);
         syn::visit::visit_expr_method_call(self, expression);
+    }
+}
+
+impl Commands<'_> {
+    fn bind_local(&mut self, local: &Local) {
+        let (Pat::Ident(binding), Some(initializer)) = (&local.pat, &local.init) else {
+            return;
+        };
+        let name = binding.ident.to_string();
+        self.staged.remove(&name);
+        if let Some(command) = self.staged_initializer(initializer.expr.as_ref()) {
+            self.staged.insert(name, command);
+        }
+    }
+
+    fn staged_initializer(&self, expression: &Expr) -> Option<Staged> {
+        match expression {
+            Expr::Call(call) if self.program_path(call).is_some() => call
+                .args
+                .first()
+                .and_then(string_literal)
+                .filter(|program| shell_program(program))
+                .map(|shell| Staged { shell, armed: false }),
+            Expr::Path(alias) => alias
+                .path
+                .get_ident()
+                .and_then(|original| self.staged.get(&original.to_string()))
+                .cloned(),
+            _ => None,
+        }
     }
 }
 
