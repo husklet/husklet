@@ -1379,6 +1379,33 @@ static enum avx_dispatch_result avx_dispatch_map1_unpack(const hl_x86_avx_state 
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_bitwise(const hl_x86_avx_state *state, struct cpu *c,
+                                                         struct insn *instruction, uint64_t next, int map, int op,
+                                                         int destination, int first_register, int width) {
+    int exclusive_or = op == 0xEF || op == 0x57;
+    int inclusive_or = op == 0xEB || op == 0x56;
+    int and = op == 0xDB || op == 0x54;
+    int and_not = op == 0xDF || op == 0x55;
+    if (map != 1 || (!exclusive_or && !inclusive_or && !and && !and_not)) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t first[64], second[64], output[64];
+    avx_get(c, first_register, first);
+    avx_get_rm(state, c, instruction, next, width, second);
+    for (int offset = 0; offset < width; offset++) {
+        if (exclusive_or)
+            output[offset] = first[offset] ^ second[offset];
+        else if (inclusive_or)
+            output[offset] = first[offset] | second[offset];
+        else if (and)
+            output[offset] = first[offset] & second[offset];
+        else
+            output[offset] = (uint8_t)(~first[offset] & second[offset]);
+    }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1834,6 +1861,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_packed_low_multiply(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_sign_mask(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_unpack(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map1_bitwise(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2145,28 +2173,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 avx_put(c, rd, d, W);
             }
             cvt_fp_flags_set(parked);
-            goto done;
-        }
-        // logical: dst = src1 OP src2  (src1=vvvv, src2=rm). byte-wise over W.
-        case 0xEF: // vpxor
-        case 0xEB: // vpor
-        case 0xDB: // vpand
-        case 0xDF: // vpandn
-        case 0x57: // vxorps/pd
-        case 0x56: // vorps/pd
-        case 0x54: // vandps/pd
-        case 0x55: // vandnps/pd
-        {
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i++) {
-                uint8_t x = a[i], y = b[i];
-                d[i] = (op == 0xEF || op == 0x57)   ? (x ^ y)
-                       : (op == 0xEB || op == 0x56) ? (x | y)
-                       : (op == 0xDB || op == 0x54) ? (x & y)
-                                                    : (uint8_t)(~x & y); // andn
-            }
-            avx_put(c, rd, d, W);
             goto done;
         }
         // SSE3 horizontal FP + addsub: 7C haddps/pd, 7D hsubps/pd, D0 addsubps/pd. pp==1 => double,
