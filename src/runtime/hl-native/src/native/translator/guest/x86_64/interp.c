@@ -1203,11 +1203,47 @@ static int interp_one_byte_stack(struct cpu *cpu, struct insn *insn, uint64_t pc
     return STEP_NEXT;
 }
 
+static int interp_one_byte_modrm_transfer(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op < 0x86 || op > 0x8E || op == 0x8F) return -1;
+    if (op == 0x86 || op == 0x87) {
+        int width = (op & 1) ? insn->opsize : 1;
+        interp_operand operand = interp_rm(cpu, insn, next);
+        uint64_t reg_value = interp_reg_read(cpu, insn, insn->reg, width);
+        if (operand.is_memory) {
+            uint64_t old = interp_locked_rmw(operand.address, width, RMW_XCHG, reg_value, 0);
+            interp_reg_write(cpu, insn, insn->reg, width, old);
+        } else {
+            uint64_t old = interp_reg_read(cpu, insn, operand.number, width);
+            interp_reg_write(cpu, insn, operand.number, width, reg_value);
+            interp_reg_write(cpu, insn, insn->reg, width, old);
+        }
+    } else if (op >= 0x88 && op <= 0x8B) {
+        int width = (op & 1) ? insn->opsize : 1;
+        interp_operand operand = interp_rm(cpu, insn, next);
+        if (op <= 0x89)
+            interp_rm_write(cpu, insn, &operand, width, interp_reg_read(cpu, insn, insn->reg, width));
+        else
+            interp_reg_write(cpu, insn, insn->reg, width, interp_rm_read(cpu, insn, &operand, width));
+    } else if (op == 0x8C) {
+        static const int selector[8] = {0, 0x33, 0x2b, 0, 0, 0, 0, 0};
+        interp_operand operand = interp_rm(cpu, insn, next);
+        interp_rm_write(cpu, insn, &operand, operand.is_memory ? 2 : insn->opsize, (uint64_t)selector[insn->reg & 7]);
+    } else if (op == 0x8D) {
+        if (!insn->is_mem) return interp_undefined(cpu, insn, pc, "LEA with a register operand (#UD encoding)");
+        interp_reg_write(cpu, insn, insn->reg, insn->opsize, interp_lea_value(cpu, insn, next));
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_one_byte_alu(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_one_byte_stack(cpu, insn, pc, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_one_byte_modrm_transfer(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
 
     switch (op) {
@@ -1273,69 +1309,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         uint64_t left = interp_rm_read(cpu, insn, &operand, width);
         uint64_t right = interp_reg_read(cpu, insn, insn->reg, width);
         interp_flags_logic(cpu, (left & right) & interp_mask(width), width);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // XCHG r/m, r: IMPLICITLY locked on memory, LOCK prefix or not -- hence the unconditional locked_rmw.
-    case 0x86:
-    case 0x87: {
-        int width = (op & 1) ? insn->opsize : 1;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t reg_value = interp_reg_read(cpu, insn, insn->reg, width);
-        if (operand.is_memory) {
-            uint64_t old = interp_locked_rmw(operand.address, width, RMW_XCHG, reg_value, 0);
-            interp_reg_write(cpu, insn, insn->reg, width, old);
-        } else {
-            uint64_t old = interp_reg_read(cpu, insn, operand.number, width);
-            interp_reg_write(cpu, insn, operand.number, width, reg_value);
-            interp_reg_write(cpu, insn, insn->reg, width, old);
-        }
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // MOV r/m<-r, then r<-r/m
-    case 0x88:
-    case 0x89: {
-        int width = (op & 1) ? insn->opsize : 1;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        interp_rm_write(cpu, insn, &operand, width, interp_reg_read(cpu, insn, insn->reg, width));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-    case 0x8A:
-    case 0x8B: {
-        int width = (op & 1) ? insn->opsize : 1;
-        interp_operand operand = interp_rm(cpu, insn, next);
-        interp_reg_write(cpu, insn, insn->reg, width, interp_rm_read(cpu, insn, &operand, width));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // MOV r/m16, Sreg (8C) / MOV Sreg, r/m16 (8E). Long-mode userspace selectors are constants -- Linux
-    // starts a process with ES/DS/FS/GS = 0, CS = 0x33, SS = 0x2b -- and the FS/GS state that does vary is
-    // the BASE in cpu->fs_base/gs_base, which no selector move touches. These values must be lower/mov.c's
-    // exactly, or a guest that reads a selector and compares it diverges between the backends; /6 and /7
-    // are reserved and answer 0 there too.
-    case 0x8C: {
-        static const int selector[8] = {0, 0x33, 0x2b, 0, 0, 0, 0, 0}; // ES CS SS DS FS GS
-        interp_operand operand = interp_rm(cpu, insn, next);
-        // A memory destination is always 16-bit; a register one follows the operand size, so a 32/64-bit
-        // register destination zero-extends the selector.
-        interp_rm_write(cpu, insn, &operand, operand.is_memory ? 2 : insn->opsize, (uint64_t)selector[insn->reg & 7]);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-    // Accepted and discarded: loading a userspace selector has no visible effect without a modify_ldt(2)
-    // descriptor, which this engine does not model.
-    case 0x8E: cpu->rip = next; return STEP_NEXT;
-
-    case 0x8D: {
-        if (!insn->is_mem) return interp_undefined(cpu, insn, pc, "LEA with a register operand (#UD encoding)");
-        // LEA is an ADDRESS computation, never interp_load, and stays in the GUEST's pointer domain: a
-        // rip-relative LEA in a biased ET_EXEC must yield the LOW link address (findings 3.11).
-        interp_reg_write(cpu, insn, insn->reg, insn->opsize, interp_lea_value(cpu, insn, next));
         cpu->rip = next;
         return STEP_NEXT;
     }
