@@ -293,3 +293,11 @@ Resource acquisition and fallible state transitions return ownership or failure 
 ```c
 open_resource();
 ```
+## Do not hide C safety preconditions
+
+A safety-sensitive operation without its caller-owned invariants leaves reviewers unable to verify pointer bounds,
+lifetimes, ownership, or concurrency assumptions.
+
+```c
+copy_bytes(destination, source, length);
+```

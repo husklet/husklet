@@ -50,6 +50,18 @@ pub struct Policy {
     /// C functions whose return values carry mandatory outcome or ownership information.
     #[serde(default)]
     pub c_result: CResultPolicy,
+    /// C operations that require an attached safety rationale.
+    #[serde(default)]
+    pub c_safety: CSafetyPolicy,
+}
+
+/// Portable safety-rationale policy for C operations with caller-owned invariants.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CSafetyPolicy {
+    /// Exact function names whose calls require an attached `SAFETY:` comment.
+    #[serde(default)]
+    pub operations: Vec<String>,
 }
 
 /// Portable must-use policy for C function results.
@@ -281,6 +293,9 @@ maximum_functions = 12
 
 [c_result]
 must_use_functions = ["acquire"]
+
+[c_safety]
+operations = ["copy_bytes"]
 "#,
         )
         .unwrap();
@@ -288,6 +303,7 @@ must_use_functions = ["acquire"]
         assert_eq!(policy.dependency.package_budget("translator"), Some(1));
         assert_eq!(policy.c_interface.maximum_functions, 12);
         assert_eq!(policy.c_result.must_use_functions, ["acquire"]);
+        assert_eq!(policy.c_safety.operations, ["copy_bytes"]);
     }
 
     #[test]

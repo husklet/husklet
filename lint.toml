@@ -83,3 +83,6 @@ maximum_functions = 24
 
 [c_result]
 must_use_functions = ["fdopen", "fopen", "realloc", "tmpfile"]
+
+[c_safety]
+operations = ["gets", "vsprintf"]

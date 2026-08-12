@@ -10,12 +10,14 @@ pub mod analyzer;
 mod interface;
 mod policy;
 mod result;
+mod safety;
 mod structure;
 mod suppression;
 
 pub use interface::Interface;
 pub use policy::{CallPolicy, Policy};
 pub use result::ResultUse;
+pub use safety::Safety;
 pub use structure::Structure;
 
 fn source_files(workspace: &Workspace) -> Result<Vec<PathBuf>> {

@@ -2257,3 +2257,11 @@ if (resource == NULL) {
     return ERROR_RESOURCE;
 }
 ```
+## State C safety invariants at the call
+
+Keep the proof adjacent to the operation so later changes invalidate the rationale visibly.
+
+```c
+// SAFETY: destination and source are disjoint live allocations of at least length bytes.
+copy_bytes(destination, source, length);
+```

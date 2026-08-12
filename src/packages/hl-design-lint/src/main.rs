@@ -75,6 +75,7 @@ impl Arguments {
                 hl_design_lint::Registry::new()
                     .register(hl_design_lint::CInterface::new(policy.c_interface.clone()))
                     .register(hl_design_lint::CResult::new(policy.c_result.clone()))
+                    .register(hl_design_lint::CSafety::new(policy.c_safety.clone()))
                     .register(hl_design_lint::CStructure)
                     .register(hl_design_lint::CPolicy::new()),
             )
