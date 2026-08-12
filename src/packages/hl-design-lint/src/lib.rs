@@ -21,7 +21,7 @@ pub use rule::{
     DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString,
     FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch,
     MaximumNesting, ModelDuplication, ModulePrefix, NativeQuality, PathModules, PlatformCommand, PrefixDirectory,
-    ReceiverRepetition, Registry, RepositoryEscape, Rule, SingleFileDirectory, StructNaming, SuffixRole,
+    ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory, StructNaming, SuffixRole,
     TestDependency, TestDirectory, TestName, UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
@@ -44,6 +44,7 @@ impl Linter {
         Self::new(
             Registry::new()
                 .register(rule::DependencyDirection)
+                .register(rule::RuntimeTool)
                 .register(rule::UnsafeBoundary)
                 .register(rule::FreeFunction)
                 .register(rule::DuplicateEntity)

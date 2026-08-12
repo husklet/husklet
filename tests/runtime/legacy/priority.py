@@ -53,7 +53,10 @@ def select(names: list[str], known: dict[str, str]) -> tuple[str, str]:
 def analyze(root: Path = ROOT) -> list[dict[str, str]]:
     plan = {(row["suite"], row["case"], row["isa"]): row for row in table(root / "build-plan.tsv") if row["disposition"] == "active"}
     passes = [row for row in table(root / "report/c_results.tsv") if row["status"] == "pass"]
-    known = {row["name"]: row["status"] for row in table(root.parents[2] / "syscall-inventory.tsv")}
+    known = {
+        row["name"]: row["status"]
+        for row in table(root.parents[2] / "src/apps/testing/syscall-audit/syscall-inventory.tsv")
+    }
     with (root / "aliases.tsv").open(newline="") as source:
         aliases = {
             (row[0], row[1]): row[3]

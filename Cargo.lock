@@ -1345,10 +1345,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hl-syscall-audit"
-version = "0.1.0"
-
-[[package]]
 name = "hl-task"
 version = "0.1.0"
 dependencies = [

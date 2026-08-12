@@ -21,6 +21,7 @@ mod record;
 mod runtime;
 mod scenario;
 mod suite;
+mod syscall_audit;
 
 use clap::{Parser, Subcommand};
 
@@ -49,6 +50,8 @@ enum Command {
     ScenarioCachePreflight(scenario::CachePreflightOptions),
     /// Run nested-engine chains.
     Nested(nested::Options),
+    /// Audit production syscall coverage against the typed router inventory.
+    SyscallAudit(syscall_audit::Options),
 }
 
 #[tokio::main]
@@ -79,6 +82,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::ScenarioProvenance(options) => scenario::provenance(options),
         Command::ScenarioCachePreflight(options) => scenario::cache_preflight(options),
         Command::Nested(options) => nested::run(options),
+        Command::SyscallAudit(options) => syscall_audit::run(options),
     }
 }
 
@@ -98,6 +102,7 @@ mod cli_tests {
             "scenario-provenance",
             "scenario-cache-preflight",
             "nested",
+            "syscall-audit",
         ] {
             assert!(help.contains(command), "missing {command} from help");
         }
