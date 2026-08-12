@@ -5332,6 +5332,70 @@ static int lower_sse_sign_mask(struct insn *instruction, int vm, int mmx) {
     return TX_NEXT;
 }
 
+static int lower_mmx_fp_conversion(struct insn *instruction, uint64_t next, int vd, int vm) {
+    uint8_t opcode = instruction->op;
+    if ((opcode != 0x2A && opcode != 0x2C && opcode != 0x2D) || instruction->rep || instruction->repne)
+        return TX_FALL;
+    int truncate = opcode == 0x2C;
+    if (opcode == 0x2A) {
+        int source = vm & 7;
+        if (instruction->is_mem) {
+            g_ldr_d_ea(16, instruction, next);
+            source = 16;
+        }
+        if (instruction->p66) {
+            emit32(0x0F20A400u | (source << 5) | 18);
+            emit32(0x4E61D800u | (18 << 5) | 18);
+            e_vmov(vd, 18);
+        } else {
+            emit32(0x0E21D800u | (source << 5) | 18);
+            e_ins_d(vd, 0, 18, 0);
+        }
+        return TX_NEXT;
+    }
+    if (instruction->p66) {
+        int source = vm;
+        if (instruction->is_mem) {
+            g_ldr_q_ea(16, instruction, next);
+            source = 16;
+        }
+        e_movconst(16, 0x41E0000000000000ull);
+        emit32(0x4E080C00u | (16 << 5) | 19);
+        e_movconst(16, 0xC1E0000000000000ull);
+        emit32(0x4E080C00u | (16 << 5) | 20);
+        emit_pd2i32_pieces(24, 22, source, truncate, 19, 20, 23, 21);
+        emit32(0x0EA12800u | (24 << 5) | 24);
+        emit32(0x0EA12800u | (22 << 5) | 22);
+        e_movconst(16, 0x80000000ull);
+        emit32(0x0E040C00u | (16 << 5) | 18);
+        emit32(0x2E601C00u | (24 << 16) | (18 << 5) | 22);
+        e_vmov8(vd & 7, 22);
+        return TX_NEXT;
+    }
+    int source = vm;
+    if (instruction->is_mem) {
+        g_ldr_d_ea(16, instruction, next);
+        source = 16;
+    }
+    if (truncate) {
+        emit32(0x0EA1B800u | (source << 5) | 21);
+    } else {
+        emit32(0x2E219800u | (source << 5) | 21);
+        emit32(0x0EA1B800u | (21 << 5) | 21);
+    }
+    e_movconst(16, 0x4F000000ull);
+    emit32(0x0E040C00u | (16 << 5) | 17);
+    emit32(0x2E20E400u | (17 << 16) | (source << 5) | 19);
+    emit32(0x0E20E400u | (source << 16) | (source << 5) | 20);
+    emit32(0x2E205800u | (20 << 5) | 20);
+    e_v3(0x0EA01C00u, 19, 19, 20);
+    e_movconst(16, 0x80000000ull);
+    emit32(0x0E040C00u | (16 << 5) | 18);
+    emit32(0x2E601C00u | (21 << 16) | (18 << 5) | 19);
+    e_vmov8(vd & 7, 19);
+    return TX_NEXT;
+}
+
 // Owns the x87 run boundary as well as opcode dispatch. Every memory form
 // materializes the shadow stack before a potentially faulting access or C exit.
 static int lower_x87_family(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
@@ -6048,75 +6112,8 @@ static void *translate_block(uint64_t gpc) {
                 } else if (op == 0xD7) {
                     mmx_wb = -1;
                     (void)lower_sse_sign_mask(&I, vm, mmx);
-                } else if ((op == 0x2A || op == 0x2C || op == 0x2D) && !I.rep && !I.repne) {
-                    // The MMX conversions: without F2/F3, 0F 2A/2C/2D name an mm operand, not a GPR --
-                    // CVTPI2PS/PD (2A), CVT[T]PS2PI and CVT[T]PD2PI (2C trunc / 2D rounds by MXCSR.RC).
-                    // They used to fall into the scalar cvtsi2ss/cvttss2si arms below, which read the wrong
-                    // register file entirely; every line of the fixture was wrong.
-                    // The float->int direction MUST stay at .2s (Q=0) for the NP forms: they read only two
-                    // of xmm's four floats, and a 4-wide host convert would raise the upper lanes' #I/#P
-                    // into the guest's MXCSR. mm_n aliases v[n&7]; REX does not extend an MMX operand.
-                    mmx_wb = -1; // each arm writes its own width
-                    int trunc = (op == 0x2C);
-                    if (op == 0x2A) { // mm/m64 = 2 int32 -> xmm
-                        int s = vm & 7;
-                        if (I.is_mem) {
-                            g_ldr_d_ea(16, &I, next);
-                            s = 16;
-                        }
-                        if (I.p66) { // CVTPI2PD: 2 doubles, writes all 128 bits (int32->f64 is exact)
-                            emit32(0x0F20A400u | (s << 5) | 18);  // SXTL  v18.2d, vs.2s
-                            emit32(0x4E61D800u | (18 << 5) | 18); // SCVTF v18.2d, v18.2d
-                            e_vmov(vd, 18);
-                        } else {                                 // CVTPI2PS: 2 floats, MERGED into vd[63:0]
-                            emit32(0x0E21D800u | (s << 5) | 18); // SCVTF v18.2s, vs.2s (rounds by FPCR.RMode)
-                            e_ins_d(vd, 0, 18, 0);
-                        }
-                    } else if (I.p66) { // CVT[T]PD2PI: xmm/m128 = 2 doubles -> 2 int32 in mm
-                        int s = vm;
-                        if (I.is_mem) {
-                            g_ldr_q_ea(16, &I, next);
-                            s = 16;
-                        }
-                        e_movconst(16, 0x41E0000000000000ull);
-                        emit32(0x4E080C00u | (16 << 5) | 19); // v19.2d = 2^31 (f64)
-                        e_movconst(16, 0xC1E0000000000000ull);
-                        emit32(0x4E080C00u | (16 << 5) | 20); // v20.2d = -2^31
-                        // The pre-rounding FRINTX that used to sit here reported #P for an out-of-range
-                        // inexact source, where x86 raises #I alone; emit_pd2i32_pieces now owns the whole
-                        // round-and-flag rule for this width.
-                        emit_pd2i32_pieces(24, 22, s, trunc, 19, 20, 23, 21); // v24 = int64 lanes, v22 = mask
-                        emit32(0x0EA12800u | (24 << 5) | 24);                 // XTN v24.2s, v24.2d
-                        emit32(0x0EA12800u | (22 << 5) | 22);                 // XTN v22.2s, v22.2d
-                        e_movconst(16, 0x80000000ull);
-                        emit32(0x0E040C00u | (16 << 5) | 18);              // v18.2s = 0x80000000 (integer indefinite)
-                        emit32(0x2E601C00u | (24 << 16) | (18 << 5) | 22); // BSL v22.8b = mask ? indef : result
-                        e_vmov8(vd & 7, 22);
-                    } else { // CVT[T]PS2PI: xmm/m64 = 2 floats -> 2 int32 in mm
-                        int s = vm;
-                        if (I.is_mem) {
-                            g_ldr_d_ea(16, &I, next);
-                            s = 16;
-                        }
-                        if (trunc) {
-                            emit32(0x0EA1B800u | (s << 5) | 21); // FCVTZS.2s v21, vs
-                        } else {
-                            // FRINTX, not FRINTI: x86 raises #P when the conversion is inexact, and only the
-                            // X form reports Inexact. Then FCVTZS of the now-integral value is exact.
-                            emit32(0x2E219800u | (s << 5) | 21);  // FRINTX.2s v21, vs (current FPCR.RMode)
-                            emit32(0x0EA1B800u | (21 << 5) | 21); // FCVTZS.2s v21, v21
-                        }
-                        e_movconst(16, 0x4F000000ull);
-                        emit32(0x0E040C00u | (16 << 5) | 17);             // v17.2s = 2^31 (f32)
-                        emit32(0x2E20E400u | (17 << 16) | (s << 5) | 19); // FCMGE.2s v19, vs, 2^31
-                        emit32(0x0E20E400u | (s << 16) | (s << 5) | 20);  // FCMEQ.2s v20, vs, vs (0 where NaN)
-                        emit32(0x2E205800u | (20 << 5) | 20);             // MVN.8b v20 -> NaN mask
-                        e_v3(0x0EA01C00u, 19, 19, 20);                    // ORR.8b v19 = (f>=2^31 OR NaN)
-                        e_movconst(16, 0x80000000ull);
-                        emit32(0x0E040C00u | (16 << 5) | 18);              // v18.2s = integer indefinite
-                        emit32(0x2E601C00u | (21 << 16) | (18 << 5) | 19); // BSL v19.8b = mask ? indef : result
-                        e_vmov8(vd & 7, 19);
-                    }
+                } else if (lower_mmx_fp_conversion(&I, next, vd, vm) == TX_NEXT) {
+                    mmx_wb = -1;
                 } else if (op == 0x2A) { // cvtsi2sd/ss: int r/m -> xmm (F2=double,F3=single)
                     int src;
                     if (I.is_mem) {
