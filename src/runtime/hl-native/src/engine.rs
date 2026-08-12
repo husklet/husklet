@@ -31,7 +31,7 @@ pub struct EngineConfig<'a> {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-struct MainImagePlan {
+struct Plan {
     abi: u32,
     size: u32,
     architecture: u32,
@@ -138,7 +138,7 @@ impl Engine {
     }
 }
 
-fn inspect_main_image(config: &EngineConfig<'_>) -> Result<MainImagePlan, i32> {
+fn inspect_main_image(config: &EngineConfig<'_>) -> Result<Plan, i32> {
     let mut file = open_main_image(config)?;
     let mut header = [0_u8; 64];
     file.read_exact(&mut header).map_err(|_| 1)?;
@@ -171,9 +171,9 @@ fn inspect_main_image(config: &EngineConfig<'_>) -> Result<MainImagePlan, i32> {
             (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
         })
     });
-    Ok(MainImagePlan {
+    Ok(Plan {
         abi: 1,
-        size: u32::try_from(std::mem::size_of::<MainImagePlan>()).expect("small ABI struct"),
+        size: u32::try_from(std::mem::size_of::<Plan>()).expect("small ABI struct"),
         architecture: config.isa,
         kind,
         link_start,
