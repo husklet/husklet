@@ -1,10 +1,16 @@
 # Oracle C engine import plan
 
-This plan is rooted at Husklet commit `719980785` and audits the read-only
+This historical sequencing plan was rooted at Husklet commit `719980785` and audits the read-only
 oracle at `../engine` revision
 `7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`. The oracle is not a build
 dependency. Every imported file is copied into `retained/`, reviewed there,
 and recorded in both retained source inventories.
+
+Current status: the AArch64 interpreter tranche and complete x86 closure have
+been imported. The x86 closure is compiled and inventoried but remains
+production-unselected. Production has no Rust execution fallback; promotion of
+another retained target must pass the gates below and update the fail-closed
+selector explicitly.
 
 [`ORACLE_IMPORT_MANIFEST.tsv`](ORACLE_IMPORT_MANIFEST.tsv) is the
 source-by-source delta for the standalone core and both translator ISAs. Files
@@ -25,27 +31,21 @@ mutation-time peer stopping, standalone configuration reads, and signal/process
 singletons are not valid integration mechanisms. Imported code receives
 bounded POD requests and returns bounded results through the retained ABI.
 
-## Smallest compilable import tranche
+## Completed import tranches
 
-The first tranche is the AArch64 interpreter pair:
+The first tranche was the AArch64 interpreter pair:
 
 - `translator/guest/aarch64/interp_dispatch.h`
 - `translator/guest/aarch64/interp.c`
 
-Copy both at the pinned revision, add both to `RUNTIME_SOURCES.manifest`, and
-compile `interp.c` as a normal archive translation unit. Adapt only its memory,
-fault, signal, and CPU-state entrances to retained host services. Do not wire it
-into production selection in this tranche. This proves the import discipline,
-license/inventory checks, and Rust-owned boundary without touching the hot
-translator or cache.
+Both are now inventoried with a non-selected link smoke. Production continues
+to use the same-ISA AArch64 translator rather than this interpreter arm.
 
-The x86 backend is not safely divisible into individual lowering files: decoder,
+The x86 backend was not safely divisible into individual lowering files: decoder,
 operand, flags, emit, REP, vector, x87, cache, and generated dispatch headers
-cross-include each other. Import the manifest's complete `x86_closure` as the
-second tranche, but initially compile it into a non-selected archive plus a
-link-smoke fixture. `core/target/{run,dual,x86_64}.c` joins only after the
-translator archive links cleanly. Production selection follows CPU snapshot,
-signal, syscall, dirty-publication, and differential tests.
+cross-include each other. The manifest's complete `x86_closure`, including
+`core/target/{dual,x86_64}.c`, is now present. It remains non-selected pending
+CPU snapshot, signal, syscall, dirty-publication, and differential tests.
 
 The standalone CLI/config/environment/launch files are last and remain
 unwired. Their purpose is a diagnostic standalone executable for oracle-floor
@@ -78,5 +78,6 @@ Each tranche must satisfy, in order:
 7. same-binary control demonstrating that any measured win comes from the
    imported mechanism rather than layout or container lifecycle.
 
-No tranche may delete its Rust fallback or select the imported standalone path
-until the next layer has independent compatibility and non-vacuity evidence.
+No tranche may change production selection until the next layer has independent
+compatibility, non-vacuity, and performance evidence. There is no production
+Rust fallback to preserve.
