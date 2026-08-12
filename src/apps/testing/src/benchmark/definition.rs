@@ -125,7 +125,7 @@ impl Campaign {
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
         if !invariant_phases_valid(&self.invariant_phases, &declared) {
-            return Err("benchmark invariant phases must be unique declared phases".into());
+            return Err("benchmark requires at least one unique declared invariant phase".into());
         }
         if self.workloads["malloc"].commands.keys().collect::<Vec<_>>() != self.layouts.keys().collect::<Vec<_>>() {
             return Err("malloc must run the full sequence on both plain and sqlite layouts".into());
@@ -192,7 +192,7 @@ fn phase_names_valid(phases: &[String], allow_empty: bool) -> bool {
 }
 
 fn invariant_phases_valid(invariants: &[String], declared: &BTreeSet<&str>) -> bool {
-    phase_names_valid(invariants, true) && invariants.iter().all(|phase| declared.contains(phase.as_str()))
+    phase_names_valid(invariants, false) && invariants.iter().all(|phase| declared.contains(phase.as_str()))
 }
 
 fn guest_is_hashed(rootfs: &Path, guest: &Path) -> bool {
@@ -408,6 +408,7 @@ mod tests {
 
         let declared = ["compute", "malloc"].into_iter().collect();
         assert!(invariant_phases_valid(&["compute".into()], &declared));
+        assert!(!invariant_phases_valid(&[], &declared));
         assert!(!invariant_phases_valid(&["typo".into()], &declared));
     }
 
