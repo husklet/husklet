@@ -25,6 +25,37 @@ struct direct_call_state {
     int *context_count;
 };
 
+struct deferred_branch;
+
+struct conditional_branch_state {
+    uint64_t start;
+    void *body;
+    uint64_t *seen;
+    int *seen_count;
+    int *trace_blocks;
+    int *conditional_count;
+    struct deferred_branch *deferred;
+    int *deferred_count;
+    int in_exclusive_region;
+    int stitch_allowed;
+};
+
+static enum translation_step translate_condition_branch(uint64_t *guest_pc, uint32_t instruction,
+                                                        struct conditional_branch_state *state);
+static enum translation_step translate_compare_zero_branch(uint64_t *guest_pc, uint32_t instruction,
+                                                           struct conditional_branch_state *state);
+static enum translation_step translate_test_bit_branch(uint64_t *guest_pc, uint32_t instruction,
+                                                       struct conditional_branch_state *state);
+
+static enum translation_step translate_conditional_control(uint64_t *guest_pc, uint32_t instruction,
+                                                           struct conditional_branch_state *state) {
+    enum translation_step step = translate_condition_branch(guest_pc, instruction, state);
+    if (step != TRANSLATION_UNHANDLED) return step;
+    step = translate_compare_zero_branch(guest_pc, instruction, state);
+    if (step != TRANSLATION_UNHANDLED) return step;
+    return translate_test_bit_branch(guest_pc, instruction, state);
+}
+
 static enum translation_step translate_unconditional_branch(uint64_t *guest_pc, uint32_t instruction,
                                                             struct unconditional_branch_state *state) {
     if ((instruction & 0xFC000000u) != 0x14000000u) return TRANSLATION_UNHANDLED;

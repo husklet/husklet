@@ -409,19 +409,6 @@ static uint64_t translate_special_instruction(uint64_t guest_pc, uint64_t block_
     return 0;
 }
 
-struct conditional_branch_state {
-    uint64_t start;
-    void *body;
-    uint64_t *seen;
-    int *seen_count;
-    int *trace_blocks;
-    int *conditional_count;
-    struct deferred_branch *deferred;
-    int *deferred_count;
-    int in_exclusive_region;
-    int stitch_allowed;
-};
-
 static enum translation_step translate_test_bit_branch(uint64_t *guest_pc, uint32_t instruction,
                                                        struct conditional_branch_state *state) {
     if ((instruction & 0x7E000000u) != 0x36000000u) return TRANSLATION_UNHANDLED;
@@ -890,57 +877,21 @@ static void *translate_block(uint64_t gpc) {
         enum translation_step indirect_step = translate_indirect_control(&gpc, in, ctx, &nctx);
         if (indirect_step == TRANSLATION_CONTINUE) continue;
         if (indirect_step == TRANSLATION_STOP) break;
-        if ((in & 0xFF000010u) == 0x54000000u) {
-            struct conditional_branch_state branch_state = {
-                .start = start,
-                .body = body,
-                .seen = seen,
-                .seen_count = &nseen,
-                .trace_blocks = &trace_blk,
-                .conditional_count = &ncond,
-                .deferred = defer,
-                .deferred_count = &ndefer,
-                .in_exclusive_region = in_excl,
-                .stitch_allowed = STITCH_OK,
-            };
-            enum translation_step step = translate_condition_branch(&gpc, in, &branch_state);
-            if (step == TRANSLATION_CONTINUE) continue;
-            if (step == TRANSLATION_STOP) break;
-        }
-        if ((in & 0x7E000000u) == 0x34000000u) {
-            struct conditional_branch_state branch_state = {
-                .start = start,
-                .body = body,
-                .seen = seen,
-                .seen_count = &nseen,
-                .trace_blocks = &trace_blk,
-                .conditional_count = &ncond,
-                .deferred = defer,
-                .deferred_count = &ndefer,
-                .in_exclusive_region = in_excl,
-                .stitch_allowed = STITCH_OK,
-            };
-            enum translation_step step = translate_compare_zero_branch(&gpc, in, &branch_state);
-            if (step == TRANSLATION_CONTINUE) continue;
-            if (step == TRANSLATION_STOP) break;
-        }
-        if ((in & 0x7E000000u) == 0x36000000u) {
-            struct conditional_branch_state branch_state = {
-                .start = start,
-                .body = body,
-                .seen = seen,
-                .seen_count = &nseen,
-                .trace_blocks = &trace_blk,
-                .conditional_count = &ncond,
-                .deferred = defer,
-                .deferred_count = &ndefer,
-                .in_exclusive_region = in_excl,
-                .stitch_allowed = STITCH_OK,
-            };
-            enum translation_step test_bit_step = translate_test_bit_branch(&gpc, in, &branch_state);
-            if (test_bit_step == TRANSLATION_CONTINUE) continue;
-            if (test_bit_step == TRANSLATION_STOP) break;
-        }
+        struct conditional_branch_state branch_state = {
+            .start = start,
+            .body = body,
+            .seen = seen,
+            .seen_count = &nseen,
+            .trace_blocks = &trace_blk,
+            .conditional_count = &ncond,
+            .deferred = defer,
+            .deferred_count = &ndefer,
+            .in_exclusive_region = in_excl,
+            .stitch_allowed = STITCH_OK,
+        };
+        enum translation_step conditional_step = translate_conditional_control(&gpc, in, &branch_state);
+        if (conditional_step == TRANSLATION_CONTINUE) continue;
+        if (conditional_step == TRANSLATION_STOP) break;
 
         if (translate_tls_instruction(in)) {
             gpc += 4;
