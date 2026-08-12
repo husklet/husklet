@@ -67,15 +67,15 @@ this repository requires for a coverage claim anyway.
 
 ## What "green" means
 
-The corpus is not the gate. `make gate` runs
+The corpus is not the gate. The `nix flake check` verification derivation runs
 `cargo test --workspace --all-targets`, which covers the Rust library tests and
-the C program suite (`src/native/tests/exec_c.rs`); the corpus reaches neither.
+the native-package integration tests; the corpus reaches neither.
 Eleven stale assertions once survived because every lane ran the corpus and a
 targeted `cargo test -p <pkg>` and nobody ran the workspace.
 
 Before committing, run `cargo test --workspace --lib --bins` and
-`cargo test -p hl-native --test exec_c` — about a minute, and it catches that
-whole class. Run them in debug or inside `make gate`: under `--release`,
+`cargo test -p hl-native --all-targets` — about a minute, and it catches that
+whole class. Run them in debug or inside `nix flake check`: under `--release`,
 `hl-log`'s verbose tests compile out and the daemon tests need
 `HL_ALPINE_ARCHIVE`, so both report spurious failures.
 
@@ -108,14 +108,16 @@ the product. That is the permanently-armed form of the merge hazard above.
 
 Making it visible cost four lines of `flake.nix`: the Linux dev shell now carries `gtk4`,
 `librsvg` and `vte-gtk4` exactly as the Darwin one does, all substitutable (~257 MiB, no
-source builds). `make gate` therefore runs the two feature-gated Clippy commands CI runs,
-and `make gate-app` runs just those two when you only want the application answered.
+source builds). CI therefore runs the two feature-gated Clippy commands explicitly.
+Run the same `cargo clippy -p husklet --all-targets --features runtime` and
+`cargo clippy -p husklet --all-targets --features gui` commands inside `nix develop`
+when you only want the application answered.
 
 What this does **not** cover, and no Linux run can: linking and running the GTK app,
 the `#[cfg(target_os = "macos")]` arms in `bin/host/{environment,pty,appearance}.rs` and
 `runtime/process.rs`, the objc2 title-bar and appearance code, and everything in
 `.github/workflows/release.yml` — bundling, code signing, notarization, the DMG. A green
-`make gate` on Linux means the application *type-checks and lints*; it does not mean it
+CI verification run on Linux means the application *type-checks and lints*; it does not mean it
 runs. The macOS arms are still only compiled by CI on `macos-26`.
 
 ### Work in your own worktree, and stage by path
@@ -192,8 +194,9 @@ shared `target/` was populated by the flake toolchain, and a host-resolved
 anyone's diff and `cargo clean` is the wrong response — it would discard tens of
 gigabytes other lanes are using.
 
-Use `make lint` and `make fmt`, which route through `$(NIX_DEV)`. Two lanes have
-now reported the E0514 as a mysterious failure of their own change.
+Enter the pinned shell with `nix develop` before running `cargo clippy` or
+`cargo fmt`. Two lanes have now reported the E0514 as a mysterious failure of
+their own change.
 
 ### A real Docker is reachable — use `sudo -n docker`
 
@@ -306,7 +309,7 @@ arriving — which is the whole window the announcement exists to close.
 
 **Count lock holders, not processes named `testing`.** The quiet probe reads
 `pgrep -cx testing` and will happily report zero while eleven holders are live,
-because they are `cargo`, `clippy`, `make lint` and a renamed engine. Walk
+because they are `cargo`, `clippy`, `nix` and a renamed engine. Walk
 `/proc/*/fd` for the lock file instead: holder count is the occupancy signal,
 and it is immune to every naming blind spot above.
 
@@ -407,12 +410,12 @@ adds load to someone's minima. `pgrep -ax testing` shows the row's start time,
 which is how you tell "just finished" from "sixteen seconds in".
 
 **Do not poll for your own long job — capture its exit code at the call site.**
-`make lint; echo EXIT=$?` is the whole technique. A waiter built on
-`pgrep -f "make lint"` matches its own command line and blocks forever on
-itself: one lane reported lint as still running for nine minutes after it had
-finished, then read a `sleep && tail` wrapper's exit code as lint's verdict and
-reported a green it had not observed. `-cx` cannot rescue this, because a `make`
-target has no distinct process name. The self-match hazard is generic to
+`cargo clippy; echo EXIT=$?` at the invocation site is the whole technique. A
+waiter built on `pgrep -f "cargo clippy"` matches its own command line and blocks
+forever on itself: one lane reported lint as still running for nine minutes after
+it had finished, then read a `sleep && tail` wrapper's exit code as lint's verdict and
+reported a green it had not observed. `-cx` cannot rescue this, because a Cargo
+subcommand has no distinct process name. The self-match hazard is generic to
 `pgrep -f`, not specific to `testing`.
 
 Timings taken without this check are not evidence. Counter ratios, code-size
@@ -622,7 +625,8 @@ changing edits until the dependent verification has captured a coherent commit.
 ## Mission
 
 Provide isolated, reproducible Linux workspaces backed by the production C
-execution engine under `src/runtime/native`, with a memory-safe Rust control plane.
+execution engine in the Cargo package `src/runtime/hl-native`, with a memory-safe
+Rust control plane.
 Opening a workspace enters its configured
 image with a terminal, filesystem, networking, VPN, and container services.
 
@@ -637,7 +641,7 @@ interactive terminal workloads, and nested engine execution such as `arm -> amd 
 Production engine behavior must never branch on an application, language, runtime,
 framework, executable name, build-information marker, or vendor identity.  In
 particular, Go, V8, JVM, and similar guest internals are not Linux ABI
-domains.  When retained C contains such a branch, preserve it as migration evidence
+domains. When inherited C contains such a branch, preserve it as migration evidence
 and identify the violated generic invariant (for example non-PIE guest-address
 placement or signal semantics); repair that invariant in its authoritative
 owner rather than adding runtime-specific detection in C or Rust. Guest-visible
@@ -645,11 +649,11 @@ addresses remain ELF/Linux addresses;
 host storage placement is an internal mapping detail and must not leak into guest
 pointers, symbols, signals, `/proc`, checkpoints, or runtime metadata.
 
-## Production/native ownership study before every migration lane
+## Production/native ownership study before every engine lane
 
-Reading retained fixtures and expected output is necessary but insufficient.
+Reading compatibility fixtures and expected output is necessary but insufficient.
 Before changing a runtime domain, the lane owner must inspect the selected
-implementation under `src/runtime/native/retained` and, when provenance or an
+implementation under `src/runtime/hl-native/src/native` and, when provenance or an
 independent baseline matters, the corresponding pinned read-only implementation
 in `../engine`. Record:
 
@@ -695,11 +699,11 @@ nothing.
 
 ### Change domains, not failing cases
 
-The selected retained C backend is the production implementation. Compatibility
+The integrated `hl-native` C backend is the production implementation. Compatibility
 cases are acceptance evidence and prioritization signals; they are not a
 substitute for understanding the complete implementation that already works.
 
-Before fixing a corpus cluster, read the complete retained C domain and its call
+Before fixing a corpus cluster, read the complete integrated C domain and its call
 graph rather than only the function named by the first failure. Inventory every
 entry point, state object, ownership edge, lock, wakeup, error path, architecture
 branch, and teardown transition, then compare that inventory mechanically against
@@ -709,7 +713,7 @@ Implement the largest coherent missing mechanism and all of its widths, flags,
 lifecycle paths, and error semantics before returning to the corpus.
 
 Walking one executable until it exposes the next unsupported instruction or
-patching one fixture-visible branch at a time is forbidden when the retained C
+patching one fixture-visible branch at a time is forbidden when the integrated C
 tables or domain implementation can reveal the complete family in one audit.
 Likewise, a narrow passing case does not prove a domain port complete. Acceptance
 requires focused cohort evidence after the implementation comparison and later a
@@ -723,8 +727,7 @@ execution, container capabilities, workspace capabilities, and the product root:
 ```text
 src/
   packages/   transferable libraries and repository tool packages
-  runtime/    engine runtime domains, including the production C engine in native/
-  native/     CPU schema generation and C ABI test/build harness
+  runtime/    engine runtime domains, including the hl-native Cargo package
   containers/ container services and the integrated hl-engine
   workspaces/ workspace, terminal, and generic GUI capabilities
   apps/husklet/ the product composition root
@@ -734,7 +737,7 @@ Dependencies point inward:
 
 ```text
 husklet -> workspaces + containers -> runtime -> packages -> std
-                              -> native schema/build harness
+                              -> hl-native (Cargo-built C engine)
 ```
 
 - Production libraries in `packages/` must make sense without an engine, guest,
@@ -770,9 +773,9 @@ Ask these questions in order:
 
 1. Is it repository-only lint, differential, fixture, or benchmark machinery
    that is forbidden as a production dependency? Put its package in `packages/`
-   and keep the tool boundary explicit. Audits that understand engine-owned
-   runtime domains, such as syscall admission, live in `runtime/` but remain
-   forbidden as production dependencies.
+   and keep the tool boundary explicit. Product compatibility probes and audits,
+   including syscall admission audits, are owned by the `testing` application;
+   they do not become runtime packages.
 2. Does the code extend ordinary logging, filesystem, byte I/O, encoding, or
    another standard-library mechanism without engine vocabulary? Put it in
    `packages/`.
@@ -789,8 +792,8 @@ Do not add catch-all packages or modules named `core`, `common`, `shared`, `type
 `utils`, `helpers`, or `misc`. Name code by the entity, capability, algorithm, or
 external mechanism it owns.
 
-Do not create an outer directory containing one crate. The three source layers are
-the meaningful grouping. Runtime concepts such as ISA, memory, networking, tasks,
+Do not create an outer directory containing one crate. The source layers are the
+meaningful grouping. Runtime concepts such as ISA, memory, networking, tasks,
 and execution are sibling packages under `src/runtime/`.
 
 ## Domain ownership
@@ -834,7 +837,7 @@ boundary.
 Current execution boundary:
 
 - `hl-engine` owns validated launch plans, worker supervision, fail-closed
-  C-only backend selection, and the coarse retained-C FFI;
+  C-only backend selection, and the coarse `hl-native` FFI;
 - Rust loader and memory services own bounded image/projection inputs;
 - selected C owns guest scheduling, Linux personality, translation, and execution;
 - memory owns `Backing`; runtime adapts a pinned open-file description;
@@ -846,17 +849,19 @@ Keep traits small and capability-specific.
 
 ## Native execution boundary
 
-The production C/assembly engine lives under `src/runtime/native/retained` and
-is selected through the Rust boundary in
-`src/containers/hl-engine/src/execution`. It currently owns the complete guest
+The production C/assembly engine lives under
+`src/runtime/hl-native/src/native` and is compiled by
+`src/runtime/hl-native/build.rs`. It is selected through the Rust boundary in
+`src/containers/hl-engine/src/runtime/execution.rs`. It currently owns the complete guest
 execution closure: translation, scheduling, Linux ABI services, signals,
 filesystem and descriptor behavior, and guest lifecycle. Rust owns product
 selection, launch-plan validation, worker supervision, and the public product
 interfaces. Builds must not read or link `../engine`.
 
-`src/runtime/native/exec` is an unselected replacement candidate retained for
-differential evidence. `src/native` contains CPU-schema generation, build
-integration, and C test harnesses; it is not the production engine source root.
+There is no second production engine tree. Differential or oracle material belongs
+under testing, and the build must not select code from `../engine` or
+`../engine_rust`. Cargo is the package-level build authority; Nix supplies and
+pins its toolchain.
 
 The following narrow boundary described the deleted Rust-executor migration and
 is retained as historical design evidence, not as the current architecture:
@@ -874,9 +879,9 @@ descriptor, networking, task, loader, checkpoint, or product policy.
 Cross-language operations are coarse. FFI per instruction, guest memory access,
 block lookup, or chain transition is forbidden.
 
-CPU layouts are generated from `src/native/cpu` into C and Rust. Both sides compile
-size, alignment, and offset assertions. Hand-maintained duplicate layouts are
-forbidden.
+CPU layouts shared across the C/Rust boundary live with `hl-native`; both sides
+compile size, alignment, and offset assertions. Hand-maintained duplicate layouts
+are forbidden.
 
 ### Historical: why the deleted Rust executor translated less on arm64
 
@@ -1076,9 +1081,9 @@ nix build -L --option cores 0 --max-jobs auto
 nix flake check -L --option cores 0 --max-jobs auto
 ```
 
-Run Clippy and rustfmt only through `make lint` (alias of `make clippy`), `make fmt`,
-`make fmt-check`, or `make gate`; each enters the pinned shell. A bare `cargo clippy`
-on a host whose `cargo`/`rustc` come from a distribution package but whose
+Run Clippy and rustfmt inside `nix develop`, or let `nix flake check` run the
+complete locked verification derivation. A bare `cargo clippy` on a host whose
+`cargo`/`rustc` come from a distribution package but whose
 `clippy-driver` comes from Nix fails with `error[E0514]: found crate ... compiled by
 an incompatible version of rustc` even though both report the same version string,
 because the two builds hash crate metadata differently.
@@ -1093,16 +1098,18 @@ derivation deliberately; use its internal parallelism rather than launching
 duplicate full Cargo builds that contend for the same dependency graph.
 The derivation must remain offline, locked, warning-strict, and responsible for
 format, design lint, lint cases, workspace and documentation tests, and checked
-compatibility metadata. Do not reintroduce retained-tree CMake, Ninja, clang, or
-cppcheck dependencies unless Rust-owned build code actually requires them.
+compatibility metadata. Do not reintroduce retained-tree CMake, Ninja,
+clang-tidy, or cppcheck command pipelines. Native C compilation is owned by
+`hl-native/build.rs`; portable source analysis is embedded in `hl-design-lint`.
 
 ## Design lint
 
-`src/packages/hl-design-lint` is the repository architecture linter. Run:
+`src/packages/hl-design-lint` is the repository architecture linter. Run it in
+the pinned shell:
 
 ```text
-make design-lint
-make lint-cases
+cargo run --locked --offline -q -p hl-design-lint -- --policy design-lint.toml src tests
+cargo run --locked --offline -q -p hl-design-lint -- --policy design-lint.toml --cases lint src tests
 ```
 
 It enforces dependency direction and cycles, source ownership, ambient environment
