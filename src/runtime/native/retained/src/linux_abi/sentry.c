@@ -648,12 +648,12 @@ static struct hl_sentry_binding *binding_lookup_locked(pid_t wpid, uint32_t toke
 }
 
 static void sentry_native_close(int descriptor) {
-    // Close the owned kernel object before touching descriptor-indexed emulation state.  That teardown can
-    // consult/release injected logical-handle slots with the same small integer; doing it first allowed the
-    // native pipe end to survive after its table entry had already been erased.
+    // Tear down descriptor-indexed emulation while the descriptor still names its object.  In particular,
+    // epoll/OFD cleanup may inspect or re-home registrations; closing first lets that work reuse this number
+    // and leaves the replacement open when the reset returns.
+    fd_reset_emul(descriptor);
     int result = close(descriptor);
     int error = errno;
-    fd_reset_emul(descriptor);
     // A sentry table owns every native descriptor passed here exactly once.  EBADF or another hard failure
     // means the ownership ledger and kernel disagree; fail closed instead of silently creating an EOF leak.
     if (result != 0 && error != EINTR) abort();
