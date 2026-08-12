@@ -3911,6 +3911,35 @@ static int lower_wide_compare_exchange(struct insn *instruction, uint64_t guest_
     return TX_NEXT;
 }
 
+static int lower_system_query(struct insn *instruction, uint64_t next) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0xA2) {
+        emit_exit_const(next, R_CPUID);
+        return TX_BREAK;
+    }
+    if (opcode == 0x31) {
+        emit32(0xD53BE040u | 16);
+        e_mov_rr(RAX, 16, 0);
+        e_lsr_i(RDX, 16, 32, 1);
+        return TX_NEXT;
+    }
+    if (opcode != 0x01 || !instruction->has_modrm) return TX_FALL;
+    if (instruction->modrm == 0xF9) {
+        emit32(0xD53BE040u | 16);
+        e_mov_rr(RAX, 16, 0);
+        e_lsr_i(RDX, 16, 32, 1);
+        e_movz(RCX, 0, 0);
+        return TX_NEXT;
+    }
+    if (instruction->modrm == 0xD0) {
+        e_movz(RAX, 3, 0);
+        e_movz(RDX, 0, 0);
+        return TX_NEXT;
+    }
+    if (instruction->modrm == 0xD5) return TX_NEXT;
+    return TX_FALL;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -5931,35 +5960,12 @@ static void *translate_block(uint64_t gpc) {
                     continue;
                 }
             }
-            if (op == 0xA2) {
-                emit_exit_const(next, R_CPUID);
-                break;
-            } // cpuid -> dispatcher helper
-            if (op == 0x31) {             // rdtsc: edx:eax = cntvct
-                emit32(0xD53BE040u | 16); // mrs x16, cntvct_el0
-                e_mov_rr(RAX, 16, 0);
-                e_lsr_i(RDX, 16, 32, 1);
+            int system_query_result = lower_system_query(&I, next);
+            if (system_query_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
-            if (op == 0x01 && I.has_modrm && I.modrm == 0xF9) { // rdtscp: edx:eax = cntvct, ecx = TSC_AUX (0)
-                emit32(0xD53BE040u | 16);                       // mrs x16, cntvct_el0
-                e_mov_rr(RAX, 16, 0);
-                e_lsr_i(RDX, 16, 32, 1);
-                e_movz(RCX, 0, 0); // TSC_AUX = 0
-                gpc = next;
-                continue;
-            }
-            if (op == 0x01 && I.has_modrm && I.modrm == 0xD0) { // xgetbv (ecx=0): XCR0 = x87+SSE (no AVX)
-                e_movz(RAX, 3, 0);
-                e_movz(RDX, 0, 0);
-                gpc = next;
-                continue;
-            }
-            if (op == 0x01 && I.has_modrm && I.modrm == 0xD5) { // xend (TSX): no transaction -> NOP
-                gpc = next;
-                continue;
-            }
+            if (system_query_result == TX_BREAK) break;
             if (op == 0xC3) { // movnti: non-temporal store r32/r64 -> m
                 emit_ea(&I, next);
                 emit_memory_guard(17, (uint64_t)I.opsize, gpc, X86_SOFT_WRITE);
