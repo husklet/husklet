@@ -3747,7 +3747,7 @@ static void launch_reg_terminate_peers(void) {
             errno = 0;
             raw = strtol(entry->d_name + 1, &end, 10);
             if (errno != 0 || *end != 0 || raw <= 0 || raw > INT32_MAX || raw == (long)getpid()) continue;
-            snprintf(path, sizeof path, "%s/%s", directory, entry->d_name);
+            snprintf(path, sizeof path, "%s/b%ld", directory, raw);
             int descriptor = open(path, O_RDONLY | O_CLOEXEC);
             if (descriptor < 0) continue;
             ssize_t count;
