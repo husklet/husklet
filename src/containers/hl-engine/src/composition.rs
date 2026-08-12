@@ -123,7 +123,10 @@ impl Terminal {
     }
 
     pub(crate) fn detach(&self) {
-        let mut current = self.attachment.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self
+            .attachment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         current.take();
     }
 }
