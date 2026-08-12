@@ -3,6 +3,6 @@
 
 /* Public native-execution view of the generated CPU ABI. Consumers include
  * this boundary header rather than depending on the repository layout. */
-#include "../../cpu/include/layout.h"
+#include "layout.h"
 
 #endif

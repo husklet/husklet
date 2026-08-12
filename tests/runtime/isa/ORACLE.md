@@ -58,11 +58,11 @@ same guest-address contract.
 |---|---|---|
 | Exclusive reservation generations, invalidation, ordering | `hl-memory/src/atomic_access.rs`, `reservation.rs` | implemented |
 | Per-task AArch64 reservation lifetime and fork/reset clearing | `hl-execution/src/aarch64/state.rs`, `hl-engine/src/ffi/linux/execution/fork.rs` | implemented |
-| x86 compare-exchange decode/lowering | `hl-execution/src/x86`, `native/exec/src/arch/x86_64/frontend/memory.c` | implemented |
-| x86 XADD widths, byte-register identity, ADD flags, dual destinations | `native/exec/src/arch/x86_64/frontend/memory.c` | implemented |
-| x86 XADD memory R/W admission, aligned LDADDAL, split-lock fallback, dirty/executable publication | `native/exec/src/arch/x86_64/frontend/memory.c` | implemented |
+| x86 compare-exchange decode/lowering | `hl-execution/src/x86`, `runtime/native/exec/src/arch/x86_64/frontend/memory.c` | implemented |
+| x86 XADD widths, byte-register identity, ADD flags, dual destinations | `runtime/native/exec/src/arch/x86_64/frontend/memory.c` | implemented |
+| x86 XADD memory R/W admission, aligned LDADDAL, split-lock fallback, dirty/executable publication | `runtime/native/exec/src/arch/x86_64/frontend/memory.c` | implemented |
 | x87 control/status/value/class state | `hl-execution/src/x86`, Linux signal-frame adapter | implemented |
-| Native AArch64 provenance for exclusive/LSE/CASP | `native/exec/test/aarch64_provenance.c` | divergent: fallback-only until monitor state is ported |
+| Native AArch64 provenance for exclusive/LSE/CASP | `runtime/native/exec/test/aarch64_provenance.c` | divergent: fallback-only until monitor state is ported |
 | Exact ET_EXEC guest-address identity with internal host placement | loader/memory/native execution composition | acceptance coverage retained by the non-PIE cases |
 | Per-case deterministic Go cross-build environment | testing folder runner | missing; two cases are visibly `unsupported` |
 

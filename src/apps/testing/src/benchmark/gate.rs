@@ -259,8 +259,8 @@ fn slot(affinity: &str, requested: Option<usize>, seed: usize) -> Result<(usize,
 /// change by measuring an ARM64 guest.
 pub(crate) const fn lowering(isa: Isa) -> &'static str {
     match isa {
-        Isa::Aarch64 => "src/native/exec/src/arch/aarch64",
-        Isa::X86 => "src/native/exec/src/arch/x86_64",
+        Isa::Aarch64 => "src/runtime/native/exec/src/arch/aarch64",
+        Isa::X86 => "src/runtime/native/exec/src/arch/x86_64",
     }
 }
 

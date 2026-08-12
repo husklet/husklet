@@ -29,16 +29,16 @@ The complete retained AArch64 memory/dispatch path inspected was:
 
 The corresponding Rust-owned implementation inspected was:
 
-- `src/native/exec/src/arch/aarch64/guard.c`: `read_cache`, `write_cache`,
+- `src/runtime/native/exec/src/arch/aarch64/guard.c`: `read_cache`, `write_cache`,
   `legacy_begin`, `hl_a64_guard_write_begin`, and `hl_a64_guard_written`;
-- `src/native/exec/src/arch/aarch64/projection.c`:
+- `src/runtime/native/exec/src/arch/aarch64/projection.c`:
   `hl_a64_projection_resolve` and `flush_dirty`;
-- `src/native/exec/src/arch/aarch64/pair.c`, `single.c`, `structure.c`,
+- `src/runtime/native/exec/src/arch/aarch64/pair.c`, `single.c`, `structure.c`,
   `ordered.c`, and `zero.c`: guarded native memory operation families;
-- `src/native/exec/src/arch/aarch64/stub.c`: full prologue, spill, and public
+- `src/runtime/native/exec/src/arch/aarch64/stub.c`: full prologue, spill, and public
   exit ownership;
-- `src/native/exec/src/arch/aarch64/direct.c`: direct-branch exit ownership;
-- `src/native/exec/src/executor.c`: `run_aarch64`, run-view publication,
+- `src/runtime/native/exec/src/arch/aarch64/direct.c`: direct-branch exit ownership;
+- `src/runtime/native/exec/src/executor.c`: `run_aarch64`, run-view publication,
   execution admission, resolver exit/re-entry, and epoch handling;
 - `src/native/cpu/layout.tsv`: CPU ABI state for views, dirty ranges, active
   authority, and the dormant certificate seam;

@@ -1,4 +1,4 @@
-file(GLOB_RECURSE actual RELATIVE "${ROOT}" "${ROOT}/native/exec/src/*.c" "${ROOT}/native/exec/cache/*.c")
+file(GLOB_RECURSE actual RELATIVE "${ROOT}" "${ROOT}/runtime/native/exec/src/*.c" "${ROOT}/runtime/native/exec/cache/*.c")
 list(APPEND actual
  "runtime/native/address_projection.c"
  "runtime/native/executable_authority.c"

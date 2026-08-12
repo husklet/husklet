@@ -27,7 +27,7 @@ float-to-integer result to x86's integer-indefinite value for NaN and positive
 overflow. Its x86-host interpreter instead makes host MXCSR authoritative.
 
 The Rust-owned native boundary already saves and restores host FPCR/FPSR in
-`src/native/exec/src/arch/x86_64/entry.S`; `NativeX86` maps guest MXCSR into
+`src/runtime/native/exec/src/arch/x86_64/entry.S`; `NativeX86` maps guest MXCSR into
 the native CPU record and merges FPSR exceptions back. Before this lane,
 `frontend.c` and `frontend/memory.c` lowered scalar-double SQRT, ADD, MUL, and
 DIV but rejected SUB, COMISD/UCOMISD, and CVTTSD2SI. This lane maps that
@@ -42,12 +42,12 @@ the frontend returned unsupported. The warning-strict candidate build and its
 focused structural/differential test passed:
 
 ```sh
-sources=$(find src/native/exec/src src/native/exec/cache -type f -name '*.c' -print)
+sources=$(find src/runtime/native/exec/src src/runtime/native/exec/cache -type f -name '*.c' -print)
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/native/exec/include -I src/native/exec/src -I src/native/cpu/include \
-  $sources src/native/exec/src/arch/aarch64/entry.S \
-  src/native/exec/src/arch/x86_64/entry.S src/native/exec/test/x86_run.S \
-  src/native/exec/test/x86_translation.c -lpthread -o /tmp/hl_x86_sse_new
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  $sources src/runtime/native/exec/src/arch/aarch64/entry.S \
+  src/runtime/native/exec/src/arch/x86_64/entry.S src/runtime/native/exec/test/x86_run.S \
+  src/runtime/native/exec/test/x86_translation.c -lpthread -o /tmp/hl_x86_sse_new
 /tmp/hl_x86_sse_new
 ```
 

@@ -23,8 +23,8 @@ macOS, and Windows W^X adapters.
 
 ## Rust comparison
 
-`src/native/exec/src/arch/x86_64/run.c` owns x86 miss admission and
-`emit_block`; `src/native/exec/src/translation.c` owns serialized reserve,
+`src/runtime/native/exec/src/arch/x86_64/run.c` owns x86 miss admission and
+`emit_block`; `src/runtime/native/exec/src/translation.c` owns serialized reserve,
 RW-copy, publication, relocation, and rollback; `cache/cache.c` owns exact-key
 lookup, generations, overlap invalidation, and retained arena identity;
 `src/executor.c` owns mutation/execution leases and rollover.

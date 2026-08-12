@@ -112,7 +112,7 @@ retains an interrupt poll. Mapping changes retire translations through the JIT
 gate. The retained engine has no request instruction budget, so it has no
 equivalent per-block completed-instruction store.
 
-The Rust owner is `src/native/exec/src/executor.c::run_aarch64` and the emitted
+The Rust owner is `src/runtime/native/exec/src/executor.c::run_aarch64` and the emitted
 admission sequence is `src/arch/aarch64/stub.c::{hl_a64_stub_budget_begin,
 hl_a64_stub_budget_finish}`. Rust must additionally preserve exact bounded-run
 semantics: a block compares and subtracts its complete instruction count before

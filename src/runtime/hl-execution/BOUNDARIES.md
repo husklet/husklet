@@ -88,7 +88,7 @@ selects translate/enter/retry and validates that a frontend's nonempty emission,
 body offset, provenance count, source identity, and byte count fit the bounded
 request before native W^X publication.
 
-The C and assembly implementation under `src/native/exec` is a permanent native
+The C and assembly implementation under `src/runtime/native/exec` is a permanent native
 execution mechanism. It owns machine-code entry and return, translated-code
 publication and chaining, W^X mutation, host fault-context reconstruction, and
 signal-safe and fork-critical repair. Those responsibilities do not migrate into

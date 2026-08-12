@@ -27,8 +27,8 @@ RETAB reads the unsigned `x30` value without changing registers or flags.
 | PAC/AUT hint admission | `hl-execution` AArch64 system decoder | implemented as NOP |
 | RETAA/RETAB cold decode | `hl-execution` AArch64 integer decoder | implemented as `Return { source: 30 }` |
 | Target alignment/fault staging | `hl-execution` AArch64 interpreter | shared with ordinary returns |
-| Native target extraction and IBTC miss | `src/native/exec` AArch64 indirect emitter | implemented using guest `x30` |
-| Native trace termination | `src/native/exec` AArch64 trace effects | implemented for both encodings |
+| Native target extraction and IBTC miss | `src/runtime/native/exec` AArch64 indirect emitter | implemented using guest `x30` |
+| Native trace termination | `src/runtime/native/exec` AArch64 trace effects | implemented for both encodings |
 | Key/SP authentication | no owner | intentionally absent oracle approximation |
 
 The cold decoder maps only the two allocated encodings selected by

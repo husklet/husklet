@@ -101,11 +101,11 @@ evidence; neither permits vendor- or executable-name branching.
 | Retained C capability | Rust owner | State |
 |---|---|---|
 | CPU layouts used by entry code, signal frames, integer/FP/vector state | generated schema in `src/schema/cpu` and native layouts in `src/native/cpu` | implemented; ABI assertions remain mandatory |
-| Block entry/return, full spill, return reasons, fault context | `src/native/exec` plus `hl-execution` runner | implemented; target gates cover both ISAs |
+| Block entry/return, full spill, return reasons, fault context | `src/runtime/native/exec` plus `hl-execution` runner | implemented; target gates cover both ISAs |
 | AArch64 decode, ALU, FP/SIMD, atomics/LSE, branches and fixed PC advance | `src/runtime/hl-execution/src/aarch64` | implemented for this cohort; corpus remains the broader completeness gate |
 | x86 decode, operands, RFLAGS, REP progress, x87/SSE/AVX, CPUID and IRETQ | `src/runtime/hl-execution/src/x86` | implemented for active rows; CPUID oracle mismatch remains typed broken evidence |
 | Guest memory loads/stores, unaligned access, atomics and executable-write invalidation | `hl-memory`, `hl-execution`, and the `hl-runtime` execution adapter | implemented for active rows; exact invalidation concurrency remains a full-corpus gate |
-| W^X cache mapping, publication, lookup, chaining, generations and retirement | `src/native/exec` code-cache boundary | implemented; clean-tree native and stress gates required for parity |
+| W^X cache mapping, publication, lookup, chaining, generations and retirement | `src/runtime/native/exec` code-cache boundary | implemented; clean-tree native and stress gates required for parity |
 | Syscall boundary and exact errno/partial/EINTR behavior | Linux personality in `hl-runtime` and domain owners | implemented for exercised calls; ABI fixtures alone do not prove every syscall domain |
 | Signals, signal frames, setjmp/longjmp and ucontext restoration | `hl-task`, Linux signal adapter, and native fault entry | setjmp/longjmp active; retained macOS `swapcontext` path remains an explicit gap |
 | TLS models and static/non-PIE guest addresses | loader, memory, task TLS, and execution address translation | implemented for active TLS rows; guest-visible addresses must never expose host storage |

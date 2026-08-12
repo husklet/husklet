@@ -1,4 +1,5 @@
-//! Compiles, links and runs every standalone C program under `exec/test` against the engine archive
+//! Compiles, links and runs every standalone C program under `src/runtime/native/exec/test`
+//! against the engine archive
 //! produced by this crate's build script, so those programs gate on `cargo test --workspace`.
 
 use std::path::{Path, PathBuf};

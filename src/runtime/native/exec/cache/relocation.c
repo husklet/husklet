@@ -1,6 +1,6 @@
 #include "private.h"
 
-#include "../../cpu/include/layout.h"
+#include "layout.h"
 
 #include <stddef.h>
 #include <string.h>

@@ -59,9 +59,9 @@ case remains selectable and points here instead of disappearing from inventory.
 
 | Retained capability | Rust owner | Migration state |
 |---|---|---|
-| AArch64 decode, scalar, AdvSIMD, crypto, atomics, FP state | `hl-execution::aarch64` and `src/native/exec` | implemented; cases retain byte-exact acceptance |
-| x86 decode, flags, scalar, string, MMX/x87, SSE/AVX, crypto | `hl-execution::x86` and `src/native/exec` | implemented with compatibility cases covering edge flags and traps |
-| translated-block publication, lookup, chaining, fault reconstruction | `src/native/exec` plus `hl-execution` | implemented; native diagnostics are required by this manifest |
+| AArch64 decode, scalar, AdvSIMD, crypto, atomics, FP state | `hl-execution::aarch64` and `src/runtime/native/exec` | implemented; cases retain byte-exact acceptance |
+| x86 decode, flags, scalar, string, MMX/x87, SSE/AVX, crypto | `hl-execution::x86` and `src/runtime/native/exec` | implemented with compatibility cases covering edge flags and traps |
+| translated-block publication, lookup, chaining, fault reconstruction | `src/runtime/native/exec` plus `hl-execution` | implemented; native diagnostics are required by this manifest |
 | syscall normalization, errno, guest marshalling | `hl-linux` | implemented; rare syscall cases remain acceptance probes |
 | descriptor, event, process, signal, memory, filesystem, procfs joins | owning runtime crates joined by `hl-runtime` | implemented or visibly divergent through a typed case status |
 | macOS synthetic procfs directory enumeration | VFS/procfs host adapter | divergent; `getdents64` is typed unsupported with this evidence |

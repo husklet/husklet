@@ -135,10 +135,10 @@ The following active owners were compared:
   `Executor::{run_x86_lease,run_x86_inner}`, the `NativeX86` capture, restore,
   and write-publication methods, the operand resolver, and source/view hint
   lifetimes.
-- `src/native/exec/src/arch/x86_64/run.c`:
+- `src/runtime/native/exec/src/arch/x86_64/run.c`:
   `rep_decode`, `rep_view`, `rep_span`, `rep_execute`,
   `hl_native_x86_64_run`, and `leave_exit`.
-- `src/native/exec/include/executor.h::hl_native_run_request`, whose `budget`
+- `src/runtime/native/exec/include/executor.h::hl_native_run_request`, whose `budget`
   is explicitly the maximum guest-instruction count for one activation.
 
 One current quantum has this order:
@@ -265,7 +265,7 @@ fail-closed behavior.
 | Signal, cancellation, control, retirement, and peer-runnable invalidation | same scheduler/thread owners plus signal boundary | missing as one lock-free continuation contract |
 | CPU timer armed/deadline/generation publication | `src/runtime/hl-runtime/src/process/itimer.rs::AlarmRegistry` | missing; CPU timers remain in `Mutex<BTreeMap<(ProcessId, i32), TimerState>>` |
 | Per-quantum CPU accounting usable without task-registry locking | `src/runtime/hl-task/src/registry/state.rs::TaskRegistry::charge_cpu` and scheduler `charge_elapsed` | missing |
-| Optional borrowed native poll ABI and cumulative grants | `src/native/exec/include/executor.h`, `src/native/exec/src/arch/x86_64/run.c` | missing |
+| Optional borrowed native poll ABI and cumulative grants | `src/runtime/native/exec/include/executor.h`, `src/runtime/native/exec/src/arch/x86_64/run.c` | missing |
 | Existing bounded REP correctness across widths, DF, overlap, dirty and epoch exits | `run.c::{rep_decode,rep_span,rep_copy,rep_fill,rep_execute}` | implemented; must be preserved |
 
 ### CPU-accounting continuation audit
@@ -427,7 +427,7 @@ state before each chunk while preserving the same partial-progress contract.
 
 ### Rust ownership and capability map
 
-`src/native/exec/src/arch/x86_64/run.c` owns the bounded MOVS/STOS fast path.
+`src/runtime/native/exec/src/arch/x86_64/run.c` owns the bounded MOVS/STOS fast path.
 `rep_decode` admits the relevant REP widths, `rep_span` bounds work to the current
 view and one MiB, `rep_copy` and `rep_fill` preserve overlap and direction, and
 `hl_x86_projection_resolve` plus `hl_x86_projection_written` own permission and

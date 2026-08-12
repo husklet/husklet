@@ -21,7 +21,7 @@ archive=$(find "$target/debug/build" -path '*/out/libhl_native_execution.a' -pri
 test -n "$archive"
 before=$(sha256sum "$archive" | cut -d' ' -f1)
 
-header=src/native/exec/src/executor.h
+header=src/runtime/native/exec/src/executor.h
 grep -q '(1u << 16)' "$header"
 sed -i 's/(1u << 16)/(1u << 15)/' "$header"
 grep -q '(1u << 15)' "$header"

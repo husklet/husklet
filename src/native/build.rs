@@ -101,7 +101,9 @@ fn emit_test_environment(root: &Path, allocation_test: bool) {
 }
 
 fn main() {
-    let root = Path::new("exec");
+    // The Rust crate owns only the build adapter.  Production C lives under
+    // runtime/native so every C source has one authoritative repository root.
+    let root = Path::new("../runtime/native/exec");
     let inputs = NativeInputs::discover(root);
     let mut build = cc::Build::new();
     if std::env::var_os("CARGO_FEATURE_C_COEXIST").is_some() {
@@ -156,6 +158,7 @@ fn main() {
         .files(&inputs.sources)
         .include(root.join("include"))
         .include(root.join("src"))
+        .include("cpu/include")
         .std("c11")
         .warnings(true)
         .extra_warnings(true)
@@ -190,6 +193,7 @@ fn main() {
             )
             .include(root.join("include"))
             .include(root.join("src"))
+            .include("cpu/include")
             .warnings(true)
             .extra_warnings(true)
             .flag_if_supported("-Werror")

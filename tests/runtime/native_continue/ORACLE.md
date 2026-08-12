@@ -43,15 +43,15 @@ is deliberately the AMD64 `addps`/`subl`/`jne` loop.
 
 | Retained capability | Rust-engine owner | State |
 |---|---|---|
-| Entry budget and interrupt check | `src/native/exec/src/arch/x86_64/run.c` | implemented |
-| Bounded backedge batching | `src/native/exec/src/arch/x86_64/run.c` | implemented in at most 256 iterations |
-| Register and XMM state across the internal boundary | generated CPU schema and `src/native/exec/src/arch/x86_64` frontend/output | implemented |
+| Entry budget and interrupt check | `src/runtime/native/exec/src/arch/x86_64/run.c` | implemented |
+| Bounded backedge batching | `src/runtime/native/exec/src/arch/x86_64/run.c` | implemented in at most 256 iterations |
+| Register and XMM state across the internal boundary | generated CPU schema and `src/runtime/native/exec/src/arch/x86_64` frontend/output | implemented |
 | Continuation identity and invalidation | native cache mapping/instruction epochs, identity token, and source interval | implemented |
 | Public return only after completion or caller-visible boundary | `hl_native_x86_64_run` | implemented; an internal quantum is resumed internally |
 | Linux process exit and stdout comparison | `src/containers/hl-engine` composition and runtime inventory harness | implemented by this focused case |
 
 The broader native unit evidence and fail-first account are recorded in
-`src/native/exec/REP_QUANTA.md`.  This runtime case adds the guest-visible
+`src/runtime/native/exec/REP_QUANTA.md`.  This runtime case adds the guest-visible
 composition witness: 300 loop iterations necessarily cross the 256-iteration
 internal quantum, preserve XMM state, fall through, print `continue`, and exit
 zero.

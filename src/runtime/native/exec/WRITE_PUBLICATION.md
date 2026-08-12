@@ -45,7 +45,7 @@ identity they were compiled against.
 | Journal overflow | Conservative SMC refresh | Epoch exit before an unrecordable store |
 
 In Rust, `hl_a64_guard_write_begin` and `hl_a64_guard_written` in
-`src/native/exec/src/arch/aarch64/guard.c` run around every emitted store.
+`src/runtime/native/exec/src/arch/aarch64/guard.c` run around every emitted store.
 `projection.c::flush_dirty` moves the active interval into the bounded journal.
 The x86-64 projection path has the same publication obligation. Then
 `ProjectionLease::publish_written_ranges` in
@@ -305,7 +305,7 @@ retain checkpoint admission, the mapping transaction, storage, backing, and
 every write reservation.
 
 The size-qualified native mirror belongs in
-`src/native/exec/include/executor.h`; zero means absent or `Exact`, never an
+`src/runtime/native/exec/include/executor.h`; zero means absent or `Exact`, never an
 inferred permission. `src/containers/hl-engine/src/native/executor.rs` owns
 the matching `RunCertificate` conversion and result validation.
 `WritePublication` is `repr(u16)`, with `Exact = 0` and `WholeView = 1`.
@@ -336,7 +336,7 @@ Duplicate offsets are forbidden.
 
 ### Entry, chain, access, and publication
 
-`src/native/exec/src/executor.c` validates immediately before native entry.
+`src/runtime/native/exec/src/executor.c` validates immediately before native entry.
 Publication ordering is payload initialization, release-store token, publish
 the fault scope, then enter. Every AArch64 direct/indirect/return/self-loop
 relocation and x86 live-chain ingress acquire-loads the token and authenticates

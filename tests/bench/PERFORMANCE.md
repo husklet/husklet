@@ -1252,7 +1252,7 @@ the translator lock. The same-ISA AArch64 path is the host branch measured here.
 
 The Rust owners are `benchmark::{matrix,alternating,adapter}` for immutable
 content identity, typed options, bounded child lifecycle, resume, parsing, and
-median evidence; `src/native/exec` cache, AArch64 trace/stub/fault code for
+median evidence; `src/runtime/native/exec` cache, AArch64 trace/stub/fault code for
 translated-state lifetime and publication; and `hl-engine` for selected backend
 composition. No implementation changed in this checkpoint. The repeatable fast
 cadence is the README matrix command with five repeats, 60-second timeout,
@@ -1414,10 +1414,10 @@ publication occur under the JIT lock, and signals are selected after a fully
 published boundary.  The AArch64 host branch is the relevant same-ISA path;
 other hosts do not execute this transliterator.
 
-The Rust owners are `src/native/exec/src/arch/aarch64/trace.c`
+The Rust owners are `src/runtime/native/exec/src/arch/aarch64/trace.c`
 (`trace_build` and `hl_a64_conditional_chain`), `stub.c`
 (`hl_a64_stub_budget_begin` and `hl_a64_stub_exit`), `entry.S`, cache
-`relocation.c`, and `src/native/exec/src/executor.c::run_aarch64`, with the
+`relocation.c`, and `src/runtime/native/exec/src/executor.c::run_aarch64`, with the
 safe call/lifetime owner in `src/containers/hl-engine/src/native/executor.rs`.
 Rust relocation correctly targets `body_offset`, skipping the full register
 reload on a chained edge.  It nevertheless terminates every conditional basic

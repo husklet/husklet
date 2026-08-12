@@ -326,7 +326,7 @@
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings
               cargo test --workspace --all-targets --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
-              src/native/exec/test/memory_lifecycle.sh
+              src/runtime/native/exec/test/memory_lifecycle.sh
 
               python3 tests/runtime/legacy/corpus.py verify
               python3 tests/runtime/legacy/fixture_schema.py --check

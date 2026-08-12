@@ -490,8 +490,8 @@ The fail-first test was linked to the previously built archive:
 ```sh
 archive=$(find target/debug/build -path '*/out/libhl_native_execution.a' -print | tail -1)
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/native/exec/include -I src/native/exec/src -I src/native/cpu/include \
-  src/native/exec/test/x86_budget.c "$archive" -lpthread -o /tmp/hl-x86-budget
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  src/runtime/native/exec/test/x86_budget.c "$archive" -lpthread -o /tmp/hl-x86-budget
 /tmp/hl-x86-budget
 ```
 
@@ -505,12 +505,12 @@ The exact candidate sources were then compiled warning-strict and the focused
 test passed with no output:
 
 ```sh
-sources=$(find src/native/exec/src src/native/exec/cache -type f -name '*.c' -print)
+sources=$(find src/runtime/native/exec/src src/runtime/native/exec/cache -type f -name '*.c' -print)
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/native/exec/include -I src/native/exec/src -I src/native/cpu/include \
-  $sources src/native/exec/src/arch/aarch64/entry.S \
-  src/native/exec/src/arch/x86_64/entry.S \
-  src/native/exec/test/x86_budget.c -lpthread -o /tmp/hl-x86-budget-new
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  $sources src/runtime/native/exec/src/arch/aarch64/entry.S \
+  src/runtime/native/exec/src/arch/x86_64/entry.S \
+  src/runtime/native/exec/test/x86_budget.c -lpthread -o /tmp/hl-x86-budget-new
 /tmp/hl-x86-budget-new
 ```
 
@@ -914,7 +914,7 @@ and `FlushInstructionCache`. Fork repair can replace or recouple aliases and
 must preserve the mapping handle, executable address where requested, content
 bound, and process-private lock lifetime.
 
-The Rust-owned correspondence is `src/native/exec/src/arena.c`, which owns
+The Rust-owned correspondence is `src/runtime/native/exec/src/arena.c`, which owns
 validated bump allocation, ordered publication, write-window state, counters,
 rotation, and teardown, and `src/containers/hl-engine/src/native/executor.rs`,
 whose `ExecutableMemory` owns the host mappings. Linux dual allocation is the
@@ -980,7 +980,7 @@ owner before entering `block_return`. The retained signal path reconstructs
 the guest pre-operation register/vector/FP state and redirects the host signal
 context to `block_return`; it does not resume C code on the guest stack.
 
-The Rust ownership maps directly to `src/native/exec/src/arch/aarch64/entry.S`
+The Rust ownership maps directly to `src/runtime/native/exec/src/arch/aarch64/entry.S`
 for the same x19--x30, q8--q15, and SP image; `stub.c` for guest SP/FPCR/FPSR,
 guest registers and vector transfer; `fault.c` and `fault_darwin.c` for signal
 context reconstruction and redirection; `fault/thread.c` for the bounded
@@ -1027,7 +1027,7 @@ mapping state: its PC was the first generated prologue instruction at
 `0xfffff3ddf000`, but the complete containing arena was mapped `rw-p`, so the
 fault occurred on instruction fetch before `ldr x9,[x0,#248]` executed. Its SP
 and CPU pointer were still valid and distinct. A warning-strict rebuild from
-the current exact sources, including `src/native/exec/cache/*.c`, passed with
+the current exact sources, including `src/runtime/native/exec/cache/*.c`, passed with
 status zero. That test exercises a separate aligned 4-KiB guest stack, native
 cycle yield, pre-block interrupt, syscall re-entry, and live x19/x20 guest
 callee-save semantics.
@@ -1343,18 +1343,18 @@ The warning-strict direct baseline used all current native C sources plus both
 entry assemblies. `x86_budget` and `x86_rep` compiled and passed with no output:
 
 ```sh
-sources=$(find src/native/exec/src src/native/exec/cache -type f -name '*.c' -print)
+sources=$(find src/runtime/native/exec/src src/runtime/native/exec/cache -type f -name '*.c' -print)
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/native/exec/include -I src/native/exec/src -I src/native/cpu/include \
-  $sources src/native/exec/src/arch/aarch64/entry.S \
-  src/native/exec/src/arch/x86_64/entry.S \
-  src/native/exec/test/x86_budget.c -lpthread -o /tmp/hl-x86-budget-audit
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  $sources src/runtime/native/exec/src/arch/aarch64/entry.S \
+  src/runtime/native/exec/src/arch/x86_64/entry.S \
+  src/runtime/native/exec/test/x86_budget.c -lpthread -o /tmp/hl-x86-budget-audit
 /tmp/hl-x86-budget-audit
 cc -std=c11 -Wall -Wextra -Werror \
-  -I src/native/exec/include -I src/native/exec/src -I src/native/cpu/include \
-  $sources src/native/exec/src/arch/aarch64/entry.S \
-  src/native/exec/src/arch/x86_64/entry.S \
-  src/native/exec/test/x86_rep.c -lpthread -o /tmp/hl-x86-rep-audit
+  -I src/runtime/native/exec/include -I src/runtime/native/exec/src -I src/native/cpu/include \
+  $sources src/runtime/native/exec/src/arch/aarch64/entry.S \
+  src/runtime/native/exec/src/arch/x86_64/entry.S \
+  src/runtime/native/exec/test/x86_rep.c -lpthread -o /tmp/hl-x86-rep-audit
 /tmp/hl-x86-rep-audit
 ```
 

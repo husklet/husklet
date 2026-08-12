@@ -108,7 +108,7 @@ locale, filesystem paths, and CPU identity do not become expected output.
 |---|---|---|
 | AArch64 decode, integer/FP/atomic execution and CPU state | `hl-execution::aarch64` | implemented; cohort evidence required |
 | x86 decode, scalar/vector/string/x87 execution and flags | `hl-execution::x86` | implemented; x86-only cohort evidence required |
-| stable CPU layouts and native entry/cache ABI | generated CPU schema plus `src/native/exec` | implemented; exact-layout/native evidence remains a wider gate |
+| stable CPU layouts and native entry/cache ABI | generated CPU schema plus `src/runtime/native/exec` | implemented; exact-layout/native evidence remains a wider gate |
 | ELF load, initial stack and guest-visible entry addresses | `hl-loader` | implemented |
 | guest ranges, anonymous mappings, protection and unmap publication | `hl-memory`; syscall join in `hl-runtime` | implemented; partial-unmap behavior is directly exercised |
 | syscall numbers, argument codecs, signal frames and errno values | `hl-linux` | implemented |
@@ -116,7 +116,7 @@ locale, filesystem paths, and CPU identity do not become expected output.
 | process/thread registration, fork, exit and signal queues | `hl-task`; joins in `hl-runtime` | implemented; cohort evidence required |
 | block-boundary signal delivery and `rt_sigreturn` | `hl-runtime::signal` with `hl-linux` frame codecs | implemented; both-ISA evidence required |
 | libc heap, math, strings, regex/glob, qsort and atexit algorithms | guest static libc | outside engine ownership; preserved as acceptance evidence |
-| retained host-specific W^X/fault adapters | `src/native/exec` platform adapters | migration is platform-gated outside this fixture-only lane |
+| retained host-specific W^X/fault adapters | `src/runtime/native/exec` platform adapters | migration is platform-gated outside this fixture-only lane |
 
 No case licenses application-, runtime-, or vendor-specific production behavior.
 A failure must be assigned to the generic execution, loader, memory, descriptor,

@@ -162,7 +162,7 @@ BENCH_GATE = target/release/testing benchmark gate \
 	  --repeats $(BENCH_REPEATS) --divisor $(BENCH_DIVISOR) --max-spread $(BENCH_MAX_SPREAD)
 
 # The guest ISA selects the lowering under test: arm64 covers
-# src/native/exec/src/arch/aarch64, amd64 covers .../x86_64. Prove an x86-64
+# src/runtime/native/exec/src/arch/aarch64, amd64 covers .../x86_64. Prove an x86-64
 # change with bench-gate-amd64, never with bench-gate-arm64.
 BENCH_CC_arm64 = aarch64-linux-gnu-gcc
 BENCH_CC_amd64 = x86_64-linux-gnu-gcc

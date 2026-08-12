@@ -21,11 +21,11 @@ advances PC only after the write. NZCV is unchanged by loads and stores.
 
 ## Rust ownership and ordering
 
-- `src/native/exec/src/arch/aarch64/guard.c` owns projection checks, write
+- `src/runtime/native/exec/src/arch/aarch64/guard.c` owns projection checks, write
   reservation, dirty-range publication, and cold exits.
-- `src/native/exec/src/arch/aarch64/stub.c` spills the live host register image
+- `src/runtime/native/exec/src/arch/aarch64/stub.c` spills the live host register image
   into `hl_native_aarch64_cpu` on exit.
-- `src/native/exec/src/executor.c` returns the fully spilled native boundary.
+- `src/runtime/native/exec/src/executor.c` returns the fully spilled native boundary.
 - `src/containers/hl-engine/src/native/executor.rs` converts between the C CPU
   frame and `Aarch64CpuState`.
 - `src/containers/hl-engine/src/ffi/linux/execution/scheduler.rs` services one

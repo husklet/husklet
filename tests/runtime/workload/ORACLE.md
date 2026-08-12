@@ -78,7 +78,7 @@ memory, fork, thread, and indirect-dispatch cases run on both guest ISAs.
 | Retained capability | Rust owner | State |
 |---|---|---|
 | Guest decode, indirect dispatch, architectural state | `hl-execution::{aarch64,x86}` | implemented |
-| Native block cache, W^X publication, chaining and fault reconstruction | `src/native/exec` | implemented; performance parity remains a gate |
+| Native block cache, W^X publication, chaining and fault reconstruction | `src/runtime/native/exec` | implemented; performance parity remains a gate |
 | Mapping identity, protection, replacement and shared backing | `hl-memory` plus `hl-runtime::memory` | implemented with known host-adapter gaps |
 | Futex queues, wake ordering, PI and interruption | `hl-sync` plus `hl-runtime::futex` | implemented |
 | Task/thread/fork/wait lifecycle | `hl-task` plus `hl-runtime::{fork,process}` | implemented |
