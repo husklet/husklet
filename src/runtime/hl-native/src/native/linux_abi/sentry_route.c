@@ -236,113 +236,19 @@ static int sentry_route_file_mmap(struct cpu *c, uint64_t nr) {
     return 1;
 }
 
-// ------------------------------------------------------------------ the routed trust boundary
-// Replaces the direct service_local(c) call for untrusted guests. When g_untrusted is off this is a
-// transparent pass-through (trusted path byte-identical to baseline -- and service() already gated us
-// out before getting here). When on, fs/net/proc syscalls are marshaled to the sentry over the ring;
-// everything else stays local in the worker.
-static void syscall_route(struct cpu *c) {
-    if (!g_untrusted) {
-        service_local(c);
-        return;
-    }
-    // Normalize legacy x86 forms (open->openat, ...) in the worker so we classify by canonical number;
-    // a return of 1 means it was fully handled locally (arch_prctl/TLS) -- it must stay here.
-    if (G_NORMALIZE(c)) return;
-    uint64_t nr = G_NR(c);
-
-    /* service_local rebases pointer arguments from a biased ET_EXEC's Linux link range to the host mapping.
-     * A FORWARDED call is marshaled before service_local runs, so apply the same table here -- the same
-     * table, from nonpie_args.h, restricted to what we forward, because anything else reaches service_local
-     * and gets it there. (Two independently maintained copies of this list is what let static x86 strings
-     * and buffers be copied from their unmapped low link addresses: empty paths, zero-filled pipe writes.)
-     * The fold is idempotent, so a forwarded call that also falls through to service_local is unharmed. */
-    sentry_route_rebase(c, nr);
-
-    // exit(93)/exit_group(94): service_local() never returns.  exit(93) also ends the PROCESS when this is
-    // its last thread, so release the process table in that case before entering the host syscall.  Missing
-    // that distinction leaves the last child's duplicated pipe writers alive in the sentry forever.
-    if (sentry_route_exit(c, nr)) return;
-
-    // --- fork/exec/wait lane (item 1) -------------------------------------------------------------------
-    // clone(220)/clone3(435): a guest THREAD is a host pthread (stays this process; gets its own lane
-    // lazily). A guest FORK is a real worker fork() (the guest address space is worker-side COW memory the
-    // sentry cannot duplicate) done LOCALLY by service_local. The freshly forked CHILD inherited the
-    // parent's lane + sentry-ownership, so re-init its bookkeeping; the PARENT counts the new child so a
-    // later wait4 with no real children doesn't deadlock on the hidden sentry child.
-    if (sentry_route_clone(c, nr)) return;
-    // execve(221) stays LOCAL: service_local reloads the guest image IN THIS PROCESS (it is not a host
-    // execve), so the worker keeps its pid, ring lane, control sockets, sentry, and confinement across it.
-    // But because it is NOT a real execve, the kernel never applies FD_CLOEXEC: ask the sentry to close+drop
-    // this worker's cloexec virtual fds first, so a guest that set FD_CLOEXEC before exec sees them gone
-    // (pipe EOF for the peer, no leaked resources) exactly as on Linux. Only on a SUCCESSFUL exec — if the
-    // image load fails (service_local returns with a negated errno in the return reg) the fds must survive.
-    if (sentry_route_exec(c, nr)) return;
-    // openat(56)/readlinkat(78) of a per-process guest-state /proc file: serve it LOCALLY -- only this
-    // worker holds the current image's identity (the sentry's copy is the pre-fork/pre-exec one; see
-    // sentry_worker_proc_leaf). readlinkat is pure state (bytes into a guest buffer). openat yields a real
-    // worker-local fd, which must not leak into the guest's (fully virtual) descriptor space -- hand it to
-    // the sentry for adoption so read/lseek/close forward exactly like any sentry-opened descriptor.
-    if (sentry_route_worker_proc(c, nr)) return;
-    // wait4(260): reap the guest's child WORKER processes locally. The sentry is ALSO a child of the owner,
-    // so a blocking wait-any with no GUEST children would hang on it -> short-circuit to -ECHILD; and never
-    // surface the sentry's own pid to the guest. A specific-pid wait passes straight through.
-    if (sentry_route_wait(c, nr)) return;
-    // file-backed mmap(222): the mapping must live in the WORKER (memory authority) but the fd is
-    // sentry-owned and invalid here. Borrow the real fd over this lane's control socket (SCM_RIGHTS), map
-    // it locally with the borrowed number, then drop it -- so the worker holds the real fd only for the
-    // single mmap. Anonymous mmap (MAP_ANON 0x20) needs no fd and stays fully local below.
-    if (sentry_route_file_mmap(c, nr)) return;
-
-    if (!sentry_forwarded(nr)) {
-        service_local(c); // LOCAL authority (its G_NORMALIZE re-runs as a no-op on already-*at registers)
-        return;
-    }
-
-    struct sentry_ring *R = ring_for_thread(); // this worker thread's private ring (pool, keyed lazily)
-    // Producer lock: at <=N concurrent worker threads each owns a distinct ring and this is an
-    // uncontended single TAS; overflow threads (sharing a lane) serialize here, preserving the SPSC
-    // ping-pong on the shared ring. Held across the whole round-trip + the output copy-back.
-    while (atomic_exchange_explicit(&R->busy, 1, memory_order_acquire))
-        sched_yield();
-    R->wpid = (uint32_t)g_worker_pid; // stamp the worker PROCESS: selects this guest's virtual fd table (P1/P2)
-    R->wtid = t_token;
-    R->inherit_wtid = 0;
-#ifdef G_PROF_EXTRA
-    R->rawnr = hl_linux_syscall_guest_number(HL_LINUX_GUEST_X86_64, nr);
-    if (R->rawnr == UINT64_MAX) {
-        atomic_store_explicit(&R->busy, 0, memory_order_release);
-        G_RET(c) = (uint64_t)(int64_t)-ENOSYS;
-        return;
-    }
-#else
-    R->rawnr = nr;
-#endif
-    R->a[0] = G_A0(c);
-    R->a[1] = G_A1(c);
-    R->a[2] = G_A2(c);
-    R->a[3] = G_A3(c);
-    R->a[4] = G_A4(c);
-    R->a[5] = G_A5(c);
-    for (int i = 0; i < 6; i++)
-        R->redir[i] = -1;
-    R->iovn = 0;
-    R->inlen = 0;
-
-    /*
-     * Import every guest descriptor exactly once before publishing the ring.
-     * These snapshots survive the synchronous round trip and are also used for
-     * copy-back, closing both the sentry pointer escape and worker-side TOCTOU
-     * window where an iovec/msghdr was formerly reread after the host call.
-     */
+struct sentry_marshal {
+    struct cpu *c;
+    struct sentry_ring *R;
+    uint64_t nr;
     struct iovec worker_iov[SENTRY_IOVMAX];
-    uint32_t worker_iovn = 0;
+    uint32_t worker_iovn;
     uint8_t worker_msghdr[SENTRY_MSGHDR_SZ];
     struct iovec worker_msg_iov[SENTRY_IOVMAX];
-    uint32_t worker_msg_iovn = 0;
-    int worker_msghdr_valid = 0;
-    socklen_t worker_socklen = 0;
-    int worker_socklen_valid = 0;
+    uint32_t worker_msg_iovn;
+    int worker_msghdr_valid;
+    socklen_t worker_socklen;
+    int worker_socklen_valid;
+};
 
 #define SENTRY_IMPORT_EXACT(dst, src, len)                                                                             \
     do {                                                                                                               \
@@ -350,7 +256,7 @@ static void syscall_route(struct cpu *c) {
         if (_n && guest_copy_from((dst), (uint64_t)(src), _n) != (ssize_t)_n) {                                        \
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);                                                                   \
             atomic_store_explicit(&R->busy, 0, memory_order_release);                                                  \
-            return;                                                                                                    \
+            return -1;                                                                                                 \
         }                                                                                                              \
     } while (0)
 #define SENTRY_IMPORT_STRING(dst, cap, src)                                                                            \
@@ -359,7 +265,7 @@ static void syscall_route(struct cpu *c) {
         if (_r < 0) {                                                                                                  \
             G_RET(c) = (uint64_t)(int64_t)_r;                                                                          \
             atomic_store_explicit(&R->busy, 0, memory_order_release);                                                  \
-            return;                                                                                                    \
+            return -1;                                                                                                 \
         }                                                                                                              \
         R->inlen = (uint32_t)_r + 1u;                                                                                  \
     } while (0)
@@ -369,10 +275,15 @@ static void syscall_route(struct cpu *c) {
         if (_n && guest_accessible_prefix((uint64_t)(ptr), _n, HL_LOGICAL_VMA_WRITE) != _n) {                          \
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);                                                                   \
             atomic_store_explicit(&R->busy, 0, memory_order_release);                                                  \
-            return;                                                                                                    \
+            return -1;                                                                                                 \
         }                                                                                                              \
     } while (0)
 
+
+static int sentry_import_file(struct sentry_marshal *M) {
+    struct cpu *c = M->c;
+    struct sentry_ring *R = M->R;
+    uint64_t nr = M->nr;
     switch (nr) {
     case 48:  // faccessat
     case 56:  // openat
@@ -381,7 +292,7 @@ static void syscall_route(struct cpu *c) {
         if (!G_A1(c)) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             atomic_store_explicit(&R->busy, 0, memory_order_release);
-            return;
+            return -1;
         }
         SENTRY_IMPORT_STRING((char *)R->buf, SENTRY_PATHCAP, G_A1(c));
         R->redir[1] = 0;
@@ -391,7 +302,7 @@ static void syscall_route(struct cpu *c) {
         if (!G_A0(c)) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             atomic_store_explicit(&R->busy, 0, memory_order_release);
-            return;
+            return -1;
         }
         SENTRY_IMPORT_STRING((char *)R->buf, SENTRY_PATHCAP, G_A0(c));
         R->redir[0] = 0;
@@ -401,7 +312,7 @@ static void syscall_route(struct cpu *c) {
         if (!G_A1(c)) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             atomic_store_explicit(&R->busy, 0, memory_order_release);
-            return;
+            return -1;
         }
         SENTRY_IMPORT_STRING((char *)R->buf, SENTRY_PATHCAP, G_A1(c));
         R->redir[1] = 0;
@@ -418,7 +329,7 @@ static void syscall_route(struct cpu *c) {
             if (copied <= 0) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 atomic_store_explicit(&R->busy, 0, memory_order_release);
-                return;
+                return -1;
             }
             n = (uint32_t)copied; /* Linux permits a short write up to the first inaccessible byte. */
         }
@@ -454,7 +365,7 @@ static void syscall_route(struct cpu *c) {
             if (!prefix) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 atomic_store_explicit(&R->busy, 0, memory_order_release);
-                return;
+                return -1;
             }
             n = (uint32_t)prefix;
         }
@@ -470,7 +381,7 @@ static void syscall_route(struct cpu *c) {
         if (!G_A1(c)) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             atomic_store_explicit(&R->busy, 0, memory_order_release);
-            return;
+            return -1;
         }
         SENTRY_IMPORT_STRING((char *)R->buf, SENTRY_PATHCAP, G_A1(c));
         SENTRY_REQUIRE_WRITE(G_A2(c), SENTRY_STATSZ);
@@ -482,7 +393,7 @@ static void syscall_route(struct cpu *c) {
         if (!G_A1(c)) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             atomic_store_explicit(&R->busy, 0, memory_order_release);
-            return;
+            return -1;
         }
         SENTRY_IMPORT_STRING((char *)R->buf, SENTRY_PATHCAP, G_A1(c));
         SENTRY_REQUIRE_WRITE(G_A4(c), SENTRY_STATXSZ);
@@ -498,18 +409,18 @@ static void syscall_route(struct cpu *c) {
         // rebased to ring pointers by the sentry, so no guest pointer ever crosses.
         uint32_t n = (uint32_t)G_A2(c);
         if (n > SENTRY_IOVMAX) n = SENTRY_IOVMAX; // partial scatter/gather is legal -> guest loops
-        const struct iovec *giov = worker_iov;
+        const struct iovec *giov = M->worker_iov;
         if (n) {
-            if (guest_iov_import(G_A1(c), n, worker_iov) < 0) {
+            if (guest_iov_import(G_A1(c), n, M->worker_iov) < 0) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 atomic_store_explicit(&R->busy, 0, memory_order_release);
-                return;
+                return -1;
             }
             if (g_nonpie_lo)
                 for (uint32_t i = 0; i < n; i++)
-                    worker_iov[i].iov_base = (void *)(uintptr_t)nonpie_p((uint64_t)(uintptr_t)worker_iov[i].iov_base);
+                    M->worker_iov[i].iov_base = (void *)(uintptr_t)nonpie_p((uint64_t)(uintptr_t)M->worker_iov[i].iov_base);
         }
-        worker_iovn = n;
+        M->worker_iovn = n;
         struct iovec *biov = (struct iovec *)R->buf;
         uint32_t cur = n * (uint32_t)sizeof(struct iovec); // data region starts after the iovec header
         uint32_t payload = 0;
@@ -523,10 +434,10 @@ static void syscall_route(struct cpu *c) {
                     if (!payload) {
                         G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                         atomic_store_explicit(&R->busy, 0, memory_order_release);
-                        return;
+                        return -1;
                     }
                     n = i;
-                    worker_iovn = n;
+                    M->worker_iovn = n;
                     break;
                 }
                 want = (uint32_t)prefix;
@@ -537,11 +448,11 @@ static void syscall_route(struct cpu *c) {
                     if (copied <= 0 && payload == 0) {
                         G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                         atomic_store_explicit(&R->busy, 0, memory_order_release);
-                        return;
+                        return -1;
                     }
                     if (copied <= 0) {
                         n = i;
-                        worker_iovn = n;
+                        M->worker_iovn = n;
                         break;
                     }
                     want = (uint32_t)copied;
@@ -558,6 +469,17 @@ static void syscall_route(struct cpu *c) {
         R->a[2] = n; // sentry runs the (possibly clamped) segment count
         break;
     }
+    default:
+        return 0;
+    }
+    return 1;
+}
+
+static int sentry_import_socket(struct sentry_marshal *M) {
+    struct cpu *c = M->c;
+    struct sentry_ring *R = M->R;
+    uint64_t nr = M->nr;
+    switch (nr) {
     // ---- socket family ---- (sentry owns the real socket fd; only sockaddr/optval/data bytes cross,
     // never a guest pointer; all AF/port-map/jail translation runs inside service_local on the sentry)
     case 200:   // bind(fd, a1=addr, a2=addrlen)
@@ -580,10 +502,10 @@ static void syscall_route(struct cpu *c) {
         if (G_A1(c)) R->redir[1] = SENTRY_SADDR_OFF; // out sockaddr -> tail window
         if (G_A2(c)) {                               // in/out socklen: ship the guest cap
             SENTRY_IMPORT_EXACT(R->buf + SENTRY_SLEN_OFF, G_A2(c), sizeof(socklen_t));
-            memcpy(&worker_socklen, R->buf + SENTRY_SLEN_OFF, sizeof worker_socklen);
-            worker_socklen_valid = 1;
+            memcpy(&M->worker_socklen, R->buf + SENTRY_SLEN_OFF, sizeof M->worker_socklen);
+            M->worker_socklen_valid = 1;
             if (G_A1(c)) {
-                size_t need = worker_socklen < SENTRY_SADDRCAP ? worker_socklen : SENTRY_SADDRCAP;
+                size_t need = M->worker_socklen < SENTRY_SADDRCAP ? M->worker_socklen : SENTRY_SADDRCAP;
                 SENTRY_REQUIRE_WRITE(G_A1(c), need);
             }
             R->redir[2] = SENTRY_SLEN_OFF;
@@ -597,7 +519,7 @@ static void syscall_route(struct cpu *c) {
             if (copied <= 0) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 atomic_store_explicit(&R->busy, 0, memory_order_release);
-                return;
+                return -1;
             }
             n = (uint32_t)copied;
         }
@@ -620,7 +542,7 @@ static void syscall_route(struct cpu *c) {
             if (!prefix) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 atomic_store_explicit(&R->busy, 0, memory_order_release);
-                return;
+                return -1;
             }
             n = (uint32_t)prefix;
         }
@@ -629,10 +551,10 @@ static void syscall_route(struct cpu *c) {
         if (G_A4(c)) R->redir[4] = SENTRY_SADDR_OFF; // out src sockaddr -> tail window
         if (G_A5(c)) {                               // in/out socklen: ship the guest cap
             SENTRY_IMPORT_EXACT(R->buf + SENTRY_SLEN_OFF, G_A5(c), sizeof(socklen_t));
-            memcpy(&worker_socklen, R->buf + SENTRY_SLEN_OFF, sizeof worker_socklen);
-            worker_socklen_valid = 1;
+            memcpy(&M->worker_socklen, R->buf + SENTRY_SLEN_OFF, sizeof M->worker_socklen);
+            M->worker_socklen_valid = 1;
             if (G_A4(c)) {
-                size_t need = worker_socklen < SENTRY_SADDRCAP ? worker_socklen : SENTRY_SADDRCAP;
+                size_t need = M->worker_socklen < SENTRY_SADDRCAP ? M->worker_socklen : SENTRY_SADDRCAP;
                 SENTRY_REQUIRE_WRITE(G_A4(c), need);
             }
             R->redir[5] = SENTRY_SLEN_OFF;
@@ -654,8 +576,8 @@ static void syscall_route(struct cpu *c) {
         if (G_A4(c)) { // in/out optlen: ship the guest cap (clamped so the kernel can't overrun the window)
             socklen_t cap;
             SENTRY_IMPORT_EXACT(&cap, G_A4(c), sizeof cap);
-            worker_socklen = cap;
-            worker_socklen_valid = 1;
+            M->worker_socklen = cap;
+            M->worker_socklen_valid = 1;
             if (G_A3(c)) {
                 size_t need = cap < SENTRY_OPTCAP ? cap : SENTRY_OPTCAP;
                 SENTRY_REQUIRE_WRITE(G_A3(c), need);
@@ -667,23 +589,34 @@ static void syscall_route(struct cpu *c) {
         if (G_A3(c)) R->redir[3] = SENTRY_OPT_OFF; // out optval -> opt window
         break;
     }
+    default:
+        return 0;
+    }
+    return 1;
+}
+
+static int sentry_import_message(struct sentry_marshal *M) {
+    struct cpu *c = M->c;
+    struct sentry_ring *R = M->R;
+    uint64_t nr = M->nr;
+    switch (nr) {
     // ---- sendmsg/recvmsg (item 2): flatten the guest msghdr GRAPH into the ring ----
     case 211:   // sendmsg(fd, a1=msghdr, flags)
     case 212: { // recvmsg(fd, a1=msghdr, flags)
         if (!G_A1(c)) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             atomic_store_explicit(&R->busy, 0, memory_order_release);
-            return;
+            return -1;
         }
-        SENTRY_IMPORT_EXACT(worker_msghdr, G_A1(c), SENTRY_MSGHDR_SZ);
-        worker_msghdr_valid = 1;
-        uint64_t g_name = *(uint64_t *)(worker_msghdr + 0);
-        uint32_t g_namelen = *(uint32_t *)(worker_msghdr + 8);
-        uint64_t g_iov = *(uint64_t *)(worker_msghdr + 16);
-        uint64_t g_iovlen = *(uint64_t *)(worker_msghdr + 24);
-        uint64_t g_ctl = *(uint64_t *)(worker_msghdr + 32);
-        uint64_t g_ctllen = *(uint64_t *)(worker_msghdr + 40);
-        uint32_t g_flags = *(uint32_t *)(worker_msghdr + 48);
+        SENTRY_IMPORT_EXACT(M->worker_msghdr, G_A1(c), SENTRY_MSGHDR_SZ);
+        M->worker_msghdr_valid = 1;
+        uint64_t g_name = *(uint64_t *)(M->worker_msghdr + 0);
+        uint32_t g_namelen = *(uint32_t *)(M->worker_msghdr + 8);
+        uint64_t g_iov = *(uint64_t *)(M->worker_msghdr + 16);
+        uint64_t g_iovlen = *(uint64_t *)(M->worker_msghdr + 24);
+        uint64_t g_ctl = *(uint64_t *)(M->worker_msghdr + 32);
+        uint64_t g_ctllen = *(uint64_t *)(M->worker_msghdr + 40);
+        uint32_t g_flags = *(uint32_t *)(M->worker_msghdr + 48);
         if (g_nonpie_lo) {
             g_name = nonpie_p(g_name);
             g_iov = nonpie_p(g_iov);
@@ -700,17 +633,17 @@ static void syscall_route(struct cpu *c) {
         }
         // msg_iov: iovec[] header (iov_base = OFFSET) + data, flattened like readv/writev, capped to DATACAP.
         uint32_t n = g_iovlen > SENTRY_IOVMAX ? SENTRY_IOVMAX : (uint32_t)g_iovlen;
-        if (n && guest_iov_import(g_iov, n, worker_msg_iov) < 0) {
+        if (n && guest_iov_import(g_iov, n, M->worker_msg_iov) < 0) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             atomic_store_explicit(&R->busy, 0, memory_order_release);
-            return;
+            return -1;
         }
         if (g_nonpie_lo)
             for (uint32_t i = 0; i < n; i++)
-                worker_msg_iov[i].iov_base =
-                    (void *)(uintptr_t)nonpie_p((uint64_t)(uintptr_t)worker_msg_iov[i].iov_base);
-        worker_msg_iovn = n;
-        const struct iovec *giov = worker_msg_iov;
+                M->worker_msg_iov[i].iov_base =
+                    (void *)(uintptr_t)nonpie_p((uint64_t)(uintptr_t)M->worker_msg_iov[i].iov_base);
+        M->worker_msg_iovn = n;
+        const struct iovec *giov = M->worker_msg_iov;
         struct iovec *biov = (struct iovec *)(R->buf + SENTRY_MSGIOV_OFF);
         uint32_t cur = SENTRY_MSGIOV_OFF + n * (uint32_t)sizeof(struct iovec);
         uint32_t msg_payload = 0;
@@ -724,10 +657,10 @@ static void syscall_route(struct cpu *c) {
                     if (!msg_payload) {
                         G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                         atomic_store_explicit(&R->busy, 0, memory_order_release);
-                        return;
+                        return -1;
                     }
                     n = i;
-                    worker_msg_iovn = n;
+                    M->worker_msg_iovn = n;
                     break;
                 }
                 want = (uint32_t)prefix;
@@ -738,11 +671,11 @@ static void syscall_route(struct cpu *c) {
                     if (copied <= 0 && i == 0) {
                         G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                         atomic_store_explicit(&R->busy, 0, memory_order_release);
-                        return;
+                        return -1;
                     }
                     if (copied <= 0) {
                         n = i;
-                        worker_msg_iovn = n;
+                        M->worker_msg_iovn = n;
                         break;
                     }
                     want = (uint32_t)copied;
@@ -768,6 +701,17 @@ static void syscall_route(struct cpu *c) {
         R->inlen = cur;
         break;
     }
+    default:
+        return 0;
+    }
+    return 1;
+}
+
+static int sentry_import_misc(struct sentry_marshal *M) {
+    struct cpu *c = M->c;
+    struct sentry_ring *R = M->R;
+    uint64_t nr = M->nr;
+    switch (nr) {
     // ---- multiplexing over sentry-owned fds (item 3) ----
     case 73: { // ppoll(fds, nfds, timeout_ts, sigmask, sigsetsz)
         uint32_t nfds = (uint32_t)G_A1(c);
@@ -861,34 +805,23 @@ static void syscall_route(struct cpu *c) {
         R->redir[3] = 0;
         break;
     default:
-        break; // 57 close / 62 lseek / 198 socket / 201 listen / 210 shutdown / 20 epoll_create1 /
+        return 0; // 57 close / 62 lseek / 198 socket / 201 listen / 210 shutdown / 20 epoll_create1 /
                // 23 dup / 24 dup3: no buffer.
     }
+    return 1;
+}
 
-    // ---- ring round-trip ----
-    uint64_t request = atomic_fetch_add_explicit(&R->request, 1, memory_order_relaxed) + 1;
-    atomic_store_explicit(&R->turn, 1, memory_order_release); // publish request -> sentry
-    uint32_t spins = 0;
-    while (atomic_load_explicit(&R->response, memory_order_acquire) != request) { // await this response
-        if (++spins > 256) {
-            sched_yield();
-            spins = 0;
-        }
-    }
-
-    // ---- copy outputs back into guest memory (guest pointers only ever touched here, on the worker) ----
-    int64_t ret = R->ret;
-    if (nr == 56 && ret >= 0 && ret < HL_NFD) {
-        const char *opened_path = (const char *)R->buf; /* canonical path snapshot, never reread guest memory */
-        if (!strcmp(opened_path, "/proc") || !strncmp(opened_path, "/proc/", 6) || !strcmp(opened_path, "/dev/fd"))
-            snprintf(g_fdpath[(int)ret], sizeof g_fdpath[(int)ret], "%.*s", (int)sizeof(g_fdpath[(int)ret]) - 1,
-                     opened_path);
-    }
 #define SENTRY_EXPORT_EXACT(dst, src, len)                                                                             \
     do {                                                                                                               \
         size_t _n = (size_t)(len);                                                                                     \
         if (_n && guest_copy_to((uint64_t)(dst), (src), _n) != (ssize_t)_n) ret = -EFAULT;                             \
     } while (0)
+
+static int sentry_export_file(struct sentry_marshal *M, int64_t *result) {
+    struct cpu *c = M->c;
+    struct sentry_ring *R = M->R;
+    uint64_t nr = M->nr;
+    int64_t ret = *result;
     switch (nr) {
     case 78: // readlinkat: sentry landed the non-NUL-terminated link bytes after the path window
         if (ret > 0) {
@@ -929,9 +862,9 @@ static void syscall_route(struct cpu *c) {
         break;
     case 65: // readv: scatter the ret bytes the sentry fetched back into the guest iovecs
         if (ret > 0) {
-            const struct iovec *giov = worker_iov;
+            const struct iovec *giov = M->worker_iov;
             const struct iovec *biov = (const struct iovec *)R->buf;
-            uint32_t n = worker_iovn, remaining = (uint32_t)ret;
+            uint32_t n = M->worker_iovn, remaining = (uint32_t)ret;
             uint32_t delivered = 0;
             for (uint32_t i = 0; i < n && remaining; i++) {
                 uint32_t seg = (uint32_t)biov[i].iov_len; // window length the sentry scattered into
@@ -948,6 +881,19 @@ static void syscall_route(struct cpu *c) {
             }
         }
         break;
+    default:
+        return 0;
+    }
+    *result = ret;
+    return 1;
+}
+
+static int sentry_export_socket(struct sentry_marshal *M, int64_t *result) {
+    struct cpu *c = M->c;
+    struct sentry_ring *R = M->R;
+    uint64_t nr = M->nr;
+    int64_t ret = *result;
+    switch (nr) {
     // ---- socket family: scatter the out-sockaddr / its length / out-optval / recv data back ----
     case 202: // accept
     case 242: // accept4
@@ -956,7 +902,7 @@ static void syscall_route(struct cpu *c) {
         // accept/accept4 succeed with ret>=0 (the new fd); getsockname/getpeername with ret==0.
         if (ret >= 0 && G_A2(c)) {
             socklen_t outlen = *(socklen_t *)(R->buf + SENTRY_SLEN_OFF); // length service_local reported
-            socklen_t gcap = worker_socklen_valid ? worker_socklen : 0;
+            socklen_t gcap = M->worker_socklen_valid ? M->worker_socklen : 0;
             if (G_A1(c)) {
                 socklen_t cpy = outlen < gcap ? outlen : gcap; // truncate to the guest buffer
                 if (cpy > SENTRY_SADDRCAP) cpy = SENTRY_SADDRCAP;
@@ -974,7 +920,7 @@ static void syscall_route(struct cpu *c) {
         }
         if (ret >= 0 && G_A5(c)) {
             socklen_t outlen = *(socklen_t *)(R->buf + SENTRY_SLEN_OFF);
-            socklen_t gcap = worker_socklen_valid ? worker_socklen : 0;
+            socklen_t gcap = M->worker_socklen_valid ? M->worker_socklen : 0;
             if (G_A4(c)) {
                 socklen_t cpy = outlen < gcap ? outlen : gcap;
                 if (cpy > SENTRY_SADDRCAP) cpy = SENTRY_SADDRCAP;
@@ -986,7 +932,7 @@ static void syscall_route(struct cpu *c) {
     case 209: // getsockopt: optval landed at the opt window; its length at SLEN
         if (ret == 0 && G_A4(c)) {
             socklen_t outlen = *(socklen_t *)(R->buf + SENTRY_SLEN_OFF);
-            socklen_t gcap = worker_socklen_valid ? worker_socklen : 0;
+            socklen_t gcap = M->worker_socklen_valid ? M->worker_socklen : 0;
             socklen_t eff = gcap < SENTRY_OPTCAP ? gcap : SENTRY_OPTCAP; // we shipped at most OPTCAP
             if (G_A3(c)) {
                 socklen_t cpy = outlen < eff ? outlen : eff;
@@ -997,39 +943,39 @@ static void syscall_route(struct cpu *c) {
         break;
     // ---- recvmsg (item 2): scatter received data + write back name/control/flags into the guest msghdr ----
     case 212:
-        if (ret >= 0 && worker_msghdr_valid) {
+        if (ret >= 0 && M->worker_msghdr_valid) {
             uint8_t *h = R->buf; // the ring msghdr copy service_local filled
-            uint64_t g_name = *(uint64_t *)(worker_msghdr + 0);
+            uint64_t g_name = *(uint64_t *)(M->worker_msghdr + 0);
             if (g_nonpie_lo) g_name = nonpie_p(g_name);
-            uint32_t g_namecap = *(uint32_t *)(worker_msghdr + 8);
+            uint32_t g_namecap = *(uint32_t *)(M->worker_msghdr + 8);
             uint32_t outnl = *(uint32_t *)(h + 8); // length the sentry reported
             if (g_name && g_namecap) {
                 uint32_t cpy = outnl < g_namecap ? outnl : g_namecap;
                 if (cpy > SENTRY_SADDRCAP) cpy = SENTRY_SADDRCAP;
                 SENTRY_EXPORT_EXACT(g_name, R->buf + SENTRY_MSGNAME_OFF, cpy);
             }
-            *(uint32_t *)(worker_msghdr + 8) = outnl;
-            uint64_t g_ctl = *(uint64_t *)(worker_msghdr + 32);
+            *(uint32_t *)(M->worker_msghdr + 8) = outnl;
+            uint64_t g_ctl = *(uint64_t *)(M->worker_msghdr + 32);
             if (g_nonpie_lo) g_ctl = nonpie_p(g_ctl);
-            uint64_t g_ctlcap = *(uint64_t *)(worker_msghdr + 40);
+            uint64_t g_ctlcap = *(uint64_t *)(M->worker_msghdr + 40);
             uint64_t outcl = *(uint64_t *)(h + 40); // control length the sentry wrote
             if (g_ctl && g_ctlcap) {
                 uint64_t cpy = outcl < g_ctlcap ? outcl : g_ctlcap;
                 if (cpy > SENTRY_MSGCTLCAP) cpy = SENTRY_MSGCTLCAP;
                 SENTRY_EXPORT_EXACT(g_ctl, R->buf + SENTRY_MSGCTL_OFF, cpy);
             }
-            *(uint64_t *)(worker_msghdr + 40) = outcl;
-            *(uint32_t *)(worker_msghdr + 48) = *(uint32_t *)(h + 48);
+            *(uint64_t *)(M->worker_msghdr + 40) = outcl;
+            *(uint32_t *)(M->worker_msghdr + 48) = *(uint32_t *)(h + 48);
             // scatter the ret payload bytes back into the guest's iovec segments
             if (ret > 0) {
                 const struct iovec *biov = (const struct iovec *)(R->buf + SENTRY_MSGIOV_OFF);
-                uint32_t n = worker_msg_iovn;
+                uint32_t n = M->worker_msg_iovn;
                 uint32_t remaining = (uint32_t)ret, delivered = 0;
                 for (uint32_t i = 0; i < n && remaining; i++) {
                     uint32_t seg = (uint32_t)biov[i].iov_len;
                     if (seg > remaining) seg = remaining;
                     ssize_t copied =
-                        guest_copy_to((uint64_t)(uintptr_t)worker_msg_iov[i].iov_base, biov[i].iov_base, seg);
+                        guest_copy_to((uint64_t)(uintptr_t)M->worker_msg_iov[i].iov_base, biov[i].iov_base, seg);
                     if (copied != (ssize_t)seg) {
                         if (copied > 0) delivered += (uint32_t)copied;
                         ret = delivered ? (int64_t)delivered : -EFAULT;
@@ -1039,9 +985,19 @@ static void syscall_route(struct cpu *c) {
                     remaining -= seg;
                 }
             }
-            if (ret >= 0) SENTRY_EXPORT_EXACT(G_A1(c), worker_msghdr, SENTRY_MSGHDR_SZ);
+            if (ret >= 0) SENTRY_EXPORT_EXACT(G_A1(c), M->worker_msghdr, SENTRY_MSGHDR_SZ);
         }
         break;
+    *result = ret;
+    return 1;
+}
+
+static int sentry_export_misc(struct sentry_marshal *M, int64_t *result) {
+    struct cpu *c = M->c;
+    struct sentry_ring *R = M->R;
+    uint64_t nr = M->nr;
+    int64_t ret = *result;
+    switch (nr) {
     // ---- multiplexing copy-back (item 3) ----
     case 73: // ppoll: copy back ONLY each entry's revents (+6, 2B). The sentry rewrote the ring pollfd.fd
              //   fields to REAL fds for the kernel, so the guest's own pollfd.fd/events must be left untouched.
@@ -1088,14 +1044,154 @@ static void syscall_route(struct cpu *c) {
         if (ret == 0 && G_A3(c)) SENTRY_EXPORT_EXACT(G_A3(c), R->buf, 8);
         break;
     default:
-        break; // 56 openat / 57 close / 62 lseek / 64 write / 66 writev / 68 pwrite / 198 socket /
+        return 0; // 56 openat / 57 close / 62 lseek / 64 write / 66 writev / 68 pwrite / 198 socket /
                // 200 bind / 203 connect / 206 sendto / 208 setsockopt / 210 shutdown / 211 sendmsg /
                // 20 epoll_create1 / 21 epoll_ctl / 23 dup / 24 dup3: no out bytes
     }
+    default:
+        return 0;
+    }
+    *result = ret;
+    return 1;
+}
+
+static int64_t sentry_export(struct sentry_marshal *M) {
+    int64_t ret = M->R->ret;
+    if (M->nr == 56 && ret >= 0 && ret < HL_NFD) {
+        const char *opened_path = (const char *)M->R->buf;
+        if (!strcmp(opened_path, "/proc") || !strncmp(opened_path, "/proc/", 6) ||
+            !strcmp(opened_path, "/dev/fd"))
+            snprintf(g_fdpath[(int)ret], sizeof g_fdpath[(int)ret], "%.*s",
+                     (int)sizeof(g_fdpath[(int)ret]) - 1, opened_path);
+    }
+    if (!sentry_export_file(M, &ret) && !sentry_export_socket(M, &ret))
+        (void)sentry_export_misc(M, &ret);
+    return ret;
+}
 #undef SENTRY_EXPORT_EXACT
-#undef SENTRY_REQUIRE_WRITE
-#undef SENTRY_IMPORT_STRING
-#undef SENTRY_IMPORT_EXACT
+
+
+static int sentry_import(struct sentry_marshal *M) {
+    int handled = sentry_import_file(M);
+    if (!handled) handled = sentry_import_socket(M);
+    if (!handled) handled = sentry_import_message(M);
+    if (!handled) handled = sentry_import_misc(M);
+    return handled;
+}
+
+// ------------------------------------------------------------------ the routed trust boundary
+// Replaces the direct service_local(c) call for untrusted guests. When g_untrusted is off this is a
+// transparent pass-through (trusted path byte-identical to baseline -- and service() already gated us
+// out before getting here). When on, fs/net/proc syscalls are marshaled to the sentry over the ring;
+// everything else stays local in the worker.
+static void syscall_route(struct cpu *c) {
+    if (!g_untrusted) {
+        service_local(c);
+        return;
+    }
+    // Normalize legacy x86 forms (open->openat, ...) in the worker so we classify by canonical number;
+    // a return of 1 means it was fully handled locally (arch_prctl/TLS) -- it must stay here.
+    if (G_NORMALIZE(c)) return;
+    uint64_t nr = G_NR(c);
+
+    /* service_local rebases pointer arguments from a biased ET_EXEC's Linux link range to the host mapping.
+     * A FORWARDED call is marshaled before service_local runs, so apply the same table here -- the same
+     * table, from nonpie_args.h, restricted to what we forward, because anything else reaches service_local
+     * and gets it there. (Two independently maintained copies of this list is what let static x86 strings
+     * and buffers be copied from their unmapped low link addresses: empty paths, zero-filled pipe writes.)
+     * The fold is idempotent, so a forwarded call that also falls through to service_local is unharmed. */
+    sentry_route_rebase(c, nr);
+
+    // exit(93)/exit_group(94): service_local() never returns.  exit(93) also ends the PROCESS when this is
+    // its last thread, so release the process table in that case before entering the host syscall.  Missing
+    // that distinction leaves the last child's duplicated pipe writers alive in the sentry forever.
+    if (sentry_route_exit(c, nr)) return;
+
+    // --- fork/exec/wait lane (item 1) -------------------------------------------------------------------
+    // clone(220)/clone3(435): a guest THREAD is a host pthread (stays this process; gets its own lane
+    // lazily). A guest FORK is a real worker fork() (the guest address space is worker-side COW memory the
+    // sentry cannot duplicate) done LOCALLY by service_local. The freshly forked CHILD inherited the
+    // parent's lane + sentry-ownership, so re-init its bookkeeping; the PARENT counts the new child so a
+    // later wait4 with no real children doesn't deadlock on the hidden sentry child.
+    if (sentry_route_clone(c, nr)) return;
+    // execve(221) stays LOCAL: service_local reloads the guest image IN THIS PROCESS (it is not a host
+    // execve), so the worker keeps its pid, ring lane, control sockets, sentry, and confinement across it.
+    // But because it is NOT a real execve, the kernel never applies FD_CLOEXEC: ask the sentry to close+drop
+    // this worker's cloexec virtual fds first, so a guest that set FD_CLOEXEC before exec sees them gone
+    // (pipe EOF for the peer, no leaked resources) exactly as on Linux. Only on a SUCCESSFUL exec — if the
+    // image load fails (service_local returns with a negated errno in the return reg) the fds must survive.
+    if (sentry_route_exec(c, nr)) return;
+    // openat(56)/readlinkat(78) of a per-process guest-state /proc file: serve it LOCALLY -- only this
+    // worker holds the current image's identity (the sentry's copy is the pre-fork/pre-exec one; see
+    // sentry_worker_proc_leaf). readlinkat is pure state (bytes into a guest buffer). openat yields a real
+    // worker-local fd, which must not leak into the guest's (fully virtual) descriptor space -- hand it to
+    // the sentry for adoption so read/lseek/close forward exactly like any sentry-opened descriptor.
+    if (sentry_route_worker_proc(c, nr)) return;
+    // wait4(260): reap the guest's child WORKER processes locally. The sentry is ALSO a child of the owner,
+    // so a blocking wait-any with no GUEST children would hang on it -> short-circuit to -ECHILD; and never
+    // surface the sentry's own pid to the guest. A specific-pid wait passes straight through.
+    if (sentry_route_wait(c, nr)) return;
+    // file-backed mmap(222): the mapping must live in the WORKER (memory authority) but the fd is
+    // sentry-owned and invalid here. Borrow the real fd over this lane's control socket (SCM_RIGHTS), map
+    // it locally with the borrowed number, then drop it -- so the worker holds the real fd only for the
+    // single mmap. Anonymous mmap (MAP_ANON 0x20) needs no fd and stays fully local below.
+    if (sentry_route_file_mmap(c, nr)) return;
+
+    if (!sentry_forwarded(nr)) {
+        service_local(c); // LOCAL authority (its G_NORMALIZE re-runs as a no-op on already-*at registers)
+        return;
+    }
+
+    struct sentry_ring *R = ring_for_thread(); // this worker thread's private ring (pool, keyed lazily)
+    // Producer lock: at <=N concurrent worker threads each owns a distinct ring and this is an
+    // uncontended single TAS; overflow threads (sharing a lane) serialize here, preserving the SPSC
+    // ping-pong on the shared ring. Held across the whole round-trip + the output copy-back.
+    while (atomic_exchange_explicit(&R->busy, 1, memory_order_acquire))
+        sched_yield();
+    R->wpid = (uint32_t)g_worker_pid; // stamp the worker PROCESS: selects this guest's virtual fd table (P1/P2)
+    R->wtid = t_token;
+    R->inherit_wtid = 0;
+#ifdef G_PROF_EXTRA
+    R->rawnr = hl_linux_syscall_guest_number(HL_LINUX_GUEST_X86_64, nr);
+    if (R->rawnr == UINT64_MAX) {
+        atomic_store_explicit(&R->busy, 0, memory_order_release);
+        G_RET(c) = (uint64_t)(int64_t)-ENOSYS;
+        return;
+    }
+#else
+    R->rawnr = nr;
+#endif
+    R->a[0] = G_A0(c);
+    R->a[1] = G_A1(c);
+    R->a[2] = G_A2(c);
+    R->a[3] = G_A3(c);
+    R->a[4] = G_A4(c);
+    R->a[5] = G_A5(c);
+    for (int i = 0; i < 6; i++)
+        R->redir[i] = -1;
+    R->iovn = 0;
+    R->inlen = 0;
+
+    struct sentry_marshal M = {.c = c, .R = R, .nr = nr};
+    int imported = sentry_import(&M);
+    if (imported <= 0) {
+        if (!imported) G_RET(c) = (uint64_t)(int64_t)-ENOSYS;
+        atomic_store_explicit(&R->busy, 0, memory_order_release);
+        return;
+    }
+
+    // ---- ring round-trip ----
+    uint64_t request = atomic_fetch_add_explicit(&R->request, 1, memory_order_relaxed) + 1;
+    atomic_store_explicit(&R->turn, 1, memory_order_release); // publish request -> sentry
+    uint32_t spins = 0;
+    while (atomic_load_explicit(&R->response, memory_order_acquire) != request) { // await this response
+        if (++spins > 256) {
+            sched_yield();
+            spins = 0;
+        }
+    }
+
+    int64_t ret = sentry_export(&M);
     G_RET(c) = (uint64_t)ret;
     atomic_store_explicit(&R->busy, 0, memory_order_release); // release the producer lock (round-trip done)
 }
