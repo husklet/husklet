@@ -10,7 +10,7 @@ mod rust;
 mod support;
 
 pub use c::{
-    CallPolicy as CCallPolicy, Policy as CPolicy, Structure as CStructure,
+    CallPolicy as CCallPolicy, Interface as CInterface, Policy as CPolicy, Structure as CStructure,
     analyzer::{AnalyzerConfig as CAnalyzerConfig, run as run_c_analyzers},
 };
 pub use repository::{

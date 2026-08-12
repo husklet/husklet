@@ -275,3 +275,14 @@ This manually couples traversal, option spelling, value consumption, validation,
 cases such as missing values, duplicate flags, `--help`, and unknown options drift between commands. Use a
 typed derive parser at the executable boundary and pass owned option values inward. Do not replace the index
 with a mutable iterator while retaining the same string-literal dispatch.
+## Do not let one C header own unrelated interfaces
+
+A header with many unrelated operations becomes the C equivalent of a broad trait: every consumer depends on one
+surface and unrelated changes travel together. Split declarations by lifecycle and state ownership.
+
+```c
+int cache_open(void);
+int cache_flush(void);
+int socket_connect(void);
+int socket_listen(void);
+```

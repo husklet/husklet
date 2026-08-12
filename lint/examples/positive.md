@@ -2237,3 +2237,13 @@ The parser owns option spelling, required values, duplicates, help, and unknown-
 command owns its validation and execution. Guest argv pass-through and exact launcher-owned bootstrap ABIs
 are different contracts, but their boundaries must be structurally explicit rather than hidden behind a
 lint suppression.
+## Keep C interfaces cohesive
+
+Expose declarations that share one state owner and lifecycle. Separate headers let callers depend only on the
+capability they use.
+
+```c
+/* cache.h */
+int cache_open(void);
+int cache_flush(void);
+```

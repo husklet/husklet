@@ -44,6 +44,30 @@ pub struct Policy {
     /// Source discovery and repository-escape exclusions.
     #[serde(default)]
     pub source: SourcePolicy,
+    /// Limits for C header interfaces.
+    #[serde(default)]
+    pub c_interface: CInterfacePolicy,
+}
+
+/// Portable limits for C header interfaces.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CInterfacePolicy {
+    /// Maximum number of externally visible function declarations in one header.
+    #[serde(default = "default_c_interface_functions")]
+    pub maximum_functions: usize,
+}
+
+impl Default for CInterfacePolicy {
+    fn default() -> Self {
+        Self {
+            maximum_functions: default_c_interface_functions(),
+        }
+    }
+}
+
+const fn default_c_interface_functions() -> usize {
+    24
 }
 
 /// Repository-owned Markdown inventory and structural example documents.
@@ -238,11 +262,15 @@ may_depend_on = ["foundation"]
 [[dependency.package_budgets]]
 package = "translator"
 maximum = 1
+
+[c_interface]
+maximum_functions = 12
 "#,
         )
         .unwrap();
         assert_eq!(policy.dependency.layer("foundation").unwrap().name, "foundation");
         assert_eq!(policy.dependency.package_budget("translator"), Some(1));
+        assert_eq!(policy.c_interface.maximum_functions, 12);
     }
 
     #[test]

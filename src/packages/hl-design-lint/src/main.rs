@@ -69,14 +69,15 @@ impl Arguments {
             Output::Markdown => Box::new(Markdown::default()),
             Output::Cases(root) => Box::new(Cases::new(root)),
         };
+        let policy = self.policy.map(Policy::load).transpose()?.unwrap_or_default();
         let linter = if self.c {
             Linter::new(
                 hl_design_lint::Registry::new()
+                    .register(hl_design_lint::CInterface::new(policy.c_interface.clone()))
                     .register(hl_design_lint::CStructure)
                     .register(hl_design_lint::CPolicy::new()),
             )
         } else {
-            let policy = self.policy.map(Policy::load).transpose()?.unwrap_or_default();
             Linter::standard_with_policy(policy)
         };
         let summaries = linter.run(self.paths, reporter.as_mut())?;

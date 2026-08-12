@@ -77,3 +77,6 @@ ignored_directories = [".git", "target", "vendor", "lint"]
 ignored_markers = [".hl-external-corpus", ".hl-generated-artifacts"]
 self_packages = ["hl-design-lint"]
 foreign_source_directories = ["native", "schema"]
+
+[c_interface]
+maximum_functions = 24

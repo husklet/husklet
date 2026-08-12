@@ -7,10 +7,12 @@ use std::{
 
 use crate::{LintError, Result, source::Workspace};
 pub mod analyzer;
+mod interface;
 mod policy;
 mod structure;
 mod suppression;
 
+pub use interface::Interface;
 pub use policy::{CallPolicy, Policy};
 pub use structure::Structure;
 
