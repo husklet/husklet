@@ -126,6 +126,10 @@ static void hl_elf_protect_segments(const hl_host_memory_mapping *mapping, const
         } else {
             gro_add(gs, ge);
         }
+        if (fl & 1)
+            gnx_clear(gs, ge);
+        else
+            gnx_add(gs, ge);
     }
 }
 

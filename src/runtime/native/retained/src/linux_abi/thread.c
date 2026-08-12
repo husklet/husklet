@@ -532,6 +532,19 @@ static atomic_flag g_gro_writer = ATOMIC_FLAG_INIT;
 static void gro_clear(uint64_t lo, uint64_t hi);
 static void gro_clear_raw(uint64_t lo, uint64_t hi);
 
+// Guest ranges without PROT_EXEC.  DBT instruction bytes are host data and
+// therefore remain readable even when Linux would reject an instruction fetch;
+// keep execute permission separately from the host mapping protection.
+static struct {
+    uint64_t lo, hi;
+} g_gnx[GNA_MAX];
+
+static int g_ngnx;
+static _Atomic uint64_t g_gnx_generation = 2;
+static atomic_flag g_gnx_writer = ATOMIC_FLAG_INIT;
+static void gnx_clear(uint64_t lo, uint64_t hi);
+static void gnx_clear_raw(uint64_t lo, uint64_t hi);
+
 static void gro_writer_lock(void) {
     while (atomic_flag_test_and_set_explicit(&g_gro_writer, memory_order_acquire))
         sched_yield();
@@ -1609,6 +1622,99 @@ static int gro_hit(uint64_t a, uint64_t len) {
     return 1; // a writer that never settles: keep the conservative answer
 }
 
+static void gnx_writer_lock(void) {
+    while (atomic_flag_test_and_set_explicit(&g_gnx_writer, memory_order_acquire))
+        sched_yield();
+}
+
+static void gnx_writer_unlock(void) {
+    atomic_flag_clear_explicit(&g_gnx_writer, memory_order_release);
+}
+
+static void gnx_clear_raw(uint64_t lo, uint64_t hi) {
+    int count = __atomic_load_n(&g_ngnx, __ATOMIC_RELAXED);
+    for (int i = 0; i < count;) {
+        uint64_t b = __atomic_load_n(&g_gnx[i].lo, __ATOMIC_RELAXED);
+        uint64_t e = __atomic_load_n(&g_gnx[i].hi, __ATOMIC_RELAXED);
+        if (lo >= e || hi <= b) {
+            ++i;
+            continue;
+        }
+        int keep_head = b < lo, keep_tail = hi < e;
+        if (!keep_head && !keep_tail) {
+            --count;
+            __atomic_store_n(&g_gnx[i].lo, __atomic_load_n(&g_gnx[count].lo, __ATOMIC_RELAXED), __ATOMIC_RELAXED);
+            __atomic_store_n(&g_gnx[i].hi, __atomic_load_n(&g_gnx[count].hi, __ATOMIC_RELAXED), __ATOMIC_RELAXED);
+            __atomic_store_n(&g_ngnx, count, __ATOMIC_RELEASE);
+            continue;
+        }
+        if (keep_head)
+            __atomic_store_n(&g_gnx[i].hi, lo, __ATOMIC_RELAXED);
+        else
+            __atomic_store_n(&g_gnx[i].lo, hi, __ATOMIC_RELAXED);
+        if (keep_head && keep_tail && count < GNA_MAX) {
+            __atomic_store_n(&g_gnx[count].lo, hi, __ATOMIC_RELAXED);
+            __atomic_store_n(&g_gnx[count].hi, e, __ATOMIC_RELAXED);
+            __atomic_store_n(&g_ngnx, ++count, __ATOMIC_RELEASE);
+        }
+        ++i;
+    }
+}
+
+static void gnx_add(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return;
+    gnx_writer_lock();
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
+    gnx_clear_raw(lo, hi);
+    int count = __atomic_load_n(&g_ngnx, __ATOMIC_RELAXED);
+    if (count < GNA_MAX) {
+        __atomic_store_n(&g_gnx[count].lo, lo, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_gnx[count].hi, hi, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_ngnx, count + 1, __ATOMIC_RELEASE);
+    }
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
+    gnx_writer_unlock();
+}
+
+static void gnx_clear(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return;
+    gnx_writer_lock();
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
+    gnx_clear_raw(lo, hi);
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
+    gnx_writer_unlock();
+}
+
+static int gnx_hit(uint64_t a, uint64_t len) {
+    if (!len || __atomic_load_n(&g_ngnx, __ATOMIC_ACQUIRE) == 0) return 0;
+    a = nonpie_unfold(a);
+    uint64_t end = a + len;
+    if (end < a) return 1;
+    for (int attempt = 0; attempt < 4096; ++attempt) {
+        uint64_t generation = atomic_load_explicit(&g_gnx_generation, memory_order_acquire);
+        if (generation & 1) {
+            sched_yield();
+            continue;
+        }
+        int count = __atomic_load_n(&g_ngnx, __ATOMIC_ACQUIRE);
+        int hit = 0;
+        for (int i = 0; i < count; ++i) {
+            uint64_t lo = __atomic_load_n(&g_gnx[i].lo, __ATOMIC_RELAXED);
+            uint64_t hi = __atomic_load_n(&g_gnx[i].hi, __ATOMIC_RELAXED);
+            if (a < hi && end > lo) {
+                hit = 1;
+                break;
+            }
+        }
+        if (atomic_load_explicit(&g_gnx_generation, memory_order_acquire) == generation) return hit;
+    }
+    return 1;
+}
+
+static int guest_exec_direct_valid(uint64_t guest, size_t length) {
+    return !gnx_hit(guest, length);
+}
+
 // execve replaces the whole address space -> drop all tracked PROT_NONE ranges (they're gone with the old
 // image; a stale entry could otherwise wrongly EFAULT a fresh mapping the new image lays at the same address).
 static void gna_reset(void) {
@@ -1618,6 +1724,11 @@ static void gna_reset(void) {
     atomic_fetch_add_explicit(&g_gna_generation, 1, memory_order_release);
     gna_writer_unlock();
     __atomic_store_n(&g_ngro, 0, __ATOMIC_RELEASE);
+    gnx_writer_lock();
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
+    __atomic_store_n(&g_ngnx, 0, __ATOMIC_RELEASE);
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
+    gnx_writer_unlock();
     pthread_mutex_lock(&g_filemap_lock);
     for (int index = 0; index < g_nfilemap; ++index) {
         int retained = g_filemap[index].fd;
@@ -2480,6 +2591,7 @@ static void thread_int_handler(int sig) {
 static pthread_once_t g_thread_int_once = PTHREAD_ONCE_INIT;
 
 static void thread_int_install(void) {
+    hl_guest_fetch_set_direct_validator(guest_exec_direct_valid);
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = thread_int_handler;

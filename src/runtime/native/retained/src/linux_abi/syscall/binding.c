@@ -772,6 +772,10 @@ static int64_t bound_mmap_file(const hl_linux_fd_snapshot *file, uint64_t addres
             gro_add(lo, hi);
         else
             gro_clear(lo, hi);
+        if (protection & 4u)
+            gnx_clear(lo, hi);
+        else
+            gnx_add(lo, hi);
     }
     if (bus_prepared && gbus_add(mapped.address + bus_accessible, mapped.address + size) != 0) {
         gbus_prepare_release();

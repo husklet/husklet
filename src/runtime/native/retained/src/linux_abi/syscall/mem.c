@@ -200,6 +200,7 @@ static void mremap_publish_accessible(uint64_t first, uint64_t last) {
     uint64_t high = (last + 0xfff) & ~(uint64_t)0xfff;
     gna_clear(low, high);
     gro_clear(low, high);
+    gnx_clear(low, high);
     gbus_clear(low, high);
 }
 
@@ -208,6 +209,7 @@ static void mremap_publish_unmapped(uint64_t first, uint64_t last) {
     uint64_t high = (last + 0xfff) & ~(uint64_t)0xfff;
     gna_add(low, high);
     gro_clear(low, high);
+    gnx_add(low, high);
     gbus_clear(low, high);
 }
 
@@ -288,6 +290,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // physical release below is partial -- the guest's mapping is logically gone either way.
         gna_clear(a0 & ~(uint64_t)0xfff, (a0 + a1 + 0xfff) & ~(uint64_t)0xfff);
         gro_clear(a0 & ~(uint64_t)0xfff, (a0 + a1 + 0xfff) & ~(uint64_t)0xfff);
+        gnx_clear(a0 & ~(uint64_t)0xfff, (a0 + a1 + 0xfff) & ~(uint64_t)0xfff);
         gbus_clear(a0, a0 + a1);
         // A non-fixed anon mapping carries a 64 KB guard tail that mmap (case 222) reserved
         // past the guest's logical length (so glibc's vectorized over-reads land in mapped memory).
@@ -359,6 +362,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // per-4 KB software fault checks the JIT deliberately avoids; the common aligned/whole-page case is
             // now correct.)
             gna_add(u_lo, u_hi);
+            gnx_add(u_lo, u_hi);
         }
         if (r == 0 && g_mem_max) {
             // uncharge (clamp >=0)
@@ -1014,6 +1018,10 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                     gro_add(glo, ghi);
                 else
                     gro_clear(glo, ghi);
+                if ((int)a2 & PROT_EXEC)
+                    gnx_clear(glo, ghi);
+                else
+                    gnx_add(glo, ghi);
             }
         }
         /* Keep registry publication inside the same serialized mapping
@@ -1136,7 +1144,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // Drop translations while the SMC page is still tracked, before the host protection below makes
             // the store silent. This also covers 4K guest subpages where a 16K host mprotect is unsafe: the
             // later lazy write fault may open the host page, but the stale translation is already gone.
-            if ((int)a2 & PROT_WRITE) G_SMC_UNMAP(physical_a0, physical_a0 + a1);
+            if (((int)a2 & PROT_WRITE) || !((int)a2 & PROT_EXEC)) G_SMC_UNMAP(physical_a0, physical_a0 + a1);
 #if defined(__linux__)
             // On a Linux host the guest and host VM page granularities match.  Apply the transition for
             // real: managed runtimes reserve file-backed PROT_NONE arenas (commonly /dev/zero) and commit
@@ -1221,6 +1229,13 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             } else {
                 gro_clear(glo, ghi);
                 if (alias_glo != glo) gro_clear(alias_glo, alias_ghi);
+            }
+            if ((int)a2 & PROT_EXEC) {
+                gnx_clear(glo, ghi);
+                if (alias_glo != glo) gnx_clear(alias_glo, alias_ghi);
+            } else {
+                gnx_add(glo, ghi);
+                if (alias_glo != glo) gnx_add(alias_glo, alias_ghi);
             }
             if (logical_protect_prepared) {
                 hl_logical_vma_commit_shared(logical_protect_plan);
