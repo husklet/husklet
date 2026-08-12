@@ -3781,6 +3781,36 @@ static enum avx_dispatch_result sse_dispatch_immediate_arithmetic(int op, uint8_
     }
 }
 
+static enum avx_dispatch_result sse_dispatch_sha1_message(int op, const uint8_t destination[16],
+                                                          const uint8_t source[16], uint8_t result[16]) {
+    uint32_t left[4], right[4], output[4];
+    memcpy(left, destination, 16);
+    memcpy(right, source, 16);
+    switch (op) {
+    case 0xC8: // sha1nexte
+        output[3] = right[3] + rotl32(left[3], 30);
+        output[2] = right[2];
+        output[1] = right[1];
+        output[0] = right[0];
+        break;
+    case 0xC9: // sha1msg1
+        output[3] = left[1] ^ left[3];
+        output[2] = left[0] ^ left[2];
+        output[1] = right[3] ^ left[1];
+        output[0] = right[2] ^ left[0];
+        break;
+    case 0xCA: // sha1msg2
+        output[3] = rotl32(left[3] ^ right[2], 1);
+        output[2] = rotl32(left[2] ^ right[1], 1);
+        output[1] = rotl32(left[1] ^ right[0], 1);
+        output[0] = rotl32(left[0] ^ output[3], 1);
+        break;
+    default: return AVX_DISPATCH_UNMATCHED;
+    }
+    memcpy(result, output, 16);
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3810,6 +3840,11 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     memcpy(r, D, 16);
 
     if (map == 2) {
+        if (sse_dispatch_sha1_message(op, D, s, r) == AVX_DISPATCH_HANDLED) {
+            memcpy(D, r, 16);
+            c->rip = next;
+            return;
+        }
         switch (op) {
         case 0x00: { // pshufb
             uint8_t t[16];
@@ -3884,40 +3919,6 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
                     idx = i;
                 }
             uint16_t o[8] = {best, (uint16_t)idx, 0, 0, 0, 0, 0, 0};
-            memcpy(r, o, 16);
-            break;
-        }
-        case 0xC8: { // sha1nexte: dst.dw3 = src.dw3 + ROL(dst.dw3,30); dst.dw0..2 = src.dw0..2 (passthrough)
-            uint32_t Dw[4], sw[4], o[4];
-            memcpy(Dw, D, 16);
-            memcpy(sw, s, 16);
-            uint32_t tmp = rotl32(Dw[3], 30); // ROL32(SRC1[127:96], 30)
-            o[3] = sw[3] + tmp;               // DEST[127:96] = SRC2[127:96] + TMP
-            o[2] = sw[2];
-            o[1] = sw[1];
-            o[0] = sw[0];
-            memcpy(r, o, 16);
-            break;
-        }
-        case 0xC9: {                     // sha1msg1: W0..W3=SRC1 (hi->lo dwords), W4/W5=SRC2 hi dwords
-            uint32_t Dw[4], sw[4], o[4]; // Dw[k]=dword k ([31:0]=Dw[0]); W0=Dw[3],W1=Dw[2],W2=Dw[1],W3=Dw[0]
-            memcpy(Dw, D, 16);
-            memcpy(sw, s, 16);    // W4=sw[3], W5=sw[2]
-            o[3] = Dw[1] ^ Dw[3]; // DEST[127:96] = W2 ^ W0
-            o[2] = Dw[0] ^ Dw[2]; // DEST[95:64]  = W3 ^ W1
-            o[1] = sw[3] ^ Dw[1]; // DEST[63:32]  = W4 ^ W2
-            o[0] = sw[2] ^ Dw[0]; // DEST[31:0]   = W5 ^ W3
-            memcpy(r, o, 16);
-            break;
-        }
-        case 0xCA: { // sha1msg2: out.dw3..1 = ROL(SRC1.dw ^ SRC2.dw,1); out.dw0 chains on out.dw3
-            uint32_t Dw[4], sw[4], o[4];
-            memcpy(Dw, D, 16);
-            memcpy(sw, s, 16);
-            o[3] = rotl32(Dw[3] ^ sw[2], 1);
-            o[2] = rotl32(Dw[2] ^ sw[1], 1);
-            o[1] = rotl32(Dw[1] ^ sw[0], 1);
-            o[0] = rotl32(Dw[0] ^ o[3], 1); // chained: depends on the high-lane result
             memcpy(r, o, 16);
             break;
         }
