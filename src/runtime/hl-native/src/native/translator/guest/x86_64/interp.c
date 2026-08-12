@@ -4468,39 +4468,52 @@ static int interp_two_byte_bswap(struct cpu *cpu, struct insn *insn, uint64_t ne
     return STEP_NEXT;
 }
 
+static int interp_two_byte_system(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op == 0x05) return interp_exit(cpu, next, R_SYSCALL);
+    if (op == 0xA2) return interp_exit(cpu, next, R_CPUID);
+    if (op == 0x0B || op == 0xB9 || op == 0xFF) return interp_guest_trap(cpu, pc, 4, 2);
+    if (op == 0x77 || op == 0x0D || (op >= 0x18 && op <= 0x1F)) {
+        cpu->rip = next;
+        return STEP_NEXT;
+    }
+    if (op == 0x31) {
+        uint64_t counter = now_ns();
+        interp_reg_write(cpu, insn, RAX, 4, counter & UINT64_C(0xffffffff));
+        interp_reg_write(cpu, insn, RDX, 4, counter >> 32);
+        cpu->rip = next;
+        return STEP_NEXT;
+    }
+    return -1;
+}
+
+static int interp_two_byte_extend(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op != 0xB6 && op != 0xB7 && op != 0xBE && op != 0xBF) return -1;
+    int width = (op & 1) ? 2 : 1;
+    interp_operand operand = interp_rm(cpu, insn, next);
+    uint64_t value = interp_rm_read(cpu, insn, &operand, width);
+    if (op >= 0xBE) {
+        unsigned bits = (unsigned)(8 * width);
+        value = (uint64_t)((int64_t)(value << (64 - bits)) >> (64 - bits));
+    }
+    interp_reg_write(cpu, insn, insn->reg, insn->opsize, value);
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_two_byte_condition(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_two_byte_bswap(cpu, insn, next);
     if (delegated >= 0) return delegated;
+    delegated = interp_two_byte_system(cpu, insn, pc, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_two_byte_extend(cpu, insn, next);
+    if (delegated >= 0) return delegated;
 
     switch (op) {
-    // SYSCALL (0F 05): rip is pre-advanced past the 0F 05 bytes, so R_SYSCALL in interp_dispatch.h adds none.
-    case 0x05: return interp_exit(cpu, next, R_SYSCALL);
-
-    // CPUID (0F A2)
-    case 0xA2: return interp_exit(cpu, next, R_CPUID);
-
-    // UD1/UD2 and reserved 0F FF: architectural #UD, not an engine gap.
-    case 0x0B:
-    case 0xB9:
-    case 0xFF: return interp_guest_trap(cpu, pc, 4 /*SIGILL*/, 2 /*ILL_ILLOPN*/);
-
-    // Multi-byte NOPs and hints: 0F 1F, 0F 0D, 0F 18..1E (incl. ENDBR64). No register or memory effect.
-    case 0x0D:
-    case 0x18:
-    case 0x19:
-    case 0x1A:
-    case 0x1B:
-    case 0x1C:
-    case 0x1D:
-    case 0x1E:
-    case 0x1F: cpu->rip = next; return STEP_NEXT;
-
-    // EMMS (0F 77): no MMX tag word exists in this model
-    case 0x77: cpu->rip = next; return STEP_NEXT;
-
     case 0x01:
         if (insn->has_modrm && insn->modrm == 0xF9) { // RDTSCP: EDX:EAX = counter, ECX = TSC_AUX (0)
             uint64_t counter = now_ns();
@@ -4522,33 +4535,6 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
             return STEP_NEXT;
         }
         return interp_undefined(cpu, insn, pc, "0F 01 system instruction group");
-
-    // RDTSC (0F 31): the engine's ns clock, not a host RDTSC -- host-neutral and matches clock_gettime.
-    case 0x31: {
-        uint64_t counter = now_ns();
-        interp_reg_write(cpu, insn, RAX, 4, counter & UINT64_C(0xffffffff));
-        interp_reg_write(cpu, insn, RDX, 4, counter >> 32);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // MOVZX / MOVSX (0F B6/B7, BE/BF)
-    case 0xB6:
-    case 0xB7:
-    case 0xBE:
-    case 0xBF: {
-        int source_width = (op & 1) ? 2 : 1;
-        int signed_extend = (op >= 0xBE);
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t value = interp_rm_read(cpu, insn, &operand, source_width);
-        if (signed_extend) {
-            unsigned bits = (unsigned)(8 * source_width);
-            value = (uint64_t)((int64_t)(value << (64 - bits)) >> (64 - bits));
-        }
-        interp_reg_write(cpu, insn, insn->reg, insn->opsize, value);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
 
     case 0xAF: {
         interp_operand operand = interp_rm(cpu, insn, next);
