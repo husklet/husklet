@@ -13,13 +13,13 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::MutexGuard;
 
-pub(super) struct Spawned {
+pub(super) struct SpawnResult {
     pub(super) process: Process,
     pub(super) stdout: File,
     pub(super) stderr: File,
 }
 
-pub(super) fn spawn(command: &OwnedCommand) -> std::io::Result<Spawned> {
+pub(super) fn spawn(command: &OwnedCommand) -> std::io::Result<SpawnResult> {
     if command.environment().is_some() {
         spawn_exact(command)
     } else {
@@ -27,7 +27,7 @@ pub(super) fn spawn(command: &OwnedCommand) -> std::io::Result<Spawned> {
     }
 }
 
-fn spawn_standard(command: &OwnedCommand) -> std::io::Result<Spawned> {
+fn spawn_standard(command: &OwnedCommand) -> std::io::Result<SpawnResult> {
     let _spawn = spawn_lock()?;
     let mut command = command.standard();
     command
@@ -44,14 +44,14 @@ fn spawn_standard(command: &OwnedCommand) -> std::io::Result<Spawned> {
         .stderr
         .take()
         .ok_or_else(|| std::io::Error::other("stderr was not piped"))?;
-    Ok(Spawned {
+    Ok(SpawnResult {
         process: Process::Standard(child),
         stdout: OwnedFd::from(stdout).into(),
         stderr: OwnedFd::from(stderr).into(),
     })
 }
 
-fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
+fn spawn_exact(command: &OwnedCommand) -> std::io::Result<SpawnResult> {
     let _spawn = spawn_lock()?;
     let stdout = pipe()?;
     let stderr = pipe()?;
@@ -175,7 +175,7 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
     spawned?;
     drop(stdout.1);
     drop(stderr.1);
-    Ok(Spawned {
+    Ok(SpawnResult {
         process: Process::Exact(pid),
         stdout: stdout.0.into(),
         stderr: stderr.0.into(),

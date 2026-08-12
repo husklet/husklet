@@ -204,7 +204,7 @@ fn finish(capture: &Capture, stdout: Drain, stderr: Drain, outcome: Outcome) -> 
     Ok(if exceeded { Outcome::OutputLimit } else { outcome })
 }
 
-struct Drained {
+struct DrainOutput {
     bytes: Vec<u8>,
     exceeded: bool,
 }
@@ -241,13 +241,13 @@ impl Drain {
         self.count.load(Ordering::Acquire) > self.limit
     }
 
-    fn finish(self) -> std::io::Result<Drained> {
+    fn finish(self) -> std::io::Result<DrainOutput> {
         let exceeded = self.exceeded();
         let bytes = self
             .thread
             .join()
             .map_err(|_| std::io::Error::other("subprocess capture thread panicked"))??;
-        Ok(Drained { bytes, exceeded })
+        Ok(DrainOutput { bytes, exceeded })
     }
 }
 

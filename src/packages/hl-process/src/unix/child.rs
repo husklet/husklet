@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
 
-pub(super) struct Drained {
+pub(super) struct DrainOutput {
     pub(super) bytes: Vec<u8>,
     pub(super) exceeded: bool,
 }
@@ -71,14 +71,14 @@ impl Drain {
         self.count.load(Ordering::Acquire) > self.limit
     }
 
-    pub(super) fn finish(self) -> std::io::Result<Drained> {
+    pub(super) fn finish(self) -> std::io::Result<DrainOutput> {
         self.stopping.store(true, Ordering::Release);
         let bytes = self
             .thread
             .join()
             .map_err(|_| std::io::Error::other("subprocess capture thread panicked"))??;
         let exceeded = self.count.load(Ordering::Acquire) > self.limit;
-        Ok(Drained { bytes, exceeded })
+        Ok(DrainOutput { bytes, exceeded })
     }
 }
 
