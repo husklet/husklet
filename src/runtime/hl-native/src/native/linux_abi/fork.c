@@ -313,6 +313,43 @@ static void srv_sigint(int s) {
     hl_host_child_watch_notify(&g_fsrv_wake);
 }
 
+static void hl_server_reap_and_monitor(struct pollfd *watched, const int *slots, nfds_t watched_count) {
+    if (watched[1].revents != 0) { hl_host_child_watch_drain(&g_fsrv_wake); }
+    for (int i = 0; i < FSRV_MAXLIVE; i++)
+        if (g_fsrv_live[i].pid) {
+            int status;
+            pid_t reaped = waitpid(g_fsrv_live[i].pid, &status, WNOHANG);
+            if (reaped == g_fsrv_live[i].pid) {
+                if (g_fsrv_live[i].conn >= 0) {
+                    int32_t status32 = (int32_t)status;
+                    (void)hl_fork_wire_send(g_fsrv_live[i].conn, &status32, 4);
+                    close(g_fsrv_live[i].conn);
+                }
+                g_fsrv_live[i].pid = 0;
+                g_fsrv_live[i].conn = -1;
+            }
+        }
+    for (nfds_t index = 2; index < watched_count; ++index) {
+        int slot = slots[index];
+        if (watched[index].revents == 0 || slot < 0 || !g_fsrv_live[slot].pid ||
+            g_fsrv_live[slot].conn != watched[index].fd)
+            continue;
+        if ((watched[index].revents & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
+            kill(g_fsrv_live[slot].pid, SIGHUP);
+            close(g_fsrv_live[slot].conn);
+            g_fsrv_live[slot].conn = -1;
+        } else if ((watched[index].revents & POLLIN) != 0) {
+            char junk[256];
+            ssize_t received = recv(g_fsrv_live[slot].conn, junk, sizeof junk, 0);
+            if (received == 0) {
+                kill(g_fsrv_live[slot].pid, SIGHUP);
+                close(g_fsrv_live[slot].conn);
+                g_fsrv_live[slot].conn = -1;
+            }
+        }
+    }
+}
+
 static int hl_server_main(int argc, char **argv) {
     const char *sock = NULL, *rootfs = NULL, *prewarm = NULL;
     for (int i = 1; i < argc; i++) {
@@ -467,40 +504,7 @@ static int hl_server_main(int argc, char **argv) {
             break;
         }
         if (ne == 0) continue;
-        if (watched[1].revents != 0) { hl_host_child_watch_drain(&g_fsrv_wake); }
-        for (int i = 0; i < FSRV_MAXLIVE; i++)
-            if (g_fsrv_live[i].pid) {
-                int status;
-                pid_t reaped = waitpid(g_fsrv_live[i].pid, &status, WNOHANG);
-                if (reaped == g_fsrv_live[i].pid) {
-                    if (g_fsrv_live[i].conn >= 0) {
-                        int32_t status32 = (int32_t)status;
-                        (void)hl_fork_wire_send(g_fsrv_live[i].conn, &status32, 4);
-                        close(g_fsrv_live[i].conn);
-                    }
-                    g_fsrv_live[i].pid = 0;
-                    g_fsrv_live[i].conn = -1;
-                }
-            }
-        for (nfds_t index = 2; index < watched_count; ++index) {
-            int slot = slots[index];
-            if (watched[index].revents == 0 || slot < 0 || !g_fsrv_live[slot].pid ||
-                g_fsrv_live[slot].conn != watched[index].fd)
-                continue;
-            if ((watched[index].revents & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
-                kill(g_fsrv_live[slot].pid, SIGHUP);
-                close(g_fsrv_live[slot].conn);
-                g_fsrv_live[slot].conn = -1;
-            } else if ((watched[index].revents & POLLIN) != 0) {
-                char junk[256];
-                ssize_t received = recv(g_fsrv_live[slot].conn, junk, sizeof junk, 0);
-                if (received == 0) {
-                    kill(g_fsrv_live[slot].pid, SIGHUP);
-                    close(g_fsrv_live[slot].conn);
-                    g_fsrv_live[slot].conn = -1;
-                }
-            }
-        }
+        hl_server_reap_and_monitor(watched, slots, watched_count);
         if ((watched[0].revents & POLLIN) == 0) continue;
 
         int conn = accept(ls, NULL, NULL);
