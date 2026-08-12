@@ -240,14 +240,18 @@ impl CWorker {
             );
             return Err(EngineError::WaitFailed);
         };
-        let status = self
-            .child
-            .lock()
-            .map_err(|_| EngineError::Synchronization)?
-            .as_mut()
-            .ok_or(EngineError::WaitFailed)?
-            .wait()
-            .map_err(|_| EngineError::WaitFailed)?;
+        let (process, status) = {
+            let mut child = self.child.lock().map_err(|_| EngineError::Synchronization)?;
+            let child = child.as_mut().ok_or(EngineError::WaitFailed)?;
+            let process = child.id();
+            let status = child.wait().map_err(|_| EngineError::WaitFailed)?;
+            (process, status)
+        };
+        // The retained engine runs guest tasks as descendants of this private
+        // session.  Its tracked leader can exit before those descendants do.
+        // Quiesce the session before dropping the stream bridge: descendants
+        // inherit stdout/stderr and would otherwise keep its pump threads alive.
+        signal_process_group(process, libc::SIGKILL)?;
         if !process_status_matches(&status, exit) {
             hl_log::hl_error!(
                 hl_log::tag::EXEC,
@@ -310,9 +314,6 @@ impl CWorker {
             }
             return requested;
         }
-        if requested.is_ok() && self.wait_force_grace()? {
-            return Ok(());
-        }
         let process = self
             .child
             .lock()
@@ -320,6 +321,10 @@ impl CWorker {
             .as_ref()
             .map(Child::id)
             .ok_or(EngineError::StopFailed)?;
+        let worker_exited = requested.is_ok() && self.wait_force_grace()?;
+        if worker_exited {
+            return signal_process_group(process, libc::SIGKILL);
+        }
         hl_log::hl_verdict!(
             hl_log::tag::EXEC,
             "retained_c.worker.force_kill",
@@ -354,14 +359,14 @@ impl CWorker {
     }
 
     fn reap_without_frame(&self) -> Result<EngineExit, EngineError> {
-        let status = self
-            .child
-            .lock()
-            .map_err(|_| EngineError::Synchronization)?
-            .as_mut()
-            .ok_or(EngineError::WaitFailed)?
-            .wait()
-            .map_err(|_| EngineError::WaitFailed)?;
+        let (process, status) = {
+            let mut child = self.child.lock().map_err(|_| EngineError::Synchronization)?;
+            let child = child.as_mut().ok_or(EngineError::WaitFailed)?;
+            let process = child.id();
+            let status = child.wait().map_err(|_| EngineError::WaitFailed)?;
+            (process, status)
+        };
+        signal_process_group(process, libc::SIGKILL)?;
         let signal = status.signal().ok_or(EngineError::WaitFailed)?;
         let exit = EngineExit {
             kind: crate::engine::ExitKind::Signal,
@@ -384,19 +389,22 @@ impl CWorker {
 impl Drop for CWorker {
     fn drop(&mut self) {
         let child = self.child.get_mut().unwrap_or_else(|error| error.into_inner());
-        if let Some(child) = child.as_mut()
-            && child.try_wait().ok().flatten().is_none()
-        {
-            hl_log::hl_verdict!(
-                hl_log::tag::EXEC,
-                "retained_c.worker.drop_rollback",
-                stage = %"drop",
-                reason = %"worker_still_running",
-                pid = child.id();
-                "retained C worker failure stage=drop reason=worker_still_running pid={}", child.id()
-            );
+        if let Some(child) = child.as_mut() {
+            let running = child.try_wait().ok().flatten().is_none();
+            if running {
+                hl_log::hl_verdict!(
+                    hl_log::tag::EXEC,
+                    "retained_c.worker.drop_rollback",
+                    stage = %"drop",
+                    reason = %"worker_still_running",
+                    pid = child.id();
+                    "retained C worker failure stage=drop reason=worker_still_running pid={}", child.id()
+                );
+            }
             let _ = signal_process_group(child.id(), libc::SIGKILL);
-            let _ = child.wait();
+            if running {
+                let _ = child.wait();
+            }
         }
     }
 }
@@ -406,7 +414,8 @@ struct ChildGuard(Option<Child>);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         let Some(child) = self.0.as_mut() else { return };
-        if child.try_wait().ok().flatten().is_none() {
+        let running = child.try_wait().ok().flatten().is_none();
+        if running {
             hl_log::hl_verdict!(
                 hl_log::tag::EXEC,
                 "retained_c.worker.create_rollback",
@@ -415,7 +424,9 @@ impl Drop for ChildGuard {
                 pid = child.id();
                 "retained C worker failure stage=create reason=post_spawn_rollback pid={}", child.id()
             );
-            let _ = signal_process_group(child.id(), libc::SIGKILL);
+        }
+        let _ = signal_process_group(child.id(), libc::SIGKILL);
+        if running {
             let _ = child.wait();
         }
     }
@@ -629,6 +640,40 @@ mod tests {
         let status = worker.child.lock().unwrap().as_mut().unwrap().wait().unwrap();
         assert_eq!(status.signal(), Some(libc::SIGKILL));
         assert_group_gone(process);
+    }
+
+    #[test]
+    fn force_stop_cleans_descendants_after_the_worker_exits_during_grace() {
+        let mut child = session_child("sleep 60 >/dev/null & echo $!; exit 0", Stdio::piped());
+        let process = child.id();
+        let descendant = {
+            let mut line = String::new();
+            BufReader::new(child.stdout.take().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            line.trim().parse::<i32>().unwrap()
+        };
+        let (control, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let reader = control.try_clone().unwrap();
+        let worker = CWorker {
+            child: Mutex::new(Some(child)),
+            reader: Mutex::new(reader),
+            writer: Arc::new(Mutex::new(control)),
+            streams: Mutex::new(Some(StreamBridge::inherited())),
+            exit: Mutex::new(None),
+            startup: Mutex::new(Startup::Started),
+            startup_changed: Condvar::new(),
+        };
+
+        worker.stop(StopRequest::Force).unwrap();
+
+        assert_group_gone(process);
+        // Prove the group assertion covered a real descendant rather than an
+        // already-empty worker session.
+        // SAFETY: signal zero is an existence probe for the child-reported positive pid.
+        let status = unsafe { libc::kill(descendant, 0) };
+        assert_eq!(status, -1);
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
     }
 
     #[test]
