@@ -179,7 +179,7 @@ activation_failed: {
 
 static void bound_path_duplicate(hl_linux_fd source, int64_t target) {
     if (source >= HL_NFD || target < 0 || target >= HL_NFD) return;
-    snprintf(g_fdpath[(int)target], sizeof g_fdpath[(int)target], "%s", g_fdpath[(int)source]);
+    memmove(g_fdpath[(int)target], g_fdpath[(int)source], sizeof g_fdpath[(int)target]);
 }
 
 static int64_t bound_dup_at_least(hl_linux_fd source, int minimum, uint32_t descriptor_flags) {
