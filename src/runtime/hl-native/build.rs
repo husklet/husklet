@@ -172,12 +172,15 @@ fn included_c_sources(source: &Path) -> Vec<PathBuf> {
         .filter_map(|line| {
             let line = line.trim_start();
             let include = line.strip_prefix("#include \"")?.split('"').next()?;
-            include.ends_with(".c").then(|| {
-                let relative = source.parent().expect("source parent").join(include);
-                relative
-                    .canonicalize()
-                    .unwrap_or_else(|error| panic!("resolve C include {include} from {}: {error}", source.display()))
-            })
+            Path::new(include)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("c"))
+                .then(|| {
+                    let relative = source.parent().expect("source parent").join(include);
+                    relative.canonicalize().unwrap_or_else(|error| {
+                        panic!("resolve C include {include} from {}: {error}", source.display())
+                    })
+                })
         })
         .map(|path| {
             let package = env::current_dir()
@@ -299,9 +302,7 @@ fn shared_library_filename(target_os: &str) -> &'static str {
 }
 
 fn emit_development_rpath(output: &Path, target_os: &str) {
-    if target_os == "macos" {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", output.display());
-    } else if target_os != "windows" {
+    if target_os != "windows" {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", output.display());
     }
 }

@@ -5,8 +5,11 @@
 //! individual service groups can later move to Rust without changing callers.
 
 mod bindings;
+mod engine;
 mod provider;
 
+pub use bindings::SyscallDispatch;
+pub use engine::{Create, Engine, Exit, STATUS_OK};
 pub use provider::{LIBRARY_NAME, Native};
 
 /// Reports whether this package contains a production engine for the target.
