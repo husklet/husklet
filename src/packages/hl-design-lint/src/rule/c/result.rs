@@ -65,7 +65,9 @@ fn analyze(path: &Path, source: &str, functions: &BTreeSet<String>) -> Result<Ve
 
 fn collect(node: Node<'_>, source: &str, functions: &BTreeSet<String>, path: &Path, output: &mut Vec<Finding>) {
     if node.kind() == "expression_statement"
-        && let Some(call) = node.named_child(0).and_then(discarded_call)
+        && let Some(call) = node
+            .named_child(0)
+            .and_then(|expression| discarded_call(expression, source))
         && let Some(function) = call
             .child_by_field_name("function")
             .and_then(unparenthesized)
@@ -82,8 +84,18 @@ fn collect(node: Node<'_>, source: &str, functions: &BTreeSet<String>, path: &Pa
     }
 }
 
-fn discarded_call(mut expression: Node<'_>) -> Option<Node<'_>> {
+fn discarded_call<'tree>(mut expression: Node<'tree>, source: &str) -> Option<Node<'tree>> {
     expression = unparenthesized(expression)?;
+    if expression.kind() == "cast_expression" {
+        let cast = expression
+            .child_by_field_name("type")?
+            .utf8_text(source.as_bytes())
+            .ok()?;
+        if cast.split_whitespace().collect::<String>() == "void" {
+            return None;
+        }
+        return discarded_call(expression.child_by_field_name("value")?, source);
+    }
     (expression.kind() == "call_expression").then_some(expression)
 }
 
