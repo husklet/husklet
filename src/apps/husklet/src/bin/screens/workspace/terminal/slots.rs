@@ -56,7 +56,7 @@ impl<'a> Slots<'a> {
     /// Discard the slots of every terminal under a page's widget subtree (a whole tab being closed).
     pub(crate) fn discard_page(&self, child: &gtk::Widget) {
         let mut terms = Vec::new();
-        TerminalPane::collect(child, &mut terms);
+        PaneView::collect(child, &mut terms);
         for t in &terms {
             self.discard(t);
         }

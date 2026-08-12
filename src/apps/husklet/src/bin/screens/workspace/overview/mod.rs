@@ -10,7 +10,7 @@ mod table;
 pub(crate) use process::*;
 pub(crate) use resources::*;
 
-use poll::{spawn_overview_poller, OverviewData};
+use poll::{spawn_overview_poller, Data};
 use table::Table;
 
 pub(crate) struct Overview<'a> {
@@ -29,7 +29,7 @@ impl<'a> Overview<'a> {
         let ws = self.workspace;
 
         // Live panes fed by a background poller over the workspace daemon's Unix socket.
-        let data = std::sync::Arc::new(std::sync::Mutex::new(OverviewData::loading()));
+        let data = std::sync::Arc::new(std::sync::Mutex::new(Data::loading()));
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         spawn_overview_poller(ws.name.clone(), self.shell_label(), data.clone(), stop.clone());
         let containers = Table::new(&["NAME", "IMAGE", "STATUS"]);

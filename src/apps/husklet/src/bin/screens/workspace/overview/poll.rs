@@ -2,7 +2,7 @@ use super::*;
 
 /// Latest snapshot of the workspace daemon's resources (rows are pre-formatted cell strings).
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct OverviewData {
+pub(super) struct Data {
     pub(super) containers: Vec<Vec<String>>,
     pub(super) images: Vec<Vec<String>>,
     pub(super) volumes: Vec<Vec<String>>,
@@ -12,7 +12,7 @@ pub(super) struct OverviewData {
     pub(super) processes_error: Option<String>,
 }
 
-impl OverviewData {
+impl Data {
     pub(super) fn loading() -> Self {
         Self {
             resources_error: Some("Loading workspace resources…".into()),
@@ -101,23 +101,23 @@ impl OverviewData {
 pub(super) fn spawn_overview_poller(
     workspace: String,
     shell: String,
-    data: std::sync::Arc<std::sync::Mutex<OverviewData>>,
+    data: std::sync::Arc<std::sync::Mutex<Data>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
-    std::thread::spawn(move || OverviewData::poll_forever(&workspace, &shell, &data, &stop));
+    std::thread::spawn(move || Data::poll_forever(&workspace, &shell, &data, &stop));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::OverviewData;
+    use super::Data;
 
     #[test]
     fn initial_overview_never_claims_backend_results_are_empty() {
-        let loading = OverviewData::loading();
+        let loading = Data::loading();
         assert!(loading.resources_error.as_deref().unwrap().contains("Loading"));
         assert!(loading.processes_error.as_deref().unwrap().contains("Loading"));
 
-        let poll = OverviewData::poll();
+        let poll = Data::poll();
         assert_eq!(poll.resources_error, None);
         assert_eq!(poll.processes_error, None);
         assert_ne!(loading, poll);

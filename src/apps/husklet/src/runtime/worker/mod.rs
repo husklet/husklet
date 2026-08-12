@@ -23,9 +23,9 @@ pub struct Worker;
 ///
 /// These codes are diagnostic only. Once a guest starts, its exit code is
 /// forwarded unchanged and may have the same numeric value.
-struct WorkerStatus;
+struct Status;
 
-impl WorkerStatus {
+impl Status {
     pub const TERMINAL_UNAVAILABLE: i32 = 70;
     pub const DESCRIPTORS_UNAVAILABLE: i32 = 71;
     pub const WORKSPACE_MISSING: i32 = 72;
@@ -42,7 +42,7 @@ impl ProcessStatus {
         Self(if (0..=255).contains(&status) {
             status
         } else {
-            WorkerStatus::INVALID_ENGINE_STATUS
+            Status::INVALID_ENGINE_STATUS
         })
     }
 }
@@ -69,12 +69,12 @@ impl Worker {
         if let Err(error) = ControllingTerminal::claim() {
             diagnostics.record(format_args!("controlling terminal failed: {error}"));
             eprintln!("workspace terminal unavailable: {error}");
-            std::process::exit(WorkerStatus::TERMINAL_UNAVAILABLE);
+            std::process::exit(Status::TERMINAL_UNAVAILABLE);
         }
         if let Err(error) = OpenFiles::prepare() {
             diagnostics.record(format_args!("descriptor capacity failed: {error}"));
             eprintln!("workspace descriptor capacity unavailable: {error}");
-            std::process::exit(WorkerStatus::DESCRIPTORS_UNAVAILABLE);
+            std::process::exit(Status::DESCRIPTORS_UNAVAILABLE);
         }
         diagnostics.record(terminal::contract());
         let store = match WorkspaceStore::load(Self::store()) {
@@ -82,12 +82,12 @@ impl Worker {
             Err(error) => {
                 diagnostics.record(format_args!("workspace configuration failed: {error}"));
                 eprintln!("workspace configuration unavailable: {error}");
-                std::process::exit(WorkerStatus::WORKSPACE_MISSING);
+                std::process::exit(Status::WORKSPACE_MISSING);
             }
         };
         let Some(workspace) = store.get_key(name).cloned() else {
             eprintln!("workspace key {name:?} does not exist");
-            std::process::exit(WorkerStatus::WORKSPACE_MISSING);
+            std::process::exit(Status::WORKSPACE_MISSING);
         };
         let (columns, rows) = terminal::size().unwrap_or((80, 24));
         let mut terminal = match crate::runtime::execution::launch(&workspace, columns, rows, cwd, slot) {
@@ -95,7 +95,7 @@ impl Worker {
             Err(error) => {
                 diagnostics.record(format_args!("workspace launch failed: {error}"));
                 eprintln!("workspace launch failed: {error}");
-                std::process::exit(WorkerStatus::LAUNCH_FAILED);
+                std::process::exit(Status::LAUNCH_FAILED);
             }
         };
         match crate::runtime::domain::Domain::take_restore_summary(&workspace) {

@@ -46,7 +46,7 @@ use host::{
     home::Home,
 };
 use screens::workspace::overview::Overview;
-use screens::workspace::terminal::{Terminal, TerminalWindow};
+use screens::workspace::terminal::{Terminal, Window as TerminalWindow};
 
 const APP_ID: &str = "com.husklet.app";
 

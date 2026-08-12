@@ -249,12 +249,12 @@ impl<'a> Page<'a> {
 }
 
 /// Find the first VTE terminal in `w`'s subtree (used by the `HL_TERM_SPLIT` screenshot hook).
-pub(crate) struct TerminalPane<'a> {
+pub(crate) struct PaneView<'a> {
     window: &'a Rc<TermWin>,
     terminal: vte4::Terminal,
 }
 
-impl<'a> TerminalPane<'a> {
+impl<'a> PaneView<'a> {
     pub(crate) fn new(window: &'a Rc<TermWin>, terminal: &vte4::Terminal) -> Self {
         Self {
             window,

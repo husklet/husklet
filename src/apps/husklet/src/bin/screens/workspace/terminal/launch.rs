@@ -155,7 +155,7 @@ pub(crate) fn make_terminal_ex(
                     );
                     return;
                 }
-                TerminalPane::new(&tw2, &te).close();
+                PaneView::new(&tw2, &te).close();
             });
             if let Some(text) = AppConfig::get().typed_text.clone() {
                 let t2 = term.clone();

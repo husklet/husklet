@@ -46,7 +46,7 @@ pub(crate) struct Search {
     caseless: Cell<bool>,
 }
 
-pub(crate) struct TerminalWindow;
+pub(crate) struct Window;
 
 pub(crate) struct Clipboard;
 
@@ -96,7 +96,7 @@ impl SplitAction {
         } else {
             gtk::Orientation::Horizontal
         };
-        TerminalPane::new(window, &terminal).split(orientation);
+        PaneView::new(window, &terminal).split(orientation);
     }
 }
 
@@ -124,7 +124,7 @@ impl Clipboard {
     }
 }
 
-impl TerminalWindow {
+impl Window {
     pub(crate) fn open(app: &gtk::Application, ws: &WorkspaceConfig) {
         Self::open_page(app, ws, None);
     }
@@ -253,7 +253,7 @@ impl TerminalWindow {
                     tw.ws.name
                 );
                 Tabs::new(&tw).terminal();
-                if let Some(terminal) = tw.stack.visible_child().and_then(|page| TerminalPane::first(&page)) {
+                if let Some(terminal) = tw.stack.visible_child().and_then(|page| PaneView::first(&page)) {
                     terminal.feed(
                         format!(
                             "\r\n\x1b[31mworkspace restore incomplete: layout/history could not be restored: {error}\x1b[0m\r\n"
@@ -271,14 +271,14 @@ impl TerminalWindow {
         }
         // Debug: HL_TERM_SPLIT=h|v splits the current shell tab (to screenshot the split separator).
         if let Some(dir) = AppConfig::get().split.as_deref() {
-            if let Some(t) = tw.stack.visible_child().and_then(|c| TerminalPane::first(&c)) {
+            if let Some(t) = tw.stack.visible_child().and_then(|c| PaneView::first(&c)) {
                 *tw.focused.borrow_mut() = Some(t.clone());
                 let o = if dir == "v" {
                     gtk::Orientation::Vertical
                 } else {
                     gtk::Orientation::Horizontal
                 };
-                TerminalPane::new(&tw, &t).split(o);
+                PaneView::new(&tw, &t).split(o);
             }
         }
         // Debug: HL_TERM_OVERVIEW selects the overview (first) tab for screenshotting.
