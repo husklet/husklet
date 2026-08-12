@@ -267,7 +267,7 @@ mod tests {
             assert_eq!(metadata.link_end, plan.link_base() + plan.image_span());
             assert_eq!(
                 metadata.interpreter.as_deref(),
-                plan.interpreter().map(|path| path.as_bytes())
+                plan.interpreter().map(super::super::model::InterpreterPath::as_bytes)
             );
         }
         for mutation in 0..4 {
