@@ -4315,6 +4315,141 @@ static int lower_conditional_data_move(struct insn *instruction, uint64_t guest_
     return TX_FALL;
 }
 
+static int lower_x87_memory_state(struct insn *instruction, uint64_t guest_pc, uint64_t next, int reg) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0xD9 && opcode != 0xDD && opcode != 0xDB && opcode != 0xDF) return TX_FALL;
+    if (opcode == 0xD9) {    // f32 mem
+        if (reg == 0) {
+            g_ldr_s(16, 19);
+            e_fmov_from_s(20, 16);
+            hl_x86_x87_denormal(20, 1);
+            emit32(0x1E22C000u | (16 << 5) | 16);
+            hl_x86_x87_push(16);
+        } // fld m32
+        else if (reg == 2 || reg == 3) {
+            hl_x86_x87_live(0, -1);
+            hl_x86_x87_load(16, 0);
+            hl_x86_x87_rc_enter(); // the one x87 store that ROUNDS, so the one that needs RC
+            emit32(0x1E624000u | (16 << 5) | 16);
+            hl_x86_x87_rc_leave();
+            e_movconst(20, 0xffc00000u); // masked #IS delivers the m32 REAL indefinite
+            e_fmov_to_s(17, 20);
+            e_subi_s(31, 22, 0, 1);
+            emit32(0x1E200C00u | (17 << 16) | (0u << 12) | (16 << 5) | 16); // fcsel s16,s16,s17,eq
+            g_str_s(16, 19);
+            if (reg == 3) hl_x86_x87_pop();
+        } // fst/fstp
+        else if (reg == 5) { // fldcw m16: load the x87 control word (RC/PC/exception masks)
+            emit32(0x79400000u | (19 << 5) | 16); // ldrh w16, [x19]
+            e_movconst(17, 0x1f3f);               // FCW is not stored verbatim: bit 6 reads
+            e_rrr(A_AND, 16, 16, 17, 1, 0);       // back 1, bit 7 and 15:13 as 0 (measured:
+            e_movconst(17, 0x40);                 // fldcw ffff -> fnstcw 1f7f)
+            e_rrr(A_ORR, 16, 16, 17, 1, 0);
+            e_str(16, 28, OFF_FPCW); // cpu->fpcw = CW (honored by fist rounding)
+        } else if (reg == 7) {       // fnstcw m16: store the live x87 control word
+            e_ldr(16, 28, OFF_FPCW);
+            emit32(0x79000000u | (19 << 5) | 16); // strh w16, [x19]
+        } // fnstcw
+        else if (reg == 4 || reg == 6) {
+            emit_x87_environment(reg == 6 ? X87ENV_STORE : X87ENV_LOAD, next);
+            return TX_BREAK;
+        } // fnstenv / fldenv m28
+        else {
+            report_unimpl(guest_pc, instruction);
+            return TX_BREAK;
+        }
+    } else if (opcode == 0xDD) { // f64 mem
+        if (reg == 0) {
+            g_ldr_d(16, 19);
+            e_fmov_from_d(20, 16);
+            hl_x86_x87_denormal(20, 0);
+            hl_x86_x87_push(16);
+        } // fld m64
+        else if (reg == 2 || reg == 3) {
+            hl_x86_x87_live(0, -1);
+            hl_x86_x87_load(16, 0);
+            hl_x86_x87_indefinite(16);
+            g_str_d(16, 19);
+            if (reg == 3) hl_x86_x87_pop();
+        } // fst/fstp
+        else if (reg == 4 || reg == 6) {
+            emit_x87_environment(reg == 6 ? X87ENV_SAVE : X87ENV_RESTORE, next);
+            return TX_BREAK;
+        } // fnsave / frstor m108
+        else if (reg == 7) {
+            hl_x86_x87_status();
+            emit32(0x79000000u | (19 << 5) | 16);
+        } // fnstsw m16
+        else {
+            report_unimpl(guest_pc, instruction);
+            return TX_BREAK;
+        }
+    } else if (opcode == 0xDB) { // i32 mem / m80
+        if (reg == 0) {
+            emit32(0xB9400000u | (19 << 5) | 16);
+            emit32(0x1E620000u | (16 << 5) | 16);
+            hl_x86_x87_push(16);
+        } // fild m32
+        else if (reg == 2 || reg == 3) {
+            hl_x86_x87_live(0, -1);
+            hl_x86_x87_load(16, 0);
+            emit_x87_round_st0();                 // round per x87 control word (default: nearest)
+            emit32(0x1E780000u | (16 << 5) | 16); // FCVTZS w16,d16 (exact: d16 already integral)
+            emit_x87_integer_indefinite(16, 4);
+            emit32(0xB9000000u | (19 << 5) | 16);
+            if (reg == 3) hl_x86_x87_pop();
+        } // fist/fistp m32
+        else if (reg == 5) {
+            e_str(19, 28, OFF_X87EA);
+            emit_exit_const(next, R_X87FLD);
+            return TX_BREAK;
+        } // fld m80 -> C
+        else if (reg == 7) {
+            e_str(19, 28, OFF_X87EA);
+            emit_exit_const(next, R_X87FSTP);
+            return TX_BREAK;
+        } // fstp m80 -> C
+        else {
+            report_unimpl(guest_pc, instruction);
+            return TX_BREAK;
+        }
+    } else if (opcode == 0xDF) { // i16/i64 mem
+        if (reg == 0) {
+            emit32(0x79C00000u | (19 << 5) | 16);
+            emit32(0x1E620000u | (16 << 5) | 16);
+            hl_x86_x87_push(16);
+        } // fild m16 (ldrsh)
+        else if (reg == 3) {
+            hl_x86_x87_live(0, -1);
+            hl_x86_x87_load(16, 0);
+            emit_x87_round_st0();                 // round per x87 control word (default: nearest)
+            emit32(0x1E780000u | (16 << 5) | 16); // FCVTZS w16,d16 (exact: d16 already integral)
+            emit_x87_integer_indefinite(16, 2);
+            emit32(0x79000000u | (19 << 5) | 16);
+            hl_x86_x87_pop();
+        } // fistp m16
+        else if (reg == 5) {
+            e_ldr(16, 19, 0);
+            emit32(0x9E620000u | (16 << 5) | 16);
+            hl_x86_x87_push(16);
+        } // fild m64
+        else if (reg == 7) {
+            hl_x86_x87_live(0, -1);
+            hl_x86_x87_load(16, 0);
+            emit_x87_round_st0();                 // round per x87 control word (default: nearest)
+            emit32(0x9E780000u | (16 << 5) | 16); // FCVTZS x16,d16 (exact: d16 already integral)
+            emit_x87_integer_indefinite(16, 8);
+            e_str(16, 19, 0);
+            hl_x86_x87_pop();
+        } // fistp m64
+        else {
+            report_unimpl(guest_pc, instruction);
+            return TX_BREAK;
+        }
+    }
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -4684,135 +4819,13 @@ static void *translate_block(uint64_t gpc) {
                         e_ldr(17, 28, OFF_BUS_EA);
                     }
                     e_mov_rr(19, 17, 1); // x19 = EA (helpers clobber x17)
-                    if (op == 0xD9) {    // f32 mem
-                        if (reg == 0) {
-                            g_ldr_s(16, 19);
-                            e_fmov_from_s(20, 16);
-                            hl_x86_x87_denormal(20, 1);
-                            emit32(0x1E22C000u | (16 << 5) | 16);
-                            hl_x86_x87_push(16);
-                        } // fld m32
-                        else if (reg == 2 || reg == 3) {
-                            hl_x86_x87_live(0, -1);
-                            hl_x86_x87_load(16, 0);
-                            hl_x86_x87_rc_enter(); // the one x87 store that ROUNDS, so the one that needs RC
-                            emit32(0x1E624000u | (16 << 5) | 16);
-                            hl_x86_x87_rc_leave();
-                            e_movconst(20, 0xffc00000u); // masked #IS delivers the m32 REAL indefinite
-                            e_fmov_to_s(17, 20);
-                            e_subi_s(31, 22, 0, 1);
-                            emit32(0x1E200C00u | (17 << 16) | (0u << 12) | (16 << 5) | 16); // fcsel s16,s16,s17,eq
-                            g_str_s(16, 19);
-                            if (reg == 3) hl_x86_x87_pop();
-                        } // fst/fstp
-                        else if (reg == 5) { // fldcw m16: load the x87 control word (RC/PC/exception masks)
-                            emit32(0x79400000u | (19 << 5) | 16); // ldrh w16, [x19]
-                            e_movconst(17, 0x1f3f);               // FCW is not stored verbatim: bit 6 reads
-                            e_rrr(A_AND, 16, 16, 17, 1, 0);       // back 1, bit 7 and 15:13 as 0 (measured:
-                            e_movconst(17, 0x40);                 // fldcw ffff -> fnstcw 1f7f)
-                            e_rrr(A_ORR, 16, 16, 17, 1, 0);
-                            e_str(16, 28, OFF_FPCW); // cpu->fpcw = CW (honored by fist rounding)
-                        } else if (reg == 7) {       // fnstcw m16: store the live x87 control word
-                            e_ldr(16, 28, OFF_FPCW);
-                            emit32(0x79000000u | (19 << 5) | 16); // strh w16, [x19]
-                        } // fnstcw
-                        else if (reg == 4 || reg == 6) {
-                            emit_x87_environment(reg == 6 ? X87ENV_STORE : X87ENV_LOAD, next);
-                            break;
-                        } // fnstenv / fldenv m28
-                        else {
-                            report_unimpl(gpc, &I);
-                            break;
-                        }
-                    } else if (op == 0xDD) { // f64 mem
-                        if (reg == 0) {
-                            g_ldr_d(16, 19);
-                            e_fmov_from_d(20, 16);
-                            hl_x86_x87_denormal(20, 0);
-                            hl_x86_x87_push(16);
-                        } // fld m64
-                        else if (reg == 2 || reg == 3) {
-                            hl_x86_x87_live(0, -1);
-                            hl_x86_x87_load(16, 0);
-                            hl_x86_x87_indefinite(16);
-                            g_str_d(16, 19);
-                            if (reg == 3) hl_x86_x87_pop();
-                        } // fst/fstp
-                        else if (reg == 4 || reg == 6) {
-                            emit_x87_environment(reg == 6 ? X87ENV_SAVE : X87ENV_RESTORE, next);
-                            break;
-                        } // fnsave / frstor m108
-                        else if (reg == 7) {
-                            hl_x86_x87_status();
-                            emit32(0x79000000u | (19 << 5) | 16);
-                        } // fnstsw m16
-                        else {
-                            report_unimpl(gpc, &I);
-                            break;
-                        }
-                    } else if (op == 0xDB) { // i32 mem / m80
-                        if (reg == 0) {
-                            emit32(0xB9400000u | (19 << 5) | 16);
-                            emit32(0x1E620000u | (16 << 5) | 16);
-                            hl_x86_x87_push(16);
-                        } // fild m32
-                        else if (reg == 2 || reg == 3) {
-                            hl_x86_x87_live(0, -1);
-                            hl_x86_x87_load(16, 0);
-                            emit_x87_round_st0();                 // round per x87 control word (default: nearest)
-                            emit32(0x1E780000u | (16 << 5) | 16); // FCVTZS w16,d16 (exact: d16 already integral)
-                            emit_x87_integer_indefinite(16, 4);
-                            emit32(0xB9000000u | (19 << 5) | 16);
-                            if (reg == 3) hl_x86_x87_pop();
-                        } // fist/fistp m32
-                        else if (reg == 5) {
-                            e_str(19, 28, OFF_X87EA);
-                            emit_exit_const(next, R_X87FLD);
-                            break;
-                        } // fld m80 -> C
-                        else if (reg == 7) {
-                            e_str(19, 28, OFF_X87EA);
-                            emit_exit_const(next, R_X87FSTP);
-                            break;
-                        } // fstp m80 -> C
-                        else {
-                            report_unimpl(gpc, &I);
-                            break;
-                        }
-                    } else if (op == 0xDF) { // i16/i64 mem
-                        if (reg == 0) {
-                            emit32(0x79C00000u | (19 << 5) | 16);
-                            emit32(0x1E620000u | (16 << 5) | 16);
-                            hl_x86_x87_push(16);
-                        } // fild m16 (ldrsh)
-                        else if (reg == 3) {
-                            hl_x86_x87_live(0, -1);
-                            hl_x86_x87_load(16, 0);
-                            emit_x87_round_st0();                 // round per x87 control word (default: nearest)
-                            emit32(0x1E780000u | (16 << 5) | 16); // FCVTZS w16,d16 (exact: d16 already integral)
-                            emit_x87_integer_indefinite(16, 2);
-                            emit32(0x79000000u | (19 << 5) | 16);
-                            hl_x86_x87_pop();
-                        } // fistp m16
-                        else if (reg == 5) {
-                            e_ldr(16, 19, 0);
-                            emit32(0x9E620000u | (16 << 5) | 16);
-                            hl_x86_x87_push(16);
-                        } // fild m64
-                        else if (reg == 7) {
-                            hl_x86_x87_live(0, -1);
-                            hl_x86_x87_load(16, 0);
-                            emit_x87_round_st0();                 // round per x87 control word (default: nearest)
-                            emit32(0x9E780000u | (16 << 5) | 16); // FCVTZS x16,d16 (exact: d16 already integral)
-                            emit_x87_integer_indefinite(16, 8);
-                            e_str(16, 19, 0);
-                            hl_x86_x87_pop();
-                        } // fistp m64
-                        else {
-                            report_unimpl(gpc, &I);
-                            break;
-                        }
-                    } else { // D8/DC/DA/DE arith with ST0: load the operand into d16 honoring its
+                    int x87_memory_result = lower_x87_memory_state(&I, gpc, next, reg);
+                    if (x87_memory_result == TX_NEXT) {
+                        gpc = next;
+                        continue;
+                    }
+                    if (x87_memory_result == TX_BREAK) break;
+                    if (x87_memory_result == TX_FALL) { // D8/DC/DA/DE arith with ST0: load the operand into d16 honoring its
                         // declared memory type -- m32/m64 float (D8/DC) or a SIGNED 32/16-bit integer
                         // (DA/DE: the fiadd/fimul/ficom/fisub/fidiv group) -- then share the reg-field
                         // arith dispatch below (identical fadd(0)/fmul(1)/fcom(2)/fcomp(3)/fsub(4)/
