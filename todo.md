@@ -40,7 +40,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [ ] Replace the Linux-specific bridge lifecycle and descriptor imports with Windows host-service handles before enabling Windows support.
 - [ ] Prove Windows runtime behavior; previous oracle evidence was incomplete and is not production evidence. (Windows implementation is only priority if you are on windows and have powershell and tools.)
 - [x] Eliminate the five single-file-directory findings without adding ceremonial siblings.
-- [ ] Resolve `host/linux/memory/shared.c` consistently: parent context makes `shared.c` precise, so the generic catch-all rule must understand contextual ownership rather than forcing `shared_memory.c`.
+- [x] Make the generic catch-all rule recognize contextually owned `memory/shared.c` while still rejecting ambiguous shallow or sibling-less catch-all sources.
 
 ## Supported platform and execution matrix
 
@@ -71,6 +71,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Split network namespace implementation below 1,500 lines.
 - [x] Begin sentry decomposition with isolated control operations.
 - [x] Decompose `svc_fcntl`, `svc_read`, and `svc_write` below the configured function and nesting limits.
+- [x] Decompose checkpoint image capture, descriptor restore, and resource restore functions below the configured limits.
+- [x] Decompose the rare syscall dispatcher into capability handlers below the configured limits.
 - [ ] Finish netns ancillary/service function decomposition (in progress).
 - [ ] Split `container/vfs.c` and its oversized/nested functions (in progress).
 - [ ] Split `syscall/binding.c` and `bound_route` (in progress).
