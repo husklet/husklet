@@ -148,7 +148,11 @@ fn main() {
     link_shared_engine(&output, &target_os, &archives, system_libraries);
     println!("cargo:rustc-link-search=native={}", output.display());
     println!("cargo:rustc-link-lib=dylib=hl_native_engine");
-    emit_loader_paths(&output, &target_os);
+    emit_loader_paths(
+        &output,
+        &target_os,
+        &env::var("PROFILE").expect("Cargo supplies PROFILE"),
+    );
     if env::var("HL_C_SANITIZER").as_deref() == Ok("leak") && target_os == "linux" {
         println!("cargo:rustc-link-lib=lsan");
     }
@@ -362,13 +366,15 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
     println!("cargo:rustc-env=HL_NATIVE_LIBRARY_PATH={}", destination.display());
 }
 
-fn emit_loader_paths(output: &Path, target_os: &str) {
+fn emit_loader_paths(output: &Path, target_os: &str, profile: &str) {
     // Keep relocatable package locations before the development fallback.
     // Windows has no rpath; its package places the DLL beside each executable.
     for path in artifact::loader_paths(target_os) {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{path}");
     }
-    if target_os != "windows" {
+    // Development and test executables run directly from Cargo's target tree.
+    // Installed release products must not retain a workspace-specific OUT_DIR.
+    if target_os != "windows" && profile != "release" {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", output.display());
     }
 }

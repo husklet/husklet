@@ -295,6 +295,12 @@
             runHook preBuild
             export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
             cargo build --release -p engine --bins --locked --offline
+            ${lib.optionalString pkgs.stdenv.isLinux ''
+              for binary in target/release/hl-engine target/release/hl-aarch64 target/release/hl-x86_64
+              do
+                ! patchelf --print-rpath "$binary" | tr : '\n' | grep -F '/build/' >/dev/null
+              done
+            ''}
             runHook postBuild
           '';
           installPhase = ''
