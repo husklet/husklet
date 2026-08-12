@@ -12,6 +12,7 @@ use tokio::{
     task::JoinSet,
 };
 
+#[path = "scheduler_process_lifecycle.rs"]
 mod process_lifecycle;
 
 pub(super) struct Summary {

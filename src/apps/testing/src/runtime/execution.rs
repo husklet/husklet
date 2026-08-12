@@ -1,3 +1,4 @@
+#[path = "execution_worker.rs"]
 mod worker;
 
 use super::diagnostic::Excerpt as _;
