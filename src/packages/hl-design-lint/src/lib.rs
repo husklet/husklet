@@ -17,12 +17,12 @@ use std::path::PathBuf;
 pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use policy::{
-    BoundaryPolicy, CInterfacePolicy, DependencyPolicy, DocumentationPolicy, LayerPolicy, OwnershipPolicy,
-    PackageDependencyBudget, Policy, SourcePolicy, SourceSelector,
+    BoundaryPolicy, CInterfacePolicy, CResultPolicy, DependencyPolicy, DocumentationPolicy, LayerPolicy,
+    OwnershipPolicy, PackageDependencyBudget, Policy, SourcePolicy, SourceSelector,
 };
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
-    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CAnalyzerConfig, CCallPolicy, CInterface, CPolicy,
+    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CAnalyzerConfig, CCallPolicy, CInterface, CPolicy, CResult,
     CStructure, CatchAllModule, CatchAllSourcePath, CeremonialStructure, ConstructorOwnership, DependencyDirection,
     Documentation, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString,
     FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch,
@@ -66,6 +66,7 @@ impl Linter {
             ownership,
             source,
             c_interface,
+            c_result,
         } = policy;
         let escape = rule::RepositoryEscape::new(&source);
         let mut linter = Self::new(
@@ -115,6 +116,7 @@ impl Linter {
                 .register(rule::SingleFileDirectory)
                 .register(rule::CeremonialStructure)
                 .register(rule::CInterface::new(c_interface))
+                .register(rule::CResult::new(c_result))
                 .register(rule::CStructure)
                 .register(rule::CPolicy::new()),
         );
@@ -252,6 +254,7 @@ mod tests {
             "single-file-directory",
             "ceremonial-structure",
             "c-interface-breadth",
+            "c-ignored-result",
             "c-source-structure",
             "c-source-policy",
         ];
@@ -314,7 +317,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 44);
+        assert_eq!(summaries.len(), 45);
         assert!(
             reporter
                 .0

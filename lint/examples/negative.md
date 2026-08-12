@@ -286,3 +286,10 @@ int cache_flush(void);
 int socket_connect(void);
 int socket_listen(void);
 ```
+## Do not discard a configured C result
+
+Resource acquisition and fallible state transitions return ownership or failure information. A bare call loses both.
+
+```c
+open_resource();
+```

@@ -2247,3 +2247,13 @@ capability they use.
 int cache_open(void);
 int cache_flush(void);
 ```
+## Consume fallible C results
+
+Check a configured must-use result, propagate it, or bind the returned resource to an owner.
+
+```c
+struct resource *resource = open_resource();
+if (resource == NULL) {
+    return ERROR_RESOURCE;
+}
+```

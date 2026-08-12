@@ -80,3 +80,6 @@ foreign_source_directories = ["native", "schema"]
 
 [c_interface]
 maximum_functions = 24
+
+[c_result]
+must_use_functions = ["fdopen", "fopen", "realloc", "tmpfile"]

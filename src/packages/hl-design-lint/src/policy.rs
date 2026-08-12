@@ -47,6 +47,18 @@ pub struct Policy {
     /// Limits for C header interfaces.
     #[serde(default)]
     pub c_interface: CInterfacePolicy,
+    /// C functions whose return values carry mandatory outcome or ownership information.
+    #[serde(default)]
+    pub c_result: CResultPolicy,
+}
+
+/// Portable must-use policy for C function results.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CResultPolicy {
+    /// Exact function names whose direct call results must be consumed.
+    #[serde(default)]
+    pub must_use_functions: Vec<String>,
 }
 
 /// Portable limits for C header interfaces.
@@ -266,12 +278,16 @@ maximum = 1
 
 [c_interface]
 maximum_functions = 12
+
+[c_result]
+must_use_functions = ["acquire"]
 "#,
         )
         .unwrap();
         assert_eq!(policy.dependency.layer("foundation").unwrap().name, "foundation");
         assert_eq!(policy.dependency.package_budget("translator"), Some(1));
         assert_eq!(policy.c_interface.maximum_functions, 12);
+        assert_eq!(policy.c_result.must_use_functions, ["acquire"]);
     }
 
     #[test]
