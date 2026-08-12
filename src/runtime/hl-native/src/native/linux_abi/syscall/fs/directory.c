@@ -531,9 +531,6 @@ static void svc_fs_directory_78(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             readlink_filesystem(c, (int)a0, path, guest_path, result, size);
         if ((int64_t)G_RET(c) > 0 && guest_copy_to(a2, result, (size_t)G_RET(c)) != (ssize_t)G_RET(c))
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-
-        if ((int64_t)G_RET(c) > 0 && guest_copy_to(a2, local_result, (size_t)G_RET(c)) != (ssize_t)G_RET(c))
-            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
         break;
     }
     default: break;

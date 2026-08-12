@@ -333,7 +333,6 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
         break;
     }
     }
-    }
 }
 
 static void svc_fs_control_29(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -468,7 +467,6 @@ static void svc_fs_control_29(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t 
         } break;
         default: break;
         }
-        switch (rq) {
         if (!ioctl_terminal_request(c, fd, rq, arg, a2, tfd, is_master))
             ioctl_descriptor_request(c, fd, rq, arg, a2);
         if (pts_slave >= 0) close(pts_slave); // transient slave used to service a master's termios/winsize op
