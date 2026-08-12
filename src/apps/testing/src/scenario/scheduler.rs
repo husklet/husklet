@@ -157,7 +157,7 @@ async fn run_on_provider(
 ) -> execution::CaseOutcome {
     match (pool, slot, local) {
         (Some(pool), Some(slot), _) => pool.run(slot, scenario, case_index, target, sample).await,
-        (_, _, Some(provider)) => execution::run_case_on(provider, scenario, case_index, target, sample).await,
+        (_, _, Some(provider)) => execution::CaseOutcome::run_on(provider, scenario, case_index, target, sample).await,
         _ => execution::CaseOutcome {
             result: execution::CaseResult::Failed("scenario provider is unavailable".to_owned()),
             timing: execution::PhaseTiming::default(),
@@ -214,7 +214,7 @@ impl ProviderPool {
                 timing: execution::PhaseTiming::default(),
             };
         };
-        let mut outcome = execution::run_case_on(provider, scenario, case_index, target, sample).await;
+        let mut outcome = execution::CaseOutcome::run_on(provider, scenario, case_index, target, sample).await;
         outcome.timing.setup_us = outcome.timing.setup_us.saturating_add(provider_setup_us);
         slot.finish(&outcome.result);
         outcome

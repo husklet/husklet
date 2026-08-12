@@ -1,4 +1,4 @@
-use super::{ProcessOutput, capture};
+use super::ProcessOutput;
 use crate::nested::{Build, Error};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
@@ -14,7 +14,7 @@ pub(in crate::nested) fn hash_tool(
 ) -> Result<(), Error> {
     let mut command = vec![program.to_owned()];
     command.extend(arguments.iter().map(|value| (*value).to_owned()));
-    let output = capture(&command, Duration::from_secs(30), 128 * 1024)
+    let output = ProcessOutput::capture(&command, Duration::from_secs(30), 128 * 1024)
         .map_err(|error| format!("cannot identify {name}: {error}"))?;
     if output.status != Some(0) {
         return Err(format!("{name} identity command exited {:?}", output.status).into());
@@ -51,8 +51,9 @@ pub(in crate::nested) fn build_artifact(
         arguments.push("--".into());
         arguments.extend(build.rustflags.iter().cloned());
     }
-    let ProcessOutput { status, stderr, .. } = capture(&arguments, Duration::from_secs(3600), 16 * 1024 * 1024)
-        .map_err(|error| format!("nested Cargo build failed: {error}"))?;
+    let ProcessOutput { status, stderr, .. } =
+        ProcessOutput::capture(&arguments, Duration::from_secs(3600), 16 * 1024 * 1024)
+            .map_err(|error| format!("nested Cargo build failed: {error}"))?;
     if status != Some(0) {
         return Err(format!(
             "nested Cargo build exited {status:?}: {}",

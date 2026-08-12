@@ -1,4 +1,4 @@
-use super::{Options, WorkKey, apps, plan, plan_for_host, require_planned, validate_case_ids, workspace};
+use super::{Options, Schedule, WorkKey, apps, require_planned, validate_case_ids, workspace};
 use crate::runtime::definition::{App, EngineHost};
 use crate::suite::Target;
 use clap::Parser;
@@ -72,22 +72,25 @@ fn case_selection_parses_with_optional_app_and_isa() {
 #[test]
 fn plan_matches_only_the_complete_case_id() {
     let exact = options(&["--case", "runtime/exact", "--isa", "arm64"]);
-    let planned = plan(vec![app()], &exact);
+    let planned = Schedule::plan(vec![app()], &exact);
     assert!(planned.matched_case);
     assert_eq!(planned.work.len(), 1);
     assert_eq!(planned.work[0].key.id, "runtime/exact");
 
     let substring = options(&["--case", "runtime/ex"]);
-    let error = require_planned(plan(vec![app()], &substring), substring.selection.case.as_deref())
-        .err()
-        .expect("substring case selection unexpectedly produced work");
+    let error = require_planned(
+        Schedule::plan(vec![app()], &substring),
+        substring.selection.case.as_deref(),
+    )
+    .err()
+    .expect("substring case selection unexpectedly produced work");
     assert_eq!(error.to_string(), "no runtime case exactly matched --case runtime/ex");
 }
 
 #[test]
 fn an_inactive_only_selection_is_recorded_rather_than_rejected() {
     let options = options(&["--case", "runtime/inactive", "--isa", "arm64"]);
-    let planned = require_planned(plan(vec![app()], &options), options.selection.case.as_deref()).unwrap();
+    let planned = require_planned(Schedule::plan(vec![app()], &options), options.selection.case.as_deref()).unwrap();
     assert!(planned.work.is_empty());
     assert_eq!(planned.skipped.len(), 1);
     assert_eq!(planned.skipped[0].attempt.key.id, "runtime/inactive");
@@ -99,13 +102,13 @@ fn an_inactive_only_selection_is_recorded_rather_than_rejected() {
 fn host_exclusion_uses_the_injected_engine_host() {
     let options = options(&["--case", "runtime/host-excluded", "--isa", "arm64"]);
     for host in [EngineHost::Linux, EngineHost::Windows] {
-        let planned = plan_for_host(vec![app()], &options, host);
+        let planned = Schedule::for_host(vec![app()], &options, host);
         assert!(planned.matched_case);
         assert_eq!(planned.work.len(), 1);
         assert_eq!(planned.work[0].key.id, "runtime/host-excluded");
     }
 
-    let excluded = plan_for_host(vec![app()], &options, EngineHost::Macos);
+    let excluded = Schedule::for_host(vec![app()], &options, EngineHost::Macos);
     assert!(excluded.matched_case);
     let excluded = require_planned(excluded, options.selection.case.as_deref()).unwrap();
     assert!(excluded.work.is_empty());
@@ -157,7 +160,7 @@ fn repository_yaml_inventory_is_fully_discovered_and_planned() {
     assert!(active.is_disjoint(&inactive));
     assert_eq!(declared, active.union(&inactive).cloned().collect());
 
-    let planned = plan(apps, &options);
+    let planned = Schedule::plan(apps, &options);
     let scheduled = planned.work.into_iter().map(|work| work.key).collect::<BTreeSet<_>>();
     let recorded = planned
         .skipped

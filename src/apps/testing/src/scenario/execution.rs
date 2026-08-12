@@ -37,6 +37,23 @@ pub struct CaseOutcome {
     pub timing: PhaseTiming,
 }
 
+impl CaseOutcome {
+    pub(super) async fn run_on(
+        provider: &Provider,
+        scenario: Arc<Scenario>,
+        case_index: usize,
+        target: Target,
+        sample: u16,
+    ) -> Self {
+        let case = &scenario.cases[case_index];
+        let (outcome, timing) = execute_case(provider, &scenario, case, target, sample).await;
+        Self {
+            result: classify(outcome, case.expects_failure(target)),
+            timing,
+        }
+    }
+}
+
 /// A provider service may be reused only after the preceding container was
 /// force-removed. Each case still receives a fresh image view, container name,
 /// process tree, and writable state.
@@ -67,21 +84,6 @@ impl CaseResult {
             Self::UnexpectedPass => ("xpass", "unexpected pass".to_owned()),
             Self::NotRun(reason) => ("skip", diagnostic(reason)),
         }
-    }
-}
-
-pub(super) async fn run_case_on(
-    provider: &Provider,
-    scenario: Arc<Scenario>,
-    case_index: usize,
-    target: Target,
-    sample: u16,
-) -> CaseOutcome {
-    let case = &scenario.cases[case_index];
-    let (outcome, timing) = execute_case(provider, &scenario, case, target, sample).await;
-    CaseOutcome {
-        result: classify(outcome, case.expects_failure(target)),
-        timing,
     }
 }
 
@@ -195,7 +197,7 @@ async fn execute_image(
         || async {
             tokio::time::timeout(
                 timeout,
-                execute_actions(containers, case, runtime, image, &name, &mut terminal_steps),
+                ActionOutput::execute(containers, case, runtime, image, &name, &mut terminal_steps),
             )
             .await
             .map_err(|_| format!("timed out after {} milliseconds", timeout.as_millis()))
@@ -313,47 +315,49 @@ async fn await_readiness(
     .into())
 }
 
-async fn execute_actions(
-    containers: &hl_container::Containers,
-    case: &Sample,
-    runtime: &RuntimeConfig,
-    rootfs: &std::path::Path,
-    name: &str,
-    terminal_metrics: &mut Vec<super::terminal::Metric>,
-) -> Result<ActionOutput, Error> {
-    if matches!(case.actions.first(), Some(super::definition::Step::Entrypoint)) {
-        let status = wait(containers, name, Duration::from_secs(case.timeout)).await?;
-        let logs = containers.logs(name).await?;
-        logs.bounded()?;
-        return Ok(ActionOutput {
-            status,
-            stdout: logs.stdout,
-            stderr: logs.stderr,
-        });
-    }
-    if let Some(readiness) = &case.readiness {
-        await_readiness(containers, case, runtime, rootfs, name, readiness).await?;
-    }
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let mut status = ExitStatus::Code(0);
-    for action in &case.actions {
-        let outcome = match action {
-            super::definition::Step::Api(operation) => run_api(containers, name, operation).await?,
-            super::definition::Step::Terminal(action) => {
-                super::terminal::run(containers, case, runtime, rootfs, name, action, terminal_metrics).await?
-            }
-            _ => run_exec(containers, case, runtime, rootfs, name, action).await?,
-        };
-        status = outcome.0;
-        stdout.extend(outcome.1);
-        stderr.extend(outcome.2);
-        crate::suite::Capture::bounded(stdout.len(), stderr.len())?;
-        if status != ExitStatus::Code(0) {
-            break;
+impl ActionOutput {
+    async fn execute(
+        containers: &hl_container::Containers,
+        case: &Sample,
+        runtime: &RuntimeConfig,
+        rootfs: &std::path::Path,
+        name: &str,
+        terminal_metrics: &mut Vec<super::terminal::Metric>,
+    ) -> Result<Self, Error> {
+        if matches!(case.actions.first(), Some(super::definition::Step::Entrypoint)) {
+            let status = wait(containers, name, Duration::from_secs(case.timeout)).await?;
+            let logs = containers.logs(name).await?;
+            logs.bounded()?;
+            return Ok(Self {
+                status,
+                stdout: logs.stdout,
+                stderr: logs.stderr,
+            });
         }
+        if let Some(readiness) = &case.readiness {
+            await_readiness(containers, case, runtime, rootfs, name, readiness).await?;
+        }
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut status = ExitStatus::Code(0);
+        for action in &case.actions {
+            let outcome = match action {
+                super::definition::Step::Api(operation) => run_api(containers, name, operation).await?,
+                super::definition::Step::Terminal(action) => {
+                    super::terminal::run(containers, case, runtime, rootfs, name, action, terminal_metrics).await?
+                }
+                _ => run_exec(containers, case, runtime, rootfs, name, action).await?,
+            };
+            status = outcome.0;
+            stdout.extend(outcome.1);
+            stderr.extend(outcome.2);
+            crate::suite::Capture::bounded(stdout.len(), stderr.len())?;
+            if status != ExitStatus::Code(0) {
+                break;
+            }
+        }
+        Ok(Self { status, stdout, stderr })
     }
-    Ok(ActionOutput { status, stdout, stderr })
 }
 
 struct ActionOutput {

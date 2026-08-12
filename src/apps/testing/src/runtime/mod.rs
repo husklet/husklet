@@ -44,7 +44,7 @@ pub async fn run(options: Options) -> Result<(), Error> {
     println!("runtime: engine profile={} runner={}", profile::PROFILE, &runner[..16]);
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
-    let planned = require_planned(plan(apps, &options), options.selection.case.as_deref())?;
+    let planned = require_planned(Schedule::plan(apps, &options), options.selection.case.as_deref())?;
     let mut work = planned.work;
     let skipped = planned.skipped;
     // The runner identity joins the stamp so a rebuilt engine cannot resume the previous one's rows.
@@ -186,7 +186,7 @@ fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error>
     };
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
-    let mut planned = require_planned(plan(apps, &options), Some(&case))?.work;
+    let mut planned = require_planned(Schedule::plan(apps, &options), Some(&case))?.work;
     if planned.len() != 1 {
         return Err("runtime worker selection did not resolve exactly one row".into());
     }
@@ -385,28 +385,30 @@ struct Schedule {
     matched_case: bool,
 }
 
-fn plan(apps: Vec<App>, options: &Options) -> Schedule {
-    plan_for_host(apps, options, EngineHost::current())
-}
-
-fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Schedule {
-    let mut work = Vec::new();
-    let mut skipped = Vec::new();
-    let mut matched_case = options.selection.case.is_none();
-    for app in apps {
-        let app = Arc::new(app);
-        if let Some(selected) = options.selection.case.as_deref()
-            && app.cases.iter().any(|case| case.id == selected)
-        {
-            matched_case = true;
-        }
-        plan_app(&app, options, host, &mut work, &mut skipped);
+impl Schedule {
+    fn plan(apps: Vec<App>, options: &Options) -> Self {
+        Self::for_host(apps, options, EngineHost::current())
     }
-    work.sort_by(|left, right| left.key.cmp(&right.key));
-    Schedule {
-        work,
-        skipped,
-        matched_case,
+
+    fn for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Self {
+        let mut work = Vec::new();
+        let mut skipped = Vec::new();
+        let mut matched_case = options.selection.case.is_none();
+        for app in apps {
+            let app = Arc::new(app);
+            if let Some(selected) = options.selection.case.as_deref()
+                && app.cases.iter().any(|case| case.id == selected)
+            {
+                matched_case = true;
+            }
+            plan_app(&app, options, host, &mut work, &mut skipped);
+        }
+        work.sort_by(|left, right| left.key.cmp(&right.key));
+        Self {
+            work,
+            skipped,
+            matched_case,
+        }
     }
 }
 

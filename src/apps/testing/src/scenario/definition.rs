@@ -284,7 +284,7 @@ impl Scenario {
         let cases = document
             .cases
             .into_iter()
-            .map(|case| load_case(directory, definition, case, &mut ids))
+            .map(|case| Sample::load(directory, definition, case, &mut ids))
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             name,
@@ -294,104 +294,106 @@ impl Scenario {
     }
 }
 
-fn load_case(directory: &Path, definition: &Path, case: Input, ids: &mut BTreeSet<String>) -> Result<Sample, Error> {
-    if !ids.insert(case.id.clone())
-        || !case.id.contains('/')
-        || case.image.trim().is_empty()
-        || case.image.len() > 512
-        || case.image.contains('\0')
-        || !(1..=3600).contains(&case.timeout)
-        || case.warmups > 100
-        || !(1..=100).contains(&case.repetitions)
-    {
-        return Err(format!("{} has invalid case {:?}", definition.display(), case.id).into());
+impl Sample {
+    fn load(directory: &Path, definition: &Path, case: Input, ids: &mut BTreeSet<String>) -> Result<Self, Error> {
+        if !ids.insert(case.id.clone())
+            || !case.id.contains('/')
+            || case.image.trim().is_empty()
+            || case.image.len() > 512
+            || case.image.contains('\0')
+            || !(1..=3600).contains(&case.timeout)
+            || case.warmups > 100
+            || !(1..=100).contains(&case.repetitions)
+        {
+            return Err(format!("{} has invalid case {:?}", definition.display(), case.id).into());
+        }
+        if case.actions.is_empty() == case.run.is_none() {
+            return Err(format!("{} must define exactly one of run or actions", case.id).into());
+        }
+        if case.actions.len() > MAX_ACTIONS
+            || case.fixtures.len() > MAX_FIXTURES
+            || case.environment.len() > MAX_ENVIRONMENT
+        {
+            return Err(format!("{} exceeds a scenario collection bound", case.id).into());
+        }
+        validate_environment(&case.id, &case.environment)?;
+        let targets = platforms(case.targets, true, &case.id)?;
+        let expected_failures = platforms(case.xfail, false, &case.id)?;
+        if expected_failures
+            .iter()
+            .any(|target| !targets.iter().any(|candidate| candidate.name() == target.name()))
+        {
+            return Err(format!("{} marks an unsupported target xfail", case.id).into());
+        }
+        let resources = unique(case.resources, &case.id, "resource")?;
+        let (working_directory, actions) = load_actions(directory, &case.id, case.run, case.actions)?;
+        if actions.iter().any(|action| matches!(action, Step::Terminal(_))) && !resources.contains(&Resource::Pty) {
+            return Err(format!("{} terminal action requires the pty resource", case.id).into());
+        }
+        let entrypoints = actions
+            .iter()
+            .filter(|action| matches!(action, Step::Entrypoint))
+            .count();
+        if entrypoints > 1 || (entrypoints == 1 && (actions.len() != 1 || case.readiness.is_some())) {
+            return Err(format!(
+                "{} entrypoint must be its only action and cannot use readiness",
+                case.id
+            )
+            .into());
+        }
+        let fixtures = case
+            .fixtures
+            .into_iter()
+            .map(|fixture| InstalledFixture::load(directory, fixture))
+            .collect::<Result<Vec<_>, Error>>()?;
+        reject_duplicate_fixture_destinations(&case.id, &fixtures)?;
+        let stdout_contains = case
+            .expect
+            .stdout_contains
+            .into_vec()
+            .into_iter()
+            .map(|path| local_file(directory, path, "golden output"))
+            .collect::<Result<Vec<_>, Error>>()?;
+        if stdout_contains.len() > MAX_OUTPUT_CHECKS {
+            return Err(format!("{} defines too many output checks", case.id).into());
+        }
+        if stdout_contains.iter().collect::<BTreeSet<_>>().len() != stdout_contains.len() {
+            return Err(format!("{} repeats an output check", case.id).into());
+        }
+        let stdout_exact = case
+            .expect
+            .stdout_exact
+            .map(|path| local_file(directory, path, "exact golden output"))
+            .transpose()?;
+        if case.expect.output_empty && (!stdout_contains.is_empty() || stdout_exact.is_some()) {
+            return Err(format!("{} combines an empty-output assertion with a golden output", case.id).into());
+        }
+        if stdout_contains.is_empty() && stdout_exact.is_none() && !case.expect.output_empty {
+            return Err(format!("{} defines no output oracle", case.id).into());
+        }
+        let readiness = case.readiness.map(Readiness::validate).transpose()?;
+        Ok(Self {
+            id: case.id,
+            image: case.image,
+            execution: case.execution,
+            class: case.class,
+            targets,
+            expected_failures,
+            resources,
+            environment: case.environment,
+            working_directory,
+            actions,
+            fixtures,
+            readiness,
+            timeout: case.timeout,
+            warmups: case.warmups,
+            repetitions: case.repetitions,
+            exit: case.expect.exit,
+            stdout_contains,
+            stdout_exact,
+            output_empty: case.expect.output_empty,
+        })
     }
-    if case.actions.is_empty() == case.run.is_none() {
-        return Err(format!("{} must define exactly one of run or actions", case.id).into());
-    }
-    if case.actions.len() > MAX_ACTIONS
-        || case.fixtures.len() > MAX_FIXTURES
-        || case.environment.len() > MAX_ENVIRONMENT
-    {
-        return Err(format!("{} exceeds a scenario collection bound", case.id).into());
-    }
-    validate_environment(&case.id, &case.environment)?;
-    let targets = platforms(case.targets, true, &case.id)?;
-    let expected_failures = platforms(case.xfail, false, &case.id)?;
-    if expected_failures
-        .iter()
-        .any(|target| !targets.iter().any(|candidate| candidate.name() == target.name()))
-    {
-        return Err(format!("{} marks an unsupported target xfail", case.id).into());
-    }
-    let resources = unique(case.resources, &case.id, "resource")?;
-    let (working_directory, actions) = load_actions(directory, &case.id, case.run, case.actions)?;
-    if actions.iter().any(|action| matches!(action, Step::Terminal(_))) && !resources.contains(&Resource::Pty) {
-        return Err(format!("{} terminal action requires the pty resource", case.id).into());
-    }
-    let entrypoints = actions
-        .iter()
-        .filter(|action| matches!(action, Step::Entrypoint))
-        .count();
-    if entrypoints > 1 || (entrypoints == 1 && (actions.len() != 1 || case.readiness.is_some())) {
-        return Err(format!(
-            "{} entrypoint must be its only action and cannot use readiness",
-            case.id
-        )
-        .into());
-    }
-    let fixtures = case
-        .fixtures
-        .into_iter()
-        .map(|fixture| load_fixture(directory, fixture))
-        .collect::<Result<Vec<_>, Error>>()?;
-    reject_duplicate_fixture_destinations(&case.id, &fixtures)?;
-    let stdout_contains = case
-        .expect
-        .stdout_contains
-        .into_vec()
-        .into_iter()
-        .map(|path| local_file(directory, path, "golden output"))
-        .collect::<Result<Vec<_>, Error>>()?;
-    if stdout_contains.len() > MAX_OUTPUT_CHECKS {
-        return Err(format!("{} defines too many output checks", case.id).into());
-    }
-    if stdout_contains.iter().collect::<BTreeSet<_>>().len() != stdout_contains.len() {
-        return Err(format!("{} repeats an output check", case.id).into());
-    }
-    let stdout_exact = case
-        .expect
-        .stdout_exact
-        .map(|path| local_file(directory, path, "exact golden output"))
-        .transpose()?;
-    if case.expect.output_empty && (!stdout_contains.is_empty() || stdout_exact.is_some()) {
-        return Err(format!("{} combines an empty-output assertion with a golden output", case.id).into());
-    }
-    if stdout_contains.is_empty() && stdout_exact.is_none() && !case.expect.output_empty {
-        return Err(format!("{} defines no output oracle", case.id).into());
-    }
-    let readiness = case.readiness.map(Readiness::validate).transpose()?;
-    Ok(Sample {
-        id: case.id,
-        image: case.image,
-        execution: case.execution,
-        class: case.class,
-        targets,
-        expected_failures,
-        resources,
-        environment: case.environment,
-        working_directory,
-        actions,
-        fixtures,
-        readiness,
-        timeout: case.timeout,
-        warmups: case.warmups,
-        repetitions: case.repetitions,
-        exit: case.expect.exit,
-        stdout_contains,
-        stdout_exact,
-        output_empty: case.expect.output_empty,
-    })
 }
 
 fn load_actions(
@@ -545,12 +547,14 @@ fn bounded_text(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= MAX_TEXT && !value.contains('\0')
 }
 
-fn load_fixture(directory: &Path, fixture: Fixture) -> Result<InstalledFixture, Error> {
-    std::path::Path::new(&fixture.destination).safe_absolute()?;
-    Ok(InstalledFixture {
-        source: local_file(directory, fixture.source, "fixture")?,
-        destination: fixture.destination,
-    })
+impl InstalledFixture {
+    fn load(directory: &Path, fixture: Fixture) -> Result<Self, Error> {
+        std::path::Path::new(&fixture.destination).safe_absolute()?;
+        Ok(Self {
+            source: local_file(directory, fixture.source, "fixture")?,
+            destination: fixture.destination,
+        })
+    }
 }
 
 fn reject_duplicate_fixture_destinations(id: &str, fixtures: &[InstalledFixture]) -> Result<(), Error> {

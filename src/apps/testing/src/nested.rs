@@ -11,7 +11,7 @@ use std::{
 
 mod adapter;
 
-use adapter::{build_artifact, capture, environment, hash_tool, materialize};
+use adapter::{ProcessOutput, build_artifact, environment, hash_tool, materialize};
 
 type Error = Box<dyn std::error::Error>;
 const DEFAULT_CAPTURE_LIMIT: usize = 1024 * 1024;
@@ -472,7 +472,7 @@ impl Workspace {
             Err(error) => return Outcome::Failed(format!("cannot read {}: {error}", expected.display())),
         };
         let arguments = self.command(chain);
-        match capture(
+        match ProcessOutput::capture(
             &arguments,
             Duration::from_secs(chain.timeout_seconds),
             chain.capture_limit_bytes,
@@ -700,7 +700,7 @@ expect: { exit: 42, stdout: hello.txt }
 
     #[test]
     fn capture_success() {
-        let captured = capture(
+        let captured = ProcessOutput::capture(
             &[
                 "/bin/sh".into(),
                 "-c".into(),
@@ -717,7 +717,7 @@ expect: { exit: 42, stdout: hello.txt }
 
     #[test]
     fn capture_timeout() {
-        let error = capture(
+        let error = ProcessOutput::capture(
             &["/bin/sh".into(), "-c".into(), "sleep 2".into()],
             Duration::from_millis(20),
             1024,
@@ -728,7 +728,7 @@ expect: { exit: 42, stdout: hello.txt }
 
     #[test]
     fn capture_limit() {
-        let error = capture(
+        let error = ProcessOutput::capture(
             &["/bin/sh".into(), "-c".into(), "printf 12345".into()],
             Duration::from_secs(2),
             4,
