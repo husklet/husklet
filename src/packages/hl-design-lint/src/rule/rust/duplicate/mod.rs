@@ -128,6 +128,24 @@ struct Pair {
 }
 
 impl Pair {
+    fn shared(first: &Definition, second: &Definition) -> Option<Self> {
+        if !related(first, second) {
+            return None;
+        }
+        let mut common = first
+            .fields
+            .iter()
+            .filter(|(name, ty)| second.fields.get(*name) == Some(*ty))
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect::<Vec<_>>();
+        common.sort();
+        (common.len() >= 3).then(|| Self {
+            first: first.clone(),
+            second: second.clone(),
+            common,
+        })
+    }
+
     fn finding(self, rule: &'static str) -> Finding {
         let fields = self
             .common
@@ -162,33 +180,24 @@ impl Pair {
 }
 
 fn compare(definitions: Vec<Definition>) -> Vec<Pair> {
-    let mut pairs = Vec::new();
     let mut packages = HashMap::<String, Vec<Definition>>::new();
     for definition in definitions {
         packages.entry(definition.package.clone()).or_default().push(definition);
     }
-    for definitions in packages.values() {
-        for (index, first) in definitions.iter().enumerate() {
-            for second in &definitions[index + 1..] {
-                if !related(first, second) {
-                    continue;
-                }
-                let mut common = first
-                    .fields
-                    .iter()
-                    .filter(|(name, ty)| second.fields.get(*name) == Some(*ty))
-                    .map(|(name, ty)| (name.clone(), ty.clone()))
-                    .collect::<Vec<_>>();
-                common.sort();
-                if common.len() >= 3 {
-                    pairs.push(Pair {
-                        first: first.clone(),
-                        second: second.clone(),
-                        common,
-                    });
-                }
-            }
-        }
-    }
-    pairs
+    packages
+        .values()
+        .flat_map(|definitions| comparisons(definitions))
+        .collect()
+}
+
+fn comparisons(definitions: &[Definition]) -> Vec<Pair> {
+    definitions
+        .iter()
+        .enumerate()
+        .flat_map(|(index, first)| {
+            definitions[index + 1..]
+                .iter()
+                .filter_map(|second| Pair::shared(first, second))
+        })
+        .collect()
 }
