@@ -3495,6 +3495,50 @@ static enum avx_dispatch_result sse_dispatch_packed_arithmetic(const hl_x86_avx_
     return AVX_DISPATCH_HANDLED;
 }
 
+static uint32_t aes_subword(uint32_t value) {
+    return (uint32_t)k_aes_sbox[value & 0xff] | ((uint32_t)k_aes_sbox[(value >> 8) & 0xff] << 8) |
+           ((uint32_t)k_aes_sbox[(value >> 16) & 0xff] << 16) | ((uint32_t)k_aes_sbox[(value >> 24) & 0xff] << 24);
+}
+
+static enum avx_dispatch_result sse_dispatch_aes(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
+                                                 uint64_t next, uint8_t destination[16]) {
+    int op = I->op;
+    int round = I->map3 == 2 && op >= 0xDB && op <= 0xDF;
+    int keygen = I->map3 == 3 && op == 0xDF;
+    if (!round && !keygen) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t source[16];
+    uint8_t result[16];
+    sse_get_rm(state, c, I, next, source);
+    if (keygen) {
+        uint32_t words[4];
+        uint32_t output[4];
+        memcpy(words, source, 16);
+        uint32_t subword1 = aes_subword(words[1]);
+        uint32_t subword3 = aes_subword(words[3]);
+        uint32_t round_constant = (uint32_t)((uint8_t)I->imm);
+        output[0] = subword1;
+        output[1] = rotr32(subword1, 8) ^ round_constant;
+        output[2] = subword3;
+        output[3] = rotr32(subword3, 8) ^ round_constant;
+        memcpy(result, output, 16);
+    } else if (op == 0xDB) { // AESIMC
+        memcpy(result, source, 16);
+        aes_mixcolumns(result, 1);
+    } else {
+        int inverse = op == 0xDE || op == 0xDF;
+        uint8_t transformed[16];
+        aes_shiftrows(destination, transformed, inverse);
+        aes_subbytes(transformed, inverse ? k_aes_isbox : k_aes_sbox);
+        if (op == 0xDC || op == 0xDE) aes_mixcolumns(transformed, inverse);
+        for (int byte = 0; byte < 16; byte++)
+            result[byte] = transformed[byte] ^ source[byte];
+    }
+    memcpy(destination, result, 16);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3529,6 +3573,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
 
     if (sse_dispatch_integer_extension(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_packed_arithmetic(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
+    if (sse_dispatch_aes(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     // ---- the remaining ops are xmm-destructive: load the r/m source, compute into r, write to D -----
     sse_get_rm(state, c, &I, next, s);
@@ -3677,32 +3722,6 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
                 for (int i = 0; i < 2; i++)
                     memcpy(r + 8 * i, (mask[8 * i + 7] & 0x80) ? s + 8 * i : D + 8 * i, 8);
             }
-            break;
-        }
-        case 0xDB: // aesimc: dst = InvMixColumns(src)
-            memcpy(r, s, 16);
-            aes_mixcolumns(r, 1);
-            break;
-        case 0xDC: // aesenc
-        case 0xDD: // aesenclast
-        {
-            uint8_t t[16];
-            aes_shiftrows(D, t, 0);
-            aes_subbytes(t, k_aes_sbox);
-            if (op == 0xDC) aes_mixcolumns(t, 0);
-            for (int i = 0; i < 16; i++)
-                r[i] = t[i] ^ s[i];
-            break;
-        }
-        case 0xDE: // aesdec
-        case 0xDF: // aesdeclast
-        {
-            uint8_t t[16];
-            aes_shiftrows(D, t, 1);
-            aes_subbytes(t, k_aes_isbox);
-            if (op == 0xDE) aes_mixcolumns(t, 1);
-            for (int i = 0; i < 16; i++)
-                r[i] = t[i] ^ s[i];
             break;
         }
         case 0xC8: { // sha1nexte: dst.dw3 = src.dw3 + ROL(dst.dw3,30); dst.dw0..2 = src.dw0..2 (passthrough)
@@ -3943,25 +3962,6 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
                 A = t;
             }
             uint32_t o[4] = {Dd, Cc, B, A}; // DEST: [31:0]=D4,[63:32]=C4,[95:64]=B4,[127:96]=A4
-            memcpy(r, o, 16);
-            break;
-        }
-        case 0xDF: { // aeskeygenassist: SubWord+RotWord+RCON on dwords 1 and 3
-            uint32_t x[4];
-            memcpy(x, s, 16);
-            uint32_t rcon = (uint32_t)(imm & 0xff);
-            uint32_t X1 = x[1], X3 = x[3];
-            uint32_t sub1 = (uint32_t)k_aes_sbox[X1 & 0xff] | ((uint32_t)k_aes_sbox[(X1 >> 8) & 0xff] << 8) |
-                            ((uint32_t)k_aes_sbox[(X1 >> 16) & 0xff] << 16) |
-                            ((uint32_t)k_aes_sbox[(X1 >> 24) & 0xff] << 24);
-            uint32_t sub3 = (uint32_t)k_aes_sbox[X3 & 0xff] | ((uint32_t)k_aes_sbox[(X3 >> 8) & 0xff] << 8) |
-                            ((uint32_t)k_aes_sbox[(X3 >> 16) & 0xff] << 16) |
-                            ((uint32_t)k_aes_sbox[(X3 >> 24) & 0xff] << 24);
-            uint32_t o[4];
-            o[0] = sub1;
-            o[1] = rotr32(sub1, 8) ^ rcon;
-            o[2] = sub3;
-            o[3] = rotr32(sub3, 8) ^ rcon;
             memcpy(r, o, 16);
             break;
         }
