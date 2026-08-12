@@ -55,7 +55,7 @@
 #include "../host/file.h"
 #include "../host/system.h"
 #include "sink_stream.h" // the writer emits every image byte through the sink
-#include "ckpt_source.h"      // restore reads the image back through the symmetric source interface
+#include "ckpt_source.h" // restore reads the image back through the symmetric source interface
 #include "logical_vma.h"
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta

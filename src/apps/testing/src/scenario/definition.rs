@@ -291,12 +291,7 @@ impl Scenario {
     }
 }
 
-fn load_case(
-    directory: &Path,
-    definition: &Path,
-    case: Input,
-    ids: &mut BTreeSet<String>,
-) -> Result<Sample, Error> {
+fn load_case(directory: &Path, definition: &Path, case: Input, ids: &mut BTreeSet<String>) -> Result<Sample, Error> {
     if !ids.insert(case.id.clone())
         || !case.id.contains('/')
         || case.image.trim().is_empty()

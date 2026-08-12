@@ -176,7 +176,7 @@ fn opens_workspace_path_as_transfer_authority_and_discards_on_create_failure() {
     let mut executable = executable_with_poison();
 
     // SAFETY: host, path, and output remain live for the duration of both calls.
-    let status = unsafe { hl_c_backend_executable_open(&host, path.as_ptr().cast(), &mut executable) };
+    let status = unsafe { hl_c_backend_executable_open(&raw const host, path.as_ptr().cast(), &raw mut executable) };
     assert_eq!(status, STATUS_OK);
     assert_eq!(state.path, b"/workspace/staged/guest");
     assert_eq!(state.directory, HANDLE_CWD);
@@ -192,7 +192,7 @@ fn opens_workspace_path_as_transfer_authority_and_discards_on_create_failure() {
     assert_eq!(executable.image_size, 0);
 
     // SAFETY: the authority has not been transferred to an engine.
-    unsafe { hl_c_backend_executable_discard(&host, &mut executable) };
+    unsafe { hl_c_backend_executable_discard(&raw const host, &raw mut executable) };
     assert_eq!(state.closes, [41]);
     assert_eq!(executable.host_handle, 0);
     assert_eq!(executable.ownership, 0);
@@ -219,13 +219,13 @@ fn failure_propagates_without_leaving_a_live_authority() {
     let mut executable = executable_with_poison();
 
     // SAFETY: host, path, and output remain live for the call.
-    let status = unsafe { hl_c_backend_executable_open(&host, c"/missing".as_ptr(), &mut executable) };
+    let status = unsafe { hl_c_backend_executable_open(&raw const host, c"/missing".as_ptr(), &raw mut executable) };
     assert_eq!(status, STATUS_NOT_FOUND);
     assert_eq!(executable.host_handle, 0);
     assert_eq!(executable.ownership, 0);
 
     // SAFETY: a cleared authority is valid to discard and must be a no-op.
-    unsafe { hl_c_backend_executable_discard(&host, &mut executable) };
+    unsafe { hl_c_backend_executable_discard(&raw const host, &raw mut executable) };
     assert!(state.closes.is_empty());
 }
 
@@ -250,7 +250,7 @@ fn invalid_inputs_are_rejected_before_opening() {
     let mut executable = executable_with_poison();
 
     // SAFETY: host and output are live; the helper validates the missing callback.
-    let status = unsafe { hl_c_backend_executable_open(&host, c"/guest".as_ptr(), &mut executable) };
+    let status = unsafe { hl_c_backend_executable_open(&raw const host, c"/guest".as_ptr(), &raw mut executable) };
     assert_eq!(status, STATUS_INVALID_ARGUMENT);
     assert_eq!(executable.host_handle, 0);
     assert!(state.path.is_empty());

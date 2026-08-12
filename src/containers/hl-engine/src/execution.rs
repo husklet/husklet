@@ -13,7 +13,7 @@ use crate::activation::GuestIsa;
 use crate::composition::RuntimeServices;
 use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
 use crate::launch_plan::RuntimeLaunchPlan;
-use std::ffi::{CString, c_char, c_int, c_uint, c_ulonglong, c_void};
+use std::ffi::{c_char, c_int, c_uint, c_ulonglong, c_void};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
@@ -684,10 +684,10 @@ mod tests {
         // layouts match the callback ABI for the complete call.
         let status = unsafe {
             c_syscall_trap(
-                (&mut context as *mut CSyscallTrapContext).cast(),
+                (&raw mut context).cast(),
                 GuestIsa::Aarch64 as u32,
-                &mut cpu,
-                &mut result,
+                &raw mut cpu,
+                &raw mut result,
             )
         };
         assert_eq!(status, 0);
@@ -722,12 +722,7 @@ mod tests {
         // SAFETY: the closure passes live uniquely borrowed ABI records and a context that
         // remains allocated for every synchronous callback invocation.
         let mut dispatch = |cpu: &mut CSyscallCpuAarch64, result: &mut CSyscallTrapResult| unsafe {
-            c_syscall_trap(
-                (&mut context as *mut CSyscallTrapContext).cast(),
-                GuestIsa::Aarch64 as u32,
-                cpu,
-                result,
-            )
+            c_syscall_trap((&raw mut context).cast(), GuestIsa::Aarch64 as u32, cpu, result)
         };
 
         cpu.x[8] = 172;

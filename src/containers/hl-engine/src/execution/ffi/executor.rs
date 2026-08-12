@@ -1,6 +1,16 @@
 #![allow(unsafe_code)]
 
-use super::super::*;
+use std::ffi::{CString, c_int, c_uint};
+use std::os::fd::AsRawFd;
+use std::ptr::NonNull;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use super::super::{
+    CGuestExecutor, CSyscallTrapContext, CTerminalWindowNotification, EngineError, EngineExit, ExitKind, GuestIsa,
+    REQUEST_FORCE_STOP, REQUEST_INTERRUPT, REQUEST_SIGNAL, RuntimeLaunchPlan, STATUS_OK, StopRequest, StreamBridge,
+    c_file_volumes, c_main_image_plan, c_option, c_syscall_trap, hl_c_backend_create, hl_c_backend_destroy,
+    hl_c_backend_exit_detail, hl_c_backend_exit_kind, hl_c_backend_exit_status, hl_c_backend_request, hl_c_backend_run,
+};
 
 // The C lifecycle contract explicitly permits request() from a second thread
 // while run() is active. Ownership remains with this value until Drop.
