@@ -100,7 +100,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Add a generic documentation inventory/example contract.
 - [x] Add a generic detached-constructor rule: free constructors returning `T`, `Option<T>`, or `Result<T, E>` belong on `T` when ownership is proven.
 - [x] Move detached constructors reported by the live scan onto their owned result types, including `Schedule` and `Sample`.
-- [ ] Fix the remaining Rust nesting finding in testing runtime definition.
+- [x] Fix the remaining Rust nesting finding; merged-tip self-lint reports zero `maximum-nesting` errors.
 - [x] Repair stale linter self-test expectations and make `cargo test -p hl-design-lint --lib` fully green.
 - [ ] Run the full linter to zero findings on the final merged repository.
 
