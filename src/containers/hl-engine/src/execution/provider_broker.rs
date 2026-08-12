@@ -109,10 +109,69 @@ mod tests {
     fn malformed_headers_fail_closed() {
         let mut oversized = request_header(1, MAXIMUM_PAYLOAD + 1);
         assert_eq!(decode_request(&oversized), None);
+        let mut empty = request_header(1, 0);
+        assert_eq!(decode_request(&empty), None);
+        empty = request_header(1, 1);
+        empty[0..4].copy_from_slice(&(MAGIC ^ 1).to_le_bytes());
+        assert_eq!(decode_request(&empty), None);
+        empty = request_header(1, 1);
+        empty[4..6].copy_from_slice(&(VERSION + 1).to_le_bytes());
+        assert_eq!(decode_request(&empty), None);
+        empty = request_header(1, 1);
+        empty[6..8].copy_from_slice(&4_u16.to_le_bytes());
+        assert_eq!(decode_request(&empty), None);
         oversized = request_header(1, 1);
         oversized[20] = 1;
         assert_eq!(decode_request(&oversized), None);
         assert_eq!(decode_request(&request_header(0, 1)), None);
+    }
+
+    #[test]
+    fn truncated_header_and_payload_close_without_dispatch() {
+        for bytes in [
+            request_header(1, 1)[..HEADER_SIZE - 1].to_vec(),
+            request_header(1, 2).to_vec(),
+        ] {
+            let (mut client, server) = UnixStream::pair().unwrap();
+            let worker = std::thread::spawn(move || serve(server, |_| panic!("must not dispatch")));
+            client.write_all(&bytes).unwrap();
+            if bytes.len() == HEADER_SIZE {
+                client.write_all(&[16]).unwrap();
+            }
+            client.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut byte = [0];
+            assert_eq!(client.read(&mut byte).unwrap(), 0);
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn dead_authority_and_oversized_reply_close_transport() {
+        for oversized_reply in [false, true] {
+            let (mut client, server) = UnixStream::pair().unwrap();
+            let worker = std::thread::spawn(move || {
+                serve(server, move |_| {
+                    if oversized_reply {
+                        Ok(vec![0; MAXIMUM_PAYLOAD + 1])
+                    } else {
+                        Err(())
+                    }
+                });
+            });
+            client.write_all(&request_header(7, 1)).unwrap();
+            client.write_all(&[16]).unwrap();
+            let mut byte = [0];
+            assert_eq!(client.read(&mut byte).unwrap(), 0);
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn peer_death_ends_broker_without_dispatch() {
+        let (client, server) = UnixStream::pair().unwrap();
+        drop(client);
+        let worker = std::thread::spawn(move || serve(server, |_| panic!("must not dispatch")));
+        worker.join().unwrap();
     }
 
     #[test]
