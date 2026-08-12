@@ -17,7 +17,7 @@ struct Audit {
 }
 
 /// Syscall numbers pinned from the production C engine; refresh explicitly with `--regenerate`.
-const NUMBERS: &str = include_str!("../syscall-audit/syscall-numbers.tsv");
+const NUMBERS: &str = include_str!("../syscall-numbers.tsv");
 
 #[derive(Args)]
 pub struct Options {
@@ -80,7 +80,7 @@ impl Audit {
     }
 
     fn numbers_path(&self) -> PathBuf {
-        self.root.join("src/apps/testing/syscall-audit/syscall-numbers.tsv")
+        self.root.join("src/apps/testing/syscall-numbers.tsv")
     }
 
     fn numbers(source: &str) -> Result<Vec<Entry>, String> {
