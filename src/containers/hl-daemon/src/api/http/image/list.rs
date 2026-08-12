@@ -15,21 +15,21 @@ pub(in super::super) struct ListQuery {
 }
 
 impl ListQuery {
-    pub(super) fn selection(&self) -> ApiResult<(ImageSelection, bool)> {
+    pub(super) fn selection(&self) -> ApiResult<(Selection, bool)> {
         Fields::from(&self.unsupported).reject("image list")?;
         let _all = Field::new("all", self.all.as_deref()).boolean()?;
         let _digests = Field::new("digests", self.digests.as_deref()).boolean()?;
         let shared_size = Field::new("shared-size", self.shared_size.as_deref()).boolean()?;
-        Ok((ImageSelection::parse(self.filters.as_deref())?, shared_size))
+        Ok((Selection::parse(self.filters.as_deref())?, shared_size))
     }
 }
 
 #[derive(Debug, Default)]
-pub(super) struct ImageSelection {
+pub(super) struct Selection {
     values: BTreeMap<String, Vec<String>>,
 }
 
-impl ImageSelection {
+impl Selection {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let Some(raw) = raw.filter(|value| Field::meaningful(value)) else {
             return Ok(Self::default());
@@ -205,14 +205,14 @@ impl Prune {
             graph
                 .labels
                 .as_ref()
-                .is_some_and(|labels| filters.iter().any(|value| ImageSelection::label(labels, value)))
+                .is_some_and(|labels| filters.iter().any(|value| Selection::label(labels, value)))
         });
         included
             && values.get("label!").is_none_or(|filters| {
                 graph
                     .labels
                     .as_ref()
-                    .is_some_and(|labels| filters.iter().all(|value| !ImageSelection::label(labels, value)))
+                    .is_some_and(|labels| filters.iter().all(|value| !Selection::label(labels, value)))
             })
     }
 

@@ -208,10 +208,10 @@ fn working_directory() -> String {
 pub struct Scenario {
     pub name: String,
     pub definition: PathBuf,
-    pub cases: Vec<ScenarioCase>,
+    pub cases: Vec<Sample>,
 }
 
-pub struct ScenarioCase {
+pub struct Sample {
     pub id: String,
     pub image: String,
     pub execution: Execution,
@@ -221,8 +221,8 @@ pub struct ScenarioCase {
     pub resources: Vec<Resource>,
     pub environment: BTreeMap<String, String>,
     pub working_directory: String,
-    pub actions: Vec<ScenarioAction>,
-    pub fixtures: Vec<ScenarioFixture>,
+    pub actions: Vec<Step>,
+    pub fixtures: Vec<InstalledFixture>,
     pub readiness: Option<Readiness>,
     pub timeout: u64,
     pub warmups: u16,
@@ -233,27 +233,27 @@ pub struct ScenarioCase {
 }
 
 #[derive(Debug)]
-pub enum ScenarioAction {
+pub enum Step {
     Argv(Vec<String>),
     Shell(String),
     Entrypoint,
     Host(String),
-    Api(ScenarioApiAction),
+    Api(ApiStep),
     Terminal(super::terminal::Action),
 }
 
 #[derive(Debug)]
-pub enum ScenarioApiAction {
+pub enum ApiStep {
     CopyToContainer { source: PathBuf, destination: String },
     CopyFromContainer { source: String },
 }
 
-pub struct ScenarioFixture {
+pub struct InstalledFixture {
     pub source: PathBuf,
     pub destination: String,
 }
 
-impl ScenarioCase {
+impl Sample {
     pub fn supports(&self, target: Target) -> bool {
         self.targets.iter().any(|candidate| candidate.name() == target.name())
     }
@@ -296,7 +296,7 @@ fn load_case(
     definition: &Path,
     case: ScenarioSpecification,
     ids: &mut BTreeSet<String>,
-) -> Result<ScenarioCase, Error> {
+) -> Result<Sample, Error> {
     if !ids.insert(case.id.clone())
         || !case.id.contains('/')
         || case.image.trim().is_empty()
@@ -328,16 +328,12 @@ fn load_case(
     }
     let resources = unique(case.resources, &case.id, "resource")?;
     let (working_directory, actions) = load_actions(directory, &case.id, case.run, case.actions)?;
-    if actions
-        .iter()
-        .any(|action| matches!(action, ScenarioAction::Terminal(_)))
-        && !resources.contains(&Resource::Pty)
-    {
+    if actions.iter().any(|action| matches!(action, Step::Terminal(_))) && !resources.contains(&Resource::Pty) {
         return Err(format!("{} terminal action requires the pty resource", case.id).into());
     }
     let entrypoints = actions
         .iter()
-        .filter(|action| matches!(action, ScenarioAction::Entrypoint))
+        .filter(|action| matches!(action, Step::Entrypoint))
         .count();
     if entrypoints > 1 || (entrypoints == 1 && (actions.len() != 1 || case.readiness.is_some())) {
         return Err(format!(
@@ -374,7 +370,7 @@ fn load_case(
         return Err(format!("{} defines no output oracle", case.id).into());
     }
     let readiness = case.readiness.map(Readiness::validate).transpose()?;
-    Ok(ScenarioCase {
+    Ok(Sample {
         id: case.id,
         image: case.image,
         execution: case.execution,
@@ -401,7 +397,7 @@ fn load_actions(
     id: &str,
     run: Option<Run>,
     actions: Vec<Action>,
-) -> Result<(String, Vec<ScenarioAction>), Error> {
+) -> Result<(String, Vec<Step>), Error> {
     let Some(run) = run else {
         let actions = actions
             .into_iter()
@@ -442,7 +438,7 @@ fn unique<T: Ord + Copy>(values: Vec<T>, id: &str, noun: &str) -> Result<Vec<T>,
     }
 }
 
-fn validate_action(directory: &Path, id: &str, action: Action) -> Result<ScenarioAction, Error> {
+fn validate_action(directory: &Path, id: &str, action: Action) -> Result<Step, Error> {
     let count = usize::from(action.argv.is_some())
         + usize::from(action.shell.is_some())
         + usize::from(action.entrypoint.is_some())
@@ -453,7 +449,7 @@ fn validate_action(directory: &Path, id: &str, action: Action) -> Result<Scenari
         return Err(format!("{id} action must select exactly one operation").into());
     }
     if let Some(terminal) = action.terminal {
-        return Ok(ScenarioAction::Terminal(terminal.validate(id)?));
+        return Ok(Step::Terminal(terminal.validate(id)?));
     }
     match (action.argv, action.shell, action.entrypoint, action.host, action.api) {
         (Some(ArgvAction { argv }), None, None, None, None)
@@ -464,15 +460,11 @@ fn validate_action(directory: &Path, id: &str, action: Action) -> Result<Scenari
                     .all(|value| value.len() <= MAX_FIELD && !value.contains('\0'))
                 && argv.iter().map(String::len).sum::<usize>() <= MAX_TEXT =>
         {
-            Ok(ScenarioAction::Argv(argv))
+            Ok(Step::Argv(argv))
         }
-        (None, Some(ScriptAction { script }), None, None, None) if bounded_text(&script) => {
-            Ok(ScenarioAction::Shell(script))
-        }
-        (None, None, Some(EmptyAction {}), None, None) => Ok(ScenarioAction::Entrypoint),
-        (None, None, None, Some(ScriptAction { script }), None) if bounded_text(&script) => {
-            Ok(ScenarioAction::Host(script))
-        }
+        (None, Some(ScriptAction { script }), None, None, None) if bounded_text(&script) => Ok(Step::Shell(script)),
+        (None, None, Some(EmptyAction {}), None, None) => Ok(Step::Entrypoint),
+        (None, None, None, Some(ScriptAction { script }), None) if bounded_text(&script) => Ok(Step::Host(script)),
         (
             None,
             None,
@@ -485,7 +477,7 @@ fn validate_action(directory: &Path, id: &str, action: Action) -> Result<Scenari
             }),
         ) => {
             std::path::Path::new(&destination).safe_absolute()?;
-            Ok(ScenarioAction::Api(ScenarioApiAction::CopyToContainer {
+            Ok(Step::Api(ApiStep::CopyToContainer {
                 source: local_path(directory, source, "copy source")?,
                 destination,
             }))
@@ -506,7 +498,7 @@ fn validate_action(directory: &Path, id: &str, action: Action) -> Result<Scenari
                 .ok_or_else(|| format!("{id} copy source is not UTF-8"))?
                 .to_owned();
             std::path::Path::new(&source).safe_absolute()?;
-            Ok(ScenarioAction::Api(ScenarioApiAction::CopyFromContainer { source }))
+            Ok(Step::Api(ApiStep::CopyFromContainer { source }))
         }
         _ => Err(format!("{id} has an empty or invalid action").into()),
     }
@@ -551,15 +543,15 @@ fn bounded_text(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= MAX_TEXT && !value.contains('\0')
 }
 
-fn load_fixture(directory: &Path, fixture: Fixture) -> Result<ScenarioFixture, Error> {
+fn load_fixture(directory: &Path, fixture: Fixture) -> Result<InstalledFixture, Error> {
     std::path::Path::new(&fixture.destination).safe_absolute()?;
-    Ok(ScenarioFixture {
+    Ok(InstalledFixture {
         source: local_file(directory, fixture.source, "fixture")?,
         destination: fixture.destination,
     })
 }
 
-fn reject_duplicate_fixture_destinations(id: &str, fixtures: &[ScenarioFixture]) -> Result<(), Error> {
+fn reject_duplicate_fixture_destinations(id: &str, fixtures: &[InstalledFixture]) -> Result<(), Error> {
     let destinations = fixtures
         .iter()
         .map(|fixture| fixture.destination.as_str())

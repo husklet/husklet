@@ -296,7 +296,7 @@ use fields::{Field, Fields};
 #[cfg(test)]
 use identity::{RemoveQuery, removal_conflicts};
 #[cfg(test)]
-use list::{ImageSelection, ListQuery};
+use list::{ListQuery, Selection};
 pub(super) use list::{Prune, list, prune};
 pub(super) use registry::{commit, pull, search};
 

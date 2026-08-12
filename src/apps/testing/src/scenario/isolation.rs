@@ -1,7 +1,7 @@
-use super::definition::{Resource, ScenarioCase};
+use super::definition::{Resource, Sample};
 use hl_container::{Isolation, Sandbox};
 
-pub(super) fn for_case(case: &ScenarioCase) -> Isolation {
+pub(super) fn for_case(case: &Sample) -> Isolation {
     Isolation {
         sandbox: Sandbox::Disabled,
         network_isolated: case.resources.contains(&Resource::HostPort),
@@ -13,13 +13,13 @@ pub(super) fn for_case(case: &ScenarioCase) -> Isolation {
 mod tests {
     use super::for_case;
     use crate::{
-        scenario::definition::{Class, Resource, ScenarioAction, ScenarioCase},
+        scenario::definition::{Class, Resource, Sample, Step},
         suite::{Execution, Target},
     };
     use std::collections::BTreeMap;
 
-    fn scenario(resources: Vec<Resource>) -> ScenarioCase {
-        ScenarioCase {
+    fn scenario(resources: Vec<Resource>) -> Sample {
+        Sample {
             id: "network/probe".to_owned(),
             image: "alpine".to_owned(),
             execution: Execution::default(),
@@ -29,7 +29,7 @@ mod tests {
             resources,
             environment: BTreeMap::new(),
             working_directory: "/".to_owned(),
-            actions: vec![ScenarioAction::Shell("true".to_owned())],
+            actions: vec![Step::Shell("true".to_owned())],
             fixtures: Vec::new(),
             readiness: None,
             timeout: 60,

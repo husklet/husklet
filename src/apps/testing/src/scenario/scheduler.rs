@@ -1,6 +1,6 @@
 use super::{
     Options,
-    definition::{Resource, Scenario, ScenarioCase},
+    definition::{Resource, Sample, Scenario},
     execution, ledger,
 };
 use crate::suite::{Error, Target};
@@ -341,7 +341,7 @@ fn extend_target_work(
 }
 
 /// Claims one key per repetition, refusing a definition that would run the same case twice.
-fn sample_keys(case: &ScenarioCase, target: Target, keys: &mut BTreeSet<WorkKey>) -> Result<Vec<WorkKey>, Error> {
+fn sample_keys(case: &Sample, target: Target, keys: &mut BTreeSet<WorkKey>) -> Result<Vec<WorkKey>, Error> {
     let mut samples = Vec::with_capacity(usize::from(case.repetitions));
     for sample in 1..=case.repetitions {
         let key = WorkKey {

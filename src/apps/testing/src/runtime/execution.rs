@@ -94,12 +94,7 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
 }
 
 /// Stages the case artifact into the writable root: the overlay upper, or the copied tree.
-async fn stage(
-    root: &Path,
-    case: &super::definition::RuntimeCase,
-    artifact: &Path,
-    target: Target,
-) -> Result<(), Error> {
+async fn stage(root: &Path, case: &super::definition::Workload, artifact: &Path, target: Target) -> Result<(), Error> {
     let destination = root.join(case.destination.trim_start_matches('/'));
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)
@@ -118,7 +113,7 @@ async fn stage(
 /// The staged program must exist in the upper and nowhere in the lower, and the
 /// lower must still carry image content the upper does not: a resolution that
 /// launches the program at all has crossed both layers.
-fn assert_overlay(fixture: &TestImage, case: &super::definition::RuntimeCase) -> Result<(), Error> {
+fn assert_overlay(fixture: &TestImage, case: &super::definition::Workload) -> Result<(), Error> {
     let Some(lower) = fixture.lower() else {
         return Ok(());
     };
@@ -144,7 +139,7 @@ fn assert_overlay(fixture: &TestImage, case: &super::definition::RuntimeCase) ->
 }
 
 /// Stages the guest-side state a case declares, so a fixture never has to depend on the image alone.
-async fn provision(root: &std::path::Path, case: &super::definition::RuntimeCase, target: Target) -> Result<(), Error> {
+async fn provision(root: &std::path::Path, case: &super::definition::Workload, target: Target) -> Result<(), Error> {
     // A dynamically linked case needs its PT_INTERP loader and shared libraries, which the base
     // image's libc does not supply; they come from the same cross toolchain that built the binary.
     for library in &case.guest_libraries {
@@ -216,7 +211,7 @@ fn make_executable(_path: &std::path::Path) -> std::io::Result<()> {
 
 struct CaseExecution<'a> {
     app: &'a App,
-    case: &'a super::definition::RuntimeCase,
+    case: &'a super::definition::Workload,
     target: Target,
     containers: &'a Containers,
     execution: hl_container::Execution,
@@ -225,7 +220,7 @@ struct CaseExecution<'a> {
 impl<'a> CaseExecution<'a> {
     fn new(
         app: &'a App,
-        case: &'a super::definition::RuntimeCase,
+        case: &'a super::definition::Workload,
         target: Target,
         containers: &'a Containers,
         execution: hl_container::Execution,

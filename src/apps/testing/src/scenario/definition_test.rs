@@ -1,4 +1,4 @@
-use super::{Class, Resource, Scenario, ScenarioAction};
+use super::{Class, Resource, Scenario, Step};
 use crate::scenario::terminal::Step;
 use std::{collections::BTreeSet, fs, path::Path};
 
@@ -26,7 +26,7 @@ fn legacy_run_is_a_single_typed_argv_action() {
     )
     .unwrap();
     let case = &scenario.cases[0];
-    assert!(matches!(&case.actions[..], [ScenarioAction::Argv(argv)] if argv == &["/bin/echo", "marker"]));
+    assert!(matches!(&case.actions[..], [Step::Argv(argv)] if argv == &["/bin/echo", "marker"]));
     assert_eq!(case.targets.len(), 2);
 }
 
@@ -70,7 +70,7 @@ fn entrypoint_action_is_distinct_from_empty_argv() {
         "cases:\n  - id: sample/entrypoint\n    image: alpine\n    actions: [{ entrypoint: {} }]\n    expect: { stdout_contains: golden/contains.txt }\n",
     )
     .unwrap();
-    assert!(matches!(entrypoint.cases[0].actions[0], ScenarioAction::Entrypoint));
+    assert!(matches!(entrypoint.cases[0].actions[0], Step::Entrypoint));
     assert!(
         load("cases:\n  - id: sample/empty\n    image: alpine\n    actions: [{ argv: { argv: [] } }]\n    expect: { stdout_contains: golden/contains.txt }\n").is_err()
     );
@@ -98,7 +98,7 @@ fn terminal_action_preserves_ordered_bounded_operations() {
 "#,
     )
     .unwrap();
-    let ScenarioAction::Terminal(action) = &scenario.cases[0].actions[0] else {
+    let Step::Terminal(action) = &scenario.cases[0].actions[0] else {
         panic!("terminal action was not retained");
     };
     assert_eq!((action.rows, action.columns), (30, 100));
@@ -266,10 +266,6 @@ fn copy_scenario_has_four_typed_api_cases() {
     let scenario = Scenario::load(&directory, &directory.join("test.yaml")).unwrap();
     assert_eq!(scenario.cases.len(), 4);
     assert!(scenario.cases.iter().all(|case| {
-        case.id.starts_with("cpcmd/")
-            && case
-                .actions
-                .iter()
-                .any(|action| matches!(action, ScenarioAction::Api(_)))
+        case.id.starts_with("cpcmd/") && case.actions.iter().any(|action| matches!(action, Step::Api(_)))
     }));
 }

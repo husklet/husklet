@@ -1,4 +1,4 @@
-use super::{definition::ScenarioCase, process};
+use super::{definition::Sample, process};
 use crate::suite::Error;
 use hl_container::{Containers, ExecSpec, ExitStatus, Size, Stream, Streams};
 use hl_images::RuntimeConfig;
@@ -100,7 +100,7 @@ impl Clock for MonotonicClock {
 
 pub(super) async fn run(
     containers: &Containers,
-    case: &ScenarioCase,
+    case: &Sample,
     runtime: &RuntimeConfig,
     rootfs: &Path,
     name: &str,

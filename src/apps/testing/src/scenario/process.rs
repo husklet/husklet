@@ -1,21 +1,14 @@
 use super::{
     Error,
-    definition::{Resource, ScenarioAction, ScenarioCase},
+    definition::{Resource, Sample, Step},
 };
 use hl_container::{Console, Process, Size};
 use hl_images::RuntimeConfig;
 
-pub(super) fn initial(
-    case: &ScenarioCase,
-    runtime: &RuntimeConfig,
-    rootfs: &std::path::Path,
-) -> Result<Process, Error> {
-    let action = case
-        .actions
-        .iter()
-        .find(|action| matches!(action, ScenarioAction::Entrypoint));
+pub(super) fn initial(case: &Sample, runtime: &RuntimeConfig, rootfs: &std::path::Path) -> Result<Process, Error> {
+    let action = case.actions.iter().find(|action| matches!(action, Step::Entrypoint));
     let process = match action {
-        Some(ScenarioAction::Entrypoint) => {
+        Some(Step::Entrypoint) => {
             let mut argv = runtime.entrypoint.clone();
             argv.extend(runtime.command.iter().cloned());
             argv_process(&argv)?
@@ -26,16 +19,16 @@ pub(super) fn initial(
 }
 
 pub(super) fn action(
-    case: &ScenarioCase,
-    action: &ScenarioAction,
+    case: &Sample,
+    action: &Step,
     runtime: &RuntimeConfig,
     rootfs: &std::path::Path,
 ) -> Result<Process, Error> {
     let (process, terminal) = match action {
-        ScenarioAction::Argv(argv) => (argv_process(argv)?, None),
-        ScenarioAction::Shell(script) => (Process::new("/bin/sh").args(["-c", script]), None),
-        ScenarioAction::Entrypoint => return Err("entrypoint is the container initial process".into()),
-        ScenarioAction::Host(script) => {
+        Step::Argv(argv) => (argv_process(argv)?, None),
+        Step::Shell(script) => (Process::new("/bin/sh").args(["-c", script]), None),
+        Step::Entrypoint => return Err("entrypoint is the container initial process".into()),
+        Step::Host(script) => {
             return Err(format!(
                 "{} host action requires a typed host adapter (script_bytes={})",
                 case.id,
@@ -43,14 +36,14 @@ pub(super) fn action(
             )
             .into());
         }
-        ScenarioAction::Api(operation) => {
+        Step::Api(operation) => {
             return Err(format!(
                 "{} API action requires a typed daemon adapter (operation={operation:?})",
                 case.id
             )
             .into());
         }
-        ScenarioAction::Terminal(terminal) => (
+        Step::Terminal(terminal) => (
             argv_process(&terminal.argv)?,
             Some(Size::new(terminal.rows, terminal.columns)?),
         ),
@@ -66,7 +59,7 @@ pub(super) fn action(
 }
 
 pub(super) fn terminal(
-    case: &ScenarioCase,
+    case: &Sample,
     action: &super::terminal::Action,
     runtime: &RuntimeConfig,
     rootfs: &std::path::Path,
@@ -85,7 +78,7 @@ fn argv_process(argv: &[String]) -> Result<Process, Error> {
 
 fn configure(
     mut process: Process,
-    case: &ScenarioCase,
+    case: &Sample,
     runtime: &RuntimeConfig,
     rootfs: &std::path::Path,
 ) -> Result<Process, Error> {
@@ -121,14 +114,14 @@ fn configure(
 mod tests {
     use super::{action, initial};
     use crate::{
-        scenario::definition::{Class, ScenarioAction, ScenarioCase},
+        scenario::definition::{Class, Sample, Step},
         suite::{Execution, Target},
     };
     use hl_images::RuntimeConfig;
     use std::collections::BTreeMap;
 
-    fn case(actions: Vec<ScenarioAction>) -> ScenarioCase {
-        ScenarioCase {
+    fn case(actions: Vec<Step>) -> Sample {
+        Sample {
             id: "process/metadata".into(),
             image: "fixture".into(),
             execution: Execution::default(),
@@ -163,7 +156,7 @@ mod tests {
     #[test]
     fn entrypoint_joins_image_entrypoint_and_command() {
         let root = tempfile::tempdir().unwrap();
-        let process = initial(&case(vec![ScenarioAction::Entrypoint]), &runtime(), root.path()).unwrap();
+        let process = initial(&case(vec![Step::Entrypoint]), &runtime(), root.path()).unwrap();
         assert_eq!(process.program, "/entry");
         assert_eq!(process.args, ["default"]);
     }
@@ -171,7 +164,7 @@ mod tests {
     #[test]
     fn image_defaults_are_applied_and_case_environment_wins() {
         let root = tempfile::tempdir().unwrap();
-        let case = case(vec![ScenarioAction::Shell("true".into())]);
+        let case = case(vec![Step::Shell("true".into())]);
         let process = action(&case, &case.actions[0], &runtime(), root.path()).unwrap();
         assert_eq!(process.working_dir, std::path::Path::new("/image-work"));
         assert_eq!(process.env.get_text("IMAGE"), Some("yes"));

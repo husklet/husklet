@@ -1,6 +1,6 @@
 use super::{
     Error,
-    definition::{Scenario, ScenarioCase},
+    definition::{Sample, Scenario},
 };
 use crate::{
     runtime::image::TestImage,
@@ -97,7 +97,7 @@ fn classify(outcome: Result<(), Error>, expected_failure: bool) -> CaseResult {
 async fn execute_case(
     provider: &Provider,
     scenario: &Scenario,
-    case: &ScenarioCase,
+    case: &Sample,
     target: Target,
     sample: u16,
 ) -> (Result<(), Error>, PhaseTiming) {
@@ -113,7 +113,7 @@ async fn execute_case(
 async fn execute_case_inner(
     provider: &Provider,
     scenario: &Scenario,
-    case: &ScenarioCase,
+    case: &Sample,
     target: Target,
     sample: u16,
     timing: &mut PhaseTiming,
@@ -151,11 +151,11 @@ async fn execute_case_inner(
     )
 }
 
-fn validate_supported(case: &ScenarioCase) -> Result<(), Error> {
+fn validate_supported(case: &Sample) -> Result<(), Error> {
     let entrypoints = case
         .actions
         .iter()
-        .filter(|action| matches!(action, super::definition::ScenarioAction::Entrypoint))
+        .filter(|action| matches!(action, super::definition::Step::Entrypoint))
         .count();
     if entrypoints != 0 && (case.actions.len() != 1 || case.readiness.is_some()) {
         return Err(format!(
@@ -170,7 +170,7 @@ fn validate_supported(case: &ScenarioCase) -> Result<(), Error> {
 async fn execute_image(
     containers: &hl_container::Containers,
     scenario: &Scenario,
-    case: &ScenarioCase,
+    case: &Sample,
     target: Target,
     sample: u16,
     image: &std::path::Path,
@@ -255,7 +255,7 @@ where
     (action, cleanup)
 }
 
-fn install_fixtures(case: &ScenarioCase, image: &std::path::Path) -> Result<(), Error> {
+fn install_fixtures(case: &Sample, image: &std::path::Path) -> Result<(), Error> {
     for fixture in &case.fixtures {
         let destination = image.join(fixture.destination.trim_start_matches('/'));
         if let Some(parent) = destination.parent() {
@@ -267,7 +267,7 @@ fn install_fixtures(case: &ScenarioCase, image: &std::path::Path) -> Result<(), 
 }
 
 fn specification(
-    case: &ScenarioCase,
+    case: &Sample,
     target: Target,
     image: &std::path::Path,
     runtime: &RuntimeConfig,
@@ -287,16 +287,16 @@ fn specification(
 /// rather than as a timeout, and an exhausted poll quotes the service's own logs.
 async fn await_readiness(
     containers: &hl_container::Containers,
-    case: &ScenarioCase,
+    case: &Sample,
     runtime: &RuntimeConfig,
     rootfs: &std::path::Path,
     name: &str,
     readiness: &super::definition::Readiness,
 ) -> Result<(), Error> {
-    let startup = super::definition::ScenarioAction::Shell(readiness.startup.clone());
+    let startup = super::definition::Step::Shell(readiness.startup.clone());
     let startup = run_exec(containers, case, runtime, rootfs, name, &startup).await?;
     require_success("readiness startup", startup.0, &startup.1, &startup.2)?;
-    let probe = super::definition::ScenarioAction::Shell(readiness.probe.clone());
+    let probe = super::definition::Step::Shell(readiness.probe.clone());
     for attempt in 1..=readiness.attempts {
         if run_exec(containers, case, runtime, rootfs, name, &probe).await?.0 == ExitStatus::Code(0) {
             return Ok(());
@@ -315,16 +315,13 @@ async fn await_readiness(
 
 async fn execute_actions(
     containers: &hl_container::Containers,
-    case: &ScenarioCase,
+    case: &Sample,
     runtime: &RuntimeConfig,
     rootfs: &std::path::Path,
     name: &str,
     terminal_metrics: &mut Vec<super::terminal::Metric>,
 ) -> Result<ActionOutput, Error> {
-    if matches!(
-        case.actions.first(),
-        Some(super::definition::ScenarioAction::Entrypoint)
-    ) {
+    if matches!(case.actions.first(), Some(super::definition::Step::Entrypoint)) {
         let status = wait(containers, name, Duration::from_secs(case.timeout)).await?;
         let logs = containers.logs(name).await?;
         logs.bounded()?;
@@ -342,8 +339,8 @@ async fn execute_actions(
     let mut status = ExitStatus::Code(0);
     for action in &case.actions {
         let outcome = match action {
-            super::definition::ScenarioAction::Api(operation) => run_api(containers, name, operation).await?,
-            super::definition::ScenarioAction::Terminal(action) => {
+            super::definition::Step::Api(operation) => run_api(containers, name, operation).await?,
+            super::definition::Step::Terminal(action) => {
                 super::terminal::run(containers, case, runtime, rootfs, name, action, terminal_metrics).await?
             }
             _ => run_exec(containers, case, runtime, rootfs, name, action).await?,
@@ -368,12 +365,12 @@ struct ActionOutput {
 async fn run_api(
     containers: &hl_container::Containers,
     name: &str,
-    operation: &super::definition::ScenarioApiAction,
+    operation: &super::definition::ApiStep,
 ) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), Error> {
-    use super::definition::ScenarioApiAction;
+    use super::definition::ApiStep;
     let filesystem = containers.filesystem(name).await?;
     match operation {
-        ScenarioApiAction::CopyToContainer { source, destination } => {
+        ApiStep::CopyToContainer { source, destination } => {
             let mut bytes = LimitedOutput::default();
             {
                 let mut archive = tar::Builder::new(&mut bytes);
@@ -396,7 +393,7 @@ async fn run_api(
             )?;
             Ok((ExitStatus::Code(0), Vec::new(), Vec::new()))
         }
-        ScenarioApiAction::CopyFromContainer { source } => {
+        ApiStep::CopyFromContainer { source } => {
             let mut archive = LimitedOutput::default();
             filesystem.archive(source, &mut archive)?;
             let output = unpack_regular_files(&archive.0)?;
@@ -450,11 +447,11 @@ impl std::io::Write for LimitedOutput {
 
 async fn run_exec(
     containers: &hl_container::Containers,
-    case: &ScenarioCase,
+    case: &Sample,
     runtime: &RuntimeConfig,
     rootfs: &std::path::Path,
     name: &str,
-    action: &super::definition::ScenarioAction,
+    action: &super::definition::Step,
 ) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), Error> {
     let process = super::process::action(case, action, runtime, rootfs)?;
     let execution = containers.executions().create(name, ExecSpec::new(process)).await?;
@@ -479,7 +476,7 @@ fn require_success(noun: &str, status: ExitStatus, stdout: &[u8], stderr: &[u8])
     Ok(())
 }
 
-fn verify(case: &ScenarioCase, status: ExitStatus, stdout: &[u8], stderr: &[u8]) -> Result<(), Error> {
+fn verify(case: &Sample, status: ExitStatus, stdout: &[u8], stderr: &[u8]) -> Result<(), Error> {
     if status != ExitStatus::Code(case.exit) {
         return Err(format!(
             "exit {status:?}, expected {}; {}",
@@ -592,7 +589,7 @@ fn diagnostic(error: &str) -> String {
 mod tests {
     use super::{Capture, CaseResult, PhaseTiming, classify, combine, diagnostic, execute_phases, verify};
     use crate::{
-        scenario::definition::{Class, ScenarioAction, ScenarioCase},
+        scenario::definition::{Class, Sample, Step},
         suite::{Execution, Target},
     };
     use hl_container::ExitStatus;
@@ -627,7 +624,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("marker.txt");
         std::fs::write(&marker, b"from-stderr").unwrap();
-        let case = ScenarioCase {
+        let case = Sample {
             id: "example/output".into(),
             image: "fixture".into(),
             execution: Execution::default(),
@@ -637,7 +634,7 @@ mod tests {
             resources: Vec::new(),
             environment: BTreeMap::new(),
             working_directory: "/".into(),
-            actions: vec![ScenarioAction::Shell("true".into())],
+            actions: vec![Step::Shell("true".into())],
             fixtures: Vec::new(),
             readiness: None,
             timeout: 1,

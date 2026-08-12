@@ -14,7 +14,7 @@ pub(super) struct ListFilters {
     label: Vec<String>,
     name: Vec<Pattern>,
     scope: Vec<String>,
-    network_type: Vec<NetworkType>,
+    network_type: Vec<Type>,
 }
 
 #[derive(Deserialize)]
@@ -51,7 +51,7 @@ impl Pattern {
     }
 }
 
-enum NetworkType {
+enum Type {
     Builtin,
     Custom,
 }
@@ -99,8 +99,8 @@ impl ListFilters {
         let network_type = take(&mut values, "type")
             .into_iter()
             .map(|value| match value.as_str() {
-                "builtin" => Ok(NetworkType::Builtin),
-                "custom" => Ok(NetworkType::Custom),
+                "builtin" => Ok(Type::Builtin),
+                "custom" => Ok(Type::Custom),
                 _ => Err(ApiError::new(
                     // Moby's type validator returns an unclassified error, which its HTTP mapper exposes as 500.
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -135,8 +135,8 @@ impl ListFilters {
             })
             && (self.network_type.is_empty()
                 || self.network_type.iter().any(|value| match value {
-                    NetworkType::Builtin => network.predefined(),
-                    NetworkType::Custom => !network.predefined(),
+                    Type::Builtin => network.predefined(),
+                    Type::Custom => !network.predefined(),
                 }))
     }
 }

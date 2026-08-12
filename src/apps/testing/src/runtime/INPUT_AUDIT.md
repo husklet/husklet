@@ -60,7 +60,7 @@ canonical category root, rejects source aliases and duplicate canonical inputs,
 and stores auxiliary identities in sorted order. The original manifest
 spelling—not an absolute checkout path—is the durable identity.
 
-`RuntimeCase::inputs` maps retained `G_DEPENDS`: auxiliary files affect the
+`Workload::inputs` maps retained `G_DEPENDS`: auxiliary files affect the
 case's resumability identity but are not inserted into the compiler argument
 list. A linker script or header remains referenced by its explicit compiler
 flag/include from the YAML recipe, matching retained `hl_guest_binary`, where

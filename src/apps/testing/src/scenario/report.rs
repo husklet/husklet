@@ -1,4 +1,4 @@
-use super::definition::{Scenario, ScenarioAction};
+use super::definition::{Scenario, Step};
 use crate::{
     runtime,
     suite::{Error, Target},
@@ -64,7 +64,7 @@ pub(super) fn provenance(scenarios: Vec<Scenario>, options: ProvenanceOptions) -
 
 fn inspect_case<'a>(
     scenario: &'a Scenario,
-    case: &'a super::definition::ScenarioCase,
+    case: &'a super::definition::Sample,
     details: bool,
     ids: &mut BTreeSet<&'a str>,
     opaque: &mut Vec<&'a str>,
@@ -72,11 +72,7 @@ fn inspect_case<'a>(
     if !ids.insert(case.id.as_str()) {
         return Err(format!("duplicate scenario ID {}", case.id).into());
     }
-    if case
-        .actions
-        .iter()
-        .any(|action| matches!(action, ScenarioAction::Host(_)))
-    {
+    if case.actions.iter().any(|action| matches!(action, Step::Host(_))) {
         opaque.push(case.id.as_str());
     }
     if details {

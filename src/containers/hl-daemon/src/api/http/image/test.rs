@@ -1,6 +1,6 @@
 use super::{
-    Fields, ImageSelection, ListQuery, Prune, RemoveQuery, build_image_summaries, docker_id_prefix,
-    matches_docker_image_id, removal_conflicts, unique_image_id,
+    Fields, ListQuery, Prune, RemoveQuery, Selection, build_image_summaries, docker_id_prefix, matches_docker_image_id,
+    removal_conflicts, unique_image_id,
 };
 use axum::http::StatusCode;
 use std::collections::BTreeMap;
@@ -297,10 +297,10 @@ fn summaries_project_tagged_and_dangling_graphs_without_inventing_names() {
 
 #[test]
 fn image_reference_wildcards_match_complete_names() {
-    assert!(ImageSelection::wildcard("alpine:*", "alpine:3.20"));
-    assert!(ImageSelection::wildcard("*/api:?", "team/api:1"));
-    assert!(!ImageSelection::wildcard("alpine", "alpine:latest"));
-    assert!(!ImageSelection::wildcard("*/api:?", "team/api:10"));
+    assert!(Selection::wildcard("alpine:*", "alpine:3.20"));
+    assert!(Selection::wildcard("*/api:?", "team/api:1"));
+    assert!(!Selection::wildcard("alpine", "alpine:latest"));
+    assert!(!Selection::wildcard("*/api:?", "team/api:10"));
 }
 
 #[test]

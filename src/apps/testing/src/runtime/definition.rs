@@ -24,7 +24,7 @@ use std::{
 
 const ORACLE_CAPTURE_LIMIT: u64 = 1024 * 1024;
 
-pub struct RuntimeCase {
+pub struct Workload {
     pub id: String,
     pub arguments: Vec<String>,
     pub environment: Vec<EnvironmentEntry>,
@@ -56,7 +56,7 @@ pub struct App {
     pub targets: BTreeSet<Target>,
     compiler: Commands,
     oracle: Option<Oracle>,
-    pub cases: Vec<RuntimeCase>,
+    pub cases: Vec<Workload>,
 }
 
 /// A freshly compiled guest; its directory is removed when the build is dropped.
@@ -71,7 +71,7 @@ impl GuestBuild {
     }
 }
 
-impl RuntimeCase {
+impl Workload {
     pub(crate) fn inactive(&self, host: EngineHost) -> Option<(&'static str, &str, &str)> {
         self.status.inactive(host)
     }
@@ -93,7 +93,7 @@ impl App {
         self.compiler.for_target(target)
     }
 
-    pub fn cases_for(&self, target: Target) -> impl Iterator<Item = &RuntimeCase> {
+    pub fn cases_for(&self, target: Target) -> impl Iterator<Item = &Workload> {
         self.cases.iter().filter(move |case| case.targets.contains(&target))
     }
 
@@ -159,7 +159,7 @@ impl App {
                     case.guest.validate().map_err(|error| format!("{}: {error}", case.id))?;
                 let (environment, engine_options) =
                     EngineOptions::split(&case.environment).map_err(|error| format!("{}: {error}", case.id))?;
-                Ok(RuntimeCase {
+                Ok(Workload {
                     id: case.id,
                     arguments: case.run,
                     environment,
@@ -201,7 +201,7 @@ impl App {
     }
 
     /// Each build owns a private directory, so concurrent runners of one case never share an artifact.
-    pub fn build(&self, case: &RuntimeCase, target: Target) -> Result<GuestBuild, Error> {
+    pub fn build(&self, case: &Workload, target: Target) -> Result<GuestBuild, Error> {
         let root = workspace()?
             .join("target/testing/runtime")
             .join(&self.name)
