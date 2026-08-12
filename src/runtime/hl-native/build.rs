@@ -32,9 +32,9 @@ fn main() {
     compile(
         "hl_c_backend_shim",
         &[
-            "src/native/shim.c",
-            "src/native/executable_authority.c",
-            "src/native/address_projection.c",
+            "src/native/bridge/shim.c",
+            "src/native/bridge/executable_authority.c",
+            "src/native/bridge/address_projection.c",
         ],
         &[platform_definition],
         false,
@@ -127,9 +127,9 @@ fn discover_runtime_roots(target_os: &str) -> Vec<String> {
         .flat_map(|source| included_c_sources(source))
         .collect::<BTreeSet<_>>();
     let special = [
-        "src/native/shim.c",
-        "src/native/executable_authority.c",
-        "src/native/address_projection.c",
+        "src/native/bridge/shim.c",
+        "src/native/bridge/executable_authority.c",
+        "src/native/bridge/address_projection.c",
         "src/native/core/lifecycle.c",
         "src/native/core/target/aarch64.c",
         "src/native/core/target/x86_64.c",

@@ -438,7 +438,7 @@ static void nonpie_report_forced_displacement(void) {
 }
 
 // ===================== non-PIE coordinates: the one rule ========================================
-#include "address_projection.h"
+#include "bridge/address_projection.h"
 // When the image IS folded (macOS, or a restored image captured folded) it is mapped HIGH at
 // +g_nonpie_bias but carries no dynamic relocations, so every address BAKED INTO IT stays at the LOW
 // link vaddr. One image byte therefore has two names, and which one is correct is not a judgement call:
