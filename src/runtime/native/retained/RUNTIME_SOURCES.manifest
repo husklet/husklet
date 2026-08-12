@@ -6,6 +6,7 @@ include/hl/host_services.h
 include/hl/linux.h
 include/hl/linux_abi.h
 include/hl/log.h
+include/hl/macos.h
 include/hl/network.h
 src/core/bus.c
 src/core/bus.h
@@ -58,6 +59,12 @@ src/host/linux/probe.h
 src/host/linux/process.c
 src/host/linux/range.c
 src/host/linux/system.c
+src/host/macos/directory.c
+src/host/macos/host.c
+src/host/macos/probe.h
+src/host/macos/process.c
+src/host/macos/range.c
+src/host/macos/system.c
 src/host/native_compat.h
 src/host/native_context.h
 src/host/private.c

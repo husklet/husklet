@@ -160,9 +160,9 @@ impl RuntimeFactory for ProductionFactory {
         match request.plan.options.get("HL_EXECUTION_BACKEND") {
             #[cfg(feature = "rust-execution")]
             Some("rust") => Self::rust(request),
-            #[cfg(all(not(hl_retained_c), feature = "rust-execution"))]
+            #[cfg(all(not(hl_retained_c_default), feature = "rust-execution"))]
             None => Self::rust(request),
-            #[cfg(hl_retained_c)]
+            #[cfg(hl_retained_c_default)]
             None => Self::c(request),
             #[cfg(hl_retained_c)]
             Some("c") => Self::c(request),

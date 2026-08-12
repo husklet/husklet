@@ -497,18 +497,35 @@ impl StreamBridge {
 
     fn pipe() -> Result<(OwnedFd, OwnedFd), EngineError> {
         let mut descriptors = [-1; 2];
-        // SAFETY: descriptors names two writable integers; successful pipe2
-        // returns two uniquely owned CLOEXEC descriptors.
-        if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        #[cfg(target_os = "linux")]
+        // SAFETY: descriptors names two writable integers; successful pipe2 returns
+        // two distinct close-on-exec descriptors.
+        let status = unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) };
+        #[cfg(not(target_os = "linux"))]
+        // SAFETY: descriptors names two writable integers; successful pipe returns
+        // two distinct descriptors which are immediately wrapped for cleanup.
+        let status = unsafe { libc::pipe(descriptors.as_mut_ptr()) };
+        if status != 0 {
             return Err(EngineError::LaunchFailed);
         }
-        // SAFETY: pipe2 succeeded and transferred these distinct descriptors.
-        Ok(unsafe {
+        // SAFETY: pipe succeeded and transferred these distinct descriptors.
+        let pair = unsafe {
             (
                 OwnedFd::from_raw_fd(descriptors[0]),
                 OwnedFd::from_raw_fd(descriptors[1]),
             )
-        })
+        };
+        #[cfg(not(target_os = "linux"))]
+        for descriptor in [&pair.0, &pair.1] {
+            // F_GETFD/F_SETFD operate on the live descriptor and retain no pointer.
+            let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
+            if flags < 0
+                || unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } != 0
+            {
+                return Err(EngineError::LaunchFailed);
+            }
+        }
+        Ok(pair)
     }
 
     fn new(services: &RuntimeServices) -> Result<Self, EngineError> {

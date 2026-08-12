@@ -19,6 +19,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_C_EXECUTION");
     println!("cargo:rustc-check-cfg=cfg(hl_retained_c)");
+    println!("cargo:rustc-check-cfg=cfg(hl_retained_c_default)");
     if env::var_os("CARGO_FEATURE_C_EXECUTION").is_none() {
         return;
     }
@@ -30,6 +31,9 @@ fn main() {
         return;
     }
     println!("cargo:rustc-cfg=hl_retained_c");
+    if retained_platform::production_default(&target_os, &target_arch) {
+        println!("cargo:rustc-cfg=hl_retained_c_default");
+    }
 
     println!("cargo:rerun-if-changed={C_ENGINE}/shim.c");
     println!("cargo:rerun-if-changed={C_ENGINE}/executable_authority.c");
@@ -52,15 +56,20 @@ fn main() {
         println!("cargo:rerun-if-changed={}", root.join(unit.source).display());
     }
 
+    let platform_definition = if target_os == "macos" {
+        "_DARWIN_C_SOURCE"
+    } else {
+        "_GNU_SOURCE"
+    };
     compile(
         "hl_c_backend_shim",
         &["shim.c", "executable_authority.c", "address_projection.c"],
-        &["_GNU_SOURCE"],
+        &[platform_definition],
         false,
     );
-    compile_group("hl_c_backend_runtime", "normal_archive", &units, true);
-    compile_group("hl_c_backend_target", "target_unity_direct", &units, false);
-    compile_group("hl_c_backend_lifecycle", "lifecycle_direct", &units, false);
+    compile_group("hl_c_backend_runtime", "normal_archive", &units, true, &target_os);
+    compile_group("hl_c_backend_target", "target_unity_direct", &units, false, &target_os);
+    compile_group("hl_c_backend_lifecycle", "lifecycle_direct", &units, false, &target_os);
 
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
     println!("cargo:rustc-link-search=native={}", output.display());
@@ -76,7 +85,12 @@ fn main() {
         // link-line ordering.
         println!("cargo:rustc-link-lib=static:+whole-archive={archive}");
     }
-    for library in ["atomic", "dl", "m", "pthread"] {
+    let libraries: &[&str] = if target_os == "macos" {
+        &["m", "pthread"]
+    } else {
+        &["atomic", "dl", "m", "pthread"]
+    };
+    for library in libraries {
         println!("cargo:rustc-link-lib={library}");
     }
 }
@@ -107,7 +121,7 @@ fn parse_manifest(manifest: &str) -> Vec<TranslationUnit<'_>> {
         .collect()
 }
 
-fn compile_group(name: &str, group: &str, units: &[TranslationUnit<'_>], strict: bool) {
+fn compile_group(name: &str, group: &str, units: &[TranslationUnit<'_>], strict: bool, target_os: &str) {
     let selected = units.iter().filter(|unit| unit.group == group).collect::<Vec<_>>();
     assert!(!selected.is_empty(), "retained C group {group} is empty");
     let definitions = selected[0].definitions;
@@ -119,12 +133,25 @@ fn compile_group(name: &str, group: &str, units: &[TranslationUnit<'_>], strict:
         definitions.split(';').any(|value| value == "HL_ENABLE_LOGGING=0"),
         "retained C group {group} must not write host diagnostics into inherited guest stderr"
     );
-    let sources = selected.iter().map(|unit| unit.source).collect::<Vec<_>>();
+    let platform_sources = selected
+        .iter()
+        .map(|unit| platform_source(unit.source, target_os))
+        .collect::<Vec<_>>();
+    let sources = platform_sources.iter().map(String::as_str).collect::<Vec<_>>();
     let definitions = definitions
         .split(';')
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
     compile(name, &sources, &definitions, strict);
+}
+
+fn platform_source(source: &str, target_os: &str) -> String {
+    if target_os == "macos"
+        && let Some(name) = source.strip_prefix("src/host/linux/")
+    {
+        return format!("src/host/macos/{name}");
+    }
+    source.to_owned()
 }
 
 fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
