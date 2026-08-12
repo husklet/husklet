@@ -78,7 +78,8 @@ The pinned Nix flake supplies the Rust, C, GTK, and fixture toolchain. Build the
 two production engine workers with
 `nix develop . --command cargo build --release -p engine --bins --locked --offline`;
 the C engine source lives only
-under `src/runtime/native` and is linked into `hl-aarch64` and `hl-x86_64`.
+under the Cargo package `src/runtime/hl-native` and is linked into `hl-aarch64`
+and `hl-x86_64`.
 Rust remains the product host: it validates launch plans, supervises workers,
 and owns the container, filesystem, networking, image, daemon, and application
 services around the in-process C Linux ABI and translator. Neither build nor
