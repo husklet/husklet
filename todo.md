@@ -29,6 +29,12 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Install the Cargo-built private shared library beside packaged products with relocatable Linux/macOS loader paths and portable artifact naming.
 - [x] Prove installed-product execution on Linux from a fresh copied prefix, including sibling-library selection, relocatable RUNPATH, backend receipts, and artifact hashes.
 - [ ] Prove authoritative packaging/install behavior on macOS and Windows artifacts.
+  Local Nix checks fully compile/link Linux ARM64 and AMD64. They also compile the
+  Windows GNU Rust surface and host bridge and link a PE/COFF ABI fixture DLL plus
+  import library. This is not MSVC ABI, Windows SDK, complete engine-DLL, loader,
+  or runtime evidence. Darwin cross-compilation remains unavailable on Linux until
+  an Apple SDK/framework-stub closure can be packaged lawfully and reproducibly;
+  native macOS ARM64 CI is authoritative meanwhile.
 
 ## Host architecture
 

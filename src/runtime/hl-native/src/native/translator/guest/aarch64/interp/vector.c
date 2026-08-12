@@ -491,7 +491,7 @@ static int interp_exec_load_store_exclusive(struct cpu *cpu, uint32_t insn) {
     if ((insn & 0x3F000000u) == 0x08000000u) {
         unsigned size = (insn >> 30) & 3, o2 = (insn >> 23) & 1, load = (insn >> 22) & 1;
         unsigned o1 = (insn >> 21) & 1, o0 = (insn >> 15) & 1;
-        int rs = rm;
+        int rs = (int)((insn >> 16) & 31);
         unsigned bytes = 1u << size;
 
         if (o2 && o1) { // CAS / CASA / CASL / CASAL (Rt2 is 11111)

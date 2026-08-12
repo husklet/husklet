@@ -625,6 +625,7 @@
             windows.stdenv.cc
             pkgs.file
           ];
+          buildInputs = [ windows.windows.mcfgthreads ];
           doCheck = false;
           buildPhase = ''
             runHook preBuild
@@ -638,12 +639,22 @@
               -Isrc/runtime/hl-native/src/native -Isrc/runtime/hl-native/src/native/include \
               -c src/runtime/hl-native/src/native/bridge/host.c -o host-bridge.obj
             file host-bridge.obj | grep -E 'Intel 80386|x86-64|PE|COFF'
+            ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
+              -DHL_ABI_FIXTURE_EXPORT \
+              -Isrc/runtime/hl-native/src/native/include \
+              -L${windows.windows.mcfgthreads}/lib \
+              -shared tests/native/host-abi/windows.c -o hl-abi-fixture.dll \
+              -Wl,--out-implib,libhl-abi-fixture.dll.a
+            file hl-abi-fixture.dll | grep -E 'PE32\+.*DLL.*x86-64'
+            file libhl-abi-fixture.dll.a | grep -F 'current ar archive'
+            ${windows.stdenv.cc.targetPrefix}nm -g libhl-abi-fixture.dll.a \
+              | grep -F ' T hl_ci_engine_abi' >/dev/null
             runHook postBuild
           '';
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows Rust target check plus PE/COFF host-bridge object smoke; this is not MSVC SDK or runtime proof' \
+              'GNU Windows Rust target check, PE/COFF host-bridge compile, and public-ABI DLL/import-library link; this is not MSVC SDK or runtime proof' \
               > "$out/evidence"
           '';
         };
