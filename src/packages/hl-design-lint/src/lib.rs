@@ -17,12 +17,12 @@ pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
-    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, DependencyDirection,
-    DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun,
-    FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting,
-    ModelDuplication, ModulePrefix, NativeQuality, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition,
-    Registry, RepositoryEscape, Rule, SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory,
-    TestName, UnsafeBoundary,
+    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CStructure, CatchAllModule, CeremonialStructure,
+    DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString,
+    FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch,
+    MaximumNesting, ModelDuplication, ModulePrefix, NativeQuality, PathModules, PlatformCommand, PrefixDirectory,
+    ReceiverRepetition, Registry, RepositoryEscape, Rule, SingleFileDirectory, StructNaming, SuffixRole,
+    TestDependency, TestDirectory, TestName, UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 

@@ -47,7 +47,11 @@ impl Arguments {
             Output::Cases(root) => Box::new(Cases::new(root)),
         };
         let linter = self.native.map_or_else(Linter::standard, |directory| {
-            Linter::new(hl_design_lint::Registry::new().register(hl_design_lint::NativeQuality::new(directory)))
+            Linter::new(
+                hl_design_lint::Registry::new()
+                    .register(hl_design_lint::CStructure)
+                    .register(hl_design_lint::NativeQuality::new(directory)),
+            )
         });
         let summaries = linter.run(self.paths, reporter.as_mut())?;
         Ok(cases

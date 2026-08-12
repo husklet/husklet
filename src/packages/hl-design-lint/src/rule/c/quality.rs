@@ -5,7 +5,7 @@ use std::{
     process::Command,
 };
 
-use super::Rule;
+use crate::rule::Rule;
 use crate::{Finding, LintError, Location, Result, Severity, source::Workspace};
 
 const RULE: &str = "native-quality";
@@ -373,4 +373,5 @@ fn finding(path: &Path, line: usize, source: &str, message: &str, help: &str) ->
 }
 
 #[cfg(test)]
+#[path = "quality_test.rs"]
 mod test;
