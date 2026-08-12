@@ -83,6 +83,17 @@ def campaign_identity(config):
     return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def validate_resume(manifest, identity):
+    if not manifest.exists():
+        raise RuntimeError("resume refused: campaign manifest is absent")
+    try:
+        recorded = json.loads(manifest.read_text()).get("identity")
+    except json.JSONDecodeError as error:
+        raise RuntimeError("resume refused: campaign manifest is corrupt") from error
+    if recorded != identity:
+        raise RuntimeError("resume refused: campaign manifest has a different identity")
+
+
 def acquire(path, timeout):
     descriptor = open(path, "a+")
     deadline = time.monotonic() + timeout
@@ -251,8 +262,7 @@ def main(argv=None):
     manifest = args.results / "manifest.json"
     ledger = args.results / "raw.jsonl"
     if args.resume:
-        if not manifest.exists() or json.loads(manifest.read_text()).get("identity") != identity:
-            raise RuntimeError("resume refused: campaign manifest is absent or has a different identity")
+        validate_resume(manifest, identity)
     else:
         args.results.mkdir(parents=True, exist_ok=False)
         manifest.write_text(json.dumps({"identity": identity, "config": config}, sort_keys=True, indent=2) + "\n")

@@ -34,9 +34,20 @@ class MatrixTests(unittest.TestCase):
 
     def test_resume_identity_is_immutable(self):
         config = {"schema": eri.SCHEMA, "rounds": 4, "arms": {}, "workloads": {}}
-        self.assertEqual(eri.campaign_identity(config), eri.campaign_identity(dict(config)))
+        identity = eri.campaign_identity(config)
+        self.assertEqual(identity, eri.campaign_identity(dict(config)))
         changed = dict(config, rounds=8)
         self.assertNotEqual(eri.campaign_identity(config), eri.campaign_identity(changed))
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = pathlib.Path(directory) / "manifest.json"
+            manifest.write_text('{"identity":"different"}')
+            with self.assertRaisesRegex(RuntimeError, "different identity"):
+                eri.validate_resume(manifest, identity)
+            manifest.write_text('{"identity":"' + identity + '"}')
+            eri.validate_resume(manifest, identity)
+            manifest.unlink()
+            with self.assertRaisesRegex(RuntimeError, "absent"):
+                eri.validate_resume(manifest, identity)
 
     def test_output_mismatch_rejects(self):
         row = {"workload": "malloc", "output": "one", "phases": {"malloc": {"ok": "1"}}}
