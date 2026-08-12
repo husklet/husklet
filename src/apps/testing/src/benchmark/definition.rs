@@ -1,7 +1,7 @@
 use crate::{platform::HostProcess, record::FramedIdentity, suite::Error};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -89,13 +89,13 @@ impl Campaign {
             }
         }
         for (name, layout) in &self.layouts {
-            if layout.phases.is_empty() {
+            if !phase_names_valid(&layout.phases, false) {
                 return Err(format!("benchmark layout {name} is incomplete").into());
             }
         }
         for (name, workload) in &self.workloads {
             if workload.commands.is_empty()
-                || workload.phases.is_empty()
+                || !phase_names_valid(&workload.phases, false)
                 || !(1..=3600).contains(&workload.timeout_seconds)
                 || workload
                     .commands
@@ -110,6 +110,16 @@ impl Campaign {
                     return Err(format!("benchmark workload {name} guest is not a rootfs-contained file").into());
                 }
             }
+        }
+        let declared = self
+            .layouts
+            .values()
+            .flat_map(|layout| &layout.phases)
+            .chain(self.workloads.values().flat_map(|workload| &workload.phases))
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if !invariant_phases_valid(&self.invariant_phases, &declared) {
+            return Err("benchmark invariant phases must be unique declared phases".into());
         }
         if self.workloads["malloc"].commands.keys().collect::<Vec<_>>() != self.layouts.keys().collect::<Vec<_>>() {
             return Err("malloc must run the full sequence on both plain and sqlite layouts".into());
@@ -150,6 +160,16 @@ impl Campaign {
     }
 }
 
+fn phase_names_valid(phases: &[String], allow_empty: bool) -> bool {
+    (allow_empty || !phases.is_empty())
+        && phases.iter().all(|phase| !phase.is_empty())
+        && phases.iter().collect::<BTreeSet<_>>().len() == phases.len()
+}
+
+fn invariant_phases_valid(invariants: &[String], declared: &BTreeSet<&str>) -> bool {
+    phase_names_valid(invariants, true) && invariants.iter().all(|phase| declared.contains(phase.as_str()))
+}
+
 fn guest_is_hashed(rootfs: &Path, guest: &Path) -> bool {
     guest.is_absolute()
         && guest.starts_with(rootfs)
@@ -187,7 +207,7 @@ fn verify_artifact(label: &str, artifact: &Artifact, directory: bool) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{Artifact, guest_is_hashed, verify_artifact};
+    use super::{Artifact, guest_is_hashed, invariant_phases_valid, phase_names_valid, verify_artifact};
     use crate::record::FramedIdentity;
     use std::fs;
 
@@ -239,6 +259,19 @@ mod tests {
         let contained = rootfs.join("contained-guest");
         symlink(&inside, &contained).unwrap();
         assert!(guest_is_hashed(&rootfs, &contained));
+    }
+
+    #[test]
+    fn phase_declarations_are_unique_and_named() {
+        assert!(phase_names_valid(&["compute".into(), "malloc".into()], false));
+        assert!(!phase_names_valid(&[], false));
+        assert!(!phase_names_valid(&["compute".into(), "compute".into()], false));
+        assert!(!phase_names_valid(&[String::new()], false));
+        assert!(phase_names_valid(&[], true));
+
+        let declared = ["compute", "malloc"].into_iter().collect();
+        assert!(invariant_phases_valid(&["compute".into()], &declared));
+        assert!(!invariant_phases_valid(&["typo".into()], &declared));
     }
 }
 
