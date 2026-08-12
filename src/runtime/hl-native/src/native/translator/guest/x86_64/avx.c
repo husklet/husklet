@@ -3558,6 +3558,24 @@ static enum avx_dispatch_result sse_dispatch_test(const hl_x86_avx_state *state,
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result sse_dispatch_absolute(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
+                                                      uint64_t next, uint8_t destination[16]) {
+    int op = I->op;
+    if (I->map3 != 2 || (op != 0x1C && op != 0x1D && op != 0x1E)) return AVX_DISPATCH_UNMATCHED;
+    uint8_t source[16];
+    int element_width = op == 0x1C ? 1 : op == 0x1D ? 2 : 4;
+    sse_get_rm(state, c, I, next, source);
+    for (int offset = 0; offset < 16; offset += element_width) {
+        uint64_t value = 0;
+        memcpy(&value, source + offset, (size_t)element_width);
+        uint64_t result =
+            simd_element_negative(value, element_width) ? simd_element_negate(value, element_width) : value;
+        memcpy(destination + offset, &result, (size_t)element_width);
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3577,6 +3595,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     if (sse_dispatch_integer_extension(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_packed_arithmetic(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_aes(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
+    if (sse_dispatch_absolute(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     // ---- the remaining ops are xmm-destructive: load the r/m source, compute into r, write to D -----
     sse_get_rm(state, c, &I, next, s);
@@ -3589,18 +3608,6 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
             memcpy(t, D, 16);
             for (int i = 0; i < 16; i++)
                 r[i] = (s[i] & 0x80) ? 0 : t[s[i] & 0x0f];
-            break;
-        }
-        case 0x1C:
-        case 0x1D:
-        case 0x1E: { // pabs b/w/d (single source: r/m)
-            int es = op == 0x1C ? 1 : op == 0x1D ? 2 : 4;
-            for (int i = 0; i < 16; i += es) {
-                uint64_t value = 0;
-                memcpy(&value, s + i, (size_t)es);
-                uint64_t output = simd_element_negative(value, es) ? simd_element_negate(value, es) : value;
-                memcpy(r + i, &output, (size_t)es);
-            }
             break;
         }
         case 0x28: { // pmuldq: signed (a.dword[0]*s.dword[0], a.dword[2]*s.dword[2]) -> 2 qwords
