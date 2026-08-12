@@ -693,7 +693,7 @@ static void overlay_copyup_tree(const char *guest) {
 // Absolute GUEST path for (dirfd, raw) -- combines a dir-fd's guest path (upper or lower) with raw.
 static void abs_guest(int dirfd, const char *raw, char *out, size_t n) {
     if (raw && raw[0] == '/') {
-        snprintf(out, n, "%s", raw);
+        (void)hl_guest_path_copy(out, n, raw);
         return;
     }
     if (dirfd >= 0 && dirfd < 1024 && g_fdpath[dirfd][0]) {
@@ -706,10 +706,10 @@ static void abs_guest(int dirfd, const char *raw, char *out, size_t n) {
                     gdir += g_lower[i].clen;
                     break;
                 }
-        snprintf(out, n, "/%s/%s", gdir, raw ? raw : "");
+        (void)hl_guest_path_compose(out, n, gdir, raw, 1);
     } else
         // AT_FDCWD-relative -> guest cwd
-        snprintf(out, n, "%s/%s", g_cwd, raw ? raw : "");
+        (void)hl_guest_path_compose(out, n, g_cwd, raw, 0);
 }
 
 // Map a canonical HOST directory path back to its GUEST path. The guest cwd is a guest-visible path, but

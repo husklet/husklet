@@ -16,6 +16,49 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn guest_path_composition_rejects_truncation() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-path-compose-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create path composition probe directory");
+    let source = scratch.join("path_compose.c");
+    let executable = scratch.join("path_compose");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/container/vfs/path_compose.h"
+#include <string.h>
+
+int main(void) {
+    char exact[8];
+    if (hl_guest_path_compose(exact, sizeof exact, "ab", "cde", 1) != 0) return 1;
+    if (strcmp(exact, "/ab/cde") != 0) return 2;
+    char short_buffer[7] = "poison";
+    if (hl_guest_path_compose(short_buffer, sizeof short_buffer, "ab", "cde", 1) == 0) return 3;
+    if (short_buffer[0] != '\0') return 4;
+    if (hl_guest_path_copy(short_buffer, sizeof short_buffer, "/abcdef") == 0) return 5;
+    if (short_buffer[0] != '\0') return 6;
+    return 0;
+}
+"#,
+    )
+    .expect("write path composition probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("path composition probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("path composition probe execution");
+    assert!(run.success(), "path composition probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove path composition probe directory");
+}
+
 #[test]
 fn owned_native_headers_are_self_contained() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
