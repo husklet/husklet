@@ -150,10 +150,7 @@ pub fn run(options: Options) -> Result<(), Error> {
             [&candidate, &base]
         };
         for arm in order {
-            for phase in execute(arm, &options)? {
-                checksums.entry(phase.name.clone()).or_default().insert(phase.ok);
-                samples.entry((phase.name, arm.label)).or_default().push(phase.us);
-            }
+            record_samples(arm, execute(arm, &options)?, &mut checksums, &mut samples);
         }
     }
 
@@ -204,6 +201,18 @@ pub fn run(options: Options) -> Result<(), Error> {
     Ok(())
 }
 
+fn record_samples(
+    arm: &Arm,
+    phases: Vec<Phase>,
+    checksums: &mut BTreeMap<String, BTreeSet<String>>,
+    samples: &mut BTreeMap<(String, &'static str), Vec<u128>>,
+) {
+    for phase in phases {
+        checksums.entry(phase.name.clone()).or_default().insert(phase.ok);
+        samples.entry((phase.name, arm.label)).or_default().push(phase.us);
+    }
+}
+
 /// The null-arm line every run ends with. A run that did not take one says so rather than leaving
 /// a reader to assume a floor was established.
 /// Reads a prior null-arm results file and returns the floor it established. A run comparing two
@@ -228,15 +237,7 @@ fn admit_floor(path: Option<&Path>, guest_identity: &str) -> Result<Floor, Error
         match fields.as_slice() {
             ["# null-arm", "true"] => null_arm = true,
             ["# null-arm", "RESOLVED", ..] => resolved = true,
-            ["# null-arm-phase", state, name, _, floor] => {
-                if let Some(value) = floor.strip_prefix("floor=").and_then(|value| value.parse().ok()) {
-                    phases.push(PhaseFloor {
-                        name: (*name).to_owned(),
-                        floor: value,
-                        resolved: *state == "RESOLVED",
-                    });
-                }
-            }
+            ["# null-arm-phase", state, name, _, floor] => parse_floor_phase(state, name, floor, &mut phases),
             ["# identity", "guest", identity] => guest = Some((*identity).to_owned()),
             _ => {}
         }
@@ -267,6 +268,16 @@ fn admit_floor(path: Option<&Path>, guest_identity: &str) -> Result<Floor, Error
         )
         .into()),
         None => Err(format!("{} names no guest identity", path.display()).into()),
+    }
+}
+
+fn parse_floor_phase(state: &str, name: &str, floor: &str, phases: &mut Vec<PhaseFloor>) {
+    if let Some(value) = floor.strip_prefix("floor=").and_then(|value| value.parse().ok()) {
+        phases.push(PhaseFloor {
+            name: name.to_owned(),
+            floor: value,
+            resolved: state == "RESOLVED",
+        });
     }
 }
 
@@ -376,11 +387,7 @@ fn parse(text: &str) -> Vec<Phase> {
             let mut us = None;
             let mut ok = None;
             for field in fields {
-                if let Some(value) = field.strip_prefix("us=") {
-                    us = value.parse().ok();
-                } else if let Some(value) = field.strip_prefix("ok=") {
-                    ok = Some(value.to_owned());
-                }
+                parse_phase_field(field, &mut us, &mut ok);
             }
             Some(Phase {
                 name,
@@ -389,6 +396,14 @@ fn parse(text: &str) -> Vec<Phase> {
             })
         })
         .collect()
+}
+
+fn parse_phase_field(field: &str, us: &mut Option<u128>, ok: &mut Option<String>) {
+    match (field.strip_prefix("us="), field.strip_prefix("ok=")) {
+        (Some(value), _) => *us = value.parse().ok(),
+        (_, Some(value)) => *ok = Some(value.to_owned()),
+        _ => {}
+    }
 }
 
 #[cfg(test)]

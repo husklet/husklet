@@ -64,11 +64,7 @@ impl Process {
         let mut timed_out = false;
         let mut tree = Vec::new();
         loop {
-            for process in Self::descendants(child.id()) {
-                if !tree.contains(&process) {
-                    tree.push(process);
-                }
-            }
+            Self::record_descendants(child.id(), &mut tree);
             match child.try_wait().map_err(|error| format!("wait failed: {error}"))? {
                 Some(_) => break,
                 None if start.elapsed() < run.timeout => std::thread::sleep(Duration::from_millis(10)),
@@ -132,6 +128,14 @@ impl Process {
             x86_diagnostics,
             causal_diagnostics,
         })
+    }
+
+    fn record_descendants(root: u32, tree: &mut Vec<u32>) {
+        for process in Self::descendants(root) {
+            if !tree.contains(&process) {
+                tree.push(process);
+            }
+        }
     }
 
     fn native_runs(diagnostics: &str) -> Option<u64> {
@@ -301,26 +305,36 @@ impl Process {
             let Some((_, fields)) = stat.rsplit_once(") ") else {
                 continue;
             };
-            if let Some(parent) = fields
-                .split_whitespace()
-                .nth(1)
-                .and_then(|value| value.parse::<u32>().ok())
-            {
-                parents.push((process, parent));
-            }
+            Self::record_parent(process, fields, &mut parents);
         }
         let mut tree = vec![root];
         let mut index = 0;
         while index < tree.len() {
             let parent = tree[index];
-            for &(process, owner) in &parents {
-                if owner == parent && !tree.contains(&process) {
-                    tree.push(process);
-                }
-            }
+            Self::record_children(parent, &parents, &mut tree);
             index += 1;
         }
         tree.into_iter().skip(1).collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn record_parent(process: u32, fields: &str, parents: &mut Vec<(u32, u32)>) {
+        if let Some(parent) = fields
+            .split_whitespace()
+            .nth(1)
+            .and_then(|value| value.parse::<u32>().ok())
+        {
+            parents.push((process, parent));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn record_children(parent: u32, parents: &[(u32, u32)], tree: &mut Vec<u32>) {
+        for &(process, owner) in parents {
+            if owner == parent && !tree.contains(&process) {
+                tree.push(process);
+            }
+        }
     }
 
     #[cfg(not(target_os = "linux"))]

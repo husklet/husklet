@@ -40,29 +40,7 @@ pub(super) fn provenance(scenarios: Vec<Scenario>, options: ProvenanceOptions) -
     let mut opaque = Vec::new();
     for scenario in &scenarios {
         for case in &scenario.cases {
-            if !ids.insert(case.id.as_str()) {
-                return Err(format!("duplicate scenario ID {}", case.id).into());
-            }
-            if case
-                .actions
-                .iter()
-                .any(|action| matches!(action, ScenarioAction::Host(_)))
-            {
-                opaque.push(case.id.as_str());
-            }
-            if options.details {
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    scenario.definition.display(),
-                    case.id,
-                    case.targets
-                        .iter()
-                        .map(|target| target.name())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                    case.image
-                );
-            }
+            inspect_case(scenario, case, options.details, &mut ids, &mut opaque)?;
         }
     }
     println!(
@@ -82,6 +60,39 @@ pub(super) fn provenance(scenarios: Vec<Scenario>, options: ProvenanceOptions) -
         )
         .into())
     }
+}
+
+fn inspect_case<'a>(
+    scenario: &'a Scenario,
+    case: &'a super::definition::ScenarioCase,
+    details: bool,
+    ids: &mut BTreeSet<&'a str>,
+    opaque: &mut Vec<&'a str>,
+) -> Result<(), Error> {
+    if !ids.insert(case.id.as_str()) {
+        return Err(format!("duplicate scenario ID {}", case.id).into());
+    }
+    if case
+        .actions
+        .iter()
+        .any(|action| matches!(action, ScenarioAction::Host(_)))
+    {
+        opaque.push(case.id.as_str());
+    }
+    if details {
+        println!(
+            "{}\t{}\t{}\t{}",
+            scenario.definition.display(),
+            case.id,
+            case.targets
+                .iter()
+                .map(|target| target.name())
+                .collect::<Vec<_>>()
+                .join(","),
+            case.image
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn cache_preflight(scenarios: Vec<Scenario>, options: CachePreflightOptions) -> Result<(), Error> {

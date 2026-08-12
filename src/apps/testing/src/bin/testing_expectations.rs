@@ -80,14 +80,15 @@ fn inventory(repository: &Path) -> Result<Inventory, Box<dyn Error>> {
             .unwrap_or_default();
         inventory.manifests += 1;
         inventory.cases += cases.len();
-        for case in cases {
-            let Some(case) = case.as_mapping() else { continue };
-            if case.contains_key(Value::String("expect".into())) {
-                *inventory.expectations.entry(authority).or_default() += 1;
-            }
-        }
+        let expectations = cases.iter().filter(|case| has_expectation(case)).count();
+        *inventory.expectations.entry(authority).or_default() += expectations;
     }
     Ok(inventory)
+}
+
+fn has_expectation(case: &&Value) -> bool {
+    case.as_mapping()
+        .is_some_and(|case| case.contains_key(Value::String("expect".into())))
 }
 
 fn authority(root: &Mapping, path: &Path) -> Result<Authority, Box<dyn Error>> {

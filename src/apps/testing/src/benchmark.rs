@@ -378,18 +378,7 @@ impl Run {
             let sample = process.sample(&self)?;
             walls.push(sample.wall);
             if let Some(diagnostics) = sample.x86_diagnostics {
-                eprint!(
-                    "diagnostic repeat={} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={}",
-                    repetition + 1,
-                    diagnostics.public_exits,
-                    diagnostics.public_syscalls,
-                    diagnostics.public_epochs,
-                    diagnostics.syscall_vector_dirty,
-                );
-                if let Some(share) = diagnostics.dirty_share_ppm() {
-                    eprint!(" x86_syscall_vector_dirty_ppm={share}");
-                }
-                eprintln!();
+                report_x86_diagnostics(repetition + 1, &diagnostics);
             }
             if let Some(diagnostics) = sample.causal_diagnostics {
                 eprintln!(
@@ -504,6 +493,20 @@ impl Run {
             },
         )
     }
+}
+
+fn report_x86_diagnostics(repetition: usize, diagnostics: &adapter::X86Diagnostics) {
+    eprint!(
+        "diagnostic repeat={repetition} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={}",
+        diagnostics.public_exits,
+        diagnostics.public_syscalls,
+        diagnostics.public_epochs,
+        diagnostics.syscall_vector_dirty,
+    );
+    if let Some(share) = diagnostics.dirty_share_ppm() {
+        eprint!(" x86_syscall_vector_dirty_ppm={share}");
+    }
+    eprintln!();
 }
 
 fn identity_field(digest: &mut sha2::Sha256, value: &[u8]) {

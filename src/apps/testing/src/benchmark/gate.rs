@@ -475,12 +475,7 @@ impl Gate {
                     |value| format!("{:.3}", ratio(engine.median, value.median))
                 ),
             );
-            if let Some(value) = recorded {
-                let allowance = 1.0 + self.tolerance.max(spread);
-                if ratio(engine.median, *value) > allowance {
-                    regressed.push(format!("{phase} {}us over baseline {value}us", engine.median));
-                }
-            }
+            record_regression(&mut regressed, phase, engine, recorded, self.tolerance, spread);
             rust.insert(phase.clone(), engine);
         }
         if !noisy.is_empty() {
@@ -513,6 +508,21 @@ impl Gate {
         } else {
             Err(format!("rust-engine regressed: {}", regressed.join(", ")))
         }
+    }
+}
+
+fn record_regression(
+    regressed: &mut Vec<String>,
+    phase: &str,
+    engine: Statistics,
+    recorded: Option<&u64>,
+    tolerance: f64,
+    spread: f64,
+) {
+    let Some(value) = recorded else { return };
+    let allowance = 1.0 + tolerance.max(spread);
+    if ratio(engine.median, *value) > allowance {
+        regressed.push(format!("{phase} {}us over baseline {value}us", engine.median));
     }
 }
 

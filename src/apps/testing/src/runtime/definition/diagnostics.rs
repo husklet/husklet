@@ -180,11 +180,7 @@ impl Counters {
             let Some(fields) = RECORDS.iter().find_map(|record| line.trim_start().strip_prefix(record)) else {
                 continue;
             };
-            for (name, value) in fields.split_whitespace().filter_map(|field| field.split_once('=')) {
-                if let Ok(value) = value.parse::<u64>() {
-                    *counters.entry(name.to_owned()).or_default() += value;
-                }
-            }
+            add_fields(&mut counters, fields);
         }
         Self(counters)
     }
@@ -203,6 +199,13 @@ impl Counters {
             .map(|(name, value)| format!("{name}={value}"))
             .collect::<Vec<_>>()
             .join(" ")
+    }
+}
+
+fn add_fields(counters: &mut BTreeMap<String, u64>, fields: &str) {
+    for (name, value) in fields.split_whitespace().filter_map(|field| field.split_once('=')) {
+        let Ok(value) = value.parse::<u64>() else { continue };
+        *counters.entry(name.to_owned()).or_default() += value;
     }
 }
 

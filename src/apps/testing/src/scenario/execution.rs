@@ -399,22 +399,28 @@ async fn run_api(
         ScenarioApiAction::CopyFromContainer { source } => {
             let mut archive = LimitedOutput::default();
             filesystem.archive(source, &mut archive)?;
-            let mut output = Vec::new();
-            for entry in tar::Archive::new(archive.0.as_slice()).entries()? {
-                let entry = entry?;
-                if entry.header().entry_type().is_file() {
-                    use std::io::Read;
-                    entry
-                        .take((Capture::LIMIT - output.len()) as u64 + 1)
-                        .read_to_end(&mut output)?;
-                    if output.len() > Capture::LIMIT {
-                        return Err(format!("copied output exceeded {} bytes", Capture::LIMIT).into());
-                    }
-                }
-            }
+            let output = unpack_regular_files(&archive.0)?;
             Ok((ExitStatus::Code(0), output, Vec::new()))
         }
     }
+}
+
+fn unpack_regular_files(archive: &[u8]) -> Result<Vec<u8>, Error> {
+    use std::io::Read;
+    let mut output = Vec::new();
+    for entry in tar::Archive::new(archive).entries()? {
+        let entry = entry?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        entry
+            .take((Capture::LIMIT - output.len()) as u64 + 1)
+            .read_to_end(&mut output)?;
+        if output.len() > Capture::LIMIT {
+            return Err(format!("copied output exceeded {} bytes", Capture::LIMIT).into());
+        }
+    }
+    Ok(output)
 }
 
 #[derive(Default)]

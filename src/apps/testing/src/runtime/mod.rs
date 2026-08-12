@@ -398,49 +398,7 @@ fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Schedul
         {
             matched_case = true;
         }
-        for target in options.selection.targets() {
-            if !app.supports(target) {
-                continue;
-            }
-            for (case_index, case) in app.cases.iter().enumerate() {
-                if options
-                    .selection
-                    .case
-                    .as_deref()
-                    .is_some_and(|selected| case.id != selected)
-                {
-                    continue;
-                }
-                if !case.targets.contains(&target) {
-                    continue;
-                }
-                if let Some((kind, reason, evidence)) = case.inactive(host) {
-                    println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
-                    skipped.push(ledger::Row {
-                        attempt: crate::journal::Attempt {
-                            key: WorkKey {
-                                id: case.id.clone(),
-                                target,
-                            },
-                            status: ledger::NOT_RUN,
-                            elapsed_ms: 0,
-                        },
-                        host_load: load::unmeasured(),
-                        diagnostic: format!("{kind}: {reason} [{evidence}]"),
-                    });
-                    continue;
-                }
-                work.push(Work {
-                    key: WorkKey {
-                        id: case.id.clone(),
-                        target,
-                    },
-                    app: Arc::clone(&app),
-                    case_index,
-                    target,
-                });
-            }
-        }
+        plan_app(&app, options, host, &mut work, &mut skipped);
     }
     work.sort_by(|left, right| left.key.cmp(&right.key));
     Schedule {
@@ -448,6 +406,63 @@ fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Schedul
         skipped,
         matched_case,
     }
+}
+
+fn plan_app(app: &Arc<App>, options: &Options, host: EngineHost, work: &mut Vec<Work>, skipped: &mut Vec<ledger::Row>) {
+    for target in options.selection.targets() {
+        if !app.supports(target) {
+            continue;
+        }
+        for (case_index, case) in app.cases.iter().enumerate() {
+            plan_case(app, case_index, target, options, host, work, skipped);
+        }
+    }
+}
+
+fn plan_case(
+    app: &Arc<App>,
+    case_index: usize,
+    target: Target,
+    options: &Options,
+    host: EngineHost,
+    work: &mut Vec<Work>,
+    skipped: &mut Vec<ledger::Row>,
+) {
+    let case = &app.cases[case_index];
+    if options
+        .selection
+        .case
+        .as_deref()
+        .is_some_and(|selected| case.id != selected)
+        || !case.targets.contains(&target)
+    {
+        return;
+    }
+    if let Some((kind, reason, evidence)) = case.inactive(host) {
+        println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
+        skipped.push(ledger::Row {
+            attempt: crate::journal::Attempt {
+                key: WorkKey {
+                    id: case.id.clone(),
+                    target,
+                },
+                status: ledger::NOT_RUN,
+                elapsed_ms: 0,
+            },
+            host_load: load::unmeasured(),
+            diagnostic: format!("{kind}: {reason} [{evidence}]"),
+        });
+        return;
+    }
+    work.push(Work {
+        key: WorkKey {
+            id: case.id.clone(),
+            target,
+        },
+        app: Arc::clone(app),
+        case_index,
+        target,
+    });
 }
 
 /// A selection with only inactive cases is a valid, fully recorded `NOT_RUN` sweep, not a failure.

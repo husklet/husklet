@@ -272,13 +272,7 @@ async fn run_product_ab_with_image(
             let remove_us = elapsed_us(teardown_started);
             let identity =
                 crate::record::FramedIdentity::over(&[outcome.stdout.as_slice(), outcome.stderr.as_slice()])?;
-            if let Some(expected) = &expected_identity {
-                if expected != &identity {
-                    return Err(format!("product A/B output changed at round {round} position {position}").into());
-                }
-            } else {
-                expected_identity = Some(identity.clone());
-            }
+            preserve_product_identity(&mut expected_identity, &identity, round, position)?;
             let setup_us = lifecycle_sum(&outcome.lifecycle, &["create", "attach", "start"]);
             let execution_us = lifecycle_sum(&outcome.lifecycle, &["wait_and_drain"]);
             let teardown_us = lifecycle_sum(&outcome.lifecycle, &["output_read"]).saturating_add(remove_us);
@@ -295,6 +289,24 @@ async fn run_product_ab_with_image(
         }
     }
     Ok(samples)
+}
+
+fn preserve_product_identity(
+    expected: &mut Option<String>,
+    observed: &str,
+    round: u32,
+    position: usize,
+) -> Result<(), Error> {
+    match expected {
+        Some(expected) if expected != observed => {
+            Err(format!("product A/B output changed at round {round} position {position}").into())
+        }
+        Some(_) => Ok(()),
+        None => {
+            *expected = Some(observed.to_owned());
+            Ok(())
+        }
+    }
 }
 
 fn lifecycle_sum(values: &[(String, u128)], names: &[&str]) -> u128 {
@@ -540,13 +552,17 @@ fn prefetch_tree(root: &std::path::Path) {
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else { continue };
-            if kind.is_dir() {
-                pending.push(entry.path());
-            } else if kind.is_file() {
-                read_fully(&entry.path(), &mut buffer);
-            }
+            prefetch_entry(entry, &mut pending, &mut buffer);
         }
+    }
+}
+
+fn prefetch_entry(entry: std::fs::DirEntry, pending: &mut Vec<PathBuf>, buffer: &mut [u8]) {
+    let Ok(kind) = entry.file_type() else { return };
+    if kind.is_dir() {
+        pending.push(entry.path());
+    } else if kind.is_file() {
+        read_fully(&entry.path(), buffer);
     }
 }
 
