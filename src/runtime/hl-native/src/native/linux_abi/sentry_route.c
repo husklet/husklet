@@ -124,118 +124,6 @@ static int sentry_route_wait(struct cpu *c, uint64_t nr) {
     return 1;
 }
 
-static int sentry_route_clone(struct cpu *c, uint64_t nr) {
-    if (nr != 220 && nr != 435) return 0;
-    uint64_t clone3_flags = 0;
-    if (nr == 435 && G_A0(c) &&
-        guest_copy_from(&clone3_flags, G_A0(c), sizeof clone3_flags) != sizeof clone3_flags) {
-        G_RET(c) = (uint64_t)(int64_t)-EFAULT;
-        return 1;
-    }
-    int is_thread = nr == 220 ? (G_A0(c) & 0x10000) != 0 : (clone3_flags & 0x10000) != 0;
-    int64_t snapshot = is_thread ? 0 : sentry_ctl_op(SENTRY_OP_FORK_PREPARE, 0, 0);
-    if (!is_thread && snapshot < 0) {
-        G_RET(c) = (uint64_t)snapshot;
-        return 1;
-    }
-    int sync[2] = {-1, -1};
-    if (!is_thread && pipe(sync) != 0) {
-        int error = errno;
-        sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)snapshot, 0);
-        G_RET(c) = (uint64_t)(int64_t)-error;
-        return 1;
-    }
-    service_local(c);
-    if (getpid() != g_worker_pid) {
-        close(sync[1]);
-        unsigned char ready;
-        ssize_t received;
-        do
-            received = read(sync[0], &ready, sizeof ready);
-        while (received < 0 && errno == EINTR);
-        close(sync[0]);
-        if (received != sizeof ready || ready != 1) _exit(127);
-        sentry_fork_child();
-        return 1;
-    }
-    if (!is_thread && (int64_t)G_RET(c) > 0) {
-        close(sync[0]);
-        pid_t child = (pid_t)G_RET(c);
-        int64_t installed = sentry_ctl_op(SENTRY_OP_FORK, (uint64_t)snapshot, (uint64_t)child);
-        if (installed < 0) {
-            sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)snapshot, 0);
-            close(sync[1]);
-            kill(child, SIGKILL);
-            int status;
-            while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-            G_RET(c) = (uint64_t)installed;
-            return 1;
-        }
-        unsigned char ready = 1;
-        ssize_t written = hl_sentry_pipe_write(sync[1], &ready, sizeof ready);
-        close(sync[1]);
-        if (written != sizeof ready) {
-            kill(child, SIGKILL);
-            int status;
-            while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-            sentry_ctl_op(SENTRY_OP_REAP, (uint64_t)child, 0);
-            G_RET(c) = (uint64_t)(int64_t)-EIO;
-            return 1;
-        }
-        atomic_fetch_add(&g_guest_children, 1);
-    } else if (!is_thread) {
-        close(sync[0]);
-        close(sync[1]);
-        sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)snapshot, 0);
-    }
-    return 1;
-}
-
-static int sentry_route_worker_proc(struct cpu *c, uint64_t nr) {
-    if (nr != 56 && nr != 78) return 0;
-    char path[SENTRY_PATHCAP];
-    int length = G_A1(c) ? guest_copy_string(path, sizeof path, G_A1(c)) : -1;
-    if (length < 0 || !sentry_worker_proc_leaf(path)) return 0;
-    service_local(c);
-    if (nr == 56 && (int64_t)G_RET(c) >= 0) {
-        int rfd = (int)G_RET(c);
-        int64_t vfd = sentry_adopt_fd(rfd, (G_A2(c) & LX_O_CLOEXEC) != 0);
-        sentry_native_close(rfd);
-        G_RET(c) = (uint64_t)vfd;
-    }
-    return 1;
-}
-
-static int sentry_route_file_mmap(struct cpu *c, uint64_t nr) {
-    if (nr != 222 || (G_A3(c) & 0x20) || (int)G_A4(c) < 0) return 0;
-    struct sentry_ring *R = ring_for_thread();
-    while (atomic_exchange_explicit(&R->busy, 1, memory_order_acquire)) sched_yield();
-    int idx = t_ring;
-    R->wpid = (uint32_t)g_worker_pid;
-    R->wtid = t_token;
-    R->inherit_wtid = 0;
-    R->rawnr = SENTRY_OP_FDPASS;
-    R->a[0] = (uint64_t)(uint32_t)(int)G_A4(c);
-    R->iovn = 0;
-    for (int i = 0; i < 6; i++) R->redir[i] = -1;
-    uint64_t request = atomic_fetch_add_explicit(&R->request, 1, memory_order_relaxed) + 1;
-    atomic_store_explicit(&R->turn, 1, memory_order_release);
-    uint32_t spins = 0;
-    while (atomic_load_explicit(&R->response, memory_order_acquire) != request)
-        if (++spins > 256) {
-            sched_yield();
-            spins = 0;
-        }
-    int lfd = idx >= 0 && g_ctl[idx][0] >= 0 ? sentry_recv_fd(g_ctl[idx][0]) : -1;
-    atomic_store_explicit(&R->busy, 0, memory_order_release);
-    uint64_t saved = G_A4(c);
-    G_A4(c) = (uint64_t)(int64_t)lfd;
-    service_local(c);
-    G_A4(c) = saved;
-    if (lfd >= 0) close(lfd);
-    return 1;
-}
-
 // ------------------------------------------------------------------ the routed trust boundary
 // Replaces the direct service_local(c) call for untrusted guests. When g_untrusted is off this is a
 // transparent pass-through (trusted path byte-identical to baseline -- and service() already gated us
@@ -270,7 +158,71 @@ static void syscall_route(struct cpu *c) {
     // sentry cannot duplicate) done LOCALLY by service_local. The freshly forked CHILD inherited the
     // parent's lane + sentry-ownership, so re-init its bookkeeping; the PARENT counts the new child so a
     // later wait4 with no real children doesn't deadlock on the hidden sentry child.
-    if (sentry_route_clone(c, nr)) return;
+    if (nr == 220 || nr == 435) {
+        uint64_t clone3_flags = 0;
+        if (nr == 435 && G_A0(c) &&
+            guest_copy_from(&clone3_flags, G_A0(c), sizeof clone3_flags) != sizeof clone3_flags) {
+            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            return;
+        }
+        int is_thread = (nr == 220) ? ((G_A0(c) & 0x10000) != 0) : ((clone3_flags & 0x10000) != 0);
+        int64_t fork_snapshot = is_thread ? 0 : sentry_ctl_op(SENTRY_OP_FORK_PREPARE, 0, 0);
+        if (!is_thread && fork_snapshot < 0) {
+            G_RET(c) = (uint64_t)fork_snapshot;
+            return;
+        }
+        int fork_sync[2] = {-1, -1};
+        if (!is_thread && pipe(fork_sync) != 0) {
+            int error = errno;
+            sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)fork_snapshot, 0);
+            G_RET(c) = (uint64_t)(int64_t)-error;
+            return;
+        }
+        service_local(c);               // spawn_thread (CLONE_THREAD) or fork() -- both worker-local
+        if (getpid() != g_worker_pid) { // we are the new child worker
+            close(fork_sync[1]);
+            unsigned char ready;
+            ssize_t received;
+            do
+                received = read(fork_sync[0], &ready, sizeof ready);
+            while (received < 0 && errno == EINTR);
+            close(fork_sync[0]);
+            if (received != sizeof ready || ready != 1) _exit(127);
+            sentry_fork_child(); // drop inherited lane, mint a fresh token + identity
+            return;
+        }
+        if (!is_thread && (int64_t)G_RET(c) > 0) {
+            close(fork_sync[0]);
+            pid_t child = (pid_t)G_RET(c);
+            int64_t installed = sentry_ctl_op(SENTRY_OP_FORK, (uint64_t)fork_snapshot, (uint64_t)child);
+            if (installed < 0) {
+                sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)fork_snapshot, 0);
+                close(fork_sync[1]);
+                kill(child, SIGKILL);
+                int status;
+                while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+                G_RET(c) = (uint64_t)installed;
+                return;
+            }
+            unsigned char ready = 1;
+            ssize_t written = hl_sentry_pipe_write(fork_sync[1], &ready, sizeof ready);
+            close(fork_sync[1]);
+            if (written != sizeof ready) {
+                kill(child, SIGKILL);
+                int status;
+                while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+                sentry_ctl_op(SENTRY_OP_REAP, (uint64_t)child, 0);
+                G_RET(c) = (uint64_t)(int64_t)-EIO;
+                return;
+            }
+            atomic_fetch_add(&g_guest_children, 1); // parent: a child appeared
+        } else if (!is_thread) {
+            close(fork_sync[0]);
+            close(fork_sync[1]);
+            sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)fork_snapshot, 0);
+        }
+        return;
+    }
     // execve(221) stays LOCAL: service_local reloads the guest image IN THIS PROCESS (it is not a host
     // execve), so the worker keeps its pid, ring lane, control sockets, sentry, and confinement across it.
     // But because it is NOT a real execve, the kernel never applies FD_CLOEXEC: ask the sentry to close+drop
@@ -283,7 +235,20 @@ static void syscall_route(struct cpu *c) {
     // sentry_worker_proc_leaf). readlinkat is pure state (bytes into a guest buffer). openat yields a real
     // worker-local fd, which must not leak into the guest's (fully virtual) descriptor space -- hand it to
     // the sentry for adoption so read/lseek/close forward exactly like any sentry-opened descriptor.
-    if (sentry_route_worker_proc(c, nr)) return;
+    char worker_proc_path[SENTRY_PATHCAP];
+    int worker_proc_path_len = ((nr == 56 || nr == 78) && G_A1(c))
+                                   ? guest_copy_string(worker_proc_path, sizeof worker_proc_path, G_A1(c))
+                                   : -1;
+    if (worker_proc_path_len >= 0 && sentry_worker_proc_leaf(worker_proc_path)) {
+        service_local(c);
+        if (nr == 56 && (int64_t)G_RET(c) >= 0) {
+            int rfd = (int)G_RET(c);
+            int64_t v = sentry_adopt_fd(rfd, (G_A2(c) & LX_O_CLOEXEC) != 0);
+            sentry_native_close(rfd);
+            G_RET(c) = (uint64_t)v;
+        }
+        return;
+    }
     // wait4(260): reap the guest's child WORKER processes locally. The sentry is ALSO a child of the owner,
     // so a blocking wait-any with no GUEST children would hang on it -> short-circuit to -ECHILD; and never
     // surface the sentry's own pid to the guest. A specific-pid wait passes straight through.
@@ -292,7 +257,38 @@ static void syscall_route(struct cpu *c) {
     // sentry-owned and invalid here. Borrow the real fd over this lane's control socket (SCM_RIGHTS), map
     // it locally with the borrowed number, then drop it -- so the worker holds the real fd only for the
     // single mmap. Anonymous mmap (MAP_ANON 0x20) needs no fd and stays fully local below.
-    if (sentry_route_file_mmap(c, nr)) return;
+    if (nr == 222 && !(G_A3(c) & 0x20) && (int)G_A4(c) >= 0) {
+        struct sentry_ring *R = ring_for_thread();
+        while (atomic_exchange_explicit(&R->busy, 1, memory_order_acquire))
+            sched_yield();
+        int idx = t_ring;
+        R->wpid = (uint32_t)g_worker_pid; // select this process's table: the guest VFD is translated there
+        R->wtid = t_token;
+        R->inherit_wtid = 0;
+        R->rawnr = SENTRY_OP_FDPASS;
+        R->a[0] = (uint64_t)(uint32_t)(int)G_A4(c); // the guest's (virtual) mmap fd
+        R->iovn = 0;
+        for (int i = 0; i < 6; i++)
+            R->redir[i] = -1;
+        uint64_t request = atomic_fetch_add_explicit(&R->request, 1, memory_order_relaxed) + 1;
+        atomic_store_explicit(&R->turn, 1, memory_order_release);
+        uint32_t sp = 0;
+        while (atomic_load_explicit(&R->response, memory_order_acquire) != request)
+            if (++sp > 256) {
+                sched_yield();
+                sp = 0;
+            }
+        // The sentry ALWAYS sends a control datagram (with the fd, or empty on -EBADF), so we MUST always
+        // receive it -- skipping on failure would leave a stale message to desync the next lend on this lane.
+        int lfd = (idx >= 0 && g_ctl[idx][0] >= 0) ? sentry_recv_fd(g_ctl[idx][0]) : -1;
+        atomic_store_explicit(&R->busy, 0, memory_order_release);
+        uint64_t saved = G_A4(c);
+        G_A4(c) = (uint64_t)(int64_t)lfd; // -1 if the lend failed -> service_local mmap returns EBADF
+        service_local(c);                 // real worker-side mmap on the borrowed fd
+        G_A4(c) = saved;                  // restore the guest's r8/a4 (preserved across a syscall)
+        if (lfd >= 0) close(lfd);         // drop the borrowed fd: worker fds stay virtual
+        return;
+    }
 
     if (!sentry_forwarded(nr)) {
         service_local(c); // LOCAL authority (its G_NORMALIZE re-runs as a no-op on already-*at registers)
@@ -1099,3 +1095,4 @@ static void syscall_route(struct cpu *c) {
     G_RET(c) = (uint64_t)ret;
     atomic_store_explicit(&R->busy, 0, memory_order_release); // release the producer lock (round-trip done)
 }
+
