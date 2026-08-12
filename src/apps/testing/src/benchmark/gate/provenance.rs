@@ -1,4 +1,4 @@
-use super::*;
+use super::{Isa, Path, PathBuf};
 
 pub(crate) struct Provenance {
     pub(super) build_id: String,

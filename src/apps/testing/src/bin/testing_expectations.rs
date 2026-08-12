@@ -80,13 +80,13 @@ fn inventory(repository: &Path) -> Result<Inventory, Box<dyn Error>> {
             .unwrap_or_default();
         inventory.manifests += 1;
         inventory.cases += cases.len();
-        let expectations = cases.iter().filter(|case| has_expectation(case)).count();
+        let expectations = cases.iter().map(has_expectation).filter(|present| *present).count();
         *inventory.expectations.entry(authority).or_default() += expectations;
     }
     Ok(inventory)
 }
 
-fn has_expectation(case: &&Value) -> bool {
+fn has_expectation(case: &Value) -> bool {
     case.as_mapping()
         .is_some_and(|case| case.contains_key(Value::String("expect".into())))
 }

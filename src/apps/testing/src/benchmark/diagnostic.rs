@@ -1,4 +1,4 @@
-use super::*;
+use super::adapter;
 
 pub(super) fn report_x86_diagnostics(repetition: usize, diagnostics: &adapter::X86Diagnostics) {
     eprint!(

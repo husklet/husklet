@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BTreeMap, Capture, DIAGNOSTIC_CAPTURE, DIAGNOSTIC_OUTPUT, Duration, Entry, Error, ExitStatus, Invocation,
+    Measurement, Session,
+};
 
 pub(super) fn stdout_contains(stdout: &[u8], marker: &[u8]) -> bool {
     marker.is_empty() || stdout.windows(marker.len()).any(|window| window == marker)
