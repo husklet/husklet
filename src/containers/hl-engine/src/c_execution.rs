@@ -63,6 +63,14 @@ struct CSyscallTrapResult {
     image_generation: u64,
 }
 
+impl CSyscallTrapResult {
+    fn fault(&mut self) -> c_int {
+        hl_log::hl_error!(hl_log::tag::EXEC, "retained runtime syscall transition failed closed");
+        self.outcome = SYSCALL_TRAP_FAULT;
+        0
+    }
+}
+
 struct CSyscallTrapContext {
     trap: Option<Arc<dyn hl_runtime::RuntimeSyscallTrap>>,
     retained_exit: Option<Arc<hl_runtime::RetainedExitTrap>>,
@@ -77,12 +85,6 @@ fn retained_tasks(context: &CSyscallTrapContext, initial_task: u64) -> Option<&h
         let _ = slot.set(tasks);
     }
     slot.get().map(Arc::as_ref)
-}
-
-fn c_syscall_fault(result: &mut CSyscallTrapResult) -> c_int {
-    hl_log::hl_error!(hl_log::tag::EXEC, "retained runtime syscall transition failed closed");
-    result.outcome = SYSCALL_TRAP_FAULT;
-    0
 }
 
 unsafe extern "C" fn c_syscall_trap(
@@ -124,30 +126,30 @@ unsafe extern "C" fn c_syscall_trap(
             return 0;
         }
         let Some(tasks) = retained_tasks(context, cpu.task) else {
-            return c_syscall_fault(result);
+            return result.fault();
         };
         if cpu.x[8] == TASK_EVENT_CREDENTIALS_CHANGED {
             let Ok(task) = u32::try_from(cpu.task) else {
-                return c_syscall_fault(result);
+                return result.fault();
             };
             let mut credentials = [0_u32; 8];
             for (destination, source) in credentials.iter_mut().zip(cpu.x) {
                 let Ok(value) = u32::try_from(source) else {
-                    return c_syscall_fault(result);
+                    return result.fault();
                 };
                 *destination = value;
             }
             if tasks.publish_credentials(task, credentials) != hl_runtime::RuntimeTrapOutcome::Continue {
-                return c_syscall_fault(result);
+                return result.fault();
             }
             result.outcome = SYSCALL_TRAP_CONTINUE;
             return 0;
         }
         let Ok(source) = u32::try_from(cpu.x[1]) else {
-            return c_syscall_fault(result);
+            return result.fault();
         };
         let Ok(value) = u32::try_from(cpu.x[0]) else {
-            return c_syscall_fault(result);
+            return result.fault();
         };
         let outcome = match cpu.x[8] {
             TASK_EVENT_CLONE_THREAD => tasks.clone_thread(source, value),
@@ -160,7 +162,7 @@ unsafe extern "C" fn c_syscall_trap(
             _ => unreachable!(),
         };
         if outcome != hl_runtime::RuntimeTrapOutcome::Continue {
-            return c_syscall_fault(result);
+            return result.fault();
         }
         result.outcome = SYSCALL_TRAP_CONTINUE;
         return 0;
@@ -168,12 +170,12 @@ unsafe extern "C" fn c_syscall_trap(
     if matches!(cpu.x[8], 172..=178) {
         if context.retained_tasks.is_some() {
             let Some(tasks) = retained_tasks(context, cpu.task) else {
-                return c_syscall_fault(result);
+                return result.fault();
             };
             let task = u32::try_from(cpu.task).unwrap_or(u32::MAX);
             let (outcome, value) = tasks.dispatch_aarch64(cpu.x[8], task);
             if outcome != hl_runtime::RuntimeTrapOutcome::Continue {
-                return c_syscall_fault(result);
+                return result.fault();
             }
             cpu.x[0] = value;
             result.outcome = SYSCALL_TRAP_CONTINUE;
@@ -188,7 +190,7 @@ unsafe extern "C" fn c_syscall_trap(
                 result.exit_status = status;
                 return 0;
             }
-            _ => return c_syscall_fault(result),
+            _ => return result.fault(),
         }
     }
     let Some(trap) = context.trap.as_deref() else {

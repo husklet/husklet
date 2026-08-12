@@ -40,6 +40,16 @@ impl FailureStage {
             Self::Destroy => "destroy",
         }
     }
+
+    const fn wire_value(self) -> u8 {
+        match self {
+            Self::Decode => 1,
+            Self::Create => 2,
+            Self::Start => 3,
+            Self::Control => 4,
+            Self::Destroy => 5,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,7 +107,7 @@ impl Message {
                 (EXIT, PAYLOAD_SIZE)
             }
             Self::Error { stage, code } => {
-                frame[HEADER_SIZE] = encode_stage(stage);
+                frame[HEADER_SIZE] = stage.wire_value();
                 put_i32(&mut frame, HEADER_SIZE + 4, code);
                 (ERROR, 8)
             }
@@ -244,16 +254,6 @@ fn decode_exit(payload: &[u8]) -> Result<EngineExit, WireError> {
         detail: get_u64(payload, 8),
         fault,
     })
-}
-
-fn encode_stage(value: FailureStage) -> u8 {
-    match value {
-        FailureStage::Decode => 1,
-        FailureStage::Create => 2,
-        FailureStage::Start => 3,
-        FailureStage::Control => 4,
-        FailureStage::Destroy => 5,
-    }
 }
 
 fn decode_stage(value: u8) -> Result<FailureStage, WireError> {

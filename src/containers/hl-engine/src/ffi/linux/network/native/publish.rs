@@ -241,7 +241,7 @@ fn claim(shared: &Weak<Reactor>, rule: Publication) -> Option<TcpListener> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         shared.upgrade()?;
-        if let Some(listener) = bind(rule) {
+        if let Some(listener) = rule.bind() {
             return Some(listener);
         }
         if Instant::now() >= deadline {
@@ -253,43 +253,45 @@ fn claim(shared: &Weak<Reactor>, rule: Publication) -> Option<TcpListener> {
 
 /// Binds the published host address with `SO_REUSEADDR`, so the next container to publish the port
 /// is not blocked by connections the previous one left in `TIME_WAIT`.
-fn bind(rule: Publication) -> Option<TcpListener> {
-    // SAFETY: socket takes scalar arguments and returns one owned descriptor.
-    // Non-blocking, so a peer that resets between poll() and accept() cannot park the loop either.
-    let descriptor = unsafe {
-        libc::socket(
-            libc::AF_INET,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-            0,
-        )
-    };
-    if descriptor < 0 {
-        return None;
-    }
-    // SAFETY: descriptor is owned here and the listener adopts it on every path below.
-    let listener = unsafe { TcpListener::from_raw_fd(descriptor) };
-    let reuse: libc::c_int = 1;
-    let mut address: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-    address.sin_family = libc::AF_INET as libc::sa_family_t;
-    address.sin_port = rule.host.to_be();
-    address.sin_addr.s_addr = u32::from_ne_bytes(rule.address);
-    // SAFETY: both option and address storage match the lengths passed with them.
-    let bound = unsafe {
-        libc::setsockopt(
-            descriptor,
-            libc::SOL_SOCKET,
-            libc::SO_REUSEADDR,
-            (&raw const reuse).cast(),
-            size_of::<libc::c_int>() as libc::socklen_t,
-        ) == 0
-            && libc::bind(
+impl Publication {
+    fn bind(self) -> Option<TcpListener> {
+        // SAFETY: socket takes scalar arguments and returns one owned descriptor.
+        // Non-blocking, so a peer that resets between poll() and accept() cannot park the loop either.
+        let descriptor = unsafe {
+            libc::socket(
+                libc::AF_INET,
+                libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+                0,
+            )
+        };
+        if descriptor < 0 {
+            return None;
+        }
+        // SAFETY: descriptor is owned here and the listener adopts it on every path below.
+        let listener = unsafe { TcpListener::from_raw_fd(descriptor) };
+        let reuse: libc::c_int = 1;
+        let mut address: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+        address.sin_family = libc::AF_INET as libc::sa_family_t;
+        address.sin_port = self.host.to_be();
+        address.sin_addr.s_addr = u32::from_ne_bytes(self.address);
+        // SAFETY: both option and address storage match the lengths passed with them.
+        let bound = unsafe {
+            libc::setsockopt(
                 descriptor,
-                (&raw const address).cast(),
-                size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                libc::SOL_SOCKET,
+                libc::SO_REUSEADDR,
+                (&raw const reuse).cast(),
+                size_of::<libc::c_int>() as libc::socklen_t,
             ) == 0
-            && libc::listen(descriptor, 128) == 0
-    };
-    bound.then_some(listener)
+                && libc::bind(
+                    descriptor,
+                    (&raw const address).cast(),
+                    size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                ) == 0
+                && libc::listen(descriptor, 128) == 0
+        };
+        bound.then_some(listener)
+    }
 }
 
 /// Dials the guest's switch rendezvous, tolerating a re-listen gap: a server looping `nc -l -w N`
@@ -357,18 +359,19 @@ fn relay(host: TcpStream, guest: UnixStream) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Accepted, Publication, accept, bind, classify};
+    use super::{Accepted, Publication, accept, classify};
 
     #[test]
     fn an_idle_listener_yields_the_accept_loop_instead_of_parking_it() {
         let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let host = reservation.local_addr().unwrap().port();
         drop(reservation);
-        let listener = bind(Publication {
+        let listener = Publication {
             address: [127, 0, 0, 1],
             host,
             guest: 1,
-        })
+        }
+        .bind()
         .unwrap();
         let started = std::time::Instant::now();
         assert!(matches!(accept(&listener), Accepted::Idle));
