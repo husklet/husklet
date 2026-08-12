@@ -197,6 +197,93 @@ static void e_rev4s(int vd, int vn) {
     hl_x86_emit_vector_extract(vd, vd, vd, 8);
 }
 
+static int lower_aeskeygenassist(struct insn *I, uint64_t next, hl_x86_crypto_state *state) {
+    int D = I->reg;
+    if (hl_x86_x87_known()) hl_x86_x87_drop();
+    int s = crypto_rm_vec(I, next);
+    if (!state->zero_ready || !state->optimize) hl_x86_emit_vector3(A_EOR16, 26, 26, 26);
+    state->zero_ready = 1;
+    hl_x86_emit_vector_copy(17, s);
+    emit32(A_AESE | (26 << 5) | 17);
+    crypto_vconst16(16, UINT64_C(0x040B0E010B0E0104), UINT64_C(0x0C0306090306090C));
+    emit32(A_TBL | (16 << 16) | (17 << 5) | 17);
+    hl_x86_emit_vector3(A_EOR16, 16, 16, 16);
+    uint32_t rcon = (uint32_t)((uint64_t)I->imm & UINT64_C(0xff));
+    if (rcon) {
+        e_movz(16, rcon, 0);
+        crypto_ins_g(16, 1, 16, 4);
+        crypto_ins_g(16, 3, 16, 4);
+    }
+    hl_x86_emit_vector3(A_EOR16, D, 17, 16);
+    return TX_NEXT;
+}
+
+static int lower_ptest(struct insn *I, uint64_t next) {
+    int D = I->reg;
+    if (hl_x86_x87_known()) hl_x86_x87_drop();
+    int s = crypto_rm_vec(I, next);
+    hl_x86_emit_vector3(0x4E201C00u, 16, D, s);
+    emit32(0x6E30A800u | (16 << 5) | 16);
+    emit32(0x0E013C00u | (16 << 5) | 18);
+    hl_x86_emit_vector3(0x4E601C00u, 17, s, D);
+    emit32(0x6E30A800u | (17 << 5) | 17);
+    emit32(0x0E013C00u | (17 << 5) | 19);
+    e_subi_s(31, 18, 0, 0);
+    e_cset(20, 0, 1);
+    e_subi_s(31, 19, 0, 0);
+    e_cset(21, 1, 1);
+    e_lsl_i(20, 20, 30, 1);
+    e_rrr(A_ORR, 20, 20, 21, 1, 29);
+    e_str(20, 28, OFF_NZCV);
+    emit32(0xD51B4200u | 20);
+    e_movconst(18, 1);
+    e_str(18, 28, OFF_PF);
+    e_movconst(18, 0);
+    e_str(18, 28, OFF_AF);
+    return TX_NEXT;
+}
+
+static int lower_pmovx(struct insn *I, uint64_t next) {
+    int D = I->reg;
+    uint8_t op = I->op;
+    if (hl_x86_x87_known()) hl_x86_x87_drop();
+    int sgn = op < 0x30;
+    int form = op & 0x0f;
+    int src_bytes = (form == 0 || form == 3 || form == 5) ? 8 : (form == 1 || form == 4) ? 4 : 2;
+    int s;
+    if (I->is_mem) {
+        emit_ea(I, next);
+        emit_memory_guard(17, (uint64_t)src_bytes, next - (uint64_t)I->len, X86_SOFT_READ);
+        s = 19;
+        if (src_bytes == 8)
+            hl_x86_emit_vector_load64(19, 17);
+        else if (src_bytes == 4)
+            hl_x86_emit_vector_load32(19, 17);
+        else
+            e_ldr_h(19, 17);
+    } else {
+        s = I->rm_reg;
+    }
+    if (form == 0) {
+        e_xtl(D, s, 0x080000u, sgn);
+    } else if (form == 1) {
+        e_xtl(D, s, 0x080000u, sgn);
+        e_xtl(D, D, 0x100000u, sgn);
+    } else if (form == 2) {
+        e_xtl(D, s, 0x080000u, sgn);
+        e_xtl(D, D, 0x100000u, sgn);
+        e_xtl(D, D, 0x200000u, sgn);
+    } else if (form == 3) {
+        e_xtl(D, s, 0x100000u, sgn);
+    } else if (form == 4) {
+        e_xtl(D, s, 0x100000u, sgn);
+        e_xtl(D, D, 0x200000u, sgn);
+    } else {
+        e_xtl(D, s, 0x200000u, sgn);
+    }
+    return TX_NEXT;
+}
+
 // AES-endgame perf: straight-line hoisting of the two loop-invariant scratch constants the crypto glue
 // re-materializes per instruction: the ZERO round key the AESENC/AESDEC mapping feeds AESE/AESD, and the
 // 0x8f control mask PSHUFB ANDs into its TBL index. openssl's hot loops run 60+ back-to-back aesenc and
@@ -213,28 +300,12 @@ static void e_rev4s(int vd, int vn) {
 // NOSSEOPT=1 disables the hoist (constants re-emitted every op -- the pre-hoist codegen) for A/B.
 // Try to lower a legacy 0F38/0F3A crypto opcode to inline ARM crypto. Returns TX_NEXT if emitted,
 // TX_FALL to defer to the C softmulator (do_sse3b) for the rare ops we don't map (pcmpistri, ...).
-int hl_x86_lower_crypto(struct insn *I, uint64_t next, hl_x86_crypto_state *state) {
+static int lower_primary_crypto(struct insn *I, uint64_t next, hl_x86_crypto_state *state) {
     uint8_t op = I->op;
     int D = I->reg; // dst xmm == src1 (destructive) for AES/PCLMUL
 
     if (I->map3 == 3 && op == 0xDF) { // AESKEYGENASSIST xmm, xmm/m128, imm8
-        if (hl_x86_x87_known()) hl_x86_x87_drop();
-        int s = crypto_rm_vec(I, next);
-        if (!state->zero_ready || !state->optimize) hl_x86_emit_vector3(A_EOR16, 26, 26, 26);
-        state->zero_ready = 1;
-        hl_x86_emit_vector_copy(17, s);
-        emit32(A_AESE | (26 << 5) | 17);
-        crypto_vconst16(16, UINT64_C(0x040B0E010B0E0104), UINT64_C(0x0C0306090306090C));
-        emit32(A_TBL | (16 << 16) | (17 << 5) | 17);
-        hl_x86_emit_vector3(A_EOR16, 16, 16, 16);
-        uint32_t rcon = (uint32_t)((uint64_t)I->imm & UINT64_C(0xff));
-        if (rcon) {
-            e_movz(16, rcon, 0);
-            crypto_ins_g(16, 1, 16, 4);
-            crypto_ins_g(16, 3, 16, 4);
-        }
-        hl_x86_emit_vector3(A_EOR16, D, 17, 16);
-        return TX_NEXT;
+        return lower_aeskeygenassist(I, next, state);
     }
 
     if (I->map3 == 2) { // 0F38
@@ -374,30 +445,7 @@ int hl_x86_lower_crypto(struct insn *I, uint64_t next, hl_x86_crypto_state *stat
             // write cpu->nzcv AND the live ARM NZCV here (and set no g_fl_pending), the immediately
             // following Jcc reads the correct flags off live NZCV, exactly as pcmpistri does.
             if (!state->optimize) return TX_FALL;
-            if (hl_x86_x87_known()) hl_x86_x87_drop();
-            int s = crypto_rm_vec(I, next);
-            // ZF: is (D & s) all-zero?  AND -> v16; UMAXV reduces to the max byte (== 0 iff every bit is 0).
-            hl_x86_emit_vector3(0x4E201C00u, 16, D, s); // AND   v16.16b, D.16b, s.16b   = D & s
-            emit32(0x6E30A800u | (16 << 5) | 16);       // UMAXV b16, v16.16b
-            emit32(0x0E013C00u | (16 << 5) | 18);       // UMOV  w18, v16.b[0]   x18 = max byte of (D & s)
-            // CF: is (s & ~D) all-zero?  BIC v17 = s AND NOT D.
-            hl_x86_emit_vector3(0x4E601C00u, 17, s, D); // BIC   v17.16b, s.16b, D.16b   = s & ~D
-            emit32(0x6E30A800u | (17 << 5) | 17);       // UMAXV b17, v17.16b
-            emit32(0x0E013C00u | (17 << 5) | 19);       // UMOV  w19, v17.b[0]   x19 = max byte of (s & ~D)
-            // ZF = (x18 == 0) -> ARM Z (bit30); stored C (bit29) = NOT x86 CF = (x19 != 0).
-            e_subi_s(31, 18, 0, 0);          // subs wzr, w18, #0
-            e_cset(20, 0, 1);                // x20 = (AND all-zero) = ZF          (EQ)
-            e_subi_s(31, 19, 0, 0);          // subs wzr, w19, #0
-            e_cset(21, 1, 1);                // x21 = (s & ~D nonzero) = NOT CF = stored C   (NE)
-            e_lsl_i(20, 20, 30, 1);          // ZF -> bit30
-            e_rrr(A_ORR, 20, 20, 21, 1, 29); // | (stored C << 29)   (N/V stay 0 -> SF=OF=0)
-            e_str(20, 28, OFF_NZCV);         // spill x86 flag substrate for a later boundary
-            emit32(0xD51B4200u | 20);        // msr nzcv, x20   (live flags for the following Jcc)
-            e_movconst(18, 1);               // PF source byte = 1 (odd popcount) -> x86 PF = 0
-            e_str(18, 28, OFF_PF);
-            e_movconst(18, 0);
-            e_str(18, 28, OFF_AF); // AF = 0
-            return TX_NEXT;
+            return lower_ptest(I, next);
         }
         case 0x00: { // PSHUFB d, s: d[i] = (s[i] & 0x80) ? 0 : d[s[i] & 0x0f]  (byte permute, hi-bit zeroes)
             if (!state->optimize) return TX_FALL;
@@ -437,49 +485,18 @@ int hl_x86_lower_crypto(struct insn *I, uint64_t next, hl_x86_crypto_state *stat
         case 0x34:
         case 0x35: { // PMOVZX (zero-extend)
             if (!state->optimize) return TX_FALL;
-            if (hl_x86_x87_known()) hl_x86_x87_drop();
-            int sgn = op < 0x30;  // 0x2x = signed, 0x3x = unsigned
-            int form = op & 0x0f; // 0=bw 1=bd 2=bq 3=wd 4=wq 5=dq
-            int src_bytes = (form == 0 || form == 3 || form == 5) ? 8 : (form == 1 || form == 4) ? 4 : 2;
-            int s;
-            if (I->is_mem) { // narrow source: load exactly src_bytes to avoid a 16B over-read past the page
-                emit_ea(I, next);
-                emit_memory_guard(17, (uint64_t)src_bytes, next - (uint64_t)I->len, X86_SOFT_READ);
-                s = 19;
-                if (src_bytes == 8)
-                    hl_x86_emit_vector_load64(19, 17);
-                else if (src_bytes == 4)
-                    hl_x86_emit_vector_load32(19, 17);
-                else
-                    e_ldr_h(19, 17);
-            } else
-                s = I->rm_reg;
-            // widen the low half one size step at a time (UXTL/SXTL). Each step consumes the low 64 bits.
-            if (form == 0)
-                e_xtl(D, s, 0x080000u, sgn); // bw: 8B->8H
-            else if (form == 1) {
-                e_xtl(D, s, 0x080000u, sgn);
-                e_xtl(D, D, 0x100000u, sgn);
-            } // bd
-            else if (form == 2) {
-                e_xtl(D, s, 0x080000u, sgn);
-                e_xtl(D, D, 0x100000u, sgn);
-                e_xtl(D, D, 0x200000u, sgn);
-            } // bq
-            else if (form == 3)
-                e_xtl(D, s, 0x100000u, sgn); // wd: 4H->4S
-            else if (form == 4) {
-                e_xtl(D, s, 0x100000u, sgn);
-                e_xtl(D, D, 0x200000u, sgn);
-            } // wq
-            else
-                e_xtl(D, s, 0x200000u, sgn); // dq: 2S->2D
-            return TX_NEXT;
+            return lower_pmovx(I, next);
         }
         default: return TX_FALL;
         }
     }
 
+    return TX_FALL;
+}
+
+static int lower_immediate_crypto(struct insn *I, uint64_t next, hl_x86_crypto_state *state) {
+    uint8_t op = I->op;
+    int D = I->reg;
     if (I->map3 == 3) { // 0F3A
         switch (op) {
         case 0xCC: { // SHA1RNDS4 d, s, imm2: 4 SHA-1 rounds; fn/K by imm2 (see header derivation)
@@ -611,4 +628,9 @@ int hl_x86_lower_crypto(struct insn *I, uint64_t next, hl_x86_crypto_state *stat
         }
     }
     return TX_FALL;
+}
+
+int hl_x86_lower_crypto(struct insn *I, uint64_t next, hl_x86_crypto_state *state) {
+    int result = lower_primary_crypto(I, next, state);
+    return result == TX_NEXT ? result : lower_immediate_crypto(I, next, state);
 }
