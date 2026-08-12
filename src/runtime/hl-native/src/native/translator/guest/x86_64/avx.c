@@ -913,6 +913,86 @@ static enum avx_dispatch_result avx_dispatch_fma(const hl_x86_avx_state *state, 
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
+                                                           struct insn *instruction, uint64_t next) {
+    int op = instruction->op;
+    int immediate = (int)instruction->imm;
+    uint8_t source[64], result[64];
+    if (op >= 0x14 && op <= 0x17) { // vpextrb/w/d/q and vextractps
+        avx_get(c, instruction->reg, source);
+        uint64_t value;
+        int bytes;
+        if (op == 0x14) {
+            bytes = 1;
+            value = source[immediate & 15];
+        } else if (op == 0x15) {
+            uint16_t word;
+            bytes = 2;
+            memcpy(&word, source + 2 * (immediate & 7), 2);
+            value = word;
+        } else if (op == 0x16) {
+            bytes = instruction->vex_w ? 8 : 4;
+            value = 0;
+            memcpy(&value, source + (instruction->vex_w ? 8 * (immediate & 1) : 4 * (immediate & 3)),
+                   (size_t)bytes);
+        } else {
+            uint32_t word;
+            bytes = 4;
+            memcpy(&word, source + 4 * (immediate & 3), 4);
+            value = word;
+        }
+        if (instruction->is_mem) {
+            uint64_t address = avx_ea(state, c, instruction, next, bytes);
+            (void)avx_memory_write(state, address, &value, (size_t)bytes);
+        } else {
+            c->r[instruction->rm_reg] = bytes == 8 ? value : (uint32_t)value;
+        }
+        return AVX_DISPATCH_HANDLED;
+    }
+    if (op >= 0x20 && op <= 0x22) { // vpinsrb, vinsertps, vpinsrd/q
+        avx_get(c, instruction->vvvv, result);
+        if (op == 0x20) {
+            uint8_t value = (uint8_t)c->r[instruction->rm_reg];
+            if (instruction->is_mem)
+                (void)avx_memory_read(state, avx_ea(state, c, instruction, next, 1), &value, 1);
+            result[immediate & 15] = value;
+        } else if (op == 0x22) {
+            int bytes = instruction->vex_w ? 8 : 4;
+            uint64_t value = c->r[instruction->rm_reg];
+            if (instruction->is_mem)
+                (void)avx_memory_read(state, avx_ea(state, c, instruction, next, bytes), &value, (size_t)bytes);
+            memcpy(result + bytes * (immediate & (instruction->vex_w ? 1 : 3)), &value, (size_t)bytes);
+        } else {
+            uint32_t value;
+            if (instruction->is_mem)
+                (void)avx_memory_read(state, avx_ea(state, c, instruction, next, 4), &value, 4);
+            else {
+                avx_get(c, instruction->rm_reg, source);
+                memcpy(&value, source + 4 * ((immediate >> 6) & 3), 4);
+            }
+            memcpy(result + 4 * ((immediate >> 4) & 3), &value, 4);
+            for (int lane = 0; lane < 4; lane++)
+                if (immediate & (1 << lane)) memset(result + 4 * lane, 0, 4);
+        }
+        avx_put(c, instruction->reg, result, 16);
+        return AVX_DISPATCH_HANDLED;
+    }
+    if (op == 0x18 || op == 0x38) { // vinsertf128/vinserti128
+        avx_get(c, instruction->vvvv, result);
+        avx_get_rm(state, c, instruction, next, 16, source);
+        memcpy(result + ((immediate & 1) ? 16 : 0), source, 16);
+        avx_put(c, instruction->reg, result, 32);
+        return AVX_DISPATCH_HANDLED;
+    }
+    if (op == 0x19 || op == 0x39) { // vextractf128/vextracti128
+        avx_get(c, instruction->reg, source);
+        memcpy(result, source + ((immediate & 1) ? 16 : 0), 16);
+        avx_put_rm(state, c, instruction, next, 16, result);
+        return AVX_DISPATCH_HANDLED;
+    }
+    return AVX_DISPATCH_UNMATCHED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2423,6 +2503,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     }
     // ---- map 3 (0F3A) ----
     if (map == 3) {
+        if (avx_dispatch_lane_transfer(state, c, &I, next) == AVX_DISPATCH_HANDLED) goto done;
         int imm = (int)I.imm;
         switch (op) {
         case 0x04: { // vpermilps imm: per-128-lane, dword j <- src.dword[imm[2j+1:2j]] (single src=rm)
@@ -2528,89 +2609,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + 8 * i, &o, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0x14:   // vpextrb
-        case 0x15:   // vpextrw (mem-capable form)
-        case 0x16:   // vpextrd/q
-        case 0x17: { // vextractps -- xmm src = ModRM.reg, gpr/mem dst = ModRM.r/m (128-bit only)
-            avx_get(c, rd, a);
-            uint64_t val;
-            int nb;
-            if (op == 0x14) {
-                nb = 1;
-                val = a[imm & 15];
-            } else if (op == 0x15) {
-                nb = 2;
-                uint16_t w;
-                memcpy(&w, a + 2 * (imm & 7), 2);
-                val = w;
-            } else if (op == 0x16) {
-                nb = I.vex_w ? 8 : 4;
-                val = 0;
-                memcpy(&val, a + (I.vex_w ? 8 * (imm & 1) : 4 * (imm & 3)), (size_t)nb);
-            } else {
-                nb = 4;
-                uint32_t w;
-                memcpy(&w, a + 4 * (imm & 3), 4);
-                val = w;
-            }
-            if (I.is_mem) {
-                uint64_t ad = avx_ea(state, c, &I, next, nb);
-                (void)avx_memory_write(state, ad, &val, (size_t)nb);
-            } else if (nb == 8) {
-                c->r[I.rm_reg] = val;
-            } else {
-                c->r[I.rm_reg] = (uint32_t)val; // zero-extend into GPR
-            }
-            goto done;
-        }
-        case 0x20:   // vpinsrb
-        case 0x21:   // vinsertps
-        case 0x22: { // vpinsrd/q -- dst=reg, src1=vvvv, src2=gpr/mem (r/m); 128-bit only
-            avx_get(c, vv, d);
-            if (op == 0x20) {
-                uint8_t v = (uint8_t)c->r[I.rm_reg];
-                if (I.is_mem) (void)avx_memory_read(state, avx_ea(state, c, &I, next, 1), &v, 1);
-                d[imm & 15] = v;
-            } else if (op == 0x22) {
-                if (I.vex_w) {
-                    uint64_t v = c->r[I.rm_reg];
-                    if (I.is_mem) (void)avx_memory_read(state, avx_ea(state, c, &I, next, 8), &v, 8);
-                    memcpy(d + 8 * (imm & 1), &v, 8);
-                } else {
-                    uint32_t v = (uint32_t)c->r[I.rm_reg];
-                    if (I.is_mem) (void)avx_memory_read(state, avx_ea(state, c, &I, next, 4), &v, 4);
-                    memcpy(d + 4 * (imm & 3), &v, 4);
-                }
-            } else { // vinsertps: select src dword (imm[7:6]), insert at dst lane (imm[5:4]), zero per imm[3:0]
-                uint32_t src;
-                if (I.is_mem)
-                    (void)avx_memory_read(state, avx_ea(state, c, &I, next, 4), &src, 4);
-                else {
-                    avx_get(c, I.rm_reg, b);
-                    memcpy(&src, b + 4 * ((imm >> 6) & 3), 4);
-                }
-                memcpy(d + 4 * ((imm >> 4) & 3), &src, 4);
-                for (int i = 0; i < 4; i++)
-                    if (imm & (1 << i)) memset(d + 4 * i, 0, 4);
-            }
-            avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0x18:   // vinsertf128 (same as vinserti128)
-        case 0x38: { // vinserti128: dst = src1; dst[imm&1 *16] = rm(128)
-            avx_get(c, vv, d);
-            avx_get_rm(state, c, &I, next, 16, b);
-            memcpy(d + ((I.imm & 1) ? 16 : 0), b, 16);
-            avx_put(c, rd, d, 32);
-            goto done;
-        }
-        case 0x19:   // vextractf128 (same as vextracti128)
-        case 0x39: { // vextracti128: rm(128) = src.reg[imm&1]
-            avx_get(c, rd, a);
-            memcpy(d, a + ((I.imm & 1) ? 16 : 0), 16);
-            avx_put_rm(state, c, &I, next, 16, d);
             goto done;
         }
         case 0x00: // vpermq (integer) / vpermpd (fp): imm8 selects 4 qwords across the full 256
