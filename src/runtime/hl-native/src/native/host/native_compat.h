@@ -298,6 +298,62 @@ static inline int kqueue(void) {
     return descriptor;
 }
 
+static inline int hl_native_kevent_wait(int descriptor, struct kevent *events, int event_count,
+                                       const struct timespec *timeout) {
+    struct epoll_event native_events[256];
+    int timeout_ms = -1;
+    if (event_count > 256) event_count = 256;
+    if (timeout != NULL) {
+        int64_t milliseconds = (int64_t)timeout->tv_sec * 1000 + (timeout->tv_nsec + 999999) / 1000000;
+        timeout_ms = milliseconds > INT_MAX ? INT_MAX : (int)milliseconds;
+    }
+    for (;;) {
+        int count = epoll_wait(descriptor, native_events, event_count, timeout_ms);
+        int delivered = 0;
+        if (count < 0) return -1;
+        for (int index = 0; index < count; ++index) {
+            pthread_mutex_lock(&hl_native_klock);
+            hl_native_kregistration *entry = hl_native_ktoken_find(native_events[index].data.u64);
+            if (entry == NULL) {
+                pthread_mutex_unlock(&hl_native_klock);
+                continue;
+            }
+            uint32_t ready = native_events[index].events;
+            if (entry->filter == EVFILT_TIMER) {
+                uint64_t expirations = 0;
+                if (read(entry->wake, &expirations, sizeof(expirations)) != (ssize_t)sizeof(expirations) ||
+                    expirations == 0) {
+                    pthread_mutex_unlock(&hl_native_klock);
+                    continue;
+                }
+                events[delivered] = (struct kevent){(uintptr_t)(entry->target < 0 ? descriptor : entry->target),
+                                                    EVFILT_TIMER, 0, 0, (intptr_t)expirations, entry->udata};
+                delivered++;
+                pthread_mutex_unlock(&hl_native_klock);
+                continue;
+            }
+            int16_t filter = (ready & (EPOLLIN | EPOLLPRI | EPOLLRDHUP)) != 0 ? EVFILT_READ : EVFILT_WRITE;
+            events[delivered] = (struct kevent){
+                (uintptr_t)(entry->target < 0 ? descriptor : entry->target), filter, 0, 0, 0, entry->udata};
+            if ((ready & (EPOLLHUP | EPOLLRDHUP)) != 0) events[delivered].flags |= EV_EOF;
+            if ((ready & EPOLLERR) != 0) events[delivered].flags |= EV_ERROR;
+            if (entry->target < 0) {
+                uint64_t value;
+                ssize_t consumed = read(entry->wake, &value, sizeof(value));
+                if (consumed < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                    events[delivered].flags |= EV_ERROR;
+                    events[delivered].data = errno;
+                }
+                events[delivered].filter = EVFILT_USER;
+            }
+            delivered++;
+            pthread_mutex_unlock(&hl_native_klock);
+        }
+        if (delivered == 0 && count > 0 && timeout == NULL) continue;
+        return delivered;
+    }
+}
+
 static inline int kevent(int descriptor, const struct kevent *changes, int change_count, struct kevent *events,
                          int event_count, const struct timespec *timeout) {
     int index;
@@ -447,76 +503,7 @@ static inline int kevent(int descriptor, const struct kevent *changes, int chang
     }
     pthread_mutex_unlock(&hl_native_klock);
     if (event_count == 0) return 0;
-    {
-        struct epoll_event native_events[256];
-        int timeout_ms = -1;
-        int count;
-        if (event_count > 256) event_count = 256;
-        if (timeout != NULL) {
-            int64_t milliseconds = (int64_t)timeout->tv_sec * 1000 + (timeout->tv_nsec + 999999) / 1000000;
-            timeout_ms = milliseconds > INT_MAX ? INT_MAX : (int)milliseconds;
-        }
-        for (;;) {
-            count = epoll_wait(descriptor, native_events, event_count, timeout_ms);
-            if (count < 0) return -1;
-            int delivered = 0;
-            for (index = 0; index < count; ++index) {
-                pthread_mutex_lock(&hl_native_klock);
-                hl_native_kregistration *entry = hl_native_ktoken_find(native_events[index].data.u64);
-                if (entry == NULL) {
-                    pthread_mutex_unlock(&hl_native_klock);
-                    continue; /* stale readiness raced the last alias close */
-                }
-                uint32_t ready = native_events[index].events;
-                if (entry->filter == EVFILT_TIMER) {
-                    // The underlying timerfd is TFD_NONBLOCK and, when the guest kqueue (a host epoll fd) is
-                    // shared across fork(2), it backs BOTH the parent's and the child's inherited timer fd.
-                    // Level-triggered epoll can therefore report readiness to one waiter after the other has
-                    // already drained the accumulated expirations. A drained read yields EAGAIN / a short
-                    // read (0 expirations) -- Linux's timerfd read() NEVER surfaces a count of 0, so treat
-                    // this as a spurious wake: skip the stale event instead of delivering data=0. The fd is
-                    // now at 0 (level-triggered), so a re-wait below blocks until the next real expiry.
-                    uint64_t expirations = 0;
-                    if (read(entry->wake, &expirations, sizeof(expirations)) != (ssize_t)sizeof(expirations) ||
-                        expirations == 0) {
-                        pthread_mutex_unlock(&hl_native_klock);
-                        continue;
-                    }
-                    events[delivered] = (struct kevent){(uintptr_t)(entry->target < 0 ? descriptor : entry->target),
-                                                        EVFILT_TIMER,
-                                                        0,
-                                                        0,
-                                                        (intptr_t)expirations,
-                                                        entry->udata};
-                    delivered++;
-                    pthread_mutex_unlock(&hl_native_klock);
-                    continue;
-                }
-                int16_t filter = (ready & (EPOLLIN | EPOLLPRI | EPOLLRDHUP)) != 0 ? EVFILT_READ : EVFILT_WRITE;
-                events[delivered] = (struct kevent){
-                    (uintptr_t)(entry->target < 0 ? descriptor : entry->target), filter, 0, 0, 0, entry->udata};
-                if ((ready & (EPOLLHUP | EPOLLRDHUP)) != 0) events[delivered].flags |= EV_EOF;
-                if ((ready & EPOLLERR) != 0) events[delivered].flags |= EV_ERROR;
-                if (entry->target < 0) {
-                    uint64_t value;
-                    ssize_t consumed = read(entry->wake, &value, sizeof(value));
-                    if (consumed < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                        events[delivered].flags |= EV_ERROR;
-                        events[delivered].data = errno;
-                    }
-                    events[delivered].filter = EVFILT_USER;
-                }
-                delivered++;
-                pthread_mutex_unlock(&hl_native_klock);
-            }
-            // A blocking wait (timeout==NULL) that saw only stale-drained timer wakeups must keep waiting for a
-            // real expiration rather than returning 0 events (which the timerfd read path maps to a spurious
-            // EAGAIN on a blocking fd). Any events delivered, a finite/zero timeout, or an idle wakeup (count==0
-            // -> timeout elapsed) all return as-is.
-            if (delivered == 0 && count > 0 && timeout == NULL) continue;
-            return delivered;
-        }
-    }
+    return hl_native_kevent_wait(descriptor, events, event_count, timeout);
 }
 
 #define st_atimespec st_atim

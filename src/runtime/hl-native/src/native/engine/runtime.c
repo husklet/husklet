@@ -455,14 +455,10 @@ static hl_status hl_engine_apply_box(hl_engine *engine, const hl_engine_box_conf
     return HL_STATUS_OK;
 }
 
-static hl_status hl_engine_create_with_options_mode(const hl_engine_config *config, const hl_host_services *host,
-                                                    const hl_options *source_options, uint32_t borrow_options,
-                                                    hl_engine **out_engine) {
-    hl_engine *engine;
-    hl_host_handle *candidate_handles = NULL;
-    hl_status status;
+static hl_status hl_engine_create_validate(const hl_engine_config *config, const hl_host_services *host,
+                                           const hl_options *source_options, uint32_t borrow_options,
+                                           hl_engine **out_engine) {
     if (config == NULL || host == NULL || out_engine == NULL) return HL_STATUS_INVALID_ARGUMENT;
-    *out_engine = NULL;
     if (config->abi != HL_ENGINE_ABI || config->size < sizeof(*config)) return HL_STATUS_ABI_MISMATCH;
     if (config->guest_isa != HL_GUEST_ISA_AARCH64 && config->guest_isa != HL_GUEST_ISA_X86_64)
         return HL_STATUS_INVALID_ARGUMENT;
@@ -491,8 +487,18 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
          (config->main_image_plan->kind != 1 && config->main_image_plan->kind != 2)))
         return HL_STATUS_INVALID_ARGUMENT;
     if (config->fd_binding_count != 0 && config->fd_bindings == NULL) return HL_STATUS_INVALID_ARGUMENT;
-    status = hl_host_services_validate(host, HL_HOST_CAP_MEMORY | HL_HOST_CAP_CLOCK | HL_HOST_CAP_SYNC);
+    return hl_host_services_validate(host, HL_HOST_CAP_MEMORY | HL_HOST_CAP_CLOCK | HL_HOST_CAP_SYNC);
+}
+
+static hl_status hl_engine_create_with_options_mode(const hl_engine_config *config, const hl_host_services *host,
+                                                    const hl_options *source_options, uint32_t borrow_options,
+                                                    hl_engine **out_engine) {
+    hl_engine *engine;
+    hl_host_handle *candidate_handles = NULL;
+    hl_status status;
+    status = hl_engine_create_validate(config, host, source_options, borrow_options, out_engine);
     if (status != HL_STATUS_OK) return status;
+    *out_engine = NULL;
     engine = calloc(1, sizeof(*engine));
     if (engine == NULL) return HL_STATUS_OUT_OF_MEMORY;
     memcpy(&engine->config, config, sizeof(*config));
