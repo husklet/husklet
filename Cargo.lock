@@ -1034,14 +1034,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hl-checkpoint"
-version = "0.1.0"
-dependencies = [
- "hl-log",
- "ring",
-]
-
-[[package]]
 name = "hl-client"
 version = "0.1.0"
 dependencies = [
@@ -1124,13 +1116,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hl-descriptor"
-version = "0.1.0"
-dependencies = [
- "hl-log",
-]
-
-[[package]]
 name = "hl-design"
 version = "0.1.0"
 dependencies = [
@@ -1160,30 +1145,12 @@ dependencies = [
 name = "hl-engine"
 version = "0.1.0"
 dependencies = [
- "hl-descriptor",
- "hl-event",
- "hl-fs",
- "hl-isa",
- "hl-linux",
- "hl-loader",
  "hl-log",
  "hl-native",
- "hl-network",
- "hl-provider",
- "hl-runtime",
  "libc",
  "ring",
  "tempfile",
  "zeroize",
-]
-
-[[package]]
-name = "hl-event"
-version = "0.1.0"
-dependencies = [
- "hl-descriptor",
- "hl-log",
- "hl-time",
 ]
 
 [[package]]
@@ -1226,54 +1193,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "hl-ipc"
-version = "0.1.0"
-dependencies = [
- "hl-descriptor",
- "hl-log",
- "hl-memory",
- "hl-sync",
- "hl-time",
-]
-
-[[package]]
-name = "hl-isa"
-version = "0.1.0"
-
-[[package]]
-name = "hl-linux"
-version = "0.1.0"
-dependencies = [
- "hl-descriptor",
- "hl-event",
- "hl-isa",
- "hl-log",
- "hl-memory",
- "hl-network",
- "hl-sync",
- "hl-task",
- "hl-time",
- "hl-vfs",
-]
-
-[[package]]
-name = "hl-loader"
-version = "0.1.0"
-dependencies = [
- "hl-isa",
-]
-
-[[package]]
 name = "hl-log"
 version = "0.1.0"
-
-[[package]]
-name = "hl-memory"
-version = "0.1.0"
-dependencies = [
- "hl-isa",
- "hl-log",
-]
 
 [[package]]
 name = "hl-native"
@@ -1284,87 +1205,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "hl-network"
-version = "0.1.0"
-dependencies = [
- "hl-descriptor",
- "hl-log",
- "hl-sync",
-]
-
-[[package]]
 name = "hl-process"
 version = "0.1.0"
 dependencies = [
  "libc",
  "tempfile",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "hl-provider"
-version = "0.1.0"
-dependencies = [
- "hl-descriptor",
-]
-
-[[package]]
-name = "hl-runtime"
-version = "0.1.0"
-dependencies = [
- "hl-checkpoint",
- "hl-descriptor",
- "hl-event",
- "hl-ipc",
- "hl-isa",
- "hl-linux",
- "hl-loader",
- "hl-log",
- "hl-memory",
- "hl-network",
- "hl-provider",
- "hl-sync",
- "hl-task",
- "hl-terminal",
- "hl-time",
- "hl-vfs",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "hl-sync"
-version = "0.1.0"
-dependencies = [
- "hl-log",
- "hl-time",
-]
-
-[[package]]
-name = "hl-task"
-version = "0.1.0"
-dependencies = [
- "hl-log",
-]
-
-[[package]]
-name = "hl-terminal"
-version = "0.1.0"
-dependencies = [
- "hl-descriptor",
- "hl-log",
-]
-
-[[package]]
-name = "hl-time"
-version = "0.1.0"
-
-[[package]]
-name = "hl-vfs"
-version = "0.1.0"
-dependencies = [
- "hl-descriptor",
- "hl-log",
 ]
 
 [[package]]
@@ -2813,17 +2659,12 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "fs2",
- "hl-checkpoint",
  "hl-container",
- "hl-descriptor",
  "hl-design",
  "hl-engine",
  "hl-images",
  "hl-log",
- "hl-network",
  "hl-process",
- "hl-provider",
- "hl-runtime",
  "libc",
  "nix",
  "reflink-copy",
