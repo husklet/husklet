@@ -679,7 +679,6 @@ static void sentry_native_close(int descriptor) {
     // epoll/OFD cleanup may inspect or re-home registrations; closing first lets that work reuse this number
     // and leaves the replacement open when the reset returns.
     sentry_fd_trace(0, 3, -1, descriptor, 0, 0);
-    fd_reset_emul(descriptor);
     int result = close(descriptor);
     int error = errno;
     // A sentry table owns every native descriptor passed here exactly once.  EBADF or another hard failure
@@ -850,6 +849,7 @@ static int table_clone_locked(const struct sentry_proc *source) {
             return -1;
         }
         copy->real[v] = duplicate;
+        copy->borrowed[v] = 0;
         hl_native_kqueue_duplicate(source->real[v], duplicate);
         if (duplicate < HL_NFD && source->real[v] >= 0 && source->real[v] < HL_NFD) {
             strcpy(g_fdpath[duplicate], g_fdpath[source->real[v]]);
