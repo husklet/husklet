@@ -5,7 +5,7 @@ use syn::{Expr, ExprCall, ExprMacro, FnArg, ItemFn, ItemMod, PathArguments, Type
 use crate::{
     Result,
     model::{Finding, Related, Review, ReviewState, Severity},
-    rule::{Rule, references::References},
+    rule::{Rule, support::references::References},
     source::{Workspace, platform_gated, requires_test},
 };
 
@@ -26,7 +26,7 @@ impl Rule for FreeFunction {
         let owned = owned_types(workspace);
         let mut candidates = Vec::new();
         let mut definitions = HashMap::<String, usize>::new();
-        let mut references = HashMap::<String, Vec<crate::rule::references::Reference>>::new();
+        let mut references = HashMap::<String, Vec<crate::rule::support::references::Reference>>::new();
         let mut gated = HashSet::new();
         for source in workspace.production() {
             let mut functions = Functions {
@@ -86,7 +86,7 @@ impl Candidate {
         self,
         rule: &'static str,
         source: &crate::source::Source,
-        usages: impl Iterator<Item = &'a crate::rule::references::Reference>,
+        usages: impl Iterator<Item = &'a crate::rule::support::references::Reference>,
         ambiguous: bool,
     ) -> Finding {
         let mut finding = Finding::error(rule, &self.name, source.location(self.span));
@@ -169,7 +169,7 @@ impl<'ast> Visit<'ast> for Functions<'_> {
                 name: function.sig.ident.to_string(),
                 arguments: function.sig.inputs.len(),
                 span,
-                module: crate::rule::references::module(self.path, &self.nesting),
+                module: crate::rule::support::references::module(self.path, &self.nesting),
                 dependencies: dependencies.names.into_iter().collect(),
                 classification: classification(function),
                 platform: platform_gated(&function.attrs),

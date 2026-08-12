@@ -170,7 +170,49 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 37);
+        let expected_ids = [
+            "dependency-direction",
+            "runtime-tool-ownership",
+            "unsafe-boundary",
+            "unclassified-free-function",
+            "duplicate-entity-base",
+            "boolean-state-cluster",
+            "broad-trait-responsibilities",
+            "environment-variable-access",
+            "repository-escape",
+            "manual-cli-dispatch",
+            "platform-command-boundary",
+            "ignored-fallible-result",
+            "async-blocking-operation",
+            "struct-noun-naming",
+            "receiver-name-repetition",
+            "gui-toolkit-type-leakage",
+            "god-object-growth",
+            "redundant-accessor",
+            "wire-domain-model-duplication",
+            "maximum-nesting",
+            "file-length",
+            "file-name-density",
+            "singular-test-file",
+            "flat-prefix-density",
+            "flat-role-density",
+            "path-module-flattening",
+            "test-only-source-directory",
+            "sibling-test-dependency",
+            "test-suite-kebab-path",
+            "integration-test-candidate",
+            "folder-noun",
+            "redundant-module-prefix",
+            "string-backed-finite-state",
+            "catch-all-module-name",
+            "empty-directory",
+            "single-file-directory",
+            "ceremonial-structure",
+        ];
+        assert_eq!(
+            summaries.iter().map(|summary| summary.rule).collect::<Vec<_>>(),
+            expected_ids
+        );
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "maximum-nesting");

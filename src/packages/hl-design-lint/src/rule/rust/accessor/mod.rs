@@ -13,7 +13,7 @@ use crate::{
 #[path = "test.rs"]
 mod tests;
 
-use super::{Rule, syntax::type_name};
+use crate::rule::{Rule, support::syntax::type_name};
 
 /// Detects accessors that duplicate access callers already have.
 pub struct Bloat;

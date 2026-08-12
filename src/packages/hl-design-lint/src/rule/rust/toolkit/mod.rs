@@ -12,7 +12,7 @@ use crate::{
     source::{Source, Workspace},
 };
 
-use super::Rule;
+use crate::rule::Rule;
 
 const TOOLKITS: &[&str] = &["gtk", "gdk", "glib", "vte4"];
 

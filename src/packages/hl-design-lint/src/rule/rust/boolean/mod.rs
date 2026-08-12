@@ -8,7 +8,7 @@ use syn::{
 use crate::{
     Result,
     model::{Finding, Related, Review, Severity},
-    rule::{Rule, syntax::type_name},
+    rule::{Rule, support::syntax::type_name},
     source::{Source, Workspace, requires_test},
 };
 

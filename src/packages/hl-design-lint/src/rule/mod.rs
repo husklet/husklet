@@ -4,75 +4,22 @@ use crate::{
     source::Workspace,
 };
 
-mod accessor;
-mod arguments;
-mod blocking;
-mod boolean;
-mod boundary;
 mod c;
-mod catchall;
-mod ceremony;
-mod command;
-mod contract;
-mod dependency;
-mod duplicate;
-mod empty;
-mod environment;
-mod escape;
-mod folder;
-mod function;
-mod length;
-mod model;
-mod naming;
-mod nesting;
-mod object;
-mod ownership;
-mod placement;
-mod receiver;
-mod references;
-mod result;
-mod role;
-mod safety;
-mod shape;
-mod state;
-mod suite;
-mod suite_path;
-mod syntax;
-mod toolkit;
+mod repository;
+mod rust;
+mod support;
 
-pub use accessor::Bloat as AccessorBloat;
-pub use arguments::ManualDispatch;
-pub use blocking::AsyncBlocking;
-pub use boolean::State as BooleanState;
-pub use boundary::PathModules;
 pub use c::{CallPolicy as CCallPolicy, Policy as CPolicy, Structure as CStructure};
-pub use catchall::CatchAllModule;
-pub use ceremony::CeremonialStructure;
-pub use command::PlatformCommand;
-pub use contract::BroadTrait;
-pub use dependency::Direction as DependencyDirection;
-pub use duplicate::Entity as DuplicateEntity;
-pub use empty::Directory as EmptyDirectory;
-pub use environment::Access as EnvironmentAccess;
-pub use escape::Repository as RepositoryEscape;
-pub use folder::SingleFileDirectory;
-pub use function::FreeFunction;
-pub use length::FileLength;
-pub use model::Duplication as ModelDuplication;
-pub use naming::StructNaming;
-pub use nesting::MaximumNesting;
-pub use object::GodObject;
-pub use ownership::RuntimeTool;
-pub use placement::IntegrationCandidate;
-pub use receiver::Repetition as ReceiverRepetition;
-pub use result::IgnoredResult;
-pub use role::Suffix as SuffixRole;
-pub use safety::Boundary as UnsafeBoundary;
-pub use shape::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, TestName};
-pub use state::FiniteStateString;
-pub use suite::{Dependency as TestDependency, Directory as TestDirectory};
-pub use suite_path::KebabPath as TestSuiteKebabPath;
-pub use toolkit::GuiToolkitLeakage;
+pub use repository::{
+    DependencyDirection, EmptyDirectory, FileLength, FileName, FolderNoun, ModulePrefix, PrefixDirectory,
+    RepositoryEscape, RuntimeTool, SingleFileDirectory, TestDependency, TestDirectory, TestName, TestSuiteKebabPath,
+};
+pub use rust::{
+    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, DuplicateEntity,
+    EnvironmentAccess, FiniteStateString, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
+    IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, PathModules, PlatformCommand,
+    ReceiverRepetition, StructNaming, SuffixRole, UnsafeBoundary,
+};
 
 /// One independently executable design check.
 pub trait Rule {
@@ -112,5 +59,29 @@ impl Registry {
 impl Default for Registry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeSet, fs, path::Path};
+
+    #[test]
+    fn rule_tree_has_only_language_repository_and_support_domains() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/rule");
+        let entries = fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            entries,
+            BTreeSet::from([
+                "c".into(),
+                "mod.rs".into(),
+                "repository".into(),
+                "rust".into(),
+                "support".into()
+            ])
+        );
     }
 }

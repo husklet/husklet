@@ -40,8 +40,8 @@ fn is_required_structure(directory: &std::path::Path) -> bool {
             .parent()
             .zip(name)
             .is_some_and(|(parent, name)| parent.join(format!("{name}.rs")).is_file());
-    let fixture_boundary = matches!(name, Some("expected" | "golden"))
-        && directory.components().any(|part| part.as_os_str() == "tests");
+    let fixture_boundary =
+        matches!(name, Some("expected" | "golden")) && directory.components().any(|part| part.as_os_str() == "tests");
     cargo_package_source || cargo_target || rust_companion || fixture_boundary
 }
 

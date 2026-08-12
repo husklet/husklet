@@ -6,7 +6,7 @@ use crate::{
     source::{Source, Workspace},
 };
 
-use super::{Rule, syntax::type_name};
+use crate::rule::{Rule, support::syntax::type_name};
 
 /// Detects method names that unnecessarily repeat their receiver namespace.
 pub struct Repetition;

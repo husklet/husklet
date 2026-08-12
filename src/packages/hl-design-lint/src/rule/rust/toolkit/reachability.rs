@@ -5,7 +5,7 @@ use std::{
 
 use syn::{Item, ItemImpl, UseTree, Visibility};
 
-use crate::{rule::syntax::type_name, source::Source};
+use crate::{rule::support::syntax::type_name, source::Source};
 
 pub(super) fn public_files(sources: &[&Source]) -> BTreeSet<PathBuf> {
     let mut public = sources

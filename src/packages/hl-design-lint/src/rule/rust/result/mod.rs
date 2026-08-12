@@ -5,7 +5,7 @@ use syn::{Expr, ImplItemFn, ItemFn, Pat, ReturnType, Stmt, Type, spanned::Spanne
 use crate::{
     Result,
     model::{Finding, Location, Related, Severity},
-    rule::{Rule, syntax::type_name},
+    rule::{Rule, support::syntax::type_name},
     source::{Source, Workspace, requires_test},
 };
 
