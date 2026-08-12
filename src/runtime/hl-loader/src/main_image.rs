@@ -27,6 +27,84 @@ pub struct MainImageInspector {
     limits: ImageLimits,
 }
 
+struct ProgramScan {
+    first: u64,
+    last: u64,
+    interpreter: Option<Vec<u8>>,
+    loads: u16,
+    executable: Vec<(u64, u64)>,
+}
+
+impl ProgramScan {
+    const fn new() -> Self {
+        Self {
+            first: u64::MAX,
+            last: 0,
+            interpreter: None,
+            loads: 0,
+            executable: Vec::new(),
+        }
+    }
+
+    fn apply(
+        &mut self,
+        program: ProgramHeader,
+        source: &impl ImageReadAt,
+        length: u64,
+        limits: ImageLimits,
+    ) -> Result<(), MainImageInspectError> {
+        match program.kind {
+            1 => self.load(program, length, limits),
+            3 => self.interpreter(program, source, limits),
+            _ => Ok(()),
+        }
+    }
+
+    fn load(&mut self, program: ProgramHeader, length: u64, limits: ImageLimits) -> Result<(), MainImageInspectError> {
+        self.loads = self
+            .loads
+            .checked_add(1)
+            .ok_or(MainImageInspectError::Inspect(InspectError::TooManyLoadSegments))?;
+        if self.loads > limits.max_load_segments {
+            return Err(MainImageInspectError::Inspect(InspectError::TooManyLoadSegments));
+        }
+        program.validate_load(length).map_err(MainImageInspectError::Inspect)?;
+        let address = program.virtual_address;
+        let end = address
+            .checked_add(program.memory_size)
+            .ok_or(MainImageInspectError::Inspect(InspectError::AddressOverflow))?;
+        self.first = self.first.min(address);
+        self.last = self.last.max(end);
+        if program.flags & 1 != 0 {
+            self.executable.push((address, end));
+        }
+        Ok(())
+    }
+
+    fn interpreter(
+        &mut self,
+        program: ProgramHeader,
+        source: &impl ImageReadAt,
+        limits: ImageLimits,
+    ) -> Result<(), MainImageInspectError> {
+        if self.interpreter.is_some() {
+            return Err(MainImageInspectError::Inspect(InspectError::MultipleInterpreters));
+        }
+        let size = usize::try_from(program.file_size)
+            .map_err(|_| MainImageInspectError::Inspect(InspectError::InterpreterTooLong))?;
+        let mut path = vec![0; size];
+        source
+            .read_exact_at(program.offset, &mut path)
+            .map_err(|()| MainImageInspectError::Read)?;
+        program
+            .validate_interpreter(&path, limits.max_interpreter_bytes)
+            .map_err(MainImageInspectError::Inspect)?;
+        path.pop();
+        self.interpreter = Some(path);
+        Ok(())
+    }
+}
+
 impl MainImageInspector {
     #[must_use]
     pub const fn new(architecture: GuestArchitecture, limits: ImageLimits) -> Self {
@@ -53,11 +131,7 @@ impl MainImageInspector {
         let table = parsed.headers.source().offset();
         let entry_size = parsed.headers.entry_size();
         let entries = parsed.headers.entry_count();
-        let mut first = u64::MAX;
-        let mut last = 0_u64;
-        let mut interpreter = None;
-        let mut loads = 0_u16;
-        let mut executable = Vec::new();
+        let mut scan = ProgramScan::new();
         for index in 0..entries {
             let offset = table
                 .checked_add(u64::from(index) * u64::from(entry_size))
@@ -67,46 +141,9 @@ impl MainImageInspector {
                 .read_exact_at(offset, &mut entry)
                 .map_err(|()| MainImageInspectError::Read)?;
             let program = ProgramHeader::parse(&entry).map_err(MainImageInspectError::Inspect)?;
-            match program.kind {
-                1 => {
-                    loads = loads
-                        .checked_add(1)
-                        .ok_or(MainImageInspectError::Inspect(InspectError::TooManyLoadSegments))?;
-                    if loads > self.limits.max_load_segments {
-                        return Err(MainImageInspectError::Inspect(InspectError::TooManyLoadSegments));
-                    }
-                    program.validate_load(length).map_err(MainImageInspectError::Inspect)?;
-                    let address = program.virtual_address;
-                    let end = address
-                        .checked_add(program.memory_size)
-                        .ok_or(MainImageInspectError::Inspect(InspectError::AddressOverflow))?;
-                    first = first.min(address);
-                    last = last.max(end);
-                    if program.flags & 1 != 0 {
-                        executable.push((address, end));
-                    }
-                }
-                3 => {
-                    if interpreter.is_some() {
-                        return Err(MainImageInspectError::Inspect(InspectError::MultipleInterpreters));
-                    }
-                    let offset = program.offset;
-                    let size = usize::try_from(program.file_size)
-                        .map_err(|_| MainImageInspectError::Inspect(InspectError::InterpreterTooLong))?;
-                    let mut path = vec![0; size];
-                    source
-                        .read_exact_at(offset, &mut path)
-                        .map_err(|()| MainImageInspectError::Read)?;
-                    program
-                        .validate_interpreter(&path, self.limits.max_interpreter_bytes)
-                        .map_err(MainImageInspectError::Inspect)?;
-                    path.pop();
-                    interpreter = Some(path);
-                }
-                _ => {}
-            }
+            scan.apply(program, source, length, self.limits)?;
         }
-        if first == u64::MAX {
+        if scan.first == u64::MAX {
             return Err(MainImageInspectError::Inspect(InspectError::MissingLoadSegment));
         }
         if !parsed
@@ -115,7 +152,8 @@ impl MainImageInspector {
         {
             return Err(MainImageInspectError::Inspect(InspectError::MisalignedEntry));
         }
-        if !executable
+        if !scan
+            .executable
             .iter()
             .any(|&(start, end)| parsed.entry >= start && parsed.entry < end)
         {
@@ -123,8 +161,9 @@ impl MainImageInspector {
                 InspectError::EntryOutsideExecutableSegment,
             ));
         }
-        let link_start = first & !0xfff;
-        let span = last
+        let link_start = scan.first & !0xfff;
+        let span = scan
+            .last
             .checked_sub(link_start)
             .and_then(|value| value.checked_add(0xffff))
             .ok_or(MainImageInspectError::Inspect(InspectError::AddressOverflow))?
@@ -140,7 +179,7 @@ impl MainImageInspector {
             kind: parsed.kind,
             link_start,
             link_end,
-            interpreter,
+            interpreter: scan.interpreter,
         })
     }
 }
