@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use syn::{Expr, GenericArgument, Item, ItemFn, PathArguments, ReturnType, Type};
+use syn::{Expr, GenericArgument, Item, ItemFn, PathArguments, ReturnType, Type, visit::Visit};
 
 use crate::{
     Result,
@@ -93,7 +93,10 @@ fn inspect_function(
     let Some(owner) = returned_owner(&function.sig.output) else {
         return;
     };
-    if !declared.contains(&owner) || !constructs(&function.block, &owner) {
+    if !declared.contains(&owner)
+        || !constructs(&function.block, &owner)
+        || constructs_other_type(&function.block, &owner, declared)
+    {
         return;
     }
 
@@ -103,6 +106,58 @@ fn inspect_function(
         format!("free function `{name}` constructs and returns `{owner}`, so `{owner}` is its natural owner");
     finding.help = format!("move it into `impl {owner}` and call it as `{owner}::{name}(...)`");
     findings.push(finding);
+}
+
+fn constructs_other_type(block: &syn::Block, owner: &str, declared: &BTreeSet<String>) -> bool {
+    let mut constructions = Constructions {
+        owner,
+        declared,
+        other: false,
+    };
+    // The terminal expression is the owner evidence already checked above. Only preceding work can
+    // turn the function into multi-type orchestration.
+    for statement in block.stmts.iter().take(block.stmts.len().saturating_sub(1)) {
+        constructions.visit_stmt(statement);
+    }
+    constructions.other
+}
+
+struct Constructions<'a> {
+    owner: &'a str,
+    declared: &'a BTreeSet<String>,
+    other: bool,
+}
+
+impl Constructions<'_> {
+    fn record(&mut self, path: &syn::Path) {
+        if let Some(name) = path.segments.last().map(|segment| segment.ident.to_string())
+            && name != self.owner
+            && self.declared.contains(&name)
+        {
+            self.other = true;
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for Constructions<'_> {
+    fn visit_expr_struct(&mut self, expression: &'ast syn::ExprStruct) {
+        self.record(&expression.path);
+        syn::visit::visit_expr_struct(self, expression);
+    }
+
+    fn visit_expr_call(&mut self, expression: &'ast syn::ExprCall) {
+        if let Expr::Path(function) = expression.func.as_ref() {
+            self.record(&function.path);
+        }
+        syn::visit::visit_expr_call(self, expression);
+    }
+
+    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+        if expression.path.segments.len() == 1 {
+            self.record(&expression.path);
+        }
+        syn::visit::visit_expr_path(self, expression);
+    }
 }
 
 fn returned_owner(output: &ReturnType) -> Option<String> {

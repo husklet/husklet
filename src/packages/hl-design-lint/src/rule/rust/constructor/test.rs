@@ -76,12 +76,14 @@ mod other { pub(super) fn make() -> super::Local { super::Local } }
 impl From<usize> for Local { fn from(_: usize) -> Self { Self } }
 "#,
     );
+    // The outer forwarding and multi-type orchestration are intentionally conservative; the
+    // nested function that actually constructs `Local` is the only detached constructor.
     assert_eq!(
         values
             .iter()
             .map(|finding| finding.subject.as_str())
             .collect::<Vec<_>>(),
-        ["orchestrated", "make"]
+        ["make"]
     );
 }
 
