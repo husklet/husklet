@@ -68,6 +68,7 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     let text = std::str::from_utf8(&output.stdout)?;
     let mut phases = BTreeMap::new();
     let mut canonical = Vec::new();
+    let mut metadata_seen = false;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("PHASE ") {
             let mut words = rest.split_ascii_whitespace();
@@ -98,7 +99,17 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
             }
             canonical.push(format!("PHASE {name} us=<time> ok={ok}"));
         } else if line.starts_with("META ") {
+            if metadata_seen {
+                return Err("duplicate benchmark metadata".into());
+            }
+            metadata_seen = true;
             canonical.push(line.to_owned());
+        } else if let Some(metadata) = counter_metadata(line) {
+            if metadata_seen {
+                return Err("duplicate benchmark metadata".into());
+            }
+            metadata_seen = true;
+            canonical.push(metadata?);
         } else {
             return Err(format!("unaccounted benchmark output {line:?}").into());
         }
@@ -113,6 +124,23 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     }
     let identity = FramedIdentity::of(canonical.join("\n").as_bytes());
     Ok((phases, identity))
+}
+
+fn counter_metadata(line: &str) -> Option<Result<String, Error>> {
+    let rest = line.strip_prefix("cntfrq=")?;
+    let Some((frequency, divisor)) = rest.split_once(" divisor=") else {
+        return Some(Err("malformed counter-frequency metadata".into()));
+    };
+    Some(
+        frequency
+            .parse::<u64>()
+            .and_then(|_| {
+                divisor
+                    .parse::<u32>()
+                    .map(|_| format!("META cntfrq={frequency} divisor={divisor}"))
+            })
+            .map_err(|_| "malformed counter-frequency metadata".into()),
+    )
 }
 
 fn bounded_output(command: &mut Command, timeout: Duration) -> Result<std::process::Output, Error> {
