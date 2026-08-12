@@ -488,77 +488,8 @@ fn display_attempt(id: &str, attempt: Option<u16>) -> String {
     attempt.map_or_else(|| id.to_owned(), |ordinal| format!("{id}#attempt-{ordinal}"))
 }
 
-pub fn oracle(options: OracleOptions) -> Result<(), Error> {
-    let apps = apps(&options.runtime)?;
-    validate_case_ids(&apps)?;
-    if let Some(selected) = options.runtime.selection.case.as_deref()
-        && !apps.iter().any(|app| app.cases.iter().any(|case| case.id == selected))
-    {
-        return Err(format!("no runtime case exactly matched --case {selected}").into());
-    }
-    let mut eligible = false;
-    for app in apps {
-        for target in options.runtime.selection.targets() {
-            if !app.supports(target) {
-                continue;
-            }
-            let mut cases = app.cases_for(target);
-            if !cases.any(|case| {
-                options
-                    .runtime
-                    .selection
-                    .case
-                    .as_deref()
-                    .is_none_or(|selected| case.id == selected)
-            }) {
-                continue;
-            }
-            eligible = true;
-            app.oracle(target, options.update, options.runtime.selection.case.as_deref())?;
-        }
-    }
-    if eligible {
-        Ok(())
-    } else {
-        Err("no oracle cases support the selected target(s)".into())
-    }
-}
-
-fn validate_case_ids(apps: &[App]) -> Result<(), Error> {
-    let mut ids = std::collections::BTreeSet::new();
-    for case in apps.iter().flat_map(|app| &app.cases) {
-        if !ids.insert(&case.id) {
-            return Err(format!("runtime case ID is duplicated: {}", case.id).into());
-        }
-    }
-    Ok(())
-}
-
-fn apps(options: &Options) -> Result<Vec<App>, Error> {
-    let root = workspace()?.join("tests/runtime");
-    let mut directories = std::fs::read_dir(&root)?
-        .map(|entry| entry.map(|value| value.path()))
-        .collect::<Result<Vec<_>, _>>()?;
-    directories.sort();
-    let mut result = Vec::new();
-    for directory in directories.into_iter().filter(|value| value.is_dir()) {
-        let name = directory
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        if options.app.as_deref().is_some_and(|selected| selected != name) {
-            continue;
-        }
-        let definition = directory.join("test.yaml");
-        if definition.is_file() {
-            result.push(App::load(&directory, &definition)?);
-        }
-    }
-    if result.is_empty() {
-        return Err(format!("no runtime apps matched under {}", root.display()).into());
-    }
-    Ok(result)
-}
+mod oracle;
+pub(crate) use oracle::{OracleOptions, oracle};
 
 pub(super) fn workspace() -> Result<PathBuf, Error> {
     let mut path = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -590,57 +521,5 @@ pub(crate) struct Options {
     engine_profile: profile::Requested,
 }
 
-#[derive(Args)]
-pub(crate) struct OracleOptions {
-    /// Replace checked golden output with oracle output.
-    #[arg(long, conflicts_with = "check")]
-    update: bool,
-    /// Check oracle output against the golden (the default).
-    #[arg(long)]
-    check: bool,
-    #[command(flatten)]
-    runtime: Options,
-}
-
 #[cfg(test)]
-mod tests {
-    use super::{WorkKey, display_attempt, ledger, unattempted};
-    use crate::journal::Attempt;
-    use crate::suite::Target;
-
-    #[test]
-    fn an_abort_records_every_unreached_case_rather_than_dropping_it() {
-        let key = |id: &str| WorkKey {
-            id: id.to_owned(),
-            target: Target::Arm64,
-        };
-        let keys = std::collections::BTreeSet::from([key("runtime/a"), key("runtime/b")]);
-        let directory = tempfile::tempdir().unwrap();
-        let opened = ledger::Ledger::open(&directory.path().join("results.tsv"), "stamp", &keys, false).unwrap();
-        opened
-            .ledger
-            .record(ledger::Row {
-                attempt: Attempt {
-                    key: key("runtime/a"),
-                    status: ledger::PASS,
-                    elapsed_ms: 1,
-                },
-                host_load: "0.10/8".to_owned(),
-                diagnostic: String::new(),
-            })
-            .unwrap();
-        let rows = unattempted(&opened.ledger, Some(&"row limit".into())).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].attempt.key.id, "runtime/b");
-        assert_eq!(rows[0].attempt.status, ledger::NOT_RUN);
-        assert!(rows[0].diagnostic.contains("row limit"), "{}", rows[0].diagnostic);
-    }
-
-    #[test]
-    fn attempt_display_does_not_mutate_the_case_identity() {
-        let id = String::from("runtime/soak");
-        assert_eq!(display_attempt(&id, None), "runtime/soak");
-        assert_eq!(display_attempt(&id, Some(7)), "runtime/soak#attempt-7");
-        assert_eq!(id, "runtime/soak");
-    }
-}
+mod test;
