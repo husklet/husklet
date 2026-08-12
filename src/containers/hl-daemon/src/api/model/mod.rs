@@ -35,7 +35,7 @@ pub use image::{
     ImagePrune, ImageSummary, InspectImage, ProgressDetail, PullProgress, PushAux, PushProgress, Search,
 };
 pub use inspect::{
-    ContainerConfig, ContainerState, EndpointSettings, HealthLog, HealthState, InspectContainer, InspectHostConfig,
+    ContainerConfig, ContainerState, EndpointSettings, HealthLog, HealthState, HostInspection, InspectContainer,
     MountPoint, NetworkSettings,
 };
 #[cfg(feature = "runtime")]

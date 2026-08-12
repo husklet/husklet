@@ -22,7 +22,7 @@ pub struct InspectContainer {
     pub state: ContainerState,
     pub restart_count: i64,
     pub config: ContainerConfig,
-    pub host_config: InspectHostConfig,
+    pub host_config: HostInspection,
     pub network_settings: NetworkSettings,
 }
 
@@ -62,7 +62,7 @@ pub struct ContainerConfig {
 /// Docker inspection view of persisted host-side container settings.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct InspectHostConfig {
+pub struct HostInspection {
     #[serde(default)]
     pub memory: i64,
     #[serde(default)]
@@ -253,7 +253,7 @@ impl From<hl_container::Container> for InspectContainer {
                 stop_signal: Signal::from(value.spec.stop_signal).to_string(),
                 stop_timeout: i64::try_from(value.spec.stop_timeout_seconds).unwrap_or(i64::MAX),
             },
-            host_config: InspectHostConfig {
+            host_config: HostInspection {
                 memory: i64::try_from(value.spec.resources.memory_bytes).unwrap_or(i64::MAX),
                 nano_cpus: i64::from(value.spec.resources.cpu_count).saturating_mul(1_000_000_000),
                 pids_limit: (value.spec.resources.process_count != 0)

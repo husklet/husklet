@@ -48,7 +48,7 @@ The Rust ownership mapping is therefore:
 | token bounds and durable resolver policy | `hl-container::Resolver` |
 | create-time transfer into persisted state | `hl-daemon::HostSettings` |
 | atomic identity-file generation and reuse | `hl-container::Identity` |
-| inspect projection | `hl-daemon::api::model::InspectHostConfig` |
+| inspect projection | `hl-daemon::api::model::HostInspection` |
 | built-in and ordinary DNS socket execution | `hl-runtime` network path |
 
 The implementation deliberately does not add an application-specific resolver
@@ -62,4 +62,3 @@ branch or teach the engine about Docker request fields.
 3. A live Docker-surface create/start/exec check that reads `/etc/resolv.conf` and
    confirms the ordered nameserver, search, and option records.
 4. The repository dependency/design lint for the changed packages.
-
