@@ -92,6 +92,10 @@ gate-compat:
 	$(NIX_DEV) bash -euc '\
 	  cargo build --release -p engine -p testing --bins --locked --offline; \
 	  export HL_TEST_ENGINE_APP_BIN_DIR="$(CURDIR)/target/release"; \
+	  export HL_COMPAT_ARM64_CC=/usr/bin/aarch64-linux-gnu-gcc; \
+	  export HL_COMPAT_AMD64_CC=/usr/bin/x86_64-linux-gnu-gcc; \
+	  test -x "$$HL_COMPAT_ARM64_CC"; \
+	  test -x "$$HL_COMPAT_AMD64_CC"; \
 	  for worker in hl-aarch64 hl-x86_64; do \
 	    "$$HL_TEST_ENGINE_APP_BIN_DIR/$$worker" --backend-receipt \
 	      | grep -F '\''"backend":"retained-c"'\'' >/dev/null; \

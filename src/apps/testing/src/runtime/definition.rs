@@ -215,7 +215,8 @@ impl App {
             .tempdir_in(&root)
             .map_err(|error| format!("create build directory in {}: {error}", root.display()))?;
         let output = directory.path().join(&case.output);
-        let compiler = self.compiler.for_target(target);
+        let declared_compiler = self.compiler.for_target(target);
+        let compiler = compatibility_compiler(target, declared_compiler);
         let source = self.directory.join(case.source.native());
         let capture = hl_process::Capture {
             stdout: directory.path().join("compiler.stdout"),
@@ -223,7 +224,7 @@ impl App {
             stdout_limit: COMPILER_CAPTURE_LIMIT,
             stderr_limit: COMPILER_CAPTURE_LIMIT,
         };
-        let mut command = hl_process::Command::new(compiler);
+        let mut command = hl_process::Command::new(&compiler);
         command.arg("-o").arg(&output).arg(&source).args(&case.flags);
         let outcome = hl_process::run(&command, &capture, COMPILER_TIMEOUT, &AtomicBool::new(false))
             .map_err(|error| format!("run {compiler} on {}: {error}", source.display()))?;
@@ -320,6 +321,14 @@ impl App {
         let _provider = oracle.provider;
         oracle.commands.for_target(target)
     }
+}
+
+fn compatibility_compiler(target: Target, declared: &str) -> String {
+    let variable = match target {
+        Target::Arm64 => "HL_COMPAT_ARM64_CC",
+        Target::Amd64 => "HL_COMPAT_AMD64_CC",
+    };
+    std::env::var_os(variable).map_or_else(|| declared.to_owned(), |value| value.to_string_lossy().into_owned())
 }
 
 fn compiler_diagnostic(bytes: &[u8]) -> String {
