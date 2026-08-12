@@ -4429,10 +4429,8 @@ static int interp_is_legacy_sse(uint8_t op) {
     return 0;
 }
 
-static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+static int interp_two_byte_condition(struct cpu *cpu, struct insn *insn, uint64_t next) {
     uint8_t op = insn->op;
-
-    // Jcc rel32 (0F 80..8F)
     if (op >= 0x80 && op <= 0x8F) {
         cpu->rip = interp_cond(cpu, op & 0xf) ? next + (uint64_t)insn->imm : next;
         cpu->reason = R_BRANCH;
@@ -4446,8 +4444,6 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         cpu->rip = next;
         return STEP_NEXT;
     }
-
-    // CMOVcc r, r/m (0F 40..4F)
     if (op >= 0x40 && op <= 0x4F) {
         interp_operand operand = interp_rm(cpu, insn, next);
         // Source read and destination written unconditionally; `cmovcc r32` zero-extends even without a move.
@@ -4457,19 +4453,27 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         cpu->rip = next;
         return STEP_NEXT;
     }
+    return -1;
+}
 
-    // BSWAP r (0F C8..CF)
-    if (op >= 0xC8 && op <= 0xCF) {
-        int number = (op & 7) | (insn->rexB << 3);
-        uint64_t value = cpu->r[number];
-        if (insn->opsize == 8)
-            value = __builtin_bswap64(value);
-        else
-            value = __builtin_bswap32((uint32_t)value); // 32-bit form also zero-extends, via reg_write
-        interp_reg_write(cpu, insn, number, insn->opsize == 8 ? 8 : 4, value);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
+static int interp_two_byte_bswap(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op < 0xC8 || op > 0xCF) return -1;
+    int number = (op & 7) | (insn->rexB << 3);
+    uint64_t value = cpu->r[number];
+    if (insn->opsize == 8) value = __builtin_bswap64(value);
+    else value = __builtin_bswap32((uint32_t)value);
+    interp_reg_write(cpu, insn, number, insn->opsize == 8 ? 8 : 4, value);
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
+static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    int delegated = interp_two_byte_condition(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_two_byte_bswap(cpu, insn, next);
+    if (delegated >= 0) return delegated;
 
     switch (op) {
     // SYSCALL (0F 05): rip is pre-advanced past the 0F 05 bytes, so R_SYSCALL in interp_dispatch.h adds none.
