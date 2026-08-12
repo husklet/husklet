@@ -488,7 +488,6 @@ static void svc_semop(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             hl_ipc_lock(&C->lock);
             struct hl_sem_entry *s = sem_by_id(C, id);
             if (!s) {
-                if (waited_marked) waited_marked = 0; // set gone while blocking -> EIDRM
                 hl_ipc_unlock(&C->lock);
                 G_RET(c) = (uint64_t)(did_wait ? -EIDRM : -EINVAL);
                 break;
@@ -507,7 +506,6 @@ static void svc_semop(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             if (block_on == -1) {
                 if (waited_marked) { // leaving the wait: drop our ncnt/zcnt bookkeeping
                     sem_waiters_adjust(s, sops, nsops, -1);
-                    waited_marked = 0;
                 }
                 int gp = container_pid();
                 for (size_t i = 0; i < nsops; i++) {

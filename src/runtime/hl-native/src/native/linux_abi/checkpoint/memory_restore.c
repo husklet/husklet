@@ -263,7 +263,6 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
                         (unsigned long long)reg.addr, (unsigned long long)reg.glen, strerror(errno));
                 goto fail;
             }
-            contained = 1;
         } else if (!contained) {
             int map_flags = MAP_FIXED | MAP_ANON | MAP_PRIVATE;
             int map_fd = -1;
@@ -804,4 +803,3 @@ fail:
     ckpt_source_fclose(file);
     return -1;
 }
-
