@@ -110,6 +110,9 @@ impl Campaign {
                     return Err(format!("benchmark workload {name} guest is not a rootfs-contained file").into());
                 }
             }
+            if !workload_judgments_covered(name, workload, &self.layouts) {
+                return Err(format!("benchmark workload {name} judges a phase absent from one of its layouts").into());
+            }
         }
         let declared = self
             .layouts
@@ -158,6 +161,20 @@ impl Campaign {
         }
         Ok(())
     }
+}
+
+fn workload_judgments_covered(
+    name: &str,
+    workload: &Workload,
+    layouts: &BTreeMap<String, Layout>,
+) -> bool {
+    name == "python"
+        || workload.commands.keys().all(|layout| {
+            workload
+                .phases
+                .iter()
+                .all(|phase| layouts[layout].phases.contains(phase))
+        })
 }
 
 fn phase_names_valid(phases: &[String], allow_empty: bool) -> bool {
@@ -247,7 +264,10 @@ pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Artifact, guest_is_hashed, invariant_phases_valid, phase_names_valid, verify_artifact};
+    use super::{
+        Artifact, Layout, Workload, guest_is_hashed, invariant_phases_valid, phase_names_valid, verify_artifact,
+        workload_judgments_covered,
+    };
     use crate::record::FramedIdentity;
     use std::fs;
 
@@ -312,5 +332,33 @@ mod tests {
         let declared = ["compute", "malloc"].into_iter().collect();
         assert!(invariant_phases_valid(&["compute".into()], &declared));
         assert!(!invariant_phases_valid(&["typo".into()], &declared));
+    }
+
+    #[test]
+    fn judged_phases_exist_in_every_workload_layout() {
+        let layouts = [
+            ("plain".into(), Layout { phases: vec!["malloc".into()] }),
+            (
+                "sqlite".into(),
+                Layout {
+                    phases: vec!["malloc".into(), "sqlite".into()],
+                },
+            ),
+        ]
+        .into();
+        let mut workload = Workload {
+            commands: [
+                ("plain".into(), vec!["guest".into()]),
+                ("sqlite".into(), vec!["guest".into()]),
+            ]
+            .into(),
+            phases: vec!["malloc".into()],
+            timeout_seconds: 1,
+            wall_time: false,
+        };
+        assert!(workload_judgments_covered("malloc", &workload, &layouts));
+        workload.phases = vec!["sqlite".into()];
+        assert!(!workload_judgments_covered("malloc", &workload, &layouts));
+        assert!(workload_judgments_covered("python", &workload, &layouts));
     }
 }
