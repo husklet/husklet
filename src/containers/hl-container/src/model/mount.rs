@@ -109,11 +109,6 @@ impl Mount {
     }
 
     #[must_use]
-    pub fn anonymous_read_only(volume: &crate::Volume, target: impl Into<PathBuf>) -> Self {
-        Self::anonymous(volume, target, Access::ReadOnly)
-    }
-
-    #[must_use]
     pub fn anonymous_read_write(volume: &crate::Volume, target: impl Into<PathBuf>) -> Self {
         Self::anonymous(volume, target, Access::ReadWrite)
     }
