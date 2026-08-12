@@ -436,6 +436,42 @@
           }
         );
 
+      installedProductFor =
+        pkgs: engine:
+        pkgs.runCommand "hl-engine-installed-product"
+          {
+            nativeBuildInputs = [ pkgs.patchelf ];
+          }
+          ''
+            set -euo pipefail
+            prefix="$TMPDIR/installed-product"
+            mkdir -p "$prefix"
+            cp -a ${engine}/. "$prefix"/
+
+            for name in hl-engine hl-aarch64 hl-x86_64
+            do
+              binary="$prefix/bin/$name"
+              test -x "$binary"
+              patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
+              test "$(patchelf --print-rpath "$binary" | cut -d: -f1)" = '$ORIGIN/../lib'
+              "$binary" --backend-receipt |
+                grep -F '"backend":"retained-c"' >/dev/null
+            done
+
+            LD_DEBUG=libs "$prefix/bin/hl-engine" --backend-receipt \
+              > "$TMPDIR/receipt.json" 2> "$TMPDIR/loader.log"
+            grep -F "trying file=$prefix/bin/../lib/libhl_native_engine.so" \
+              "$TMPDIR/loader.log" >/dev/null
+            grep -F "calling init: $prefix/bin/../lib/libhl_native_engine.so" \
+              "$TMPDIR/loader.log" >/dev/null
+
+            mkdir -p "$out"
+            cp "$TMPDIR/receipt.json" "$out/backend-receipt.json"
+            printf '%s\n' \
+              'copied-prefix RUNPATH, NEEDED, backend ABI, and sibling-library loader selection passed' \
+              > "$out/evidence"
+          '';
+
       linuxHostCompileFor =
         pkgs: architecture:
         let
@@ -551,6 +587,7 @@
         pkgs:
         let
           verification = verificationFor pkgs;
+          engine = packageFor pkgs;
         in
         {
           package = verification;
@@ -561,6 +598,7 @@
           "compat-fixtures" = verification;
         }
         // lib.optionalAttrs pkgs.stdenv.isLinux {
+          "installed-product" = installedProductFor pkgs engine;
           "host-linux-aarch64" = linuxHostCompileFor pkgs "aarch64";
           "host-linux-x86_64" = linuxHostCompileFor pkgs "x86_64";
           "host-windows-x86_64-gnu-smoke" = windowsGnuSmokeFor pkgs;
