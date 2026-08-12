@@ -348,14 +348,20 @@ fn dependencies(document: &toml::Value, manifest: &Path, workspace: &WorkspaceDe
         return output;
     };
     tables(root, None, manifest, workspace, &mut output);
-    if let Some(targets) = root.get("target").and_then(toml::Value::as_table) {
-        for (target, value) in targets {
-            if let Some(table) = value.as_table() {
-                tables(table, Some(target.clone()), manifest, workspace, &mut output);
-            }
-        }
+    for (target, table) in target_tables(root) {
+        tables(table, Some(target.clone()), manifest, workspace, &mut output);
     }
     output
+}
+
+fn target_tables(
+    root: &toml::map::Map<String, toml::Value>,
+) -> impl Iterator<Item = (&String, &toml::map::Map<String, toml::Value>)> {
+    root.get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(toml::map::Map::iter)
+        .filter_map(|(target, value)| value.as_table().map(|table| (target, table)))
 }
 
 // The recursion hands each nested table its own owned target name.
