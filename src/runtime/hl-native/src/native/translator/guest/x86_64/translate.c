@@ -4298,6 +4298,59 @@ static int lower_sse_horizontal(struct insn *instruction, uint64_t guest_pc, uin
     return TX_NEXT;
 }
 
+// Returns the AArch64 SIMD encoding for packed integer operations whose x86
+// semantics are one lane-wise binary instruction. Zero means another family.
+static uint32_t sse_packed_binary_opcode(uint8_t opcode) {
+    switch (opcode) {
+    case 0xEF: return 0x6E201C00u; // PXOR
+    case 0xDB: return 0x4E201C00u; // PAND
+    case 0xEB: return 0x4EA01C00u; // POR
+    case 0xDF: return 0x4E601C00u; // PANDN (operands reversed below)
+    case 0x74: return 0x6E208C00u; // PCMPEQB
+    case 0x75: return 0x6E608C00u; // PCMPEQW
+    case 0x76: return 0x6EA08C00u; // PCMPEQD
+    case 0x64: return 0x4E203400u; // PCMPGTB
+    case 0x65: return 0x4E603400u; // PCMPGTW
+    case 0x66: return 0x4EA03400u; // PCMPGTD
+    case 0xDE: return 0x6E206400u; // PMAXUB
+    case 0xDA: return 0x6E206C00u; // PMINUB
+    case 0xEE: return 0x4E606400u; // PMAXSW
+    case 0xEA: return 0x4E606C00u; // PMINSW
+    case 0xFC: return 0x4E208400u; // PADDB
+    case 0xFD: return 0x4E608400u; // PADDW
+    case 0xFE: return 0x4EA08400u; // PADDD
+    case 0xD4: return 0x4EE08400u; // PADDQ
+    case 0xF8: return 0x6E208400u; // PSUBB
+    case 0xF9: return 0x6E608400u; // PSUBW
+    case 0xFA: return 0x6EA08400u; // PSUBD
+    case 0xFB: return 0x6EE08400u; // PSUBQ
+    case 0xDC: return 0x6E200C00u; // PADDUSB
+    case 0xDD: return 0x6E600C00u; // PADDUSW
+    case 0xEC: return 0x4E200C00u; // PADDSB
+    case 0xED: return 0x4E600C00u; // PADDSW
+    case 0xD8: return 0x6E202C00u; // PSUBUSB
+    case 0xD9: return 0x6E602C00u; // PSUBUSW
+    case 0xE8: return 0x4E202C00u; // PSUBSB
+    case 0xE9: return 0x4E602C00u; // PSUBSW
+    case 0xE0: return 0x6E201400u; // PAVGB
+    case 0xE3: return 0x6E601400u; // PAVGW
+    case 0xD5: return 0x4E609C00u; // PMULLW
+    default: return 0;
+    }
+}
+
+static int lower_sse_packed_binary(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
+    uint32_t encoding = sse_packed_binary_opcode(instruction->op);
+    if (!encoding) return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    if (instruction->op == 0xDF)
+        e_v3(encoding, vd, source, vd);
+    else
+        e_v3(encoding, vd, vd, source);
+    return TX_NEXT;
+}
+
 static int lower_double_shift(struct insn *instruction, uint64_t next) {
     uint8_t opcode = instruction->op;
     if (opcode != 0xA4 && opcode != 0xA5 && opcode != 0xAC && opcode != 0xAD) return TX_FALL;
@@ -5661,74 +5714,8 @@ static void *translate_block(uint64_t gpc) {
                                (s << 5) | 17);
                     }
                     e_vmov(vd, 17);
-                } else if (op == 0xEF) { // pxor
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    e_v3(0x6E201C00u, vd, vd, s);
-                } else if (op == 0xDB || op == 0xEB || op == 0xDF) { // pand / por / pandn
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    if (op == 0xDB)
-                        e_v3(0x4E201C00u, vd, vd, s);
-                    else if (op == 0xEB)
-                        e_v3(0x4EA01C00u, vd, vd, s);
-                    else
-                        e_v3(0x4E601C00u, vd, s, vd);                // pandn: vd = ~vd & s  -> BIC vd, s, vd
-                } else if (op == 0x74 || op == 0x75 || op == 0x76) { // pcmpeqb/w/d
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    uint32_t b = op == 0x74 ? 0x6E208C00u : op == 0x75 ? 0x6E608C00u : 0x6EA08C00u;
-                    e_v3(b, vd, vd, s);
-                } else if (op == 0x64 || op == 0x65 || op == 0x66) { // pcmpgtb/w/d -> CMGT (signed)
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    uint32_t b = op == 0x64 ? 0x4E203400u : op == 0x65 ? 0x4E603400u : 0x4EA03400u;
-                    e_v3(b, vd, vd, s);
-                } else if (op == 0xDE || op == 0xDA || op == 0xEE || op == 0xEA) { // pmaxub/pminub/pmaxsw/pminsw
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    uint32_t b = op == 0xDE   ? 0x6E206400u  // pmaxub -> UMAX  .16B (lane-wise, NOT UMAXP)
-                                 : op == 0xDA ? 0x6E206C00u  // pminub -> UMIN  .16B (lane-wise, NOT UMINP)
-                                 : op == 0xEE ? 0x4E606400u  // pmaxsw -> SMAX  .8H  (lane-wise, NOT SMAXP)
-                                              : 0x4E606C00u; // pminsw -> SMIN  .8H  (lane-wise, NOT SMINP)
-                    e_v3(b, vd, vd, s);
-                } else if (op == 0xFC || op == 0xFD || op == 0xFE || op == 0xD4) { // paddb/w/d/q
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    uint32_t b = op == 0xFC   ? 0x4E208400u
-                                 : op == 0xFD ? 0x4E608400u
-                                 : op == 0xFE ? 0x4EA08400u
-                                              : 0x4EE08400u;
-                    e_v3(b, vd, vd, s);
-                } else if (op == 0xF8 || op == 0xF9 || op == 0xFA || op == 0xFB) { // psubb/w/d/q
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    uint32_t b = op == 0xF8   ? 0x6E208400u
-                                 : op == 0xF9 ? 0x6E608400u
-                                 : op == 0xFA ? 0x6EA08400u
-                                              : 0x6EE08400u;
-                    e_v3(b, vd, vd, s);
-                } else if (op == 0xDC || op == 0xDD || op == 0xEC || op == 0xED || op == 0xD8 || op == 0xD9 ||
-                           op == 0xE8 || op == 0xE9) { // saturating add/sub: paddus/padds/psubus/psubs b/w
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    uint32_t b = op == 0xDC   ? 0x6E200C00u  // paddusb -> UQADD .16b
-                                 : op == 0xDD ? 0x6E600C00u  // paddusw -> UQADD .8h
-                                 : op == 0xEC ? 0x4E200C00u  // paddsb  -> SQADD .16b
-                                 : op == 0xED ? 0x4E600C00u  // paddsw  -> SQADD .8h
-                                 : op == 0xD8 ? 0x6E202C00u  // psubusb -> UQSUB .16b
-                                 : op == 0xD9 ? 0x6E602C00u  // psubusw -> UQSUB .8h
-                                 : op == 0xE8 ? 0x4E202C00u  // psubsb  -> SQSUB .16b
-                                              : 0x4E602C00u; // psubsw  -> SQSUB .8h
-                    e_v3(b, vd, vd, s);
-                } else if (op == 0xE0 || op == 0xE3) { // pavgb/pavgw: unsigned rounding average -> URHADD
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    e_v3(op == 0xE0 ? 0x6E201400u : 0x6E601400u, vd, vd, s); // .16b : .8h
-                } else if (op == 0xD5) { // pmullw: packed signed 16x16 -> low 16 bits -> MUL .8h
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    e_v3(0x4E609C00u, vd, vd, s);
+                } else if (lower_sse_packed_binary(&I, next, vd, vm, mmx) == TX_NEXT) {
+                    // The helper emitted the complete lane-wise operation.
                 } else if (op == 0xE5 || op == 0xE4) { // pmulhw(signed)/pmulhuw(unsigned): 16x16 -> high 16 bits
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
