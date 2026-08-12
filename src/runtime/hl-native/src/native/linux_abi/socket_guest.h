@@ -742,32 +742,4 @@ static inline const char *inet_ntop(int family, const void *address, char *out, 
     return NULL;
 }
 
-/* REAL.  The pre-inet_pton spellings, kept because callers still reach for
- * them.  inet_addr's INADDR_NONE ambiguity -- it reports the same value for
- * "255.255.255.255" and for "that is not an address" -- is inherited
- * deliberately rather than repaired: it is the documented behaviour every
- * caller was written against, and quietly fixing it here would make this host's
- * inet_addr disagree with the other two. */
-static inline in_addr_t inet_addr(const char *text) {
-    in_addr_t value = 0;
-    if (text == NULL || !hl_linux_pton4(text, (unsigned char *)&value)) return INADDR_NONE;
-    return value;
-}
-
-static inline int inet_aton(const char *text, struct in_addr *out) {
-    if (text == NULL || out == NULL) return 0;
-    return hl_linux_pton4(text, (unsigned char *)&out->s_addr);
-}
-
-/* REAL, and thread-unsafe exactly as inet_ntoa(3) has always been -- the static
- * buffer IS the interface, not an oversight here.  One buffer per translation
- * unit that includes this header, which is no weaker a guarantee than the
- * one-per-process the real implementations offer. */
-static inline char *inet_ntoa(struct in_addr address) {
-    static char text[INET_ADDRSTRLEN];
-    const unsigned char *octets = (const unsigned char *)&address.s_addr;
-    snprintf(text, sizeof text, "%u.%u.%u.%u", octets[0], octets[1], octets[2], octets[3]);
-    return text;
-}
-
 #endif
