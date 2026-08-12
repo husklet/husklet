@@ -90,6 +90,7 @@ unsafe extern "C" {
     pub(super) fn hl_c_backend_exit_kind(backend: *const Backend) -> c_uint;
     pub(super) fn hl_c_backend_exit_status(backend: *const Backend) -> c_int;
     pub(super) fn hl_c_backend_exit_detail(backend: *const Backend) -> c_ulonglong;
+    #[cfg(test)]
     pub(super) fn hl_c_backend_translation_count(backend: *const Backend) -> c_ulonglong;
     pub(super) fn hl_c_backend_destroy(backend: *mut Backend);
 }

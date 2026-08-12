@@ -124,13 +124,6 @@ impl Engine {
         let detail = unsafe { bindings::hl_c_backend_exit_detail(self.0.as_ptr()) };
         Exit { kind, status, detail }
     }
-
-    /// Returns the number of translations published by this engine instance.
-    #[must_use]
-    pub fn translation_count(&self) -> u64 {
-        // SAFETY: `self` owns a live backend; the counter accessor performs no mutation and copies its value.
-        unsafe { bindings::hl_c_backend_translation_count(self.0.as_ptr()) }
-    }
 }
 
 impl Plan {
