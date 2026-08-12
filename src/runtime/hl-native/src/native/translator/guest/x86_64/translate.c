@@ -3792,6 +3792,47 @@ static int lower_population_count(struct insn *instruction, uint64_t next, int s
     return TX_NEXT;
 }
 
+static int lower_compare_exchange(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0xB0 && opcode != 0xB1) return TX_FALL;
+    int width = opcode == 0xB0 ? 1 : instruction->opsize;
+    int sf = width == 8;
+    if (instruction->is_mem) {
+        emit_ea(instruction, next);
+        emit_memory_guard(17, (uint64_t)width, guest_pc, X86_SOFT_READ | X86_SOFT_WRITE);
+        e_mov_rr(19, RAX, sf);
+        e_cas(width, 19, instruction->reg, 17);
+        do_alu(7, -1, RAX, 19, width);
+        if (width >= 4)
+            e_mov_rr(RAX, 19, sf);
+        else
+            e_bfi(RAX, 19, 0, 8 * width, 1);
+        if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)width);
+        return TX_NEXT;
+    }
+    if (width >= 4) {
+        e_mov_rr(19, instruction->rm_reg, sf);
+        do_alu(7, -1, RAX, 19, width);
+        e_csel(instruction->rm_reg, instruction->reg, 19, 0, sf);
+        e_csel(RAX, RAX, 19, 0, sf);
+        return TX_NEXT;
+    }
+    int old_value = width == 1 ? byte_val(instruction, instruction->rm_reg, 19) : instruction->rm_reg;
+    int source_value = width == 1 ? byte_val(instruction, instruction->reg, 24) : instruction->reg;
+    if (old_value != 19) e_mov_rr(19, old_value, 1);
+    do_alu(7, -1, RAX, 19, width);
+    e_csel(21, source_value, 19, 0, 0);
+    e_csel(22, RAX, 19, 0, 0);
+    if (width == 1) {
+        byte_wb(instruction, instruction->rm_reg, 21);
+        e_bfi(RAX, 22, 0, 8, 1);
+    } else {
+        e_bfi(instruction->rm_reg, 21, 0, 16, 1);
+        e_bfi(RAX, 22, 0, 16, 1);
+    }
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6177,43 +6218,8 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // cmpxchg (0F B0 byte / B1): compare RAX with r/m; if eq, r/m=reg, ZF=1; else RAX=r/m.
-            if (op == 0xB0 || op == 0xB1) {
-                int w = op == 0xB0 ? 1 : I.opsize, sf2 = (w == 8);
-                if (I.is_mem) {
-                    emit_ea(&I, next);
-                    emit_memory_guard(17, (uint64_t)w, gpc, X86_SOFT_READ | X86_SOFT_WRITE);
-                    e_mov_rr(19, RAX, sf2);    // expected
-                    e_cas(w, 19, I.reg, 17);   // x19 = old; if old==expected [m]=reg
-                    do_alu(7, -1, RAX, 19, w); // flags from (accumulator - dest), per the SDM
-                    if (w >= 4)
-                        e_mov_rr(RAX, 19, sf2);
-                    else
-                        e_bfi(RAX, 19, 0, 8 * w, 1); // rax = old
-                    if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)w);
-                } else if (w >= 4) {
-                    e_mov_rr(19, I.rm_reg, sf2);
-                    do_alu(7, -1, RAX, 19, w);           // flags from (accumulator - dest)
-                    e_csel(I.rm_reg, I.reg, 19, 0, sf2); // rm = ZF? reg : rm_old
-                    e_csel(RAX, RAX, 19, 0, sf2);        // rax = ZF? rax : rm_old
-                } else {
-                    // 8/16-bit register forms (previously UNIMPL -> hard abort). Only the low
-                    // w bytes of the destination and of RAX are written; both new values are
-                    // selected BEFORE either write, because rm may itself be RAX.
-                    int oldv = (w == 1) ? byte_val(&I, I.rm_reg, 19) : I.rm_reg;
-                    int srcv = (w == 1) ? byte_val(&I, I.reg, 24) : I.reg;
-                    if (oldv != 19) e_mov_rr(19, oldv, 1);
-                    do_alu(7, -1, RAX, 19, w); // ZF = (AL/AX == dest)
-                    e_csel(21, srcv, 19, 0, 0);
-                    e_csel(22, RAX, 19, 0, 0);
-                    if (w == 1) {
-                        byte_wb(&I, I.rm_reg, 21);
-                        e_bfi(RAX, 22, 0, 8, 1); // AL
-                    } else {
-                        e_bfi(I.rm_reg, 21, 0, 16, 1);
-                        e_bfi(RAX, 22, 0, 16, 1);
-                    }
-                }
+            int compare_exchange_result = lower_compare_exchange(&I, gpc, next);
+            if (compare_exchange_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
