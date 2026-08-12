@@ -289,7 +289,10 @@
           src = workspaceSource;
           cargoLock.lockFile = ./Cargo.lock;
           strictDeps = true;
-          nativeBuildInputs = commonNativeInputs pkgs ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
+          nativeBuildInputs =
+            commonNativeInputs pkgs
+            ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ]
+            ++ lib.optionals pkgs.stdenv.isDarwin [ pkgs.darwin.cctools ];
           doCheck = false;
           buildPhase = ''
             runHook preBuild
@@ -345,7 +348,8 @@
             cmp "''${native_libraries[0]}" "$out/lib/$(basename "''${native_libraries[0]}")"
             runHook postInstall
           '';
-          postFixup = lib.optionalString pkgs.stdenv.isLinux ''
+          postFixup =
+            lib.optionalString pkgs.stdenv.isLinux ''
             strip --strip-unneeded "$out/bin/hl-engine" "$out/bin/hl-aarch64" \
               "$out/bin/hl-x86_64" "$out/lib/libhl_native_engine.so"
             for binary in "$out/bin/hl-engine" "$out/bin/hl-aarch64" "$out/bin/hl-x86_64"
@@ -363,7 +367,13 @@
               test "$(patchelf --print-rpath "$binary" | cut -d: -f1)" = '$ORIGIN/../lib'
               ! patchelf --print-rpath "$binary" | tr : '\n' | grep -Fx "$out/lib" >/dev/null
             done
-          '';
+            ''
+            + lib.optionalString pkgs.stdenv.isDarwin ''
+              for binary in "$out/bin/hl-engine" "$out/bin/hl-aarch64" "$out/bin/hl-x86_64"
+              do
+                install_name_tool -add_rpath '@loader_path/../lib' "$binary"
+              done
+            '';
           meta = {
             description = "Userspace execution engine for Linux programs";
             homepage = "https://github.com/husklet/engine";
@@ -818,7 +828,9 @@
 
       darwinInstalledProductFor =
         pkgs: engine:
-        pkgs.runCommand "hl-engine-darwin-installed-product" { } ''
+        pkgs.runCommand "hl-engine-darwin-installed-product"
+          { nativeBuildInputs = [ pkgs.darwin.cctools ]; }
+          ''
           set -euo pipefail
           prefix="$TMPDIR/installed-product"
           mkdir -p "$prefix"
@@ -854,7 +866,7 @@
           done
           mkdir -p "$out"
           printf '%s\n' 'native Darwin copied-prefix exact ARM64 architecture, install name, exports, rpath, and backend receipts passed' > "$out/evidence"
-        '';
+          '';
 
       darwinHostAbiFor =
         pkgs: engine:
