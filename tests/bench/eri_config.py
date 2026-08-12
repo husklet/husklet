@@ -17,7 +17,7 @@ PYTHON_PROGRAM = """import time
 start=time.monotonic_ns()
 import json,os,re,sys
 d={}
-for i in range(200000): d[i%1000]=d.get(i%1000,0)+i
+for i in range(2000000): d[i%1000]=d.get(i%1000,0)+i
 ok=sum(d.values())
 elapsed=(time.monotonic_ns()-start)//1000
 print(f'PHASE python us={max(1,elapsed)} ok={ok}')
@@ -151,8 +151,8 @@ def main(argv=None):
         },
         "workloads": {
             "python": {"argv": [str(python), "-c", PYTHON_PROGRAM], "phases": ["python"]},
-            "sqlite": {"argv": [str(sqlite), "--divisor", "20", "--phase", "sqlite"], "phases": ["sqlite"]},
-            "malloc": {"argv": [str(combined), "--divisor", "20", "--phase", "malloc"], "phases": ["malloc"]},
+            "sqlite": {"argv": [str(sqlite), "--divisor", "2", "--phase", "sqlite"], "phases": ["sqlite"]},
+            "malloc": {"argv": [str(combined), "--divisor", "2", "--phase", "malloc"], "phases": ["malloc"]},
         },
     }
     output = Path(args.output).resolve()

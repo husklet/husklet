@@ -7,6 +7,11 @@ ordering and therefore requires a multiple of four rounds.
 Four crossed warmup pairs run before recorded samples in every cell, including
 after resume.
 
+The generated workloads deliberately run the combined sqlite and malloc phases
+at divisor 2 and the Python loop for two million iterations.  Shorter smoke
+workloads made identical-binary null arms vary by 5--10 percent on this host;
+those rows are retained as rejected evidence, not used to relax qualification.
+
 Configuration generation is currently deliberately unavailable for the direct
 Husklet product CLI. That CLI constructs `RustRuntimeFactory` directly, so an
 `HL_EXECUTION_BACKEND=c` argument is ignored and even a bogus backend value can
