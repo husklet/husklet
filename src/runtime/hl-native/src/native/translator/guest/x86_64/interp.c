@@ -1149,34 +1149,36 @@ static void interp_alu_to_rm(struct cpu *cpu, struct insn *insn, const interp_op
     if (store) interp_rm_write(cpu, insn, operand, width, result);
 }
 
+static int interp_one_byte_alu(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op >= 0x40 || (op & 7) > 5) return -1;
+    int kind = op >> 3;
+    int form = op & 7;
+    int width = (form == 0 || form == 2 || form == 4) ? 1 : insn->opsize;
+    if (form == 4 || form == 5) {
+        uint64_t old = interp_reg_read(cpu, insn, RAX, width);
+        int store;
+        uint64_t result = interp_alu_kind(cpu, kind, old, (uint64_t)insn->imm, width, &store);
+        if (store) interp_reg_write(cpu, insn, RAX, width, result);
+    } else if (form == 2 || form == 3) {
+        interp_operand operand = interp_rm(cpu, insn, next);
+        uint64_t source = interp_rm_read(cpu, insn, &operand, width);
+        uint64_t old = interp_reg_read(cpu, insn, insn->reg, width);
+        int store;
+        uint64_t result = interp_alu_kind(cpu, kind, old, source, width, &store);
+        if (store) interp_reg_write(cpu, insn, insn->reg, width, result);
+    } else {
+        interp_operand operand = interp_rm(cpu, insn, next);
+        interp_alu_to_rm(cpu, insn, &operand, kind, width, interp_reg_read(cpu, insn, insn->reg, width));
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
-
-    // 00..3F ALU block by op & 7: 0 r/m8,r8  1 r/m,r  2 r8,r/m8  3 r,r/m  4 AL,imm8  5 eAX,imm; 6/7 (segment
-    // push/pop, BCD) are invalid in long mode and fall through.
-    if (op < 0x40 && (op & 7) <= 5) {
-        int kind = op >> 3;
-        int form = op & 7;
-        int width = (form == 0 || form == 2 || form == 4) ? 1 : insn->opsize;
-        if (form == 4 || form == 5) {
-            uint64_t old = interp_reg_read(cpu, insn, RAX, width);
-            int store;
-            uint64_t result = interp_alu_kind(cpu, kind, old, (uint64_t)insn->imm, width, &store);
-            if (store) interp_reg_write(cpu, insn, RAX, width, result);
-        } else if (form == 2 || form == 3) {
-            interp_operand operand = interp_rm(cpu, insn, next);
-            uint64_t source = interp_rm_read(cpu, insn, &operand, width);
-            uint64_t old = interp_reg_read(cpu, insn, insn->reg, width);
-            int store;
-            uint64_t result = interp_alu_kind(cpu, kind, old, source, width, &store);
-            if (store) interp_reg_write(cpu, insn, insn->reg, width, result);
-        } else {
-            interp_operand operand = interp_rm(cpu, insn, next);
-            interp_alu_to_rm(cpu, insn, &operand, kind, width, interp_reg_read(cpu, insn, insn->reg, width));
-        }
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
+    int delegated = interp_one_byte_alu(cpu, insn, next);
+    if (delegated >= 0) return delegated;
 
     switch (op) {
     // PUSH / POP register
@@ -2324,33 +2326,57 @@ static void interp_fp_comis_flags(struct cpu *cpu, unsigned char zf, unsigned ch
 static void interp_fp_arithmetic(uint8_t op, int dbl, int scalar, uint8_t d[16], const uint8_t s[16]) {
     if (dbl) {
         __m128d a = interp_fp_get_pd(d), b = interp_fp_get_pd(s);
-        if (op == 0x58 && scalar) INTERP_FP_BIN("addsd");
-        else if (op == 0x58) INTERP_FP_BIN("addpd");
-        else if (op == 0x59 && scalar) INTERP_FP_BIN("mulsd");
-        else if (op == 0x59) INTERP_FP_BIN("mulpd");
-        else if (op == 0x5C && scalar) INTERP_FP_BIN("subsd");
-        else if (op == 0x5C) INTERP_FP_BIN("subpd");
-        else if (op == 0x5D && scalar) INTERP_FP_BIN("minsd");
-        else if (op == 0x5D) INTERP_FP_BIN("minpd");
-        else if (op == 0x5E && scalar) INTERP_FP_BIN("divsd");
-        else if (op == 0x5E) INTERP_FP_BIN("divpd");
-        else if (scalar) INTERP_FP_BIN("maxsd");
-        else INTERP_FP_BIN("maxpd");
+        if (op == 0x58 && scalar)
+            INTERP_FP_BIN("addsd");
+        else if (op == 0x58)
+            INTERP_FP_BIN("addpd");
+        else if (op == 0x59 && scalar)
+            INTERP_FP_BIN("mulsd");
+        else if (op == 0x59)
+            INTERP_FP_BIN("mulpd");
+        else if (op == 0x5C && scalar)
+            INTERP_FP_BIN("subsd");
+        else if (op == 0x5C)
+            INTERP_FP_BIN("subpd");
+        else if (op == 0x5D && scalar)
+            INTERP_FP_BIN("minsd");
+        else if (op == 0x5D)
+            INTERP_FP_BIN("minpd");
+        else if (op == 0x5E && scalar)
+            INTERP_FP_BIN("divsd");
+        else if (op == 0x5E)
+            INTERP_FP_BIN("divpd");
+        else if (scalar)
+            INTERP_FP_BIN("maxsd");
+        else
+            INTERP_FP_BIN("maxpd");
         interp_fp_put_pd(d, a);
     } else {
         __m128 a = interp_fp_get_ps(d), b = interp_fp_get_ps(s);
-        if (op == 0x58 && scalar) INTERP_FP_BIN("addss");
-        else if (op == 0x58) INTERP_FP_BIN("addps");
-        else if (op == 0x59 && scalar) INTERP_FP_BIN("mulss");
-        else if (op == 0x59) INTERP_FP_BIN("mulps");
-        else if (op == 0x5C && scalar) INTERP_FP_BIN("subss");
-        else if (op == 0x5C) INTERP_FP_BIN("subps");
-        else if (op == 0x5D && scalar) INTERP_FP_BIN("minss");
-        else if (op == 0x5D) INTERP_FP_BIN("minps");
-        else if (op == 0x5E && scalar) INTERP_FP_BIN("divss");
-        else if (op == 0x5E) INTERP_FP_BIN("divps");
-        else if (scalar) INTERP_FP_BIN("maxss");
-        else INTERP_FP_BIN("maxps");
+        if (op == 0x58 && scalar)
+            INTERP_FP_BIN("addss");
+        else if (op == 0x58)
+            INTERP_FP_BIN("addps");
+        else if (op == 0x59 && scalar)
+            INTERP_FP_BIN("mulss");
+        else if (op == 0x59)
+            INTERP_FP_BIN("mulps");
+        else if (op == 0x5C && scalar)
+            INTERP_FP_BIN("subss");
+        else if (op == 0x5C)
+            INTERP_FP_BIN("subps");
+        else if (op == 0x5D && scalar)
+            INTERP_FP_BIN("minss");
+        else if (op == 0x5D)
+            INTERP_FP_BIN("minps");
+        else if (op == 0x5E && scalar)
+            INTERP_FP_BIN("divss");
+        else if (op == 0x5E)
+            INTERP_FP_BIN("divps");
+        else if (scalar)
+            INTERP_FP_BIN("maxss");
+        else
+            INTERP_FP_BIN("maxps");
         interp_fp_put_ps(d, a);
     }
 }
@@ -2372,10 +2398,14 @@ static void interp_fp_mmx_convert(struct cpu *cpu, struct insn *insn, uint64_t n
         return;
     }
     interp_sse_rm_get(cpu, insn, next, source_bytes, s);
-    if (dbl && op == 0x2C) interp_fp_put_dq(result, _mm_cvttpd_epi32(interp_fp_opaque_pd(interp_fp_get_pd(s))));
-    else if (dbl) interp_fp_put_dq(result, _mm_cvtpd_epi32(interp_fp_opaque_pd(interp_fp_get_pd(s))));
-    else if (op == 0x2C) interp_fp_put_dq(result, _mm_cvttps_epi32(interp_fp_opaque_ps(interp_fp_get_ps(s))));
-    else interp_fp_put_dq(result, _mm_cvtps_epi32(interp_fp_opaque_ps(interp_fp_get_ps(s))));
+    if (dbl && op == 0x2C)
+        interp_fp_put_dq(result, _mm_cvttpd_epi32(interp_fp_opaque_pd(interp_fp_get_pd(s))));
+    else if (dbl)
+        interp_fp_put_dq(result, _mm_cvtpd_epi32(interp_fp_opaque_pd(interp_fp_get_pd(s))));
+    else if (op == 0x2C)
+        interp_fp_put_dq(result, _mm_cvttps_epi32(interp_fp_opaque_ps(interp_fp_get_ps(s))));
+    else
+        interp_fp_put_dq(result, _mm_cvtps_epi32(interp_fp_opaque_ps(interp_fp_get_ps(s))));
     interp_mm_put(cpu, destination, result);
 }
 
@@ -2385,8 +2415,10 @@ static void interp_fp_compare(struct cpu *cpu, struct insn *insn, uint64_t next,
     interp_xmm_get(cpu, insn->reg, d);
     interp_sse_rm_get(cpu, insn, next, source_bytes, s);
     unsigned predicate = (unsigned)insn->imm & 7u;
-    if (dbl) interp_fp_put_pd(d, interp_fp_cmp_pd(interp_fp_get_pd(d), interp_fp_get_pd(s), predicate, scalar));
-    else interp_fp_put_ps(d, interp_fp_cmp_ps(interp_fp_get_ps(d), interp_fp_get_ps(s), predicate, scalar));
+    if (dbl)
+        interp_fp_put_pd(d, interp_fp_cmp_pd(interp_fp_get_pd(d), interp_fp_get_pd(s), predicate, scalar));
+    else
+        interp_fp_put_ps(d, interp_fp_cmp_ps(interp_fp_get_ps(d), interp_fp_get_ps(s), predicate, scalar));
     interp_xmm_put(cpu, insn->reg, d);
 }
 
@@ -3514,20 +3546,24 @@ static void interp_x87_register_arithmetic(struct cpu *cpu, uint8_t op, int reg,
 }
 
 static int interp_x87_register_status(struct cpu *cpu, struct insn *insn, int reg, int rm, uint64_t pc) {
-    if (reg == 4 && rm == 0) interp_reg_write(cpu, insn, RAX, 2, interp_x87_status_word(cpu));
+    if (reg == 4 && rm == 0)
+        interp_reg_write(cpu, insn, RAX, 2, interp_x87_status_word(cpu));
     else if (reg == 5 || reg == 6) {
         if (interp_x87_live(cpu, 0, rm))
             interp_x87_compare_eflags(cpu, interp_x87_get(cpu, 0), interp_x87_get(cpu, rm), reg == 6);
-        else interp_x87_compare_unordered_eflags(cpu);
+        else
+            interp_x87_compare_unordered_eflags(cpu);
         interp_x87_pop(cpu);
-    } else return interp_undefined(cpu, insn, pc, "x87 DF register form");
+    } else
+        return interp_undefined(cpu, insn, pc, "x87 DF register form");
     return STEP_NEXT;
 }
 
 static void interp_x87_register_compare(struct cpu *cpu, uint8_t op, int reg, int rm) {
     if (interp_x87_live(cpu, 0, rm))
         interp_x87_compare_fpsw(cpu, interp_x87_get(cpu, 0), interp_x87_get(cpu, rm), 1);
-    else interp_x87_compare_unordered_fpsw(cpu);
+    else
+        interp_x87_compare_unordered_fpsw(cpu);
     if (op == 0xDE && rm == 1) interp_x87_pop(cpu);
     if (reg == 3) interp_x87_pop(cpu);
 }
@@ -3735,11 +3771,10 @@ static int interp_step_x87_register(struct cpu *cpu, struct insn *insn, uint64_t
         cpu->rip = next;
         return STEP_NEXT;
 
-    case 0xDF:
-        {
-            int result = interp_x87_register_status(cpu, insn, reg, rm, pc);
-            if (result != STEP_NEXT) return result;
-        }
+    case 0xDF: {
+        int result = interp_x87_register_status(cpu, insn, reg, rm, pc);
+        if (result != STEP_NEXT) return result;
+    }
         cpu->rip = next;
         return STEP_NEXT;
 
@@ -3748,8 +3783,7 @@ static int interp_step_x87_register(struct cpu *cpu, struct insn *insn, uint64_t
 }
 
 static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
-    return insn->is_mem ? interp_step_x87_memory(cpu, insn, pc, next)
-                        : interp_step_x87_register(cpu, insn, pc, next);
+    return insn->is_mem ? interp_step_x87_memory(cpu, insn, pc, next) : interp_step_x87_register(cpu, insn, pc, next);
 }
 
 static int interp_sse_integer_arithmetic(struct cpu *cpu, struct insn *insn, uint64_t next) {
@@ -3761,13 +3795,13 @@ static int interp_sse_integer_arithmetic(struct cpu *cpu, struct insn *insn, uin
         interp_simd_get(cpu, mmx, insn->reg, d);
         interp_simd_rm_get(cpu, insn, mmx, next, s);
         for (int i = 0; i < wide; i++)
-            d[i] = op == 0xDB ? (uint8_t)(d[i] & s[i])
+            d[i] = op == 0xDB   ? (uint8_t)(d[i] & s[i])
                    : op == 0xDF ? (uint8_t)(~d[i] & s[i])
                    : op == 0xEB ? (uint8_t)(d[i] | s[i])
                                 : (uint8_t)(d[i] ^ s[i]);
-    } else if (op == 0xFC || op == 0xFD || op == 0xFE || op == 0xD4 || op == 0xF8 || op == 0xF9 ||
-               op == 0xFA || op == 0xFB || op == 0xEC || op == 0xED || op == 0xDC || op == 0xDD ||
-               op == 0xE8 || op == 0xE9 || op == 0xD8 || op == 0xD9) {
+    } else if (op == 0xFC || op == 0xFD || op == 0xFE || op == 0xD4 || op == 0xF8 || op == 0xF9 || op == 0xFA ||
+               op == 0xFB || op == 0xEC || op == 0xED || op == 0xDC || op == 0xDD || op == 0xE8 || op == 0xE9 ||
+               op == 0xD8 || op == 0xD9) {
         interp_simd_get(cpu, mmx, insn->reg, d);
         interp_simd_rm_get(cpu, insn, mmx, next, s);
         switch (op) {
@@ -3792,7 +3826,8 @@ static int interp_sse_integer_arithmetic(struct cpu *cpu, struct insn *insn, uin
         interp_simd_get(cpu, mmx, insn->reg, d);
         interp_simd_rm_get(cpu, insn, mmx, next, s);
         if (op == 0xDA || op == 0xDE) {
-            for (int i = 0; i < wide; i++) d[i] = (op == 0xDA) == (d[i] < s[i]) ? d[i] : s[i];
+            for (int i = 0; i < wide; i++)
+                d[i] = (op == 0xDA) == (d[i] < s[i]) ? d[i] : s[i];
         } else {
             for (int i = 0; i < wide / 2; i++) {
                 int16_t a = (int16_t)interp_lane16(d, i), b = (int16_t)interp_lane16(s, i);
@@ -3809,8 +3844,7 @@ static int interp_sse_integer_arithmetic(struct cpu *cpu, struct insn *insn, uin
 
 static int interp_sse_integer_multiply_reduce(struct cpu *cpu, struct insn *insn, uint64_t next) {
     uint8_t op = insn->op;
-    if (op != 0xD5 && op != 0xE4 && op != 0xE5 && op != 0xF4 && op != 0xF5 && op != 0xF6 && op != 0xE0 &&
-        op != 0xE3)
+    if (op != 0xD5 && op != 0xE4 && op != 0xE5 && op != 0xF4 && op != 0xF5 && op != 0xF6 && op != 0xE0 && op != 0xE3)
         return -1;
     int mmx = interp_sse_prefix(insn) == SSE_NP;
     int wide = mmx ? 8 : 16;
@@ -3819,10 +3853,9 @@ static int interp_sse_integer_multiply_reduce(struct cpu *cpu, struct insn *insn
     interp_simd_rm_get(cpu, insn, mmx, next, s);
     if (op == 0xD5 || op == 0xE4 || op == 0xE5) {
         for (int i = 0; i < wide / 2; i++) {
-            uint32_t product = op == 0xE5
-                                   ? (uint32_t)(int32_t)((int16_t)interp_lane16(d, i) *
-                                                        (int32_t)(int16_t)interp_lane16(s, i))
-                                   : (uint32_t)interp_lane16(d, i) * (uint32_t)interp_lane16(s, i);
+            uint32_t product =
+                op == 0xE5 ? (uint32_t)(int32_t)((int16_t)interp_lane16(d, i) * (int32_t)(int16_t)interp_lane16(s, i))
+                           : (uint32_t)interp_lane16(d, i) * (uint32_t)interp_lane16(s, i);
             interp_put16(d, i, (uint16_t)(op == 0xD5 ? product & 0xffff : product >> 16));
         }
     } else if (op == 0xF4) {
@@ -3848,7 +3881,8 @@ static int interp_sse_integer_multiply_reduce(struct cpu *cpu, struct insn *insn
         }
         memcpy(d, out, (size_t)wide);
     } else if (op == 0xE0) {
-        for (int i = 0; i < wide; i++) d[i] = (uint8_t)(((uint32_t)d[i] + (uint32_t)s[i] + 1u) >> 1);
+        for (int i = 0; i < wide; i++)
+            d[i] = (uint8_t)(((uint32_t)d[i] + (uint32_t)s[i] + 1u) >> 1);
     } else {
         for (int i = 0; i < wide / 2; i++) {
             uint32_t sum = (uint32_t)interp_lane16(d, i) + (uint32_t)interp_lane16(s, i) + 1u;
@@ -3863,8 +3897,8 @@ static int interp_sse_integer_multiply_reduce(struct cpu *cpu, struct insn *insn
 static int interp_sse_integer_shift(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int immediate = op >= 0x71 && op <= 0x73;
-    int variable = op == 0xD1 || op == 0xD2 || op == 0xD3 || op == 0xE1 || op == 0xE2 || op == 0xF1 ||
-                   op == 0xF2 || op == 0xF3;
+    int variable =
+        op == 0xD1 || op == 0xD2 || op == 0xD3 || op == 0xE1 || op == 0xE2 || op == 0xF1 || op == 0xF2 || op == 0xF3;
     if (!immediate && !variable) return -1;
     int mmx = interp_sse_prefix(insn) == SSE_NP;
     uint8_t value[16];
@@ -3890,9 +3924,7 @@ static int interp_sse_integer_shift(struct cpu *cpu, struct insn *insn, uint64_t
         interp_simd_rm_get(cpu, insn, mmx, next, count_operand);
         uint64_t raw = interp_lane64(count_operand, 0);
         unsigned count = raw > 255 ? 255u : (unsigned)raw;
-        int lane = (op == 0xD1 || op == 0xE1 || op == 0xF1) ? 2
-                   : (op == 0xD2 || op == 0xE2 || op == 0xF2) ? 4
-                                                               : 8;
+        int lane = (op == 0xD1 || op == 0xE1 || op == 0xF1) ? 2 : (op == 0xD2 || op == 0xE2 || op == 0xF2) ? 4 : 8;
         int arithmetic = op == 0xE1 || op == 0xE2;
         int right = arithmetic || op == 0xD1 || op == 0xD2 || op == 0xD3;
         interp_pshift(value, lane, count, right, arithmetic);
@@ -3904,8 +3936,8 @@ static int interp_sse_integer_shift(struct cpu *cpu, struct insn *insn, uint64_t
 
 static int interp_sse_integer_pack_compare(struct cpu *cpu, struct insn *insn, uint64_t next) {
     uint8_t op = insn->op;
-    int unpack = op == 0x60 || op == 0x61 || op == 0x62 || op == 0x6C || op == 0x68 || op == 0x69 || op == 0x6A ||
-                 op == 0x6D;
+    int unpack =
+        op == 0x60 || op == 0x61 || op == 0x62 || op == 0x6C || op == 0x68 || op == 0x69 || op == 0x6A || op == 0x6D;
     int pack = op == 0x63 || op == 0x67 || op == 0x6B;
     int greater = op == 0x64 || op == 0x65 || op == 0x66;
     int equal = op == 0x74 || op == 0x75 || op == 0x76;
@@ -3916,8 +3948,7 @@ static int interp_sse_integer_pack_compare(struct cpu *cpu, struct insn *insn, u
     interp_simd_get(cpu, mmx, insn->reg, d);
     interp_simd_rm_get(cpu, insn, mmx, next, s);
     if (unpack) {
-        int lane = (op == 0x60 || op == 0x68) ? 1 : (op == 0x61 || op == 0x69) ? 2 :
-                   (op == 0x62 || op == 0x6A) ? 4 : 8;
+        int lane = (op == 0x60 || op == 0x68) ? 1 : (op == 0x61 || op == 0x69) ? 2 : (op == 0x62 || op == 0x6A) ? 4 : 8;
         int high = (op >= 0x68 && op <= 0x6A) || op == 0x6D;
         interp_punpck(d, s, lane, high, wide);
     } else if (pack) {
@@ -3946,11 +3977,14 @@ static int interp_sse_permute_extract(struct cpu *cpu, struct insn *insn, uint64
             interp_simd_get(cpu, mmx, insn->rm_reg, s);
         uint64_t mask = 0;
         if (op == 0x50 && prefix == SSE_66) {
-            for (int i = 0; i < 2; i++) mask |= (uint64_t)((interp_lane64(s, i) >> 63) & 1) << i;
+            for (int i = 0; i < 2; i++)
+                mask |= (uint64_t)((interp_lane64(s, i) >> 63) & 1) << i;
         } else if (op == 0x50) {
-            for (int i = 0; i < 4; i++) mask |= (uint64_t)((interp_lane32(s, i) >> 31) & 1) << i;
+            for (int i = 0; i < 4; i++)
+                mask |= (uint64_t)((interp_lane32(s, i) >> 31) & 1) << i;
         } else {
-            for (int i = 0; i < wide; i++) mask |= (uint64_t)((s[i] >> 7) & 1) << i;
+            for (int i = 0; i < wide; i++)
+                mask |= (uint64_t)((s[i] >> 7) & 1) << i;
         }
         interp_reg_write(cpu, insn, insn->reg, 4, mask);
     } else if (op == 0x70) {
@@ -3958,14 +3992,16 @@ static int interp_sse_permute_extract(struct cpu *cpu, struct insn *insn, uint64
         unsigned control = (unsigned)(insn->imm & 0xff);
         memset(d, 0, 16);
         if (prefix == SSE_66) {
-            for (int i = 0; i < 4; i++) interp_put32(d, i, interp_lane32(s, (int)((control >> (2 * i)) & 3)));
+            for (int i = 0; i < 4; i++)
+                interp_put32(d, i, interp_lane32(s, (int)((control >> (2 * i)) & 3)));
         } else if (prefix == SSE_F3) {
             memcpy(d, s, 8);
             for (int i = 0; i < 4; i++)
                 interp_put16(d, 4 + i, interp_lane16(s, 4 + (int)((control >> (2 * i)) & 3)));
         } else {
             if (prefix == SSE_F2) memcpy(d + 8, s + 8, 8);
-            for (int i = 0; i < 4; i++) interp_put16(d, i, interp_lane16(s, (int)((control >> (2 * i)) & 3)));
+            for (int i = 0; i < 4; i++)
+                interp_put16(d, i, interp_lane16(s, (int)((control >> (2 * i)) & 3)));
         }
         interp_simd_put(cpu, mmx, insn->reg, d);
     } else if (op == 0xC4) {
@@ -4007,7 +4043,7 @@ static int interp_sse_xmm_binary(struct cpu *cpu, struct insn *insn, uint64_t ne
         interp_punpck(destination, source, interp_sse_prefix(insn) == SSE_66 ? 8 : 4, op == 0x15, 16);
     } else {
         for (int i = 0; i < 16; i++)
-            destination[i] = op == 0x54 ? (uint8_t)(destination[i] & source[i])
+            destination[i] = op == 0x54   ? (uint8_t)(destination[i] & source[i])
                              : op == 0x55 ? (uint8_t)(~destination[i] & source[i])
                              : op == 0x56 ? (uint8_t)(destination[i] | source[i])
                                           : (uint8_t)(destination[i] ^ source[i]);
@@ -4378,8 +4414,10 @@ static int interp_two_byte_bswap(struct cpu *cpu, struct insn *insn, uint64_t ne
     if (op < 0xC8 || op > 0xCF) return -1;
     int number = (op & 7) | (insn->rexB << 3);
     uint64_t value = cpu->r[number];
-    if (insn->opsize == 8) value = __builtin_bswap64(value);
-    else value = __builtin_bswap32((uint32_t)value);
+    if (insn->opsize == 8)
+        value = __builtin_bswap64(value);
+    else
+        value = __builtin_bswap32((uint32_t)value);
     interp_reg_write(cpu, insn, number, insn->opsize == 8 ? 8 : 4, value);
     cpu->rip = next;
     return STEP_NEXT;
@@ -4424,8 +4462,7 @@ static int interp_two_byte_shift(struct cpu *cpu, struct insn *insn, uint64_t ne
     if (op != 0xA4 && op != 0xA5 && op != 0xAC && op != 0xAD) return -1;
     int right = op >= 0xAC;
     int width = insn->opsize;
-    unsigned count = (op == 0xA4 || op == 0xAC) ? (unsigned)(insn->imm & 0xff)
-                                                  : (unsigned)(cpu->r[RCX] & 0xff);
+    unsigned count = (op == 0xA4 || op == 0xAC) ? (unsigned)(insn->imm & 0xff) : (unsigned)(cpu->r[RCX] & 0xff);
     interp_operand operand = interp_rm(cpu, insn, next);
     uint64_t value = interp_rm_read(cpu, insn, &operand, width);
     uint64_t fill = interp_reg_read(cpu, insn, insn->reg, width);
@@ -4492,9 +4529,9 @@ static int interp_two_byte_bit_count(struct cpu *cpu, struct insn *insn, uint64_
     interp_operand operand = interp_rm(cpu, insn, next);
     uint64_t source = interp_rm_read(cpu, insn, &operand, width) & interp_mask(width);
     if (insn->rep) {
-        uint64_t result = source == 0 ? bits
-                                     : op == 0xBC ? (uint64_t)__builtin_ctzll(source)
-                                                  : (uint64_t)(__builtin_clzll(source) - (64 - bits));
+        uint64_t result = source == 0  ? bits
+                          : op == 0xBC ? (uint64_t)__builtin_ctzll(source)
+                                       : (uint64_t)(__builtin_clzll(source) - (64 - bits));
         interp_flags_nzcv(cpu, 0, result == 0, source == 0, 0);
         cpu->pf = result & 0xff;
         interp_reg_write(cpu, insn, insn->reg, width, result);
