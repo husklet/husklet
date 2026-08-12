@@ -315,9 +315,17 @@
             for binary in "$out/bin/hl-engine" "$out/bin/hl-aarch64" "$out/bin/hl-x86_64"
             do
               existing_rpath=$(patchelf --print-rpath "$binary")
-              patchelf --set-rpath "\$ORIGIN/../lib:$existing_rpath" "$binary"
+              filtered_rpath=""
+              IFS=: read -ra rpath_entries <<< "$existing_rpath"
+              for entry in "''${rpath_entries[@]}"; do
+                if [ "$entry" != "$out/lib" ]; then
+                  filtered_rpath="''${filtered_rpath:+$filtered_rpath:}$entry"
+                fi
+              done
+              patchelf --set-rpath "\$ORIGIN/../lib''${filtered_rpath:+:$filtered_rpath}" "$binary"
               patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
               test "$(patchelf --print-rpath "$binary" | cut -d: -f1)" = '$ORIGIN/../lib'
+              ! patchelf --print-rpath "$binary" | tr : '\n' | grep -Fx "$out/lib" >/dev/null
             done
           '';
           meta = {
@@ -454,7 +462,10 @@
               test -x "$binary"
               patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
               test "$(patchelf --print-rpath "$binary" | cut -d: -f1)" = '$ORIGIN/../lib'
-              "$binary" --backend-receipt |
+              ! patchelf --print-rpath "$binary" | tr : '\n' |
+                grep -Fx ${engine}/lib >/dev/null
+              env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
+                "$binary" --backend-receipt |
                 grep -F '"backend":"retained-c"' >/dev/null
             done
 
