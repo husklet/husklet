@@ -27,7 +27,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Route `hl-engine` lifecycle through `hl-native` and remove dependencies on deleted Rust runtime packages.
 - [x] Give `hl-native` a configured zero-local-dependency budget in `lint.toml`.
 - [x] Install the Cargo-built private shared library beside packaged products with relocatable Linux/macOS loader paths and portable artifact naming.
-- [ ] Prove final installed-product execution on Linux and authoritative packaging/install behavior on macOS and Windows artifacts.
+- [x] Prove installed-product execution on Linux from a fresh copied prefix, including sibling-library selection, relocatable RUNPATH, backend receipts, and artifact hashes.
+- [ ] Prove authoritative packaging/install behavior on macOS and Windows artifacts.
 
 ## Host architecture
 
