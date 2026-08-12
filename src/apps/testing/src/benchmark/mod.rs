@@ -72,6 +72,9 @@ pub(crate) async fn run(options: Options) -> Result<(), Error> {
         let row = evidence::measure(&campaign, &step)?;
         ledger.append(&row)?;
     }
+    // A writable guest or replaced binary invalidates the whole campaign, even if its output
+    // happened to remain stable. Re-hash after the last sample as well as before the first.
+    campaign.verify_artifacts()?;
     let rows = ledger.complete()?;
     let report = verdict::evaluate(&campaign, &rows, options.limit)?;
     ledger.publish(&report)?;

@@ -36,6 +36,14 @@ pub(super) struct Arm {
     pub command: Vec<String>,
     pub artifacts: BTreeMap<String, Artifact>,
     pub smoke: Vec<String>,
+    pub guest_path: GuestPath,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum GuestPath {
+    HostAbsolute,
+    RootfsAbsolute,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -49,6 +57,7 @@ pub(super) struct Layout {
 pub(super) struct Workload {
     pub commands: BTreeMap<String, Vec<String>>,
     pub phases: Vec<String>,
+    pub timeout_seconds: u64,
     #[serde(default)]
     pub wall_time: bool,
 }
@@ -86,6 +95,7 @@ impl Campaign {
         for (name, workload) in &self.workloads {
             if workload.commands.is_empty()
                 || workload.phases.is_empty()
+                || !(1..=3600).contains(&workload.timeout_seconds)
                 || workload
                     .commands
                     .iter()
@@ -93,6 +103,18 @@ impl Campaign {
             {
                 return Err(format!("benchmark workload {name} has invalid layouts or phases").into());
             }
+            for command in workload.commands.values() {
+                let guest = Path::new(&command[0]);
+                if !guest.is_absolute() || !guest.starts_with(&self.rootfs.path) || !guest.is_file() {
+                    return Err(format!("benchmark workload {name} guest is not a rootfs-contained file").into());
+                }
+            }
+        }
+        if self.workloads["malloc"].commands.keys().collect::<Vec<_>>() != self.layouts.keys().collect::<Vec<_>>() {
+            return Err("malloc must run the full sequence on both plain and sqlite layouts".into());
+        }
+        if !self.workloads["sqlite"].commands.contains_key("sqlite") {
+            return Err("sqlite must run on the sqlite-linked layout".into());
         }
         Ok(())
     }

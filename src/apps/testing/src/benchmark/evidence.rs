@@ -1,5 +1,5 @@
 use super::{
-    definition::Campaign,
+    definition::{Campaign, GuestPath},
     schedule::{self, Step},
 };
 use crate::{record::FramedIdentity, suite::Error};
@@ -37,13 +37,22 @@ pub(super) struct Row {
 pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<String, Phase>, String), Error> {
     let arm = &campaign.arms[&step.arm];
     let workload = &campaign.workloads[&step.workload];
+    let guest = &workload.commands[&step.layout];
+    let executable = match arm.guest_path {
+        GuestPath::HostAbsolute => guest[0].clone(),
+        GuestPath::RootfsAbsolute => format!(
+            "/{}",
+            Path::new(&guest[0]).strip_prefix(&campaign.rootfs.path)?.display()
+        ),
+    };
     let mut command = Command::new(&arm.command[0]);
     command
         .args(&arm.command[1..])
-        .args(&workload.commands[&step.layout])
+        .arg(executable)
+        .args(&guest[1..])
         .stdin(Stdio::null());
     let started = Instant::now();
-    let output = command.output()?;
+    let output = bounded_output(&mut command, Duration::from_secs(workload.timeout_seconds))?;
     let wall_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX).max(1);
     if !output.status.success() || !output.stderr.is_empty() {
         return Err(format!(
@@ -104,6 +113,23 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     }
     let identity = FramedIdentity::of(canonical.join("\n").as_bytes());
     Ok((phases, identity))
+}
+
+fn bounded_output(command: &mut Command, timeout: Duration) -> Result<std::process::Output, Error> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            let _ = child.wait();
+            return Err(format!("benchmark sample exceeded {} seconds", timeout.as_secs()).into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
