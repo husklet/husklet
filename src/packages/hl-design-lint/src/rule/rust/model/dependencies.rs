@@ -57,7 +57,7 @@ pub(super) fn local_dependencies(path: &Path) -> Result<HashSet<(String, String)
             specification
         };
         if let Some(dependency) =
-            local_package(specification, &manifest).or_else(|| dependency_package(alias, specification))
+            local_package(specification, &manifest)?.or_else(|| dependency_package(alias, specification))
         {
             resolved.insert((owner.clone(), dependency));
         }
@@ -78,10 +78,15 @@ fn dependency_tables<'a>(value: &'a toml::Value, output: &mut Vec<(&'a str, &'a 
     }
 }
 
-fn local_package(specification: &toml::Value, owner_manifest: &Path) -> Option<String> {
-    let path = specification.get("path")?.as_str()?;
-    let root = owner_manifest.parent()?.join(path);
-    package_name(&root.join("Cargo.toml"))
+fn local_package(specification: &toml::Value, owner_manifest: &Path) -> Result<Option<String>> {
+    let Some(path) = specification.get("path").and_then(toml::Value::as_str) else {
+        return Ok(None);
+    };
+    let root = owner_manifest
+        .parent()
+        .ok_or_else(|| LintError::configuration(format!("{} has no parent directory", owner_manifest.display())))?
+        .join(path);
+    package_name(&root.join("Cargo.toml")).map(Some)
 }
 
 fn dependency_package(alias: &str, specification: &toml::Value) -> Option<String> {
@@ -93,10 +98,17 @@ fn dependency_package(alias: &str, specification: &toml::Value) -> Option<String
         .or_else(|| specification.get("path").map(|_| alias.to_owned()))
 }
 
-fn package_name(manifest: &Path) -> Option<String> {
-    let text = fs::read_to_string(manifest).ok()?;
-    let value = toml::from_str::<toml::Value>(&text).ok()?;
-    value.get("package")?.get("name")?.as_str().map(ToOwned::to_owned)
+fn package_name(manifest: &Path) -> Result<String> {
+    let text = fs::read_to_string(manifest)
+        .map_err(|error| LintError::configuration(format!("read {}: {error}", manifest.display())))?;
+    let value = toml::from_str::<toml::Value>(&text)
+        .map_err(|error| LintError::configuration(format!("decode {}: {error}", manifest.display())))?;
+    value
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml::Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| LintError::configuration(format!("{} has no package.name", manifest.display())))
 }
 
 fn manifest(path: &Path) -> Option<PathBuf> {
@@ -162,6 +174,21 @@ mod tests {
         .unwrap();
         let error = local_dependencies(&root.join("member/src/lib.rs")).unwrap_err();
         assert!(error.to_string().contains("absent from [workspace.dependencies]"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_unreadable_local_dependency_manifest() {
+        let root = std::env::temp_dir().join(format!("lint-model-local-dependency-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("member/src")).unwrap();
+        fs::write(
+            root.join("member/Cargo.toml"),
+            "[package]\nname = \"member\"\n[dependencies]\ntarget = { path = \"../missing\" }\n",
+        )
+        .unwrap();
+        let error = local_dependencies(&root.join("member/src/lib.rs")).unwrap_err();
+        assert!(error.to_string().contains("missing/Cargo.toml"));
         fs::remove_dir_all(root).unwrap();
     }
 }
