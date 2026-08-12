@@ -6,9 +6,11 @@ pub(crate) mod process;
 pub(crate) mod worker;
 
 mod checkpoint_broker;
+mod checkpoint_control;
 mod environment;
 mod ffi;
 mod options;
+mod process_lifecycle;
 mod provider_broker;
 
 use crate::activation::GuestIsa;
