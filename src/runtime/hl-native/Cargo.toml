@@ -11,9 +11,6 @@ links = "hl_native"
 [lints]
 workspace = true
 
-[dependencies]
-libc = "0.2.189"
-
 [build-dependencies]
 cc = "1.4.0"
 

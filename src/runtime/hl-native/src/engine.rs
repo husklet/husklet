@@ -203,16 +203,13 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
     if config.executable_fd >= 0 {
         #[cfg(unix)]
         {
-            use std::os::fd::FromRawFd;
-            // SAFETY: `dup` accepts any integer descriptor and reports invalid
-            // descriptors with a negative return value, which is checked.
-            let descriptor = unsafe { libc::dup(config.executable_fd) };
-            if descriptor < 0 {
-                return Err(1);
-            }
-            // SAFETY: successful `dup` returned a fresh owned descriptor, so
-            // transferring that ownership to `File` is unique and balanced.
-            return Ok(unsafe { File::from_raw_fd(descriptor) });
+            use std::os::fd::BorrowedFd;
+            // SAFETY: the descriptor is borrowed only for this duplication
+            // call; invalid descriptors are reported by `try_clone_to_owned`.
+            let descriptor = unsafe { BorrowedFd::borrow_raw(config.executable_fd) }
+                .try_clone_to_owned()
+                .map_err(|_| 1)?;
+            return Ok(File::from(descriptor));
         }
         #[cfg(not(unix))]
         return Err(3);
