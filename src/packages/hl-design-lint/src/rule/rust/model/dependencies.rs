@@ -25,24 +25,44 @@ pub(super) fn local_dependencies(path: &Path) -> Result<HashSet<(String, String)
     let workspace = workspace_manifest(&manifest);
     let workspace_dependencies = workspace
         .as_ref()
-        .and_then(|path| fs::read_to_string(path).ok())
-        .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
-        .and_then(|value| value.get("workspace")?.get("dependencies").cloned());
+        .map(|path| {
+            let text = fs::read_to_string(path)
+                .map_err(|error| LintError::configuration(format!("read {}: {error}", path.display())))?;
+            let value = toml::from_str::<toml::Value>(&text)
+                .map_err(|error| LintError::configuration(format!("decode {}: {error}", path.display())))?;
+            Ok::<_, LintError>(
+                value
+                    .get("workspace")
+                    .and_then(|workspace| workspace.get("dependencies"))
+                    .cloned(),
+            )
+        })
+        .transpose()?
+        .flatten();
     let mut dependencies = Vec::new();
     dependency_tables(&value, &mut dependencies);
-    Ok(dependencies
-        .into_iter()
-        .filter_map(|(alias, specification)| {
-            let specification = if specification.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
-                workspace_dependencies.as_ref()?.get(alias)?
-            } else {
-                specification
-            };
-            local_package(specification, &manifest)
-                .or_else(|| dependency_package(alias, specification))
-                .map(|dependency| (owner.clone(), dependency))
-        })
-        .collect())
+    let mut resolved = HashSet::new();
+    for (alias, specification) in dependencies {
+        let specification = if specification.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
+            workspace_dependencies
+                .as_ref()
+                .and_then(|dependencies| dependencies.get(alias))
+                .ok_or_else(|| {
+                    LintError::configuration(format!(
+                        "{} inherits dependency {alias:?}, but it is absent from [workspace.dependencies]",
+                        manifest.display()
+                    ))
+                })?
+        } else {
+            specification
+        };
+        if let Some(dependency) =
+            local_package(specification, &manifest).or_else(|| dependency_package(alias, specification))
+        {
+            resolved.insert((owner.clone(), dependency));
+        }
+    }
+    Ok(resolved)
 }
 
 fn dependency_tables<'a>(value: &'a toml::Value, output: &mut Vec<(&'a str, &'a toml::Value)>) {
@@ -122,6 +142,26 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("Cargo.toml"), "[package]\nname = \"sample\"\n").unwrap();
         assert!(local_dependencies(&root.join("src/lib.rs")).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_unresolved_workspace_dependency() {
+        let root = std::env::temp_dir().join(format!("lint-model-workspace-dependency-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("member/src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\n[workspace.dependencies]\nother = \"1\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("member/Cargo.toml"),
+            "[package]\nname = \"member\"\n[dependencies]\nmissing.workspace = true\n",
+        )
+        .unwrap();
+        let error = local_dependencies(&root.join("member/src/lib.rs")).unwrap_err();
+        assert!(error.to_string().contains("absent from [workspace.dependencies]"));
         fs::remove_dir_all(root).unwrap();
     }
 }
