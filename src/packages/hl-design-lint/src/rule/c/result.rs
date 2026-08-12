@@ -70,7 +70,7 @@ fn collect(node: Node<'_>, source: &str, functions: &BTreeSet<String>, path: &Pa
             .and_then(|expression| discarded_call(expression, source))
         && let Some(function) = call
             .child_by_field_name("function")
-            .and_then(unparenthesized)
+            .and_then(|function| direct_function(function, source))
             .filter(|child| child.kind() == "identifier")
         && let Ok(name) = function.utf8_text(source.as_bytes())
         && functions.contains(name)
@@ -102,6 +102,20 @@ fn discarded_call<'tree>(mut expression: Node<'tree>, source: &str) -> Option<No
 fn unparenthesized(mut expression: Node<'_>) -> Option<Node<'_>> {
     while expression.kind() == "parenthesized_expression" {
         expression = expression.named_child(0)?;
+    }
+    Some(expression)
+}
+
+fn direct_function<'tree>(mut expression: Node<'tree>, source: &str) -> Option<Node<'tree>> {
+    expression = unparenthesized(expression)?;
+    if expression.kind() == "pointer_expression"
+        && expression
+            .utf8_text(source.as_bytes())
+            .ok()?
+            .trim_start()
+            .starts_with('*')
+    {
+        return direct_function(expression.named_child(0)?, source);
     }
     Some(expression)
 }
