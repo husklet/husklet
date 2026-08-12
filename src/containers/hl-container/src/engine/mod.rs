@@ -477,6 +477,18 @@ mod tests {
         assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), Some("c"));
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+        assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), None);
+        assert_eq!(spec.plan.options.get("HL_C_EXECUTION_ATTESTATION"), None);
+    }
+
+    #[test]
+    fn retained_c_diagnostics_enable_profile_and_completion_attestation() {
+        let mut launch = launch();
+        launch.execution = crate::Execution::retained_c_diagnostics();
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), Some("c"));
+        assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_C_EXECUTION_ATTESTATION"), Some("1"));
     }
 
     #[test]
