@@ -4,6 +4,8 @@ use std::{
     process::Command,
 };
 
+use sha2::{Digest, Sha256};
+
 fn build(workspace: &Path, target: &Path) -> Vec<u8> {
     let status = Command::new(env!("CARGO"))
         .args([
@@ -47,6 +49,10 @@ fn find_artifact(directory: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
+fn sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[test]
 #[ignore = "expensive independent-build gate run by the release workflow"]
 fn native_shared_library_is_reproducible_across_out_directories() {
@@ -55,5 +61,11 @@ fn native_shared_library_is_reproducible_across_out_directories() {
     let temporary = tempfile::tempdir().expect("temporary build root");
     let first = build(workspace, &temporary.path().join("first"));
     let second = build(workspace, &temporary.path().join("second"));
-    assert_eq!(first, second, "native shared library depends on its Cargo OUT_DIR");
+    let first_hash = sha256(&first);
+    let second_hash = sha256(&second);
+    eprintln!("first={first_hash}\nsecond={second_hash}");
+    assert!(
+        first == second,
+        "native shared library depends on its Cargo OUT_DIR: {first_hash} != {second_hash}"
+    );
 }

@@ -313,8 +313,12 @@ int main(void) {
             "-D_GNU_SOURCE",
             "-ffunction-sections",
             "-fdata-sections",
-            "-Wl,--gc-sections",
         ])
+        .arg(if cfg!(target_os = "macos") {
+            "-Wl,-dead_strip"
+        } else {
+            "-Wl,--gc-sections"
+        })
         .arg(format!("-I{}", native.display()))
         .arg(format!("-I{}", native.join("include").display()))
         .arg(&source)
@@ -366,8 +370,12 @@ int main(void) {
             "-D_GNU_SOURCE",
             "-ffunction-sections",
             "-fdata-sections",
-            "-Wl,--gc-sections",
         ])
+        .arg(if cfg!(target_os = "macos") {
+            "-Wl,-dead_strip"
+        } else {
+            "-Wl,--gc-sections"
+        })
         .arg(format!("-I{}", native.display()))
         .arg(format!("-I{}", native.join("include").display()))
         .arg(&source)

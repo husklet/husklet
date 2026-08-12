@@ -260,13 +260,17 @@ fn included_c_sources(source: &Path) -> Vec<PathBuf> {
 
 fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
     let mut build = cc::Build::new();
+    let debug = env::var("PROFILE").as_deref() != Ok("release");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        build.archiver("/usr/bin/ar");
+    }
     build
         .cargo_metadata(false)
         .include(NATIVE_ROOT)
         .include("src/native/include")
         .include("src/native")
         .opt_level(2)
-        .debug(true)
+        .debug(debug)
         .pic(true)
         .warnings(strict)
         .std("c11")
