@@ -1340,6 +1340,35 @@ static int interp_one_byte_test_immediate(struct cpu *cpu, struct insn *insn, ui
     return STEP_NEXT;
 }
 
+static int interp_one_byte_integer_convert(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op == 0x63) {
+        interp_operand operand = interp_rm(cpu, insn, next);
+        uint64_t source = interp_rm_read(cpu, insn, &operand, 4);
+        uint64_t value = insn->opsize == 8 ? (uint64_t)(int64_t)(int32_t)(uint32_t)source : source;
+        interp_reg_write(cpu, insn, insn->reg, insn->opsize, value);
+    } else if (op == 0x69 || op == 0x6B) {
+        interp_operand operand = interp_rm(cpu, insn, next);
+        uint64_t source = interp_rm_read(cpu, insn, &operand, insn->opsize);
+        uint64_t value = interp_imul_truncating(cpu, source, (uint64_t)insn->imm, insn->opsize);
+        interp_reg_write(cpu, insn, insn->reg, insn->opsize, value);
+    } else if (op == 0x98) {
+        int width = insn->opsize;
+        uint64_t value = width == 2 ? (uint64_t)(int64_t)(int8_t)(uint8_t)cpu->r[RAX]
+                         : width == 4 ? (uint64_t)(int64_t)(int16_t)(uint16_t)cpu->r[RAX]
+                                      : (uint64_t)(int64_t)(int32_t)(uint32_t)cpu->r[RAX];
+        interp_reg_write(cpu, insn, RAX, width, value);
+    } else if (op == 0x99) {
+        int width = insn->opsize;
+        uint64_t sign = interp_msb(cpu->r[RAX] & interp_mask(width), width) ? UINT64_MAX : 0;
+        interp_reg_write(cpu, insn, RDX, width, sign);
+    } else {
+        return -1;
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int delegated = interp_one_byte_alu(cpu, insn, next);
@@ -1356,29 +1385,10 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     if (delegated >= 0) return delegated;
     delegated = interp_one_byte_test_immediate(cpu, insn, next);
     if (delegated >= 0) return delegated;
+    delegated = interp_one_byte_integer_convert(cpu, insn, next);
+    if (delegated >= 0) return delegated;
 
     switch (op) {
-    // MOVSXD
-    case 0x63: {
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t source = interp_rm_read(cpu, insn, &operand, 4);
-        interp_reg_write(cpu, insn, insn->reg, insn->opsize,
-                         insn->opsize == 8 ? (uint64_t)(int64_t)(int32_t)(uint32_t)source : source);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // IMUL r, r/m, imm
-    case 0x69:
-    case 0x6B: {
-        interp_operand operand = interp_rm(cpu, insn, next);
-        uint64_t source = interp_rm_read(cpu, insn, &operand, insn->opsize);
-        interp_reg_write(cpu, insn, insn->reg, insn->opsize,
-                         interp_imul_truncating(cpu, source, (uint64_t)insn->imm, insn->opsize));
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
     // NOP and XCHG rAX, r
     case 0x90:
     case 0x91:
@@ -1397,28 +1407,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
             interp_reg_write(cpu, insn, RAX, width, b);
             interp_reg_write(cpu, insn, number, width, a);
         }
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-
-    // CBW/CWDE/CDQE, then CWD/CDQ/CQO
-    case 0x98: {
-        int width = insn->opsize;
-        uint64_t value;
-        if (width == 2)
-            value = (uint64_t)(int64_t)(int8_t)(uint8_t)(cpu->r[RAX] & 0xff); // CBW: AL -> AX
-        else if (width == 4)
-            value = (uint64_t)(int64_t)(int16_t)(uint16_t)(cpu->r[RAX] & 0xffff); // CWDE: AX -> EAX
-        else
-            value = (uint64_t)(int64_t)(int32_t)(uint32_t)(cpu->r[RAX] & 0xffffffff); // CDQE: EAX -> RAX
-        interp_reg_write(cpu, insn, RAX, width, value);
-        cpu->rip = next;
-        return STEP_NEXT;
-    }
-    case 0x99: {
-        int width = insn->opsize;
-        uint64_t sign = interp_msb(cpu->r[RAX] & interp_mask(width), width) ? UINT64_MAX : 0;
-        interp_reg_write(cpu, insn, RDX, width, sign);
         cpu->rip = next;
         return STEP_NEXT;
     }
