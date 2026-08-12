@@ -3,7 +3,7 @@ use super::{
     evidence::Row,
     schedule::{self, CELLS, Step},
 };
-use crate::suite::Error;
+use crate::{record::FramedIdentity, suite::Error};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) struct Report {
@@ -345,8 +345,12 @@ fn verify_outputs(rows: &[Row]) -> Result<(), Error> {
         if !valid_identity(&row.output) {
             return Err(format!("invalid exact-output identity for {}", row.key).into());
         }
+        if FramedIdentity::of(row.output_frame.as_bytes()) != row.output {
+            return Err(format!("exact-output frame identity differs for {}", row.key).into());
+        }
         let value = (
             row.output.as_str(),
+            row.output_frame.as_str(),
             row.phases
                 .iter()
                 .map(|(name, phase)| (name.as_str(), phase.ok.as_str()))
@@ -480,6 +484,7 @@ mod tests {
             position: 0,
             arm: arm.into(),
             output: "same".into(),
+            output_frame: "frame".into(),
             phases: [("malloc".into(), super::super::evidence::Phase { us, ok: "same".into() })].into(),
             host_load: "0.1".into(),
         }
@@ -600,6 +605,16 @@ mod tests {
         }
         let mut evidence = row("malloc|plain|EE|0|0", "E", 1);
         evidence.output = "corrupt".into();
+        assert!(super::verify_outputs(&[evidence]).is_err());
+    }
+
+    #[test]
+    fn exact_output_digest_is_recomputed_from_its_frame() {
+        let mut evidence = row("malloc|plain|EE|0|0", "E", 1);
+        evidence.output_frame = "META guest=plain".into();
+        evidence.output = crate::record::FramedIdentity::of(evidence.output_frame.as_bytes());
+        super::verify_outputs(std::slice::from_ref(&evidence)).unwrap();
+        evidence.output_frame.push('x');
         assert!(super::verify_outputs(&[evidence]).is_err());
     }
 

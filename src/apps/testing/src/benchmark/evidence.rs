@@ -30,11 +30,12 @@ pub(super) struct Row {
     pub position: usize,
     pub arm: String,
     pub output: String,
+    pub output_frame: String,
     pub phases: BTreeMap<String, Phase>,
     pub host_load: String,
 }
 
-pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<String, Phase>, String), Error> {
+pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<String, Phase>, String, String), Error> {
     let arm = &campaign.arms[&step.arm];
     let workload = &campaign.workloads[&step.workload];
     let guest = &workload.commands[&step.layout];
@@ -88,8 +89,9 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     if phases.keys().map(String::as_str).collect::<BTreeSet<_>>() != expected.iter().map(String::as_str).collect() {
         return Err(format!("layout {} emitted an incomplete phase set", step.layout).into());
     }
-    let identity = FramedIdentity::of(canonical.join("\n").as_bytes());
-    Ok((phases, identity))
+    let frame = canonical.join("\n");
+    let identity = FramedIdentity::of(frame.as_bytes());
+    Ok((phases, identity, frame))
 }
 
 fn parse_output_line(
@@ -191,18 +193,22 @@ pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
         readings.push(sample(campaign, step)?);
     }
     let output = readings[0].1.clone();
-    if readings.iter().any(|(_, identity)| *identity != output) {
+    let output_frame = readings[0].2.clone();
+    if readings
+        .iter()
+        .any(|(_, identity, frame)| *identity != output || *frame != output_frame)
+    {
         return Err("repeated sample exact-output mismatch".into());
     }
     let mut phases = BTreeMap::new();
     for name in readings[0].0.keys() {
         let ok = readings[0].0[name].ok.clone();
-        if readings.iter().any(|(sample, _)| sample[name].ok != ok) {
+        if readings.iter().any(|(sample, _, _)| sample[name].ok != ok) {
             return Err(format!("repeated checksum mismatch for {name}").into());
         }
         let us = readings
             .iter()
-            .map(|(sample, _)| sample[name].us)
+            .map(|(sample, _, _)| sample[name].us)
             .min()
             .ok_or("sample set is empty")?;
         phases.insert(name.clone(), Phase { us, ok });
@@ -216,6 +222,7 @@ pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
         position: step.position,
         arm: step.arm.clone(),
         output,
+        output_frame,
         phases,
         host_load: load(),
     })
@@ -495,6 +502,7 @@ mod ledger_tests {
             position: 0,
             arm: "E".into(),
             output: "same".into(),
+            output_frame: "frame".into(),
             phases: [(
                 "malloc".into(),
                 Phase {
