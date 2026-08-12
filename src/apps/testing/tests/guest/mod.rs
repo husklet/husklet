@@ -52,7 +52,7 @@ pub fn projection(name: &str, isa: &str, destination: &Path) {
     compile(&source, isa, destination, flags);
 }
 
-/// Builds the generic static ET_EXEC displacement fixture.
+/// Builds the generic static `ET_EXEC` displacement fixture.
 pub fn displaced_et_exec(isa: &str, destination: &Path) {
     compile(
         &repository("src/runtime/native/fixtures/testing/elf/displaced.c"),
@@ -62,7 +62,7 @@ pub fn displaced_et_exec(isa: &str, destination: &Path) {
     );
 }
 
-/// Builds a self-contained ET_DYN guest using the requested PIE linker mode.
+/// Builds a self-contained `ET_DYN` guest using the requested PIE linker mode.
 pub fn pie_exec(isa: &str, destination: &Path, static_pie: bool) {
     let (source, flags) = if static_pie {
         (
