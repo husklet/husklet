@@ -589,9 +589,30 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     return svc_done(c);
 }
 
+static void svc_write_host(struct cpu *c, int descriptor, uint64_t address, uint64_t count) {
+    hl_fdcache_fd_evict(descriptor);
+    int64_t allowed = fsize_gate(c, descriptor, -1, count);
+    if (allowed < 0) {
+        G_RET(c) = (uint64_t)allowed;
+        return;
+    }
+    ssize_t result;
+    do {
+        result = guest_fd_write(descriptor, address, (size_t)allowed, 0, 0);
+    } while (result < 0 && SVC_EINTR_RESTART(c));
+    G_RET(c) = result < 0 ? (uint64_t)(-errno) : (uint64_t)result;
+    svc_sigpipe_on_epipe(c, (int64_t)G_RET(c));
+}
+
+static int svc_write_sealed(struct cpu *c, int descriptor) {
+    if (descriptor < 0 || descriptor >= HL_NFD || !(memfd_seals_fd(descriptor) & 0x8)) return 0;
+    G_RET(c) = (uint64_t)(-EPERM);
+    return 1;
+}
+
 static int svc_write(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    (void)a3; (void)a4; (void)a5;
     switch (nr) {
     case 64: {
         int wfd = (int)a0;
@@ -727,11 +748,7 @@ static int svc_write(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = a2; // Linux consumes the whole write even when it truncated the stored name
             break;
         }
-        // memfd F_SEAL_WRITE: a write to a write-sealed memfd fails EPERM (emulated seal state).
-        if (wfd >= 0 && wfd < HL_NFD && (memfd_seals_fd(wfd) & 0x8)) {
-            G_RET(c) = (uint64_t)(-EPERM);
-            break;
-        }
+        if (svc_write_sealed(c, wfd)) break;
         // AF_NETLINK socket write: busybox `ip` (libbb) sends its RTM_GET* dump request via
         // write(2), NOT sendto/sendmsg -- so the netlink responder (which only hooked send*) never saw
         // it, no dump was queued, and the follow-up recvmsg blocked forever ("container stuck Up").
@@ -806,8 +823,7 @@ static int svc_write(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             }
             free(buffer);
         }
-        // RAM-backed scratch file: serve the write from memory (spill to the host file past the cap).
-        // Copies straight from the guest buffer, so validate it (a host-fd write's kernel copyin would fault
+        // Validate RAM-backed writes because a host-fd kernel copyin would fault
         // a bad pointer to EFAULT; this engine memcpy would instead crash) --, access_ok.
         if (memf_get(wfd) && memf_room_or_spill(wfd, (off_t)g_memf[wfd]->pos + (off_t)a2)) {
             int64_t allowed = memf_fsize_gate(c, (off_t)g_memf[wfd]->pos, a2); // RLIMIT_FSIZE -> SIGXFSZ/EFBIG
@@ -831,20 +847,7 @@ static int svc_write(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = r < 0 ? (uint64_t)(int64_t)r : (uint64_t)r;
             break;
         }
-        hl_fdcache_fd_evict(wfd);
-        // RLIMIT_FSIZE: a write past the soft file-size limit raises SIGXFSZ (and returns EFBIG); a straddling
-        // write is clamped to the limit. No-op unless the guest set a finite limit on a regular file.
-        int64_t allowed = fsize_gate(c, wfd, -1, a2);
-        if (allowed < 0) {
-            G_RET(c) = (uint64_t)allowed;
-            break;
-        }
-        ssize_t r; // SA_RESTART: restart a signal-interrupted blocking write in place (see case 63)
-        do {
-            r = guest_fd_write(wfd, a1, (size_t)allowed, 0, 0);
-        } while (r < 0 && SVC_EINTR_RESTART(c));
-        G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
-        svc_sigpipe_on_epipe(c, (int64_t)G_RET(c)); // write(2) to a broken pipe/socket -> guest SIGPIPE
+        svc_write_host(c, wfd, a1, a2);
         break;
     }
     default: return 0;
