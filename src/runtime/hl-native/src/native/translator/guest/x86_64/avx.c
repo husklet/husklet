@@ -1289,6 +1289,37 @@ static enum avx_dispatch_result avx_dispatch_saturating_pack(const hl_x86_avx_st
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_packed_low_multiply(const hl_x86_avx_state *state, struct cpu *c,
+                                                                struct insn *instruction, uint64_t next, int map,
+                                                                int op, int destination, int first_register,
+                                                                int width) {
+    if (!((map == 1 && op == 0xF4) || (map == 2 && op == 0x40))) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t first[64], second[64], output[64];
+    avx_get(c, first_register, first);
+    avx_get_rm(state, c, instruction, next, width, second);
+    if (map == 1) { // vpmuludq: multiply the low unsigned dword in each qword lane
+        for (int offset = 0; offset < width; offset += 8) {
+            uint32_t left, right;
+            memcpy(&left, first + offset, 4);
+            memcpy(&right, second + offset, 4);
+            uint64_t result = (uint64_t)left * right;
+            memcpy(output + offset, &result, 8);
+        }
+    } else { // vpmulld: retain the low dword of every product
+        for (int offset = 0; offset < width; offset += 4) {
+            uint32_t left, right;
+            memcpy(&left, first + offset, 4);
+            memcpy(&right, second + offset, 4);
+            uint32_t result = left * right;
+            memcpy(output + offset, &result, 4);
+        }
+    }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1741,6 +1772,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map2_qword_comparison(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
         return;
     if (avx_dispatch_saturating_pack(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_packed_low_multiply(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2376,19 +2408,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             }
             goto done;
         }
-        case 0xF4: { // vpmuludq: dst.u64[i] = (u32)src1.even32[i] * (u32)rm.even32[i]
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += 8) {
-                uint32_t x, y;
-                memcpy(&x, a + i, 4); // low dword of each qword lane
-                memcpy(&y, b + i, 4);
-                uint64_t z = (uint64_t)x * (uint64_t)y;
-                memcpy(d + i, &z, 8);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
         case 0x77: { // vzeroupper (L=0): zero bits[128:256) of ymm0..15. vzeroall (L=1): zero all of 0..15.
             uint8_t z[64];
             memset(z, 0, 64);
@@ -2654,19 +2673,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             uint8_t zero[64];
             memset(zero, 0, 64);
             avx_put(c, vv, zero, W); // the entire mask register is cleared after a completed gather
-            goto done;
-        }
-        case 0x40: { // vpmulld: 32-bit low product, dst = src1(vvvv) * rm
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += 4) {
-                int32_t x, y;
-                memcpy(&x, a + i, 4);
-                memcpy(&y, b + i, 4);
-                int32_t z = x * y;
-                memcpy(d + i, &z, 4);
-            }
-            avx_put(c, rd, d, W);
             goto done;
         }
         }
