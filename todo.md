@@ -28,7 +28,13 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Give `hl-native` a configured zero-local-dependency budget in `lint.toml`.
 - [x] Install the Cargo-built private shared library beside packaged products with relocatable Linux/macOS loader paths and portable artifact naming.
 - [x] Prove installed-product execution on Linux from a fresh copied prefix, including sibling-library selection, relocatable RUNPATH, backend receipts, and artifact hashes.
-- [ ] Prove authoritative packaging/install behavior on macOS and Windows artifacts.
+- [x] Prove authoritative packaging/install behavior on macOS ARM64 artifacts.
+  The native `aarch64-darwin` `installed-product` and `host-darwin-aarch64-native`
+  flake checks passed together on commit `ef4ad33f0`: the Cargo-built dylib and
+  all three launchers are exact ARM64 Mach-O artifacts, copied-prefix loader and
+  deterministic hash-bound receipt contracts pass, removing the sibling dylib
+  fails closed, and strict C/C++ consumers compile, link, and execute against it.
+- [ ] Prove authoritative packaging/install behavior on Windows AMD64 artifacts.
   Local Nix checks fully compile/link Linux ARM64 and AMD64. They also compile the
   Windows GNU Rust surface and host bridge and link a PE/COFF ABI fixture DLL plus
   import library. This is not MSVC ABI, Windows SDK, complete engine-DLL, loader,
@@ -66,7 +72,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Organize Linux under `context`, `handles`, `fs`, `process`, `io`, `memory`, `network`, `time`, `sync`, and logging owners.
 - [x] Keep Linux `host.c` limited to registration/assembly.
 - [x] Integrate the macOS capability hierarchy onto the current native layout and verify its source/build selection on the merged tip.
-- [ ] Obtain authoritative macOS ARM64 compilation and runtime evidence from macOS CI.
+- [x] Obtain authoritative macOS ARM64 compilation and runtime evidence from a native macOS host.
 - [x] Restore the Windows AMD64 source backend, isolate its Cargo source closure, and wire its DLL/import-library boundary into the current native layout.
 - [ ] Replace the Linux-specific bridge lifecycle and descriptor imports with Windows host-service handles before enabling Windows support.
 - [ ] Prove Windows runtime behavior; previous oracle evidence was incomplete and is not production evidence. (Windows implementation is only priority if you are on windows and have powershell and tools.)
