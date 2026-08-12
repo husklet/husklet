@@ -155,17 +155,7 @@ static uint64_t nonpie_zext(uint64_t v, int size) {
     return size >= 3 ? v : (v & ((1ull << (8 << size)) - 1));
 }
 
-static int nonpie_fixup(siginfo_t *si, void *ucv) {
-    if (!g_nonpie_lo || !ucv || !si) return 0;
-    uint64_t va = (uint64_t)si->si_addr;
-    if (va < g_nonpie_lo || va >= g_nonpie_hi) return 0;
-    ucontext_t *uc = (ucontext_t *)ucv;
-    uint32_t insn = *(uint32_t *)(HL_HOST_UC_PC(uc));
-    uint64_t real = va + g_nonpie_bias; // the datum's real (high) mapped location
-    uint64_t *X = HL_HOST_UC_REGS(uc);
-    __uint128_t *V = HL_HOST_UC_VREGS(uc);
-    int rt = insn & 0x1F;
-
+static int nonpie_fixup_basic(uint32_t insn, uint64_t real, uint64_t va, uint64_t *X, __uint128_t *V, int rt, ucontext_t *uc) {
     // ---- DC ZVA (data-cache zero by VA): zero the DCZID_EL0-sized block containing the faulting addr.
     //      glibc's memset streams large zero-fills through `dc zva`; on the non-PIE image's .bss this
     //      faults at the low link address. The guest sized its loop from the host DCZID_EL0 (the frontend
@@ -307,6 +297,10 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
         return 1;
     }
 
+    return -1;
+}
+
+static int nonpie_fixup_pair_atomics(uint32_t insn, uint64_t real, uint64_t va, uint64_t *X, __uint128_t *V, int rt, ucontext_t *uc) {
     // ---- Exclusive PAIR: LDXP/LDAXP/STXP/STLXP. bit30=element width (0=32-bit pair/8B, 1=64-bit pair/16B),
     //      bit22=L (load). These fell through the single-register handler above (o1==0 there) and every other
     //      case -> return 0 -> the low non-PIE fault re-raised on the SAME instruction forever (the observed
@@ -376,6 +370,10 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
         return 1;
     }
 
+    return -1;
+}
+
+static int nonpie_fixup_simd_and_scalar(uint32_t insn, uint64_t real, uint64_t va, uint64_t *X, __uint128_t *V, int rt, ucontext_t *uc) {
     // ---- AdvSIMD load/store MULTIPLE structures (LD1/ST1 contiguous AND LD2/3/4 / ST2/3/4 interleaved).
     //      glibc's NEON memcpy/memmove/memset/strlen stream the non-PIE image's absolute data through these.
     //      Encoding: bit31=0, bits[29:24]=001100, bit23=post-index, bits[21:16]=Rm/0, opcode[15:12],
@@ -558,6 +556,25 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
     }
     HL_HOST_UC_PC(uc) += 4;
     return 1;
+}
+
+static int nonpie_fixup(siginfo_t *si, void *ucv) {
+    if (!g_nonpie_lo || !ucv || !si) return 0;
+    uint64_t va = (uint64_t)si->si_addr;
+    if (va < g_nonpie_lo || va >= g_nonpie_hi) return 0;
+    ucontext_t *uc = (ucontext_t *)ucv;
+    uint32_t insn = *(uint32_t *)(HL_HOST_UC_PC(uc));
+    uint64_t real = va + g_nonpie_bias; // the datum's real (high) mapped location
+    uint64_t *X = HL_HOST_UC_REGS(uc);
+    __uint128_t *V = HL_HOST_UC_VREGS(uc);
+    int rt = insn & 0x1F;
+
+
+    int result = nonpie_fixup_basic(insn, real, va, X, V, rt, uc);
+    if (result >= 0) return result;
+    result = nonpie_fixup_pair_atomics(insn, real, va, X, V, rt, uc);
+    if (result >= 0) return result;
+    return nonpie_fixup_simd_and_scalar(insn, real, va, X, V, rt, uc);
 }
 
 #else
