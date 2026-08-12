@@ -5442,6 +5442,63 @@ static int lower_x87_family(struct insn *instruction, uint64_t guest_pc, uint64_
     return result == TX_FALL ? TX_NEXT : result;
 }
 
+static int lower_sse_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
+    if (I.op != 0xC2) return TX_FALL;
+    int packed = !I.repne && !I.rep;
+    int s = vm;
+    if (I.is_mem) {
+        if (packed) {
+            g_ldr_q_ea(16, &I, next);
+        } else {
+            emit_ea(&I, next);
+            if (emit_soft_memory_active()) emit_memory_guard(17, I.repne ? 8u : 4u, guest_pc, X86_SOFT_READ);
+            if (I.repne)
+                g_ldr_d(16, 17);
+            else
+                g_ldr_s(16, 17);
+        }
+        s = 16;
+    }
+    int pred = (int)I.imm & 7;
+    // sz bit (bit22): packed 66 / scalar F2 -> double, else single
+    uint32_t szb = (packed ? I.p66 : I.repne) ? 0x00400000u : 0;
+    uint32_t EQ = (packed ? 0x4E20E400u : 0x5E20E400u) | szb; // FCMEQ
+    uint32_t GE = (packed ? 0x6E20E400u : 0x7E20E400u) | szb; // FCMGE
+    uint32_t GT = (packed ? 0x6EA0E400u : 0x7EA0E400u) | szb; // FCMGT
+    uint32_t ANDb = packed ? 0x4E201C00u : 0x0E201C00u;       // AND Vd.16b/8b
+    uint32_t NOTb = packed ? 0x6E205800u : 0x2E205800u;       // NOT (MVN) Vd.16b/8b
+    // CMPSS/CMPSD write ONLY the low element and preserve the rest of the
+    // destination, but the ARM scalar FCMxx/NOT forms zero everything above the
+    // element. So scalar results are built in v18 and inserted back into lane 0.
+    int res = packed ? vd : 18;
+    if (pred == 3 || pred == 7) {                       // UNORD/ORD: ordered(a)&ordered(b)
+        emit32(EQ | (vd << 16) | (vd << 5) | 17);       // v17 = a==a (ordered a)
+        emit32(EQ | (s << 16) | (s << 5) | res);        // res = b==b (ordered b)
+        emit32(ANDb | (17 << 16) | (res << 5) | res);   // res = ORD
+        if (pred == 3) emit32(NOTb | (res << 5) | res); // UNORD = ~ORD
+    } else {
+        // predicates handled here: 0 EQ, 1 LT, 2 LE, 4 NEQ, 5 NLT, 6 NLE.
+        // LT/LE/NLT/NLE build the ordered comparison a<b / a<=b via the swapped GT/GE (a<b ==
+        // b>a); NEQ/NLT/NLE then invert. x86's N-forms are UNORDERED: they return all-ones when
+        // an operand is NaN. ARM FCMGT/FCMGE give 0 on NaN, so inverting the ordered result (NOT)
+        // yields the correct NaN->true mask for NLT/NLE (H12) exactly as it already did for NEQ.
+        int lt_like = (pred == 1 || pred == 2 || pred == 5 || pred == 6);
+        int use_ge = (pred == 2 || pred == 6);           // LE/NLE -> GE ; LT/NLT -> GT
+        int neg = (pred == 4 || pred == 5 || pred == 6); // NEQ/NLT/NLE invert (NaN -> true)
+        int n = lt_like ? s : vd, m = lt_like ? vd : s;
+        uint32_t fc = (pred == 0 || pred == 4) ? EQ : use_ge ? GE : GT;
+        emit32(fc | (m << 16) | (n << 5) | res);  // FCMxx res, n, m
+        if (neg) emit32(NOTb | (res << 5) | res); // invert -> NaN lane becomes all-ones
+    }
+    if (!packed) { // merge the scalar lane back
+        if (I.repne)
+            e_ins_d(vd, 0, res, 0); // cmpsd: bits 63:0 only
+        else
+            e_ins_s(vd, 0, res, 0); // cmpss: bits 31:0 only
+    }
+    return TX_NEXT;
+}
+
 static int lower_sse_precision_conversion(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     if (I.op != 0x5A) return TX_FALL;
     // 0F 5A is FOUR instructions, selected by the mandatory prefix:
@@ -6299,59 +6356,8 @@ static void *translate_block(uint64_t gpc) {
                     mmx_wb = -1;                           // destination is a GPR
                     // UMOV Wreg, Vm.H[lane]  (imm5 = lane<<2 | 0b10 selects H; zero-extends into the GPR)
                     emit32(0x0E003C00u | ((((unsigned)lane << 2) | 2u) << 16) | (vm << 5) | I.reg);
-                } else if (op == 0xC2) { // cmpps/pd/ss/sd: FP compare with predicate imm -> all-1s/0 mask
-                    int packed = !I.repne && !I.rep;
-                    int s = vm;
-                    if (I.is_mem) {
-                        if (packed) {
-                            g_ldr_q_ea(16, &I, next);
-                        } else {
-                            emit_ea(&I, next);
-                            if (emit_soft_memory_active()) emit_memory_guard(17, I.repne ? 8u : 4u, gpc, X86_SOFT_READ);
-                            if (I.repne)
-                                g_ldr_d(16, 17);
-                            else
-                                g_ldr_s(16, 17);
-                        }
-                        s = 16;
-                    }
-                    int pred = (int)I.imm & 7;
-                    // sz bit (bit22): packed 66 / scalar F2 -> double, else single
-                    uint32_t szb = (packed ? I.p66 : I.repne) ? 0x00400000u : 0;
-                    uint32_t EQ = (packed ? 0x4E20E400u : 0x5E20E400u) | szb; // FCMEQ
-                    uint32_t GE = (packed ? 0x6E20E400u : 0x7E20E400u) | szb; // FCMGE
-                    uint32_t GT = (packed ? 0x6EA0E400u : 0x7EA0E400u) | szb; // FCMGT
-                    uint32_t ANDb = packed ? 0x4E201C00u : 0x0E201C00u;       // AND Vd.16b/8b
-                    uint32_t NOTb = packed ? 0x6E205800u : 0x2E205800u;       // NOT (MVN) Vd.16b/8b
-                    // CMPSS/CMPSD write ONLY the low element and preserve the rest of the
-                    // destination, but the ARM scalar FCMxx/NOT forms zero everything above the
-                    // element. So scalar results are built in v18 and inserted back into lane 0.
-                    int res = packed ? vd : 18;
-                    if (pred == 3 || pred == 7) {                       // UNORD/ORD: ordered(a)&ordered(b)
-                        emit32(EQ | (vd << 16) | (vd << 5) | 17);       // v17 = a==a (ordered a)
-                        emit32(EQ | (s << 16) | (s << 5) | res);        // res = b==b (ordered b)
-                        emit32(ANDb | (17 << 16) | (res << 5) | res);   // res = ORD
-                        if (pred == 3) emit32(NOTb | (res << 5) | res); // UNORD = ~ORD
-                    } else {
-                        // predicates handled here: 0 EQ, 1 LT, 2 LE, 4 NEQ, 5 NLT, 6 NLE.
-                        // LT/LE/NLT/NLE build the ordered comparison a<b / a<=b via the swapped GT/GE (a<b ==
-                        // b>a); NEQ/NLT/NLE then invert. x86's N-forms are UNORDERED: they return all-ones when
-                        // an operand is NaN. ARM FCMGT/FCMGE give 0 on NaN, so inverting the ordered result (NOT)
-                        // yields the correct NaN->true mask for NLT/NLE (H12) exactly as it already did for NEQ.
-                        int lt_like = (pred == 1 || pred == 2 || pred == 5 || pred == 6);
-                        int use_ge = (pred == 2 || pred == 6);           // LE/NLE -> GE ; LT/NLT -> GT
-                        int neg = (pred == 4 || pred == 5 || pred == 6); // NEQ/NLT/NLE invert (NaN -> true)
-                        int n = lt_like ? s : vd, m = lt_like ? vd : s;
-                        uint32_t fc = (pred == 0 || pred == 4) ? EQ : use_ge ? GE : GT;
-                        emit32(fc | (m << 16) | (n << 5) | res);  // FCMxx res, n, m
-                        if (neg) emit32(NOTb | (res << 5) | res); // invert -> NaN lane becomes all-ones
-                    }
-                    if (!packed) { // merge the scalar lane back
-                        if (I.repne)
-                            e_ins_d(vd, 0, res, 0); // cmpsd: bits 63:0 only
-                        else
-                            e_ins_s(vd, 0, res, 0); // cmpss: bits 31:0 only
-                    }
+                } else if (lower_sse_compare(I, gpc, next, vd, vm) == TX_NEXT) {
+                    // The helper emitted the complete packed or scalar comparison.
                 } else if (op == 0x2E || op == 0x2F) { // ucomisd/comisd (66=double, none=single) -> FCMP + flags
                     int s = vm;
                     if (I.is_mem) {
