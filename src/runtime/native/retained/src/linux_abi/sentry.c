@@ -234,6 +234,7 @@ static int g_ctl[SENTRY_NRINGS][2];   // per-ring AF_UNIX control socketpair: [.
 static pid_t g_worker_pid;            // this worker process's pid (changes in a forked-child worker)
 static pid_t g_sentry_owner_pid;      // ONLY the process that forked the sentry may signal-quit + reap it
 static _Atomic int g_guest_children;  // live guest-forked child WORKER processes owned by THIS worker proc
+static _Atomic int g_worker_threads;  // live guest threads in this worker; the initial thread contributes one
 static __thread int t_ring = -1;      // this worker thread's claimed ring index (claimed lazily on first use)
 static __thread uint32_t t_token = 0; // this worker thread's unique nonzero ring-ownership token
 static int64_t sentry_ctl_op(uint32_t op, uint64_t a0, uint64_t a1);
@@ -259,6 +260,7 @@ static int sentry_thread_prepare(struct cpu *child) {
         hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &unused);
         reserved = -EAGAIN;
     }
+    if (reserved == 0) atomic_fetch_add(&g_worker_threads, 1);
     pthread_mutex_unlock(&g_thread_start_lock);
     return reserved;
 }
@@ -267,8 +269,10 @@ static void sentry_thread_cancel(struct cpu *child) {
     if (!g_untrusted) return;
     pthread_mutex_lock(&g_thread_start_lock);
     uint32_t token = 0;
-    if (hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &token) == 0)
+    if (hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &token) == 0) {
         sentry_ctl_op(SENTRY_OP_THREAD_CANCEL, token, 0);
+        atomic_fetch_sub(&g_worker_threads, 1);
+    }
     pthread_mutex_unlock(&g_thread_start_lock);
 }
 
@@ -276,7 +280,9 @@ static void sentry_thread_enter(struct cpu *child) {
     if (!g_untrusted) return;
     pthread_mutex_lock(&g_thread_start_lock);
     uint32_t token = 0;
-    if (hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &token) == 0) t_token = token;
+    if (hl_sentry_start_take(g_thread_start, SENTRY_THREAD_STARTS, child, &token) == 0) {
+        t_token = token;
+    }
     pthread_mutex_unlock(&g_thread_start_lock);
 }
 
@@ -284,6 +290,7 @@ static void sentry_thread_leave(void) {
     if (!g_untrusted || t_token == 0) return;
     sentry_ctl_op(SENTRY_OP_THREAD_EXIT, 0, 0);
     ring_release();
+    atomic_fetch_sub(&g_worker_threads, 1);
 }
 
 // Claim (once per worker thread) a ring from the pool. A reclaim-aware free-list: scan for a lane whose
@@ -317,6 +324,10 @@ static void ring_release(void) {
                                                 memory_order_relaxed);
         t_ring = -1;
     }
+    // Release is terminal for this guest thread.  In particular, exit(93) unwinds through run_guest and
+    // the pthread trampoline; clearing the token keeps its later sentry_thread_leave() from publishing a
+    // second THREAD_EXIT and decrementing g_worker_threads twice.
+    t_token = 0;
 }
 
 // A worker that just forked itself (guest clone/clone3 without CLONE_THREAD) calls this in the CHILD: the
@@ -329,6 +340,7 @@ static void sentry_fork_child(void) {
     t_ring = -1;             // drop the inherited lane index; claim a fresh one lazily
     t_token = 0;             // mint a fresh ownership token on the next claim
     g_guest_children = 0;    // the child starts with no children of its own
+    g_worker_threads = 1;    // only the calling thread survives fork()
     memset(g_thread_start, 0, sizeof g_thread_start);
     pthread_mutex_init(&g_thread_start_lock, NULL);
 }
@@ -1938,6 +1950,7 @@ static void sentry_init(void) {
     g_worker_pid = getpid();
     g_sentry_owner_pid = getpid(); // only this process may signal-quit + reap the sentry
     g_guest_children = 0;
+    g_worker_threads = 1;
     // The authoritative ABI box and the host implementation both own process-local locks and handles.
     // Bracket the sentry helper fork exactly like a guest fork so the parent releases the speculative
     // child handles and the helper repairs its inherited host state. The helper retains its forked ABI box:
@@ -2098,11 +2111,12 @@ static void syscall_route(struct cpu *c) {
         // array to a host syscall, and fold each iov_base inside the flatten (case 65/66 below).
     }
 
-    // exit(93)/exit_group(94): service_local() _exit()s this worker. exit_group ends the PROCESS so the
-    // owner reaps the sentry FIRST (sentry_shutdown is owner-gated -> a forked child just releases its
-    // lane). exit(93) ends only THIS THREAD: free its lane but DON'T tear the sentry down (siblings need it).
+    // exit(93)/exit_group(94): service_local() never returns.  exit(93) also ends the PROCESS when this is
+    // its last thread, so release the process table in that case before entering the host syscall.  Missing
+    // that distinction leaves the last child's duplicated pipe writers alive in the sentry forever.
     if (nr == 93 || nr == 94) {
-        if (nr == 94) {
+        int process_exit = nr == 94 || atomic_fetch_sub(&g_worker_threads, 1) == 1;
+        if (process_exit) {
             // exit_group ends the PROCESS. A forked CHILD worker releases its OWN sentry-side fd table (closing
             // its inherited/owned real fds); the OWNER tears the whole sentry down (reclaiming everything).
             if (getpid() != g_sentry_owner_pid) sentry_ctl_op(SENTRY_OP_EXIT, 0, 0);
