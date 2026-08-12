@@ -7,6 +7,59 @@ enum ChildStatus {
     Unknown(i32),
 }
 
+struct TerminalLaunch<'a> {
+    window: &'a Rc<TermWin>,
+    terminal: &'a vte4::Terminal,
+    pid: &'a Rc<Cell<i32>>,
+}
+
+impl TerminalLaunch<'_> {
+    fn attach(&self, child: i32, pty: vte4::Pty) {
+        self.pid.set(child);
+        // Keep the FOREIGN pty sized to the terminal grid — VTE doesn't resize a foreign pty itself,
+        // so without this htop is malformed / half-height and doesn't reflow on window resize.
+        let weak = self.terminal.downgrade();
+        let mut last = (0, 0);
+        glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
+            let Some(terminal) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let dimensions = (terminal.column_count() as i32, terminal.row_count() as i32);
+            if dimensions.0 > 0 && dimensions.1 > 0 && dimensions != last {
+                let _ = pty.set_size(dimensions.1, dimensions.0);
+                last = dimensions;
+            }
+            glib::ControlFlow::Continue
+        });
+        self.watch_child(child);
+        self.schedule_typed_text();
+    }
+
+    fn watch_child(&self, child: i32) {
+        let window = self.window.clone();
+        let terminal = self.terminal.clone();
+        let born = std::time::Instant::now();
+        glib::child_watch_add_local(glib::Pid(child), move |_pid, status| {
+            let status = ChildStatus::from_wait(status);
+            if !status.succeeded() && born.elapsed() < std::time::Duration::from_millis(2500) {
+                terminal
+                    .feed(format!("\r\n\x1b[31mworkspace session ended immediately ({status})\x1b[0m\r\n").as_bytes());
+                return;
+            }
+            PaneView::new(&window, &terminal).close();
+        });
+    }
+
+    fn schedule_typed_text(&self) {
+        if let Some(text) = AppConfig::get().typed_text.clone() {
+            let terminal = self.terminal.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(3000), move || {
+                terminal.feed_child(format!("{text}\n").as_bytes());
+            });
+        }
+    }
+}
+
 impl ChildStatus {
     fn from_wait(status: i32) -> Self {
         if libc::WIFEXITED(status) {
@@ -123,47 +176,12 @@ pub(crate) fn make_terminal_ex(
     // GTK process and does non-async-signal-safe work before exec, which crashes the child before it
     // runs (every command "exits 11"). Instead spawn via posix_spawn (async-safe) onto a PTY we own.
     match PtyProcess::spawn(&term, &argv, &envv) {
-        Ok((child, pty)) => {
-            pid.set(child);
-            // Keep the FOREIGN pty sized to the terminal grid — VTE doesn't resize a foreign pty itself,
-            // so without this htop is malformed / half-height and doesn't reflow on window resize.
-            let weak = term.downgrade();
-            let mut last = (0, 0);
-            glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
-                let Some(t) = weak.upgrade() else {
-                    return glib::ControlFlow::Break;
-                };
-                let (c, r) = (t.column_count() as i32, t.row_count() as i32);
-                if c > 0 && r > 0 && (c, r) != last {
-                    let _ = pty.set_size(r, c);
-                    last = (c, r);
-                }
-                glib::ControlFlow::Continue
-            });
-            // Shell exit → close this pane/tab (collapse a split, else close the tab). BUT a shell that dies
-            // almost immediately means the LAUNCH failed (e.g. the host was momentarily saturated and the
-            // engine couldn't start) — don't silently vanish the tab, which reads as "the shortcut did
-            // nothing". Show the exit inline and keep the pane so the failure is visible and retryable.
-            let tw2 = tw.clone();
-            let te = term.clone();
-            let born = std::time::Instant::now();
-            glib::child_watch_add_local(glib::Pid(child), move |_pid, status| {
-                let status = ChildStatus::from_wait(status);
-                if !status.succeeded() && born.elapsed() < std::time::Duration::from_millis(2500) {
-                    te.feed(
-                        format!("\r\n\x1b[31mworkspace session ended immediately ({status})\x1b[0m\r\n").as_bytes(),
-                    );
-                    return;
-                }
-                PaneView::new(&tw2, &te).close();
-            });
-            if let Some(text) = AppConfig::get().typed_text.clone() {
-                let t2 = term.clone();
-                glib::timeout_add_local_once(std::time::Duration::from_millis(3000), move || {
-                    t2.feed_child(format!("{text}\n").as_bytes());
-                });
-            }
+        Ok((child, pty)) => TerminalLaunch {
+            window: tw,
+            terminal: &term,
+            pid: &pid,
         }
+        .attach(child, pty),
         Err(e) => term.feed(format!("\r\n\x1b[31mfailed to start shell: {e}\x1b[0m\r\n").as_bytes()),
     }
     (term, pid)
