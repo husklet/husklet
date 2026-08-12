@@ -3532,6 +3532,11 @@ static void interp_x87_register_compare(struct cpu *cpu, uint8_t op, int reg, in
     if (reg == 3) interp_x87_pop(cpu);
 }
 
+static int interp_x87_advance(struct cpu *cpu, uint64_t next) {
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_x87_register(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int reg = insn->reg & 7;
@@ -3547,8 +3552,7 @@ static int interp_step_x87_register(struct cpu *cpu, struct insn *insn, uint64_t
             return STEP_NEXT;
         }
         interp_x87_register_arithmetic(cpu, op, reg, rm);
-        cpu->rip = next;
-        return STEP_NEXT;
+        return interp_x87_advance(cpu, next);
 
     case 0xD9:
         interp_x87_c1(cpu, 0);
@@ -3659,8 +3663,7 @@ static int interp_step_x87_register(struct cpu *cpu, struct insn *insn, uint64_t
             break;
         default: return interp_undefined(cpu, insn, pc, "x87 D9 register form");
         }
-        cpu->rip = next;
-        return STEP_NEXT;
+        return interp_x87_advance(cpu, next);
 
     case 0xDA:
         if (reg <= 3) {
