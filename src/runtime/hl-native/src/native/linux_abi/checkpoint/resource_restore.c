@@ -265,7 +265,7 @@ static int ckpt_restore_right_pipe(const struct ckpt_fd *record) {
             ckpt_source_fclose(data);
         }
     }
-    fd = ((record->flags & O_ACCMODE) == O_WRONLY) ? pipe_object->writer : pipe_object->reader;
+    int fd = ((record->flags & O_ACCMODE) == O_WRONLY) ? pipe_object->writer : pipe_object->reader;
     if (fd < 0) return -1;
     g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, fd, 0};
     return fd;
