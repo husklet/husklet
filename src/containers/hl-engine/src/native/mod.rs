@@ -7,7 +7,8 @@ mod authority;
 mod confinement;
 mod descriptor;
 mod event;
-mod executor;
+#[cfg(feature = "alloc-count")]
+pub mod allocations;
 mod fixture;
 mod fork_wire;
 #[cfg(target_os = "linux")]
@@ -24,7 +25,7 @@ mod watch;
 pub use crate::ffi::DarwinHost;
 #[cfg(target_os = "linux")]
 pub use crate::ffi::{
-    AddressSpaceAdapter, GuestExecutor, LinuxHost, MappingHostAdapter, MemoryError, Reservation, VirtualMemory,
+    AddressSpaceAdapter, LinuxHost, MappingHostAdapter, MemoryError, Reservation, VirtualMemory,
 };
 #[cfg(target_os = "linux")]
 pub use authority::NetworkClient;
@@ -40,16 +41,6 @@ pub use descriptor::{
 pub use event::{
     EventCounter, EventInterest, EventMode, EventReady, EventSyscalls, GenerationToken, PollSet, PollSource, Timer,
     TimerSetting,
-};
-#[cfg(target_os = "linux")]
-pub(crate) use executor::NativeFaultOwner;
-#[cfg(feature = "alloc-count")]
-pub use executor::allocations;
-pub(crate) use executor::state_invariant;
-#[allow(unused_imports)]
-pub(crate) use executor::{
-    BorrowedSource as NativeSource, Executor as NativeExecutor, Exit as NativeExit, HostFaultOwner, HostFaultView,
-    InstructionWord, InterruptToken, LeaseStep as NativeLeaseStep,
 };
 pub use fixture::ChildFixture;
 pub use fork_wire::{AttachmentFrame, ChildChannel, ForkFrame, ForkWireError, ForkWireSyscalls, PeerCredentials};

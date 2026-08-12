@@ -9,8 +9,6 @@ use crate::activation::GuestIsa;
 use crate::composition::RuntimeServices;
 use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
 use crate::launch_plan::RuntimeLaunchPlan;
-use crate::runtime_machine::GuestExecutionPort;
-use hl_runtime::RuntimeAssembly;
 use std::ffi::{CString, c_char, c_int, c_uint, c_ulonglong, c_void};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -857,18 +855,10 @@ impl CGuestExecutor {
         Ok(unsafe { hl_c_backend_run(self.handle.as_ptr(), count, pointers.as_ptr()) })
     }
 
+    #[cfg(test)]
     pub(crate) fn start_plan(&self, plan: &RuntimeLaunchPlan) -> Result<(), EngineError> {
         let status = self.run_plan_status(plan)?;
-        if status == STATUS_OK {
-            Ok(())
-        } else {
-            hl_log::hl_error!(
-                hl_log::tag::EXEC,
-                "c execution backend start failed: status={status} argc={}",
-                plan.arguments.len()
-            );
-            Err(EngineError::LaunchFailed)
-        }
+        (status == STATUS_OK).then_some(()).ok_or(EngineError::LaunchFailed)
     }
 
     pub(crate) fn stop_request(&self, request: StopRequest) -> Result<(), EngineError> {
@@ -883,26 +873,6 @@ impl CGuestExecutor {
         } else {
             Err(EngineError::StopFailed)
         }
-    }
-}
-
-impl GuestExecutionPort for CGuestExecutor {
-    fn start(
-        &self,
-        _: GuestIsa,
-        plan: &RuntimeLaunchPlan,
-        _: &RuntimeAssembly,
-        _: &RuntimeServices,
-    ) -> Result<(), EngineError> {
-        self.start_plan(plan)
-    }
-
-    fn wait(&self, _: &RuntimeAssembly) -> Result<EngineExit, EngineError> {
-        Ok(self.exit())
-    }
-
-    fn stop(&self, _: &RuntimeAssembly, request: StopRequest) -> Result<(), EngineError> {
-        self.stop_request(request)
     }
 }
 

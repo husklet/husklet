@@ -28,7 +28,6 @@ mod arena;
 mod arena_test;
 #[path = "linux/event.rs"]
 mod event;
-pub(crate) mod execution;
 pub(in crate::ffi::linux) mod file_transfer;
 mod loader;
 mod mapping;
@@ -67,9 +66,8 @@ mod virtual_sparse;
 mod virtual_transaction;
 #[path = "linux/watch.rs"]
 mod watch;
-pub use execution::GuestExecutor;
 pub use loader::{AddressSpaceAdapter, Reservation};
-pub use mapping::{BackingChanges, MappingHostAdapter};
+pub use mapping::MappingHostAdapter;
 pub use virtual_memory::{Memory as VirtualMemory, MemoryError};
 
 /// Shared-backing plumbing is private to this module, so crate tests that need one object

@@ -18,7 +18,7 @@ was inspected in:
 |---|---|---|---|
 | Config route | A leading `--configfile PATH` selects the configuration wire before server/client routing. | `hl_engine::cli::Route` and `program::PlanSource` | Implemented |
 | Launch wire | The version-one header and its string pool travel as one bounded image; malformed size, offsets, or termination are rejected before launch. | `hl_engine::launcher::wire` and `config::LaunchConfig` | Implemented; header is 192 bytes after `name_binds_offset` was added. |
-| Rooted interpreter | The root filesystem scopes absolute guest paths while the executable supplied by the launcher remains a host input. The interpreter is opened beneath the guest root. | `hl_engine::program`, `ffi::linux::execution::routing`, and `hl_loader` | Implemented |
+| Rooted interpreter | The root filesystem scopes absolute guest paths while the executable supplied by the launcher remains a host input. The interpreter is opened beneath the guest root. | `hl_engine::program`, the retained C loader, and `hl_loader` inspection | Implemented |
 | Exit code | A normal guest exit is returned unchanged. | `Program::exit_status` | Implemented |
 | Signal death | A fatal default guest signal returns `128 + signo`; retained code separately preserves signal identity for a guest parent. | scheduler signal delivery, task exit state, and `Program::exit_status` | Implemented |
 | Undefined x86 instruction | Architecturally undefined opcodes are guest `SIGILL`/`ILL_ILLOPN`, not an engine decode failure. An unhandled signal exits 132. | x86 decoder, scheduler fault-to-signal routing, and signal delivery | Implemented |

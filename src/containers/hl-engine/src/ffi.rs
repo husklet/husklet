@@ -11,8 +11,6 @@ mod macos;
 mod macos_plan;
 
 #[cfg(target_os = "linux")]
-pub use linux::GuestExecutor;
-#[cfg(target_os = "linux")]
 pub use linux::{AddressSpaceAdapter, Reservation};
 #[cfg(target_os = "linux")]
 pub use linux::{LinuxHost, MappingHostAdapter, MemoryError, VirtualMemory};

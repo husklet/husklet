@@ -3,7 +3,7 @@
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::{Arc, Mutex};
 
@@ -13,7 +13,7 @@ use hl_descriptor::{
 use hl_runtime::RuntimeNetworkError;
 
 use super::cursor::CursorGate;
-use super::{FileCapability, FileOperation};
+use super::FileCapability;
 
 pub(super) struct ImportedFile {
     file: Mutex<File>,
@@ -94,17 +94,6 @@ impl FileCapability for ImportedFile {
             .map_err(|_| RuntimeNetworkError::Failed)
     }
 
-    fn operate(
-        &self,
-        _request: FileOperation,
-        terminal: &mut dyn FnMut(RawFd) -> Result<usize, hl_runtime::VectorError>,
-    ) -> Result<usize, hl_runtime::VectorError> {
-        let file = self
-            .file
-            .lock()
-            .map_err(|_| hl_runtime::VectorError::Object(hl_descriptor::ObjectError::Io))?;
-        terminal(file.as_raw_fd())
-    }
 }
 
 impl OpenFileDescription for ImportedFile {

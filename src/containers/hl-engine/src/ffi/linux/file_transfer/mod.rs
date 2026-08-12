@@ -2,58 +2,20 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::fmt;
 use std::fs::File;
-use std::io::Seek;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::OwnedFd;
 use std::sync::{Arc, Mutex, Weak};
 
 use hl_descriptor::DescriptionIdentity;
 use hl_runtime::{ImportedDescription, ImportedTransfer, RuntimeNetworkError, TransferPublication};
 
-use crate::ffi::linux::execution::path::NativeFile;
-
 mod imported;
 mod cursor;
 
 use imported::ImportedFile;
-pub(in crate::ffi::linux) use cursor::CursorGate;
 
 trait FileCapability: Send + Sync {
     fn duplicate(&self) -> Result<OwnedFd, RuntimeNetworkError>;
     fn mapping(&self) -> Result<File, RuntimeNetworkError>;
-    fn operate(
-        &self,
-        request: FileOperation,
-        terminal: &mut dyn FnMut(RawFd) -> Result<usize, hl_runtime::VectorError>,
-    ) -> Result<usize, hl_runtime::VectorError>;
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::ffi::linux) enum FileIntent {
-    Read,
-    Write,
-    Probe,
-}
-
-#[derive(Clone, Copy)]
-pub(in crate::ffi::linux) struct FileOperation {
-    pub intent: FileIntent,
-    pub position: Option<u64>,
-    pub append: bool,
-    pub total: u64,
-}
-
-impl FileOperation {
-    fn target(self, file: &File) -> Result<u64, hl_descriptor::ObjectError> {
-        let start = if self.append {
-            file.metadata().map_err(NativeFile::object)?.len()
-        } else if let Some(position) = self.position {
-            position
-        } else {
-            let mut cursor = file;
-            cursor.stream_position().map_err(NativeFile::object)?
-        };
-        start.checked_add(self.total).ok_or(hl_descriptor::ObjectError::NoSpace)
-    }
 }
 
 #[derive(Default)]
@@ -72,26 +34,6 @@ impl fmt::Debug for FileTransferRegistry {
 }
 
 impl FileTransferRegistry {
-    pub(super) fn bind(
-        &self,
-        identity: DescriptionIdentity,
-        file: Arc<NativeFile>,
-    ) -> Result<(), hl_runtime::RuntimePathError> {
-        let capability: Arc<dyn FileCapability> = file;
-        let mut files = self.files.lock().map_err(|_| hl_runtime::RuntimePathError::Io)?;
-        files.retain(|_, file| file.strong_count() != 0);
-        if files.len() >= 4096 {
-            return Err(hl_runtime::RuntimePathError::TooLarge);
-        }
-        match files.entry(identity) {
-            Entry::Vacant(slot) => {
-                slot.insert(Arc::downgrade(&capability));
-            }
-            Entry::Occupied(_) => return Err(hl_runtime::RuntimePathError::TooLarge),
-        }
-        Ok(())
-    }
-
     pub(in crate::ffi::linux) fn duplicate(
         &self,
         identity: DescriptionIdentity,
@@ -101,26 +43,6 @@ impl FileTransferRegistry {
 
     pub(super) fn mapping(&self, identity: DescriptionIdentity) -> Option<File> {
         self.capability(identity).ok()?.mapping().ok()
-    }
-
-    pub(in crate::ffi::linux) fn supports(&self, identity: DescriptionIdentity) -> bool {
-        self.capability(identity).is_ok()
-    }
-
-    pub(in crate::ffi::linux) fn operate(
-        &self,
-        identity: DescriptionIdentity,
-        request: FileOperation,
-        mut terminal: impl FnMut(RawFd) -> Result<usize, hl_runtime::VectorError>,
-    ) -> Result<usize, hl_runtime::VectorError> {
-        let capability = self.capability(identity).map_err(|error| match error {
-            RuntimeNetworkError::Unsupported => hl_runtime::VectorError::Unsupported,
-            RuntimeNetworkError::Invalid => hl_runtime::VectorError::Object(hl_descriptor::ObjectError::BadDescriptor),
-            RuntimeNetworkError::NoMemory => hl_runtime::VectorError::Object(hl_descriptor::ObjectError::ResourceLimit),
-            RuntimeNetworkError::Failed => hl_runtime::VectorError::Object(hl_descriptor::ObjectError::Io),
-            _ => hl_runtime::VectorError::Unsupported,
-        })?;
-        capability.operate(request, &mut terminal)
     }
 
     pub(in crate::ffi::linux) fn import(
@@ -170,65 +92,6 @@ impl FileTransferRegistry {
     fn remove(&self, identity: DescriptionIdentity) {
         if let Ok(mut files) = self.files.lock() {
             files.remove(&identity);
-        }
-    }
-}
-
-impl FileCapability for NativeFile {
-    fn duplicate(&self) -> Result<OwnedFd, RuntimeNetworkError> {
-        let file = self.file.lock().map_err(|_| RuntimeNetworkError::Failed)?;
-        let file = file.as_ref().ok_or(RuntimeNetworkError::Unsupported)?;
-        file.try_clone()
-            .map(OwnedFd::from)
-            .map_err(|_| RuntimeNetworkError::Failed)
-    }
-
-    fn mapping(&self) -> Result<File, RuntimeNetworkError> {
-        self.file
-            .lock()
-            .map_err(|_| RuntimeNetworkError::Failed)?
-            .as_ref()
-            .ok_or(RuntimeNetworkError::Unsupported)?
-            .try_clone()
-            .map_err(|_| RuntimeNetworkError::Failed)
-    }
-
-    fn operate(
-        &self,
-        request: FileOperation,
-        terminal: &mut dyn FnMut(RawFd) -> Result<usize, hl_runtime::VectorError>,
-    ) -> Result<usize, hl_runtime::VectorError> {
-        self.io().map_err(hl_runtime::VectorError::Object)?;
-        let opened = self
-            .file
-            .lock()
-            .map_err(|_| hl_runtime::VectorError::Object(hl_descriptor::ObjectError::Io))?;
-        let file = opened.as_ref().ok_or(hl_runtime::VectorError::Object(
-            hl_descriptor::ObjectError::BadDescriptor,
-        ))?;
-        let result = if request.intent == FileIntent::Write {
-            let lease = self
-                .shm_lease
-                .lock()
-                .map_err(|_| hl_runtime::VectorError::Object(hl_descriptor::ObjectError::Io))?;
-            if let Some(lease) = lease.as_ref() {
-                let target = request.target(file).map_err(hl_runtime::VectorError::Object)?;
-                lease
-                    .external(file, target, |file| terminal(file.as_raw_fd()))
-                    .map_err(hl_runtime::VectorError::Object)?
-            } else {
-                terminal(file.as_raw_fd())
-            }
-        } else {
-            terminal(file.as_raw_fd())
-        };
-        if let Ok(count) = result {
-            if request.intent == FileIntent::Write {
-                self.publish_modified(count);
-            }
-            Ok(count)
-        } else {
-            result
         }
     }
 }
