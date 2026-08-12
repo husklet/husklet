@@ -3567,6 +3567,56 @@ static int lower_direct_call_loop(struct insn *instruction, uint64_t guest_pc, u
     return TX_BREAK;
 }
 
+static int lower_flag_register_transfer(struct insn *instruction) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0x9E) {
+        emit32(0x53083C00u | (RAX << 5) | 16); // AH
+        emit32(0x53000000u | (16 << 5) | 17);  // CF
+        e_movconst(20, 1);
+        e_rrr(A_EOR, 17, 17, 20, 0, 0); // stored borrow-C = !CF
+        e_lsl_i(17, 17, 29, 0);
+        emit32(0x53061800u | (16 << 5) | 18); // ZF
+        e_lsl_i(18, 18, 30, 0);
+        e_rrr(A_ORR, 17, 17, 18, 0, 0);
+        emit32(0x53071C00u | (16 << 5) | 18); // SF
+        e_lsl_i(18, 18, 31, 0);
+        e_rrr(A_ORR, 17, 17, 18, 0, 0);
+        e_str(17, 28, OFF_NZCV);
+        emit32(0xD51B4200u | 17);
+        emit32(0x53020800u | (16 << 5) | 19); // PF
+        e_rrr(A_EOR, 19, 19, 20, 0, 0);
+        e_str(19, 28, OFF_PF);
+        e_af_save(16);
+        g_fl_pending = FL_NONE;
+        return TX_NEXT;
+    }
+    if (opcode == 0x9F) {
+        if (g_fl_pending) flags_materialize();
+        e_ldr(16, 28, OFF_NZCV);
+        emit32(0x53000000u | (31 << 16) | (31 << 10) | (16 << 5) | 17);
+        e_lsl_i(17, 17, 7, 0);
+        emit32(0x53000000u | (30 << 16) | (30 << 10) | (16 << 5) | 18);
+        e_lsl_i(18, 18, 6, 0);
+        e_rrr(A_ORR, 17, 17, 18, 0, 0);
+        emit32(0x53000000u | (29 << 16) | (29 << 10) | (16 << 5) | 18);
+        e_movconst(19, 1);
+        e_rrr(A_EOR, 18, 18, 19, 0, 0);
+        e_rrr(A_ORR, 17, 17, 18, 0, 0);
+        e_movconst(18, 2);
+        e_rrr(A_ORR, 17, 17, 18, 0, 0);
+        e_pf_compute(18);
+        e_rrr(A_ORR, 17, 17, 18, 0, 2);
+        e_ldr(18, 28, OFF_AF);
+        emit32(0x53000000u | (4 << 16) | (4 << 10) | (18 << 5) | 18);
+        e_rrr(A_ORR, 17, 17, 18, 0, 4);
+        e_bfi(RAX, 17, 8, 8, 1);
+        return TX_NEXT;
+    }
+    if (opcode != 0xF8 && opcode != 0xF9 && opcode != 0xF5) return TX_FALL;
+    e_nzcv_setcf_op(opcode == 0xF8 ? A_ORR : opcode == 0xF9 ? A_BIC : A_EOR);
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -3878,59 +3928,8 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             } // fwait/wait -> nop (FPU sync)
-            // sahf (9E): AH -> flags. We map SF=AH.7, ZF=AH.6, CF=AH.0 into cpu->nzcv (N/Z/C) and
-            // restore PF=AH.2 into the PF lane (the consumer takes even-parity, so store NOT(PF) as the
-            // source byte: a 0 byte -> even popcount -> PF=1, a 1 byte -> odd -> PF=0).
-            if (op == 0x9E) {
-                emit32(0x53083C00u | (RAX << 5) | 16); // ubfx w16, w_rax, #8, #8  (AH)
-                emit32(0x53000000u | (16 << 5) | 17);  // ubfx w17, w16, #0, #1  (CF)
-                e_movconst(20, 1);
-                e_rrr(A_EOR, 17, 17, 20, 0, 0); // stored borrow-C = NOT x86 CF
-                e_lsl_i(17, 17, 29, 0);
-                emit32(0x53061800u | (16 << 5) | 18); // ubfx w18, w16, #6, #1  (ZF)
-                e_lsl_i(18, 18, 30, 0);
-                e_rrr(A_ORR, 17, 17, 18, 0, 0);
-                emit32(0x53071C00u | (16 << 5) | 18); // ubfx w18, w16, #7, #1  (SF)
-                e_lsl_i(18, 18, 31, 0);
-                e_rrr(A_ORR, 17, 17, 18, 0, 0);
-                e_str(17, 28, OFF_NZCV);
-                emit32(0xD51B4200u | 17);             // msr nzcv, x17 (sync live flags)
-                emit32(0x53020800u | (16 << 5) | 19); // ubfx w19, w16, #2, #1  (PF)
-                e_rrr(A_EOR, 19, 19, 20, 0, 0);       // PF source byte = NOT PF (parity-even <-> PF=1)
-                e_str(19, 28, OFF_PF);
-                e_af_save(16);          // AF from AH bit4 (cpu->af consumer extracts bit 4)
-                g_fl_pending = FL_NONE; // flags now live in cpu->nzcv (don't let a stale defer overwrite)
-                gpc = next;
-                continue;
-            }
-            // lahf (9F): flags -> AH (SF,ZF,0,AF,0,PF,1,CF). Fill SF/ZF/CF/AF/PF + the always-1 bit.
-            if (op == 0x9F) {
-                if (g_fl_pending) flags_materialize(); // make cpu->nzcv current first
-                e_ldr(16, 28, OFF_NZCV);
-                emit32(0x53000000u | (31 << 16) | (31 << 10) | (16 << 5) | 17); // ubfx w17,w16,#31,#1 (N->SF)
-                e_lsl_i(17, 17, 7, 0);
-                emit32(0x53000000u | (30 << 16) | (30 << 10) | (16 << 5) | 18); // ubfx w18,w16,#30,#1 (Z->ZF)
-                e_lsl_i(18, 18, 6, 0);
-                e_rrr(A_ORR, 17, 17, 18, 0, 0);
-                emit32(0x53000000u | (29 << 16) | (29 << 10) | (16 << 5) | 18); // ubfx w18,w16,#29,#1 (stored borrow-C)
-                e_movconst(19, 1);
-                e_rrr(A_EOR, 18, 18, 19, 0, 0); // x86 CF = NOT stored borrow-C
-                e_rrr(A_ORR, 17, 17, 18, 0, 0); // -> bit0
-                e_movconst(18, 2);
-                e_rrr(A_ORR, 17, 17, 18, 0, 0); // bit1 reads as 1
-                e_pf_compute(18);               // x18 = x86 PF (0/1); clobbers x16
-                e_rrr(A_ORR, 17, 17, 18, 0, 2); // PF -> bit2
-                e_ldr(18, 28, OFF_AF);
-                emit32(0x53000000u | (4 << 16) | (4 << 10) | (18 << 5) | 18); // ubfx w18,w18,#4,#1 (AF)
-                e_rrr(A_ORR, 17, 17, 18, 0, 4);                               // AF -> bit4
-                e_bfi(RAX, 17, 8, 8, 1);
-                gpc = next;
-                continue; // AH = w17
-            }
-            // clc/stc/cmc (F8/F9/F5): set/clear/complement x86 CF only (other flags untouched). Borrow
-            // convention -> stored C(bit29) = NOT x86 CF, so clc(CF=0)=set, stc(CF=1)=clear, cmc=toggle.
-            if (op == 0xF8 || op == 0xF9 || op == 0xF5) {
-                e_nzcv_setcf_op(op == 0xF8 ? A_ORR : op == 0xF9 ? A_BIC : A_EOR);
+            int flag_register_result = lower_flag_register_transfer(&I);
+            if (flag_register_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
