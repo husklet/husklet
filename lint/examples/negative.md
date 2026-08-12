@@ -301,3 +301,11 @@ lifetimes, ownership, or concurrency assumptions.
 ```c
 copy_bytes(destination, source, length);
 ```
+## Do not dereference unchecked nullable allocations
+
+```c
+struct item *item = allocate(sizeof *item);
+item->state = READY;
+```
+
+An allocator that may return null must be checked before the returned pointer is dereferenced.

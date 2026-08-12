@@ -86,3 +86,6 @@ must_use_functions = ["fdopen", "fopen", "realloc", "tmpfile"]
 
 [c_safety]
 operations = ["gets", "vsprintf"]
+
+[c_allocation]
+functions = ["calloc", "malloc", "realloc"]

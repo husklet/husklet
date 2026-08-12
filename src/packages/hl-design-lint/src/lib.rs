@@ -17,18 +17,18 @@ use std::path::PathBuf;
 pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use policy::{
-    BoundaryPolicy, CInterfacePolicy, CResultPolicy, CSafetyPolicy, DependencyPolicy, DocumentationPolicy, LayerPolicy,
-    OwnershipPolicy, PackageDependencyBudget, Policy, SourcePolicy, SourceSelector,
+    BoundaryPolicy, CAllocationPolicy, CInterfacePolicy, CResultPolicy, CSafetyPolicy, DependencyPolicy,
+    DocumentationPolicy, LayerPolicy, OwnershipPolicy, PackageDependencyBudget, Policy, SourcePolicy, SourceSelector,
 };
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
-    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CAnalyzerConfig, CCallPolicy, CInterface, CPolicy, CResult,
-    CSafety, CStructure, CatchAllModule, CatchAllSourcePath, CeremonialStructure, ConstructorOwnership,
-    DependencyDirection, Documentation, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName,
-    FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate,
-    ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory,
-    ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory, StructNaming, SuffixRole,
-    TestDependency, TestDirectory, TestName, UnsafeBoundary, run_c_analyzers,
+    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CAllocation, CAnalyzerConfig, CCallPolicy, CInterface,
+    CPolicy, CResult, CSafety, CStructure, CatchAllModule, CatchAllSourcePath, CeremonialStructure,
+    ConstructorOwnership, DependencyDirection, Documentation, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
+    FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
+    IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand,
+    PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory,
+    StructNaming, SuffixRole, TestDependency, TestDirectory, TestName, UnsafeBoundary, run_c_analyzers,
 };
 pub use source::{Source, Workspace};
 
@@ -68,6 +68,7 @@ impl Linter {
             c_interface,
             c_result,
             c_safety,
+            c_allocation,
         } = policy;
         let escape = rule::RepositoryEscape::new(&source);
         let mut linter = Self::new(
@@ -119,6 +120,7 @@ impl Linter {
                 .register(rule::CInterface::new(c_interface))
                 .register(rule::CResult::new(c_result))
                 .register(rule::CSafety::new(c_safety))
+                .register(rule::CAllocation::new(c_allocation))
                 .register(rule::CStructure)
                 .register(rule::CPolicy::new()),
         );
@@ -258,6 +260,7 @@ mod tests {
             "c-interface-breadth",
             "c-ignored-result",
             "c-safety-rationale",
+            "c-unchecked-allocation",
             "c-source-structure",
             "c-source-policy",
         ];
@@ -320,7 +323,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 46);
+        assert_eq!(summaries.len(), 47);
         assert!(
             reporter
                 .0

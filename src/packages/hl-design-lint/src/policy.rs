@@ -53,6 +53,18 @@ pub struct Policy {
     /// C operations that require an attached safety rationale.
     #[serde(default)]
     pub c_safety: CSafetyPolicy,
+    /// C allocation functions whose nullable results require checking before dereference.
+    #[serde(default)]
+    pub c_allocation: CAllocationPolicy,
+}
+
+/// Portable nullability policy for C allocation functions.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CAllocationPolicy {
+    /// Exact allocator names that may return null.
+    #[serde(default)]
+    pub functions: Vec<String>,
 }
 
 /// Portable safety-rationale policy for C operations with caller-owned invariants.
@@ -296,6 +308,9 @@ must_use_functions = ["acquire"]
 
 [c_safety]
 operations = ["copy_bytes"]
+
+[c_allocation]
+functions = ["allocate"]
 "#,
         )
         .unwrap();
@@ -304,6 +319,7 @@ operations = ["copy_bytes"]
         assert_eq!(policy.c_interface.maximum_functions, 12);
         assert_eq!(policy.c_result.must_use_functions, ["acquire"]);
         assert_eq!(policy.c_safety.operations, ["copy_bytes"]);
+        assert_eq!(policy.c_allocation.functions, ["allocate"]);
     }
 
     #[test]

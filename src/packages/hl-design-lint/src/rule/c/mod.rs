@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::{LintError, Result, source::Workspace};
+mod allocation;
 pub mod analyzer;
 mod interface;
 mod policy;
@@ -14,6 +15,7 @@ mod safety;
 mod structure;
 mod suppression;
 
+pub use allocation::Allocation;
 pub use interface::Interface;
 pub use policy::{CallPolicy, Policy};
 pub use result::ResultUse;

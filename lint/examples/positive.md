@@ -2265,3 +2265,12 @@ Keep the proof adjacent to the operation so later changes invalidate the rationa
 // SAFETY: destination and source are disjoint live allocations of at least length bytes.
 copy_bytes(destination, source, length);
 ```
+## Check nullable C allocations
+
+```c
+struct item *item = allocate(sizeof *item);
+if (item == NULL) {
+    return ERROR_MEMORY;
+}
+item->state = READY;
+```
