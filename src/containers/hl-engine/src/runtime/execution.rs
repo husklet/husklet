@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use crate::composition::{CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory};
 use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
 use std::ffi::CString;
@@ -143,4 +145,3 @@ impl GuestMachine for ProductionMachine {
         self.current()?.request(kind, signal).map_err(|_| EngineError::StopFailed)
     }
 }
-#![allow(unsafe_code)]
