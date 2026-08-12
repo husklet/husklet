@@ -78,6 +78,18 @@ fn verify_plan(campaign: &Campaign, expected: &[Step], rows: &[Row]) -> Result<(
             .ok_or_else(|| format!("missing benchmark evidence key {key}"))?;
         verify_row_provenance(step, row)?;
         verify_phase_coverage(row, phases(campaign, &step.workload, &step.layout))?;
+        verify_host_load(row)?;
+    }
+    Ok(())
+}
+
+fn verify_host_load(row: &Row) -> Result<(), Error> {
+    let load = row
+        .host_load
+        .parse::<f64>()
+        .map_err(|_| format!("benchmark evidence has invalid host load for {}", row.key))?;
+    if !load.is_finite() || load < 0.0 {
+        return Err(format!("benchmark evidence has invalid host load for {}", row.key).into());
     }
     Ok(())
 }
@@ -447,5 +459,16 @@ mod tests {
         assert!(super::verify_phase_coverage(&zero, &expected).is_err());
         zero.phases.get_mut("malloc").unwrap().us = 1;
         super::verify_phase_coverage(&zero, &expected).unwrap();
+    }
+
+    #[test]
+    fn host_load_must_be_finite_numeric_evidence() {
+        let mut evidence = row("malloc|plain|EE|0|0", "E", 1);
+        for invalid in ["unavailable", "NaN", "inf", "-0.1", ""] {
+            evidence.host_load = invalid.into();
+            assert!(super::verify_host_load(&evidence).is_err(), "accepted {invalid:?}");
+        }
+        evidence.host_load = "0.25".into();
+        super::verify_host_load(&evidence).unwrap();
     }
 }
