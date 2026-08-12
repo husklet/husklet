@@ -1,6 +1,7 @@
 {
   "schema": "husklet-eri-v1",
   "rounds": 8,
+  "invariant_phases": [],
   "arms": {
     "E": { "command": ["/absolute/path/to/engine"] },
     "R": { "command": ["/absolute/path/to/testing", "benchmark", "run", "--provider", "native", "--arch", "arm64", "--engine-option", "HL_NATIVE_IMPLEMENTATION=c", "--binary"] },

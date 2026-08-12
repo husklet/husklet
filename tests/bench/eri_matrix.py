@@ -17,6 +17,7 @@ from pathlib import Path
 SCHEMA = "husklet-eri-v1"
 CELLS = (("E", "E"), ("R", "R"), ("I", "I"), ("E", "R"), ("E", "I"), ("R", "I"))
 ORDER = ((0, 1), (1, 0), (1, 0), (0, 1))
+WARMUP_PAIRS = 4
 PHASE = re.compile(r"^PHASE\s+(\S+)\s+.*?us=(\d+)\s+.*?ok=(\S+)(?:\s|$)")
 TIMING = re.compile(rb"(?m)(^PHASE\s+\S+\s+.*?)us=\d+")
 
@@ -96,16 +97,38 @@ def acquire(path, timeout):
             time.sleep(1)
 
 
-def busy():
+def lock_holders(path):
+    try:
+        target = os.stat(path)
+    except FileNotFoundError:
+        return 0
+    count = 0
+    for fd_dir in Path("/proc").glob("[0-9]*/fd"):
+        try:
+            for fd in fd_dir.iterdir():
+                try:
+                    held = fd.stat()
+                    if (held.st_dev, held.st_ino) == (target.st_dev, target.st_ino):
+                        count += 1
+                        break
+                except (FileNotFoundError, PermissionError):
+                    pass
+        except (FileNotFoundError, PermissionError):
+            pass
+    return count
+
+
+def busy(max_load):
     commands = (("pgrep", "-cx", "testing"), ("pgrep", "-c", "hl_engine-|hl-aarch64|hl-x86_64"), ("pgrep", "-cx", "cargo"))
-    return any(subprocess.run(command, capture_output=True, check=False).returncode == 0 for command in commands)
+    processes = any(subprocess.run(command, capture_output=True, check=False).returncode == 0 for command in commands)
+    return processes or lock_holders("/var/tmp/husklet-box.lock") > 0 or os.getloadavg()[0] > max_load
 
 
-def sustained_quiet(seconds, timeout):
+def sustained_quiet(seconds, timeout, max_load):
     start = None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if busy():
+        if busy(max_load):
             start = None
         elif start is None:
             start = time.monotonic()
@@ -145,7 +168,39 @@ def append_row(handle, row):
     os.fsync(handle.fileno())
 
 
-def summarize(rows, limit):
+def qualify_null(values, invariant=False):
+    """Return the measured floor or reject a null too noisy to qualify a result."""
+    if len(values) < 4:
+        raise RuntimeError("null has fewer than four paired samples")
+    center = statistics.median(values)
+    order = (statistics.median(values[0::2]), statistics.median(values[1::2]))
+    middle = len(values) // 2
+    temporal = (statistics.median(values[:middle]), statistics.median(values[middle:]))
+    checks = {
+        "center": abs(center - 1.0) <= 0.01,
+        "order strata": all(abs(value - 1.0) <= 0.01 for value in order),
+        "temporal strata": all(abs(value - 1.0) <= 0.01 for value in temporal),
+        "individual pair": all(abs(value - 1.0) <= 0.05 for value in values),
+    }
+    floor = max(abs(value - 1.0) for value in values)
+    checks["invariant floor" if invariant else "null floor"] = floor <= (0.015 if invariant else 0.03)
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise RuntimeError("unqualified null: " + ", ".join(failed))
+    return floor
+
+
+def verify_outputs(rows):
+    expected = {}
+    for row in rows:
+        key = row["workload"]
+        observed = (row["output"], tuple(sorted((p, v["ok"]) for p, v in row["phases"].items())))
+        if key in expected and expected[key] != observed:
+            raise RuntimeError(f"exact-output mismatch for {key}")
+        expected[key] = observed
+
+
+def summarize(rows, limit, invariant_phases=()):
     by_key = {(r["workload"], r["cell"], r["round"], r["position"]): r for r in rows}
     verdict = "PASS"
     lines = ["workload\tcell\tphase\tratio\tnull_floor\tupper\tverdict"]
@@ -159,7 +214,7 @@ def summarize(rows, limit):
                 for phase in a["phases"]:
                     ratios.setdefault(phase, []).append(b["phases"][phase]["us"] / a["phases"][phase]["us"])
             for phase, values in ratios.items():
-                nulls[(workload, arm, phase)] = max(abs(statistics.median(values) - 1.0), max(abs(v - 1.0) for v in values))
+                nulls[(workload, arm, phase)] = qualify_null(values, phase in invariant_phases)
         for left, right in CELLS[3:]:
             cell = left + right
             ratios = {}
@@ -189,6 +244,7 @@ def main(argv=None):
     parser.add_argument("--minimum-free-gib", type=float, default=30.0)
     parser.add_argument("--quiet-seconds", type=int, default=120)
     parser.add_argument("--lock-timeout", type=int, default=900)
+    parser.add_argument("--max-load", type=float, default=1.0)
     args = parser.parse_args(argv)
     config = validate(json.loads(args.config.read_text()))
     identity = campaign_identity(config)
@@ -206,12 +262,20 @@ def main(argv=None):
     completed = {(r["workload"], r["cell"], r["round"], r["position"]) for r in rows}
     intent = acquire("/var/tmp/husklet-box.wanted", args.lock_timeout)
     try:
-        sustained_quiet(args.quiet_seconds, args.lock_timeout)
+        sustained_quiet(args.quiet_seconds, args.lock_timeout, args.max_load)
         box = acquire("/var/tmp/husklet-box.lock", args.lock_timeout)
     finally:
         fcntl.flock(intent, fcntl.LOCK_UN)
         intent.close()
     try:
+        # Warmups are deliberately outside the resumable sample ledger. A resumed process has a
+        # cold replacement process/cache and must warm again before adding new authoritative rows.
+        for workload in ("python", "sqlite", "malloc"):
+            for left, right in CELLS:
+                for warmup in range(WARMUP_PAIRS):
+                    arms = (left, right)
+                    for index in ORDER[warmup]:
+                        run_one(config, workload, arms[index])
         with open(ledger, "a", encoding="utf-8") as output:
             for workload in ("python", "sqlite", "malloc"):
                 for left, right in CELLS:
@@ -227,14 +291,8 @@ def main(argv=None):
                             row = {"arm": arm, "cell": cell, "output": output_identity, "phases": {name: {"us": us, "ok": ok} for name, (us, ok) in phases.items()}, "position": position, "round": round_number, "workload": workload}
                             append_row(output, row)
                             rows.append(row)
-        expected_outputs = {}
-        for row in rows:
-            key = row["workload"]
-            observed = (row["output"], tuple(sorted((p, v["ok"]) for p, v in row["phases"].items())))
-            if key in expected_outputs and expected_outputs[key] != observed:
-                raise RuntimeError(f"exact-output mismatch for {key}")
-            expected_outputs[key] = observed
-        verdict, report = summarize(rows, args.limit)
+        verify_outputs(rows)
+        verdict, report = summarize(rows, args.limit, set(config.get("invariant_phases", [])))
         (args.results / "report.tsv").write_text(report)
         (args.results / "verdict.txt").write_text(verdict + "\n")
         print(report, end="")
