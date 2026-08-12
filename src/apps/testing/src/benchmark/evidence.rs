@@ -81,6 +81,7 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
             &mut metadata_seen,
         )?;
     }
+    require_metadata(metadata_seen)?;
     let expected = if step.workload == "python" {
         &campaign.workloads[&step.workload].phases
     } else {
@@ -92,6 +93,14 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     let frame = canonical.join("\n");
     let identity = FramedIdentity::of(frame.as_bytes());
     Ok((phases, identity, frame))
+}
+
+fn require_metadata(seen: bool) -> Result<(), Error> {
+    if seen {
+        Ok(())
+    } else {
+        Err("benchmark output omitted metadata".into())
+    }
 }
 
 fn parse_output_line(
@@ -536,12 +545,18 @@ mod ledger_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::Measurement;
+    use super::{Measurement, require_metadata};
     use std::{
         cell::Cell,
         fs::OpenOptions,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn exact_output_requires_identity_metadata() {
+        require_metadata(true).unwrap();
+        assert!(require_metadata(false).is_err());
+    }
 
     #[test]
     fn quiet_is_rechecked_while_the_box_lock_is_held() {
