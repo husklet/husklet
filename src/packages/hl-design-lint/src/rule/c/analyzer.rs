@@ -130,6 +130,7 @@ fn translation_units(database: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>,
     let bytes = fs::read(database).map_err(|error| format!("read {}: {error}", database.display()))?;
     let commands: Vec<Compilation> =
         serde_json::from_slice(&bytes).map_err(|error| format!("decode {}: {error}", database.display()))?;
+    let contains_c_source = roots_contain_c_source(roots)?;
     let roots = roots
         .iter()
         .map(|root| {
@@ -151,7 +152,19 @@ fn translation_units(database: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>,
             files.insert(file);
         }
     }
+    if files.is_empty() && contains_c_source {
+        return Err(format!(
+            "{} contains no C translation unit below the requested source roots",
+            database.display()
+        ));
+    }
     Ok(files.into_iter().collect())
+}
+
+fn roots_contain_c_source(roots: &[PathBuf]) -> Result<bool, String> {
+    Ok(source_files(roots)?
+        .iter()
+        .any(|file| file.extension().and_then(|value| value.to_str()) == Some("c")))
 }
 
 #[cfg(test)]
@@ -192,6 +205,34 @@ mod tests {
         .unwrap();
         let files = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap();
         assert_eq!(files, [root.join("src/a.c").canonicalize().unwrap()]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_database_that_would_skip_every_requested_translation_unit() {
+        let root = fixture("missing-database-coverage");
+        fs::write(root.join("src/a.c"), "int a;\n").unwrap();
+        fs::write(root.join("outside.c"), "int b;\n").unwrap();
+        fs::write(
+            root.join("compile_commands.json"),
+            format!(
+                "[{{\"directory\":{0:?},\"file\":\"outside.c\"}}]",
+                root.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let error = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap_err();
+        assert!(error.contains("no C translation unit"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permits_header_only_analyzer_roots() {
+        let root = fixture("header-only");
+        fs::write(root.join("src/api.h"), "int api(void);\n").unwrap();
+        fs::write(root.join("compile_commands.json"), "[]").unwrap();
+        let files = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap();
+        assert!(files.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 }
