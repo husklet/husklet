@@ -4168,6 +4168,153 @@ static int lower_double_shift(struct insn *instruction, uint64_t next) {
     return TX_NEXT;
 }
 
+struct near_branch_context {
+    hl_x86_trace_state *trace;
+    uint64_t *seen;
+    int *seen_count;
+    int *block_count;
+    int *condition_count;
+    int stitch_ok;
+    uint64_t start;
+    void *body;
+};
+
+static int lower_near_conditional_branch(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
+                                         struct near_branch_context *context) {
+    uint8_t opcode = instruction->op;
+    if ((opcode & 0xF0) != 0x80) return TX_FALL;
+    int low = opcode & 0xF;
+    int parity = low == 0xA || low == 0xB;
+    int condition;
+    if (parity) {
+        condition = emit_parity_jcc_cond(low);
+    } else {
+        condition = x86cc_to_arm(low);
+        if (condition < 0) {
+            if (g_fl_pending) flags_materialize();
+            report_unimpl(*guest_pc, instruction);
+            return TX_BREAK;
+        }
+    }
+    uint64_t taken = next + (uint64_t)instruction->imm;
+    if (!parity && taken == context->start && !notier2x() &&
+        !hl_x86_trace_loop_hazard((uint64_t)context->body, (uint64_t)g_cp)) {
+        int slot = g_tier2_build ? 0 : t2_slot(context->start);
+        if (g_tier2_build || slot >= 0) {
+            hl_x86_trace_self_loop(context->trace, condition, context->start, next, context->body, slot);
+            return TX_BREAK;
+        }
+    }
+    uint64_t fall = next;
+    int stitch_fall = context->stitch_ok && fall != context->start &&
+                      !hl_x86_trace_seen(context->seen, *context->seen_count, fall) && !map_body(fall) &&
+                      !hl_x86_trace_trap_head(fall);
+    int save_taken = 0;
+    int save_fall = 0;
+    if (!parity)
+        hl_x86_trace_jcc_flags(context->trace, taken, fall, *guest_pc, stitch_fall, condition, &save_taken,
+                               &save_fall);
+    if (stitch_fall) {
+        int inverse = (condition ^ 1) & 0xF;
+        uint32_t *patch = (uint32_t *)g_cp;
+        emit32(0);
+        if (parity) e_nzcv_load();
+        emit_jcc_edge_spill(save_taken);
+        emit_chain_exit(taken);
+        int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+        *patch = 0x54000000u | (((uint32_t)distance & 0x7FFFF) << 5) | (uint32_t)inverse;
+        if (parity) e_nzcv_load();
+        context->seen[(*context->seen_count)++] = fall;
+        (*context->block_count)++;
+        (*context->condition_count)++;
+        *guest_pc = fall;
+        return TX_NEXT;
+    }
+    uint32_t *patch = (uint32_t *)g_cp;
+    emit32(0);
+    if (parity) e_nzcv_load();
+    emit_jcc_edge_spill(save_fall);
+    emit_chain_exit(next);
+    int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+    *patch = 0x54000000u | (((uint32_t)distance & 0x7FFFF) << 5) | (condition & 0xF);
+    if (parity) e_nzcv_load();
+    emit_jcc_edge_spill(save_taken);
+    emit_chain_exit(taken);
+    return TX_BREAK;
+}
+
+static int lower_conditional_data_move(struct insn *instruction, uint64_t guest_pc, uint64_t next, int sf) {
+    uint8_t opcode = instruction->op;
+    // setcc (0F 90-9F) -> r/m8 (byte: preserve upper bits / hi-lo byte regs)
+    if ((opcode & 0xF0) == 0x90) {
+        int lo = opcode & 0xF;
+        if (lo == 0xA || lo == 0xB) { // setp/setnp: real PF lane (integer parity or comisd unordered)
+            if (instruction->is_mem) emit_ea(instruction, next);
+            e_pf_compute(19); // x19 = x86 PF (uses x16 as scratch; x17/EA preserved)
+            if (lo == 0xB) {
+                e_movconst(16, 1);
+                e_rrr(A_EOR, 19, 19, 16, 0, 0); // setnp = NOT PF
+            }
+            if (instruction->is_mem)
+                e_store(1, 19, 17);
+            else
+                byte_wb(instruction, instruction->rm_reg, 19);
+            return TX_NEXT;
+        }
+        int cc = x86cc_to_arm(opcode & 0xF);
+        if (cc < 0) {
+            report_unimpl(guest_pc, instruction);
+            return TX_BREAK;
+        }
+        if (instruction->is_mem) {
+            emit_ea(instruction, next); // EA -> x17 FIRST (emit_ea may clobber x16)
+            e_nzcv_load();
+            e_cset(16, cc, 0);
+            e_store(1, 16, 17);
+        } else {
+            e_nzcv_load();
+            e_cset(16, cc, 0);
+            byte_wb(instruction, instruction->rm_reg, 16);
+        }
+        return TX_NEXT;
+    }
+    // cmovcc (0F 40-4F), reg or mem source
+    if ((opcode & 0xF0) == 0x40) {
+        int lo = opcode & 0xF;
+        if (lo == 0xA || lo == 0xB) { // cmovp / cmovnp: real PF lane
+            e_pf_compute(19);         // x19 = x86 PF (before rm_load, which reuses x16/x17)
+            int mem;
+            int rmv = rm_load(instruction, next, instruction->opsize, &mem);
+            e_rrr(A_SUBS, 31, 19, 31, 0, 0); // Z = (PF == 0)
+            if (instruction->opsize == 2) {             // 16-bit cmov writes only bits 15:0
+                e_csel(21, rmv, instruction->reg, (lo == 0xA) ? 1 : 0, 0);
+                e_bfi(instruction->reg, 21, 0, 16, 1);
+            } else
+                e_csel(instruction->reg, rmv, instruction->reg, (lo == 0xA) ? 1 : 0, sf); // cmovp: NE; cmovnp: EQ
+            // parity-edge fix: the SUBS above clobbered the live ARM NZCV; restore the
+            // canonical flags (membank is current: the top-of-loop materialized any pending
+            // producer before this consumer) so a following block exit spills true flags.
+            e_nzcv_load();
+            return TX_NEXT;
+        }
+        int cc = x86cc_to_arm(opcode & 0xF);
+        if (cc < 0) {
+            report_unimpl(guest_pc, instruction);
+            return TX_BREAK;
+        }
+        int mem;
+        int rmv = rm_load(instruction, next, instruction->opsize, &mem);
+        e_nzcv_load();
+        if (instruction->opsize == 2) { // CMOVcc r16: bits 63:16 of the destination are PRESERVED
+            e_csel(21, rmv, instruction->reg, cc, 0);
+            e_bfi(instruction->reg, 21, 0, 16, 1);
+        } else
+            e_csel(instruction->reg, rmv, instruction->reg, cc, sf);
+        return TX_NEXT;
+    }
+    return TX_FALL;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6268,142 +6415,27 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // jcc rel32 (0F 80-8F)
             if ((op & 0xF0) == 0x80) {
-                int lo = op & 0xF, parity = (lo == 0xA || lo == 0xB);
-                int cc;
-                if (parity) {
-                    cc = emit_parity_jcc_cond(lo); // jp/jnp: PF lane -> live ARM Z, branch off it
-                } else {
-                    cc = x86cc_to_arm(lo);
-                    if (cc < 0) {
-                        if (g_fl_pending) flags_materialize(); // materialize before boundary
-                        report_unimpl(gpc, &I);
-                        break;
-                    }
-                }
-                uint64_t taken = next + (uint64_t)I.imm;
-                // W5B tier-2: single-block self-loop (taken back-edge == block start). See jcc rel8.
-                if (!parity && taken == start && !notier2x() &&
-                    !hl_x86_trace_loop_hazard((uint64_t)body, (uint64_t)g_cp)) {
-                    int slot = g_tier2_build ? 0 : t2_slot(start);
-                    if (g_tier2_build || slot >= 0) {
-                        hl_x86_trace_self_loop(&trace_state, cc, start, next, body, slot);
-                        break;
-                    }
-                }
-                uint64_t fall = next;
-                int stitch_fall = (STITCH_OK && fall != start && !hl_x86_trace_seen(seen, nseen, fall) &&
-                                   !map_body(fall) && !hl_x86_trace_trap_head(fall));
-                int save_taken = 0, save_fall = 0;
-                if (parity) {
-                    // live ARM Z already holds (PF==0) from emit_parity_jcc_cond; flags spilled there.
-                } else {
-                    // x86-xflags edge-aware flag handling -- see jcc rel8 (identical semantics).
-                    hl_x86_trace_jcc_flags(&trace_state, taken, fall, gpc, stitch_fall, cc, &save_taken, &save_fall);
-                }
-                // STITCH (see jcc rel8): inline the fall-through, invert the cond, taken exit OOL.
-                // Parity jcc: restore the canonical live NZCV on every edge (parity-edge fix).
-                if (stitch_fall) {
-                    int inv = (cc ^ 1) & 0xF;
-                    uint32_t *patch = (uint32_t *)g_cp;
-                    emit32(0);                       // b.inv -> fall (inline)
-                    if (parity) e_nzcv_load();       // taken edge: restore canonical live NZCV
-                    emit_jcc_edge_spill(save_taken); // FL_SUB (e_nzcv_save) or FL_LOGIC (e_nzcv_save_c1) spill on the
-                                                     // flag-live taken edge only
-                    emit_chain_exit(taken);
-                    int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-                    *patch = 0x54000000u | (((uint32_t)d & 0x7FFFF) << 5) | (uint32_t)inv;
-                    if (parity) e_nzcv_load(); // inline fall: restore before continuing
-                    seen[nseen++] = fall;
-                    trace_blk++;
-                    ncond++;
-                    gpc = fall;
-                    continue;
-                }
-                uint32_t *patch = (uint32_t *)g_cp;
-                emit32(0);
-                if (parity) e_nzcv_load();      // fall edge: restore canonical live NZCV
-                emit_jcc_edge_spill(save_fall); // FL_SUB/FL_LOGIC spill for a flag-live fall successor
-                emit_chain_exit(next);
-                int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-                *patch = 0x54000000u | (((uint32_t)d & 0x7FFFF) << 5) | (cc & 0xF);
-                if (parity) e_nzcv_load();       // taken edge: restore canonical live NZCV
-                emit_jcc_edge_spill(save_taken); // FL_SUB/FL_LOGIC spill for a flag-live taken successor
-                emit_chain_exit(taken);
-                break;
+                struct near_branch_context near_context = {
+                    .trace = &trace_state,
+                    .seen = seen,
+                    .seen_count = &nseen,
+                    .block_count = &trace_blk,
+                    .condition_count = &ncond,
+                    .stitch_ok = STITCH_OK,
+                    .start = start,
+                    .body = body,
+                };
+                int near_branch_result = lower_near_conditional_branch(&I, &gpc, next, &near_context);
+                if (near_branch_result == TX_NEXT) continue;
+                if (near_branch_result == TX_BREAK) break;
             }
-            // setcc (0F 90-9F) -> r/m8 (byte: preserve upper bits / hi-lo byte regs)
-            if ((op & 0xF0) == 0x90) {
-                int lo = op & 0xF;
-                if (lo == 0xA || lo == 0xB) { // setp/setnp: real PF lane (integer parity or comisd unordered)
-                    if (I.is_mem) emit_ea(&I, next);
-                    e_pf_compute(19); // x19 = x86 PF (uses x16 as scratch; x17/EA preserved)
-                    if (lo == 0xB) {
-                        e_movconst(16, 1);
-                        e_rrr(A_EOR, 19, 19, 16, 0, 0); // setnp = NOT PF
-                    }
-                    if (I.is_mem)
-                        e_store(1, 19, 17);
-                    else
-                        byte_wb(&I, I.rm_reg, 19);
-                    gpc = next;
-                    continue;
-                }
-                int cc = x86cc_to_arm(op & 0xF);
-                if (cc < 0) {
-                    report_unimpl(gpc, &I);
-                    break;
-                }
-                if (I.is_mem) {
-                    emit_ea(&I, next); // EA -> x17 FIRST (emit_ea may clobber x16)
-                    e_nzcv_load();
-                    e_cset(16, cc, 0);
-                    e_store(1, 16, 17);
-                } else {
-                    e_nzcv_load();
-                    e_cset(16, cc, 0);
-                    byte_wb(&I, I.rm_reg, 16);
-                }
+            int conditional_move_result = lower_conditional_data_move(&I, gpc, next, sf);
+            if (conditional_move_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
-            // cmovcc (0F 40-4F), reg or mem source
-            if ((op & 0xF0) == 0x40) {
-                int lo = op & 0xF;
-                if (lo == 0xA || lo == 0xB) { // cmovp / cmovnp: real PF lane
-                    e_pf_compute(19);         // x19 = x86 PF (before rm_load, which reuses x16/x17)
-                    int mem;
-                    int rmv = rm_load(&I, next, I.opsize, &mem);
-                    e_rrr(A_SUBS, 31, 19, 31, 0, 0); // Z = (PF == 0)
-                    if (I.opsize == 2) {             // 16-bit cmov writes only bits 15:0
-                        e_csel(21, rmv, I.reg, (lo == 0xA) ? 1 : 0, 0);
-                        e_bfi(I.reg, 21, 0, 16, 1);
-                    } else
-                        e_csel(I.reg, rmv, I.reg, (lo == 0xA) ? 1 : 0, sf); // cmovp: NE; cmovnp: EQ
-                    // parity-edge fix: the SUBS above clobbered the live ARM NZCV; restore the
-                    // canonical flags (membank is current: the top-of-loop materialized any pending
-                    // producer before this consumer) so a following block exit spills true flags.
-                    e_nzcv_load();
-                    gpc = next;
-                    continue;
-                }
-                int cc = x86cc_to_arm(op & 0xF);
-                if (cc < 0) {
-                    report_unimpl(gpc, &I);
-                    break;
-                }
-                int mem;
-                int rmv = rm_load(&I, next, I.opsize, &mem);
-                e_nzcv_load();
-                if (I.opsize == 2) { // CMOVcc r16: bits 63:16 of the destination are PRESERVED
-                    e_csel(21, rmv, I.reg, cc, 0);
-                    e_bfi(I.reg, 21, 0, 16, 1);
-                } else
-                    e_csel(I.reg, rmv, I.reg, cc, sf);
-                gpc = next;
-                continue;
-            }
+            if (conditional_move_result == TX_BREAK) break;
             // movzx/movsx (0F B6/B7 zero, BE/BF sign). The dest operand size (I.opsize: 2/4/8) governs how
             // the extended value lands: a 32-bit dest must extend to 32 and ZERO bits 63:32; a 64-bit dest
             // extends to 64; a 16-bit dest (66 prefix) inserts the low 16 and preserves bits 63:16.
