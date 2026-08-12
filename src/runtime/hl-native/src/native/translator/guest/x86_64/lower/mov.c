@@ -7,7 +7,7 @@
 #include "mov.h"
 #include "primitives.h"
 
-int hl_x86_lower_mov(struct insn *I, uint64_t next, const hl_x86_move_image *image) {
+static int lower_mov_immediate(struct insn *I, uint64_t next) {
     uint8_t op = I->op;
     int sf = I->opsize == 8;
     // ---- mov r8, imm8 (B0+r) ----
@@ -47,6 +47,14 @@ int hl_x86_lower_mov(struct insn *I, uint64_t next, const hl_x86_move_image *ima
         }
         return TX_NEXT;
     }
+    return TX_FALL;
+}
+
+int hl_x86_lower_mov(struct insn *I, uint64_t next, const hl_x86_move_image *image) {
+    uint8_t op = I->op;
+    int sf = I->opsize == 8;
+    int immediate = lower_mov_immediate(I, next);
+    if (immediate != TX_FALL) return immediate;
     // ---- mov accumulator <-> moffs (A0-A3): the only x86 form with a full direct-ADDRESS immediate ----
     // A0: mov AL,moffs8 ; A1: mov eAX/rAX,moffs ; A2: mov moffs8,AL ; A3: mov moffs,eAX/rAX. moffs is
     // an absolute offset (64-bit; 32-bit zero-extended under a 0x67 addr-size prefix), NOT a ModRM
