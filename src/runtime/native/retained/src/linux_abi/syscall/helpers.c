@@ -318,9 +318,32 @@ static void poslk_after_fork(void) {
 
 static int poslk_init(void) {
     if (g_poslk) return 0;
-    void *m = mmap(NULL, sizeof(struct poslk_shm), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+    char name[64];
+    int length = snprintf(name, sizeof(name), "/husklet-poslk-v1-%lu", (unsigned long)getuid());
+    if (length <= 0 || (size_t)length >= sizeof(name)) return -1;
+    int fd = shm_open(name, O_CREAT | O_RDWR, 0600);
+    if (fd < 0) return -1;
+    /* Serializing initialization on the backing object also recovers a creator
+       that died after shm_open but before publishing the required size.  Keep
+       the object named: unlinking it while another worker is mapped would split
+       the lock domain into two unrelated inodes. */
+    if (flock(fd, LOCK_EX) < 0) {
+        close(fd);
+        return -1;
+    }
+    struct stat status;
+    int reset = fstat(fd, &status) < 0 || status.st_size != (off_t)sizeof(struct poslk_shm);
+    if (reset && ftruncate(fd, (off_t)sizeof(struct poslk_shm)) < 0) {
+        (void)flock(fd, LOCK_UN);
+        close(fd);
+        return -1;
+    }
+    void *m = mmap(NULL, sizeof(struct poslk_shm), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (m != MAP_FAILED && reset) memset(m, 0, sizeof(struct poslk_shm));
+    (void)flock(fd, LOCK_UN);
+    close(fd);
     if (m == MAP_FAILED) return -1;
-    g_poslk = (struct poslk_shm *)m; // MAP_ANON is zero-filled: lockword=0, hi=0, all owner=0
+    g_poslk = (struct poslk_shm *)m;
     return 0;
 }
 

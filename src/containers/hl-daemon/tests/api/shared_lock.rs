@@ -150,15 +150,16 @@ async fn await_held(containers: &Containers) -> Result<(), Box<dyn std::error::E
 
 /// Builds the probe for the guest, which is this host's own architecture.
 ///
-/// The pinned dev shell ships no static libc, so the first compiler that can
-/// actually link `-static` wins; `HL_GUEST_CC` overrides the search.
+/// The pinned dev shell cross compiler intentionally ships no static libc.
+/// Prefer the system compiler that owns the host static libc; `HL_GUEST_CC`
+/// remains the explicit cross-compilation override.
 fn compile(work: &Path, destination: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let source = work.join("locker.c");
     std::fs::write(&source, LOCKER)?;
     let override_cc = std::env::var("HL_GUEST_CC").ok();
     let candidates = override_cc
         .as_deref()
-        .map_or_else(|| vec!["cc", "/usr/bin/cc", "/usr/bin/gcc"], |value| vec![value]);
+        .map_or_else(|| vec!["/usr/bin/cc", "/usr/bin/gcc"], |value| vec![value]);
     for candidate in &candidates {
         let built = std::process::Command::new(candidate)
             .args(["-static", "-w", "-O2", "-std=gnu11", "-o"])
