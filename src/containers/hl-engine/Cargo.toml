@@ -24,7 +24,6 @@ hl-runtime = { path = "../../runtime/hl-runtime" }
 ring = "0.17.14"
 zeroize = "1.9"
 [dev-dependencies]
-hl-fake-host = { path = "../../runtime/hl-fake-host" }
 tempfile = "3"
 
 [build-dependencies]

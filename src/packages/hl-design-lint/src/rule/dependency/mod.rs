@@ -402,21 +402,20 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                     | "hl-provider"
                     | "hl-linux"
                     | "hl-checkpoint"
-                    | "hl-runtime"
-                    | "hl-fake-host",
+                    | "hl-runtime",
                 "hl-descriptor"
             )
             | (
-                "testing" | "hl-linux" | "hl-checkpoint" | "hl-runtime" | "hl-fake-host",
+                "testing" | "hl-linux" | "hl-checkpoint" | "hl-runtime",
                 "hl-network"
             )
             | ("testing", "hl-process" | "hl-provider" | "hl-runtime")
             | (
-                "hl-event" | "hl-sync" | "hl-ipc" | "hl-task" | "hl-linux" | "hl-runtime" | "hl-fake-host",
+                "hl-event" | "hl-sync" | "hl-ipc" | "hl-task" | "hl-linux" | "hl-runtime",
                 "hl-time"
             )
             | (
-                "hl-memory" | "hl-loader" | "hl-linux" | "hl-runtime" | "hl-fake-host",
+                "hl-memory" | "hl-loader" | "hl-linux" | "hl-runtime",
                 "hl-isa"
             )
             | (
@@ -426,8 +425,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                     | "hl-loader"
                     | "hl-linux"
                     | "hl-checkpoint"
-                    | "hl-runtime"
-                    | "hl-fake-host",
+                    | "hl-runtime",
                 "hl-memory"
             )
             | (
@@ -435,16 +433,15 @@ fn allowed_edge(source: &str, target: &str) -> bool {
                 "hl-sync"
             )
             | (
-                "hl-loader" | "hl-linux" | "hl-checkpoint" | "hl-runtime" | "hl-fake-host",
+                "hl-loader" | "hl-linux" | "hl-checkpoint" | "hl-runtime",
                 "hl-vfs"
             )
             | (
                 "hl-linux" | "hl-checkpoint" | "hl-runtime",
                 "hl-event" | "hl-ipc" | "hl-task"
             )
-            | ("hl-checkpoint" | "hl-runtime" | "hl-fake-host", "hl-provider")
+            | ("hl-checkpoint" | "hl-runtime", "hl-provider")
             | ("hl-runtime", "hl-aio" | "hl-linux" | "hl-loader" | "hl-terminal")
-            | ("hl-fake-host", "hl-linux")
     )
 }
 
@@ -455,7 +452,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
 fn allowed_development_edge(source: &str, target: &str) -> bool {
     matches!(
         (source, target),
-        ("dockerd", "hl-client") | ("hl-engine", "hl-fake-host")
+        ("dockerd", "hl-client")
     )
 }
 

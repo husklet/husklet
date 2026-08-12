@@ -1160,7 +1160,6 @@ dependencies = [
  "cc",
  "hl-descriptor",
  "hl-event",
- "hl-fake-host",
  "hl-fs",
  "hl-isa",
  "hl-linux",
@@ -1182,20 +1181,6 @@ dependencies = [
  "hl-descriptor",
  "hl-log",
  "hl-time",
-]
-
-[[package]]
-name = "hl-fake-host"
-version = "0.1.0"
-dependencies = [
- "hl-descriptor",
- "hl-isa",
- "hl-linux",
- "hl-memory",
- "hl-network",
- "hl-provider",
- "hl-time",
- "hl-vfs",
 ]
 
 [[package]]
