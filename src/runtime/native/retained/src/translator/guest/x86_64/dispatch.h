@@ -125,10 +125,7 @@ static int smc_on_write(uint64_t a) {
 // shared dispatcher while-loop -- the original broke the loop immediately, not just the macro.
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
-        if (g_pending) {                                                                                               \
-            maybe_deliver_signal(c); /* async signal pending -> redirect to guest handler */                           \
-            (c)->rip = nonpie_fold((c)->rip);                                                                          \
-        }                                                                                                              \
+        if (g_pending) { maybe_deliver_signal(c); /* async signal pending -> redirect to guest handler */ }            \
         g_prevpc = g_curpc;                                                                                            \
         g_curpc = (c)->rip;                                                                                            \
         g_disp_n++;                                                                                                    \
@@ -179,7 +176,7 @@ static int smc_on_write(uint64_t a) {
 // W6A item 3: after translating a block, write-protect its 16KB source page so a JIT (RWX-mmap) guest's
 // later overwrite traps in jit86_lazyguard -> smc_on_write() drops the stale translation. Inert unless
 // g_rwx_guest is set (smc_protect returns immediately). Was the smc_protect(c->rip) after the translate.
-#define G_AFTER_TRANSLATE(c) smc_protect((c)->rip)
+#define G_AFTER_TRANSLATE(c) smc_protect(nonpie_fold((c)->rip))
 
 // (5) Per-block JT trace dump. x86 register/flag layout (flags derived from cpu->nzcv; stored C = NOT
 // x86 CF). Verbatim from frontend/x86_64/dispatch.c.

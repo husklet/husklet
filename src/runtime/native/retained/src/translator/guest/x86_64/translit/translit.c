@@ -310,7 +310,7 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
         if (hl_x86_decode(pc, &insn) <= 0) break;
         int kind = translit_classify(&insn);
         if (kind == TL_NO) break;
-        if (hl_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) break;
+        if (x86_guest_fetch_exec(pc, bytes, (size_t)insn.len) != 0) break;
 
         uint64_t next = pc + (uint64_t)insn.len;
         uint8_t *instruction_start = a->cursor;

@@ -29,11 +29,6 @@
 
 // ---- The seam: names the JIT files own, which the rest of the TU needs.
 
-// A biased ET_EXEC's Go type section and V8 embedded-blob code base, in LOW link coordinates; set by
-// linux_abi/x86.c. g_nonpie_lo/hi/bias are declared above this include, in core/target/x86_64.c.
-static uint64_t g_nonpie_types_lo, g_nonpie_types_hi;
-static uint64_t g_nonpie_blob_code;
-
 // Must match guest/x86_64/cache.c, or switching host CPU silently relocates the guest image.
 #define PC_IMG_BASE 0x0000040000000000ull    // 4 TB
 #define PC_INTERP_BASE 0x0000048000000000ull // 4.5 TB
@@ -328,12 +323,8 @@ static void interp_store_bytes(uint64_t guest_address, const void *source, unsig
 }
 
 // The address CALL pushes is guest-visible: DWARF FDE lookup, dladdr and unwinding need a biased ET_EXEC's
-// LINK address; the dispatcher rebiases on the RET. Go and V8 are the exceptions -- their code metadata is
-// rebased high, so their walkers need high return PCs. Must stay byte-for-byte translate.c's.
+// LINK address; instruction fetch projects it onto storage after RET. Must stay byte-for-byte translate.c's.
 static uint64_t interp_call_return_pc(uint64_t pc) {
-    if (g_nonpie_lo && !g_nonpie_types_lo && !g_nonpie_blob_code && pc >= g_nonpie_lo + g_nonpie_bias &&
-        pc < g_nonpie_hi + g_nonpie_bias)
-        return pc - g_nonpie_bias;
     return pc;
 }
 
@@ -343,30 +334,13 @@ static uint64_t interp_ea(const struct cpu *cpu, const struct insn *insn, uint64
 // the image's baked LOW pointers, and a HIGH value silently disagrees -- glibc's __malloc_fork_lock_parent
 // then self-deadlocks on main_arena.mutex. Un-biases materialisation only; ACCESSES stay rebiased by
 // hl_x86_guest_pointer. Guards match lower/mov.c: 64-bit opsize (32-bit
-// truncates to the low value anyway); rip-relative; target inside the link range; Go images narrowed to the
-// type section, since code LEAs (`LEAQ asyncPreempt(SB)`) need HIGH for findfunc.
+// truncates to the low value anyway); rip-relative; target inside the link range.
 static uint64_t interp_lea_value(const struct cpu *cpu, const struct insn *insn, uint64_t next) {
     if (insn->opsize == 8 && insn->rip_rel && g_nonpie_lo) {
-        uint64_t link_target = (next - g_nonpie_bias) + (uint64_t)insn->disp;
-        uint64_t range_lo = g_nonpie_types_lo ? g_nonpie_types_lo : g_nonpie_lo;
-        uint64_t range_hi = g_nonpie_types_lo ? g_nonpie_types_hi : g_nonpie_hi;
-        if (link_target >= range_lo && link_target < range_hi) return link_target;
+        uint64_t link_target = next + (uint64_t)insn->disp;
+        if (link_target >= g_nonpie_lo && link_target < g_nonpie_hi) return link_target;
     }
     return interp_ea(cpu, insn, next);
-}
-
-// The one baked immediate hl rebases, and the opposite obligation to interp_lea_value above: V8's
-// embedded-builtins CODE base (v8_Default_embedded_blob_code_, recorded at load) is range-checked against
-// HIGH return addresses, so this constant alone must materialise HIGH. Exact-value match -> inert for every
-// other constant, every PIE image and every non-V8 image. Returns 1 when it fired, and then the write is
-// 64-bit whatever the operand size: the biased value does not fit the 32-bit form that usually carries it.
-// Register destinations only. Must stay byte-for-byte lower/mov.c's (findings 3.11).
-static int interp_mov_imm_rebase(const struct insn *insn, uint64_t *value) {
-    if (insn->opsize == 2 || !g_nonpie_blob_code) return 0;
-    uint64_t raw = insn->opsize == 8 ? *value : (uint64_t)(uint32_t)*value;
-    if (raw != g_nonpie_blob_code) return 0;
-    *value = raw + g_nonpie_bias;
-    return 1;
 }
 
 // ---- The flag substrate: x86 EFLAGS on ARM NZCV in cpu->nzcv plus side lanes, fixed by the checkpoint
@@ -782,7 +756,7 @@ static int interp_undefined(struct cpu *cpu, const struct insn *insn, uint64_t p
                       : insn->map3 == 3 ? "0F3A"
                       : insn->two       ? "0F"
                                         : "1B";
-    if (hl_guest_fetch_exec(pc, bytes, (size_t)length) != 0) length = 0;
+    if (x86_guest_fetch_exec(pc, bytes, (size_t)length) != 0) length = 0;
     for (int index = 0; index < length && used < (int)sizeof text - 4; index++)
         used += snprintf(text + used, sizeof text - (size_t)used, "%02x ", bytes[index]);
     if (used > 0) text[used - 1] = 0;
@@ -1069,13 +1043,6 @@ static int interp_step(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t
 // safepoints) at block granularity.
 static void interp_execute(struct cpu *cpu) {
     for (;;) {
-        // Non-PIE fold, AGAIN. core/dispatch.c folds a low link-vaddr PC into the biased image once per
-        // iteration, but G_DISPATCH_DEBUG runs AFTER it and delivers a queued signal -- and the handler
-        // address the guest registered is a LOW vaddr, so that redirect lands here unfolded and the fetch
-        // faults the guest with a SIGSEGV it never earned. Rare (the window is a few instructions wide) and
-        // fatal: ~1 in 10^3 async deliveries under a 2 ms itimer. Folding at the point of execution is the
-        // one place no ordering can outrun.
-        if (g_nonpie_lo && cpu->rip >= g_nonpie_lo && cpu->rip < g_nonpie_hi) cpu->rip += g_nonpie_bias;
         uint64_t pc = cpu->rip; // a fault below reports precisely this PC
         struct insn insn;
         if (hl_x86_decode(pc, &insn) < 0) {
@@ -1575,7 +1542,7 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     case 0xBE:
     case 0xBF: {
         uint64_t value = (uint64_t)insn->imm;
-        int width = interp_mov_imm_rebase(insn, &value) ? 8 : insn->opsize;
+        int width = insn->opsize;
         interp_reg_write(cpu, insn, (op & 7) | (insn->rexB << 3), width, value);
         cpu->rip = next;
         return STEP_NEXT;
@@ -1670,7 +1637,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         int width = (op & 1) ? insn->opsize : 1;
         interp_operand operand = interp_rm(cpu, insn, next);
         uint64_t value = (uint64_t)insn->imm;
-        if (op == 0xC7 && !insn->is_mem && interp_mov_imm_rebase(insn, &value)) width = 8;
         interp_rm_write(cpu, insn, &operand, width, value);
         cpu->rip = next;
         return STEP_NEXT;

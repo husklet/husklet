@@ -26,11 +26,6 @@ int hl_x86_lower_mov(struct insn *I, uint64_t next, const hl_x86_move_image *ima
             return TX_NEXT;
         }
         uint64_t v = sf ? (uint64_t)I->imm : (uint64_t)(uint32_t)I->imm;
-        // bias the ONE baked immediate that materializes V8's embedded-builtins code base
-        // (v8_Default_embedded_blob_code_) to the high mapping so V8's InnerPointerToCodeCache range
-        // matches where the builtins actually execute (return addresses stay HIGH). Exact-value match
-        // on the symbol recorded at load -> inert for every other constant / PIE / non-V8 image.
-        if (image->blob_code && v == image->blob_code) v += image->bias;
         e_movconst(rd, v);
         return TX_NEXT;
     }
@@ -48,9 +43,6 @@ int hl_x86_lower_mov(struct insn *I, uint64_t next, const hl_x86_move_image *ima
             e_bfi(I->rm_reg, 16, 0, 16, 1);
         } else {
             uint64_t v = sf ? (uint64_t)I->imm : (uint64_t)(uint32_t)I->imm;
-            // the C7 /0 `mov r,imm` form of the V8 embedded-blob code-base load (see the B8-BF
-            // note above). Same exact-value rebase; C6 is byte-imm (never a code address) so op==0xC7.
-            if (op == 0xC7 && image->blob_code && v == image->blob_code) v += image->bias;
             e_movconst(I->rm_reg, v);
         }
         return TX_NEXT;
@@ -173,13 +165,8 @@ int hl_x86_lower_mov(struct insn *I, uint64_t next, const hl_x86_move_image *ima
         // it is redirected by the dispatcher (run_guest). Only the 64-bit form (sf); inert for
         // PIE/static-PIE (g_nonpie_lo == 0). NOGUESTFOLD leaves lea biased for A/B bisection.
         if (sf && I->rip_rel && image->low) {
-            uint64_t lo = (next - image->bias) + (uint64_t)I->disp; // low link target
-            // EXPERIMENT(diagnosis): for a Go image restrict the low-rewrite to the type
-            // section only (the pre-v0.9.40 behavior). Whole-image low-rewrite wrongly caught
-            // code-address leas (LEAQ asyncPreempt(SB)) that findfunc needs HIGH -> crash.
-            uint64_t rlo = image->types_low ? image->types_low : image->low;
-            uint64_t rhi = image->types_low ? image->types_high : image->high;
-            if (lo >= rlo && lo < rhi) {
+            uint64_t lo = next + (uint64_t)I->disp;
+            if (lo >= image->low && lo < image->high) {
                 e_movconst(I->reg, lo);
                 return TX_NEXT;
             }

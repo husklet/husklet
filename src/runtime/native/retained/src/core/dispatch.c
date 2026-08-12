@@ -265,11 +265,11 @@ static void run_guest(struct cpu *c) {
             continue;
             // handler returned -> restore context
         }
-        // A non-PIE image's un-relocated absolute jump lands on its (unmapped) low link vaddr; redirect it
-        // into the biased image so we translate real code instead of faulting on the unmapped low address.
-        // (The one place the folded value is deliberately CARRIED rather than used and dropped: the running
-        // PC stays high, and pcrel_base/lea un-bias it again whenever an address is materialised.)
+#ifndef G_PC_STAYS_CANONICAL
+        // AArch64 still carries the projected PC. The x86 frontend keeps architectural PCs in guest
+        // coordinates and resolves storage only while fetching bytes or dereferencing data.
         G_PC(c) = nonpie_fold(G_PC(c));
+#endif
         // Frontend hook: top-of-loop debug instrumentation (x86-only; empty on aarch64).
         G_DISPATCH_DEBUG(c);
         // With threads, the WHOLE cache lookup is under the lock: an unlocked

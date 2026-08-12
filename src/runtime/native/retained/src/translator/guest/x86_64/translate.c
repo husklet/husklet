@@ -255,32 +255,15 @@ void byte_wb(struct insn *I, int regnum, int val) {
         e_bfi(regnum, val, 0, 8, 1);
 }
 
-// W6A item 1 (non-PIE): the link range + bias of a biased ET_EXEC image (defined in os/linux/container/vfs.c,
-// set in linux_abi/x86.c's load_elf -- both later in the unity TU), plus the Go type section [md.types, md.etypes) in
-// low link coords (set by linux_abi/x86.c's go_rebase_nonpie; the range whose lea-materialized *_type pointers are made
-// low so they match the image's baked-absolute type pointers and Go's type identity holds). Forward tentative
-// declarations so the rip-relative `lea` rewrite below can see them. All zero for PIE/static-PIE / non-Go
-// images -> the rewrite is inert.
-static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias, g_nonpie_types_lo, g_nonpie_types_hi;
-// V8's embedded-builtins CODE base (symbol v8_Default_embedded_blob_code_) -- a baked LOW.text
-// address the binary loads via `mov r32,imm32`. hl runs the code at the HIGH mapping (+bias), so V8's
-// InnerPointerToCodeCache range check compares its LOW registered base against a HIGH frame return address
-// and MISSES -> V8_Fatal "maybe_code.has_value()" (node:20 `new Error().stack` / mongosh). We record the
-// symbol's LOW link value at load (0 if absent / PIE / non-V8) and bias just THIS one materialization to the
-// high mapping (translate/mov.c), so V8's code range lives where the code executes -- the same idea as
-// go_rebase_nonpie for Go's moduledata code range. Exact-value match -> no other constant is touched, and
-// return addresses stay HIGH (Go's gentraceback/findfunc keep working). 0 for PIE / non-V8 / stripped.
-static uint64_t g_nonpie_blob_code;
+// Link range and storage bias for a displaced ET_EXEC image. Architectural addresses remain in this low
+// guest range; the bias is applied only when instruction or data bytes are dereferenced on the host.
+static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias;
 
 // A biased ET_EXEC executes from the host mapping at link_pc+bias, but the address pushed by x86 CALL is
 // guest-visible architectural state.  Keep it in the ELF link-address domain so DWARF FDE ranges, dladdr,
-// backtrace, and forced unwinding see the same PCs they would on Linux; RET is redirected to the high mapping
-// by the dispatcher.  Go and V8 are deliberate exceptions: their runtime code metadata is explicitly rebased
-// to the high execution domain by linux_abi/x86.c, and their stack walkers therefore require high return PCs.
+// backtrace, and forced unwinding see the same PCs they would on Linux. RET returns that same guest value;
+// instruction fetch alone projects it onto storage.
 static uint64_t call_return_pc(uint64_t pc) {
-    if (g_nonpie_lo && !g_nonpie_types_lo && !g_nonpie_blob_code && pc >= g_nonpie_lo + g_nonpie_bias &&
-        pc < g_nonpie_hi + g_nonpie_bias)
-        return pc - g_nonpie_bias;
     return pc;
 }
 
@@ -3269,9 +3252,7 @@ static void *translate_block(uint64_t gpc) {
             // ---- data-move class (mov B0-BF/C6/C7/88-8B, lea 8D, push/pop 50-5F, movsxd 63) ----
             // Lowered in translate/mov.c translate_mov(); no EFLAGS interaction.
             {
-                const hl_x86_move_image image = {
-                    g_nonpie_lo, g_nonpie_hi, g_nonpie_bias, g_nonpie_types_lo, g_nonpie_types_hi, g_nonpie_blob_code,
-                };
+                const hl_x86_move_image image = {g_nonpie_lo, g_nonpie_hi, g_nonpie_bias};
                 int s = hl_x86_lower_mov(&I, next, &image);
                 if (s == TX_NEXT) {
                     gpc = next;

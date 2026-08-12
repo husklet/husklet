@@ -30,6 +30,7 @@
 #define G_GPC_HASH_SHIFT 0
 
 #define G_PC(c) ((c)->rip)
+#define G_PC_STAYS_CANONICAL 1
 #define G_SP(c) ((c)->r[4])     // rsp
 #define G_TLS(c) ((c)->fs_base) // x86 TLS base (arch_prctl SET_FS)
 // A JIT guest unmapped / remapped an executable VA range [lo,hi) -> drop stale cached translations for it

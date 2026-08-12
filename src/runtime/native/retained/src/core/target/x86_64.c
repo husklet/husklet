@@ -1022,11 +1022,15 @@ static int container_init(const char *rootfs) {
 // on success, nonzero exit code on failure. First call wins; later calls are no-ops (g_engine_inited),
 // so the resident parent pays this once and the standalone path runs it exactly as before.
 static int guest_fetch_direct_valid(uint64_t address, size_t length) {
-    return host_range_mapped((uintptr_t)address, length);
+    return host_range_mapped((uintptr_t)nonpie_fold(address), length);
 }
 
 static int guest_store_direct_valid(uint64_t address, size_t length) {
-    return !gro_hit(address, (uint64_t)length) && host_range_mapped((uintptr_t)address, length);
+    return !gro_hit(address, (uint64_t)length) && host_range_mapped((uintptr_t)nonpie_fold(address), length);
+}
+
+static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
+    return hl_guest_fetch_exec(nonpie_fold(guest), destination, length);
 }
 
 static int guest_rep_access_special(uint64_t address, size_t length, int write) {
@@ -1035,7 +1039,7 @@ static int guest_rep_access_special(uint64_t address, size_t length, int write) 
 }
 
 static int engine_global_init(void) {
-    hl_x86_decode_set_instruction_fetch(hl_guest_fetch_exec);
+    hl_x86_decode_set_instruction_fetch(x86_guest_fetch_exec);
     hl_guest_memory_bind(&g_guest_memory_ops);
     hl_guest_fetch_set_direct_validator(guest_fetch_direct_valid);
     hl_x86_rep_set_store_commit(jit86_store_alias_changed, jit86_store_alias_observation_active);
