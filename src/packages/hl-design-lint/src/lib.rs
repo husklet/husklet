@@ -361,6 +361,8 @@ fn caller() { let _ = missing(&Subject); let _ = reviewed(&Subject); }
         let queues = root.join("lint");
         fs::create_dir_all(queues.join("errors")).unwrap();
         fs::create_dir_all(queues.join("check")).unwrap();
+        fs::write(queues.join("errors/.gitkeep"), "").unwrap();
+        fs::write(queues.join("check/.gitkeep"), "").unwrap();
         fs::write(queues.join("errors/stale.md"), "stale").unwrap();
         fs::write(queues.join("check/stale.md"), "stale").unwrap();
 
@@ -374,11 +376,17 @@ fn caller() { let _ = missing(&Subject); let _ = reviewed(&Subject); }
             .unwrap()
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(errors.len(), 1);
-        assert_eq!(checks.len(), 1);
+        assert_eq!(errors.len(), 2);
+        assert_eq!(checks.len(), 2);
+        assert!(queues.join("errors/.gitkeep").is_file());
+        assert!(queues.join("check/.gitkeep").is_file());
         assert!(!queues.join("errors/stale.md").exists());
         assert!(!queues.join("check/stale.md").exists());
-        let check = fs::read_to_string(checks[0].path()).unwrap();
+        let check = checks
+            .iter()
+            .find(|entry| entry.file_name() != ".gitkeep")
+            .map(|entry| fs::read_to_string(entry.path()).unwrap())
+            .unwrap();
         assert!(check.contains("domain(surface)"));
         assert!(check.contains("## Related context"));
         fs::remove_dir_all(root).unwrap();

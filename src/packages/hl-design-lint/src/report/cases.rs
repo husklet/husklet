@@ -80,7 +80,7 @@ impl<Output: Write> Reporter for Cases<Output> {
         for name in ["errors", "check"] {
             let queue = self.root.join(name);
             if queue.exists() {
-                fs::remove_dir_all(&queue).map_err(|error| LintError::io("clear", &queue, error))?;
+                clear_queue(&queue)?;
             }
             fs::create_dir_all(&queue).map_err(|error| LintError::io("create", &queue, error))?;
         }
@@ -99,6 +99,23 @@ impl<Output: Write> Reporter for Cases<Output> {
         writeln!(self.output, "wrote {} case(s) to {}", self.written, self.root.display())
             .map_err(|error| LintError::report("case summary", error))
     }
+}
+
+fn clear_queue(queue: &std::path::Path) -> Result<()> {
+    let entries = fs::read_dir(queue).map_err(|error| LintError::io("read", queue, error))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| LintError::io("read", queue, error))?;
+        if entry.file_name() == ".gitkeep" {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            fs::remove_dir_all(&path).map_err(|error| LintError::io("clear", &path, error))?;
+        } else {
+            fs::remove_file(&path).map_err(|error| LintError::io("clear", &path, error))?;
+        }
+    }
+    Ok(())
 }
 
 fn document(finding: &Finding, timestamp: u64, domain: &str, package: &str, classification: &str) -> String {

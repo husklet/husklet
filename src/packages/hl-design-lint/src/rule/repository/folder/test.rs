@@ -19,7 +19,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 #[test]
-fn reports_one_file() {
+fn negative_example_reports_an_unjustified_single_file_namespace() {
     let root = fixture("single");
     let module = root.join("workspace");
     fs::create_dir_all(&module).unwrap();
@@ -37,7 +37,7 @@ fn reports_one_file() {
 }
 
 #[test]
-fn keeps_cargo_roots() {
+fn positive_example_keeps_cohesive_siblings_and_required_cargo_roots() {
     let root = fixture("valid");
     let component = root.join("component");
     fs::create_dir_all(&component).unwrap();
