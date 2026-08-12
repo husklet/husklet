@@ -1,5 +1,6 @@
 use std::{fs, path::Path};
 
+use super::source_files;
 use crate::{Finding, LintError, Location, Result, Review, Severity, rule::Rule, source::Workspace};
 
 const FILE_LINES: usize = 1_500;
@@ -22,11 +23,7 @@ impl Rule for Structure {
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
-        for path in workspace.source_files()?.into_iter().filter(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| matches!(extension, "c" | "h" | "m" | "mm"))
-        }) {
+        for path in source_files(workspace)? {
             let text = fs::read_to_string(&path).map_err(|error| LintError::io("read", &path, error))?;
             findings.extend(analyze(&path, &text));
         }

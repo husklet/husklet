@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 use tree_sitter::{Node, Parser};
 
+use super::source_files;
 use crate::{Finding, LintError, Location, Result, Severity, rule::Rule, source::Workspace};
 
 const RULE: &str = "c-source-policy";
@@ -73,18 +74,12 @@ impl Rule for Policy {
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
-        for path in workspace.source_files()?.into_iter().filter(|path| is_c(path)) {
+        for path in source_files(workspace)? {
             let source = fs::read_to_string(&path).map_err(|error| LintError::io("read", &path, error))?;
             findings.extend(analyze(&path, &source, self)?);
         }
         Ok(findings)
     }
-}
-
-fn is_c(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| matches!(extension, "c" | "h" | "m" | "mm"))
 }
 
 #[derive(Debug)]

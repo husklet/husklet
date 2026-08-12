@@ -15,10 +15,10 @@ fn findings(source: &str, policy: Policy) -> Vec<crate::Finding> {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::create_dir_all(root.join("src")).unwrap();
-    let path = root.join("src/arbitrary-name.c");
+    fs::create_dir_all(root.join("arbitrary-source-root")).unwrap();
+    let path = root.join("arbitrary-source-root/arbitrary-name.c");
     fs::write(&path, source).unwrap();
-    let workspace = Workspace::load([PathBuf::from(&path)]).unwrap();
+    let workspace = Workspace::load([PathBuf::from(&root)]).unwrap();
     let result = policy.check(&workspace).unwrap();
     fs::remove_dir_all(root).unwrap();
     result
