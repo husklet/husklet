@@ -54,25 +54,25 @@ impl Role {
             Self::Adapters => matches!(target, Self::Model | Self::Library | Self::Ports | Self::Adapters),
         }
     }
-}
 
-fn source_role(source: &Source) -> Option<Role> {
-    let manifest = owning_manifest(&source.path)?;
-    let relative = source.path.strip_prefix(manifest.parent()?).ok()?;
-    let mut components = relative
-        .components()
-        .filter_map(|component| component.as_os_str().to_str());
-    if components.next()? != "src" {
-        return None;
+    fn from_source(source: &Source) -> Option<Self> {
+        let manifest = owning_manifest(&source.path)?;
+        let relative = source.path.strip_prefix(manifest.parent()?).ok()?;
+        let mut components = relative
+            .components()
+            .filter_map(|component| component.as_os_str().to_str());
+        if components.next()? != "src" {
+            return None;
+        }
+        let first = components.next()?;
+        Self::parse(first.strip_suffix(".rs").unwrap_or(first))
     }
-    let first = components.next()?;
-    Role::parse(first.strip_suffix(".rs").unwrap_or(first))
 }
 
 pub(super) fn findings(workspace: &Workspace, rule: &'static str) -> Vec<Finding> {
     let mut findings = Vec::new();
     for source in workspace.production() {
-        let Some(role) = source_role(source) else {
+        let Some(role) = Role::from_source(source) else {
             continue;
         };
         let mut visitor = RoleVisitor {
