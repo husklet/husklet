@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use super::control::{FRAME_SIZE, FailureStage, Message};
 use super::{StreamBridge, wire};
 use crate::activation::GuestIsa;

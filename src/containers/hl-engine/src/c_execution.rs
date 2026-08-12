@@ -94,7 +94,11 @@ unsafe extern "C" fn c_syscall_trap(
     if context.is_null() || cpu.is_null() || result.is_null() {
         return -1;
     }
+    // SAFETY: the null checks above establish non-null pointers; the C callback contract
+    // supplies uniquely borrowed CPU and result records for the duration of this call.
     let cpu = unsafe { &mut *cpu };
+    // SAFETY: as above, the backend owns this result record and grants this callback its
+    // only mutable borrow until the callback returns.
     let result = unsafe { &mut *result };
     if cpu.abi != SYSCALL_TRAP_ABI || cpu.size < std::mem::size_of::<CSyscallCpuAarch64>() as u32 {
         return -1;
@@ -102,6 +106,8 @@ unsafe extern "C" fn c_syscall_trap(
     result.abi = SYSCALL_TRAP_ABI;
     result.size = std::mem::size_of::<CSyscallTrapResult>() as u32;
     result.outcome = SYSCALL_TRAP_DECLINED;
+    // SAFETY: create_with_streams passes a pointer to a boxed CSyscallTrapContext whose
+    // allocation remains pinned and alive until after the backend is destroyed.
     let context = unsafe { &*(context.cast::<CSyscallTrapContext>()) };
     if matches!(
         cpu.x[8],
@@ -481,6 +487,8 @@ impl crate::composition::NativeTerminalWindowNotification for CTerminalWindowNot
             .lock()
             .map_err(|_| crate::composition::CompositionError::RuntimeConstruction)?
             .ok_or(crate::composition::CompositionError::RuntimeConstruction)?;
+        // SAFETY: terminal_handle is published only after backend creation succeeds and is
+        // cleared before destruction; the backend permits concurrent request calls.
         let status = unsafe { hl_c_backend_request(handle as *mut c_void, REQUEST_SIGNAL, libc::SIGWINCH) };
         (status == STATUS_OK)
             .then_some(())
@@ -542,7 +550,10 @@ impl StreamBridge {
         #[cfg(not(target_os = "linux"))]
         for descriptor in [&pair.0, &pair.1] {
             // F_GETFD/F_SETFD operate on the live descriptor and retain no pointer.
+            // SAFETY: descriptor owns a live pipe endpoint and F_GETFD takes no pointer.
             let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
+            // SAFETY: descriptor remains live, flags came from F_GETFD, and F_SETFD retains
+            // neither the descriptor nor any borrowed memory.
             if flags < 0 || unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } != 0
             {
                 return Err(EngineError::LaunchFailed);
@@ -788,6 +799,9 @@ impl CGuestExecutor {
         } else {
             std::ptr::null_mut()
         };
+        // SAFETY: all C strings, pointer arrays, image_plan, descriptors, callback context,
+        // and output slot remain valid for the call. The backend copies configuration and
+        // returns an exclusively owned handle on success; syscall_trap then outlives it.
         let status = unsafe {
             hl_c_backend_create(
                 isa as c_uint,
@@ -821,6 +835,8 @@ impl CGuestExecutor {
                 handle: Arc::clone(&terminal_handle),
             }))
         {
+            // SAFETY: creation returned this uniquely owned handle, and terminal attachment
+            // failed before the handle could escape into the executor.
             unsafe { hl_c_backend_destroy(handle.as_ptr()) };
             return Err(error);
         }
@@ -840,6 +856,7 @@ impl CGuestExecutor {
     }
 
     pub(crate) fn exit(&self) -> EngineExit {
+        // SAFETY: self owns a live backend handle until Drop and the accessor is read-only.
         let kind = unsafe { hl_c_backend_exit_kind(self.handle.as_ptr()) };
         EngineExit {
             kind: match kind {
@@ -848,7 +865,9 @@ impl CGuestExecutor {
                 3 => ExitKind::Fault,
                 _ => ExitKind::EngineError,
             },
+            // SAFETY: self owns a live backend handle and this accessor is read-only.
             guest_status: unsafe { hl_c_backend_exit_status(self.handle.as_ptr()) },
+            // SAFETY: self owns a live backend handle and this accessor is read-only.
             detail: unsafe { hl_c_backend_exit_detail(self.handle.as_ptr()) },
             fault: None,
         }
@@ -862,6 +881,8 @@ impl CGuestExecutor {
             .collect::<Result<Vec<_>, _>>()?;
         let pointers = arguments.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
         let count = c_int::try_from(pointers.len()).map_err(|_| EngineError::LaunchFailed)?;
+        // SAFETY: self owns the live handle; count matches pointers, and every pointed-to
+        // CString remains alive and NUL-terminated for the duration of the call.
         Ok(unsafe { hl_c_backend_run(self.handle.as_ptr(), count, pointers.as_ptr()) })
     }
 
@@ -877,6 +898,8 @@ impl CGuestExecutor {
             StopRequest::Force => REQUEST_FORCE_STOP,
             StopRequest::Signal(_) => REQUEST_SIGNAL,
         };
+        // SAFETY: self owns a live handle and the backend contract permits request while run
+        // is active; the call receives only scalar request data.
         let status = unsafe { hl_c_backend_request(self.handle.as_ptr(), kind, request.signal()) };
         if status == STATUS_OK {
             Ok(())
@@ -891,6 +914,8 @@ impl Drop for CGuestExecutor {
         if let Ok(mut handle) = self.terminal_handle.lock() {
             *handle = None;
         }
+        // SAFETY: this executor uniquely owns the live handle and Drop runs exactly once,
+        // after terminal users have been prevented from issuing further requests.
         unsafe { hl_c_backend_destroy(self.handle.as_ptr()) };
     }
 }
@@ -1046,6 +1071,8 @@ mod tests {
             exit_status: -1,
             image_generation: u64::MAX,
         };
+        // SAFETY: context, cpu, and result are live uniquely borrowed test values whose
+        // layouts match the callback ABI for the complete call.
         let status = unsafe {
             c_syscall_trap(
                 (&mut context as *mut CSyscallTrapContext).cast(),
@@ -1083,6 +1110,8 @@ mod tests {
             exit_status: -1,
             image_generation: 0,
         };
+        // SAFETY: the closure passes live uniquely borrowed ABI records and a context that
+        // remains allocated for every synchronous callback invocation.
         let mut dispatch = |cpu: &mut CSyscallCpuAarch64, result: &mut CSyscallTrapResult| unsafe {
             c_syscall_trap(
                 (&mut context as *mut CSyscallTrapContext).cast(),
