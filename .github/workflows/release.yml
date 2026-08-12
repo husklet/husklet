@@ -25,9 +25,37 @@ jobs:
       HL_REGISTRY_USERNAME: ${{ secrets.HL_REGISTRY_USERNAME }}
       HL_REGISTRY_PASSWORD: ${{ secrets.HL_REGISTRY_PASSWORD }}
 
+  native-linux-reproducibility:
+    name: Native engine / Linux AMD64 reproducibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an AMD64 Linux host
+        run: test "$(uname -s)-$(uname -m)" = Linux-x86_64
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Verify Linux native shared-library reproducibility
+        timeout-minutes: 10
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test --locked --offline -p hl-native --test build_reproducibility --
+          --ignored --exact native_shared_library_is_reproducible_across_out_directories
+
   dmg:
     name: Signed and notarized DMG
-    needs: smoke
+    needs: [smoke, native-linux-reproducibility]
     runs-on: macos-26
     timeout-minutes: 60
     steps:

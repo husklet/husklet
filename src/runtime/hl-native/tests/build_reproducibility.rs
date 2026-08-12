@@ -6,7 +6,14 @@ use std::{
 
 fn build(workspace: &Path, target: &Path) -> Vec<u8> {
     let status = Command::new(env!("CARGO"))
-        .args(["build", "--offline", "--package", "hl-native", "--manifest-path"])
+        .args([
+            "build",
+            "--release",
+            "--offline",
+            "--package",
+            "hl-native",
+            "--manifest-path",
+        ])
         .arg(workspace.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", target)
         .status()
