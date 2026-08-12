@@ -6,6 +6,10 @@ E/E, R/R, I/I, E/R, E/I, and R/I. Each cell uses crossed `AB, BA, BA, AB`
 ordering and therefore requires a multiple of four rounds.
 Four crossed warmup pairs run before recorded samples in every cell, including
 after resume.
+Each recorded row executes three exact-output samples and records the minimum
+phase time; all three phase sets, checksums, normalized stdout, and stderr must
+match. This mirrors the established benchmark harness instead of asking one
+scheduler sample to satisfy the null floor.
 
 The generated workloads deliberately run the combined sqlite and malloc phases
 at divisor 2 and the Python loop for two million iterations.  Shorter smoke

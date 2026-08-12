@@ -2,6 +2,7 @@ import importlib.util
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 MODULE = pathlib.Path(__file__).with_name("eri_matrix.py")
 SPEC = importlib.util.spec_from_file_location("eri_matrix", MODULE)
@@ -67,6 +68,19 @@ class MatrixTests(unittest.TestCase):
             first = eri.tree_digest(root)
             (root / "value").write_text("two")
             self.assertNotEqual(first, eri.tree_digest(root))
+
+    def test_repeated_row_uses_minimum_and_requires_exact_output(self):
+        samples = [
+            ({"sqlite": (120, "ok")}, "same"),
+            ({"sqlite": (90, "ok")}, "same"),
+            ({"sqlite": (110, "ok")}, "same"),
+        ]
+        with mock.patch.object(eri, "run_sample", side_effect=samples):
+            self.assertEqual(eri.run_one({"samples_per_row": 3}, "sqlite", "R"), ({"sqlite": (90, "ok")}, "same"))
+        samples[-1] = ({"sqlite": (110, "different")}, "same")
+        with mock.patch.object(eri, "run_sample", side_effect=samples):
+            with self.assertRaisesRegex(RuntimeError, "checksum mismatch"):
+                eri.run_one({"samples_per_row": 3}, "sqlite", "R")
 
     def test_backend_receipt_is_executable_and_engine_bound(self):
         with tempfile.TemporaryDirectory() as directory:

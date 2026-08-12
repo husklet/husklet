@@ -150,6 +150,10 @@ def validate(config):
     if not isinstance(rounds, int) or rounds < 4 or rounds % 4:
         raise ValueError("rounds must be a positive multiple of four (minimum 4)")
     config["rounds"] = rounds
+    samples_per_row = config.get("samples_per_row", 3)
+    if not isinstance(samples_per_row, int) or samples_per_row < 3:
+        raise ValueError("samples_per_row must be an integer of at least three")
+    config["samples_per_row"] = samples_per_row
     return config
 
 
@@ -235,7 +239,7 @@ def load_rows(path):
     return rows
 
 
-def run_one(config, workload, arm):
+def run_sample(config, workload, arm):
     argv = config["arms"][arm]["command"] + config["workloads"][workload]["argv"]
     result = subprocess.run(argv, capture_output=True, check=False)
     if result.returncode:
@@ -245,6 +249,23 @@ def run_one(config, workload, arm):
     if expected is not None and set(phases) != set(expected):
         raise RuntimeError(f"{workload}/{arm} phases {sorted(phases)} != expected {sorted(expected)}")
     return phases, canonical(result.stdout, result.stderr)
+
+
+def run_one(config, workload, arm):
+    samples = [run_sample(config, workload, arm) for _ in range(config.get("samples_per_row", 3))]
+    identities = {identity for _, identity in samples}
+    if len(identities) != 1:
+        raise RuntimeError(f"{workload}/{arm} repeated sample output mismatch")
+    phase_names = set(samples[0][0])
+    if any(set(phases) != phase_names for phases, _ in samples):
+        raise RuntimeError(f"{workload}/{arm} repeated sample phase mismatch")
+    phases = {}
+    for phase in phase_names:
+        checksums = {sample[0][phase][1] for sample in samples}
+        if len(checksums) != 1:
+            raise RuntimeError(f"{workload}/{arm} repeated sample checksum mismatch for {phase}")
+        phases[phase] = (min(sample[0][phase][0] for sample in samples), checksums.pop())
+    return phases, identities.pop()
 
 
 def append_row(handle, row):
@@ -359,7 +380,7 @@ def main(argv=None):
                 for warmup in range(WARMUP_PAIRS):
                     arms = (left, right)
                     for index in ORDER[warmup]:
-                        run_one(config, workload, arms[index])
+                        run_sample(config, workload, arms[index])
         with open(ledger, "a", encoding="utf-8") as output:
             for workload in ("python", "sqlite", "malloc"):
                 for left, right in CELLS:

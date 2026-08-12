@@ -143,6 +143,7 @@ def main(argv=None):
     config = {
         "schema": "husklet-eri-v2",
         "rounds": args.rounds,
+        "samples_per_row": 3,
         "rootfs": {"path": str(rootfs), "sha256": tree_digest(rootfs)},
         "arms": {
             "E": arm("E", "external"),
