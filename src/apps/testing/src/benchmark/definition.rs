@@ -205,6 +205,46 @@ fn verify_artifact(label: &str, artifact: &Artifact, directory: bool) -> Result<
     Ok(())
 }
 
+fn tree_hash(root: &Path) -> Result<String, Error> {
+    fn walk(root: &Path, directory: &Path, identity: &mut FramedIdentity) -> Result<(), Error> {
+        let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let relative = path.strip_prefix(root)?;
+            identity.field(relative.as_os_str().as_encoded_bytes())?;
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                identity.field(b"L")?;
+                identity.field(fs::read_link(path)?.as_os_str().as_encoded_bytes())?;
+            } else if metadata.is_dir() {
+                identity.field(b"D")?;
+                walk(root, &path, identity)?;
+            } else if metadata.is_file() {
+                identity.field(b"F")?;
+                identity.field(&fs::read(path)?)?;
+            } else {
+                return Err("rootfs contains an unsupported entry type".into());
+            }
+        }
+        Ok(())
+    }
+    let mut identity = FramedIdentity::new(b"husklet-rootfs-tree-v1")?;
+    walk(root, root, &mut identity)?;
+    Ok(identity.finish())
+}
+
+pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        tree_hash(path)
+    } else if metadata.is_file() {
+        Ok(FramedIdentity::of(&fs::read(path)?))
+    } else {
+        Err("benchmark artifact is neither a regular file nor a directory".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Artifact, guest_is_hashed, invariant_phases_valid, phase_names_valid, verify_artifact};
@@ -272,45 +312,5 @@ mod tests {
         let declared = ["compute", "malloc"].into_iter().collect();
         assert!(invariant_phases_valid(&["compute".into()], &declared));
         assert!(!invariant_phases_valid(&["typo".into()], &declared));
-    }
-}
-
-fn tree_hash(root: &Path) -> Result<String, Error> {
-    fn walk(root: &Path, directory: &Path, identity: &mut FramedIdentity) -> Result<(), Error> {
-        let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            let path = entry.path();
-            let relative = path.strip_prefix(root)?;
-            identity.field(relative.as_os_str().as_encoded_bytes())?;
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
-                identity.field(b"L")?;
-                identity.field(fs::read_link(path)?.as_os_str().as_encoded_bytes())?;
-            } else if metadata.is_dir() {
-                identity.field(b"D")?;
-                walk(root, &path, identity)?;
-            } else if metadata.is_file() {
-                identity.field(b"F")?;
-                identity.field(&fs::read(path)?)?;
-            } else {
-                return Err("rootfs contains an unsupported entry type".into());
-            }
-        }
-        Ok(())
-    }
-    let mut identity = FramedIdentity::new(b"husklet-rootfs-tree-v1")?;
-    walk(root, root, &mut identity)?;
-    Ok(identity.finish())
-}
-
-pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.is_dir() {
-        tree_hash(path)
-    } else if metadata.is_file() {
-        Ok(FramedIdentity::of(&fs::read(path)?))
-    } else {
-        Err("benchmark artifact is neither a regular file nor a directory".into())
     }
 }

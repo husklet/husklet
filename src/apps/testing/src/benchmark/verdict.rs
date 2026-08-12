@@ -432,9 +432,16 @@ mod tests {
 
     #[test]
     fn control_correction_accounts_for_drift_in_both_arms() {
-        let upper = super::corrected_upper(1.07, 0.02, 0.02).unwrap();
-        assert!(upper > 1.10);
-        assert!(1.07 * 1.02 < 1.10, "one-sided correction would falsely pass");
+        let measured = 1.07;
+        let base_drift = 0.02;
+        let candidate_drift = 0.02;
+        let limit = 1.10;
+        let upper = super::corrected_upper(measured, base_drift, candidate_drift).unwrap();
+        assert!(upper > limit);
+        assert!(
+            measured * (1.0 + candidate_drift) < limit,
+            "one-sided correction would falsely pass"
+        );
         assert!(super::corrected_upper(1.0, 0.0, 1.0).is_err());
     }
 
