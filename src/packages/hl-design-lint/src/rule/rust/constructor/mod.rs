@@ -59,19 +59,29 @@ fn inspect_items(
     findings: &mut Vec<Finding>,
 ) {
     for item in items {
-        match item {
-            Item::Fn(function) if !requires_test(&function.attrs) => {
-                inspect_function(rule, source, function, declared, findings);
-            }
-            Item::Mod(module) if !requires_test(&module.attrs) => {
-                if let Some((_, nested)) = &module.content {
-                    inspect_items(rule, source, nested, declared, findings);
-                }
-            }
-            // Implementation methods already have an owner. Do not descend into impls, traits,
-            // function bodies, or foreign blocks.
-            _ => {}
+        inspect_item(rule, source, item, declared, findings);
+    }
+}
+
+fn inspect_item(
+    rule: &'static str,
+    source: &Source,
+    item: &Item,
+    declared: &BTreeSet<String>,
+    findings: &mut Vec<Finding>,
+) {
+    match item {
+        Item::Fn(function) if !requires_test(&function.attrs) => {
+            inspect_function(rule, source, function, declared, findings);
         }
+        Item::Mod(module) if !requires_test(&module.attrs) => {
+            if let Some((_, nested)) = &module.content {
+                inspect_items(rule, source, nested, declared, findings);
+            }
+        }
+        // Implementation methods already have an owner. Do not descend into impls, traits,
+        // function bodies, or foreign blocks.
+        _ => {}
     }
 }
 
