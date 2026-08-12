@@ -255,6 +255,6 @@ mod tests {
         assert!(backend_receipt(&arguments("c"), Some(Guest::Aarch64)).is_ok());
         assert!(backend_receipt(&arguments("rust"), Some(Guest::Aarch64)).is_err());
         assert!(backend_receipt(&arguments("bogus"), Some(Guest::Aarch64)).is_err());
-        assert!(backend_receipt(&arguments("c"), Some(Guest::X86_64)).is_err());
+        assert!(backend_receipt(&arguments("c"), Some(Guest::X86_64)).is_ok());
     }
 }

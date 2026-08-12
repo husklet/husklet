@@ -258,12 +258,14 @@ fn futex_routes_both() {
         ("x86_64", futex_x86(128, 1, 0), 245),
         ("x86_64", futex_x86(128, 0, 1), 146),
         ("x86_64", futex_x86(128, 0, 2), 242),
-        ("x86_64", futex_x86(384, 1, 0), 234),
+        ("x86_64", futex_x86(384, 1, 0), 218),
+        ("x86_64", futex_x86(640, 1, 0), 234),
         ("aarch64", futex_arm(129, 1, 0), 0),
         ("aarch64", futex_arm(128, 1, 0), 245),
         ("aarch64", futex_arm(128, 0, 1), 146),
         ("aarch64", futex_arm(128, 0, 2), 242),
-        ("aarch64", futex_arm(384, 1, 0), 234),
+        ("aarch64", futex_arm(384, 1, 0), 218),
+        ("aarch64", futex_arm(640, 1, 0), 234),
     ] {
         let identity = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("hl-engine-futex-{}-{identity}", std::process::id()));

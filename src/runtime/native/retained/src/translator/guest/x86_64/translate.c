@@ -4644,10 +4644,10 @@ static void *translate_block(uint64_t gpc) {
                 emit_exit_const(next, R_SYSCALL);
                 break;
             } // syscall
-            if (op == 0x0B || op == 0xB9) {
+            if (op == 0x0B || op == 0xB9 || op == 0xFF) {
                 emit_sigill(gpc);
                 break;
-            } // ud1/ud2 -> guest SIGILL (terminate like real Linux), not an engine abort
+            } // UD1/UD2 and reserved 0F FF -> guest #UD/SIGILL, not an engine abort
             // ===== SSE / SSE2 (guest xmm0..15 == host v0..v15) =====
             // mandatory prefix selects the variant: 66=packed-int/double, F3=scalar-single,
             // F2=scalar-double, none=packed-single. reg/rm fields index xmm directly.

@@ -818,7 +818,12 @@ static int raise_guest_de(struct cpu *c, int si_code) {
 
 static int raise_guest_trap(struct cpu *c) {
     hl_x86_signal_queue queue = x86_signal_queue();
-    return hl_x86_signal_raise_trap(c, &queue);
+    if (hl_x86_signal_raise_trap(c, &queue)) return 1;
+    // A translated #BP/#UD with the default disposition is a guest signal
+    // death, not a normal exit whose numeric code happens to be 128+signal.
+    // Publish the signal record before terminating so --report-exit and
+    // parent wait semantics retain WIFSIGNALED/WTERMSIG.
+    guest_group_fatal(c, (int)(c->divop & 0xff));
 }
 
 static uint64_t nzcv_to_eflags(uint64_t nzcv) {

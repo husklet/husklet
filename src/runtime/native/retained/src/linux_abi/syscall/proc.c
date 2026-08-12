@@ -723,7 +723,11 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     }
     case 93:
         c->exited = 1;
-        c->exit_code = (int)a0;
+        // Linux exposes only the low eight bits of an exit status to waiters.
+        // Preserve that contract on the translated `exit` path too: unlike the
+        // `exit_group` path below, this unwinds through the engine instead of
+        // reaching the host `_exit`, so the kernel cannot normalize it for us.
+        c->exit_code = (int)(a0 & 0xffu);
         // exit: end THIS thread
         break;
     // exit_group: end the whole process
@@ -760,7 +764,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         if (g_noexit) { // W3D fork-server prewarm: don't kill the resident parent; unwind run_guest instead
             c->exited = 1;
-            c->exit_code = (int)a0;
+            c->exit_code = (int)(a0 & 0xffu);
             break;
         }
 #ifdef PCACHE_SAVE_HOOK
@@ -798,7 +802,20 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     case 268: G_RET(c) = ((int)a0 < 0) ? (uint64_t)(int64_t)(-EBADF) : 0; break;
     // futex
     case 98: { // futex(uaddr, op, val, timeout|nr_wake2=a3, uaddr2=a4, val3=a5)
-        int operation = (int)a1 & 0x7f;
+        const unsigned raw_operation = (unsigned)a1;
+        const unsigned known_operation_bits = 0x7fu | 0x80u /* PRIVATE */ | 0x100u /* CLOCK_REALTIME */;
+        if (raw_operation & ~known_operation_bits) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
+        int operation = (int)raw_operation & 0x7f;
+        // Linux accepts FUTEX_CLOCK_REALTIME only for the absolute-time
+        // operations.  In particular WAIT|CLOCK_REALTIME is ENOSYS; silently
+        // dropping the flag turns it into a different wait operation.
+        if ((raw_operation & 0x100u) != 0 && operation != 9 && operation != 11 && operation != 13) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOSYS);
+            break;
+        }
         void *primary = NULL, *secondary = NULL, *timeout = (void *)(uintptr_t)a3;
         hl_logical_vma_pin primary_pin = {0}, secondary_pin = {0}, timeout_pin = {0};
         if (a0 & 3) {
@@ -836,7 +853,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         // a3 is a timespec* for waits and a wake count for WAKE_OP; operation selects its interpretation.
-        int is_private = ((int)a1 & 0x80) != 0;
+        int is_private = (raw_operation & 0x80u) != 0;
         /*
          * futex_op's bucket/key helpers canonicalize addresses which belong to
          * MAP_SHARED file mappings. FUTEX_PRIVATE_FLAG must instead remain

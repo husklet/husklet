@@ -4551,9 +4551,10 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
     // CPUID (0F A2)
     case 0xA2: return interp_exit(cpu, next, R_CPUID);
 
-    // UD1/UD2 (0F B9/0F 0B): a trap, not an engine gap
+    // UD1/UD2 and reserved 0F FF: architectural #UD, not an engine gap.
     case 0x0B:
-    case 0xB9: return interp_guest_trap(cpu, pc, 4 /*SIGILL*/, 2 /*ILL_ILLOPN*/);
+    case 0xB9:
+    case 0xFF: return interp_guest_trap(cpu, pc, 4 /*SIGILL*/, 2 /*ILL_ILLOPN*/);
 
     // Multi-byte NOPs and hints: 0F 1F, 0F 0D, 0F 18..1E (incl. ENDBR64). No register or memory effect.
     case 0x0D:
