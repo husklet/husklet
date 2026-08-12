@@ -89,6 +89,7 @@ impl Linter {
                 .register(rule::MaximumNesting)
                 .register(rule::FileLength)
                 .register(rule::FileName)
+                .register(rule::ParentName)
                 .register(rule::TestName)
                 .register(rule::PrefixDirectory)
                 .register(rule::SuffixRole)
@@ -222,6 +223,7 @@ mod tests {
             "maximum-nesting",
             "file-length",
             "file-name-density",
+            "redundant-parent-name",
             "singular-test-file",
             "flat-prefix-density",
             "flat-role-density",

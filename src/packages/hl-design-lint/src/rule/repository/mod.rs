@@ -17,7 +17,7 @@ pub use escape::Repository as RepositoryEscape;
 pub use folder::SingleFileDirectory;
 pub use length::FileLength;
 pub use ownership::RuntimeTool;
-pub use shape::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, TestName};
+pub use shape::{FileName, FolderNoun, ModulePrefix, ParentName, PrefixDirectory, TestName};
 pub use suite::{Dependency as TestDependency, Directory as TestDirectory};
 pub use suite_path::KebabPath as TestSuiteKebabPath;
 pub use catchall::SourcePath as CatchAllSourcePath;

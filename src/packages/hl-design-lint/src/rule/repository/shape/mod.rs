@@ -97,6 +97,47 @@ impl Rule for FileName {
     }
 }
 
+/// Rejects source filenames that repeat a semantic word supplied by their parent directory.
+pub struct ParentName;
+
+impl Rule for ParentName {
+    fn id(&self) -> &'static str {
+        "redundant-parent-name"
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Error
+    }
+
+    fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
+        Ok(workspace
+            .source_files()?
+            .into_iter()
+            .filter_map(|path| {
+                let stem = path.file_stem()?.to_str()?;
+                if conventional_entry(stem) {
+                    return None;
+                }
+                let parent = path.parent()?.file_name()?.to_str()?;
+                let parent_words = words(parent);
+                let stem_words = words(stem);
+                let repeated = parent_words
+                    .iter()
+                    .find(|word| stem_words.iter().any(|candidate| candidate == *word))?;
+                let mut finding = Finding::error(self.id(), stem, file_location(&path));
+                finding.message = format!(
+                    "source filename `{}` repeats `{repeated}` from its parent directory `{parent}`",
+                    path.file_name()?.to_string_lossy()
+                );
+                finding.help = format!(
+                    "remove `{repeated}` from the filename; the `{parent}/` path already supplies that context"
+                );
+                Some(finding)
+            })
+            .collect())
+    }
+}
+
 /// Enforces singular companion-test filenames.
 pub struct TestName;
 
@@ -345,6 +386,10 @@ fn test_function(attributes: &[syn::Attribute]) -> bool {
 
 fn conventional(stem: &str) -> bool {
     matches!(stem, "lib" | "main" | "mod" | "build")
+}
+
+fn conventional_entry(stem: &str) -> bool {
+    conventional(stem) || stem == "index"
 }
 
 fn numbered_fragment(stem: &str) -> bool {

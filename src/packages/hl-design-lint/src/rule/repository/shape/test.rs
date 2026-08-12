@@ -6,7 +6,7 @@ use std::{
 
 use crate::{rule::Rule, source::Workspace};
 
-use super::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, TestName, words};
+use super::{FileName, FolderNoun, ModulePrefix, ParentName, PrefixDirectory, TestName, words};
 
 fn fixture(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
@@ -31,6 +31,38 @@ fn semantic_acronyms_together() {
     );
     assert_eq!(words("HTTPServerABI"), ["http", "server", "abi"]);
     assert_eq!(words("ipc_shared_test"), ["ipc", "shared", "test"]);
+}
+
+#[test]
+fn filename_does_not_repeat_parent_semantic_word() {
+    let root = fixture("parent-name");
+    fs::create_dir_all(root.join("src/memory")).unwrap();
+    fs::create_dir_all(root.join("src/net_work")).unwrap();
+    for path in [
+        "src/memory/shared_memory.c",
+        "src/memory/memory_map.h",
+        "src/net_work/socket_work.rs",
+    ] {
+        fs::write(root.join(path), "").unwrap();
+    }
+    for path in [
+        "src/memory/memorial.c",
+        "src/memory/shared.c",
+        "src/net_work/network.rs",
+        "src/memory/index.c",
+    ] {
+        fs::write(root.join(path), "").unwrap();
+    }
+    let workspace = Workspace::load([root.clone()]).unwrap();
+    let findings = ParentName.check(&workspace).unwrap();
+
+    assert_eq!(findings.len(), 3);
+    assert!(findings.iter().any(|finding| finding.subject == "shared_memory"));
+    assert!(findings.iter().any(|finding| finding.subject == "memory_map"));
+    assert!(findings.iter().any(|finding| finding.subject == "socket_work"));
+    assert!(!findings.iter().any(|finding| finding.subject == "memorial"));
+    assert!(!findings.iter().any(|finding| finding.subject == "network"));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
