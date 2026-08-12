@@ -251,7 +251,7 @@ fn lifecycle_sum(values: &[(String, u128)], names: &[&str]) -> u128 {
 }
 
 fn product_order(round: u32) -> [ProductBackend; 2] {
-    if round % 2 == 0 {
+    if round.is_multiple_of(2) {
         [ProductBackend::ExplicitC, ProductBackend::DefaultC]
     } else {
         [ProductBackend::DefaultC, ProductBackend::ExplicitC]
