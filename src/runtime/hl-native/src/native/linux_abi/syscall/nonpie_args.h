@@ -21,7 +21,7 @@
 // folding a register that service_local then folds again is a no-op -- the same property guest_span
 // relies on.
 
-static void nonpie_rebase_args(uint64_t nr, uint64_t a[6]) {
+static void nonpie_rebase_path_and_io_args(uint64_t nr, uint64_t a[6]) {
     switch (nr) {
     case 56:  // openat(dfd, PATH, flags, mode)
     case 33:  // mknodat(dfd, PATH, ...)
@@ -152,6 +152,12 @@ static void nonpie_rebase_args(uint64_t nr, uint64_t a[6]) {
         a[1] = nonpie_p(a[1]);
         a[2] = nonpie_p(a[2]);
         break; //   rebased at the shared case-221 body after the case-281 arg shift)
+    default: break;
+    }
+}
+
+static void nonpie_rebase_memory_and_time_args(uint64_t nr, uint64_t a[6]) {
+    switch (nr) {
     // Syscalls whose result the ENGINE writes/reads into the guest buffer ITSELF (memset/memcpy/
     // struct fill / arc4random_buf), not via a host syscall -- so there is no host EFAULT fixup to
     // rescue a low, un-rebased non-PIE pointer; the handler's host_range_mapped() guard would simply
@@ -287,6 +293,12 @@ static void nonpie_rebase_args(uint64_t nr, uint64_t a[6]) {
         a[1] = nonpie_p(a[1]);
         a[2] = nonpie_p(a[2]);
         break;
+    default: break;
+    }
+}
+
+static void nonpie_rebase_process_and_ipc_args(uint64_t nr, uint64_t a[6]) {
+    switch (nr) {
     // the remaining pointer-arg syscalls whose handler dereferences the guest pointer DIRECTLY (a
     // host-syscall deref, or the engine reading/writing the guest struct itself) that were still missing
     // from this switch -- so a non-PIE guest handing a low .bss/.rodata/.data pointer EFAULTed (or, for the
@@ -412,6 +424,12 @@ static void nonpie_rebase_args(uint64_t nr, uint64_t a[6]) {
         break;
     default: break;
     }
+}
+
+static void nonpie_rebase_args(uint64_t nr, uint64_t a[6]) {
+    nonpie_rebase_path_and_io_args(nr, a);
+    nonpie_rebase_memory_and_time_args(nr, a);
+    nonpie_rebase_process_and_ipc_args(nr, a);
 }
 
 // Second pass for the callers that hand the iovec ARRAY STRAIGHT to a host readv/writev: the entries'
