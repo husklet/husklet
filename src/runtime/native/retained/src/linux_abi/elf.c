@@ -816,7 +816,8 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
     // Placement: thread.c, "non-PIE image placement, per host". On Linux an ET_EXEC goes AT its link
     // address, so bias == 0 and nothing below arms. The link address is deterministic across runs, which
     // is all the g_force_base / snapshot-arena hints below exist to provide -- consume the one-shot.
-    if (etype == 2) base = (uint8_t *)(uintptr_t)nonpie_place_at_link_address(basepage, span, &image_mapping);
+    if (etype == 2 && !nonpie_force_displaced())
+        base = (uint8_t *)(uintptr_t)nonpie_place_at_link_address(basepage, span, &image_mapping);
     if (base != NULL) {
         g_force_base = 0; // one-shot, consumed by the link-address placement
     } else if (g_force_base) {
@@ -870,6 +871,8 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
         g_nonpie_hi = image_projection.guest_end;
         g_nonpie_bias = image_projection.storage_bias;
     }
+    if (etype == 2 && nonpie_force_displaced())
+        nonpie_report_forced_displacement(basepage, basepage + span, (uint64_t)base);
     for (int i = 0; i < phnum; i++) {
         uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
         if (rd32(ph) != 1) continue;

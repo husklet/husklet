@@ -52,6 +52,16 @@ pub fn projection(name: &str, isa: &str, destination: &Path) {
     compile(&source, isa, destination, flags);
 }
 
+/// Builds the generic static ET_EXEC displacement fixture.
+pub fn displaced_et_exec(isa: &str, destination: &Path) {
+    compile(
+        &repository("src/runtime/native/fixtures/testing/displaced_et_exec.c"),
+        isa,
+        destination,
+        FREESTANDING,
+    );
+}
+
 /// Builds the runtime socket-stop application, whose folder case cannot drive an external stop.
 pub fn socket_stop(isa: &str, destination: &Path) {
     compile(

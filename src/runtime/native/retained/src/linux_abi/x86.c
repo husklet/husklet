@@ -378,7 +378,8 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     // Placement: thread.c, "non-PIE image placement, per host". On Linux an ET_EXEC goes AT its link
     // address, so bias == 0 and the whole fold family below never arms. That address is also already
     // deterministic across runs, which is the only thing g_force_base exists to provide -- consume it.
-    if (etype == 2) base = (uint8_t *)(uintptr_t)nonpie_place_at_link_address(basepage, span, &map_context.mapping);
+    if (etype == 2 && !nonpie_force_displaced())
+        base = (uint8_t *)(uintptr_t)nonpie_place_at_link_address(basepage, span, &map_context.mapping);
     // opt8: the persistent cache needs deterministic guest bases across runs so the translated bytes
     // (RIP-relative leas, baked branch targets, block-map keys) are byte-identical. When g_force_base is
     // set, map MAP_FIXED at the caller-requested address; the image is PIE so basepage is ~0 and the chosen
@@ -432,6 +433,8 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
         g_nonpie_bias = bias;
         g_nonpie_types_lo = g_nonpie_types_hi = 0; // set by go_rebase_nonpie iff this is a Go image
     }
+    if (etype == 2 && nonpie_force_displaced())
+        nonpie_report_forced_displacement(basepage, basepage + span, (uint64_t)base);
     for (int i = 0; i < phnum; i++) {
         uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
         if (rd32(ph) != 1) continue;
