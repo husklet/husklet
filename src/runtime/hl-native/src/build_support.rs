@@ -7,6 +7,7 @@ pub(crate) const BUILD_POLICY_INPUTS: &[&str] =
 
 pub(crate) const COMPILER_ENVIRONMENT_INPUTS: &[&str] =
     &["AR", "ARFLAGS", "CC", "CFLAGS", "CPPFLAGS", "CRATE_CC_NO_DEFAULTS"];
+pub(crate) const LINKER_ENVIRONMENT_INPUTS: &[&str] = &["CROSS_COMPILE", "RUSTC_LINKER", "RUSTC_WRAPPER"];
 const TARGET_SCOPED_COMPILER_ENVIRONMENT_INPUTS: &[&str] = &["AR", "ARFLAGS", "CC", "CFLAGS", "CPPFLAGS"];
 
 pub(crate) fn target_compiler_environment_inputs(target: &str) -> Vec<String> {
@@ -93,6 +94,14 @@ mod tests {
         assert_eq!(
             super::COMPILER_ENVIRONMENT_INPUTS,
             &["AR", "ARFLAGS", "CC", "CFLAGS", "CPPFLAGS", "CRATE_CC_NO_DEFAULTS"]
+        );
+    }
+
+    #[test]
+    fn linker_environment_inputs_are_complete_and_stably_ordered() {
+        assert_eq!(
+            super::LINKER_ENVIRONMENT_INPUTS,
+            &["CROSS_COMPILE", "RUSTC_LINKER", "RUSTC_WRAPPER"]
         );
     }
 

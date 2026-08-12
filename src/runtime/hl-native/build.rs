@@ -35,6 +35,9 @@ fn main() {
     for input in build_support::COMPILER_ENVIRONMENT_INPUTS {
         println!("cargo:rerun-if-env-changed={input}");
     }
+    for input in build_support::LINKER_ENVIRONMENT_INPUTS {
+        println!("cargo:rerun-if-env-changed={input}");
+    }
     let target_triple = env::var("TARGET").expect("Cargo supplies TARGET");
     for input in build_support::target_compiler_environment_inputs(&target_triple) {
         println!("cargo:rerun-if-env-changed={input}");
