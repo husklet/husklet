@@ -799,6 +799,18 @@ mod tests {
         Arc::try_unwrap(output).unwrap().into_inner().unwrap()
     }
 
+    fn capture_exec_info_events(run: impl FnOnce()) -> String {
+        let _guard = EVENT_CAPTURE_LOCK.lock().unwrap();
+        let output = Arc::new(Mutex::new(String::new()));
+        hl_log::Events::global().set(Box::new(EventCapture(Arc::clone(&output))));
+        hl_log::Logging::global().set(hl_log::tag::EXEC);
+        hl_log::Logging::global().set_level(hl_log::Level::Info);
+        run();
+        hl_log::Logging::global().set(hl_log::Tags::NONE);
+        hl_log::Events::global().reset();
+        Arc::try_unwrap(output).unwrap().into_inner().unwrap()
+    }
+
     impl TerminalPort for Port {
         fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
             Ok(0)
@@ -1002,10 +1014,23 @@ mod tests {
         let executable = exiting_arm(0);
         std::fs::write(&path, &executable).unwrap();
         let path = CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
-        let plan = c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).unwrap();
-        assert_eq!(plan.kind, 1);
-        assert_eq!((plan.link_start, plan.link_end), (0x0040_0000, 0x0041_0000));
-        assert_eq!(plan.has_interpreter, 0);
+        let events = capture_exec_info_events(|| {
+            let plan = c_main_image_plan(GuestIsa::Aarch64, Some(&path), None).unwrap();
+            assert_eq!(plan.kind, 1);
+            assert_eq!((plan.link_start, plan.link_end), (0x0040_0000, 0x0041_0000));
+            assert_eq!(plan.has_interpreter, 0);
+        });
+        for field in [
+            r#""event":"execution.c.image_plan.accepted""#,
+            r#""isa":"Aarch64""#,
+            r#""source":"path""#,
+            r#""kind":"executable""#,
+            r#""link_start":4194304"#,
+            r#""link_end":4259840"#,
+            r#""interpreter":false"#,
+        ] {
+            assert!(events.contains(field), "missing {field} in {events}");
+        }
 
         let mut pie = executable;
         put_u16(&mut pie, 16, 3);

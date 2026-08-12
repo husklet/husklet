@@ -91,7 +91,7 @@ pub(in crate::execution) fn c_main_image_plan(
             (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
         })
     });
-    Ok(CMainImagePlan {
+    let image_plan = CMainImagePlan {
         abi: 1,
         size: u32::try_from(std::mem::size_of::<CMainImagePlan>()).unwrap(),
         architecture: isa as u32,
@@ -101,7 +101,19 @@ pub(in crate::execution) fn c_main_image_plan(
         has_interpreter: u32::from(plan.interpreter.is_some()),
         reserved: 0,
         interpreter_identity,
-    })
+    };
+    hl_log::hl_event!(
+        hl_log::tag::EXEC,
+        hl_log::Level::Info,
+        "execution.c.image_plan.accepted",
+        isa = ?isa,
+        source = %source,
+        kind = if kind == 1 { "executable" } else { "position_independent" },
+        link_start = image_plan.link_start,
+        link_end = image_plan.link_end,
+        interpreter = image_plan.has_interpreter != 0
+    );
+    Ok(image_plan)
 }
 
 #[cfg(test)]
