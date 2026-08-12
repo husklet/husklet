@@ -80,6 +80,11 @@ def backend_receipt(engine, backend, options=()):
     return {"command": command, **expected}
 
 
+def python_argv(python):
+    """Keep the hashed rootfs immutable while Python imports benchmark modules."""
+    return [str(python), "-B", "-c", PYTHON_PROGRAM]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--external", required=True)
@@ -151,7 +156,7 @@ def main(argv=None):
             "I": arm("I", "product"),
         },
         "workloads": {
-            "python": {"argv": [str(python), "-c", PYTHON_PROGRAM], "phases": ["python"]},
+            "python": {"argv": python_argv(python), "phases": ["python"]},
             "sqlite": {"argv": [str(sqlite), "--divisor", "2", "--phase", "sqlite"], "phases": ["sqlite"]},
             "malloc": {"argv": [str(combined), "--divisor", "2", "--phase", "malloc"], "phases": ["malloc"]},
         },

@@ -13,6 +13,10 @@ SPEC.loader.exec_module(config)
 
 
 class AdapterTests(unittest.TestCase):
+    def test_python_workload_disables_rootfs_bytecode_writes(self):
+        argv = config.python_argv(pathlib.Path("/rootfs/usr/local/bin/python3"))
+        self.assertEqual(argv[:3], ["/rootfs/usr/local/bin/python3", "-B", "-c"])
+
     def test_adapter_selects_guest_or_wall_time(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = pathlib.Path(directory)

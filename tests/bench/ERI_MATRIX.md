@@ -60,6 +60,8 @@ the two loader coordinate contracts are explicit. Python's `python` phase uses
 adapter wall time, covering interpreter startup, imports and work;
 sqlite and malloc retain their in-guest `us`. A successful adapter writes no
 stderr, so provider diagnostics cannot silently become guest-output identity.
+Python runs with `-B`, preventing imports from mutating the rootfs after its
+identity has been recorded in the immutable campaign manifest.
 
 Then run:
 
