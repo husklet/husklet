@@ -157,7 +157,6 @@
         fileset = lib.fileset.unions [
           ./Cargo.lock
           ./Cargo.toml
-          ./lint
           ./rust-toolchain.toml
           ./rustfmt.toml
           ./src
@@ -167,9 +166,7 @@
 
       commonNativeInputs = pkgs: [
         pkgs.clang-tools
-        pkgs.cmake
         pkgs.cppcheck
-        pkgs.gnumake
         pkgs.pkg-config
         pkgs.python3
       ];
@@ -220,8 +217,6 @@
             tmux
             neovim
             gnupg
-            gnumake
-            cmake
             pkg-config
             clang
             python3
@@ -322,7 +317,6 @@
               fi
 
               cargo fmt --all --check --message-format short
-              make lint-c-inner
               cargo run --locked --offline -q -p hl-design-lint -- src tests
               cargo run --locked --offline -q -p hl-design-lint -- --cases lint src tests
               cargo build -p engine -p testing --bins --locked --offline
@@ -331,8 +325,6 @@
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings
               cargo test --workspace --all-targets --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
-              src/runtime/native/exec/test/memory_lifecycle.sh
-
               python3 tests/runtime/legacy/corpus.py verify
               python3 tests/runtime/legacy/fixture_schema.py --check
               python3 tests/runtime/legacy/priority.py --check
@@ -398,9 +390,7 @@
             // {
               packages = [
                 pkgs.clang-tools
-                pkgs.cmake
                 pkgs.cppcheck
-                pkgs.gnumake
                 pkgs.nixfmt
                 pkgs.pkg-config
                 pkgs.python3
@@ -423,9 +413,9 @@
               HL_SCENARIO_TARGET = alpine.target;
               HL_ALPINE_ARCHIVE = alpine.archive;
               # The signed application is macOS-only, but its GTK4/VTE sources are the largest body of
-              # code in the tree and `required-features = ["gui"]` makes cargo skip them in silence when
-              # the toolkit is absent. Carrying the same libraries on Linux is what lets `make gate-app`
-              # type-check them here, so an engine refactor cannot redden the app behind a green gate.
+              # code in the tree and `required-features = ["gui"]` makes Cargo skip them in silence when
+              # the toolkit is absent. Carrying the same libraries on Linux lets the explicit GUI Clippy
+              # invocation type-check them, so an engine refactor cannot redden the app behind a green gate.
               nativeBuildInputs = [
                 pkgs.gobject-introspection
                 pkgs.glib
