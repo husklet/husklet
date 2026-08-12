@@ -20,11 +20,11 @@ pub use policy::{DependencyKind, DependencyPolicy, EdgePolicy, LayerPolicy, Poli
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CCallPolicy, CPolicy, CStructure, CatchAllModule,
-    CeremonialStructure, DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName,
-    FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate,
-    ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory,
-    ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory, StructNaming, SuffixRole,
-    TestDependency, TestDirectory, TestName, UnsafeBoundary,
+    CatchAllSourcePath, CeremonialStructure, DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
+    FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
+    IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand,
+    PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory,
+    StructNaming, SuffixRole, TestDependency, TestDirectory, TestName, UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 
@@ -85,9 +85,12 @@ impl Linter {
                 .register(rule::ModulePrefix)
                 .register(rule::FiniteStateString)
                 .register(rule::CatchAllModule)
+                .register(rule::CatchAllSourcePath)
                 .register(rule::EmptyDirectory)
                 .register(rule::SingleFileDirectory)
-                .register(rule::CeremonialStructure),
+                .register(rule::CeremonialStructure)
+                .register(rule::CStructure)
+                .register(rule::CPolicy::new()),
         )
     }
 
@@ -213,9 +216,12 @@ mod tests {
             "redundant-module-prefix",
             "string-backed-finite-state",
             "catch-all-module-name",
+            "catch-all-source-path",
             "empty-directory",
             "single-file-directory",
             "ceremonial-structure",
+            "c-source-structure",
+            "c-source-policy",
         ];
         assert_eq!(
             summaries.iter().map(|summary| summary.rule).collect::<Vec<_>>(),
@@ -255,7 +261,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 37);
+        assert_eq!(summaries.len(), 40);
         assert!(
             reporter
                 .0
@@ -280,6 +286,45 @@ fn caller() {
         ] {
             assert!(reporter.0.iter().any(|finding| finding.rule == rule), "missing {rule}");
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn standard_repository_invocation_rejects_oversized_c_below_arbitrary_root() {
+        let root = temporary("standard-c-structure");
+        let nested = root.join("components/portable/implementation");
+        fs::create_dir_all(&nested).unwrap();
+        let path = nested.join("host.c");
+        fs::write(&path, "int declaration;\n".repeat(1_501)).unwrap();
+        let catch_all = nested.join("common.c");
+        fs::write(&catch_all, "int declaration;\n").unwrap();
+
+        let mut reporter = Memory(Vec::new());
+        let summaries = Linter::standard().run([root.clone()], &mut reporter).unwrap();
+
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.rule == "c-source-structure")
+            .expect("standard registry must contain the C structure rule");
+        assert_eq!(summary.severity, Severity::Error);
+        assert_eq!(summary.findings, 1);
+        assert!(reporter.0.iter().any(|finding| {
+            finding.rule == "c-source-structure"
+                && finding.subject == "file length"
+                && finding.location.path == path
+                && finding.is_violation()
+        }));
+        let catch_all_summary = summaries
+            .iter()
+            .find(|summary| summary.rule == "catch-all-source-path")
+            .expect("standard registry must contain the catch-all source path rule");
+        assert_eq!(catch_all_summary.severity, Severity::Error);
+        assert_eq!(catch_all_summary.findings, 1);
+        assert!(reporter.0.iter().any(|finding| {
+            finding.rule == "catch-all-source-path"
+                && finding.location.path == catch_all
+                && finding.is_violation()
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 

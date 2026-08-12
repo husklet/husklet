@@ -11,8 +11,9 @@ mod support;
 
 pub use c::{CallPolicy as CCallPolicy, Policy as CPolicy, Structure as CStructure};
 pub use repository::{
-    DependencyDirection, EmptyDirectory, FileLength, FileName, FolderNoun, ModulePrefix, PrefixDirectory,
-    RepositoryEscape, RuntimeTool, SingleFileDirectory, TestDependency, TestDirectory, TestName, TestSuiteKebabPath,
+    CatchAllSourcePath, DependencyDirection, EmptyDirectory, FileLength, FileName, FolderNoun, ModulePrefix,
+    PrefixDirectory, RepositoryEscape, RuntimeTool, SingleFileDirectory, TestDependency, TestDirectory, TestName,
+    TestSuiteKebabPath,
 };
 pub use rust::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, DuplicateEntity,

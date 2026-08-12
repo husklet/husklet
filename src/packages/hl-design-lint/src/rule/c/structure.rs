@@ -16,9 +16,7 @@ impl Rule for Structure {
     }
 
     fn severity(&self) -> Severity {
-        // The retained engine predates these cohesion thresholds. Keep the migration visible
-        // without making historic size debt block correctness and analyzer gates.
-        Severity::Warning
+        Severity::Error
     }
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
@@ -187,7 +185,7 @@ impl Lexical {
 }
 
 fn metric(path: &Path, line: usize, subject: &str, value: usize, limit: usize) -> Finding {
-    let mut finding = Finding::warning(
+    let mut finding = Finding::error(
         "c-source-structure",
         subject,
         Location {

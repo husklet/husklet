@@ -1,5 +1,6 @@
 //! Language-neutral rules for repository structure and manifests.
 
+mod catchall;
 mod dependency;
 mod empty;
 mod escape;
@@ -19,3 +20,4 @@ pub use ownership::RuntimeTool;
 pub use shape::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, TestName};
 pub use suite::{Dependency as TestDependency, Directory as TestDirectory};
 pub use suite_path::KebabPath as TestSuiteKebabPath;
+pub use catchall::SourcePath as CatchAllSourcePath;
