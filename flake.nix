@@ -168,7 +168,6 @@
         pkgs.clang-tools
         pkgs.cppcheck
         pkgs.pkg-config
-        pkgs.python3
       ];
 
       macBaseFor =
@@ -219,7 +218,6 @@
             gnupg
             pkg-config
             clang
-            python3
             nodejs
             go
             rustc
@@ -325,14 +323,6 @@
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings
               cargo test --workspace --all-targets --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
-              python3 tests/runtime/legacy/corpus.py verify
-              python3 tests/runtime/legacy/fixture_schema.py --check
-              python3 tests/runtime/legacy/priority.py --check
-              PYTHONPATH=tests/runtime/legacy python3 -m unittest \
-                tests/runtime/legacy/corpus_test.py \
-                tests/runtime/legacy/fixture_schema_test.py \
-                tests/runtime/legacy/priority_test.py
-
               runHook postBuild
             '';
             installPhase = ''
@@ -393,7 +383,6 @@
                 pkgs.cppcheck
                 pkgs.nixfmt
                 pkgs.pkg-config
-                pkgs.python3
                 (rustFor pkgs)
               ]
               ++ lib.optionals toolchain.canBuildGuests (

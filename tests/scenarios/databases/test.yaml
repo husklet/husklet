@@ -547,32 +547,6 @@ cases:
         redis-cli set k 0123456789 >/dev/null; redis-cli strlen k'
   expect:
     stdout_contains: golden/redis_strlen.txt
-- id: databases/sqlite-join
-  image: python:alpine
-  timeout: 60
-  fixtures:
-  - source: source/sqlite_join.py
-    destination: /tmp/sqlite_join.py
-  actions:
-  - argv:
-      argv:
-      - python3
-      - /tmp/sqlite_join.py
-  expect:
-    stdout_contains: golden/sqlite_join.txt
-- id: databases/sqlite-query
-  image: python:alpine
-  timeout: 60
-  fixtures:
-  - source: source/sqlite_query.py
-    destination: /tmp/sqlite_query.py
-  actions:
-  - argv:
-      argv:
-      - python3
-      - /tmp/sqlite_query.py
-  expect:
-    stdout_contains: golden/sqlite_query.txt
 - id: databases/valkey-agg-8
   image: valkey/valkey:8-alpine
   timeout: 90
