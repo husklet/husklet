@@ -272,7 +272,9 @@ HL_API hl_status hl_linux_fd_exec_all(hl_linux_abi *linux_abi, hl_linux_fd_exec_
                                       uint32_t *out_closed);
 /* Quiescent-state diagnostic for descriptor/OFD ownership invariants. */
 HL_API hl_status hl_linux_abi_validate_fds(const hl_linux_abi *linux_abi);
-/* Returns a stable value snapshot; internal entries and mutex-bearing OFDs never escape. */
+/* Returns a stable value snapshot; internal entries and mutex-bearing OFDs never escape.
+ * snapshot is required and is reset to fd=HL_LINUX_FD_LIMIT, invalid host handle, and zero metadata
+ * before lookup, so every failure has one explicit non-authoritative state. */
 HL_API hl_status hl_linux_fd_snapshot_get(const hl_linux_abi *linux_abi, hl_linux_fd fd,
                                           hl_linux_fd_snapshot *snapshot);
 /*

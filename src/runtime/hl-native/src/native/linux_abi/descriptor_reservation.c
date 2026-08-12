@@ -68,11 +68,14 @@ done:
     return status;
 }
 
+#include "snapshot_output.h"
+
 hl_status hl_linux_fd_snapshot_get(const hl_linux_abi *linux_abi, hl_linux_fd fd, hl_linux_fd_snapshot *snapshot) {
     const hl_linux_fd_entry *fd_entry;
     const hl_linux_ofd_entry *ofd_entry;
     hl_status status;
-    if (linux_abi == NULL || snapshot == NULL) return HL_STATUS_INVALID_ARGUMENT;
+    if (!hl_linux_fd_snapshot_output_prepare(snapshot)) return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL) return HL_STATUS_INVALID_ARGUMENT;
     hl_linux_lock((hl_linux_abi *)linux_abi);
     status = hl_linux_fd_get_unlocked(linux_abi, fd, &fd_entry, &ofd_entry);
     if (status == HL_STATUS_OK) {
@@ -91,4 +94,3 @@ hl_status hl_linux_fd_snapshot_get(const hl_linux_abi *linux_abi, hl_linux_fd fd
     hl_linux_unlock((hl_linux_abi *)linux_abi);
     return status;
 }
-
