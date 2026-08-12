@@ -286,7 +286,9 @@
           src = workspaceSource;
           cargoLock.lockFile = ./Cargo.lock;
           strictDeps = true;
-          nativeBuildInputs = commonNativeInputs pkgs;
+          nativeBuildInputs =
+            commonNativeInputs pkgs
+            ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
           doCheck = false;
           buildPhase = ''
             runHook preBuild
@@ -308,6 +310,15 @@
             fi
             install -Dm755 "''${native_libraries[0]}" "$out/lib/$(basename "''${native_libraries[0]}")"
             runHook postInstall
+          '';
+          postFixup = lib.optionalString pkgs.stdenv.isLinux ''
+            for binary in "$out/bin/hl-engine" "$out/bin/hl-aarch64" "$out/bin/hl-x86_64"
+            do
+              existing_rpath=$(patchelf --print-rpath "$binary")
+              patchelf --set-rpath "\$ORIGIN/../lib:$existing_rpath" "$binary"
+              patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
+              test "$(patchelf --print-rpath "$binary" | cut -d: -f1)" = '$ORIGIN/../lib'
+            done
           '';
           meta = {
             description = "Userspace execution engine for Linux programs";
