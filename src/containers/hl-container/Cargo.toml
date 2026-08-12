@@ -11,7 +11,7 @@ readme = "../../../README.md"
 
 [dependencies]
 async-trait.workspace = true
-hl-engine.workspace = true
+hl-engine = { path = "../hl-engine", default-features = false }
 hl-fs = { path = "../../packages/hl-fs" }
 hl-images = { version = "0.1.0", path = "../hl-images" }
 hl-log = { path = "../../packages/hl-log" }
@@ -31,6 +31,12 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1", features = ["fs"] }
+
+[features]
+default = ["c-execution"]
+# The product container path owns the retained-C execution capability explicitly;
+# Rust execution remains available only to differential tooling that requests it.
+c-execution = ["hl-engine/c-execution"]
 
 [lints]
 workspace = true

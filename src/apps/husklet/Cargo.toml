@@ -26,7 +26,7 @@ hl-ws = { path = "../../workspaces/hl-ws" }
 hl-log = { path = "../../packages/hl-log" }
 
 hl-ws-term = { path = "../../workspaces/hl-ws-term", optional = true }
-hl-container = { path = "../../containers/hl-container", optional = true }
+hl-container = { path = "../../containers/hl-container", default-features = false, optional = true }
 hl-daemon = { path = "../../containers/hl-daemon", optional = true }
 hl-client = { path = "../../containers/hl-client", optional = true }
 hl-images = { path = "../../containers/hl-images", optional = true }
@@ -60,6 +60,7 @@ profile = ["hl-log/release-verbose"]
 runtime = [
     "dep:hl-ws-term",
     "dep:hl-container",
+    "hl-container/c-execution",
     "dep:hl-daemon",
     "dep:hl-client",
     "dep:hl-images",
