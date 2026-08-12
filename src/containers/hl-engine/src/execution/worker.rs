@@ -102,6 +102,9 @@ pub(crate) fn run(
     // descriptor scan must not publish the Rust lifecycle channel as a guest
     // socket. Registration occurs after backend creation, which initializes the
     // engine-private descriptor registry.
+    // SAFETY: backend creation initialized the process-private descriptor
+    // registry, `control` owns a live descriptor for this call, and the C
+    // function copies only its integer value without retaining Rust memory.
     if unsafe { super::hl_c_backend_private_descriptor_add(control.as_raw_fd()) } != super::STATUS_OK {
         return Err(WorkerError::Descriptor);
     }
@@ -111,6 +114,9 @@ pub(crate) fn run(
         return Err(WorkerError::Control);
     }
     let request_control = control.try_clone().map_err(|_| WorkerError::Control)?;
+    // SAFETY: `request_control` owns a live duplicate for this call, the
+    // process-private registry is initialized, and the C function copies only
+    // the descriptor value without retaining Rust memory.
     if unsafe { super::hl_c_backend_private_descriptor_add(request_control.as_raw_fd()) } != super::STATUS_OK {
         return Err(WorkerError::Descriptor);
     }
