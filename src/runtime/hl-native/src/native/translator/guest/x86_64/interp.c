@@ -1312,6 +1312,16 @@ static int interp_one_byte_flags(struct cpu *cpu, struct insn *insn, uint64_t ne
     } else if (op == 0x9F) {
         uint64_t flags = interp_read_rflags(cpu);
         cpu->r[RAX] = (cpu->r[RAX] & ~UINT64_C(0xff00)) | ((flags & 0xd5) | 0x02) << 8;
+    } else if (op == 0xF5) {
+        interp_set_cf(cpu, interp_cf(cpu) ^ 1u);
+    } else if (op == 0xF8) {
+        interp_set_cf(cpu, 0);
+    } else if (op == 0xF9) {
+        interp_set_cf(cpu, 1);
+    } else if (op == 0xFC) {
+        cpu->df = 0;
+    } else if (op == 0xFD) {
+        cpu->df = 1;
     } else {
         return -1;
     }
@@ -1536,28 +1546,6 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
         cpu->reason = R_BRANCH;
         return STEP_END;
     }
-
-    // CMC / CLC / STC / CLD / STD
-    case 0xF5:
-        interp_set_cf(cpu, interp_cf(cpu) ^ 1u);
-        cpu->rip = next;
-        return STEP_NEXT;
-    case 0xF8:
-        interp_set_cf(cpu, 0);
-        cpu->rip = next;
-        return STEP_NEXT;
-    case 0xF9:
-        interp_set_cf(cpu, 1);
-        cpu->rip = next;
-        return STEP_NEXT;
-    case 0xFC:
-        cpu->df = 0;
-        cpu->rip = next;
-        return STEP_NEXT;
-    case 0xFD:
-        cpu->df = 1;
-        cpu->rip = next;
-        return STEP_NEXT;
 
     // Group 4/5
     case 0xFE:
