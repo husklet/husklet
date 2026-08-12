@@ -1,3 +1,4 @@
+use super::protocol::{ABI, MAGIC_REQUEST, STATUS_OK};
 use super::*;
 use crate::composition::CompositionError;
 

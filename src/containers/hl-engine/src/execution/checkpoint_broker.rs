@@ -17,7 +17,11 @@ use std::{
 
 #[path = "broker/protocol.rs"]
 mod protocol;
-use protocol::*;
+use protocol::{
+    CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, OBJECT_ABORT,
+    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PAYLOAD_MAX, REQUEST_BYTES, Reply,
+    Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
+};
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
 const HASH_PRIME: u64 = 1_099_511_628_211;
@@ -395,11 +399,7 @@ impl Server {
             payload.extend_from_slice(entry.as_bytes());
             payload.push(0);
         }
-        Reply {
-            status: STATUS_OK,
-            value: seen.len() as u64,
-            payload,
-        }
+        Reply::counted_payload(seen.len() as u64, payload)
     }
 }
 

@@ -104,6 +104,14 @@ impl Reply {
         }
     }
 
+    pub(super) const fn counted_payload(value: u64, payload: Vec<u8>) -> Self {
+        Self {
+            status: STATUS_OK,
+            value,
+            payload,
+        }
+    }
+
     pub(super) fn write(&self, channel: &mut impl Write) -> std::io::Result<()> {
         let mut header = [0_u8; REPLY_BYTES];
         header[0..4].copy_from_slice(&MAGIC_REPLY.to_ne_bytes());
