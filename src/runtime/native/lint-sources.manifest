@@ -280,11 +280,13 @@ fixture	exec/test/xadd.c
 source	executable_authority.c
 source	executable_authority.h
 fixture	fixtures/testing/displaced_et_exec.c
+fixture	fixtures/testing/pie_exec.c
 fixture	fixtures/testing/projected_directory.c
 fixture	fixtures/testing/projected_read.c
 fixture	fixtures/testing/projected_spin.c
 fixture	fixtures/testing/projected_static.c
 fixture	fixtures/testing/projected_write.c
+fixture	fixtures/testing/static_pie_exec.c
 source	linter/src/analyzers.c
 source	linter/src/analyzers.h
 source	linter/src/cli.c

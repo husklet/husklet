@@ -62,6 +62,33 @@ pub fn displaced_et_exec(isa: &str, destination: &Path) {
     );
 }
 
+/// Builds a self-contained ET_DYN guest using the requested PIE linker mode.
+pub fn pie_exec(isa: &str, destination: &Path, static_pie: bool) {
+    let (source, flags) = if static_pie {
+        (
+            "src/runtime/native/fixtures/testing/static_pie_exec.c",
+            vec!["-static-pie", "-fPIE", "-O2", "-std=gnu11", "-Wl,--build-id=none"],
+        )
+    } else {
+        (
+            "src/runtime/native/fixtures/testing/pie_exec.c",
+            vec![
+                "-nostdlib",
+                "-fPIE",
+                "-pie",
+                "-O2",
+                "-ffreestanding",
+                "-fno-stack-protector",
+                "-fno-ident",
+                "-Wl,-e,_start",
+                "-Wl,--build-id=none",
+                "-Wl,--no-dynamic-linker",
+            ],
+        )
+    };
+    compile(&repository(source), isa, destination, &flags);
+}
+
 /// Builds the runtime socket-stop application, whose folder case cannot drive an external stop.
 pub fn socket_stop(isa: &str, destination: &Path) {
     compile(
