@@ -829,6 +829,43 @@
           printf '%s\n' 'native Darwin copied-prefix exact ARM64 architecture, install name, exports, rpath, and backend receipts passed' > "$out/evidence"
         '';
 
+      darwinHostAbiFor =
+        pkgs: engine:
+        pkgs.runCommand "hl-native-darwin-host-abi"
+          {
+            nativeBuildInputs = [ pkgs.stdenv.cc ];
+          }
+          ''
+            set -euo pipefail
+            mkdir -p "$TMPDIR/product"
+            cp ${engine}/lib/libhl_native_engine.dylib "$TMPDIR/product/"
+            library="$TMPDIR/product/libhl_native_engine.dylib"
+            lipo -archs "$library" | grep -Fx arm64 >/dev/null
+
+            ${pkgs.stdenv.cc}/bin/cc -std=c11 -Wall -Wextra -Werror \
+              -DHL_SHARED -I${workspaceSource}/src/runtime/hl-native/src/native/include \
+              ${workspaceSource}/tests/native/host-abi/unix.c \
+              -L"$TMPDIR/product" -lhl_native_engine \
+              -Wl,-rpath,@loader_path -o "$TMPDIR/product/public-abi-c"
+            ${pkgs.stdenv.cc}/bin/c++ -std=c++20 -Wall -Wextra -Werror \
+              -DHL_SHARED -I${workspaceSource}/src/runtime/hl-native/src/native/include \
+              ${workspaceSource}/tests/native/host-abi/unix.cpp \
+              -L"$TMPDIR/product" -lhl_native_engine \
+              -Wl,-rpath,@loader_path -o "$TMPDIR/product/public-abi-cxx"
+
+            for binary in "$TMPDIR/product/public-abi-c" "$TMPDIR/product/public-abi-cxx"; do
+              lipo -archs "$binary" | grep -Fx arm64 >/dev/null
+              otool -L "$binary" | grep -F '@rpath/libhl_native_engine.dylib' >/dev/null
+              otool -l "$binary" | grep -A2 LC_RPATH | grep -F '@loader_path' >/dev/null
+              env -i PATH=/usr/bin:/bin HOME="$TMPDIR/home" "$binary"
+            done
+
+            mkdir -p "$out"
+            printf '%s\n' \
+              'native Darwin ARM64 strict C/C++ public-ABI compile, dylib link, loader-path resolution, and execution passed' \
+              > "$out/evidence"
+          '';
+
       darwinCrossContractFor =
         pkgs:
         pkgs.runCommand "hl-native-darwin-cross-contract" { } ''
@@ -882,7 +919,7 @@
           "host-darwin-cross-contract" = darwinCrossContractFor pkgs;
         }
         // lib.optionalAttrs pkgs.stdenv.isDarwin {
-          "host-darwin-aarch64-native" = verification;
+          "host-darwin-aarch64-native" = darwinHostAbiFor pkgs engine;
           "installed-product" = darwinInstalledProductFor pkgs engine;
         }
       );

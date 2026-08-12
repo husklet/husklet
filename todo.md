@@ -51,6 +51,9 @@ This is the authoritative checklist for the C-primary production migration. Chec
   Native macOS CI requires the installed dylib and all three launchers to be
   ARM64-only Mach-O artifacts before exercising their loader and receipt
   contracts; a wrong-architecture or accidental universal artifact fails.
+  The dedicated native-Darwin host gate compiles, links, and executes strict C
+  and C++ public-header consumers against the packaged ARM64 dylib; it is not
+  an alias for the broader workspace verification derivation.
   Linux installed-product launchers carry `$ORIGIN/../lib` first and permit
   only immutable Nix-store library directories afterward; appended relative,
   host, or writable search directories fail even when the sibling comes first.

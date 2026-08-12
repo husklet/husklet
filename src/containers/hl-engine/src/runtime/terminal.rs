@@ -91,7 +91,7 @@ fn set_nonblocking(descriptor: &OwnedFd) -> Result<(), CompositionError> {
 fn open_pair(initial: (u16, u16)) -> Result<(OwnedFd, OwnedFd), CompositionError> {
     let mut master = -1;
     let mut slave = -1;
-    let size = libc::winsize {
+    let mut size = libc::winsize {
         ws_row: initial.0,
         ws_col: initial.1,
         ws_xpixel: 0,
@@ -103,8 +103,8 @@ fn open_pair(initial: (u16, u16)) -> Result<(OwnedFd, OwnedFd), CompositionError
             &raw mut master,
             &raw mut slave,
             std::ptr::null_mut(),
-            std::ptr::null(),
-            &raw const size,
+            std::ptr::null_mut(),
+            &raw mut size,
         )
     };
     if result != 0 {
