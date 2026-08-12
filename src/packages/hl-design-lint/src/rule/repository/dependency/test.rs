@@ -65,6 +65,22 @@ fn findings(root: &Path, policy: DependencyPolicy) -> Vec<crate::Finding> {
 }
 
 #[test]
+fn rejects_missing_local_package_manifest_inside_requested_roots() {
+    let root = fixture();
+    package(
+        &root,
+        "services",
+        "scheduler",
+        "[dependencies]\nmissing = { path = \"../../foundation/missing\" }\n",
+    );
+    fs::create_dir_all(root.join("src/foundation/missing")).unwrap();
+    let workspace = Workspace::load([root.join("src")]).unwrap();
+    let error = Direction::new(policy()).check(&workspace).unwrap_err();
+    assert!(error.to_string().contains("does not exist"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn accepts_dependency_permitted_by_layer_policy() {
     let root = fixture();
     package(&root, "foundation", "clock", "");

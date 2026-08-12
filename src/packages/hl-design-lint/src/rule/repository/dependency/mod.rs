@@ -147,6 +147,32 @@ impl Graph {
                 },
             );
         }
+        let roots = paths
+            .iter()
+            .map(|path| normalized(path).ok_or_else(|| LintError::configuration(format!("resolve {}", path.display()))))
+            .collect::<Result<Vec<_>>>()?;
+        for package in packages.values() {
+            for dependency in &package.dependencies {
+                let Some(manifest) = dependency.manifest.as_ref() else {
+                    continue;
+                };
+                if manifest.is_file() {
+                    continue;
+                }
+                let requested = manifest
+                    .parent()
+                    .and_then(normalized)
+                    .is_some_and(|directory| roots.iter().any(|root| directory.starts_with(root)));
+                if requested {
+                    return Err(LintError::configuration(format!(
+                        "{} declares local dependency {:?}, but {} does not exist",
+                        package.manifest.display(),
+                        dependency.alias,
+                        manifest.display()
+                    )));
+                }
+            }
+        }
         let manifests = packages
             .values()
             .filter_map(|package| normalized(&package.manifest).map(|manifest| (manifest, package.name.clone())))
