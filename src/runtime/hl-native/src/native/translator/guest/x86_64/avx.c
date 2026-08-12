@@ -3429,6 +3429,72 @@ static enum avx_dispatch_result sse_dispatch_integer_extension(const hl_x86_avx_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result sse_dispatch_packed_arithmetic(const hl_x86_avx_state *state, struct cpu *c,
+                                                               struct insn *I, uint64_t next, uint8_t destination[16]) {
+    int op = I->op;
+    if (I->map3 != 2 || op < 0x01 || op > 0x0B) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t source[16];
+    uint8_t result[16];
+    sse_get_rm(state, c, I, next, source);
+    if (op == 0x04) { // PMADDUBSW
+        int16_t output[8];
+        for (int lane = 0; lane < 8; lane++) {
+            int product = (int)(uint8_t)destination[2 * lane] * (int)(int8_t)source[2 * lane] +
+                          (int)(uint8_t)destination[2 * lane + 1] * (int)(int8_t)source[2 * lane + 1];
+            output[lane] = (int16_t)sat_s16(product);
+        }
+        memcpy(result, output, 16);
+    } else if (op <= 0x07) { // PHADD / PHSUB
+        int subtract = op >= 0x05;
+        int saturate = op == 0x03 || op == 0x07;
+        if (op == 0x02 || op == 0x06) {
+            int32_t left[4], right[4], output[4];
+            memcpy(left, destination, 16);
+            memcpy(right, source, 16);
+            output[0] = subtract ? left[0] - left[1] : left[0] + left[1];
+            output[1] = subtract ? left[2] - left[3] : left[2] + left[3];
+            output[2] = subtract ? right[0] - right[1] : right[0] + right[1];
+            output[3] = subtract ? right[2] - right[3] : right[2] + right[3];
+            memcpy(result, output, 16);
+        } else {
+            int16_t left[8], right[8], output[8];
+            memcpy(left, destination, 16);
+            memcpy(right, source, 16);
+            for (int lane = 0; lane < 4; lane++) {
+                int left_value = subtract ? left[2 * lane] - left[2 * lane + 1] : left[2 * lane] + left[2 * lane + 1];
+                int right_value =
+                    subtract ? right[2 * lane] - right[2 * lane + 1] : right[2 * lane] + right[2 * lane + 1];
+                output[lane] = saturate ? (int16_t)sat_s16(left_value) : (int16_t)left_value;
+                output[lane + 4] = saturate ? (int16_t)sat_s16(right_value) : (int16_t)right_value;
+            }
+            memcpy(result, output, 16);
+        }
+    } else if (op <= 0x0A) { // PSIGNB / PSIGNW / PSIGND
+        int element_width = op == 0x08 ? 1 : op == 0x09 ? 2 : 4;
+        for (int offset = 0; offset < 16; offset += element_width) {
+            uint64_t value = 0;
+            uint64_t control = 0;
+            memcpy(&value, destination + offset, (size_t)element_width);
+            memcpy(&control, source + offset, (size_t)element_width);
+            uint64_t output = simd_element_negative(control, element_width) ? simd_element_negate(value, element_width)
+                              : control == 0                                ? 0
+                                                                            : value;
+            memcpy(result + offset, &output, (size_t)element_width);
+        }
+    } else { // PMULHRSW
+        int16_t left[8], right[8], output[8];
+        memcpy(left, destination, 16);
+        memcpy(right, source, 16);
+        for (int lane = 0; lane < 8; lane++)
+            output[lane] = (int16_t)((((left[lane] * right[lane]) >> 14) + 1) >> 1);
+        memcpy(result, output, 16);
+    }
+    memcpy(destination, result, 16);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3462,6 +3528,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     }
 
     if (sse_dispatch_integer_extension(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
+    if (sse_dispatch_packed_arithmetic(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     // ---- the remaining ops are xmm-destructive: load the r/m source, compute into r, write to D -----
     sse_get_rm(state, c, &I, next, s);
@@ -3474,71 +3541,6 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
             memcpy(t, D, 16);
             for (int i = 0; i < 16; i++)
                 r[i] = (s[i] & 0x80) ? 0 : t[s[i] & 0x0f];
-            break;
-        }
-        case 0x04: { // pmaddubsw: word k = sat16( uD[2k]*sB[2k] + uD[2k+1]*sB[2k+1] ) -- D unsigned, s signed
-            int16_t o[8];
-            for (int k = 0; k < 8; k++) {
-                int p = (int)(uint8_t)D[2 * k] * (int)(int8_t)s[2 * k] +
-                        (int)(uint8_t)D[2 * k + 1] * (int)(int8_t)s[2 * k + 1];
-                o[k] = (int16_t)sat_s16(p);
-            }
-            memcpy(r, o, 16);
-            break;
-        }
-        case 0x01:
-        case 0x02:
-        case 0x03:
-        case 0x05:
-        case 0x06:
-        case 0x07: { // phadd/phsub w/d (saturated for 03/07)
-            int sub = (op >= 0x05);
-            int sat = (op == 0x03 || op == 0x07);
-            if (op == 0x02 || op == 0x06) { // dword
-                int32_t a[4], b[4], o[4];
-                memcpy(a, D, 16);
-                memcpy(b, s, 16);
-                o[0] = sub ? a[0] - a[1] : a[0] + a[1];
-                o[1] = sub ? a[2] - a[3] : a[2] + a[3];
-                o[2] = sub ? b[0] - b[1] : b[0] + b[1];
-                o[3] = sub ? b[2] - b[3] : b[2] + b[3];
-                memcpy(r, o, 16);
-            } else { // word
-                int16_t a[8], b[8], o[8];
-                memcpy(a, D, 16);
-                memcpy(b, s, 16);
-                for (int i = 0; i < 4; i++) {
-                    int va = sub ? a[2 * i] - a[2 * i + 1] : a[2 * i] + a[2 * i + 1];
-                    int vb = sub ? b[2 * i] - b[2 * i + 1] : b[2 * i] + b[2 * i + 1];
-                    o[i] = sat ? (int16_t)sat_s16(va) : (int16_t)va;
-                    o[i + 4] = sat ? (int16_t)sat_s16(vb) : (int16_t)vb;
-                }
-                memcpy(r, o, 16);
-            }
-            break;
-        }
-        case 0x08:
-        case 0x09:
-        case 0x0A: { // psign b/w/d
-            int es = op == 0x08 ? 1 : op == 0x09 ? 2 : 4;
-            for (int i = 0; i < 16; i += es) {
-                uint64_t value = 0, control = 0;
-                memcpy(&value, D + i, (size_t)es);
-                memcpy(&control, s + i, (size_t)es);
-                uint64_t output = simd_element_negative(control, es) ? simd_element_negate(value, es)
-                                  : control == 0                     ? 0
-                                                                     : value;
-                memcpy(r + i, &output, (size_t)es);
-            }
-            break;
-        }
-        case 0x0B: { // pmulhrsw
-            int16_t a[8], b[8], o[8];
-            memcpy(a, D, 16);
-            memcpy(b, s, 16);
-            for (int i = 0; i < 8; i++)
-                o[i] = (int16_t)((((a[i] * b[i]) >> 14) + 1) >> 1);
-            memcpy(r, o, 16);
             break;
         }
         case 0x1C:
