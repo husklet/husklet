@@ -3510,6 +3510,63 @@ static int lower_stack_transfer(struct insn *instruction, uint64_t next) {
     return TX_NEXT;
 }
 
+static int lower_direct_call_loop(struct insn *instruction, uint64_t guest_pc, uint64_t next,
+                                  const hl_x86_trace_state *trace_state) {
+    uint8_t opcode = instruction->op;
+    uint64_t taken = next + (uint64_t)instruction->imm;
+    if (opcode == 0xE8) {
+        if (emit_soft_memory_active()) {
+            e_subi(17, RSP, 8, 1);
+            emit_memory_guard(17, 8, guest_pc, X86_SOFT_WRITE);
+        }
+        e_subi(RSP, RSP, 8, 1);
+        e_movconst(16, call_return_pc(next));
+        e_store(8, 16, emit_soft_memory_active() ? 17 : RSP);
+        hl_x86_trace_flags_edge(trace_state, taken, guest_pc);
+        emit_chain_exit(taken);
+        return TX_BREAK;
+    }
+    if (opcode == 0xE3) {
+        uint32_t cbz = instruction->addr32 ? 0x34000000u : 0xB4000000u;
+        uint32_t *patch = (uint32_t *)g_cp;
+        emit32(0);
+        emit_chain_exit(next);
+        int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+        *patch = cbz | (((uint32_t)distance & 0x7FFFF) << 5) | RCX;
+        emit_chain_exit(taken);
+        return TX_BREAK;
+    }
+    if (opcode != 0xE0 && opcode != 0xE1 && opcode != 0xE2) return TX_FALL;
+
+    int wide = instruction->addr32 ? 0 : 1;
+    uint32_t cbz = instruction->addr32 ? 0x34000000u : 0xB4000000u;
+    uint32_t cbnz = instruction->addr32 ? 0x35000000u : 0xB5000000u;
+    e_subi(RCX, RCX, 1, wide);
+    if (opcode == 0xE2) {
+        uint32_t *patch = (uint32_t *)g_cp;
+        emit32(0);
+        emit_chain_exit(next);
+        int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+        *patch = cbnz | (((uint32_t)distance & 0x7FFFF) << 5) | RCX;
+        emit_chain_exit(taken);
+        return TX_BREAK;
+    }
+
+    e_nzcv_load();
+    int fail_condition = opcode == 0xE1 ? 1 : 0;
+    uint32_t *counter_patch = (uint32_t *)g_cp;
+    emit32(0);
+    uint32_t *flag_patch = (uint32_t *)g_cp;
+    emit32(0);
+    emit_chain_exit(taken);
+    int64_t counter_distance = ((uint8_t *)g_cp - (uint8_t *)counter_patch) / 4;
+    *counter_patch = cbz | (((uint32_t)counter_distance & 0x7FFFF) << 5) | RCX;
+    int64_t flag_distance = ((uint8_t *)g_cp - (uint8_t *)flag_patch) / 4;
+    *flag_patch = 0x54000000u | (((uint32_t)flag_distance & 0x7FFFF) << 5) | (uint32_t)fail_condition;
+    emit_chain_exit(next);
+    return TX_BREAK;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -3694,71 +3751,8 @@ static void *translate_block(uint64_t gpc) {
                 emit_chain_exit(tgt);
                 break;
             }
-            // ---- call rel32 (E8) ----
-            if (op == 0xE8) {
-                if (emit_soft_memory_active()) {
-                    e_subi(17, RSP, 8, 1);
-                    emit_memory_guard(17, 8, gpc, X86_SOFT_WRITE);
-                }
-                e_subi(RSP, RSP, 8, 1); // commit only after a soft miss can no longer exit
-                e_movconst(16, call_return_pc(next));
-                e_store(8, 16, emit_soft_memory_active() ? 17 : RSP);
-                // x86-xflags: consult the CALLEE's flag live-in (function prologues kill flags fast).
-                hl_x86_trace_flags_edge(&trace_state, next + (uint64_t)I.imm, gpc);
-                emit_chain_exit(next + (uint64_t)I.imm);
-                break;
-            }
-            // ---- jrcxz/jecxz rel8 (E3): jump if rCX == 0 (no decrement, no flag effect) ----
-            // 0x67 selects the 32-bit counter (ECX): test the W-form so a nonzero upper half of RCX
-            // doesn't suppress the branch; without it the 64-bit X-form tests all of RCX.
-            if (op == 0xE3) {
-                uint64_t taken = next + (uint64_t)I.imm;
-                uint32_t cbz = I.addr32 ? 0x34000000u : 0xB4000000u; // cbz w_rcx / x_rcx
-                uint32_t *patch = (uint32_t *)g_cp;
-                emit32(0);             // cbz rcx -> taken
-                emit_chain_exit(next); // rCX != 0: fall through
-                int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-                *patch = cbz | (((uint32_t)d & 0x7FFFF) << 5) | RCX; // cbz rcx, taken
-                emit_chain_exit(taken);
-                break;
-            }
-            // ---- loop/loope/loopne rel8 (E2/E1/E0): --rCX; branch if rCX != 0 [and ZF cond] ----
-            // None of these touch RFLAGS; loope/loopne only READ ZF. 0x67 makes the counter ECX (sf=0,
-            // which also zero-extends so the X-form cbz/cbnz still tests the right value); else RCX.
-            if (op == 0xE0 || op == 0xE1 || op == 0xE2) {
-                uint64_t taken = next + (uint64_t)I.imm;
-                int sf2 = I.addr32 ? 0 : 1; // counter width: ECX vs RCX
-                uint32_t cbz = I.addr32 ? 0x34000000u : 0xB4000000u;
-                uint32_t cbnz = I.addr32 ? 0x35000000u : 0xB5000000u;
-                e_subi(RCX, RCX, 1, sf2); // --rCX (no flag effect: plain SUB, not SUBS)
-                if (op == 0xE2) {
-                    // plain LOOP: taken iff rCX != 0.
-                    uint32_t *patch = (uint32_t *)g_cp;
-                    emit32(0);             // cbnz rcx -> taken
-                    emit_chain_exit(next); // rCX == 0: fall through
-                    int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-                    *patch = cbnz | (((uint32_t)d & 0x7FFFF) << 5) | RCX;
-                    emit_chain_exit(taken);
-                    break;
-                }
-                // loope (E1): taken iff rCX != 0 && ZF==1; loopne (E0): rCX != 0 && ZF==0.
-                // Branch to the fall-through exit when EITHER test fails; fall through to the taken exit.
-                // Flags are already materialized to membank by the top-of-loop (E0/E1 aren't flagkill),
-                // but reload cpu->nzcv to be robust even when no producer was pending this block.
-                e_nzcv_load(); // ZF (ARM Z) canonical in live NZCV; SUB above left it untouched
-                int fail_cc = (op == 0xE1) ? 1 /*NE: ZF==0 fails loope*/ : 0 /*EQ: ZF==1 fails loopne*/;
-                uint32_t *p1 = (uint32_t *)g_cp;
-                emit32(0); // cbz rcx -> fall
-                uint32_t *p2 = (uint32_t *)g_cp;
-                emit32(0);              // b.<fail_cc> -> fall
-                emit_chain_exit(taken); // both tests passed
-                int64_t d1 = ((uint8_t *)g_cp - (uint8_t *)p1) / 4;
-                *p1 = cbz | (((uint32_t)d1 & 0x7FFFF) << 5) | RCX; // cbz rcx, fall
-                int64_t d2 = ((uint8_t *)g_cp - (uint8_t *)p2) / 4;
-                *p2 = 0x54000000u | (((uint32_t)d2 & 0x7FFFF) << 5) | (uint32_t)fail_cc; // b.cc, fall
-                emit_chain_exit(next);
-                break;
-            }
+            int direct_loop_result = lower_direct_call_loop(&I, gpc, next, &trace_state);
+            if (direct_loop_result == TX_BREAK) break;
             // ---- jcc rel8 (70-7F) ----
             if (op >= 0x70 && op <= 0x7F) {
                 int lo = op & 0xF, parity = (lo == 0xA || lo == 0xB);
