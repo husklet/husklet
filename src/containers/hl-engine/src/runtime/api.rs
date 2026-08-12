@@ -7,16 +7,12 @@ use std::sync::Arc;
 mod execution;
 pub(crate) use execution::{ProductionFactory, ProductionMachine};
 
-#[cfg(feature = "rust-execution")]
-use hl_runtime::{RuntimeAssembly, RuntimeDomain, RuntimeExecPort, RuntimeForkPort};
 
 use crate::activation::GuestIsa;
 use crate::composition::{ActivationChannel, CompositionError, EngineBackend, RuntimeServices};
 use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::launch_plan::RuntimePlan;
 use crate::options::Options;
-#[cfg(feature = "rust-execution")]
-use crate::runtime_machine::HostServices;
 
 mod workspace;
 
@@ -363,23 +359,6 @@ impl ActivationChannel for Activation {
     }
     fn receive(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
         Ok(Vec::new())
-    }
-}
-
-#[cfg(feature = "rust-execution")]
-struct Services;
-#[cfg(feature = "rust-execution")]
-impl HostServices for Services {
-    fn exec_port(&self, _: &RuntimeAssembly) -> Result<Option<Arc<dyn RuntimeExecPort>>, CompositionError> {
-        Ok(None)
-    }
-    fn fork_port(&self, _: &RuntimeAssembly) -> Result<Option<Arc<dyn RuntimeForkPort>>, CompositionError> {
-        Ok(None)
-    }
-    fn validate(&self, assembly: &RuntimeAssembly) -> Result<(), CompositionError> {
-        assembly
-            .require(RuntimeDomain::Task)
-            .map_err(|_| CompositionError::RuntimeConstruction)
     }
 }
 

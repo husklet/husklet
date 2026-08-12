@@ -1,19 +1,10 @@
 use crate::composition::{CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory};
 use crate::engine::{EngineError, EngineExit, StopRequest};
-#[cfg(feature = "rust-execution")]
-use crate::runtime_machine::{RustRuntimeFactory, RustRuntimeMachine};
-#[cfg(feature = "rust-execution")]
-use hl_runtime::RuntimeAssemblyConfig;
 use std::sync::Arc;
 #[cfg(hl_retained_c)]
 use std::sync::Mutex;
 
-#[cfg(feature = "rust-execution")]
-type RustMachine = RustRuntimeMachine<crate::native::GuestExecutor>;
-
 pub(crate) enum ProductionMachine {
-    #[cfg(feature = "rust-execution")]
-    Rust(Box<RustMachine>),
     #[cfg(hl_retained_c)]
     C(Box<CMachine>),
 }
@@ -83,25 +74,6 @@ impl CUnsupported {
 }
 
 impl ProductionFactory {
-    #[cfg(feature = "rust-execution")]
-    fn rust(request: RuntimeConstruction<'_>) -> Result<ProductionMachine, CompositionError> {
-        hl_log::hl_event!(
-            hl_log::tag::EXEC,
-            hl_log::Level::Info,
-            "execution.backend.selected",
-            backend = "rust",
-            isa = ?request.isa
-        );
-        RustRuntimeFactory::new(
-            Arc::new(crate::native::GuestExecutor::default()),
-            Arc::new(super::Services),
-            RuntimeAssemblyConfig::default(),
-        )
-        .construct(request)
-        .map(Box::new)
-        .map(ProductionMachine::Rust)
-    }
-
     #[cfg(hl_retained_c)]
     fn c(request: RuntimeConstruction<'_>) -> Result<ProductionMachine, CompositionError> {
         if let Some(reason) = Self::c_unsupported(&request) {
@@ -158,10 +130,6 @@ impl RuntimeFactory for ProductionFactory {
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
         match request.plan.options.get("HL_EXECUTION_BACKEND") {
-            #[cfg(feature = "rust-execution")]
-            Some("rust") => Self::rust(request),
-            #[cfg(all(not(hl_retained_c_default), feature = "rust-execution"))]
-            None => Self::rust(request),
             #[cfg(hl_retained_c_default)]
             None => Self::c(request),
             #[cfg(hl_retained_c)]
@@ -174,8 +142,6 @@ impl RuntimeFactory for ProductionFactory {
 impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
         match self {
-            #[cfg(feature = "rust-execution")]
-            Self::Rust(machine) => machine.start(),
             #[cfg(hl_retained_c)]
             Self::C(machine) => machine.start(),
         }
@@ -183,8 +149,6 @@ impl GuestMachine for ProductionMachine {
 
     fn wait(&self) -> Result<EngineExit, EngineError> {
         match self {
-            #[cfg(feature = "rust-execution")]
-            Self::Rust(machine) => machine.wait(),
             #[cfg(hl_retained_c)]
             Self::C(machine) => machine.current()?.wait(),
         }
@@ -192,8 +156,6 @@ impl GuestMachine for ProductionMachine {
 
     fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
         match self {
-            #[cfg(feature = "rust-execution")]
-            Self::Rust(machine) => machine.stop(request),
             #[cfg(hl_retained_c)]
             Self::C(machine) => machine.current()?.stop(request),
         }
@@ -201,8 +163,6 @@ impl GuestMachine for ProductionMachine {
 
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         match self {
-            #[cfg(feature = "rust-execution")]
-            Self::Rust(machine) => machine.checkpoint_supported(),
             #[cfg(hl_retained_c)]
             Self::C(_) => Err(EngineError::Unsupported),
         }
@@ -210,8 +170,6 @@ impl GuestMachine for ProductionMachine {
 
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         match self {
-            #[cfg(feature = "rust-execution")]
-            Self::Rust(machine) => machine.capture_checkpoint(),
             #[cfg(hl_retained_c)]
             Self::C(_) => Err(EngineError::Unsupported),
         }
@@ -339,7 +297,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "rust-execution"))]
     #[test]
     fn production_build_rejects_retired_rust_backend() {
         let mut plan = c_plan();

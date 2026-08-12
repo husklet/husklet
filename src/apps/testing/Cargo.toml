@@ -18,10 +18,7 @@ hl-design = { path = "../../packages/hl-design" }
 hl-images = { path = "../../containers/hl-images" }
 hl-log = { path = "../../packages/hl-log" }
 hl-process = { path = "../../packages/hl-process" }
-# `hl-compat-worker` remains a differential Rust oracle during the C cutover.
-# Keep that reachability explicit so the production container dependency does
-# not silently retain the Rust execution entry point.
-hl-engine = { path = "../../containers/hl-engine", features = ["rust-execution"] }
+hl-engine = { path = "../../containers/hl-engine" }
 libc = "0.2"
 nix = { version = "0.30", features = ["signal"] }
 reflink-copy.workspace = true

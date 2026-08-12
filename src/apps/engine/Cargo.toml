@@ -33,7 +33,6 @@ path = "src/bin/x86.rs"
 
 [features]
 alloc-count = ["hl-engine/alloc-count"]
-rust-execution = ["hl-engine/rust-execution"]
 
 [dev-dependencies]
 serde_json.workspace = true

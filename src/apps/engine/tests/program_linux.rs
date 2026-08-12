@@ -1,4 +1,4 @@
-#![cfg(all(target_os = "linux", feature = "rust-execution"))]
+#![cfg(target_os = "linux")]
 
 use std::fs;
 use std::process::Command;

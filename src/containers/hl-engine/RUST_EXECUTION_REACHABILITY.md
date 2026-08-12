@@ -1,42 +1,35 @@
-# Rust execution reachability
+# Rust executor deletion boundary
 
-`rust-execution` is the temporary, explicit boundary around the retired Rust
-guest-execution entry points. It is deliberately absent from `hl-engine`'s
-default features. A default `hl-engine` build therefore selects retained C and
-rejects `HL_EXECUTION_BACKEND=rust`.
+The production and packaged engine paths now enter `Program`, which constructs
+`runtime::ProductionFactory`; that factory has only the retained-C machine.
+`Program` is therefore part of the C product frontend and must not be deleted.
 
-The remaining opt-in production roots are exact and intentionally small:
+There are no Cargo features or application manifests which opt into Rust guest
+execution. `HL_EXECUTION_BACKEND=rust` is rejected by the production factory.
+The former `rust-execution` feature, `RustRuntimeFactory`, `RustRuntimeMachine`,
+their unit fixtures, and the old Rust `Program` guest fixture are removed.
 
-- `src/runtime/execution.rs`: the `ProductionMachine::Rust` variant and
-  `ProductionFactory::rust` selector arm;
-- `src/program.rs`: the legacy `hl-engine`, `hl-aarch64`, and `hl-x86_64`
-  frontend, which constructs `RustRuntimeFactory` directly;
-- `src/apps/engine/Cargo.toml`: the legacy frontend's explicit feature opt-in;
-- `src/apps/testing/Cargo.toml`: the compatibility worker's differential-oracle
-  opt-in.
+## Remaining source-only closure
 
-Those roots reach the Rust executor closure under
-`src/ffi/linux/execution/**`, its `GuestExecutor` exports in `src/ffi.rs`,
-`src/ffi/linux.rs`, and `src/native/mod.rs`, and the generic factory in
-`src/runtime/machine.rs`. Remove that closure only after both application
-opt-ins above have moved to C.
+The Rust guest executor is still physically compiled under
+`src/ffi/linux/execution/**`, with reexports through `src/ffi.rs`,
+`src/ffi/linux.rs`, and `src/native/mod.rs`. Nothing constructs it in production.
+Most of that directory can be deleted after its one live product service is
+moved: `runtime/api.rs` reexports
+`ffi::linux::execution::network::CheckpointRuntime`.
 
-Do **not** infer that the `hl-runtime`, `hl-execution`, `hl-memory`, `hl-task`,
-or loader packages can be removed with that closure. The retained C adapter
-currently uses typed CPU snapshots and the runtime syscall-trap/task context,
-and the product still uses loader inspection plus container lifecycle services.
-Their reachability is independent of `rust-execution` and must be audited after
-the C adapter owns equivalent services.
+The bounded follow-up is:
 
-Mechanical checks:
+1. Move the checkpoint network catalog/host projection into a non-executor
+   service module and update the public reexport.
+2. Remove the temporary `GuestExecutionPort` trait and its C and Rust impls;
+   the C worker already invokes `CGuestExecutor` directly.
+3. Delete `ffi/linux/execution/**`, its three `GuestExecutor` reexports, and
+   Rust-native executor-only helpers proven caller-free after step 2.
+4. Compile every consumer, then mutate the deleted exports to confirm the
+   C-only gate is non-vacuous.
 
-```sh
-cargo check -p hl-engine --no-default-features --features c-execution
-cargo test -p hl-engine --lib --no-default-features --features c-execution \
-  production_build_rejects_retired_rust_backend
-cargo check -p hl-engine --all-features
-```
-
-The first two commands prove that the production C configuration has no Rust
-entry root. The all-features command keeps the temporary compatibility closure
-buildable until its two named consumers are migrated.
+Do not remove `program.rs`, loader inspection, container lifecycle, or the
+`hl-runtime`, `hl-execution`, `hl-memory`, and `hl-task` crates with this closure.
+The retained C adapter independently uses typed CPU snapshots, runtime syscall
+trap/task state, and loader services.
