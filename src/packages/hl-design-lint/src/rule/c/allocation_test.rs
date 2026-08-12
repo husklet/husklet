@@ -24,6 +24,15 @@ fn accepts_common_null_checks_and_unused_allocation() {
 }
 
 #[test]
+fn accepts_null_checks_composed_with_other_failure_conditions() {
+    let source =
+        "void run(void) { int *value = allocate(4); if (!value || initialize(value) != 0) return; value[0] = 1; }";
+    assert!(findings(source).is_empty());
+    let source = "void run(int requested) { int *value = allocate(4); if (requested && !value) return; value[0] = 1; }";
+    assert!(findings(source).is_empty());
+}
+
+#[test]
 fn reasoned_suppression_is_exact() {
     let source = "void run(void) {\n// hl-lint: allow(c-unchecked-allocation) -- allocator aborts on exhaustion\nint *value = allocate(4);\n*value = 1;\n}";
     assert!(findings(source).is_empty());

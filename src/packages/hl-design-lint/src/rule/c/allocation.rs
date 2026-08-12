@@ -142,6 +142,13 @@ fn null_checked(function: &str, name: &str) -> bool {
         format!("NULL!={name}"),
         format!("if({name})"),
         format!("if(!{name})"),
+        format!("if({name}&&"),
+        format!("if({name}||"),
+        format!("if(!{name}&&"),
+        format!("if(!{name}||"),
+        format!("!{name})"),
+        format!("!{name}&&"),
+        format!("!{name}||"),
     ]
     .iter()
     .any(|pattern| compact.contains(pattern))
