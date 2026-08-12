@@ -392,6 +392,9 @@
             toolchain.env
             // {
               packages = [
+                pkgs.clang-tools
+                pkgs.cmake
+                pkgs.cppcheck
                 pkgs.gnumake
                 pkgs.nixfmt
                 pkgs.pkg-config

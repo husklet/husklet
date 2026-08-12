@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint gate gate-app gate-fixture lint lint-cases clippy fmt fmt-check test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
+.PHONY: all check design-lint gate gate-app gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
 
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
@@ -20,15 +20,42 @@ lint-cases:
 clippy:
 	$(NIX_DEV) cargo clippy --workspace --all-targets --locked --offline -- -D warnings
 
-lint: clippy
+lint: clippy lint-c
+
+C_LINT_BUILD = target/c-lint-native
+C_LINT_CONFIGURE = cmake -S src/runtime/native -B $(C_LINT_BUILD) -DHL_BUILD_TESTS=ON -DCMAKE_C_COMPILER="$(NATIVE_CC)"
+
+lint-c:
+	$(NIX_DEV) $(MAKE) lint-c-inner
+
+lint-c-inner:
+	$(C_LINT_CONFIGURE)
+	cmake --build $(C_LINT_BUILD)
+	cmake --build $(C_LINT_BUILD) --target source-manifest-check
+	ctest --test-dir $(C_LINT_BUILD) -L lint --no-tests=error --output-on-failure
+	cmake --build $(C_LINT_BUILD) --target lint-c
 
 # Rustfmt ships with the pinned flake toolchain, not with a distribution Rust, so route formatting through
 # the same shell as Clippy rather than whatever `cargo fmt` a host happens to resolve.
 fmt:
 	$(NIX_DEV) cargo fmt --all
 
+fmt-c:
+	$(NIX_DEV) $(MAKE) fmt-c-inner
+
+fmt-c-inner:
+	$(C_LINT_CONFIGURE)
+	cmake --build $(C_LINT_BUILD) --target fmt-c
+
 fmt-check:
 	$(NIX_DEV) cargo fmt --all -- --check
+
+fmt-c-check:
+	$(NIX_DEV) $(MAKE) fmt-c-check-inner
+
+fmt-c-check-inner:
+	$(C_LINT_CONFIGURE)
+	cmake --build $(C_LINT_BUILD) --target fmt-c-check
 
 test: design-lint
 	cargo build -p engine -p testing --bins --locked
@@ -45,6 +72,7 @@ gate:
 	  status=0; \
 	  cargo run -q -p hl-design-lint -- src tests || status=1; \
 	  cargo run -q -p hl-design-lint -- --cases lint src tests || status=1; \
+	  $(MAKE) lint-c-inner || status=1; \
 	  cargo build -p engine -p testing --bins --locked --offline || status=1; \
 	  export HL_TEST_ENGINE_APP_BIN_DIR="$(CURDIR)/target/debug"; \
 	  cargo clippy --workspace --all-targets --locked --offline -- -D warnings || status=1; \
