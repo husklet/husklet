@@ -19,49 +19,49 @@ cases:
   - id: runtime/overlay/lower-read
     status: active
     compat: { class: compatibility }
-    build: { source: source/lower.c, output: lower, flags: [-static, -O2, -std=c11] }
+    build: { source: lower.c, output: lower, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/lower-read }
     run: [read]
     expect: { exit: 0, stdout: golden/lower-read.out }
   - id: runtime/overlay/lower-negative
     status: active
     compat: { class: compatibility }
-    build: { source: source/lower.c, output: lower-negative, flags: [-static, -O2, -std=c11] }
+    build: { source: lower.c, output: lower-negative, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/lower-negative }
     run: [negative]
     expect: { exit: 0, stdout: golden/lower-negative.out }
   - id: runtime/overlay/lower-copy-up
     status: active
     compat: { class: compatibility }
-    build: { source: source/lower.c, output: lower-copy-up, flags: [-static, -O2, -std=c11] }
+    build: { source: lower.c, output: lower-copy-up, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/lower-copy-up }
     run: [copy-up]
     expect: { exit: 0, stdout: golden/lower-copy-up.out }
   - id: runtime/overlay/lower-whiteout
     status: active
     compat: { class: compatibility }
-    build: { source: source/lower.c, output: lower-whiteout, flags: [-static, -O2, -std=c11] }
+    build: { source: lower.c, output: lower-whiteout, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/lower-whiteout }
     run: [whiteout]
     expect: { exit: 0, stdout: golden/lower-whiteout.out }
   - id: runtime/overlay/lower-merge
     status: active
     compat: { class: compatibility }
-    build: { source: source/lower.c, output: lower-merge, flags: [-static, -O2, -std=c11] }
+    build: { source: lower.c, output: lower-merge, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/lower-merge }
     run: [merge]
     expect: { exit: 0, stdout: golden/lower-merge.out }
   - id: runtime/overlay/lower-lock-copy-up
     status: active
     compat: { class: compatibility }
-    build: { source: source/lower.c, output: lower-lock-copy-up, flags: [-static, -O2, -std=c11] }
+    build: { source: lower.c, output: lower-lock-copy-up, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/lower-lock-copy-up }
     run: [lock-copy-up]
     expect: { exit: 0, stdout: golden/lower-lock-copy-up.out }
   - id: runtime/overlay/lower-whiteout-dir
     status: active
     compat: { class: compatibility }
-    build: { source: source/lower.c, output: lower-whiteout-dir, flags: [-static, -O2, -std=c11] }
+    build: { source: lower.c, output: lower-whiteout-dir, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/lower-whiteout-dir }
     run: [whiteout-dir]
     expect: { exit: 0, stdout: golden/lower-whiteout-dir.out }
