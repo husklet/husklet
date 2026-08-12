@@ -67,9 +67,9 @@ fn visit_functions(
     if node.kind() == "function_definition" {
         let mut declarations = Vec::new();
         allocations(node, source, allocators, &mut declarations);
-        let function = node.utf8_text(source.as_bytes()).unwrap_or_default();
         for (name, declaration) in declarations {
-            if dereferenced(node, source, &name) && !null_checked(function, &name) {
+            let evidence = source.get(declaration.end_byte()..node.end_byte()).unwrap_or_default();
+            if dereferenced(node, source, &name) && !null_checked(evidence, &name) {
                 output.push(finding(path, declaration, &name));
             }
         }

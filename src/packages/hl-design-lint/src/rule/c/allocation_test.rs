@@ -33,6 +33,14 @@ fn accepts_null_checks_composed_with_other_failure_conditions() {
 }
 
 #[test]
+fn check_before_allocation_does_not_prove_the_new_result() {
+    let source = "void run(int *value) { if (!value) return; { int *value = allocate(4); value[0] = 1; } }";
+    let values = findings(source);
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].subject, "value");
+}
+
+#[test]
 fn reasoned_suppression_is_exact() {
     let source = "void run(void) {\n// hl-lint: allow(c-unchecked-allocation) -- allocator aborts on exhaustion\nint *value = allocate(4);\n*value = 1;\n}";
     assert!(findings(source).is_empty());
