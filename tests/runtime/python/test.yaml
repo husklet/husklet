@@ -53,6 +53,22 @@ cases:
     artifact: { destination: /opt/husklet/python/exec-python-json-ascii }
     run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w').write(json.dumps({'value': 7}, sort_keys=True) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_json_ascii.out }
+  - id: runtime/python/cpython-json-unicode-escaped
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-json-unicode-escaped, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-json-unicode-escaped }
+    run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w').write(json.dumps({'unicode': '\u03bb'}, sort_keys=True) + '\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_json_unicode_escaped.out }
+  - id: runtime/python/cpython-json-ensure-ascii-false
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-json-ensure-ascii-false, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-json-ensure-ascii-false }
+    run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w').write(json.dumps({'value': 'x'}, sort_keys=True, ensure_ascii=False) + '\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_json_ascii_text.out }
   - id: runtime/python/cpython-unicode
     status: active
     compat: { class: compatibility }
