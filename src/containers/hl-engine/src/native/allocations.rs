@@ -20,20 +20,24 @@ pub struct CountingAllocator;
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         bump();
+        // SAFETY: `layout` is forwarded unchanged under `GlobalAlloc::alloc`'s contract.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         bump();
+        // SAFETY: `layout` is forwarded unchanged under `GlobalAlloc::alloc_zeroed`'s contract.
         unsafe { System.alloc_zeroed(layout) }
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         bump();
+        // SAFETY: the pointer, layout, and requested size are forwarded unchanged under `GlobalAlloc::realloc`.
         unsafe { System.realloc(pointer, layout, size) }
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        // SAFETY: the pointer and layout are forwarded unchanged under `GlobalAlloc::dealloc`'s contract.
         unsafe { System.dealloc(pointer, layout) }
     }
 }

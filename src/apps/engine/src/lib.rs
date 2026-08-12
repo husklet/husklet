@@ -1,5 +1,6 @@
 //! Process adapters for the packaged engine executables.
 
+use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::io::Read as _;
 
@@ -43,6 +44,14 @@ impl Guest {
 
 /// Runs one architecture-specific engine worker process.
 pub struct Worker;
+
+#[derive(Parser)]
+struct BackendReceiptArguments {
+    #[arg(long = "engine-option")]
+    engine_options: Vec<String>,
+    #[arg(long = "guest-isa")]
+    guest: Option<String>,
+}
 
 impl Worker {
     pub fn run(guest: Guest) -> ! {
@@ -133,26 +142,20 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
         return Err(());
     }
     let mut options = hl_engine::options::Options::default();
-    let mut selected = forced_guest;
-    let mut index = 2;
-    while index < arguments.len() {
-        match arguments[index].as_str() {
-            "--engine-option" => {
-                let assignment = arguments.get(index + 1).ok_or(())?;
-                let (name, value) = assignment.split_once('=').ok_or(())?;
-                options.set(name, value, true).map_err(|_| ())?;
-                index += 2;
-            }
-            "--guest-isa" if forced_guest.is_none() => {
-                selected = arguments.get(index + 1).and_then(|value| Guest::named(value));
-                if selected.is_none() {
-                    return Err(());
-                }
-                index += 2;
-            }
-            _ => return Err(()),
-        }
+    let parsed = BackendReceiptArguments::try_parse_from(
+        std::iter::once("backend-receipt").chain(arguments[2..].iter().map(String::as_str)),
+    )
+    .map_err(|_| ())?;
+    for assignment in parsed.engine_options {
+        let (name, value) = assignment.split_once('=').ok_or(())?;
+        options.set(name, value, true).map_err(|_| ())?;
     }
+    let selected = match (forced_guest, parsed.guest.as_deref()) {
+        (Some(_), Some(_)) => return Err(()),
+        (Some(guest), None) => Some(guest),
+        (None, Some(guest)) => Guest::named(guest),
+        (None, None) => None,
+    };
     let guest = selected.unwrap_or(if cfg!(target_arch = "aarch64") {
         Guest::Aarch64
     } else {
