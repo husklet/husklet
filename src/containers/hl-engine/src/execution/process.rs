@@ -393,6 +393,26 @@ impl CWorker {
             return Err(EngineError::Exited);
         }
         drop(startup);
+        // SIGSTOP and SIGCONT govern the whole retained execution domain, not one
+        // emulated guest task.  The worker is a private session leader and every
+        // host process used by the C engine remains in that process group, so
+        // suspending the group freezes translation threads and guest descendants
+        // atomically.  Forwarding SIGSTOP through hl_engine_request is both too
+        // narrow and intentionally rejected by that API because it cannot return
+        // after stopping its own control thread.
+        if matches!(request, StopRequest::Signal(signal) if signal == libc::SIGSTOP || signal == libc::SIGCONT) {
+            let process = self
+                .child
+                .lock()
+                .map_err(|_| EngineError::Synchronization)?
+                .as_ref()
+                .map(Child::id)
+                .ok_or(EngineError::StopFailed)?;
+            let StopRequest::Signal(signal) = request else {
+                unreachable!();
+            };
+            return signal_process_group(process, signal);
+        }
         let mut writer = self.writer.lock().map_err(|_| EngineError::Synchronization)?;
         let requested = write_message(&mut writer, Message::Stop(request));
         drop(writer);
@@ -645,6 +665,42 @@ mod tests {
         assert!(events.contains("retained_c.worker.create_rollback"));
         assert!(events.contains("\"stage\":\"create\""));
         assert!(events.contains("\"reason\":\"post_spawn_rollback\""));
+        assert_group_gone(process);
+    }
+
+    #[test]
+    fn pause_and_resume_signal_the_private_worker_group_without_control_rpc() {
+        let child = session_child("exec sleep 60", Stdio::null());
+        let process = child.id();
+        let (control, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let reader = control.try_clone().unwrap();
+        drop(peer);
+        let worker = CWorker {
+            child: Mutex::new(Some(child)),
+            reader: Mutex::new(reader),
+            writer: Arc::new(Mutex::new(control)),
+            streams: Mutex::new(Some(StreamBridge::inherited())),
+            exit: Mutex::new(None),
+            startup: Mutex::new(Startup::Started),
+            startup_changed: Condvar::new(),
+            provider_broker: None,
+            checkpoint: None,
+        };
+
+        worker.stop(StopRequest::Signal(libc::SIGSTOP)).unwrap();
+        let mut status = 0;
+        // SAFETY: process is the live child owned by worker and status is uniquely writable.
+        assert_eq!(
+            unsafe { libc::waitpid(i32::try_from(process).unwrap(), &raw mut status, libc::WUNTRACED) },
+            process as i32
+        );
+        assert!(libc::WIFSTOPPED(status));
+        assert_eq!(libc::WSTOPSIG(status), libc::SIGSTOP);
+
+        worker.stop(StopRequest::Signal(libc::SIGCONT)).unwrap();
+        // SAFETY: signal zero is an existence probe for the live child.
+        assert_eq!(unsafe { libc::kill(i32::try_from(process).unwrap(), 0) }, 0);
+        drop(worker);
         assert_group_gone(process);
     }
 
