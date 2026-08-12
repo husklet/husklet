@@ -89,50 +89,6 @@ pub trait TerminalPort: Send + Sync {
     fn close(&self);
 }
 
-#[cfg(hl_retained_c)]
-pub(crate) trait NativeTerminalWindowNotification: Send + Sync {
-    fn resize(&self, master: &std::fs::File, rows: u16, columns: u16) -> Result<(), CompositionError>;
-}
-
-#[cfg(hl_retained_c)]
-struct NativeTerminalBridge {
-    master: Option<std::fs::File>,
-    window_notification: Arc<dyn NativeTerminalWindowNotification>,
-    workers: Vec<JoinHandle<()>>,
-}
-
-enum AttachedTerminal {
-    #[cfg(hl_retained_c)]
-    Native(NativeTerminalBridge),
-}
-
-impl AttachedTerminal {
-    fn close(self) {
-        match self {
-            #[cfg(hl_retained_c)]
-            Self::Native(mut bridge) => {
-                drop(bridge.master.take());
-                for worker in bridge.workers {
-                    let _ = worker.join();
-                }
-            }
-        }
-    }
-}
-
-/// Writes the whole slice and reports whether the port stayed writable; unlike the master, a port
-/// that accepts nothing is closed rather than busy.
-fn write_all_to_port(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
-    let mut offset = 0;
-    while offset < bytes.len() {
-        match port.write(&bytes[offset..]) {
-            Ok(0) | Err(_) => return false,
-            Ok(written) => offset += written,
-        }
-    }
-    true
-}
-
 /// One application-owned terminal transport attached to one runtime PTY.
 #[derive(Clone, Copy)]
 pub(crate) struct TerminalWindow {
@@ -145,7 +101,6 @@ pub(crate) struct TerminalWindow {
 pub struct Terminal {
     port: Arc<dyn TerminalPort>,
     initial: TerminalWindow,
-    bridge: Mutex<Option<AttachedTerminal>>,
 }
 
 impl Terminal {
@@ -162,7 +117,6 @@ impl Terminal {
                 pixel_width: 0,
                 pixel_height: 0,
             },
-            bridge: Mutex::new(None),
         }))
     }
 
@@ -170,79 +124,15 @@ impl Terminal {
         self.initial
     }
 
-    #[cfg(hl_retained_c)]
-    pub(crate) fn attach_native(
-        &self,
-        master: std::fs::File,
-        window_notification: Arc<dyn NativeTerminalWindowNotification>,
-    ) -> Result<(), CompositionError> {
-        let mut bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
-        if bridge.is_some() {
-            return Err(CompositionError::RuntimeConstruction);
-        }
-        let input_master = master.try_clone().map_err(|_| CompositionError::RuntimeConstruction)?;
-        let output_master = master.try_clone().map_err(|_| CompositionError::RuntimeConstruction)?;
-        let input_port = Arc::clone(&self.port);
-        let input = std::thread::Builder::new()
-            .name("hl-native-terminal-input".into())
-            .spawn(move || {
-                let mut master = input_master;
-                let mut bytes = [0_u8; 16 * 1024];
-                while let Ok(count) = input_port.read(&mut bytes) {
-                    if count == 0 || master.write_all(&bytes[..count]).is_err() {
-                        return;
-                    }
-                }
-            })
-            .map_err(|_| CompositionError::RuntimeConstruction)?;
-        let output_port = Arc::clone(&self.port);
-        let output = std::thread::Builder::new()
-            .name("hl-native-terminal-output".into())
-            .spawn(move || {
-                let mut master = output_master;
-                let mut bytes = [0_u8; 16 * 1024];
-                loop {
-                    let Ok(count) = master.read(&mut bytes) else { return };
-                    if count == 0 || !write_all_to_port(output_port.as_ref(), &bytes[..count]) {
-                        return;
-                    }
-                }
-            });
-        let Ok(output) = output else {
-            self.port.close();
-            drop(master);
-            let _ = input.join();
-            return Err(CompositionError::RuntimeConstruction);
-        };
-        *bridge = Some(AttachedTerminal::Native(NativeTerminalBridge {
-            master: Some(master),
-            window_notification,
-            workers: vec![input, output],
-        }));
-        Ok(())
-    }
-
     pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
         if rows == 0 || columns == 0 {
             return Err(CompositionError::RuntimeConstruction);
         }
-        let bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
-        match bridge.as_ref().ok_or(CompositionError::RuntimeConstruction)? {
-            #[cfg(hl_retained_c)]
-            AttachedTerminal::Native(bridge) => {
-                let master = bridge.master.as_ref().ok_or(CompositionError::RuntimeConstruction)?;
-                bridge.window_notification.resize(master, rows, columns)?;
-            }
-        }
-        Ok(())
+        Err(CompositionError::RuntimeConstruction)
     }
 
     pub fn close(&self) {
-        let bridge = self.bridge.lock().ok().and_then(|mut bridge| bridge.take());
         self.port.close();
-        if let Some(bridge) = bridge {
-            bridge.close();
-        }
     }
 }
 
