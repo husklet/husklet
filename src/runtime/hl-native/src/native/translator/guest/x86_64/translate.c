@@ -3289,6 +3289,78 @@ static int lower_group3_narrow_muldiv(struct insn *instruction, uint64_t guest_p
     return TX_NEXT;
 }
 
+static int lower_group3_wide_muldiv(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    if (instruction->op != 0xF7 || (instruction->opsize != 4 && instruction->opsize != 8)) return TX_FALL;
+    int operation = instruction->reg & 7;
+    if (operation < 4) return TX_FALL;
+    int width = instruction->opsize;
+    int memory;
+    int value = rm_load(instruction, next, width, &memory);
+    if (operation == 4 || operation == 5) {
+        if (width == 4) {
+            if (operation == 4) {
+                e_uxt(20, RAX, 4);
+                e_uxt(21, value, 4);
+            } else {
+                e_sxt(20, RAX, 4);
+                e_sxt(21, value, 4);
+            }
+            e_mul(19, 20, 21, 1);
+            e_lsr_i(RDX, 19, 32, 1);
+            e_mov_rr(RAX, 19, 0);
+            if (operation == 4) {
+                e_lsr_i(22, 19, 32, 1);
+                e_subi_s(23, 22, 0, 1);
+            } else {
+                e_sxt(22, 19, 4);
+                e_rrr(A_SUBS, 23, 19, 22, 1, 0);
+            }
+        } else {
+            e_mul(19, RAX, value, 1);
+            if (operation == 4)
+                e_umulh(RDX, RAX, value);
+            else
+                e_smulh(RDX, RAX, value);
+            e_mov_rr(RAX, 19, 1);
+            if (operation == 4) {
+                e_mov_rr(22, RDX, 1);
+                e_subi_s(23, 22, 0, 1);
+            } else {
+                e_asr_i(22, 19, 63, 1);
+                e_rrr(A_SUBS, 23, RDX, 22, 1, 0);
+            }
+        }
+        e_cset(21, 1 /*NE*/, 1);
+        e_mul_set_oc(21);
+        return TX_NEXT;
+    }
+    if (operation != 6 && operation != 7) {
+        report_unimpl(guest_pc, instruction);
+        return TX_BREAK;
+    }
+    if (width == 8) {
+        emit_div64_fast(next, guest_pc, operation == 7, value);
+        return TX_NEXT;
+    }
+
+    e_lsl_i(19, RDX, 32, 1);
+    e_bfi(19, RAX, 0, 32, 1);
+    if (operation == 6) {
+        e_uxt(22, value, 4);
+        emit_div_zero_check(22, guest_pc, 0);
+        e_udiv(20, 19, 22, 1);
+    } else {
+        e_sxt(22, value, 4);
+        emit_div_zero_check(22, guest_pc, 1);
+        e_sdiv(20, 19, 22, 1);
+    }
+    e_msub(21, 20, 22, 19, 1);
+    emit_div_ovf_check(20, 23, 4, operation == 7, guest_pc, operation == 7);
+    e_mov_rr(RAX, 20, 0);
+    e_mov_rr(RDX, 21, 0);
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -3407,91 +3479,13 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            // ---- group3 (F6/F7): /0 test /2 not /3 neg /4 mul /5 imul /6 div /7 idiv ----
+            int wide_result = lower_group3_wide_muldiv(&I, gpc, next);
+            if (wide_result == TX_NEXT) {
+                gpc = next;
+                continue;
+            }
+            if (wide_result == TX_BREAK) break;
             if (op == 0xF6 || op == 0xF7) {
-                int k = I.reg & 7, w = op == 0xF6 ? 1 : I.opsize, mem;
-                if (w == 4 || w == 8) {
-                    if (k == 4 || k == 5) { // mul / imul (rdx:rax = rax * r/m)
-                        int rmv = rm_load(&I, next, w, &mem);
-                        if (w == 4) {
-                            // 32-bit: the operands are EAX and the 32-bit r/m. Mask (mul) or sign-extend
-                            // (imul) them to 32 bits FIRST so dirty upper halves of the host regs can't
-                            // corrupt the product; the 64-bit result lands in edx:eax. (Before this, the
-                            // full 64-bit regs were multiplied -> wrong product on a dirty upper half, and
-                            // the imul high half came out unsigned.)
-                            if (k == 4) {
-                                e_uxt(20, RAX, 4);
-                                e_uxt(21, rmv, 4);
-                            } else {
-                                e_sxt(20, RAX, 4);
-                                e_sxt(21, rmv, 4);
-                            }
-                            e_mul(19, 20, 21, 1);    // x19 = 64-bit product
-                            e_lsr_i(RDX, 19, 32, 1); // edx = product[63:32]
-                            e_mov_rr(RAX, 19, 0);    // eax = product[31:0]
-                            if (k == 4) {            // MUL: CF=OF = (high half != 0)
-                                e_lsr_i(22, 19, 32, 1);
-                                e_subi_s(23, 22, 0, 1);
-                                e_cset(21, 1 /*NE*/, 1);
-                            } else { // IMUL: CF=OF = (full product != sxt of low 32)
-                                e_sxt(22, 19, 4);
-                                e_rrr(A_SUBS, 23, 19, 22, 1, 0);
-                                e_cset(21, 1 /*NE*/, 1);
-                            }
-                            e_mul_set_oc(21);
-                            gpc = next;
-                            continue;
-                        }
-                        // w == 8: the operands are the full 64-bit registers, lo->rax hi->rdx.
-                        e_mul(19, RAX, rmv, 1);
-                        if (k == 4)
-                            e_umulh(RDX, RAX, rmv);
-                        else
-                            e_smulh(RDX, RAX, rmv);
-                        e_mov_rr(RAX, 19, 1);
-                        // x86 CF=OF: high half significant? (jc/jo/setc/seto consume these; e.g. glibc's
-                        // divide-by-constant idioms after a widening multiply). x19=full lo product, RDX=hi.
-                        if (k == 4) { // MUL: CF=OF = (high half != 0)
-                            e_mov_rr(22, RDX, 1);
-                            e_subi_s(23, 22, 0, 1);
-                            e_cset(21, 1 /*NE*/, 1);
-                        } else {                              // IMUL: CF=OF = (high half != sign-extension of low half)
-                            e_asr_i(22, 19, 63, 1);           // x22 = sign bits of low half
-                            e_rrr(A_SUBS, 23, RDX, 22, 1, 0); // cmp smulh(hi), sign(lo)
-                            e_cset(21, 1 /*NE*/, 1);
-                        }
-                        e_mul_set_oc(21);
-                        gpc = next;
-                        continue;
-                    }
-                    if (k == 6 || k == 7) { // div / idiv
-                        int rmv = rm_load(&I, next, w, &mem);
-                        if (w == 8) { // 64-bit: fast inline UDIV/SDIV for 64/64; C helper for true 128/64
-                            emit_div64_fast(next, gpc, k == 7, rmv);
-                            gpc = next;
-                            continue;
-                        }
-                        // 32-bit: dividend = edx:eax (64-bit), 32-bit divisor (zero/sign-extend), 32-bit quotient
-                        e_lsl_i(19, RDX, 32, 1);
-                        e_bfi(19, RAX, 0, 32, 1); // x19 = (edx<<32)|eax
-                        if (k == 6) {
-                            e_uxt(22, rmv, 4);
-                            emit_div_zero_check(22, gpc, 0); // #DE on /0
-                            e_udiv(20, 19, 22, 1);
-                        } // unsigned: zero-extend divisor
-                        else {
-                            e_sxt(22, rmv, 4);
-                            emit_div_zero_check(22, gpc, 1);
-                            e_sdiv(20, 19, 22, 1);
-                        } // signed: sign-extend divisor (edx:eax already 64-bit signed)
-                        e_msub(21, 20, 22, 19, 1);                          // rem = x19 - q*divisor
-                        emit_div_ovf_check(20, 23, 4, k == 7, gpc, k == 7); // EAX overflow -> #DE
-                        e_mov_rr(RAX, 20, 0);
-                        e_mov_rr(RDX, 21, 0); // eax=quot, edx=rem (32-bit)
-                        gpc = next;
-                        continue;
-                    }
-                }
                 report_unimpl(gpc, &I);
                 break;
             }
