@@ -647,6 +647,7 @@
           targetKey = "X86_64_PC_WINDOWS_GNU";
           windows = pkgs.pkgsCross.mingwW64;
           compiler = "${windows.stdenv.cc}/bin/${windows.stdenv.cc.targetPrefix}cc";
+          cxx = "${windows.stdenv.cc}/bin/${windows.stdenv.cc.targetPrefix}c++";
         in
         (rustPlatformFor pkgs).buildRustPackage {
           pname = "hl-native-windows-gnu-smoke";
@@ -673,6 +674,13 @@
               -Isrc/runtime/hl-native/src/native -Isrc/runtime/hl-native/src/native/include \
               -c src/runtime/hl-native/src/native/bridge/host.c -o host-bridge.obj
             file host-bridge.obj | grep -E 'Intel 80386|x86-64|PE|COFF'
+            ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
+              -DHL_SHARED -DHL_ABI_COMPILE_CONTRACT \
+              -Isrc/runtime/hl-native/src/native/include \
+              -c tests/native/host-abi/windows.c -o public-abi-c.obj
+            ${lib.escapeShellArg cxx} -std=c++20 -Wall -Wextra -Werror \
+              -DHL_SHARED -Isrc/runtime/hl-native/src/native/include \
+              -c tests/native/host-abi/windows.cpp -o public-abi-cxx.obj
             ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
               -DHL_ABI_FIXTURE_EXPORT \
               -Isrc/runtime/hl-native/src/native/include \
@@ -688,7 +696,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows Rust target check, PE/COFF host-bridge compile, and public-ABI DLL/import-library link; this is not MSVC SDK or runtime proof' \
+              'GNU Windows Rust target, C/C++ public-header layout/linkage/signature checks, host-bridge compile, and ABI fixture DLL/import-library link; this is not MSVC SDK or runtime proof' \
               > "$out/evidence"
           '';
         };

@@ -87,6 +87,18 @@ jobs:
           src/runtime/hl-native/src/native/bridge/host.c
           /Fo:$env:RUNNER_TEMP\hl-host-windows.obj
 
+      - name: Compile the public C and C++ ABI contracts
+        shell: pwsh
+        run: |
+          cl.exe /nologo /std:c11 /W4 /WX /c /DHL_SHARED /DHL_ABI_COMPILE_CONTRACT `
+            /Isrc/runtime/hl-native/src/native/include `
+            tests/native/host-abi/windows.c `
+            /Fo:$env:RUNNER_TEMP\hl-public-abi-c.obj
+          cl.exe /nologo /std:c++20 /EHsc /W4 /WX /c /DHL_SHARED `
+            /Isrc/runtime/hl-native/src/native/include `
+            tests/native/host-abi/windows.cpp `
+            /Fo:$env:RUNNER_TEMP\hl-public-abi-cxx.obj
+
       - name: Link and execute the public ABI fixture
         shell: pwsh
         run: |

@@ -35,6 +35,9 @@ This is the authoritative checklist for the C-primary production migration. Chec
   or runtime evidence. Darwin cross-compilation remains unavailable on Linux until
   an Apple SDK/framework-stub closure can be packaged lawfully and reproducibly;
   native macOS ARM64 CI is authoritative meanwhile.
+  Native Windows CI additionally compiles the public API as strict C and C++ and
+  pins Win64 layouts, function signatures, and C linkage. Its executed DLL is a
+  fixture only; it does not claim that the complete engine DLL links or runs.
 
 ## Host architecture
 
