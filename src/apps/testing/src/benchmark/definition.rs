@@ -77,6 +77,9 @@ impl Campaign {
         if self.arms.keys().map(String::as_str).collect::<Vec<_>>() != ["E", "I", "R"] {
             return Err("benchmark arms must be exactly E, I, and R".into());
         }
+        if !command_profiles_distinct(self.arms.values().map(|arm| &arm.command)) {
+            return Err("benchmark E, I, and R command profiles must be distinct".into());
+        }
         if !self.layouts.contains_key("plain") || !self.layouts.contains_key("sqlite") || self.layouts.len() != 2 {
             return Err("benchmark layouts must be exactly plain and sqlite".into());
         }
@@ -165,6 +168,11 @@ impl Campaign {
 
 fn smoke_binds_profile(command: &[String], smoke: &[String]) -> bool {
     !command.is_empty() && smoke.starts_with(command) && smoke.len() > command.len()
+}
+
+fn command_profiles_distinct<'a>(commands: impl IntoIterator<Item = &'a Vec<String>>) -> bool {
+    let commands = commands.into_iter().collect::<Vec<_>>();
+    commands.len() == 3 && commands.iter().collect::<BTreeSet<_>>().len() == 3
 }
 
 fn workload_judgments_covered(name: &str, workload: &Workload, layouts: &BTreeMap<String, Layout>) -> bool {
@@ -265,8 +273,8 @@ pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Artifact, Layout, Workload, guest_is_hashed, invariant_phases_valid, phase_names_valid, smoke_binds_profile,
-        verify_artifact, workload_judgments_covered,
+        Artifact, Layout, Workload, command_profiles_distinct, guest_is_hashed, invariant_phases_valid,
+        phase_names_valid, smoke_binds_profile, verify_artifact, workload_judgments_covered,
     };
     use crate::record::FramedIdentity;
     use std::fs;
@@ -304,6 +312,24 @@ mod tests {
             ]
         ));
         assert!(!smoke_binds_profile(&command, &command));
+    }
+
+    #[test]
+    fn engine_labels_cannot_alias_one_command_profile() {
+        let distinct = [
+            vec!["/external".into()],
+            vec!["/testing".into(), "--backend=integrated".into()],
+            vec!["/testing".into(), "--backend=retained".into()],
+        ];
+        assert!(command_profiles_distinct(distinct.iter()));
+
+        let aliased = [
+            vec!["/external".into()],
+            vec!["/testing".into(), "--backend=integrated".into()],
+            vec!["/testing".into(), "--backend=integrated".into()],
+        ];
+        assert!(!command_profiles_distinct(aliased.iter()));
+        assert!(!command_profiles_distinct(distinct[..2].iter()));
     }
 
     #[cfg(unix)]
