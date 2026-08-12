@@ -38,7 +38,7 @@ impl Networks {
         }
         if network.driver == NetworkDriver::Bridge {
             let path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{}", network.id));
-            match std::fs::remove_dir_all(path) {
+            match tokio::fs::remove_dir_all(path).await {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(Error::Runtime(error.to_string())),

@@ -12,6 +12,7 @@ use std::{
     process::Stdio,
     sync::Arc,
 };
+use tokio::io::AsyncWriteExt as _;
 
 const LEDGER_IDENTITY: &str = "husklet-product-ab-v2";
 const STAGED: &str = "HL_PRODUCT_AB_STAGED";
@@ -116,12 +117,13 @@ async fn stage(workspace: &Path, target: Target, relative: &Path) -> Result<(), 
     }
 
     let artifacts = workspace.join(relative);
-    std::fs::create_dir_all(
+    tokio::fs::create_dir_all(
         artifacts
             .parent()
             .ok_or("product A/B artifact directory has no parent")?,
-    )?;
-    std::fs::create_dir(&artifacts)?;
+    )
+    .await?;
+    tokio::fs::create_dir(&artifacts).await?;
     let source_runner = std::env::current_exe()?;
     let source_worker = source_runner
         .parent()
@@ -145,13 +147,17 @@ async fn stage(workspace: &Path, target: Target, relative: &Path) -> Result<(), 
         target.name()
     );
     let manifest_path = artifacts.join("manifest.tsv");
-    let mut manifest_file = OpenOptions::new().write(true).create_new(true).open(&manifest_path)?;
-    manifest_file.write_all(manifest.as_bytes())?;
-    manifest_file.sync_all()?;
-    std::fs::set_permissions(&staged_runner, std::fs::Permissions::from_mode(0o555))?;
-    std::fs::set_permissions(&staged_worker, std::fs::Permissions::from_mode(0o555))?;
-    std::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o444))?;
-    std::fs::set_permissions(&artifacts, std::fs::Permissions::from_mode(0o555))?;
+    let mut manifest_file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&manifest_path)
+        .await?;
+    manifest_file.write_all(manifest.as_bytes()).await?;
+    manifest_file.sync_all().await?;
+    tokio::fs::set_permissions(&staged_runner, std::fs::Permissions::from_mode(0o555)).await?;
+    tokio::fs::set_permissions(&staged_worker, std::fs::Permissions::from_mode(0o555)).await?;
+    tokio::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o444)).await?;
+    tokio::fs::set_permissions(&artifacts, std::fs::Permissions::from_mode(0o555)).await?;
     eprintln!(
         "product-ab: artifacts={} runner_sha256={} worker={} worker_sha256={}",
         artifacts.display(),
