@@ -3,6 +3,8 @@ use std::{collections::BTreeSet, fs, path::Path, process::Command};
 const RETAINED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/retained");
 const INTERPRETER_SHA256: &str = "040ace03601d91e7bd3871dd2cd8ca5382790131bbf683b1ca31110b362961ec";
 const DISPATCH_SHA256: &str = "fe66d0be5e2aa2dd9a3282e533338eb2f5c9b5ac343775ac4d19d60337f5184f";
+const X86_DECODE_SHA256: &str = "1ba08d646d28f03b32c0455801a111c4d2492480e346ba9cca8e80bdcafb88b0";
+const X86_DISPATCH_SHA256: &str = "f7d4804c5fb284d2f789835b58299529db7419f48f8e7291f7023b9eae73edc5";
 
 fn sha256(path: &Path) -> String {
     let output = Command::new("sha256sum").arg(path).output().expect("run sha256sum");
@@ -13,6 +15,37 @@ fn sha256(path: &Path) -> String {
         .next()
         .expect("sha256 digest")
         .to_owned()
+}
+
+#[test]
+fn imported_x86_closure_is_pinned_and_inventoried() {
+    let retained = Path::new(RETAINED);
+    assert_eq!(sha256(&retained.join("src/translator/guest/x86_64/decode.c")), X86_DECODE_SHA256);
+    assert_eq!(
+        sha256(&retained.join("src/translator/guest/x86_64/interp_dispatch.h")),
+        X86_DISPATCH_SHA256
+    );
+    let sources = fs::read_to_string(retained.join("RUNTIME_SOURCES.manifest")).expect("source manifest");
+    let sources = sources.lines().collect::<BTreeSet<_>>();
+    for path in [
+        "src/core/target/x86_64.c",
+        "src/linux_abi/x86.c",
+        "src/translator/guest/x86_64/decode.c",
+        "src/translator/guest/x86_64/interp_dispatch.h",
+        "src/translator/host/x86_64/asm.h",
+    ] {
+        assert!(sources.contains(path), "source inventory omitted {path}");
+    }
+    let units = fs::read_to_string(retained.join("COMPILED_TUS.tsv")).expect("TU manifest");
+    assert!(units.lines().any(|line| {
+        line.starts_with("target_x86_64_direct\t")
+            && line.contains("HL_TARGET_NAMESPACE=x86_64")
+            && line.contains("src/core/target/x86_64.c")
+    }));
+    assert!(units.lines().any(|line| {
+        line.starts_with("lifecycle_x86_64_direct\t")
+            && line.contains("HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_X86_64")
+    }));
 }
 
 #[test]
@@ -76,7 +109,7 @@ fn imported_interpreter_unity_compiles_and_links_unselected() {
         .arg("-DHL_A64_INTERPRETER_SMOKE=1");
     for line in units.lines().skip(1) {
         let columns = line.split('\t').collect::<Vec<_>>();
-        if columns.first() == Some(&"normal_archive") {
+        if columns.first() == Some(&"normal_archive") && !columns[2].contains("translator/guest/x86_64/") {
             command.arg(retained.join(columns[2]));
         }
     }

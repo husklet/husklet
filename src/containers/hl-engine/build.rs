@@ -68,15 +68,43 @@ fn main() {
         false,
     );
     compile_group("hl_c_backend_runtime", "normal_archive", &units, true, &target_os);
-    compile_group("hl_c_backend_target", "target_unity_direct", &units, false, &target_os);
-    compile_group("hl_c_backend_lifecycle", "lifecycle_direct", &units, false, &target_os);
+    compile_group(
+        "hl_c_backend_target_aarch64",
+        "target_aarch64_direct",
+        &units,
+        false,
+        &target_os,
+    );
+    compile_group(
+        "hl_c_backend_target_x86_64",
+        "target_x86_64_direct",
+        &units,
+        false,
+        &target_os,
+    );
+    compile_group(
+        "hl_c_backend_lifecycle_aarch64",
+        "lifecycle_aarch64_direct",
+        &units,
+        false,
+        &target_os,
+    );
+    compile_group(
+        "hl_c_backend_lifecycle_x86_64",
+        "lifecycle_x86_64_direct",
+        &units,
+        false,
+        &target_os,
+    );
 
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
     println!("cargo:rustc-link-search=native={}", output.display());
     for archive in [
         "hl_c_backend_shim",
-        "hl_c_backend_target",
-        "hl_c_backend_lifecycle",
+        "hl_c_backend_target_aarch64",
+        "hl_c_backend_target_x86_64",
+        "hl_c_backend_lifecycle_aarch64",
+        "hl_c_backend_lifecycle_x86_64",
         "hl_c_backend_runtime",
     ] {
         // Link directives propagate to binaries which depend on hl-engine;

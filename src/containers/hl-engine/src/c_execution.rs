@@ -429,6 +429,10 @@ unsafe extern "C" {
     fn hl_c_backend_destroy(backend: *mut c_void);
 }
 
+pub(crate) fn retained_c_link_anchor() -> usize {
+    hl_c_backend_run as *const () as usize
+}
+
 #[link(name = "util")]
 unsafe extern "C" {
     fn openpty(
@@ -761,7 +765,10 @@ impl CGuestExecutor {
         let image_plan = c_main_image_plan(isa, executable_host.as_ref(), executable_authority)?;
         let mut handle = std::ptr::null_mut();
         let retained_exit = Arc::new(hl_runtime::RetainedExitTrap);
-        let runtime_exit = plan.options.get("HL_C_NO_RUNTIME_EXIT").is_none();
+        // The retained trap callback currently exposes the AArch64 register ABI.
+        // x86-64 remains on the retained engine's internal Linux syscall path
+        // until its typed trap record is available.
+        let runtime_exit = isa == GuestIsa::Aarch64 && plan.options.get("HL_C_NO_RUNTIME_EXIT").is_none();
         let runtime_identity = runtime_exit && plan.options.get("HL_C_NO_RUNTIME_IDENTITY").is_none();
         let mut syscall_trap = Box::new(CSyscallTrapContext {
             trap: runtime_exit.then(|| Arc::clone(&retained_exit) as Arc<dyn hl_runtime::RuntimeSyscallTrap>),
@@ -1286,6 +1293,37 @@ mod tests {
         bytes
     }
 
+    fn exiting_x86_64(status: u16) -> Vec<u8> {
+        const LINK_BASE: u64 = 0x0040_0000;
+        const ENTRY_OFFSET: usize = 0x100;
+        let mut bytes = vec![0_u8; 4096];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4..7].copy_from_slice(&[2, 1, 1]);
+        put_u16(&mut bytes, 16, 2);
+        put_u16(&mut bytes, 18, hl_isa::GuestArchitecture::X86_64.elf_machine());
+        put_u32(&mut bytes, 20, 1);
+        put_u64(&mut bytes, 24, LINK_BASE + ENTRY_OFFSET as u64);
+        put_u64(&mut bytes, 32, 64);
+        put_u16(&mut bytes, 52, 64);
+        put_u16(&mut bytes, 54, 56);
+        put_u16(&mut bytes, 56, 1);
+        put_u32(&mut bytes, 64, 1);
+        put_u32(&mut bytes, 68, 5);
+        put_u64(&mut bytes, 80, LINK_BASE);
+        put_u64(&mut bytes, 88, LINK_BASE);
+        let image_length = bytes.len() as u64;
+        put_u64(&mut bytes, 96, image_length);
+        put_u64(&mut bytes, 104, image_length);
+        put_u64(&mut bytes, 112, 4096);
+        let code = [
+            0xb8, 60, 0, 0, 0, // mov eax, SYS_exit
+            0xbf, status as u8, 0, 0, 0, // mov edi, status
+            0x0f, 0x05, // syscall
+        ];
+        bytes[ENTRY_OFFSET..ENTRY_OFFSET + code.len()].copy_from_slice(&code);
+        bytes
+    }
+
     fn executable_plan(path: &std::path::Path) -> crate::launch_plan::RuntimeLaunchPlan {
         crate::launch_plan::RuntimeLaunchPlan {
             rootfs: None,
@@ -1329,6 +1367,18 @@ mod tests {
         let executor = CGuestExecutor::create_with_streams(GuestIsa::Aarch64, &plan, None, [0, 1, 2], None).unwrap();
         executor.start_plan(&plan).unwrap();
         assert_eq!(executor.exit().guest_status, 0);
+    }
+
+    #[test]
+    fn retained_x86_64_backend_runs_a_minimal_guest() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("guest-x86_64");
+        std::fs::write(&path, exiting_x86_64(37)).unwrap();
+        let plan = executable_plan(&path);
+        let executor =
+            CGuestExecutor::create_with_streams(GuestIsa::X86_64, &plan, None, [0, 1, 2], None).unwrap();
+        executor.start_plan(&plan).unwrap();
+        assert_eq!(executor.exit().guest_status, 37);
     }
 
     #[test]

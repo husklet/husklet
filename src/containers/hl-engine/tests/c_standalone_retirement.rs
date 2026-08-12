@@ -78,27 +78,29 @@ fn product_manifest_excludes_the_retired_standalone_path() {
             );
         }
     }
-    let target = manifest
-        .lines()
-        .find(|line| line.starts_with("target_unity_direct\t"))
-        .expect("target unity translation unit");
-    assert!(
-        target
-            .split('\t')
-            .nth(3)
-            .unwrap_or_default()
-            .split(';')
-            .any(|value| value == "HL_ENGINE_NO_STANDALONE=1"),
-        "target unity must compile out hl_engine_entry"
-    );
+    for group in ["target_aarch64_direct", "target_x86_64_direct"] {
+        let target = manifest
+            .lines()
+            .find(|line| line.starts_with(&format!("{group}\t")))
+            .unwrap_or_else(|| panic!("missing {group} translation unit"));
+        assert!(
+            target
+                .split('\t')
+                .nth(3)
+                .unwrap_or_default()
+                .split(';')
+                .any(|value| value == "HL_ENGINE_NO_STANDALONE=1"),
+            "{group} must compile out hl_engine_entry"
+        );
+    }
 }
 
 #[test]
 #[cfg(hl_retained_c)]
 fn linked_test_binary_excludes_retired_standalone_symbols() {
-    // Referencing the library keeps its whole-archive native link directives in
-    // this integration test, making the symbol assertion non-vacuous.
-    drop(hl_engine::options::Options::default());
+    // A direct native reference keeps the retained whole-archive directives in
+    // this integration test. A Rust-only hl-engine type is not a link anchor.
+    std::hint::black_box(hl_engine::retained_c_link_anchor());
     let executable = std::env::current_exe().unwrap();
     let output = Command::new("nm").arg(&executable).output().expect("run nm");
     assert!(output.status.success(), "nm failed for {}", executable.display());

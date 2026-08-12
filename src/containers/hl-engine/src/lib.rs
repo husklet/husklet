@@ -68,6 +68,11 @@ pub mod native_launcher {
 }
 #[cfg(hl_retained_c)]
 mod c_execution;
+#[cfg(hl_retained_c)]
+#[doc(hidden)]
+pub fn retained_c_link_anchor() -> usize {
+    c_execution::retained_c_link_anchor()
+}
 pub mod options;
 pub mod program;
 #[cfg(test)]
