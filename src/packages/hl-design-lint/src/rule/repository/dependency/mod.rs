@@ -163,34 +163,7 @@ impl Graph {
     fn direction_findings(&self, rule: &'static str) -> Vec<Finding> {
         let mut findings = Vec::new();
         for package in self.packages.values() {
-            if let Some(maximum) = self.policy.package_budget(&package.name) {
-                let targets = package
-                    .dependencies
-                    .iter()
-                    .filter_map(|dependency| self.target(dependency).map(|target| target.name.as_str()))
-                    .collect::<BTreeSet<_>>();
-                if targets.len() > maximum {
-                    let mut finding = Finding::error(
-                        rule,
-                        format!("{} local dependency budget", package.name),
-                        location::package(package),
-                    );
-                    finding.message = format!(
-                        "`{}` has {} distinct local dependencies, exceeding its configured maximum of {maximum}",
-                        package.name,
-                        targets.len(),
-                    );
-                    finding.help = "remove dependencies, invert narrow capabilities, or change the repository-owned package budget after architectural review".into();
-                    let mut review = Review::error();
-                    review.metadata.extend([
-                        ("Maximum local dependencies".into(), maximum.to_string()),
-                        ("Observed local dependencies".into(), targets.len().to_string()),
-                    ]);
-                    review.dependencies.extend(targets.into_iter().map(str::to_owned));
-                    finding.review = Some(review);
-                    findings.push(finding);
-                }
-            }
+            findings.extend(self.budget_finding(package, rule));
             for dependency in &package.dependencies {
                 let Some(target) = self.target(dependency) else {
                     continue;
@@ -267,6 +240,37 @@ impl Graph {
             }
         }
         findings
+    }
+
+    fn budget_finding(&self, package: &Package, rule: &'static str) -> Option<Finding> {
+        let maximum = self.policy.package_budget(&package.name)?;
+        let targets = package
+            .dependencies
+            .iter()
+            .filter_map(|dependency| self.target(dependency).map(|target| target.name.as_str()))
+            .collect::<BTreeSet<_>>();
+        if targets.len() <= maximum {
+            return None;
+        }
+        let mut finding = Finding::error(
+            rule,
+            format!("{} local dependency budget", package.name),
+            location::package(package),
+        );
+        finding.message = format!(
+            "`{}` has {} distinct local dependencies, exceeding its configured maximum of {maximum}",
+            package.name,
+            targets.len(),
+        );
+        finding.help = "remove dependencies, invert narrow capabilities, or change the repository-owned package budget after architectural review".into();
+        let mut review = Review::error();
+        review.metadata.extend([
+            ("Maximum local dependencies".into(), maximum.to_string()),
+            ("Observed local dependencies".into(), targets.len().to_string()),
+        ]);
+        review.dependencies.extend(targets.into_iter().map(str::to_owned));
+        finding.review = Some(review);
+        Some(finding)
     }
 
     fn cycle_findings(&self, rule: &'static str) -> Vec<Finding> {
