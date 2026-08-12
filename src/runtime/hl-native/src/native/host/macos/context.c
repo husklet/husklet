@@ -5,16 +5,16 @@ static const hl_host_memory_services memory = {
     hl_macos_unmap_range,      hl_macos_map_anonymous,  hl_macos_discard,      hl_macos_repair_signal_page,
     hl_macos_unmap_address,    hl_macos_wire_range,     hl_macos_unwire_range, hl_macos_protect_address,
     hl_macos_sync_address};
-static const hl_host_clock_services clock = {.abi = HL_HOST_CLOCK_ABI,
-                                             .size = sizeof(clock),
-                                             .monotonic_ns = hl_macos_monotonic,
-                                             .realtime_ns = hl_macos_realtime,
-                                             .raw_monotonic_ns = hl_macos_raw_monotonic,
-                                             .process_cpu_ns = hl_macos_process_cpu,
-                                             .thread_cpu_ns = hl_macos_thread_cpu,
-                                             .sleep_until = hl_macos_clock_sleep_until,
-                                             .architectural_counter_hz = hl_macos_architectural_counter,
-                                             .backoff_ns = hl_macos_backoff};
+static const hl_host_clock_services clock_services = {.abi = HL_HOST_CLOCK_ABI,
+                                                      .size = sizeof(clock_services),
+                                                      .monotonic_ns = hl_macos_monotonic,
+                                                      .realtime_ns = hl_macos_realtime,
+                                                      .raw_monotonic_ns = hl_macos_raw_monotonic,
+                                                      .process_cpu_ns = hl_macos_process_cpu,
+                                                      .thread_cpu_ns = hl_macos_thread_cpu,
+                                                      .sleep_until = hl_macos_clock_sleep_until,
+                                                      .architectural_counter_hz = hl_macos_architectural_counter,
+                                                      .backoff_ns = hl_macos_backoff};
 static const hl_host_log_services log = {HL_HOST_LOG_ABI, sizeof(log), hl_macos_log};
 static const hl_host_file_services file = {HL_HOST_FILE_ABI,
                                            sizeof(file),
@@ -69,10 +69,10 @@ static const hl_host_event_services event = {
 static const hl_host_shared_memory_services shared_memory = {HL_HOST_SHARED_MEMORY_ABI, sizeof(shared_memory),
                                                              hl_macos_shared_create,    hl_macos_shared_open,
                                                              hl_macos_shared_resize,    hl_macos_file_close};
-static const hl_host_sync_services sync = {HL_HOST_SYNC_ABI,      sizeof(sync),           hl_macos_mutex_create,
-                                           hl_macos_mutex_lock,   hl_macos_mutex_unlock,  hl_macos_mutex_close,
-                                           hl_macos_fork_prepare, hl_macos_fork_complete, hl_macos_fork_child,
-                                           hl_macos_park,         hl_macos_unpark,        hl_macos_interrupt_park};
+static const hl_host_sync_services sync_services = {
+    HL_HOST_SYNC_ABI,      sizeof(sync_services), hl_macos_mutex_create, hl_macos_mutex_lock,
+    hl_macos_mutex_unlock, hl_macos_mutex_close,  hl_macos_fork_prepare, hl_macos_fork_complete,
+    hl_macos_fork_child,   hl_macos_park,         hl_macos_unpark,       hl_macos_interrupt_park};
 static const hl_host_terminal_services terminal = {HL_HOST_TERMINAL_ABI,       sizeof(terminal),
                                                    hl_macos_terminal_probe,    hl_macos_terminal_get_mode,
                                                    hl_macos_terminal_set_mode, hl_macos_terminal_get_size,
@@ -205,13 +205,13 @@ hl_status hl_host_macos_create(hl_host_macos **out_host, hl_host_services *out_s
                                  HL_HOST_CAP_POSIX_ATTACHMENT | HL_HOST_CAP_TERMINAL;
     out_services->context = host;
     out_services->memory = &memory;
-    out_services->clock = &clock;
+    out_services->clock = &clock_services;
     out_services->log = &log;
     out_services->file = &file;
     out_services->process = &process;
     out_services->event = &event;
     out_services->shared_memory = &shared_memory;
-    out_services->sync = &sync;
+    out_services->sync = &sync_services;
     out_services->counter = &counter;
     out_services->transfer = &transfer;
     out_services->directory = &directory;

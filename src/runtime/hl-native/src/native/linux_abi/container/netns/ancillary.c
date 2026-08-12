@@ -828,8 +828,7 @@ static int cmsg_export_visible(struct cmsg_export *export, const int *fds, int c
         }
         export->descriptors[export->count++] = native;
         (void)ofd_identity_ensure(fds[index]);
-        if (engine_metadata && fds[index] >= 0 && fds[index] < HL_NFD && g_seq_ref[fds[index]] &&
-            g_cmsg_nseq < 253) {
+        if (engine_metadata && fds[index] >= 0 && fds[index] < HL_NFD && g_seq_ref[fds[index]] && g_cmsg_nseq < 253) {
             uint32_t slot = g_seq_ref[fds[index]] - 1;
             uint32_t end = g_seq_end[fds[index]];
             __atomic_add_fetch(&g_seq_refs[slot].refs[end], 1, __ATOMIC_ACQ_REL);
@@ -1127,6 +1126,7 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap, size_t 
         *(uint64_t *)(g + go) = (uint64_t)(LX_CMSGHDR + dlen); // Linux cmsg_len
         *(int *)(g + go + 8) = cmsg_level_m2l(c->cmsg_level);
         *(int *)(g + go + 12) = c->cmsg_type;
+#if defined(SCM_CREDENTIALS)
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS && dlen >= 12) {
             const uint32_t *host = (const uint32_t *)CMSG_DATA(c);
             int guest_pid = hl_linux_pidmap_guest(&g_pidmap, (int32_t)host[0]);
@@ -1135,7 +1135,9 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap, size_t 
             *(uint32_t *)(g + go + LX_CMSGHDR + 4) = (uint32_t)cuid();
             *(uint32_t *)(g + go + LX_CMSGHDR + 8) = (uint32_t)cgid();
             if (dlen > 12) memcpy(g + go + LX_CMSGHDR + 12, CMSG_DATA(c) + 12, dlen - 12);
-        } else {
+        } else
+#endif
+        {
             memcpy(g + go + LX_CMSGHDR, CMSG_DATA(c), dlen);
         }
         go += need;

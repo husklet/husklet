@@ -388,7 +388,7 @@ static int svc_read_inotify(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
             ssize_t copied = guest_copy_to(a1, out, off);
             G_RET(c) = copied == (ssize_t)off ? (uint64_t)off : (uint64_t)(-EFAULT);
             free(out);
-            break;
+            return 1;
 #endif
     return 1;
 }

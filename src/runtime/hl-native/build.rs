@@ -275,6 +275,14 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         .flag_if_supported("-fvisibility=hidden")
         .flag_if_supported("-fno-function-sections")
         .flag_if_supported("-fno-data-sections");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        // LLVM's archiver defaults to the GNU archive dialect even on Darwin.
+        // Apple ld can inspect its members but will not force-load it reliably.
+        // The development shell's AR names a Linux guest cross-archiver, so do
+        // not let that guest-build setting escape into this host artifact.
+        build.archiver("/usr/bin/ar");
+        build.ar_flag("--format=darwin");
+    }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         build.include("src/native/toolchain/msvc-posix/include");
     }
