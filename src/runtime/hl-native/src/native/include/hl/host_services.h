@@ -532,6 +532,19 @@ typedef struct hl_host_memory_services {
     hl_host_result (*sync_address)(void *context, uint64_t address, uint64_t size, uint32_t flags);
 } hl_host_memory_services;
 
+/* Versioned callback tables are prefix ABIs. Pin every accepted boundary so adding, reordering, or
+ * compiling a function pointer with a different representation cannot silently reinterpret a provider. */
+HL_STATIC_ASSERT(offsetof(hl_host_memory_services, repair_signal_page) +
+                         sizeof(((hl_host_memory_services *)0)->repair_signal_page) ==
+                     120,
+                 "host memory ABI 6 prefix drifted");
+HL_STATIC_ASSERT(offsetof(hl_host_memory_services, unwire_range) +
+                         sizeof(((hl_host_memory_services *)0)->unwire_range) ==
+                     144,
+                 "host memory ABI 7 prefix drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_memory_services) == 160, "host memory ABI 8 table drifted");
+HL_STATIC_ASSERT(HL_ALIGNOF(hl_host_memory_services) == 8, "host memory callback alignment drifted");
+
 typedef struct hl_host_clock_services {
     HL_ABI_HEADER;
     hl_host_result (*monotonic_ns)(void *context);
@@ -903,6 +916,13 @@ typedef struct hl_host_network_services {
     hl_host_result (*duplicate)(void *context, hl_host_handle socket);
 } hl_host_network_services;
 
+HL_STATIC_ASSERT(offsetof(hl_host_network_services, close) +
+                         sizeof(((hl_host_network_services *)0)->close) ==
+                     56,
+                 "host network ABI 1 prefix drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_network_services) == 168, "host network ABI 2 table drifted");
+HL_STATIC_ASSERT(HL_ALIGNOF(hl_host_network_services) == 8, "host network callback alignment drifted");
+
 typedef struct hl_host_shared_memory_services {
     HL_ABI_HEADER;
     /* create returns a reopen identity in detail; it remains valid while the source handle is live. */
@@ -1078,6 +1098,11 @@ typedef struct hl_host_sync_services {
     hl_host_result (*interrupt_park)(void *context, uint64_t waiter);
 } hl_host_sync_services;
 
+HL_STATIC_ASSERT(offsetof(hl_host_sync_services, fork_child) + sizeof(((hl_host_sync_services *)0)->fork_child) == 64,
+                 "host sync ABI 2 prefix drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_sync_services) == 88, "host sync ABI 3 table drifted");
+HL_STATIC_ASSERT(HL_ALIGNOF(hl_host_sync_services) == 8, "host sync callback alignment drifted");
+
 enum {
     HL_HOST_WATCH_SIZE = 1u << 0,
     HL_HOST_WATCH_DATA = 1u << 1,
@@ -1235,6 +1260,25 @@ typedef struct hl_host_services {
     const hl_host_posix_attachment_services *posix_attachment;
     const hl_host_terminal_services *terminal;
 } hl_host_services;
+
+HL_STATIC_ASSERT(sizeof(hl_host_clock_services) == 72, "host clock callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_log_services) == 16, "host log callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_file_services) == 336, "host file callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_process_services) == 48, "host process callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_event_services) == 64, "host event callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_shared_memory_services) == 40, "host shared-memory callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_counter_services) == 88, "host counter callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_transfer_services) == 48, "host transfer callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_directory_services) == 64, "host directory callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_watch_services) == 40, "host watch callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_stream_services) == 72, "host stream callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_terminal_services) == 72, "host terminal callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_posix_attachment_services) == 32,
+                 "host POSIX attachment callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_services) == 152, "top-level host service table drifted");
+HL_STATIC_ASSERT(offsetof(hl_host_services, context) == 16, "host service context ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_host_services, terminal) == 144, "host service terminal ABI drifted");
+HL_STATIC_ASSERT(HL_ALIGNOF(hl_host_services) == 8, "host service table alignment drifted");
 
 HL_API hl_status hl_host_services_validate(const hl_host_services *services, uint64_t required_capabilities);
 

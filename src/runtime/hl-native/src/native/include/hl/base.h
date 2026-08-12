@@ -20,10 +20,12 @@
 #define HL_EXTERN_C_BEGIN extern "C" {
 #define HL_EXTERN_C_END }
 #define HL_STATIC_ASSERT(condition, message) static_assert(condition, message)
+#define HL_ALIGNOF(type) alignof(type)
 #else
 #define HL_EXTERN_C_BEGIN
 #define HL_EXTERN_C_END
 #define HL_STATIC_ASSERT(condition, message) _Static_assert(condition, message)
+#define HL_ALIGNOF(type) _Alignof(type)
 #endif
 
 #define HL_ARRAY_COUNT(value) (sizeof(value) / sizeof((value)[0]))
@@ -67,5 +69,6 @@ typedef enum hl_status {
 } hl_status;
 
 HL_STATIC_ASSERT(sizeof(hl_status) == sizeof(int32_t), "status ABI requires a 32-bit enum");
+HL_STATIC_ASSERT(HL_ALIGNOF(hl_status) == HL_ALIGNOF(int32_t), "status ABI alignment drifted");
 
 #endif

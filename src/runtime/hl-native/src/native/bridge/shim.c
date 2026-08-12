@@ -108,7 +108,7 @@ HL_API int32_t hl_c_backend_leak_check_nonvacuity(void) {
 #endif
 }
 
-HL_API int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
+static int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
     char broker_text[32];
     char trigger_text[32];
     if (broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
@@ -119,11 +119,11 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
 
 extern int hl_ckpt_interrupt_signal(void);
 
-HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(void) {
+static int32_t hl_c_backend_checkpoint_interrupt_signal(void) {
     return hl_ckpt_interrupt_signal();
 }
 
-HL_API int32_t hl_c_backend_private_descriptor_add(int32_t descriptor) {
+static int32_t hl_c_backend_private_descriptor_add(int32_t descriptor) {
     return hl_host_process_fd_private_add(descriptor) == 0 ? HL_STATUS_OK : HL_STATUS_PLATFORM_FAILURE;
 }
 
