@@ -441,6 +441,9 @@ impl Ledger {
         self.rows.contains_key(key)
     }
     pub fn append(&mut self, row: &Row) -> Result<(), Error> {
+        if !self.planned.contains(&row.key) || self.rows.contains_key(&row.key) {
+            return Err("benchmark ledger rejected a foreign or duplicate row".into());
+        }
         serde_json::to_writer(&mut self.writer, row)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()?;
@@ -470,6 +473,56 @@ impl Ledger {
         fs::write(self.directory.join("report.tsv"), &report.text)?;
         fs::write(self.directory.join("verdict.txt"), format!("{}\n", report.verdict))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod ledger_tests {
+    use super::{Ledger, Phase, Row};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs::{self, File},
+        io::BufWriter,
+    };
+
+    fn row(key: &str) -> Row {
+        Row {
+            key: key.into(),
+            workload: "malloc".into(),
+            layout: "plain".into(),
+            cell: "EE".into(),
+            round: 0,
+            position: 0,
+            arm: "E".into(),
+            output: "same".into(),
+            phases: [(
+                "malloc".into(),
+                Phase {
+                    us: 1,
+                    ok: "same".into(),
+                },
+            )]
+            .into(),
+            host_load: "0.1".into(),
+        }
+    }
+
+    #[test]
+    fn append_rejects_duplicate_and_foreign_rows_before_durable_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let raw = directory.path().join("raw.jsonl");
+        let mut ledger = Ledger {
+            directory: directory.path().into(),
+            writer: BufWriter::new(File::create(&raw).unwrap()),
+            rows: BTreeMap::new(),
+            planned: BTreeSet::from(["planned".into()]),
+        };
+        ledger.append(&row("planned")).unwrap();
+        let durable = fs::metadata(&raw).unwrap().len();
+        assert!(ledger.append(&row("planned")).is_err());
+        assert!(ledger.append(&row("foreign")).is_err());
+        assert_eq!(fs::metadata(&raw).unwrap().len(), durable);
+        assert_eq!(ledger.rows.keys().map(String::as_str).collect::<Vec<_>>(), ["planned"]);
     }
 }
 
