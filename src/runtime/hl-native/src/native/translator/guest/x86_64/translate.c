@@ -5115,6 +5115,52 @@ static int lower_two_byte_boundary(const struct insn *instruction, uint64_t gues
     return TX_FALL;
 }
 
+// Owns the x87 run boundary as well as opcode dispatch. Every memory form
+// materializes the shadow stack before a potentially faulting access or C exit.
+static int lower_x87_family(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    if (instruction->op < 0xD8 || instruction->op > 0xDF) return TX_FALL;
+    mark_vdirty();
+    int reg = instruction->reg & 7;
+    int rm = instruction->rm_reg & 7;
+    if (instruction->is_mem) {
+        hl_x86_x87_materialize();
+        emit_ea(instruction, next);
+        int bytes = (instruction->op == 0xD8 || instruction->op == 0xDA) ? 4
+                    : instruction->op == 0xDC                              ? 8
+                    : instruction->op == 0xDE                              ? 2
+                                                                           : 0;
+        if (instruction->op == 0xD9)
+            bytes = reg == 6 || reg == 4 ? 28 : (reg == 5 || reg == 7 ? 2 : 4);
+        else if (instruction->op == 0xDD)
+            bytes = reg == 7 ? 2 : (reg == 4 || reg == 6 ? 108 : 8);
+        else if (instruction->op == 0xDB)
+            bytes = reg == 5 || reg == 7 ? 10 : 4;
+        else if (instruction->op == 0xDF)
+            bytes = reg == 5 || reg == 7 ? 8 : 2;
+        int store = (instruction->op == 0xD9 && (reg == 2 || reg == 3 || reg == 6 || reg == 7)) ||
+                    (instruction->op == 0xDD && (reg == 2 || reg == 3 || reg == 6 || reg == 7)) ||
+                    (instruction->op == 0xDB && (reg == 2 || reg == 3 || reg == 7)) ||
+                    (instruction->op == 0xDF && (reg == 3 || reg == 7));
+        if (bytes)
+            emit_memory_guard(17, (uint64_t)bytes, guest_pc, store ? X86_SOFT_WRITE : X86_SOFT_READ);
+        if (store && emit_soft_memory_active()) {
+            emit_soft_store_commit((uint64_t)bytes);
+            e_ldr(17, 28, OFF_BUS_EA);
+        }
+        e_mov_rr(19, 17, 1);
+        int result = lower_x87_memory_state(instruction, guest_pc, next, reg);
+        if (result != TX_FALL) return result;
+        result = lower_x87_memory_arithmetic(instruction, guest_pc, reg);
+        return result == TX_FALL ? TX_NEXT : result;
+    }
+    int result = lower_x87_d9_register(instruction, guest_pc, next, reg, rm);
+    if (result != TX_FALL) return result;
+    result = lower_x87_register_arithmetic(instruction, guest_pc, reg, rm);
+    if (result != TX_FALL) return result;
+    result = lower_x87_register_control(instruction, guest_pc, reg, rm);
+    return result == TX_FALL ? TX_NEXT : result;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -5385,95 +5431,12 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             if (flag_stack_result == TX_BREAK) break;
-            // ===== x87 FPU (D8-DF): double-precision stack emulation =====
-            if (op >= 0xD8 && op <= 0xDF) {
-                mark_vdirty(); // x87 lowering touches the vector file -> mark cpu->V dirty
-                int reg = I.reg & 7, rm = I.rm_reg & 7;
-#define FAd(d, n, m) emit32(0x1E602800u | ((m) << 16) | ((n) << 5) | (d)) /* fadd d */
-#define FSd(d, n, m) emit32(0x1E603800u | ((m) << 16) | ((n) << 5) | (d)) /* fsub d */
-#define FMd(d, n, m) emit32(0x1E600800u | ((m) << 16) | ((n) << 5) | (d)) /* fmul d */
-#define FDd(d, n, m) emit32(0x1E601800u | ((m) << 16) | ((n) << 5) | (d)) /* fdiv d */
-// fucomi/fcomi/fucomip/fcomip set integer EFLAGS exactly like COMISD (ZF/PF/CF, unordered -> all 1), so
-// use the same unordered+PF fixup (this also writes the real PF lane the setp/setnp consumers read).
-#define FCMPd(n, m, sig)                                                                                               \
-    do {                                                                                                               \
-        emit32(0x1E602000u | ((sig) ? 0x10u : 0u) | ((m) << 16) | ((n) << 5));                                         \
-        e_nzcv_save_fcmp();                                                                                            \
-    } while (0)
-                if (I.is_mem) {
-                    // x87 mem forms do a faulting guest load/store and the m80 forms exit to a C
-                    // helper -- both can escape, so make cpu->fptop reflect the (pre-op) shadow first.
-                    hl_x86_x87_materialize();
-                    emit_ea(&I, next);
-                    int x87_bytes = (op == 0xD8 || op == 0xDA) ? 4 : op == 0xDC ? 8 : op == 0xDE ? 2 : 0;
-                    if (op == 0xD9)
-                        x87_bytes = reg == 6 || reg == 4 ? 28 : (reg == 5 || reg == 7 ? 2 : 4);
-                    else if (op == 0xDD)
-                        x87_bytes = reg == 7 ? 2 : (reg == 4 || reg == 6 ? 108 : 8); // FRSTOR/FNSAVE m108
-                    else if (op == 0xDB)
-                        x87_bytes = reg == 5 || reg == 7 ? 10 : 4;
-                    else if (op == 0xDF)
-                        x87_bytes = reg == 5 || reg == 7 ? 8 : 2;
-                    int x87_store = (op == 0xD9 && (reg == 2 || reg == 3 || reg == 6 || reg == 7)) ||
-                                    (op == 0xDD && (reg == 2 || reg == 3 || reg == 6 || reg == 7)) ||
-                                    (op == 0xDB && (reg == 2 || reg == 3 || reg == 7)) ||
-                                    (op == 0xDF && (reg == 3 || reg == 7));
-                    if (x87_bytes)
-                        emit_memory_guard(17, (uint64_t)x87_bytes, gpc, x87_store ? X86_SOFT_WRITE : X86_SOFT_READ);
-                    /*
-                     * C-helper stores consume the translated host EA after
-                     * leaving the block.  Conservatively retire executable
-                     * aliases before either inline or helper stores; reload
-                     * the canonical EA because the callback spill restores
-                     * guest x17.
-                     */
-                    if (x87_store && emit_soft_memory_active()) {
-                        emit_soft_store_commit((uint64_t)x87_bytes);
-                        e_ldr(17, 28, OFF_BUS_EA);
-                    }
-                    e_mov_rr(19, 17, 1); // x19 = EA (helpers clobber x17)
-                    int x87_memory_result = lower_x87_memory_state(&I, gpc, next, reg);
-                    if (x87_memory_result == TX_NEXT) {
-                        gpc = next;
-                        continue;
-                    }
-                    if (x87_memory_result == TX_BREAK) break;
-                    int memory_arithmetic_result = lower_x87_memory_arithmetic(&I, gpc, reg);
-                    if (memory_arithmetic_result == TX_NEXT) {
-                        gpc = next;
-                        continue;
-                    }
-                    if (memory_arithmetic_result == TX_BREAK) break;
-                    gpc = next;
-                    continue;
-                }
-                // ---- register forms (mod=3) ----
-                int d9_result = lower_x87_d9_register(&I, gpc, next, reg, rm);
-                if (d9_result == TX_NEXT) {
-                    gpc = next;
-                    continue;
-                }
-                if (d9_result == TX_BREAK) break;
-                int register_arithmetic_result = lower_x87_register_arithmetic(&I, gpc, reg, rm);
-                if (register_arithmetic_result == TX_NEXT) {
-                    gpc = next;
-                    continue;
-                }
-                if (register_arithmetic_result == TX_BREAK) break;
-                int register_control_result = lower_x87_register_control(&I, gpc, reg, rm);
-                if (register_control_result == TX_NEXT) {
-                    gpc = next;
-                    continue;
-                }
-                if (register_control_result == TX_BREAK) break;
-#undef FAd
-#undef FSd
-#undef FMd
-#undef FDd
-#undef FCMPd
+            int x87_result = lower_x87_family(&I, gpc, next);
+            if (x87_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
+            if (x87_result == TX_BREAK) break;
             int accumulator_result = lower_accumulator_legacy(&I, sf);
             if (accumulator_result == TX_NEXT) {
                 gpc = next;
@@ -5492,8 +5455,7 @@ static void *translate_block(uint64_t gpc) {
             // ===== SSE / SSE2 (guest xmm0..15 == host v0..v15) =====
             // mandatory prefix selects the variant: 66=packed-int/double, F3=scalar-single,
             // F2=scalar-double, none=packed-single. reg/rm fields index xmm directly.
-            {
-                mark_vdirty(); // SSE lowering writes guest xmm (v0..v15) -> mark cpu->V dirty
+            mark_vdirty(); // SSE lowering writes guest xmm (v0..v15) -> mark cpu->V dirty
                 int handled = 1;
                 int vd = I.reg, vm = I.rm_reg;
                 // MMX = the no-prefix form of an integer-SIMD opcode: the SAME operation at 64 bits, on
@@ -6483,7 +6445,6 @@ static void *translate_block(uint64_t gpc) {
                     gpc = next;
                     continue;
                 }
-            }
             int system_query_result = lower_system_query(&I, next);
             if (system_query_result == TX_NEXT) {
                 gpc = next;
