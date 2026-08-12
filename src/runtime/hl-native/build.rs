@@ -24,6 +24,8 @@ fn main() {
     };
     if !target.supported() {
         println!("cargo:supported=0");
+        println!("cargo:rustc-env=HL_NATIVE_LIBRARY_NAME={}", artifact::filename(&target_os));
+        println!("cargo:rustc-env=HL_NATIVE_LIBRARY_PATH={}", artifact::filename(&target_os));
         println!("cargo:warning=native C engine planned but not yet verified for {target_arch}-{target_os}");
         return;
     }
@@ -32,7 +34,7 @@ fn main() {
     println!("cargo:host_arch={}", target.arch.cfg_name());
 
     println!("cargo:rerun-if-changed={NATIVE_ROOT}");
-    let runtime_sources = discover_runtime_roots(&target_os);
+    let runtime_sources = discover_runtime_roots(&target_os, &target_arch);
     let runtime_source_refs = runtime_sources.iter().map(String::as_str).collect::<Vec<_>>();
 
     let platform_definition = if target_os == "macos" {
@@ -130,7 +132,7 @@ fn main() {
     }
 }
 
-fn discover_runtime_roots(target_os: &str) -> Vec<String> {
+fn discover_runtime_roots(target_os: &str, target_arch: &str) -> Vec<String> {
     let root = Path::new(NATIVE_ROOT);
     let mut sources = BTreeSet::new();
     collect_c_sources(root, &mut sources);
@@ -152,6 +154,12 @@ fn discover_runtime_roots(target_os: &str) -> Vec<String> {
         .filter(|source| !included.contains(source))
         .filter(|source| !special.contains(&source.to_string_lossy().as_ref()))
         .filter(|source| platform::source_matches(target_os, &source.to_string_lossy()))
+        .filter(|source| {
+            target_arch == "aarch64"
+                || !source
+                    .to_string_lossy()
+                    .contains("/translator/guest/x86_64/lower/")
+        })
         .map(|source| source.to_string_lossy().into_owned())
         .collect()
 }

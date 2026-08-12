@@ -445,7 +445,17 @@ static int translit_enabled(void) {
 
 #else
 // interp.c defines the same names emit.c/translate.c/cache.c do, so everything below is host-identical.
+static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length);
 #include "../../translator/guest/x86_64/interp.c"
+
+// The interpreter does not protect translated source pages because it emits
+// no translated code.  Preserve the shared store-publication call site while
+// making its translation-invalidation predicate explicitly empty.
+static int smc_tracked_written(uint64_t address, uint64_t size) {
+    (void)address;
+    (void)size;
+    return 0;
+}
 #endif
 #include "../../linux_abi/thread.c" // SHARED: clone->pthread, per-thread cpu, futex
 

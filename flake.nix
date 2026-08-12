@@ -44,6 +44,7 @@
           targets = [
             "aarch64-unknown-linux-gnu"
             "x86_64-unknown-linux-gnu"
+            "x86_64-pc-windows-gnu"
           ];
         };
 
@@ -347,6 +348,101 @@
             HL_ALPINE_ARCHIVE = alpine.archive;
           }
         );
+
+      linuxHostCompileFor =
+        pkgs: architecture:
+        let
+          native =
+            pkgs.stdenv.hostPlatform.isLinux && pkgs.stdenv.hostPlatform.parsed.cpu.name == architecture;
+          crossAttr = if architecture == "aarch64" then "aarch64-multiplatform" else "gnu64";
+          targetPkgs = if native then pkgs else pkgs.pkgsCross.${crossAttr};
+          compiler =
+            if native then
+              "${pkgs.stdenv.cc}/bin/cc"
+            else
+              "${targetPkgs.stdenv.cc}/bin/${targetPkgs.stdenv.cc.targetPrefix}cc";
+          target = "${architecture}-unknown-linux-gnu";
+          targetKey = lib.toUpper (lib.replaceStrings [ "-" ] [ "_" ] target);
+        in
+        (rustPlatformFor pkgs).buildRustPackage {
+          pname = "hl-native-${architecture}-linux-compile";
+          inherit version;
+          src = workspaceSource;
+          cargoLock.lockFile = ./Cargo.lock;
+          strictDeps = true;
+          nativeBuildInputs = [
+            (rustFor pkgs)
+            targetPkgs.stdenv.cc
+          ];
+          doCheck = false;
+          buildPhase = ''
+            runHook preBuild
+            export CC_${lib.replaceStrings [ "-" ] [ "_" ] target}=${lib.escapeShellArg compiler}
+            export CARGO_TARGET_${targetKey}_LINKER=${lib.escapeShellArg compiler}
+            cargo build --locked --offline --target ${target} -p hl-native -p hl-engine
+            test -f target/${target}/debug/libhl_native.rlib
+            native_libraries=(target/${target}/debug/build/hl-native-*/out/libhl_native_engine.so)
+            test "''${#native_libraries[@]}" -eq 1
+            test -s "''${native_libraries[0]}"
+            runHook postBuild
+          '';
+          installPhase = ''
+            mkdir -p "$out"
+            printf '%s\n' ${lib.escapeShellArg "full Cargo/C shared-engine compile for ${target}"} > "$out/evidence"
+          '';
+        };
+
+      windowsGnuSmokeFor =
+        pkgs:
+        let
+          target = "x86_64-pc-windows-gnu";
+          targetKey = "X86_64_PC_WINDOWS_GNU";
+          windows = pkgs.pkgsCross.mingwW64;
+          compiler = "${windows.stdenv.cc}/bin/${windows.stdenv.cc.targetPrefix}cc";
+        in
+        (rustPlatformFor pkgs).buildRustPackage {
+          pname = "hl-native-windows-gnu-smoke";
+          inherit version;
+          src = workspaceSource;
+          cargoLock.lockFile = ./Cargo.lock;
+          strictDeps = true;
+          nativeBuildInputs = [
+            (rustFor pkgs)
+            windows.stdenv.cc
+            pkgs.file
+          ];
+          doCheck = false;
+          buildPhase = ''
+            runHook preBuild
+            export CC_x86_64_pc_windows_gnu=${lib.escapeShellArg compiler}
+            export CARGO_TARGET_${targetKey}_LINKER=${lib.escapeShellArg compiler}
+            cargo check --locked --offline --target ${target} -p hl-native
+            ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
+              -Isrc/runtime/hl-native/src/native -Isrc/runtime/hl-native/src/native/include \
+              -c src/runtime/hl-native/src/native/bridge/host.c -o host-bridge.obj
+            file host-bridge.obj | grep -E 'Intel 80386|x86-64|PE|COFF'
+            runHook postBuild
+          '';
+          installPhase = ''
+            mkdir -p "$out"
+            printf '%s\n' \
+              'GNU Windows Rust target check plus PE/COFF host-bridge object smoke; this is not MSVC SDK or runtime proof' \
+              > "$out/evidence"
+          '';
+        };
+
+      darwinCrossContractFor =
+        pkgs:
+        pkgs.runCommand "hl-native-darwin-cross-contract" { } ''
+          mkdir -p "$out"
+          if [ -n "''${HL_APPLE_SDK:-}" ]; then
+            printf '%s\n' 'FAIL: impure Apple SDK injection is forbidden in a Nix check; package the SDK explicitly' >&2
+            exit 1
+          fi
+          printf '%s\n' \
+            'SKIP: Linux cannot honestly compile the Darwin host backend without a packaged Apple SDK; aarch64-darwin runs the native flake verification check' \
+            > "$out/evidence"
+        '';
     in
     {
       packages = forAllSystems (
@@ -376,6 +472,15 @@
           "design-lint" = verification;
           "lint-cases" = verification;
           "compat-fixtures" = verification;
+        }
+        // lib.optionalAttrs pkgs.stdenv.isLinux {
+          "host-linux-aarch64" = linuxHostCompileFor pkgs "aarch64";
+          "host-linux-x86_64" = linuxHostCompileFor pkgs "x86_64";
+          "host-windows-x86_64-gnu-smoke" = windowsGnuSmokeFor pkgs;
+          "host-darwin-cross-contract" = darwinCrossContractFor pkgs;
+        }
+        // lib.optionalAttrs pkgs.stdenv.isDarwin {
+          "host-darwin-aarch64-native" = verification;
         }
       );
 
