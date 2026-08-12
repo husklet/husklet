@@ -67,6 +67,7 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
         .into());
     }
     let text = std::str::from_utf8(&output.stdout)?;
+    require_line_framing(text)?;
     let mut phases = BTreeMap::new();
     let mut canonical = Vec::new();
     let mut metadata_seen = false;
@@ -93,6 +94,13 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     let frame = canonical.join("\n");
     let identity = FramedIdentity::of(frame.as_bytes());
     Ok((phases, identity, frame))
+}
+
+fn require_line_framing(text: &str) -> Result<(), Error> {
+    if !text.ends_with('\n') || text.contains('\r') {
+        return Err("benchmark output is not canonically LF-framed".into());
+    }
+    Ok(())
 }
 
 fn require_metadata(seen: bool) -> Result<(), Error> {
@@ -640,7 +648,7 @@ mod ledger_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{Measurement, require_metadata};
+    use super::{Measurement, require_line_framing, require_metadata};
     use std::{
         cell::Cell,
         fs::OpenOptions,
@@ -651,6 +659,13 @@ mod tests {
     fn exact_output_requires_identity_metadata() {
         require_metadata(true).unwrap();
         assert!(require_metadata(false).is_err());
+    }
+
+    #[test]
+    fn exact_output_requires_canonical_lf_byte_framing() {
+        require_line_framing("META guest=plain\nPHASE malloc us=1 ok=1\n").unwrap();
+        assert!(require_line_framing("META guest=plain\nPHASE malloc us=1 ok=1").is_err());
+        assert!(require_line_framing("META guest=plain\r\nPHASE malloc us=1 ok=1\r\n").is_err());
     }
 
     #[test]
