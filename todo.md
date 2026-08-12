@@ -74,12 +74,12 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Decompose `svc_fcntl`, `svc_read`, and `svc_write` below the configured function and nesting limits.
 - [x] Decompose checkpoint image capture, descriptor restore, and resource restore functions below the configured limits.
 - [x] Decompose the rare syscall dispatcher into capability handlers below the configured limits.
-- [ ] Finish netns ancillary/service function decomposition (in progress).
+- [x] Finish netns ancillary/service function decomposition below all configured C structure limits.
 - [x] Split `container/vfs.c` into capability-owned unity fragments below the file threshold and decompose its synthetic-stat/proc-content hotspots.
 - [x] Split `syscall/binding.c` into capability fragments and reduce `bound_route` to an ordered family router below all limits.
 - [x] Split sentry service, lifecycle, marshalling, copy-back, and worker routing below all configured C structure limits.
 - [x] Split memory, network, process, rare, signal, SysV, and time syscall domains below all configured C structure limits.
-- [ ] Split remaining oversized Linux ABI sources: ELF and thread support.
+- [x] Split Linux ABI ELF and thread support below all configured C structure limits.
 - [x] Split Linux ABI context, fork monitoring, socket ABI vocabulary, and number translation below the configured limits.
 - [ ] Split ARM64 interpreter/translator units and oversized functions.
 - [ ] Split AMD64 AVX, interpreter, translator, legacy, crypto, move, and shift units/functions.
@@ -122,7 +122,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Register C lint and structure checks in the standard Rust linter.
 - [x] Preserve strict C compiler warnings and Cargo-owned source discovery.
 - [x] Integrate clang-format verification, clang-tidy, and cppcheck without Make/CMake. Cargo owns C compilation and the embedded tree-sitter rules; Nix supplies Bear, clang-format, clang-tidy, and cppcheck, and the normal verification derivation runs them through `hl-design-lint` with Cargo's real compilation database and file-level diagnostics.
-- [ ] Classify and fix the 17 path-sensitive reports found by `scan-build` 21.1.8 before making it a hard gate: dead stores in translator cache (including AMD64 cache), ARM64 translation, SysV, memory, descriptor IO, networking, filesystem access, syscall dispatch, and checkpoint memory restore.
+- [x] Classify and fix the 17 path-sensitive reports found by `scan-build` 21.1.8. Current ARM64 and AMD64 analyses both report zero findings using target-matched Nix compiler/sysroot closures.
+- [ ] Make zero-finding ARM64 and AMD64 `scan-build` analysis a bounded Nix hard gate.
 - [ ] Make the complete `hl-design-lint` suite green.
 - [x] Run `cargo check --workspace --all-targets` successfully on the integrated C-backed workspace; rerun on the final delivery tip.
 - [x] Run `cargo test --workspace --lib --bins` successfully after restoring the C-backed engine/testing applications; rerun again on the final delivery tip.
