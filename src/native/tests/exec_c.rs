@@ -12,6 +12,7 @@ const SOURCES: &str = env!("HL_NATIVE_TEST_SOURCES");
 const INCLUDES: &str = env!("HL_NATIVE_TEST_INCLUDES");
 const ARCH: &str = env!("HL_NATIVE_TEST_ARCH");
 const ALLOCATION: &str = env!("HL_NATIVE_TEST_ALLOCATION");
+const COEXIST_SYMBOLS: &str = env!("HL_NATIVE_TEST_COEXIST_SYMBOLS");
 
 /// Programs that fail at HEAD for reasons that predate this harness. Removing an entry is the fix;
 /// a listed program that starts passing fails the run so the list cannot rot. The allowlist excuses
@@ -90,6 +91,9 @@ fn evaluate(source: &Path, scratch: &Path, helpers: &[PathBuf]) -> Outcome {
     let binary = scratch.join(&name);
     let mut build = Command::new(compiler());
     build.arg("-std=c11").arg("-o").arg(&binary).arg(source);
+    for symbol in COEXIST_SYMBOLS.split(':').filter(|symbol| !symbol.is_empty()) {
+        build.arg(format!("-D{symbol}=hlr_{symbol}"));
+    }
     for include in INCLUDES.split(':') {
         build.arg("-I").arg(include);
     }

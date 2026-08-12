@@ -1,5 +1,31 @@
 use std::path::{Path, PathBuf};
 
+const AARCH64_COEXIST_SYMBOLS: &[&str] = &[
+    "hl_a64_addi",
+    "hl_a64_addlsl3",
+    "hl_a64_addlsl4",
+    "hl_a64_adrp_add",
+    "hl_a64_br",
+    "hl_a64_emit32",
+    "hl_a64_ldp",
+    "hl_a64_ldp_q",
+    "hl_a64_ldr",
+    "hl_a64_ldur",
+    "hl_a64_load_cpu",
+    "hl_a64_mov_from_sp",
+    "hl_a64_mov_sp_from",
+    "hl_a64_movconst",
+    "hl_a64_movk",
+    "hl_a64_movr",
+    "hl_a64_movz",
+    "hl_a64_ret",
+    "hl_a64_stp",
+    "hl_a64_stp_q",
+    "hl_a64_str",
+    "hl_a64_stur",
+    "hl_a64_subi",
+];
+
 #[derive(Default)]
 struct NativeInputs {
     sources: Vec<PathBuf>,
@@ -117,6 +143,14 @@ fn emit_test_environment(root: &Path, allocation_test: bool) {
         "cargo:rustc-env=HL_NATIVE_TEST_ALLOCATION={}",
         u8::from(allocation_test)
     );
+    println!(
+        "cargo:rustc-env=HL_NATIVE_TEST_COEXIST_SYMBOLS={}",
+        if std::env::var_os("CARGO_FEATURE_C_COEXIST").is_some() {
+            AARCH64_COEXIST_SYMBOLS.join(":")
+        } else {
+            String::new()
+        }
+    );
     println!("cargo:rerun-if-changed={}", root.join("test").display());
 }
 
@@ -127,31 +161,7 @@ fn main() {
     let inputs = NativeInputs::discover(root);
     let mut build = cc::Build::new();
     if std::env::var_os("CARGO_FEATURE_C_COEXIST").is_some() {
-        for symbol in [
-            "hl_a64_addi",
-            "hl_a64_addlsl3",
-            "hl_a64_addlsl4",
-            "hl_a64_adrp_add",
-            "hl_a64_br",
-            "hl_a64_emit32",
-            "hl_a64_ldp",
-            "hl_a64_ldp_q",
-            "hl_a64_ldr",
-            "hl_a64_ldur",
-            "hl_a64_load_cpu",
-            "hl_a64_mov_from_sp",
-            "hl_a64_mov_sp_from",
-            "hl_a64_movconst",
-            "hl_a64_movk",
-            "hl_a64_movr",
-            "hl_a64_movz",
-            "hl_a64_ret",
-            "hl_a64_stp",
-            "hl_a64_stp_q",
-            "hl_a64_str",
-            "hl_a64_stur",
-            "hl_a64_subi",
-        ] {
+        for symbol in AARCH64_COEXIST_SYMBOLS {
             build.define(symbol, Some(format!("hlr_{symbol}").as_str()));
         }
     }
