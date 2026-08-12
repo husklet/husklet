@@ -6,6 +6,7 @@
 
 int main(int argc, char **argv) {
     static const char interpreter[] = "/usr/local/bin/python3";
+    static const char proof[] = "/tmp/husklet-cpython-proof";
     char **arguments = calloc((size_t)argc + 1, sizeof(*arguments));
     if (arguments == NULL) {
         fputs("exec-python: allocation failed\n", stderr);
@@ -36,6 +37,25 @@ int main(int argc, char **argv) {
         return 126;
     }
     free(arguments);
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        FILE *input = fopen(proof, "rb");
+        if (input == NULL) {
+            perror("exec-python: proof");
+            return 125;
+        }
+        char buffer[4096];
+        size_t length = 0;
+        while ((length = fread(buffer, 1, sizeof(buffer), input)) != 0) {
+            if (fwrite(buffer, 1, length, stdout) != length) {
+                fclose(input);
+                return 125;
+            }
+        }
+        if (ferror(input) != 0 || fclose(input) != 0) {
+            return 125;
+        }
+        return 0;
+    }
     if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
     }

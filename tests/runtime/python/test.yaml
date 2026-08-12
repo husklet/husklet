@@ -16,5 +16,5 @@ cases:
       - -u
       - -S
       - -c
-      - "import hashlib, json, sys, threading; values=[]; t=threading.Thread(target=lambda: values.append(sum(i*i for i in range(1000)))); t.start(); t.join(); print(sys.implementation.name); print((1 << 130) + 12345); print(hashlib.sha256(b'husklet').hexdigest()); print(json.dumps({'thread_sum': values[0], 'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False))"
+      - "import hashlib, json, sys, threading; values=[]; t=threading.Thread(target=lambda: values.append(sum(i*i for i in range(1000)))); t.start(); t.join(); lines=[sys.implementation.name, str((1 << 130) + 12345), hashlib.sha256(b'husklet').hexdigest(), json.dumps({'thread_sum': values[0], 'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False)]; open('/tmp/husklet-cpython-proof', 'w', encoding='utf-8').write('\\n'.join(lines) + '\\n')"
     expect: { exit: 0, stdout: golden/cpython_standard_library.out }
