@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub(crate) use worker::Options as WorkerOptions;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -345,13 +347,18 @@ impl<'a> CaseExecution<'a> {
             .execute(spec, &name, timeout)
             .await
             .map_err(|error| error.to_string());
-        let cleanup = self.containers.remove_force(&name).await;
+        let cleanup = tokio::time::timeout(CLEANUP_TIMEOUT, self.containers.remove_force(&name)).await;
         match (outcome, cleanup) {
-            (Ok(()), Ok(_)) => CaseResult::Passed(self.case.id.clone(), attempt),
+            (Ok(()), Ok(Ok(_))) => CaseResult::Passed(self.case.id.clone(), attempt),
             (Err(error), _) => CaseResult::Failed(self.case.id.clone(), attempt, error),
-            (Ok(()), Err(error)) => {
+            (Ok(()), Ok(Err(error))) => {
                 CaseResult::Failed(self.case.id.clone(), attempt, format!("cleanup failed: {error}"))
             }
+            (Ok(()), Err(_)) => CaseResult::Failed(
+                self.case.id.clone(),
+                attempt,
+                cleanup_timeout_diagnostic(CLEANUP_TIMEOUT),
+            ),
         }
     }
 
@@ -450,6 +457,10 @@ fn glob(pattern: &str, text: &str) -> bool {
     }
 }
 
+fn cleanup_timeout_diagnostic(timeout: Duration) -> String {
+    format!("forced cleanup timed out after {} milliseconds", timeout.as_millis())
+}
+
 impl CaseExecution<'_> {
     async fn wait(&self, name: &str, timeout: Duration) -> Result<ExitStatus, Error> {
         let waiting = self.containers.wait(name);
@@ -459,7 +470,10 @@ impl CaseExecution<'_> {
             tokio::select! {
                 result = &mut waiting => return Ok(result?),
                 () = tokio::time::sleep_until(deadline) => {
-                    return Err(format!("timed out after {} milliseconds", timeout.as_millis()).into());
+                    return Err(format!(
+                        "guest exit wait timed out after {} milliseconds",
+                        timeout.as_millis()
+                    ).into());
                 }
                 () = tokio::time::sleep(Duration::from_millis(10)) => {
                     self.containers.logs(name).await?.bounded()?;
@@ -471,7 +485,7 @@ impl CaseExecution<'_> {
 
 #[cfg(test)]
 mod stderr_tests {
-    use super::{glob, stderr_violation};
+    use super::{CLEANUP_TIMEOUT, cleanup_timeout_diagnostic, glob, stderr_violation};
 
     #[test]
     fn an_undeclared_stderr_line_still_fails_the_case() {
@@ -508,5 +522,13 @@ mod stderr_tests {
         assert!(!glob("a*c", "abbbcd"));
         assert!(!glob("abc", "abcd"));
         assert!(glob("[cache-reuse] kind=*", "[cache-reuse] kind=fork"));
+    }
+
+    #[test]
+    fn cleanup_timeout_names_the_stuck_lifecycle_stage() {
+        assert_eq!(
+            cleanup_timeout_diagnostic(CLEANUP_TIMEOUT),
+            "forced cleanup timed out after 10000 milliseconds"
+        );
     }
 }
