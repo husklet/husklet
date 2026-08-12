@@ -110,6 +110,10 @@ fn compile_group(name: &str, group: &str, units: &[TranslationUnit<'_>], strict:
         selected.iter().all(|unit| unit.definitions == definitions),
         "retained C group {group} has inconsistent definitions"
     );
+    assert!(
+        definitions.split(';').any(|value| value == "HL_ENABLE_LOGGING=0"),
+        "retained C group {group} must not write host diagnostics into inherited guest stderr"
+    );
     let sources = selected.iter().map(|unit| unit.source).collect::<Vec<_>>();
     let definitions = definitions
         .split(';')

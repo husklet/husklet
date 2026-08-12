@@ -7,6 +7,19 @@ const C_PLAN_DESCRIPTOR: &str = "HL_C_PLAN_FD";
 const C_CONTROL_DESCRIPTOR: &str = "HL_C_CONTROL_FD";
 
 fn main() {
+    let mut arguments = std::env::args().collect::<Vec<_>>();
+    if let Some(worker) = CWorker::capture(&arguments) {
+        // The worker inherits the guest's stderr. Host diagnostics belong to the
+        // supervising parent and travel over the bounded control protocol.
+        hl_log::Output::global().set(Box::new(hl_log::DiscardSink));
+        let status = match worker {
+            Ok(worker) => {
+                hl_engine::retained_worker::run(worker.plan, worker.control).unwrap_or_else(|error| error.status())
+            }
+            Err(error) => error.status(),
+        };
+        std::process::exit(status);
+    }
     let environment =
         Environment::try_parse_from(["hl-engine"]).expect("engine environment contains valid Unicode values");
     let logging = hl_log::EnvironmentConfig::parse(hl_log::Config::default(), environment.logging());
@@ -14,20 +27,6 @@ fn main() {
         eprintln!("hl-engine: {warning}");
     }
     logging.apply();
-    let mut arguments = std::env::args().collect::<Vec<_>>();
-    if let Some(worker) = CWorker::capture(&arguments) {
-        let status = match worker {
-            Ok(worker) => hl_engine::retained_worker::run(worker.plan, worker.control).unwrap_or_else(|error| {
-                eprintln!("hl-engine: retained worker failed: {error:?}");
-                error.status()
-            }),
-            Err(error) => {
-                eprintln!("hl-engine: retained worker configuration failed: {error}");
-                error.status()
-            }
-        };
-        std::process::exit(status);
-    }
     let mut environment = environment.bootstrap();
     let authority = match environment.take_authority_descriptor() {
         hl_engine::environment::AuthorityDescriptor::Absent => None,

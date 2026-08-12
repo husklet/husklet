@@ -30,6 +30,18 @@ pub(crate) enum FailureStage {
     Destroy,
 }
 
+impl FailureStage {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Decode => "decode",
+            Self::Create => "create",
+            Self::Start => "start",
+            Self::Control => "control",
+            Self::Destroy => "destroy",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Message {
     Ready,

@@ -1,4 +1,4 @@
-use super::control::{FRAME_SIZE, Message};
+use super::control::{FRAME_SIZE, FailureStage, Message};
 use super::{StreamBridge, wire};
 use crate::activation::GuestIsa;
 use crate::composition::{CompositionError, NativeTerminalWindowNotification, RuntimeServices};
@@ -33,6 +33,18 @@ enum Startup {
     Starting,
     Started,
     Failed,
+}
+
+#[cold]
+fn report_worker_failure(stage: FailureStage, code: i32) {
+    let stage = stage.name();
+    hl_log::hl_verdict!(
+        hl_log::tag::EXEC,
+        "execution.c.lifecycle.failed",
+        stage = %stage,
+        code = code;
+        "retained C lifecycle failed stage={stage} code={code}"
+    );
 }
 
 struct WorkerTerminalNotification {
@@ -154,6 +166,10 @@ impl CWorker {
     fn start_inner(&self) -> Result<(), EngineError> {
         let mut reader = self.reader.lock().map_err(|_| EngineError::Synchronization)?;
         let ready = read_message(&mut reader)?;
+        if let Message::Error { stage, code } = ready {
+            report_worker_failure(stage, code);
+            return Err(EngineError::LaunchFailed);
+        }
         if ready != Message::Ready {
             hl_log::hl_error!(
                 hl_log::tag::EXEC,
@@ -178,6 +194,10 @@ impl CWorker {
         );
         drop(writer);
         let started = read_message(&mut reader)?;
+        if let Message::Error { stage, code } = started {
+            report_worker_failure(stage, code);
+            return Err(EngineError::LaunchFailed);
+        }
         if started != Message::Started {
             hl_log::hl_verdict!(
                 hl_log::tag::EXEC,
@@ -202,6 +222,10 @@ impl CWorker {
             return self.reap_without_frame();
         };
         drop(reader);
+        if let Message::Error { stage, code } = message {
+            report_worker_failure(stage, code);
+            return Err(EngineError::WaitFailed);
+        }
         let Message::Exit(exit) = message else {
             hl_log::hl_error!(
                 hl_log::tag::EXEC,
@@ -244,7 +268,9 @@ impl CWorker {
             hl_log::tag::EXEC,
             hl_log::Level::Info,
             "retained_c.worker.reaped",
-            exit = ?exit
+            exit_kind = ?exit.kind,
+            guest_status = exit.guest_status,
+            detail = exit.detail
         );
         Ok(exit)
     }
@@ -464,10 +490,11 @@ fn write_message(stream: &mut std::os::unix::net::UnixStream, message: Message) 
 #[cfg(test)]
 mod tests {
     use super::{
-        CWorker, ChildGuard, Startup, process_status_matches, read_message, worker_environment, write_message,
+        CWorker, ChildGuard, Startup, process_status_matches, read_message, report_worker_failure, worker_environment,
+        write_message,
     };
     use crate::c_execution::StreamBridge;
-    use crate::c_execution::control::Message;
+    use crate::c_execution::control::{FailureStage, Message};
     use crate::engine::StopRequest;
     use crate::engine::{EngineExit, ExitKind};
     use std::io::{BufRead, BufReader};
@@ -500,6 +527,18 @@ mod tests {
             guest_status: status,
             detail: 0,
             fault: None,
+        }
+    }
+
+    #[test]
+    fn framed_worker_failure_is_a_release_visible_supervisor_verdict() {
+        let events = capture_events(|| report_worker_failure(FailureStage::Create, 17));
+        for field in [
+            r#""event":"execution.c.lifecycle.failed""#,
+            r#""stage":"create""#,
+            r#""code":17"#,
+        ] {
+            assert!(events.contains(field), "missing {field} in {events}");
         }
     }
 
