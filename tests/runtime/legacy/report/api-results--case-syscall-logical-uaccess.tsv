@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-memory	syscall-logical-uaccess	aarch64	fail	1	linux-libc,mmap,memfd,read/write,readv/writev	exit:e=0,a=1;stdout:e=ac480de3ef63b460,a=3701ad7a2986a821,d=30,eb=31,ab=30,el=126,al=126	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
-memory	syscall-logical-uaccess	x86_64	fail	1	linux-libc,mmap,memfd,read/write,readv/writev	exit:e=0,a=1;stdout:e=ac480de3ef63b460,a=3701ad7a2986a821,d=30,eb=31,ab=30,el=126,al=126	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }

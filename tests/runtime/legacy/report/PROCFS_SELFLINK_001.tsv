@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-procfs	pf-selflink	aarch64	fail	0	linux-libc,procfs	stdout:e=2c9bfdb88dbf4401,a=2c9883b88dbc3edc,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selflink	x86_64	fail	0	linux-libc,procfs	stdout:e=2c9bfdb88dbf4401,a=2c9883b88dbc3edc,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

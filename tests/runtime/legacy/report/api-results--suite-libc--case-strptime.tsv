@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-libc	strptime	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-libc	strptime	x86_64	fail	125	linux-libc,libm	exit:e=0,a=125;stdout:e=b72fbed7996611d5,a=cbf29ce484222325,d=0,eb=73,ab=--,el=29,al=0	EngineExit { kind: Fault, guest_status: 0, detail: 4267711, fault: Some(FaultDiagnostic { isa: X86_64, pc: 4267711, opcode: [72, 15, 190, 202, 73, 131, 197, 1, 72, 137, 199, 76, 137, 203, 246], opcode_len: 15, reason: Decode, address: None, access: None }) }

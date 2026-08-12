@@ -1,7 +1,0 @@
-mismatch	suite	cases
-cleanup-engine-exit	completeness	1
-cleanup-engine-exit	process	1
-expected-exit	completeness	1
-expected-exit	process	1
-stdout	completeness	1
-stdout	process	1

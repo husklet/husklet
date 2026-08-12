@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-abi/corpus	a_lse_rs	aarch64	pass	0	linux-libc,abi	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-completeness	capget	aarch64	fail	-	linux-libc	exit:e=0,a=-;stdout:e=1e31c289f371ea5f,a=cbf29ce484222325,d=0,eb=63,ab=--,el=12,al=0;engine:worker=0,cleaned=false	worker-error
-process	capget-version	aarch64	fail	-	linux-libc,capabilities	exit:e=0,a=-;stdout:e=116e78f4ee6e854e,a=cbf29ce484222325,d=0,eb=63,ab=--,el=63,al=0;engine:worker=0,cleaned=false	worker-error

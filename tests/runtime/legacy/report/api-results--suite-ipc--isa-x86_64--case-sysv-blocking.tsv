@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-ipc	sysv-blocking	x86_64	fail	-	linux-libc,fork,ipc,signals,time,self-contained-process	engine:timeout	timeout

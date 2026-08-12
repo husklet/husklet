@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-procfs	pf-devnodes	aarch64	fail	0	linux-libc,procfs	stdout:e=133002abce04ce4b,a=132ca0abce01f1ee,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-devnodes	x86_64	fail	0	linux-libc,procfs	stdout:e=133002abce04ce4b,a=132ca0abce01f1ee,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

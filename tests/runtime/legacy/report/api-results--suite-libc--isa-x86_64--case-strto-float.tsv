@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-libc	strto-float	x86_64	fail	125	linux-libc,libm	exit:e=0,a=125;stdout:e=12e60a1b1f7e7ad4,a=cbf29ce484222325,d=0,eb=73,ab=--,el=47,al=0	EngineExit { kind: Fault, guest_status: 0, detail: 4337545, fault: Some(FaultDiagnostic { isa: X86_64, pc: 4337545, opcode: [102, 68, 15, 100, 198, 102, 68, 15, 100, 206, 102, 68, 15, 223, 199], opcode_len: 15, reason: Decode, address: None, access: None }) }

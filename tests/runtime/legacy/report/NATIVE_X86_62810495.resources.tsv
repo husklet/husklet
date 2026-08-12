@@ -1,3 +1,0 @@
-suite	case	isa	report_status	classification	pgid	peak_rss_kib	containment
-process	forkstorm	x86_64	fail	resource-failure	346706	16239404	TERM-then-KILL
-soak	forkpipe	x86_64	fail	resource-failure	349478	12589044	TERM-then-KILL

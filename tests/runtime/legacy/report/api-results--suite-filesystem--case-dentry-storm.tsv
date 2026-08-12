@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-filesystem	dentry-storm	aarch64	pass	0	alpine-rootfs,linux-libc,filesystem,fork,stateful-soak	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-filesystem	dentry-storm	x86_64	pass	0	alpine-rootfs,linux-libc,filesystem,fork,stateful-soak	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

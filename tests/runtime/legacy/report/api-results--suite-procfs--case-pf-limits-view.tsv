@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-procfs	pf-limits-view	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-limits-view	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

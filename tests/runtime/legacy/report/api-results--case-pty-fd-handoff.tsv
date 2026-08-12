@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-process	pty-fd-handoff	aarch64	fail	2	linux-libc,pty,pipe,fork,dup3,fcntl,exec	exit:e=0,a=2;stdout:e=3246cc10d1e6a8cb,a=cbf29ce484222325,d=0,eb=70,ab=--,el=18,al=0	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
-process	pty-fd-handoff	x86_64	fail	2	linux-libc,pty,pipe,fork,dup3,fcntl,exec	exit:e=0,a=2;stdout:e=3246cc10d1e6a8cb,a=cbf29ce484222325,d=0,eb=70,ab=--,el=18,al=0	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }

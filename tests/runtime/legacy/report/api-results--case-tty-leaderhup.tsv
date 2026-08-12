@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-posix	tty-leaderhup	aarch64	fail	0	linux-libc,pty,setsid,TIOCSCTTY,SIGHUP	stdout:e=7076534bbfe4d195,a=3386dd4067227c4a,d=16,eb=31,ab=30,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-posix	tty-leaderhup	x86_64	fail	0	linux-libc,pty,setsid,TIOCSCTTY,SIGHUP	stdout:e=7076534bbfe4d195,a=3386dd4067227c4a,d=16,eb=31,ab=30,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

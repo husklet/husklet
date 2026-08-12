@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-process	wait-variants	aarch64	fail	0	linux-libc,fork,wait,waitpid,wait4,waitid,rusage,WNOWAIT,ECHILD	stdout:e=d5b60b131b9aa7f1,a=41e34879ed62dc88,d=23,eb=31,ab=30,el=51,al=51	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-process	wait-variants	x86_64	fail	0	linux-libc,fork,wait,waitpid,wait4,waitid,rusage,WNOWAIT,ECHILD	stdout:e=d5b60b131b9aa7f1,a=41e34879ed62dc88,d=23,eb=31,ab=30,el=51,al=51	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

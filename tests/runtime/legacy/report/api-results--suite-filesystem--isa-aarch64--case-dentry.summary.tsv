@@ -1,4 +1,0 @@
-mismatch	suite	cases
-expected-exit	filesystem	1
-stderr	filesystem	1
-stdout	filesystem	1

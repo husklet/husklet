@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-ipc	evtmix-epoll	aarch64	skip	-	linux-libc,ipc,eventfd,signalfd	-	unsupported-fixture:multi-process-service
-ipc	evtmix-epoll	x86_64	skip	-	linux-libc,ipc,eventfd,signalfd	-	unsupported-fixture:multi-process-service

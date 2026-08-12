@@ -1,9 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-threads	close-range-unshare	aarch64	pass	0	linux-libc,pthreads,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-threads	close-range-unshare-exec	aarch64	pass	0	linux-libc,pthreads,exec,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-threads	close-range-unshare-fork	aarch64	pass	0	linux-libc,pthreads,fork,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-threads	close-range-unshare-inherit	aarch64	pass	0	linux-libc,pthreads,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-threads	close-range-unshare	x86_64	pass	0	linux-libc,pthreads,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-threads	close-range-unshare-exec	x86_64	pass	0	linux-libc,pthreads,exec,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-threads	close-range-unshare-fork	x86_64	pass	0	linux-libc,pthreads,fork,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-threads	close-range-unshare-inherit	x86_64	pass	0	linux-libc,pthreads,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

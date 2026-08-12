@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-filesystem	fs-statfs-type	aarch64	pass	0	alpine-rootfs,overlay,linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-filesystem	fs-statfs-type	x86_64	pass	0	alpine-rootfs,overlay,linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

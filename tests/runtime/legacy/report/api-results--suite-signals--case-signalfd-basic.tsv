@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-signals	signalfd-basic	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-signals	signalfd-basic	x86_64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

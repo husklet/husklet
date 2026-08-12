@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-isa/aarch64	isa-regress	aarch64	pass	0	lse-atomic-upgrade,exclusive-monitor,casp,nonpie-fold	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

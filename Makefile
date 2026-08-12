@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint gate gate-app gate-compat gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci test-compiles containers engine app dmg install uninstall clean bench-product-ab-prepare bench-product-ab bench-direct-ab bench-workloads
+.PHONY: all check design-lint gate gate-app gate-compat gate-fixture lint lint-c lint-c-inner lint-cases clippy fmt fmt-c fmt-c-inner fmt-check fmt-c-check fmt-c-check-inner test test-ci engine app dmg install uninstall clean bench-product-ab-prepare bench-product-ab bench-direct-ab
 
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
@@ -162,12 +162,6 @@ gate-app:
 test-ci:
 	$(NIX) flake check -L --option cores 0 --max-jobs auto
 
-containers:
-	cargo test -p hl-images -p hl-container -p hl-daemon -p hl-client -p dockerd
-
-test-compiles:
-	cargo test --no-run --workspace --all-targets
-
 engine:
 	$(NIX_DEV) cargo build --release -p engine --bins --locked --offline
 
@@ -210,9 +204,6 @@ bench-direct-ab:
 	target/release/testing ab --base $(AB_BASE) $(if $(AB_CANDIDATE),--candidate $(AB_CANDIDATE)) \
 	  --guest $(AB_GUEST) --rounds $(AB_ROUNDS) --results $(AB_RESULTS) \
 	  $(if $(AB_NULL_RESULTS),--null-arm-results $(AB_NULL_RESULTS))
-
-bench-workloads:
-	cargo run -q --release -p testing --bin testing -- benchmark workloads
 
 app:
 	@chmod +x src/apps/husklet/package/bundle.sh src/apps/husklet/package/make-dmg.sh

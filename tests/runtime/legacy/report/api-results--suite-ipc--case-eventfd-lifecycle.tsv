@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-ipc	eventfd-lifecycle	aarch64	fail	12	linux-libc,ipc,eventfd	exit:e=0,a=12;stdout:e=85a1051d8b5f735f,a=cbf29ce484222325,d=0,eb=65,ab=--,el=70,al=0	EngineExit { kind: Code, guest_status: 12, detail: 0, fault: None }
-ipc	eventfd-lifecycle	x86_64	fail	12	linux-libc,ipc,eventfd	exit:e=0,a=12;stdout:e=85a1051d8b5f735f,a=cbf29ce484222325,d=0,eb=65,ab=--,el=70,al=0	EngineExit { kind: Code, guest_status: 12, detail: 0, fault: None }

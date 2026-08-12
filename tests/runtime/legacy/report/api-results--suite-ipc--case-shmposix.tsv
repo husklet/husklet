@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-ipc	shmposix	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-ipc	shmposix	x86_64	fail	0	linux-libc	stdout:e=228aadf229e24076,a=2d40d050141e4220,d=13,eb=35,ab=30,el=21,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

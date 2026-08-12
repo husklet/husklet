@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-memory	memfd-share	x86_64	fail	2	linux-libc,mmap,memfd,filesystem	exit:e=0,a=2;stdout:e=74ebe5d31816fc2d,a=46da53a9a2fd5cb5,d=0,eb=6d,ab=74,el=47,al=14	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }

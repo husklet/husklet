@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-process	exec-cloexec	aarch64	pass	0	linux-libc,exec,fork/wait	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-process	exec-cloexec-signal	aarch64	pass	0	linux-libc,fork,execve,cloexec,signal-disposition	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

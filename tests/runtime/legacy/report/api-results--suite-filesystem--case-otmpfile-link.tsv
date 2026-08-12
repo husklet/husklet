@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-filesystem	otmpfile-link	aarch64	fail	0	linux-libc,filesystem,openat	stdout:e=2ccad20b14279ade,a=4d2ac38212812ada,d=41,eb=31,ab=30,el=77,al=77	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-filesystem	otmpfile-link	x86_64	fail	0	linux-libc,filesystem,openat	stdout:e=2ccad20b14279ade,a=4d2ac38212812ada,d=41,eb=31,ab=30,el=77,al=77	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

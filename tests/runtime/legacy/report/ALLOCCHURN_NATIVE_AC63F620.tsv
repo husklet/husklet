@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-core/workload	allocchurn	x86_64	fail	-	heap,endurance	engine:timeout	timeout class=cpu-active wall_ms=120004 tree_ticks=12019 host_busy_pct=20 runnable=2 cpus=18

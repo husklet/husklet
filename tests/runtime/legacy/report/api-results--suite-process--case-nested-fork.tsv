@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-process	nested-fork	aarch64	pass	0	linux-libc,fork,double-fork,daemonize	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-process	nested-fork	x86_64	pass	0	linux-libc,fork,double-fork,daemonize	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

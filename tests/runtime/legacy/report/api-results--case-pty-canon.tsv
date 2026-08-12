@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-posix	pty-canon	aarch64	fail	0	linux-libc,pty,termios	stdout:e=565a06b6972652e5,a=1f150773447f3cbe,d=6,eb=6c,ab=73,el=40,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-posix	pty-canon	x86_64	fail	0	linux-libc,pty,termios	stdout:e=565a06b6972652e5,a=1f150773447f3cbe,d=6,eb=6c,ab=73,el=40,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

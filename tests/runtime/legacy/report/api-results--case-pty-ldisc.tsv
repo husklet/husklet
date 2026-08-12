@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-posix	pty-ldisc	aarch64	fail	0	linux-libc,pty,termios	stdout:e=283e6d39fa251e4f,a=5f5206bf871be7f4,d=6,eb=72,ab=73,el=81,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-posix	pty-ldisc	x86_64	fail	0	linux-libc,pty,termios	stdout:e=283e6d39fa251e4f,a=5f5206bf871be7f4,d=6,eb=72,ab=73,el=81,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

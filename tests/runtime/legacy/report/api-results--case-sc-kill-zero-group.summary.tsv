@@ -1,3 +1,0 @@
-mismatch	suite	cases
-expected-exit	syscall_edges	2
-stdout	syscall_edges	2

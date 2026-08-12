@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-time	pselect-ppoll-timeout	aarch64	fail	0	linux-libc,time	stdout:e=3d3f7e42c1d1d820,a=76649262a1b2cc6c,d=21,eb=31,ab=30,el=49,al=49	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-memory	mremap-einval	aarch64	fail	0	linux-libc,mremap,mlock,mincore	stdout:e=402fb5842974daae,a=0b6a3540bfa1b099,d=51,eb=32,ab=33,el=93,al=93	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-memory	mremap-einval	x86_64	fail	0	linux-libc,mremap,mlock,mincore	stdout:e=402fb5842974daae,a=0b6a3540bfa1b099,d=51,eb=32,ab=33,el=93,al=93	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

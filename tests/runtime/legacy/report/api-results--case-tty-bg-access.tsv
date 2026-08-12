@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-posix	tty-bg-access	aarch64	fail	0	linux-libc,pty,job-control,SIGTTIN,SIGTTOU	stdout:e=683281bf9116094f,a=a2bb503902ad71da,d=19,eb=31,ab=30,el=47,al=47	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-posix	tty-bg-access	x86_64	fail	0	linux-libc,pty,job-control,SIGTTIN,SIGTTOU	stdout:e=683281bf9116094f,a=a2bb503902ad71da,d=19,eb=31,ab=30,el=47,al=47	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

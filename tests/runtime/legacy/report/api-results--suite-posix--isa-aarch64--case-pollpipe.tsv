@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-posix	pollpipe	aarch64	fail	0	linux-libc	stdout:e=e9635338e8b64705,a=63df8793a0671858,d=17,eb=31,ab=30,el=41,al=41	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

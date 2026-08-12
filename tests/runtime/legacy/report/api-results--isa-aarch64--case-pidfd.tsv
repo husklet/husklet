@@ -1,9 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-completeness	pidfd-cap	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-completeness	pidfd-flags	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-completeness	pidfd-getfd	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-completeness	pidfd-signal	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-process	clone3-pidfd	aarch64	skip	-	linux-libc,clone3,CLONE_PIDFD,poll,waitid,P_PIDFD	-	unsupported-fixture:multi-process-service
-signals	pidfd-send-signal	aarch64	fail	1	linux-libc,signals,raw-syscalls	exit:e=0,a=1;stdout:e=04d67fe19adaa23d,a=4db69fb9eaa9a481,d=18,eb=61,ab=6f,el=48,al=28	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
-syscall	pidfd-open	aarch64	fail	0	linux-libc	stdout:e=c6c6e93d6d3d8ddc,a=c6ca633d6d409301,d=27,eb=31,ab=30,el=29,al=29	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-syscall	pidfd-signal	aarch64	fail	0	linux-libc	stdout:e=0f42433b57e02e27,a=3a49fde75c761950,d=20,eb=31,ab=30,el=38,al=38	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

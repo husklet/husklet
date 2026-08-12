@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-syscall	aio-bad-opcode	aarch64	pass	0	linux-libc,aio,syscall-edges	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-syscall	aio-bad-opcode	x86_64	pass	0	linux-libc,aio,syscall-edges	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

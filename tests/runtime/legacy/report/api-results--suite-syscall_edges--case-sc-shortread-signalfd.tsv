@@ -1,3 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-syscall_edges	sc-shortread-signalfd	aarch64	pass	0	linux-libc,signalfd,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-syscall_edges	sc-shortread-signalfd	x86_64	pass	0	linux-libc,signalfd,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

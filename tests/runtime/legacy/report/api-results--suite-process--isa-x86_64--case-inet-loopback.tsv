@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-process	inet-loopback	x86_64	fail	0	linux-libc	stderr:e=cbf29ce484222325,a=2df52931f1b6ed0e,d=0,eb=--,ab=6e,el=0,al=152	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

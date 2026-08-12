@@ -1,2 +1,0 @@
-suite	case	isa	status	exit	dependencies	mismatch	diagnostic
-time	nonpie-signal-fold	x86_64	fail	4	linux-libc,time,signals,nonpie	exit:e=0,a=4;stdout:e=e0c38ff0dd398887,a=cbf29ce484222325,d=0,eb=6e,ab=--,el=22,al=0	EngineExit { kind: Code, guest_status: 4, detail: 0, fault: None }
