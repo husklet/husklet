@@ -13,6 +13,7 @@ cases:
     artifact: { destination: /opt/husklet/python/exec-python }
     run:
       - -I
+      - -u
       - -S
       - -c
       - "import hashlib, json, sys, threading; values=[]; t=threading.Thread(target=lambda: values.append(sum(i*i for i in range(1000)))); t.start(); t.join(); print(sys.implementation.name); print((1 << 130) + 12345); print(hashlib.sha256(b'husklet').hexdigest()); print(json.dumps({'thread_sum': values[0], 'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False))"
