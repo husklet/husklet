@@ -353,7 +353,6 @@ source	retained/src/core/provider/tree_files.h
 source	retained/src/core/target/aarch64.c
 source	retained/src/core/target/bus.c
 source	retained/src/core/target/bus.h
-source	retained/src/core/target/dual.c
 source	retained/src/core/target/namespace.h
 source	retained/src/core/target/native.c
 source	retained/src/core/target/native.h
@@ -616,7 +615,6 @@ source	retained/src/translator/reloc.h
 source	retained/src/translator/window.c
 source	retained/src/translator/window.h
 fixture	retained/tests/aarch64_interpreter_link_smoke.c
-fixture	retained/tests/options_contract.c
 source	retained/tools/lifecycle_runner.c
 source	shim.c
 fixture	tests/checkpoint_tree.c

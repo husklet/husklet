@@ -7,7 +7,6 @@ source_revision	source	destination	tranche	disposition	conflict
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/environment.h	retained/src/core/environment.h	standalone	import_unwired	Rust owns environment construction
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/launch.c	retained/src/core/launch.c	standalone	import_unwired	Rust owns launch and lifecycle
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/launch.h	retained/src/core/launch.h	standalone	import_unwired	Rust owns launch and lifecycle
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/target/dual.c	retained/src/core/target/dual.c	x86_closure	import_adapt	Select both ISAs without oracle-global product policy
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/target/run.c	retained/src/core/target/run.c	x86_closure	import_adapt	Route through retained host services and Rust lifecycle
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/target/x86_64.c	retained/src/core/target/x86_64.c	x86_closure	import_adapt	Replace logical-VMA ownership with retained boundary
 7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/interp.c	retained/src/translator/guest/aarch64/interp.c	a64_interpreter	import_adapt	Rust remains architectural-state and fault authority

@@ -40,7 +40,6 @@ src/core/provider/namespace.h
 src/core/target/aarch64.c
 src/core/target/bus.c
 src/core/target/bus.h
-src/core/target/dual.c
 src/core/target/namespace.h
 src/core/target/native.c
 src/core/target/native.h
