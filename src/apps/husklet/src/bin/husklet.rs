@@ -37,7 +37,7 @@ pub mod screens;
 use components::dialog::RemoveWorkspace;
 use components::layout::Field;
 use components::theme::{css, ACCENT};
-use components::workspace::{build_form, Form};
+use components::workspace::Form;
 use gtk_adapter::{ColorPicker, FontPicker};
 use host::process::ProcessGroup;
 use host::pty::PtyProcess;

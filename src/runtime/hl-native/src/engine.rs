@@ -73,7 +73,7 @@ impl Engine {
             return Err(STATUS_OK.wrapping_add(1));
         }
         let count = c_uint::try_from(config.option_names.len()).map_err(|_| 1)?;
-        let image_plan = inspect_main_image(&config)?;
+        let image_plan = Plan::inspect(&config)?;
         let mut output = std::ptr::null_mut();
         // SAFETY: the caller guarantees that the raw option and callback
         // pointers satisfy the documented C ABI. All Rust-owned arrays and
@@ -138,50 +138,53 @@ impl Engine {
     }
 }
 
-fn inspect_main_image(config: &EngineConfig<'_>) -> Result<Plan, i32> {
-    let mut file = open_main_image(config)?;
-    let mut header = [0_u8; 64];
-    file.read_exact(&mut header).map_err(|_| 1)?;
-    if &header[..6] != b"\x7fELF\x02\x01" {
-        return Err(1);
-    }
-    let word16 = |offset| u16::from_le_bytes(header[offset..offset + 2].try_into().expect("fixed header"));
-    let word64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().expect("fixed header"));
-    let kind = match word16(16) {
-        2 => 1,
-        3 => 2,
-        _ => return Err(1),
-    };
-    let machine = match config.isa {
-        1 => 0xb7,
-        2 => 0x3e,
-        _ => return Err(1),
-    };
-    if word16(18) != machine {
-        return Err(1);
-    }
-    let (first, last, interpreter) = inspect_program_headers(&mut file, word64(32), u64::from(word16(54)), word16(56))?;
-    let link_start = first & !0xfff;
-    let span = last.checked_sub(link_start).ok_or(1)?;
-    let link_end = link_start
-        .checked_add(span.checked_add(0xffff).ok_or(1)? & !0xffff)
-        .ok_or(1)?;
-    let interpreter_identity = interpreter.as_deref().map_or(0, |path| {
-        path.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-            (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+impl Plan {
+    fn inspect(config: &EngineConfig<'_>) -> Result<Self, i32> {
+        let mut file = open_main_image(config)?;
+        let mut header = [0_u8; 64];
+        file.read_exact(&mut header).map_err(|_| 1)?;
+        if &header[..6] != b"\x7fELF\x02\x01" {
+            return Err(1);
+        }
+        let word16 = |offset| u16::from_le_bytes(header[offset..offset + 2].try_into().expect("fixed header"));
+        let word64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().expect("fixed header"));
+        let kind = match word16(16) {
+            2 => 1,
+            3 => 2,
+            _ => return Err(1),
+        };
+        let machine = match config.isa {
+            1 => 0xb7,
+            2 => 0x3e,
+            _ => return Err(1),
+        };
+        if word16(18) != machine {
+            return Err(1);
+        }
+        let (first, last, interpreter) =
+            inspect_program_headers(&mut file, word64(32), u64::from(word16(54)), word16(56))?;
+        let link_start = first & !0xfff;
+        let span = last.checked_sub(link_start).ok_or(1)?;
+        let link_end = link_start
+            .checked_add(span.checked_add(0xffff).ok_or(1)? & !0xffff)
+            .ok_or(1)?;
+        let interpreter_identity = interpreter.as_deref().map_or(0, |path| {
+            path.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+            })
+        });
+        Ok(Self {
+            abi: 1,
+            size: u32::try_from(std::mem::size_of::<Plan>()).expect("small ABI struct"),
+            architecture: config.isa,
+            kind,
+            link_start,
+            link_end,
+            has_interpreter: u32::from(interpreter.is_some()),
+            flags: 0,
+            interpreter_identity,
         })
-    });
-    Ok(Plan {
-        abi: 1,
-        size: u32::try_from(std::mem::size_of::<Plan>()).expect("small ABI struct"),
-        architecture: config.isa,
-        kind,
-        link_start,
-        link_end,
-        has_interpreter: u32::from(interpreter.is_some()),
-        flags: 0,
-        interpreter_identity,
-    })
+    }
 }
 
 fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {

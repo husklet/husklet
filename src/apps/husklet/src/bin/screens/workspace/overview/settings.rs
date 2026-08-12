@@ -4,7 +4,7 @@ impl Overview<'_> {
     /// Editable workspace settings. Identity remains fixed after workspace creation.
     pub(super) fn settings(&self) -> gtk::ScrolledWindow {
         let workspace = self.workspace;
-        let form = Rc::new(build_form());
+        let form = Rc::new(Form::new());
         let terminal = workspace.terminal_config();
         form.font.set_value(&terminal.font_family);
         form.font_size.set_value(terminal.font_size);

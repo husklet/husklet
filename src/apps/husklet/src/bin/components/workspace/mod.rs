@@ -41,7 +41,7 @@ impl Form {
             .modal(false)
             .build();
 
-        let form = Rc::new(build_form());
+        let form = Rc::new(Form::new());
         form.add_environment();
         let view = screens::workspace::create::View::new([
             (CreatePage::General, form.general()),
@@ -115,36 +115,36 @@ impl Form {
     }
 }
 
-pub(crate) fn build_form() -> Form {
-    let terminal = TermConfig::default();
-    let font_size = gtk::SpinButton::with_range(6.0, 48.0, 1.0);
-    font_size.set_value(terminal.font_size);
-    let cursor_blink = gtk::Switch::new();
-    cursor_blink.set_active(terminal.cursor_blink);
-    Form {
-        name: Field::entry("name", false),
-        image: Field::entry("ubuntu:24.04", true),
-        shell: Field::entry("/bin/bash -l", true),
-        storage: Field::entry("", true),
-        cpu_amd: Rc::new(Cell::new(false)),
-        cpus: gtk::SpinButton::with_range(0.0, 64.0, 1.0),
-        mem: gtk::SpinButton::with_range(0.0, 65536.0, 256.0),
-        scrollback: Field::entry("unlimited", false),
-        font: FontPicker::new(&terminal.font_family),
-        font_size,
-        foreground: ColorPicker::new(&terminal.foreground),
-        background: ColorPicker::new(&terminal.background),
-        cursor: Rc::new(Cell::new(terminal.cursor_shape)),
-        cursor_blink,
-        features: WorkspaceFeatureFields::new(),
-        env_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
-        env_rows: RefCell::new(Vec::new()),
-        mount_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
-        mount_rows: RefCell::new(Vec::new()),
-    }
-}
-
 impl Form {
+    pub(crate) fn new() -> Self {
+        let terminal = TermConfig::default();
+        let font_size = gtk::SpinButton::with_range(6.0, 48.0, 1.0);
+        font_size.set_value(terminal.font_size);
+        let cursor_blink = gtk::Switch::new();
+        cursor_blink.set_active(terminal.cursor_blink);
+        Self {
+            name: Field::entry("name", false),
+            image: Field::entry("ubuntu:24.04", true),
+            shell: Field::entry("/bin/bash -l", true),
+            storage: Field::entry("", true),
+            cpu_amd: Rc::new(Cell::new(false)),
+            cpus: gtk::SpinButton::with_range(0.0, 64.0, 1.0),
+            mem: gtk::SpinButton::with_range(0.0, 65536.0, 256.0),
+            scrollback: Field::entry("unlimited", false),
+            font: FontPicker::new(&terminal.font_family),
+            font_size,
+            foreground: ColorPicker::new(&terminal.foreground),
+            background: ColorPicker::new(&terminal.background),
+            cursor: Rc::new(Cell::new(terminal.cursor_shape)),
+            cursor_blink,
+            features: WorkspaceFeatureFields::new(),
+            env_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
+            env_rows: RefCell::new(Vec::new()),
+            mount_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
+            mount_rows: RefCell::new(Vec::new()),
+        }
+    }
+
     pub(crate) fn terminal(&self) -> gtk::Box {
         let panel = Panel::new("Terminal").into_widget();
         self.font.widget().set_hexpand(true);
