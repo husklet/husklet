@@ -3997,6 +3997,42 @@ static int interp_sse_permute_extract(struct cpu *cpu, struct insn *insn, uint64
     return STEP_NEXT;
 }
 
+static int interp_sse_xmm_binary(struct cpu *cpu, struct insn *insn, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op != 0x14 && op != 0x15 && op != 0x54 && op != 0x55 && op != 0x56 && op != 0x57) return -1;
+    uint8_t destination[16], source[16];
+    interp_xmm_get(cpu, insn->reg, destination);
+    interp_sse_rm_get(cpu, insn, next, 16, source);
+    if (op == 0x14 || op == 0x15) {
+        interp_punpck(destination, source, interp_sse_prefix(insn) == SSE_66 ? 8 : 4, op == 0x15, 16);
+    } else {
+        for (int i = 0; i < 16; i++)
+            destination[i] = op == 0x54 ? (uint8_t)(destination[i] & source[i])
+                             : op == 0x55 ? (uint8_t)(~destination[i] & source[i])
+                             : op == 0x56 ? (uint8_t)(destination[i] | source[i])
+                                          : (uint8_t)(destination[i] ^ source[i]);
+    }
+    interp_xmm_put(cpu, insn->reg, destination);
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
+static int interp_sse_aligned_move(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
+    uint8_t op = insn->op;
+    if (op != 0x28 && op != 0x29 && op != 0x2B) return -1;
+    if (interp_sse_unaligned(cpu, insn, next)) return interp_guest_trap(cpu, pc, 11, 128);
+    uint8_t value[16];
+    if (op == 0x28) {
+        interp_sse_rm_get(cpu, insn, next, 16, value);
+        interp_xmm_put(cpu, insn->reg, value);
+    } else {
+        interp_xmm_get(cpu, insn->reg, value);
+        interp_sse_rm_put(cpu, insn, next, 16, value);
+    }
+    cpu->rip = next;
+    return STEP_NEXT;
+}
+
 static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
     int prefix = interp_sse_prefix(insn);
@@ -4013,6 +4049,10 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
     delegated = interp_sse_integer_pack_compare(cpu, insn, next);
     if (delegated >= 0) return delegated;
     delegated = interp_sse_permute_extract(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_sse_xmm_binary(cpu, insn, next);
+    if (delegated >= 0) return delegated;
+    delegated = interp_sse_aligned_move(cpu, insn, pc, next);
     if (delegated >= 0) return delegated;
 
     // These have both MMX (no prefix, 64-bit) and SSE2 (0x66, 128-bit xmm) encodings. The MMX half of the
@@ -4104,48 +4144,6 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
         cpu->rip = next;
         return STEP_NEXT;
     }
-
-    // Lane interleave: these ARE PUNPCK*DQ / PUNPCK*QDQ.
-    case 0x14:
-    case 0x15:
-        interp_xmm_get(cpu, destination, d);
-        interp_sse_rm_get(cpu, insn, next, 16, s);
-        interp_punpck(d, s, prefix == SSE_66 ? 8 : 4, op == 0x15, 16); // UNPCKLPS/PD: no MMX form
-        interp_xmm_put(cpu, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-
-    // MOVAPS/MOVAPD and the non-temporal stores
-    case 0x28:
-        if (interp_sse_unaligned(cpu, insn, next)) return interp_guest_trap(cpu, pc, 11, 128);
-        interp_sse_rm_get(cpu, insn, next, 16, d);
-        interp_xmm_put(cpu, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-
-    case 0x29:
-    case 0x2B:
-        if (interp_sse_unaligned(cpu, insn, next)) return interp_guest_trap(cpu, pc, 11, 128);
-        interp_xmm_get(cpu, destination, d);
-        interp_sse_rm_put(cpu, insn, next, 16, d);
-        cpu->rip = next;
-        return STEP_NEXT;
-
-    // Bitwise, so single/double carries no difference.
-    case 0x54:
-    case 0x55:
-    case 0x56:
-    case 0x57:
-        interp_xmm_get(cpu, destination, d);
-        interp_sse_rm_get(cpu, insn, next, 16, s);
-        for (int i = 0; i < 16; i++)
-            d[i] = op == 0x54   ? (uint8_t)(d[i] & s[i])
-                   : op == 0x55 ? (uint8_t)(~d[i] & s[i]) // ANDNPS: NOT dest, then AND
-                   : op == 0x56 ? (uint8_t)(d[i] | s[i])
-                                : (uint8_t)(d[i] ^ s[i]);
-        interp_xmm_put(cpu, destination, d);
-        cpu->rip = next;
-        return STEP_NEXT;
 
     // An INTEGER r/m operand; REX.W selects 64-bit; upper bits ZEROED.
     case 0x6E: {
