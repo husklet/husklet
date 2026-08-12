@@ -55,6 +55,50 @@ class MatrixTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "exact-output mismatch"):
             eri.verify_outputs([row, dict(row, output="two")])
 
+    def test_ledger_must_be_complete_unique_and_follow_the_crossed_schedule(self):
+        config = {"rounds": 4}
+        rows = []
+        for workload in ("python", "sqlite", "malloc"):
+            for left, right in eri.CELLS:
+                for round_number in range(4):
+                    for position, index in enumerate(eri.ORDER[round_number]):
+                        rows.append({
+                            "workload": workload,
+                            "cell": left + right,
+                            "round": round_number,
+                            "position": position,
+                            "arm": (left, right)[index],
+                        })
+        eri.verify_ledger(rows, config)
+        with self.assertRaisesRegex(RuntimeError, "duplicate"):
+            eri.verify_ledger(rows + [rows[0]], config)
+        with self.assertRaisesRegex(RuntimeError, "incomplete"):
+            eri.verify_ledger(rows[:-1], config)
+        wrong = [dict(row) for row in rows]
+        wrong[0]["arm"] = "I"
+        with self.assertRaisesRegex(RuntimeError, "expected"):
+            eri.verify_ledger(wrong, config)
+
+    def test_only_integrated_against_each_baseline_controls_cutover_verdict(self):
+        rows = []
+        timings = {"E": 100, "R": 130, "I": 105}
+        for left, right in eri.CELLS:
+            for round_number in range(4):
+                for position, index in enumerate(eri.ORDER[round_number]):
+                    arm = (left, right)[index]
+                    rows.append({
+                        "workload": "python", "cell": left + right, "round": round_number,
+                        "position": position, "arm": arm,
+                        "phases": {"python": {"us": timings[arm], "ok": "same"}},
+                    })
+        # Supply equivalent rows for the other required workloads.
+        python_rows = list(rows)
+        rows += [dict(row, workload=name) for name in ("sqlite", "malloc") for row in python_rows]
+        verdict, report = eri.summarize(rows, 1.10)
+        self.assertEqual(verdict, "PASS")
+        self.assertIn("python\tER\tpython\t1.300000\t0.000000\t1.300000\tINFO", report)
+        self.assertIn("python\tEI\tpython\t1.050000\t0.000000\t1.050000\tPASS", report)
+
     def test_timing_alone_is_normalized(self):
         left = eri.canonical(b"PHASE malloc us=12 ok=7\n", b"")
         right = eri.canonical(b"PHASE malloc us=99 ok=7\n", b"")

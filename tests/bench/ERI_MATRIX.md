@@ -88,8 +88,11 @@ Failure of any condition aborts without a performance verdict.
 
 For each comparison and phase, the report uses the median paired ratio and the
 larger of the two same-arm null floors. The conservative bound is
-`ratio * (1 + null_floor)`. Every Python, sqlite, and malloc row must be at most
-1.10; otherwise the process exits 2 and writes `FAIL` to `verdict.txt`.
+`ratio * (1 + null_floor)`. E/R is reported as baseline context (`INFO`). Both
+E/I and R/I must be at most 1.10 for every Python, sqlite, and malloc phase;
+their conjunction is exactly the requirement that I be no more than 10% slower
+than the faster baseline. Otherwise the process exits 2 and writes `FAIL` to
+`verdict.txt`.
 
 ## Adapter/no-op control
 

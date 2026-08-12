@@ -306,6 +306,35 @@ def verify_outputs(rows):
         expected[key] = observed
 
 
+def verify_ledger(rows, config):
+    """Reject duplicate, foreign, or incomplete rows before producing a verdict."""
+    expected = {
+        (workload, left + right, round_number, position)
+        for workload in ("python", "sqlite", "malloc")
+        for left, right in CELLS
+        for round_number in range(config["rounds"])
+        for position in (0, 1)
+    }
+    observed = []
+    for row in rows:
+        try:
+            key = (row["workload"], row["cell"], row["round"], row["position"])
+            left, right = row["cell"]
+            scheduled = (left, right)[ORDER[row["round"] % 4][row["position"]]]
+        except (IndexError, KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("ledger contains a malformed row") from error
+        if key not in expected:
+            raise RuntimeError(f"ledger contains an unexpected row: {key}")
+        if row.get("arm") != scheduled:
+            raise RuntimeError(f"ledger row {key} records arm {row.get('arm')}, expected {scheduled}")
+        observed.append(key)
+    if len(observed) != len(set(observed)):
+        raise RuntimeError("ledger contains a duplicate campaign row")
+    missing = expected.difference(observed)
+    if missing:
+        raise RuntimeError(f"ledger is incomplete: {len(missing)} rows missing")
+
+
 def summarize(rows, limit, invariant_phases=()):
     by_key = {(r["workload"], r["cell"], r["round"], r["position"]): r for r in rows}
     verdict = "PASS"
@@ -335,9 +364,14 @@ def summarize(rows, limit, invariant_phases=()):
                 ratio = statistics.median(values)
                 floor = max(nulls[(workload, left, phase)], nulls[(workload, right, phase)])
                 upper = ratio * (1.0 + floor)
+                # E/R compares the two frozen baselines and is informative. The cutover promise is
+                # I <= limit * min(E, R), which is exactly the conjunction of E/I and R/I.
+                judged = right == "I"
                 passed = upper <= limit
-                verdict = verdict if passed else "FAIL"
-                lines.append(f"{workload}\t{cell}\t{phase}\t{ratio:.6f}\t{floor:.6f}\t{upper:.6f}\t{'PASS' if passed else 'FAIL'}")
+                if judged and not passed:
+                    verdict = "FAIL"
+                result = "PASS" if judged and passed else "FAIL" if judged else "INFO"
+                lines.append(f"{workload}\t{cell}\t{phase}\t{ratio:.6f}\t{floor:.6f}\t{upper:.6f}\t{result}")
     return verdict, "\n".join(lines) + "\n"
 
 
@@ -397,6 +431,7 @@ def main(argv=None):
                             append_row(output, row)
                             rows.append(row)
         verify_outputs(rows)
+        verify_ledger(rows, config)
         verdict, report = summarize(rows, args.limit, set(config.get("invariant_phases", [])))
         (args.results / "report.tsv").write_text(report)
         (args.results / "verdict.txt").write_text(verdict + "\n")
