@@ -1,3 +1,74 @@
+static int statx_provider_status(const hl_provider_node *provider, struct stat *status) {
+    hl_host_result opened = hl_provider_files_open_service(provider->service, HL_HOST_FILE_READ);
+    if (opened.status != HL_STATUS_OK) return -EIO;
+
+    hl_host_file_metadata metadata;
+    hl_status metadata_status =
+        g_host_services->file->metadata(g_host_services->context, opened.value, &metadata).status;
+    (void)g_host_services->file->close(g_host_services->context, opened.value);
+    if (metadata_status != HL_STATUS_OK) return -EIO;
+
+    memset(status, 0, sizeof *status);
+    status->st_mode = (provider->kind == HL_PROVIDER_NODE_CHARACTER ? S_IFCHR
+                       : provider->kind == HL_PROVIDER_NODE_BLOCK   ? S_IFBLK
+                                                                    : S_IFREG) |
+                      (mode_t)provider->mode;
+    status->st_uid = (uid_t)provider->uid;
+    status->st_gid = (gid_t)provider->gid;
+    if (provider->kind == HL_PROVIDER_NODE_CHARACTER || provider->kind == HL_PROVIDER_NODE_BLOCK)
+        status->st_rdev = (dev_t)hl_linux_device_make(provider->major, provider->minor);
+    status->st_size = (off_t)metadata.size;
+    status->st_nlink = 1;
+    return 0;
+}
+
+static int statx_resolve_status(const hl_provider_node *provider, const char *guest_path, const char *raw_path,
+                                const char *native_path, uint64_t dirfd, int nofollow, int empty,
+                                struct stat *status, const char **ownership_path, int *ownership_fd,
+                                char *backing_path, size_t backing_path_size) {
+    if (provider != NULL && provider->kind != HL_PROVIDER_NODE_DIRECTORY &&
+        provider->kind != HL_PROVIDER_NODE_SYMLINK)
+        return statx_provider_status(provider, status);
+
+    char executable[1024];
+    if (proc_self_exe(guest_path, executable, sizeof executable)) {
+        if (nofollow) {
+            memset(status, 0, sizeof *status);
+            status->st_mode = S_IFLNK | 0777;
+            status->st_nlink = 1;
+            return 0;
+        }
+        char host_path[4200];
+        const char *resolved = xresolve_overlay(executable, host_path, sizeof host_path);
+        int rc = stat(resolved, status) == 0 ? 0 : -errno;
+        if (rc == 0 && path_copy(backing_path, backing_path_size, resolved) == 0) *ownership_path = backing_path;
+        return rc;
+    }
+    if (sysnet_hidden(guest_path)) return -ENOENT;
+    if (!nofollow && procfd_num(guest_path) >= 0)
+        return procfd_follow_stat(guest_path, status) > 0 ? 0 : -ENOENT;
+    if (synth_stat_raw(guest_path, status)) return 0;
+    if (raw_path && raw_path[0] && !empty && !nofollow) {
+        int rc;
+        if (!hl_fdcache_metadata_lookup(native_path, &rc, status)) {
+            int result = fstatat(ATFD(dirfd), native_path, status, 0);
+            rc = result < 0 ? -errno : 0;
+            hl_fdcache_metadata_store(native_path, rc, status);
+        }
+        if (rc == 0) *ownership_path = native_path;
+        return rc;
+    }
+
+    int memory_file = empty && memf_get((int)dirfd);
+    int result = memory_file ? memf_fstat((int)dirfd, status)
+                 : empty    ? fstat((int)dirfd, status)
+                            : fstatat(ATFD(dirfd), native_path, status, nofollow ? AT_SYMLINK_NOFOLLOW : 0);
+    int rc = result < 0 ? -errno : 0;
+    if (rc == 0 && empty) *ownership_fd = (int)dirfd;
+    if (rc == 0 && !empty) *ownership_path = native_path;
+    return rc;
+}
+
 static void svc_fs_extended_status_291(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                                        uint64_t a4, uint64_t a5) {
     switch (nr) {
@@ -52,79 +123,13 @@ static void svc_fs_extended_status_291(struct cpu *c, uint64_t nr, uint64_t a0, 
         // both stay NULL/-1 for synthetic entries (no backing file -> cuid/cgid default applies).
         const char *xpath = NULL;
         int xfd = -1;
-        char ep[1024];
         char provider_path[4200];
+        char backing_path[4200];
         const hl_provider_node *provider;
         guest_abspath_at((int)a0, raw, provider_path, sizeof provider_path);
         provider = hl_provider_namespace_launch_resolve(provider_path, strlen(provider_path));
-        if (provider != NULL && provider->kind != HL_PROVIDER_NODE_DIRECTORY &&
-            provider->kind != HL_PROVIDER_NODE_SYMLINK) {
-            hl_host_result opened = hl_provider_files_open_service(provider->service, HL_HOST_FILE_READ);
-            hl_host_file_metadata metadata;
-            if (opened.status != HL_STATUS_OK ||
-                g_host_services->file->metadata(g_host_services->context, opened.value, &metadata).status !=
-                    HL_STATUS_OK) {
-                if (opened.status == HL_STATUS_OK)
-                    (void)g_host_services->file->close(g_host_services->context, opened.value);
-                rc = -EIO;
-            } else {
-                (void)g_host_services->file->close(g_host_services->context, opened.value);
-                memset(&s, 0, sizeof s);
-                s.st_mode = (provider->kind == HL_PROVIDER_NODE_CHARACTER ? S_IFCHR
-                             : provider->kind == HL_PROVIDER_NODE_BLOCK   ? S_IFBLK
-                                                                          : S_IFREG) |
-                            (mode_t)provider->mode;
-                s.st_uid = (uid_t)provider->uid;
-                s.st_gid = (gid_t)provider->gid;
-                if (provider->kind == HL_PROVIDER_NODE_CHARACTER || provider->kind == HL_PROVIDER_NODE_BLOCK)
-                    s.st_rdev = (dev_t)hl_linux_device_make(provider->major, provider->minor);
-                s.st_size = (off_t)metadata.size;
-                s.st_nlink = 1;
-                rc = 0;
-            }
-        } else if (proc_self_exe(gp, ep, sizeof ep)) {
-            // /proc/[self|pid]/exe magic symlink -> the running executable
-            if (nofollow) { // the magic symlink itself (Linux: st_size == 0)
-                memset(&s, 0, sizeof s);
-                s.st_mode = S_IFLNK | 0777;
-                s.st_size = 0;
-                s.st_nlink = 1;
-                rc = 0;
-            } else {
-                char hb[4200];
-                const char *hp = xresolve_overlay(ep, hb, sizeof hb);
-                rc = stat(hp, &s) == 0 ? 0 : -errno;
-                if (rc == 0) xpath = hp;
-            }
-        } else if (sysnet_hidden(gp)) {
-            rc = -ENOENT;
-        } else if (!nofollow && procfd_num(gp) >= 0) {
-            rc = procfd_follow_stat(gp, &s) > 0 ? 0 : -ENOENT;
-        } else if (synth_stat_raw(gp, &s)) {
-            rc = 0;
-            // synth /proc or /sys -> fill from s below (synthetic: no backing file, xpath/xfd stay NULL/-1)
-        }
-        // cacheable (only the follow case -- the path cache doesn't distinguish follow vs nofollow)
-        else if (raw && raw[0] && !empty && !nofollow) {
-            if (!hl_fdcache_metadata_lookup(p, &rc, &s)) {
-                int rr = fstatat(ATFD(a0), p, &s, 0);
-                rc = rr < 0 ? -errno : 0;
-                hl_fdcache_metadata_store(p, rc, &s);
-            }
-            if (rc == 0) xpath = p;
-        } else {
-            int esf = empty && memf_get((int)a0);
-            int rr = esf     ? memf_fstat((int)a0, &s)
-                     : empty ? fstat((int)a0, &s)
-                             : fstatat(ATFD(a0), p, &s, nofollow ? AT_SYMLINK_NOFOLLOW : 0);
-            rc = rr < 0 ? -errno : 0;
-            if (rc == 0) {
-                if (empty)
-                    xfd = (int)a0; // AT_EMPTY_PATH: xattr lives on the fd's backing file
-                else
-                    xpath = p;
-            }
-        }
+        rc = statx_resolve_status(provider, gp, raw, p, a0, nofollow, empty, &s, &xpath, &xfd, backing_path,
+                                  sizeof backing_path);
         if (rc < 0) {
             G_RET(c) = (uint64_t)(int64_t)rc;
             break;

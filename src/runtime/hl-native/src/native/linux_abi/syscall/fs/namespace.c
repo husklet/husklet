@@ -367,6 +367,109 @@ static void svc_fs_namespace_36(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     }
 }
 
+static int linkat_publish_procfd(uint64_t old_dirfd, uint64_t old_path, uint64_t new_dirfd, uint64_t new_path,
+                                 int64_t *result) {
+    char source_guest[4200];
+    abs_guest((int)old_dirfd, (const char *)old_path, source_guest, sizeof source_guest);
+    int source_fd = procfd_num(source_guest);
+    if (source_fd < 0) return 0;
+    if (jail_ro_at((int)new_dirfd, (const char *)new_path)) {
+        *result = -EROFS;
+        return 1;
+    }
+
+    memf_materialize(source_fd);
+    char final_name[512], native_path[4200];
+    int parent_fd;
+    const char *name;
+    int close_parent = jail_routed_at((int)new_dirfd, (const char *)new_path);
+    if (close_parent) {
+        parent_fd = jail_at((int)new_dirfd, (const char *)new_path, final_name, sizeof final_name, 1);
+        if (parent_fd < 0) {
+            *result = parent_fd;
+            return 1;
+        }
+        name = final_name;
+    } else {
+        name = atpath((int)new_dirfd, (const char *)new_path, native_path, sizeof native_path, 0);
+        parent_fd = ATFD(new_dirfd);
+    }
+
+    int rc, error;
+#if defined(AT_EMPTY_PATH)
+    rc = linkat(source_fd, "", parent_fd, name, AT_EMPTY_PATH);
+    error = errno;
+#else
+    rc = -1;
+    error = ENOTSUP;
+#endif
+    if (rc < 0) {
+        int output = openat(parent_fd, name, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (output < 0) {
+            error = errno;
+        } else {
+            char copy[65536];
+            off_t offset = 0;
+            ssize_t count;
+            rc = 0;
+            while ((count = pread(source_fd, copy, sizeof copy, offset)) > 0) {
+                ssize_t written = 0;
+                while (written < count) {
+                    ssize_t amount = pwrite(output, copy + written, (size_t)(count - written), offset + written);
+                    if (amount <= 0) {
+                        rc = -1;
+                        error = errno;
+                        break;
+                    }
+                    written += amount;
+                }
+                if (rc < 0) break;
+                offset += count;
+            }
+            if (count < 0) {
+                rc = -1;
+                error = errno;
+            }
+            close(output);
+            if (rc < 0) (void)unlinkat(parent_fd, name, 0);
+        }
+    }
+    if (close_parent) close(parent_fd);
+    *result = rc < 0 ? -(int64_t)error : 0;
+    return 1;
+}
+
+static int linkat_in_jail(uint64_t old_dirfd, uint64_t old_path, uint64_t new_dirfd, uint64_t new_path, int flags,
+                          int64_t *result) {
+    if (!jail_routed_at((int)old_dirfd, (const char *)old_path) &&
+        !jail_routed_at((int)new_dirfd, (const char *)new_path))
+        return 0;
+
+    overlay_copyup_at((int)old_dirfd, (const char *)old_path);
+    char old_final[512], new_final[512];
+    int old_parent = jail_at((int)old_dirfd, (const char *)old_path, old_final, sizeof old_final, 1);
+    if (old_parent < 0) {
+        *result = old_parent;
+        return 1;
+    }
+    int new_parent = jail_at((int)new_dirfd, (const char *)new_path, new_final, sizeof new_final, 1);
+    if (new_parent < 0) {
+        close(old_parent);
+        *result = new_parent;
+        return 1;
+    }
+    int rc = linkat(old_parent, old_final, new_parent, new_final, flags), error = errno;
+    if (rc == 0) {
+        struct stat status;
+        if (fstatat(new_parent, new_final, &status, AT_SYMLINK_NOFOLLOW) == 0)
+            hl_fdcache_metadata_evict_inode(status.st_dev, status.st_ino);
+    }
+    close(old_parent);
+    close(new_parent);
+    *result = rc < 0 ? -(int64_t)error : 0;
+    return 1;
+}
+
 static void svc_fs_namespace_37(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                                 uint64_t a4, uint64_t a5) {
     switch (nr) {
@@ -392,74 +495,9 @@ static void svc_fs_namespace_37(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
         // its backing host file, then re-link it through the host's own /proc/self/fd magic symlink (guest
         // fd numbers match the engine's native numbers). This must precede the /proc-source EXDEV rejection.
         if (a4 & 0x400 /*AT_SYMLINK_FOLLOW*/) {
-            char sgp[4200];
-            abs_guest((int)a0, (const char *)a1, sgp, sizeof sgp);
-            int pfn = procfd_num(sgp);
-            if (pfn >= 0) {
-                if (jail_ro_at((int)a2, (const char *)a3)) {
-                    G_RET(c) = (uint64_t)(int64_t)(-EROFS);
-                    break;
-                }
-                memf_materialize(pfn);
-                char nfin[512], nb[4200];
-                int npfd;
-                const char *nname;
-                if (jail_routed_at((int)a2, (const char *)a3)) {
-                    npfd = jail_at((int)a2, (const char *)a3, nfin, sizeof nfin, 1);
-                    if (npfd < 0) {
-                        G_RET(c) = (uint64_t)(int64_t)npfd;
-                        break;
-                    }
-                    nname = nfin;
-                } else {
-                    nname = atpath((int)a2, (const char *)a3, nb, sizeof nb, 0);
-                    npfd = ATFD(a2);
-                }
-                /* Give the unnamed inode a link.  A true O_TMPFILE inode re-links
-                 * straight through AT_EMPTY_PATH; the create-then-unlink emulation
-                 * of O_TMPFILE cannot, so fall back to publishing a fresh file with
-                 * the descriptor's (now materialized) contents. */
-                int r, e;
-#if defined(AT_EMPTY_PATH)
-                r = linkat(pfn, "", npfd, nname, AT_EMPTY_PATH);
-                e = errno;
-#else
-                r = -1;
-                e = ENOTSUP;
-#endif
-                if (r < 0) {
-                    int out = openat(npfd, nname, O_WRONLY | O_CREAT | O_EXCL, 0600);
-                    if (out < 0) {
-                        e = errno;
-                    } else {
-                        char copy[65536];
-                        off_t off = 0;
-                        ssize_t got;
-                        r = 0;
-                        while ((got = pread(pfn, copy, sizeof copy, off)) > 0) {
-                            ssize_t put = 0;
-                            while (put < got) {
-                                ssize_t w = pwrite(out, copy + put, (size_t)(got - put), off + put);
-                                if (w <= 0) {
-                                    r = -1;
-                                    e = errno;
-                                    break;
-                                }
-                                put += w;
-                            }
-                            if (r < 0) break;
-                            off += got;
-                        }
-                        if (got < 0) {
-                            r = -1;
-                            e = errno;
-                        }
-                        close(out);
-                        if (r < 0) (void)unlinkat(npfd, nname, 0);
-                    }
-                }
-                if (nname == nfin) close(npfd);
-                G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : 0;
+            int64_t result;
+            if (linkat_publish_procfd(a0, a1, a2, a3, &result)) {
+                G_RET(c) = (uint64_t)result;
                 break;
             }
         }
@@ -493,35 +531,9 @@ static void svc_fs_namespace_37(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             break;
         }
         int fl = (a4 & 0x400) ? AT_SYMLINK_FOLLOW : 0;
-        if (jail_routed_at((int)a0, (const char *)a1) || jail_routed_at((int)a2, (const char *)a3)) {
-            // Copy a lower-only SOURCE up first. jail_at(create=1) resolves the source to its UPPER parent
-            // dir, but a file that still lives only in the read-only lower is absent there, so linkat would
-            // ENOENT (dpkg backs up e.g. /usr/bin/perl via link() on every package upgrade). Mirrors what
-            // rename(2) already does for its source. No-op outside overlay mode / when already up.
-            overlay_copyup_at((int)a0, (const char *)a1);
-            // both ends confined via TOCTOU-free resolver
-            char ofin[512], nfin[512];
-            int opfd = jail_at((int)a0, (const char *)a1, ofin, sizeof ofin, 1);
-            if (opfd < 0) {
-                G_RET(c) = (uint64_t)(int64_t)opfd;
-                break;
-            }
-            int npfd = jail_at((int)a2, (const char *)a3, nfin, sizeof nfin, 1);
-            if (npfd < 0) {
-                close(opfd);
-                G_RET(c) = (uint64_t)(int64_t)npfd;
-                break;
-            }
-            int r = linkat(opfd, ofin, npfd, nfin, fl), e = errno;
-            // the new link bumped the shared inode's nlink -> the source path's cached stat is now stale.
-            if (r == 0) {
-                struct stat ls;
-                if (fstatat(npfd, nfin, &ls, AT_SYMLINK_NOFOLLOW) == 0)
-                    hl_fdcache_metadata_evict_inode(ls.st_dev, ls.st_ino);
-            }
-            close(opfd);
-            close(npfd);
-            G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : 0;
+        int64_t jail_result;
+        if (linkat_in_jail(a0, a1, a2, a3, fl, &jail_result)) {
+            G_RET(c) = (uint64_t)jail_result;
             break;
         }
         char ob[4200], nb[4200];
