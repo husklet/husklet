@@ -5396,6 +5396,52 @@ static int lower_mmx_fp_conversion(struct insn *instruction, uint64_t next, int 
     return TX_NEXT;
 }
 
+static int lower_sse_packed_shift(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm,
+                                  int mmx, int *writeback, hl_x86_crypto_state *crypto_state) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0x71 || opcode == 0x72 || opcode == 0x73) {
+        int operation = instruction->reg & 7;
+        int element_bits = opcode == 0x71 ? 16 : opcode == 0x72 ? 32 : 64;
+        int shift = (int)(instruction->imm & 0xff);
+        int destination = vm;
+        *writeback = mmx ? destination : -1;
+        if (operation == 2)
+            e_vshr_imm(destination, destination, element_bits, shift, 0);
+        else if (operation == 4)
+            e_vshr_imm(destination, destination, element_bits, shift, 1);
+        else if (operation == 6)
+            e_vshl_imm(destination, destination, element_bits, shift);
+        else if (opcode == 0x73 && (operation == 3 || operation == 7) && !mmx) {
+            if (shift > 15) {
+                e_v3(0x6E201C00u, destination, destination, destination);
+            } else if (shift) {
+                if (!crypto_state->zero_ready || nosseopt()) e_v3(0x6E201C00u, 26, 26, 26);
+                crypto_state->zero_ready = 1;
+                if (operation == 3)
+                    e_ext(destination, destination, 26, shift);
+                else
+                    e_ext(destination, 26, destination, 16 - shift);
+            }
+        } else {
+            report_unimpl(guest_pc, instruction);
+            return TX_BREAK;
+        }
+        return TX_NEXT;
+    }
+    if (opcode != 0xF1 && opcode != 0xF2 && opcode != 0xF3 && opcode != 0xD1 && opcode != 0xD2 &&
+        opcode != 0xD3 && opcode != 0xE1 && opcode != 0xE2)
+        return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    int left = opcode == 0xF1 || opcode == 0xF2 || opcode == 0xF3;
+    int arithmetic = opcode == 0xE1 || opcode == 0xE2;
+    int element_bits = (opcode == 0xF1 || opcode == 0xD1 || opcode == 0xE1)   ? 16
+                       : (opcode == 0xF2 || opcode == 0xD2 || opcode == 0xE2) ? 32
+                                                                                : 64;
+    e_sse_var_shift(vd, vd, source, element_bits, left, arithmetic);
+    return TX_NEXT;
+}
+
 // Owns the x87 run boundary as well as opcode dispatch. Every memory form
 // materializes the shadow stack before a potentially faulting access or C exit.
 static int lower_x87_family(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
@@ -6023,6 +6069,13 @@ static void *translate_block(uint64_t gpc) {
                     gpc = next;
                     continue;
                 }
+                int shift_result = lower_sse_packed_shift(&I, gpc, next, vd, vm, mmx, &mmx_wb, &crypto_state);
+                if (shift_result == TX_BREAK) break;
+                if (shift_result == TX_NEXT) {
+                    if (mmx_wb >= 0) e_vmov8(mmx_wb, mmx_wb);
+                    gpc = next;
+                    continue;
+                }
                 if ((op == 0x12 || op == 0x16) && I.rep) { // SSE3 movsldup/movshdup
                     int s = vm;
                     if (I.is_mem) {
@@ -6083,50 +6136,11 @@ static void *translate_block(uint64_t gpc) {
                     e_ins_s(17, 2, s, (im >> 4) & 3);
                     e_ins_s(17, 3, s, (im >> 6) & 3);
                     e_vmov(vd, 17);
-                } else if (op == 0x71 || op == 0x72 || op == 0x73) { // psrl/psra/psll w/d/q by imm8; psrldq/pslldq
-                    int sub = I.reg & 7,
-                        esz = op == 0x71   ? 16
-                              : op == 0x72 ? 32
-                                           : 64,
-                        sh = (int)(I.imm & 0xff), x = vm; // the shift's destination is r/m, NOT reg
-                    mmx_wb = mmx ? x : -1;                // ...so the MMX narrow must follow it there
-                    if (sub == 2)
-                        e_vshr_imm(x, x, esz, sh, 0); // psrl
-                    else if (sub == 4)
-                        e_vshr_imm(x, x, esz, sh, 1); // psra
-                    else if (sub == 6)
-                        e_vshl_imm(x, x, esz, sh);                           // psll
-                    else if (op == 0x73 && (sub == 3 || sub == 7) && !mmx) { // psrldq / pslldq (66 only; #UD bare)
-                        if (sh > 15) {                                       // x86: count > 15 -> result is all-zero
-                            e_v3(0x6E201C00u, x, x, x);
-                        } else if (sh) { // count 0 is the identity -> emit nothing
-                            if (!crypto_state.zero_ready || nosseopt())
-                                e_v3(0x6E201C00u, 26, 26, 26); // hoisted zero (crypto.c claim)
-                            crypto_state.zero_ready = 1;
-                            if (sub == 3)
-                                e_ext(x, x, 26, sh); // psrldq
-                            else
-                                e_ext(x, 26, x, 16 - sh); // pslldq
-                        }
-                    } else {
-                        report_unimpl(gpc, &I);
-                        break;
-                    }
                 } else if (lower_sse_shuffle(&I, next, vd, vm, mmx) == TX_NEXT) {
                 } else if (lower_sse_packed_binary(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted the complete lane-wise operation.
                 } else if (lower_sse_widening_multiply(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted the complete widening multiply operation.
-                } else if (op == 0xF1 || op == 0xF2 || op == 0xF3 || op == 0xD1 || op == 0xD2 || op == 0xD3 ||
-                           op == 0xE1 || op == 0xE2) { // psll/psrl/psra w/d/q by xmm/m (variable count)
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    int left = (op == 0xF1 || op == 0xF2 || op == 0xF3);
-                    int arith = (op == 0xE1 || op == 0xE2);
-                    int esize = (op == 0xF1 || op == 0xD1 || op == 0xE1)   ? 16
-                                : (op == 0xF2 || op == 0xD2 || op == 0xE2) ? 32
-                                                                           : 64;
-                    e_sse_var_shift(vd, vd, s, esize, left, arith);
                 } else if (op == 0x14 || op == 0x15) { // unpckl/hp{s,d}: interleave float lanes -> ZIP1/ZIP2
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
