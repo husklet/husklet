@@ -5,9 +5,9 @@ This is the authoritative checklist for the C-primary production migration. Chec
 ## Repository recovery and ownership
 
 - [x] Preserve the prior Rust repository in `../engine_rust`, excluding build artifacts. The recovery tree exists and is independent of production builds.
-- [x] Keep `../engine` read-only and remove build/runtime dependency on both sibling repositories.
+- [x] Keep `../engine` read-only and remove build/runtime dependency on both sibling repositories. Current `cargo metadata`, normal/build dependency trees, and repository-escape scan contain no sibling dependency.
 - [x] Make Husklet the active repository and retain its container, workspace, terminal, GUI, daemon, logging, image, and lifecycle surfaces.
-- [x] Remove obsolete Rust runtime crates replaced by the C engine. Only `src/runtime/hl-native` remains under `src/runtime`.
+- [x] Remove obsolete Rust runtime crates replaced by the C engine. Current Cargo metadata and the filesystem contain only `src/runtime/hl-native` under `src/runtime`; deleted runtime package names are absent from `Cargo.lock`.
 - [x] Delete obsolete duplicate native executor, differential production selector, retained directory, fixtures, manifests, provenance hashes, and source bookkeeping.
 - [x] Remove `tests/runtime/legacy` and its stale/generated compatibility corpus.
 - [x] Remove all tracked Python tooling and Python build dependencies. Python remains only as a guest workload to test compatibility.
@@ -89,9 +89,9 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Add generic catch-all source-path, empty-directory, single-file-directory, and redundant-parent-filename rules.
 - [x] Add a generic documentation inventory/example contract.
 - [x] Add a generic detached-constructor rule: free constructors returning `T`, `Option<T>`, or `Result<T, E>` belong on `T` when ownership is proven.
-- [ ] Move the two remaining detached constructors reported by the live scan onto `Schedule` and `Sample` (in progress).
+- [x] Move detached constructors reported by the live scan onto their owned result types, including `Schedule` and `Sample`.
 - [ ] Fix the remaining Rust nesting finding in testing runtime definition.
-- [ ] Repair five stale linter self-test expectations and make `cargo test -p hl-design-lint --lib` fully green (in progress).
+- [x] Repair stale linter self-test expectations and make `cargo test -p hl-design-lint --lib` fully green.
 - [ ] Run the full linter to zero findings on the final merged repository.
 
 ## Testing ownership and fixtures
