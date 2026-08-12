@@ -1226,9 +1226,13 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     // Fast-syscall counters are host telemetry, never guest output.  Explicit retained-C diagnostics
     // remain available through the canonical [prof] report emitted by the exit path; normal launches
     // must not synthesize a guest stderr line merely because an inline clock call happened.
-    if (g_prof)
+    if (g_prof) {
+        fprintf(stderr, "[prof] dispatcher crossings=%llu translations=%llu\n",
+                (unsigned long long)g_dispatch_profile.crossings,
+                (unsigned long long)g_dispatch_profile.translations);
         fprintf(stderr, "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
                 (unsigned long long)g_disp_n, (unsigned long long)g_ibtc_fill, g_noibtc ? "OFF" : "ON");
+    }
     return c.exit_code;
 }
 

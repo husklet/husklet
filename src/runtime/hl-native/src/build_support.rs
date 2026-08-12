@@ -160,6 +160,24 @@ mod tests {
     }
 
     #[test]
+    fn target_exit_paths_publish_matching_dispatch_diagnostics() {
+        let schema = "[prof] dispatcher crossings=%llu translations=%llu";
+        for target in ["aarch64", "x86_64"] {
+            let path = format!("src/native/engine/target/{target}.c");
+            let source = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+            assert_eq!(source.matches(schema).count(), 1, "{path} diagnostic schema drifted");
+            assert!(
+                source.contains("(unsigned long long)g_dispatch_profile.crossings"),
+                "{path} omits dispatcher crossings"
+            );
+            assert!(
+                source.contains("(unsigned long long)g_dispatch_profile.translations"),
+                "{path} omits translation count"
+            );
+        }
+    }
+
+    #[test]
     fn windows_link_inputs_use_target_spelling() {
         assert_eq!(super::static_archive_filename("windows", "hl_engine"), "hl_engine.lib");
         assert_eq!(super::static_archive_filename("linux", "hl_engine"), "libhl_engine.a");

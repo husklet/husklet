@@ -1231,6 +1231,10 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     run_guest(&c);
     c.exit_code = thread_process_owner_wait(&c, c.exit_code);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
+    if (g_prof)
+        fprintf(stderr, "[prof] dispatcher crossings=%llu translations=%llu\n",
+                (unsigned long long)g_dispatch_profile.crossings,
+                (unsigned long long)g_dispatch_profile.translations);
     return c.exit_code;
 }
 
