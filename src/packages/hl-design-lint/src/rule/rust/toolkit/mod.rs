@@ -50,16 +50,7 @@ impl Rule for GuiToolkitLeakage {
             if !public_files.contains(&source.path) {
                 continue;
             }
-            let aliases = Aliases::from_source(source);
-            Visitor {
-                rule: self.id(),
-                source,
-                aliases: &aliases,
-                public_context: true,
-                public_types: public_type_names(source),
-                findings: &mut findings,
-            }
-            .visit_file(&source.syntax);
+            inspect_public_source(self.id(), source, &mut findings);
         }
         for source in sources {
             let Some(names) = reexports.get(&source.path) else {
@@ -68,28 +59,46 @@ impl Rule for GuiToolkitLeakage {
             if public_files.contains(&source.path) {
                 continue;
             }
-            let aliases = Aliases::from_source(source);
-            let mut visitor = Visitor {
-                rule: self.id(),
-                source,
-                aliases: &aliases,
-                public_context: true,
-                public_types: names.clone(),
-                findings: &mut findings,
-            };
-            for item in &source.syntax.items {
-                let selected = item_name(item).is_some_and(|name| names.contains(&name));
-                let selected_impl = match item {
-                    Item::Impl(item) => impl_type_name(item).is_some_and(|name| names.contains(&name)),
-                    _ => false,
-                };
-                if selected || selected_impl {
-                    visitor.visit_item(item);
-                }
-            }
+            inspect_reexports(self.id(), source, names, &mut findings);
         }
         Ok(findings)
     }
+}
+
+fn inspect_public_source(rule: &'static str, source: &Source, findings: &mut Vec<Finding>) {
+    let aliases = Aliases::from_source(source);
+    Visitor {
+        rule,
+        source,
+        aliases: &aliases,
+        public_context: true,
+        public_types: public_type_names(source),
+        findings,
+    }
+    .visit_file(&source.syntax);
+}
+
+fn inspect_reexports(rule: &'static str, source: &Source, names: &BTreeSet<String>, findings: &mut Vec<Finding>) {
+    let aliases = Aliases::from_source(source);
+    let mut visitor = Visitor {
+        rule,
+        source,
+        aliases: &aliases,
+        public_context: true,
+        public_types: names.clone(),
+        findings,
+    };
+    for item in source.syntax.items.iter().filter(|item| exported(item, names)) {
+        visitor.visit_item(item);
+    }
+}
+
+fn exported(item: &Item, names: &BTreeSet<String>) -> bool {
+    item_name(item).is_some_and(|name| names.contains(&name))
+        || match item {
+            Item::Impl(item) => impl_type_name(item).is_some_and(|name| names.contains(&name)),
+            _ => false,
+        }
 }
 
 struct Visitor<'a> {
