@@ -69,11 +69,7 @@ impl Execution {
             return Err("retained C diagnostics require retained C execution".into());
         }
         if self.retained_c {
-            return Ok(if self.retained_c_diagnostics {
-                hl_container::Execution::retained_c_diagnostics()
-            } else {
-                hl_container::Execution::retained_c()
-            });
+            return Ok(hl_container::Execution::native(self.retained_c_diagnostics));
         }
         Ok(if self.native {
             hl_container::Execution::native(self.diagnostics)

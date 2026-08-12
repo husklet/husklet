@@ -592,9 +592,6 @@ pub enum Execution {
     Native {
         diagnostics: bool,
     },
-    /// Selects the production C engine explicitly.
-    RetainedC,
-    RetainedCDiagnostics,
 }
 
 impl Execution {
@@ -604,32 +601,17 @@ impl Execution {
         Self::Native { diagnostics }
     }
 
-    /// Selects the retained-C engine independently of the product default.
-    #[must_use]
-    pub const fn retained_c() -> Self {
-        Self::RetainedC
-    }
-
-    #[must_use]
-    pub const fn retained_c_diagnostics() -> Self {
-        Self::RetainedCDiagnostics
-    }
-
     #[must_use]
     pub const fn is_native(self) -> bool {
-        matches!(self, Self::Native { .. } | Self::RetainedC | Self::RetainedCDiagnostics)
+        matches!(self, Self::Native { .. })
     }
 
     #[must_use]
     pub const fn diagnostics(self) -> bool {
         match self {
-            Self::Interpreted | Self::RetainedC | Self::RetainedCDiagnostics => false,
+            Self::Interpreted => false,
             Self::Native { diagnostics } => diagnostics,
         }
-    }
-
-    pub(crate) const fn retained_c_diagnostics_enabled(self) -> bool {
-        matches!(self, Self::RetainedCDiagnostics)
     }
 }
 
@@ -654,11 +636,9 @@ mod execution_tests {
     }
 
     #[test]
-    fn explicit_engine_encodings_round_trip() {
-        for execution in [Execution::retained_c(), Execution::retained_c_diagnostics()] {
-            let encoded = serde_json::to_vec(&execution).unwrap();
-            assert_eq!(serde_json::from_slice::<Execution>(&encoded).unwrap(), execution);
-        }
+    fn retired_engine_selectors_are_rejected() {
+        assert!(serde_json::from_str::<Execution>(r#"{"backend":"retained_c"}"#).is_err());
+        assert!(serde_json::from_str::<Execution>(r#"{"backend":"retained_c_diagnostics"}"#).is_err());
         assert!(serde_json::from_str::<Execution>(r#"{"backend":"rust_interpreted"}"#).is_err());
         assert!(serde_json::from_str::<Execution>(r#"{"backend":"rust_native","diagnostics":true}"#).is_err());
     }

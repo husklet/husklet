@@ -366,7 +366,7 @@ impl<'a> CaseExecution<'a> {
         let status = self.wait(name, timeout).await?;
         let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
-        if matches!(self.execution, hl_container::Execution::RetainedCDiagnostics) {
+        if self.execution.diagnostics() {
             let text = std::str::from_utf8(&logs.stderr).map_err(|_| "retained C diagnostics are not UTF-8")?;
             let profile = text
                 .lines()

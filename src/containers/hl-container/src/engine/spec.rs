@@ -22,11 +22,7 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::filesystem(&mut options, launch)?;
         Self::resources(&mut options, launch)?;
         Self::network(&mut options, launch)?;
-        Self::flag(
-            &mut options,
-            "HL_C_DIAGNOSTICS",
-            launch.execution.diagnostics() || launch.execution.retained_c_diagnostics_enabled(),
-        )?;
+        Self::flag(&mut options, "HL_C_DIAGNOSTICS", launch.execution.diagnostics())?;
         Self::flag(
             &mut options,
             "HL_RESTORE",
