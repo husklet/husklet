@@ -28,11 +28,7 @@ mod tests {
 
     #[test]
     fn shared_engine_exports_matching_abi() {
-        // SAFETY: package-owned linkage tests call the immutable metadata exports directly.
-        unsafe {
-            assert_eq!(bindings::hl_engine_abi(), 5);
-            assert!(!bindings::hl_engine_version().is_null());
-        }
+        assert!(bindings::engine_metadata_is_valid());
         assert!(LIBRARY_NAME.contains("hl_native_engine"));
         let library = std::path::Path::new(LIBRARY_PATH);
         assert!(

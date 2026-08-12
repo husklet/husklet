@@ -95,6 +95,13 @@ unsafe extern "C" {
 }
 
 #[cfg(test)]
+pub(super) fn engine_metadata_is_valid() -> bool {
+    // SAFETY: both functions are immutable metadata queries exported by the
+    // package-owned shared library and take no caller-provided pointers.
+    unsafe { hl_engine_abi() == 5 && !hl_engine_version().is_null() }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::ptr;

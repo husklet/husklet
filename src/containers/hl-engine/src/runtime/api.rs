@@ -4,8 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::composition::CompositionError;
-
 mod execution;
 pub(crate) use execution::{ProductionFactory, ProductionMachine};
 
