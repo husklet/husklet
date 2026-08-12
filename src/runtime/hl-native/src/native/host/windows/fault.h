@@ -169,52 +169,6 @@ int hl_windows_fault_remove(void);
  * is the only way to observe that a fault never reached user mode at all. */
 void hl_windows_fault_counters(uint64_t *out_seen, uint64_t *out_resumed);
 
-/* --- context accessors ------------------------------------------------------
- * The engine-wide register matrix lives elsewhere and types the fault context as
- * the CONTEXT record a vectored handler receives; these are the few accessors
- * this primitive needs on its own, spelled so that adding the matrix cell later
- * does not have to move them. */
-
-static inline uint64_t hl_windows_fault_pc(const hl_windows_fault *fault) {
-    return (uint64_t)fault->context->Rip;
-}
-
-static inline void hl_windows_fault_set_pc(const hl_windows_fault *fault, uint64_t pc) {
-    fault->context->Rip = (DWORD64)pc;
-}
-
-static inline uint64_t hl_windows_fault_sp(const hl_windows_fault *fault) {
-    return (uint64_t)fault->context->Rsp;
-}
-
-/*
- * Rax..R15 then Rip are consecutive DWORD64 members of CONTEXT in x86
- * register-encoding order, so the flat "base + register number" idiom the POSIX
- * arms use over ucontext gregs survives verbatim, with the natural register
- * numbers as indices. fault.c asserts the layout at compile time rather than
- * trusting this comment.
- */
-static inline uint64_t *hl_windows_fault_gprs(const hl_windows_fault *fault) {
-    return (uint64_t *)(void *)&fault->context->Rax;
-}
-
-/* EFlags is a DWORD sited BEFORE Rax and cannot join that index space; there is
- * deliberately no register number for it. */
-static inline uint32_t hl_windows_fault_eflags(const hl_windows_fault *fault) {
-    return (uint32_t)fault->context->EFlags;
-}
-
-/* xmm0..15, contiguous inside the legacy FXSAVE image. Never NULL -- unlike the
- * optional fpregs pointer on a POSIX host -- but only meaningful, and only
- * restored on resume, when ContextFlags carries CONTEXT_FLOATING_POINT. The
- * dispatcher declines any exception whose context lacks it, so a handler that
- * runs at all may rely on this. The ymm/zmm upper lanes are reachable too, via
- * LocateXStateFeature on fault->context; they are not wrapped here because
- * writing them additionally requires committing the XSTATE feature mask. */
-static inline void *hl_windows_fault_xmm(const hl_windows_fault *fault) {
-    return (void *)fault->context->FltSave.XmmRegisters;
-}
-
 /* --- the setjmp replacement --------------------------------------------------
  *
  * longjmp out of a fault handler is forbidden on this host, unconditionally. The
