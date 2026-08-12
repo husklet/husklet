@@ -1805,6 +1805,7 @@ static void emit_vcmp_lane(int out, int a, int b, int p, int dbl) {
         e_v3(EOR, out, a, a);
         emit32(MVN | (out << 5) | out);
         break; // TRUE_UQ: all ones
+    default: __builtin_unreachable(); // p is masked to four bits above
     }
 }
 

@@ -45,8 +45,8 @@ typedef struct hl_x86_trace_state {
 int hl_x86_trace_seen(const uint64_t *seen, int count, uint64_t value);
 int hl_x86_trace_trap_head(uint64_t address);
 int hl_x86_trace_loop_hazard(uint64_t body, uint64_t end);
-int hl_x86_trace_flags_livein(hl_x86_trace_state *state, uint64_t pc, uint64_t anchor);
-int hl_x86_trace_pfaf_dead(hl_x86_trace_state *state, const struct insn *insn, uint64_t pc, uint64_t anchor);
+int hl_x86_trace_flags_livein(const hl_x86_trace_state *state, uint64_t pc, uint64_t anchor);
+int hl_x86_trace_pfaf_dead(const hl_x86_trace_state *state, const struct insn *insn, uint64_t pc, uint64_t anchor);
 void hl_x86_trace_flags_edge(hl_x86_trace_state *state, uint64_t target, uint64_t anchor);
 void hl_x86_trace_jcc_flags(hl_x86_trace_state *state, uint64_t taken, uint64_t fall, uint64_t anchor, int stitch_fall,
                             int arm_cc, int *save_taken, int *save_fall);

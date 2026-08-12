@@ -411,7 +411,7 @@ static int xf_scan_ok(const hl_x86_trace_state *state, uint64_t a, uint64_t anch
 // budget exhaustion.
 #define XSCAN_INSNS 32
 
-int hl_x86_trace_flags_livein(hl_x86_trace_state *state, uint64_t pc, uint64_t anchor) {
+int hl_x86_trace_flags_livein(const hl_x86_trace_state *state, uint64_t pc, uint64_t anchor) {
     int killed = 0, live = 0;
     (*state->flag_scans)++;
     for (int n = 0; n < XSCAN_INSNS; n++) {
@@ -543,7 +543,7 @@ void hl_x86_trace_jcc_flags(hl_x86_trace_state *state, uint64_t taken, uint64_t 
 // cross-block PF/AF: NI (the insn after a PF/AF producer) is a direct control transfer -> the
 // producer's PF/AF are dead iff provably overwritten-before-read at EVERY successor entry. jp/jnp
 // read PF themselves -> never dead. Indirect branches / ret / syscall -> unknown -> live.
-int hl_x86_trace_pfaf_dead(hl_x86_trace_state *state, const struct insn *NI, uint64_t ni_pc, uint64_t anchor) {
+int hl_x86_trace_pfaf_dead(const hl_x86_trace_state *state, const struct insn *NI, uint64_t ni_pc, uint64_t anchor) {
     uint64_t n2 = ni_pc + (uint64_t)NI->len;
     uint8_t op = NI->op;
     if (!NI->two && (op == 0xE9 || op == 0xEB || op == 0xE8))
