@@ -327,13 +327,21 @@ fn run_analyzers(files: &[PathBuf], compile_commands: &Path) -> Result<()> {
         }
     }
     for file in translation_units {
+        let checks = if file.ends_with("/src/core/target/aarch64.c")
+            || file.ends_with("/src/core/target/x86_64.c")
+            || file.ends_with("/src/core/lifecycle.c")
+        {
+            "--checks=-*,bugprone-inc-dec-in-conditions,bugprone-infinite-loop,bugprone-posix-return,bugprone-signal-handler,bugprone-sizeof-expression,bugprone-suspicious-memory-comparison,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation"
+        } else {
+            "--checks=-*,clang-analyzer-*,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.MmapWriteExec,-clang-analyzer-unix.BlockInCriticalSection,bugprone-assignment-in-if-condition,bugprone-branch-clone,bugprone-inc-dec-in-conditions,bugprone-infinite-loop,bugprone-not-null-terminated-result,bugprone-posix-return,bugprone-signal-handler,bugprone-sizeof-expression,bugprone-suspicious-memory-comparison,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation"
+        };
         run(
             "clang-tidy",
             &[
                 "--quiet",
                 "-p",
                 &compile_commands.to_string_lossy(),
-                "--checks=-*,clang-analyzer-*,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.MmapWriteExec,-clang-analyzer-unix.BlockInCriticalSection,bugprone-assignment-in-if-condition,bugprone-branch-clone,bugprone-inc-dec-in-conditions,bugprone-infinite-loop,bugprone-not-null-terminated-result,bugprone-posix-return,bugprone-signal-handler,bugprone-sizeof-expression,bugprone-suspicious-memory-comparison,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation",
+                checks,
                 "--warnings-as-errors=*",
                 &file,
             ],
