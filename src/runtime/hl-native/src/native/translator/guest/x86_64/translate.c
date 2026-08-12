@@ -5378,6 +5378,171 @@ static int lower_x87_family(struct insn *instruction, uint64_t guest_pc, uint64_
     return result == TX_FALL ? TX_NEXT : result;
 }
 
+static int lower_sse_float_arithmetic(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
+    uint8_t op = I.op;
+    if (op != 0x58 && op != 0x59 && op != 0x5C && op != 0x5E && op != 0x51 &&
+        !((op == 0x52 || op == 0x53) && !I.p66 && !I.repne))
+        return TX_FALL;
+    // add/mul/sub/div/min/max/sqrt. Prefix selects width: F2=scalar double, F3=scalar
+    // single, 66=PACKED double (.2d), none=PACKED single (.4s).
+    // 0F 52 RSQRTPS/SS and 0F 53 RCPPS/SS join the UNARY group with sqrt: baseline SSE1,
+    // single-precision only (66/F2 are reserved, excluded above -> UNIMPL as before).
+    int packed = !I.repne && !I.rep;
+    int s = vm;
+    if (I.is_mem) {
+        if (packed) {
+            g_ldr_q_ea(16, &I, next);
+        } else {
+            emit_ea(&I, next);
+            if (emit_soft_memory_active()) emit_memory_guard(17, I.repne ? 8u : 4u, guest_pc, X86_SOFT_READ);
+            if (I.repne)
+                g_ldr_d(16, 17);
+            else
+                g_ldr_s(16, 17);
+        }
+        s = 16;
+    }
+    int dbl = packed ? I.p66 : I.repne; // element type: double vs single
+    int unary = (op == 0x51 || op == 0x52 || op == 0x53);
+    // RSQRT/RCP raise NO SIMD FP exception at all (SDM; measured against native for a
+    // denormal, an overflow, a zero, a negative and both NaN classes). The FSQRT/FDIV
+    // standing in for the hardware table DO raise #D/#O/#P/#Z, so park FPSR across the
+    // whole sequence -- the same rule avx.c applies to the VEX forms.
+    int park = (op == 0x52 || op == 0x53);
+    if (park) emit32(0xD53B4420u | 16); // mrs x16, fpsr
+    if (packed && !unary) {
+        // ---- packed add/sub/mul/div: RESULT gate ----
+        // Replaces the NaN-INPUT gate + emit_dnan_pre/post pair used below (which cost 16
+        // host instructions for one guest op -- 30 of the 53 instructions the float_simd
+        // inner loop compiled to). The two ways a bare NEON FADD/FSUB/FMUL/FDIV diverges
+        // from x86 are (a) a lane with TWO NaN inputs (x86 and ARM select opposite
+        // operands) and (b) a GENERATED default NaN (x86's indefinite carries the sign
+        // bit, ARM's does not). BOTH are visible in the RESULT: these four ops propagate a
+        // NaN operand to a NaN result unconditionally, so "some result lane is NaN" is a
+        // sound superset of "this instruction needs the x86-exact path". So do the
+        // arithmetic into SCRATCH v18 -- leaving the architectural vd, and hence the
+        // R_SSE3B spill, exactly as the guest instruction found it -- test the result, and
+        // on any NaN lane exit to the C softmulator, which re-executes the whole
+        // instruction from unmodified guest state. Clean results commit with one MOV.
+        //   f<op> v18.T, vd.T, s.T
+        //   fcmeq v21.T, v18.T, v18.T   ; all-ones per NON-NaN lane
+        //   uminv b21,   v21.16b        ; zero iff ANY lane is NaN
+        //   fmov  w16,   s21
+        //   cbnz  w16,   Lfast
+        //   <exit R_SSE3B>
+        //   Lfast: mov vd.16b, v18.16b
+        // 7 host instructions against the old 16, and bit-identical on both paths: the old
+        // fast path required no NaN INPUT, which for these ops implies a non-NaN result
+        // except for a generated default NaN -- and that case now routes to C, which is the
+        // same value the old emit_dnan_post stamped. v18/v21/w16 are translator scratch
+        // (guest xmm0..15 live in v0..v15), so the exit spills the correct architectural
+        // state. Scalar ss/sd forms keep the old input gate (their gate is already 6
+        // instructions and their fixup is a predicted-not-taken FCMP branch).
+        uint32_t d = I.p66 ? 0x00400000u : 0;
+        uint32_t b = op == 0x58   ? 0x4E20D400u  // FADD
+                     : op == 0x59 ? 0x6E20DC00u  // FMUL
+                     : op == 0x5C ? 0x4EA0D400u  // FSUB
+                                  : 0x6E20FC00u; // FDIV
+        emit32(b | d | (s << 16) | (vd << 5) | 18);
+        uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u; // FCMEQ .2d/.4s
+        emit32(EQ | (18 << 16) | (18 << 5) | 21);
+        emit32(0x6E31A800u | (21 << 5) | 21); // uminv b21, v21.16b
+        emit32(0x1E260000u | (21 << 5) | 16); // fmov w16, s21
+        uint32_t *p_cbnz = (uint32_t *)g_cp;
+        emit32(0);                     // cbnz w16, Lfast (patched below)
+        emit_exit_const(guest_pc, R_SSE3B); // any NaN lane -> x86-exact C emulation
+        uint8_t *Lfast = (uint8_t *)g_cp;
+        *p_cbnz = 0x35000000u | ((uint32_t)(((Lfast - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 16;
+        e_vmov(vd, 18);
+    } else {
+        if (!unary) {
+            // ---- NaN-input gate ----
+            // NEON FADD/FMUL/FSUB/FDIV + emit_dnan is bit-exact to x86 for finite inputs, for a
+            // GENERATED NaN (fixed up below), and for a SINGLE NaN input (propagated + quieted,
+            // sign preserved -- both ISAs agree). But when a lane has TWO NaN inputs, x86 selects
+            // QNaN-priority-else-src2 while ARM selects SNaN-priority-else-src1 -- the exact
+            // mirror, a silent wrong result. Rather than reproduce x86's per-lane priority inline
+            // on the hot path, gate: if ANY checked input lane is a NaN, exit to the x86-exact C
+            // softmulator (R_SSE3B -> hl_x86_sse_run). Real FP kernels have no NaN inputs, so the
+            // fast path below is unaffected. src1 is still live in vd (arith not emitted yet),
+            // src2 in s. Scalar ss/sd check ONLY the low lane; packed checks all lanes.
+            uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u; // FCMEQ .2d/.4s (all-ones per non-NaN lane)
+            emit32(EQ | (vd << 16) | (vd << 5) | 24);      // v24 = (src1==src1)
+            emit32(EQ | (s << 16) | (s << 5) | 25);        // v25 = (src2==src2)
+            e_v3(0x4E201C00u, 24, 24, 25);                 // v24 = src1nn & src2nn (AND.16b)
+            if (packed) { // fold both 64-bit halves -> low 64 = all lanes
+                e_ext(25, 24, 24, 8);
+                e_v3(0x4E201C00u, 24, 24, 25);
+            }
+            e_fmov_from_d(16, 24);          // x16 = lane mask (all-ones iff no NaN in checked lanes)
+            e_rrr(A_ORN, 16, 31, 16, 1, 0); // x16 = ~mask (0 iff clean; nonzero iff a NaN input)
+            uint32_t *p_cbz = (uint32_t *)g_cp;
+            emit32(0);                     // cbz {w,x}16, Lfast (patched below)
+            emit_exit_const(guest_pc, R_SSE3B); // NaN present -> x86-exact C emulation of this insn
+            uint8_t *Lfast = (uint8_t *)g_cp;
+            // scalar single checks only the low 32 bits (cbz w16); packed / scalar double check 64 (cbz
+            // x16)
+            uint32_t cbz = (!packed && !dbl) ? 0x34000000u : 0xB4000000u;
+            *p_cbz = cbz | ((uint32_t)(((Lfast - (uint8_t *)p_cbz) / 4) & 0x7FFFF) << 5) | 16;
+        }
+        int fixnan = fpdnan_on();
+        if (fixnan) emit_dnan_pre(vd, s, !unary, dbl); // capture "no input NaN" (uses v20/v21)
+        if (packed) {                                  // vector FP: 66 -> .2d (sz bit), none -> .4s
+            uint32_t d = I.p66 ? 0x00400000u : 0;
+            uint32_t b = op == 0x58   ? 0x4E20D400u  // FADD
+                         : op == 0x59 ? 0x6E20DC00u  // FMUL
+                         : op == 0x5C ? 0x4EA0D400u  // FSUB
+                         : op == 0x5E ? 0x6E20FC00u  // FDIV
+                                      : 0x6EA1F800u; // FSQRT (2-reg)  [min/max: see 0x5D/0x5F above]
+            if (op == 0x52 || op == 0x53) {
+                emit32(0x4F03F600u | 19); // fmov v19.4s, #1.0
+                int n = s;
+                if (op == 0x52) {
+                    emit32(0x6EA1F800u | (s << 5) | 18); // fsqrt v18.4s, s.4s
+                    n = 18;
+                }
+                emit32(0x6E20FC00u | (n << 16) | (19 << 5) | vd); // fdiv vd.4s, v19.4s, vn.4s
+            } else if (op == 0x51)
+                emit32(b | d | (s << 5) | vd); // FSQRT vd.T, s.T
+            else
+                emit32(b | d | (s << 16) | (vd << 5) | vd); // op vd.T, vd.T, s.T
+        } else {                                            // scalar FP: F2=double, F3=single
+            uint32_t ty = I.repne ? 0x00400000u : 0;
+            uint32_t b = op == 0x58   ? 0x1E202800u
+                         : op == 0x59 ? 0x1E200800u
+                         : op == 0x5C ? 0x1E203800u
+                         : op == 0x5E ? 0x1E201800u
+                                      : 0x1E21C000u; // FSQRT [min/max: see 0x5D/0x5F above]
+            // ADDSS/SD, MULSS/SD, SUBSS/SD, DIVSS/SD and SQRTSS/SD write ONLY the low
+            // element; the rest of the destination is architecturally PRESERVED. The ARM
+            // scalar forms zero everything above the element, so land the result in
+            // scratch v18 (which the default-NaN fixup then stamps) and INS it back.
+            if (op == 0x52 || op == 0x53) {
+                emit32(0x1E2E1000u | 19); // fmov s19, #1.0
+                int n = s;
+                if (op == 0x52) {
+                    emit32(0x1E21C000u | (s << 5) | 18); // fsqrt s18, s
+                    n = 18;
+                }
+                emit32(0x1E201800u | (n << 16) | (19 << 5) | 18); // fdiv s18, s19, sn
+            } else if (op == 0x51)
+                emit32(b | ty | (s << 5) | 18); // FSQRT s18/d18, s
+            else
+                emit32(b | ty | (s << 16) | (vd << 5) | 18); // FADD/... s18/d18, vd, s
+        }
+        int res = packed ? vd : 18;
+        if (fixnan) emit_dnan_post(res, dbl, packed); // stamp x86's negative default-NaN sign
+        if (!packed) {
+            if (dbl)
+                e_ins_d(vd, 0, 18, 0);
+            else
+                e_ins_s(vd, 0, 18, 0);
+        }
+    }
+    if (park) emit32(0xD51B4420u | 16); // msr fpsr, x16
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6077,165 +6242,8 @@ static void *translate_block(uint64_t gpc) {
                         else
                             e_ins_s(vd, 0, 17, 0);
                     }
-                } else if (op == 0x58 || op == 0x59 || op == 0x5C || op == 0x5E || op == 0x51 ||
-                           ((op == 0x52 || op == 0x53) && !I.p66 && !I.repne)) {
-                    // add/mul/sub/div/min/max/sqrt. Prefix selects width: F2=scalar double, F3=scalar
-                    // single, 66=PACKED double (.2d), none=PACKED single (.4s).
-                    // 0F 52 RSQRTPS/SS and 0F 53 RCPPS/SS join the UNARY group with sqrt: baseline SSE1,
-                    // single-precision only (66/F2 are reserved, excluded above -> UNIMPL as before).
-                    int packed = !I.repne && !I.rep;
-                    int s = vm;
-                    if (I.is_mem) {
-                        if (packed) {
-                            g_ldr_q_ea(16, &I, next);
-                        } else {
-                            emit_ea(&I, next);
-                            if (emit_soft_memory_active()) emit_memory_guard(17, I.repne ? 8u : 4u, gpc, X86_SOFT_READ);
-                            if (I.repne)
-                                g_ldr_d(16, 17);
-                            else
-                                g_ldr_s(16, 17);
-                        }
-                        s = 16;
-                    }
-                    int dbl = packed ? I.p66 : I.repne; // element type: double vs single
-                    int unary = (op == 0x51 || op == 0x52 || op == 0x53);
-                    // RSQRT/RCP raise NO SIMD FP exception at all (SDM; measured against native for a
-                    // denormal, an overflow, a zero, a negative and both NaN classes). The FSQRT/FDIV
-                    // standing in for the hardware table DO raise #D/#O/#P/#Z, so park FPSR across the
-                    // whole sequence -- the same rule avx.c applies to the VEX forms.
-                    int park = (op == 0x52 || op == 0x53);
-                    if (park) emit32(0xD53B4420u | 16); // mrs x16, fpsr
-                    if (packed && !unary) {
-                        // ---- packed add/sub/mul/div: RESULT gate ----
-                        // Replaces the NaN-INPUT gate + emit_dnan_pre/post pair used below (which cost 16
-                        // host instructions for one guest op -- 30 of the 53 instructions the float_simd
-                        // inner loop compiled to). The two ways a bare NEON FADD/FSUB/FMUL/FDIV diverges
-                        // from x86 are (a) a lane with TWO NaN inputs (x86 and ARM select opposite
-                        // operands) and (b) a GENERATED default NaN (x86's indefinite carries the sign
-                        // bit, ARM's does not). BOTH are visible in the RESULT: these four ops propagate a
-                        // NaN operand to a NaN result unconditionally, so "some result lane is NaN" is a
-                        // sound superset of "this instruction needs the x86-exact path". So do the
-                        // arithmetic into SCRATCH v18 -- leaving the architectural vd, and hence the
-                        // R_SSE3B spill, exactly as the guest instruction found it -- test the result, and
-                        // on any NaN lane exit to the C softmulator, which re-executes the whole
-                        // instruction from unmodified guest state. Clean results commit with one MOV.
-                        //   f<op> v18.T, vd.T, s.T
-                        //   fcmeq v21.T, v18.T, v18.T   ; all-ones per NON-NaN lane
-                        //   uminv b21,   v21.16b        ; zero iff ANY lane is NaN
-                        //   fmov  w16,   s21
-                        //   cbnz  w16,   Lfast
-                        //   <exit R_SSE3B>
-                        //   Lfast: mov vd.16b, v18.16b
-                        // 7 host instructions against the old 16, and bit-identical on both paths: the old
-                        // fast path required no NaN INPUT, which for these ops implies a non-NaN result
-                        // except for a generated default NaN -- and that case now routes to C, which is the
-                        // same value the old emit_dnan_post stamped. v18/v21/w16 are translator scratch
-                        // (guest xmm0..15 live in v0..v15), so the exit spills the correct architectural
-                        // state. Scalar ss/sd forms keep the old input gate (their gate is already 6
-                        // instructions and their fixup is a predicted-not-taken FCMP branch).
-                        uint32_t d = I.p66 ? 0x00400000u : 0;
-                        uint32_t b = op == 0x58   ? 0x4E20D400u  // FADD
-                                     : op == 0x59 ? 0x6E20DC00u  // FMUL
-                                     : op == 0x5C ? 0x4EA0D400u  // FSUB
-                                                  : 0x6E20FC00u; // FDIV
-                        emit32(b | d | (s << 16) | (vd << 5) | 18);
-                        uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u; // FCMEQ .2d/.4s
-                        emit32(EQ | (18 << 16) | (18 << 5) | 21);
-                        emit32(0x6E31A800u | (21 << 5) | 21); // uminv b21, v21.16b
-                        emit32(0x1E260000u | (21 << 5) | 16); // fmov w16, s21
-                        uint32_t *p_cbnz = (uint32_t *)g_cp;
-                        emit32(0);                     // cbnz w16, Lfast (patched below)
-                        emit_exit_const(gpc, R_SSE3B); // any NaN lane -> x86-exact C emulation
-                        uint8_t *Lfast = (uint8_t *)g_cp;
-                        *p_cbnz = 0x35000000u | ((uint32_t)(((Lfast - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 16;
-                        e_vmov(vd, 18);
-                    } else {
-                        if (!unary) {
-                            // ---- NaN-input gate ----
-                            // NEON FADD/FMUL/FSUB/FDIV + emit_dnan is bit-exact to x86 for finite inputs, for a
-                            // GENERATED NaN (fixed up below), and for a SINGLE NaN input (propagated + quieted,
-                            // sign preserved -- both ISAs agree). But when a lane has TWO NaN inputs, x86 selects
-                            // QNaN-priority-else-src2 while ARM selects SNaN-priority-else-src1 -- the exact
-                            // mirror, a silent wrong result. Rather than reproduce x86's per-lane priority inline
-                            // on the hot path, gate: if ANY checked input lane is a NaN, exit to the x86-exact C
-                            // softmulator (R_SSE3B -> hl_x86_sse_run). Real FP kernels have no NaN inputs, so the
-                            // fast path below is unaffected. src1 is still live in vd (arith not emitted yet),
-                            // src2 in s. Scalar ss/sd check ONLY the low lane; packed checks all lanes.
-                            uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u; // FCMEQ .2d/.4s (all-ones per non-NaN lane)
-                            emit32(EQ | (vd << 16) | (vd << 5) | 24);      // v24 = (src1==src1)
-                            emit32(EQ | (s << 16) | (s << 5) | 25);        // v25 = (src2==src2)
-                            e_v3(0x4E201C00u, 24, 24, 25);                 // v24 = src1nn & src2nn (AND.16b)
-                            if (packed) { // fold both 64-bit halves -> low 64 = all lanes
-                                e_ext(25, 24, 24, 8);
-                                e_v3(0x4E201C00u, 24, 24, 25);
-                            }
-                            e_fmov_from_d(16, 24);          // x16 = lane mask (all-ones iff no NaN in checked lanes)
-                            e_rrr(A_ORN, 16, 31, 16, 1, 0); // x16 = ~mask (0 iff clean; nonzero iff a NaN input)
-                            uint32_t *p_cbz = (uint32_t *)g_cp;
-                            emit32(0);                     // cbz {w,x}16, Lfast (patched below)
-                            emit_exit_const(gpc, R_SSE3B); // NaN present -> x86-exact C emulation of this insn
-                            uint8_t *Lfast = (uint8_t *)g_cp;
-                            // scalar single checks only the low 32 bits (cbz w16); packed / scalar double check 64 (cbz
-                            // x16)
-                            uint32_t cbz = (!packed && !dbl) ? 0x34000000u : 0xB4000000u;
-                            *p_cbz = cbz | ((uint32_t)(((Lfast - (uint8_t *)p_cbz) / 4) & 0x7FFFF) << 5) | 16;
-                        }
-                        int fixnan = fpdnan_on();
-                        if (fixnan) emit_dnan_pre(vd, s, !unary, dbl); // capture "no input NaN" (uses v20/v21)
-                        if (packed) {                                  // vector FP: 66 -> .2d (sz bit), none -> .4s
-                            uint32_t d = I.p66 ? 0x00400000u : 0;
-                            uint32_t b = op == 0x58   ? 0x4E20D400u  // FADD
-                                         : op == 0x59 ? 0x6E20DC00u  // FMUL
-                                         : op == 0x5C ? 0x4EA0D400u  // FSUB
-                                         : op == 0x5E ? 0x6E20FC00u  // FDIV
-                                                      : 0x6EA1F800u; // FSQRT (2-reg)  [min/max: see 0x5D/0x5F above]
-                            if (op == 0x52 || op == 0x53) {
-                                emit32(0x4F03F600u | 19); // fmov v19.4s, #1.0
-                                int n = s;
-                                if (op == 0x52) {
-                                    emit32(0x6EA1F800u | (s << 5) | 18); // fsqrt v18.4s, s.4s
-                                    n = 18;
-                                }
-                                emit32(0x6E20FC00u | (n << 16) | (19 << 5) | vd); // fdiv vd.4s, v19.4s, vn.4s
-                            } else if (op == 0x51)
-                                emit32(b | d | (s << 5) | vd); // FSQRT vd.T, s.T
-                            else
-                                emit32(b | d | (s << 16) | (vd << 5) | vd); // op vd.T, vd.T, s.T
-                        } else {                                            // scalar FP: F2=double, F3=single
-                            uint32_t ty = I.repne ? 0x00400000u : 0;
-                            uint32_t b = op == 0x58   ? 0x1E202800u
-                                         : op == 0x59 ? 0x1E200800u
-                                         : op == 0x5C ? 0x1E203800u
-                                         : op == 0x5E ? 0x1E201800u
-                                                      : 0x1E21C000u; // FSQRT [min/max: see 0x5D/0x5F above]
-                            // ADDSS/SD, MULSS/SD, SUBSS/SD, DIVSS/SD and SQRTSS/SD write ONLY the low
-                            // element; the rest of the destination is architecturally PRESERVED. The ARM
-                            // scalar forms zero everything above the element, so land the result in
-                            // scratch v18 (which the default-NaN fixup then stamps) and INS it back.
-                            if (op == 0x52 || op == 0x53) {
-                                emit32(0x1E2E1000u | 19); // fmov s19, #1.0
-                                int n = s;
-                                if (op == 0x52) {
-                                    emit32(0x1E21C000u | (s << 5) | 18); // fsqrt s18, s
-                                    n = 18;
-                                }
-                                emit32(0x1E201800u | (n << 16) | (19 << 5) | 18); // fdiv s18, s19, sn
-                            } else if (op == 0x51)
-                                emit32(b | ty | (s << 5) | 18); // FSQRT s18/d18, s
-                            else
-                                emit32(b | ty | (s << 16) | (vd << 5) | 18); // FADD/... s18/d18, vd, s
-                        }
-                        int res = packed ? vd : 18;
-                        if (fixnan) emit_dnan_post(res, dbl, packed); // stamp x86's negative default-NaN sign
-                        if (!packed) {
-                            if (dbl)
-                                e_ins_d(vd, 0, 18, 0);
-                            else
-                                e_ins_s(vd, 0, 18, 0);
-                        }
-                    }
-                    if (park) emit32(0xD51B4420u | 16); // msr fpsr, x16
+                } else if (lower_sse_float_arithmetic(I, gpc, next, vd, vm) == TX_NEXT) {
+                    // The helper emitted the complete packed or scalar floating-point operation.
                 } else if (op == 0x5A) {
                     // 0F 5A is FOUR instructions, selected by the mandatory prefix:
                     //   F2 cvtsd2ss   F3 cvtss2sd   66 cvtpd2ps (PACKED)   none cvtps2pd (PACKED)
