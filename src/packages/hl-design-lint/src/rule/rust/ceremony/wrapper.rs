@@ -124,7 +124,7 @@ impl Database {
                 wrapper.invalid = true;
                 continue;
             }
-            if let Some(forwarder) = forwarder(source, method, &wrapper.field) {
+            if let Some(forwarder) = Forwarder::from_method(source, method, &wrapper.field) {
                 wrapper.methods.push(forwarder);
             } else if !constructor(method, &wrapper.field, &wrapper.inner) {
                 wrapper.invalid = true;
@@ -233,31 +233,33 @@ struct Forwarder {
     location: crate::Location,
 }
 
-fn forwarder(source: &Source, method: &syn::ImplItemFn, field: &Member) -> Option<Forwarder> {
-    let [Stmt::Expr(expression, _)] = method.block.stmts.as_slice() else {
-        return None;
-    };
-    let Expr::MethodCall(call) = strip(expression) else {
-        return None;
-    };
-    if call.method != method.sig.ident || !self_field(&call.receiver, field) {
-        return None;
+impl Forwarder {
+    fn from_method(source: &Source, method: &syn::ImplItemFn, field: &Member) -> Option<Self> {
+        let [Stmt::Expr(expression, _)] = method.block.stmts.as_slice() else {
+            return None;
+        };
+        let Expr::MethodCall(call) = strip(expression) else {
+            return None;
+        };
+        if call.method != method.sig.ident || !self_field(&call.receiver, field) {
+            return None;
+        }
+        let parameters = parameter_names(&method.sig)?;
+        if call.args.len() != parameters.len()
+            || !call
+                .args
+                .iter()
+                .zip(parameters.iter())
+                .all(|(argument, parameter)| path_name(argument).as_deref() == Some(parameter))
+        {
+            return None;
+        }
+        Some(Self {
+            name: method.sig.ident.to_string(),
+            signature: signature(&method.sig),
+            location: source.location(method.span()),
+        })
     }
-    let parameters = parameter_names(&method.sig)?;
-    if call.args.len() != parameters.len()
-        || !call
-            .args
-            .iter()
-            .zip(parameters.iter())
-            .all(|(argument, parameter)| path_name(argument).as_deref() == Some(parameter))
-    {
-        return None;
-    }
-    Some(Forwarder {
-        name: method.sig.ident.to_string(),
-        signature: signature(&method.sig),
-        location: source.location(method.span()),
-    })
 }
 
 fn constructor(method: &syn::ImplItemFn, field: &Member, inner: &str) -> bool {
