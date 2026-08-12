@@ -136,6 +136,19 @@ static hl_host_result hl_macos_file_writev_at(void *context, hl_host_handle file
     return hl_macos_file_vector(context, file, vectors, count, offset, 3);
 }
 
+static uint32_t hl_macos_file_type(mode_t mode) {
+    switch (mode & S_IFMT) {
+    case S_IFREG: return HL_HOST_FILE_TYPE_REGULAR;
+    case S_IFDIR: return HL_HOST_FILE_TYPE_DIRECTORY;
+    case S_IFLNK: return HL_HOST_FILE_TYPE_SYMLINK;
+    case S_IFCHR: return HL_HOST_FILE_TYPE_CHARACTER;
+    case S_IFBLK: return HL_HOST_FILE_TYPE_BLOCK;
+    case S_IFIFO: return HL_HOST_FILE_TYPE_FIFO;
+    case S_IFSOCK: return HL_HOST_FILE_TYPE_SOCKET;
+    default: return 0;
+    }
+}
+
 static hl_host_result hl_macos_file_metadata_get(void *context, hl_host_handle file, hl_host_file_metadata *output) {
     int descriptor = hl_macos_file_descriptor(context, file, 0);
     struct stat status;
@@ -159,20 +172,7 @@ static hl_host_result hl_macos_file_metadata_get(void *context, hl_host_handle f
     output->user = (uint32_t)status.st_uid;
     output->group = (uint32_t)status.st_gid;
     output->permissions = (uint32_t)status.st_mode & 07777u;
-    if (S_ISREG(status.st_mode))
-        output->type = HL_HOST_FILE_TYPE_REGULAR;
-    else if (S_ISDIR(status.st_mode))
-        output->type = HL_HOST_FILE_TYPE_DIRECTORY;
-    else if (S_ISLNK(status.st_mode))
-        output->type = HL_HOST_FILE_TYPE_SYMLINK;
-    else if (S_ISCHR(status.st_mode))
-        output->type = HL_HOST_FILE_TYPE_CHARACTER;
-    else if (S_ISBLK(status.st_mode))
-        output->type = HL_HOST_FILE_TYPE_BLOCK;
-    else if (S_ISFIFO(status.st_mode))
-        output->type = HL_HOST_FILE_TYPE_FIFO;
-    else if (S_ISSOCK(status.st_mode))
-        output->type = HL_HOST_FILE_TYPE_SOCKET;
+    output->type = hl_macos_file_type(status.st_mode);
     return hl_macos_result(HL_STATUS_OK, 0, 0);
 }
 
@@ -321,4 +321,3 @@ static hl_host_result hl_macos_file_close(void *context, hl_host_handle handle) 
     }
     return hl_macos_result(HL_STATUS_OK, 0, 0);
 }
-
