@@ -121,6 +121,11 @@ impl Terminal {
         *current = Some(attachment);
         Ok(())
     }
+
+    pub(crate) fn detach(&self) {
+        let mut current = self.attachment.lock().unwrap_or_else(|error| error.into_inner());
+        current.take();
+    }
 }
 
 impl Drop for Terminal {

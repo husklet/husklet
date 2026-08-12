@@ -29,6 +29,7 @@ impl TerminalAttachment for NativeTerminalControl {
 pub(super) struct NativeTerminalBridge {
     slave: OwnedFd,
     stop: Arc<AtomicBool>,
+    terminal: Arc<Terminal>,
     port: Arc<dyn TerminalPort>,
     workers: Vec<JoinHandle<()>>,
 }
@@ -36,6 +37,7 @@ pub(super) struct NativeTerminalBridge {
 impl NativeTerminalBridge {
     pub(super) fn attach(terminal: Arc<Terminal>) -> Result<Self, CompositionError> {
         let (master, slave) = open_pair(terminal.initial())?;
+        set_nonblocking(&master)?;
         let input_master = duplicate(&master)?;
         let output_master = duplicate(&master)?;
         let control = Arc::new(NativeTerminalControl { master });
@@ -55,6 +57,7 @@ impl NativeTerminalBridge {
         Ok(Self {
             slave,
             stop,
+            terminal,
             port,
             workers: vec![input, output],
         })
@@ -68,11 +71,21 @@ impl NativeTerminalBridge {
 impl Drop for NativeTerminalBridge {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        self.terminal.detach();
         self.port.close();
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
     }
+}
+
+fn set_nonblocking(descriptor: &OwnedFd) -> Result<(), CompositionError> {
+    // SAFETY: both operations borrow a live descriptor and do not transfer ownership.
+    let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(CompositionError::RuntimeConstruction);
+    }
+    Ok(())
 }
 
 fn open_pair(initial: (u16, u16)) -> Result<(OwnedFd, OwnedFd), CompositionError> {
@@ -125,12 +138,36 @@ fn spawn_input(
                     Ok(0) | Err(_) => break,
                     Ok(count) => count,
                 };
-                if master.write_all(&bytes[..count]).is_err() {
+                if write_master(&mut master, &bytes[..count], &stop).is_err() {
                     break;
                 }
             }
         })
         .map_err(|_| CompositionError::RuntimeConstruction)
+}
+
+fn write_master(master: &mut File, bytes: &[u8], stop: &AtomicBool) -> std::io::Result<()> {
+    let mut written = 0;
+    while written < bytes.len() && !stop.load(Ordering::Acquire) {
+        match master.write(&bytes[written..]) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(count) => written += count,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut poll = libc::pollfd {
+                    fd: master.as_raw_fd(),
+                    events: libc::POLLOUT,
+                    revents: 0,
+                };
+                // SAFETY: `poll` references one initialized record for the duration of the call.
+                if unsafe { libc::poll(&raw mut poll, 1, 50) } < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn spawn_output(
@@ -157,8 +194,11 @@ fn spawn_output(
                     continue;
                 }
                 let count = match master.read(&mut bytes) {
-                    Ok(0) | Err(_) => break,
+                    Ok(0) => break,
                     Ok(count) => count,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
                 };
                 if !write_output(port.as_ref(), &bytes[..count]) {
                     return;
@@ -186,7 +226,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::io::{Read, Write};
     use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
-    use std::sync::{Arc, Condvar, Mutex};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::time::{Duration, Instant};
 
     #[derive(Default)]
@@ -274,5 +315,84 @@ mod tests {
         assert_eq!((size.ws_row, size.ws_col), (41, 109));
         drop(bridge);
         assert!(port.state.lock().unwrap().2);
+        assert!(terminal.resize(42, 110).is_err());
+    }
+
+    struct SaturatingPort {
+        closed: AtomicBool,
+        enabled: AtomicBool,
+        reads: AtomicUsize,
+    }
+
+    impl TerminalPort for SaturatingPort {
+        fn read(&self, output: &mut [u8]) -> std::io::Result<usize> {
+            if self.closed.load(Ordering::Acquire) {
+                return Ok(0);
+            }
+            while !self.enabled.load(Ordering::Acquire) && !self.closed.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            if self.closed.load(Ordering::Acquire) {
+                return Ok(0);
+            }
+            self.reads.fetch_add(1, Ordering::Release);
+            output.fill(b'x');
+            Ok(output.len())
+        }
+
+        fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+            Ok(input.len())
+        }
+
+        fn close(&self) {
+            self.closed.store(true, Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn drop_cancels_input_blocked_by_pty_backpressure() {
+        let port = Arc::new(SaturatingPort {
+            closed: AtomicBool::new(false),
+            enabled: AtomicBool::new(false),
+            reads: AtomicUsize::new(0),
+        });
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal).unwrap();
+        let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: the bridge owns a live PTY slave and `attributes` is writable.
+        assert_eq!(
+            unsafe { libc::tcgetattr(bridge.standard_fds()[0], attributes.as_mut_ptr()) },
+            0
+        );
+        // SAFETY: tcgetattr initialized the termios and the following calls borrow it synchronously.
+        let mut attributes = unsafe { attributes.assume_init() };
+        // SAFETY: `attributes` is a valid initialized termios structure.
+        unsafe { libc::cfmakeraw(&raw mut attributes) };
+        // SAFETY: the descriptor and termios remain live for this synchronous call.
+        assert_eq!(
+            unsafe { libc::tcsetattr(bridge.standard_fds()[0], libc::TCSANOW, &raw const attributes) },
+            0
+        );
+        port.enabled.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while port.reads.load(Ordering::Acquire) < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let stalled = port.reads.load(Ordering::Acquire);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            port.reads.load(Ordering::Acquire),
+            stalled,
+            "PTY input did not reach backpressure"
+        );
+
+        let (finished, completed) = mpsc::channel();
+        std::thread::spawn(move || {
+            drop(bridge);
+            finished.send(()).unwrap();
+        });
+        completed
+            .recv_timeout(Duration::from_secs(1))
+            .expect("PTY bridge drop remained blocked behind a full master buffer");
     }
 }
