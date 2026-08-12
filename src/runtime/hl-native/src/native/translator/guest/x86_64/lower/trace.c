@@ -489,6 +489,14 @@ void hl_x86_trace_jcc_flags(hl_x86_trace_state *state, uint64_t taken, uint64_t 
                             int arm_cc, int *save_taken, int *save_fall) {
     *save_taken = HL_X86_JCC_SPILL_NONE;
     *save_fall = HL_X86_JCC_SPILL_NONE;
+    /* A stitched successor is compiled as a new guest block without an entry
+       reload. Do not carry a producer-specific deferred state across that
+       boundary: canonicalize it before emitting the taken stub and inline
+       continuation. This is executable- and address-independent. */
+    if (stitch_fall && *state->pending_flags != HL_X86_PENDING_NONE) {
+        state->materialize_flags();
+        return;
+    }
     if (!(*state->pending_flags)) {
         hl_x86_emit_flags_load();
         return;
