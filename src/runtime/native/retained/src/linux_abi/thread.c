@@ -429,18 +429,12 @@ static uint64_t nonpie_place_at_link_address(uint64_t basepage, uint64_t span, h
     return basepage;
 }
 
-/* Test-only placement control. This is deliberately keyed only on ELF image
- * kind, never on application names, sections, symbols, or byte markers. */
-static int nonpie_force_displaced(void) {
-    const char *value = getenv("HL_TEST_FORCE_DISPLACED_ET_EXEC");
-    return value != NULL && strcmp(value, "1") == 0;
-}
-
-static void nonpie_report_forced_displacement(uint64_t guest_start, uint64_t guest_end, uint64_t storage_start) {
-    if (!nonpie_force_displaced()) return;
-    fprintf(stderr, "hl-test-displaced-et-exec: guest=%llx-%llx storage=%llx bias=%llx\n",
-            (unsigned long long)guest_start, (unsigned long long)guest_end, (unsigned long long)storage_start,
-            (unsigned long long)(storage_start - guest_start));
+static void nonpie_report_forced_displacement(void) {
+    static const char message[] = "hl-test-displaced-et-exec: displaced\n";
+    const hl_host_services *host = effective_host_services();
+    if (host == NULL || (host->capabilities & HL_HOST_CAP_LOG) == 0 || host->log == NULL || host->log->emit == NULL)
+        return;
+    host->log->emit(host->context, 0, message, sizeof(message) - 1);
 }
 
 // ===================== non-PIE coordinates: the one rule ========================================

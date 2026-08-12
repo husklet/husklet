@@ -2,7 +2,7 @@
 
 use crate::activation::GuestIsa;
 use crate::engine::EngineError;
-use std::ffi::CString;
+use std::ffi::{CString, OsStr};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileExt;
@@ -17,7 +17,7 @@ pub(in crate::execution) struct CMainImagePlan {
     pub(in crate::execution) link_start: u64,
     pub(in crate::execution) link_end: u64,
     pub(in crate::execution) has_interpreter: u32,
-    pub(in crate::execution) reserved: u32,
+    pub(in crate::execution) flags: u32,
     pub(in crate::execution) interpreter_identity: u64,
 }
 
@@ -99,7 +99,7 @@ pub(in crate::execution) fn c_main_image_plan(
         link_start: plan.link_start,
         link_end: plan.link_end,
         has_interpreter: u32::from(plan.interpreter.is_some()),
-        reserved: 0,
+        flags: u32::from(std::env::var_os("HL_TEST_FORCE_DISPLACED_ET_EXEC").as_deref() == Some(OsStr::new("1"))),
         interpreter_identity,
     };
     hl_log::hl_event!(

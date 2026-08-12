@@ -76,11 +76,12 @@ typedef struct hl_engine_main_image_plan {
     uint64_t link_start;
     uint64_t link_end;
     uint32_t has_interpreter;
-    uint32_t reserved;
+    uint32_t flags;
     uint64_t interpreter_identity;
 } hl_engine_main_image_plan;
 
 #define HL_ENGINE_MAIN_IMAGE_PLAN_ABI 1u
+#define HL_ENGINE_MAIN_IMAGE_PLAN_FORCE_DISPLACED (1u << 0)
 
 enum {
     HL_ENGINE_BOX_ROOTFS_READ_ONLY = 1u << 0,

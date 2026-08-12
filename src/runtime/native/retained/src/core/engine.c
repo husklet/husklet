@@ -479,9 +479,11 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
     if (config->main_image_plan != NULL && (config->main_image_plan->abi != HL_ENGINE_MAIN_IMAGE_PLAN_ABI ||
                                             config->main_image_plan->size < sizeof(*config->main_image_plan)))
         return HL_STATUS_ABI_MISMATCH;
-    if (config->main_image_plan != NULL && (config->main_image_plan->reserved != 0 ||
-                                            config->main_image_plan->link_end <= config->main_image_plan->link_start ||
-                                            (config->main_image_plan->kind != 1 && config->main_image_plan->kind != 2)))
+    if (config->main_image_plan != NULL &&
+        ((config->main_image_plan->flags & ~HL_ENGINE_MAIN_IMAGE_PLAN_FORCE_DISPLACED) != 0 ||
+         (config->main_image_plan->flags != 0 && config->main_image_plan->kind != 1) ||
+         config->main_image_plan->link_end <= config->main_image_plan->link_start ||
+         (config->main_image_plan->kind != 1 && config->main_image_plan->kind != 2)))
         return HL_STATUS_INVALID_ARGUMENT;
     if (config->fd_binding_count != 0 && config->fd_bindings == NULL) return HL_STATUS_INVALID_ARGUMENT;
     status = hl_host_services_validate(host, HL_HOST_CAP_MEMORY | HL_HOST_CAP_CLOCK | HL_HOST_CAP_SYNC);

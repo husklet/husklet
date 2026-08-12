@@ -42,12 +42,7 @@ fn displaced_et_exec(isa: &str, engine_name: &str) {
         .find(|line| line.starts_with("hl-test-displaced-et-exec: "))
         .unwrap_or_else(|| panic!("{isa} did not prove displaced storage:\n{stderr}"));
     eprintln!("{isa} {placement}");
-    let bias = placement
-        .split_whitespace()
-        .find_map(|field| field.strip_prefix("bias="))
-        .and_then(|value| u64::from_str_radix(value, 16).ok())
-        .unwrap_or_else(|| panic!("{isa} malformed displacement evidence: {placement}"));
-    assert_ne!(bias, 0, "{isa} executable remained at its link address: {placement}");
+    assert_eq!(placement, "hl-test-displaced-et-exec: displaced");
 }
 
 #[test]

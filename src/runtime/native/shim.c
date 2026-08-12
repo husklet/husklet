@@ -68,7 +68,9 @@ static int hl_c_validate_main_image_plan(int fd,
   uint8_t header[64];
   if (plan == NULL || plan->abi != HL_C_MAIN_IMAGE_PLAN_ABI ||
       plan->size < sizeof(*plan) || plan->architecture == 0 ||
-      plan->reserved != 0 || plan->link_end <= plan->link_start)
+      (plan->flags & ~HL_ENGINE_MAIN_IMAGE_PLAN_FORCE_DISPLACED) != 0 ||
+      plan->link_end <= plan->link_start ||
+      (plan->flags != 0 && plan->kind != HL_C_IMAGE_EXECUTABLE))
     return 0;
   if (pread(fd, header, sizeof(header), 0) != (ssize_t)sizeof(header))
     return 0;

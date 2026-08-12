@@ -141,6 +141,7 @@ static int elf_interp(const char *path, char *out, size_t n) {
 struct main_placement {
     uint64_t link_start;
     uint64_t link_end;
+    uint32_t flags;
     int etype;
 };
 
@@ -150,6 +151,7 @@ static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struc
         return -1;
     placement->link_start = plan->link_start;
     placement->link_end = plan->link_end;
+    placement->flags = plan->flags;
     placement->etype = plan->kind == 1 ? 2 : 3;
     return 0;
 }
@@ -167,10 +169,12 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     int phnum = rd16(f + 56), phentsize = rd16(f + 54);
     uint64_t basepage, span;
     int etype;
+    int force_displaced = 0;
     if (placement != NULL) {
         basepage = placement->link_start;
         span = placement->link_end - placement->link_start;
         etype = placement->etype;
+        force_displaced = (placement->flags & HL_ENGINE_MAIN_IMAGE_PLAN_FORCE_DISPLACED) != 0;
     } else {
         uint64_t minv = ~0ull, maxv = 0;
         for (int i = 0; i < phnum; i++) {
@@ -190,7 +194,7 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     // Placement: thread.c, "non-PIE image placement, per host". On Linux an ET_EXEC goes AT its link
     // address, so bias == 0 and the whole fold family below never arms. That address is also already
     // deterministic across runs, which is the only thing g_force_base exists to provide -- consume it.
-    if (etype == 2 && !nonpie_force_displaced())
+    if (etype == 2 && !force_displaced)
         base = (uint8_t *)(uintptr_t)nonpie_place_at_link_address(basepage, span, &map_context.mapping);
     // opt8: the persistent cache needs deterministic guest bases across runs so the translated bytes
     // (RIP-relative leas, baked branch targets, block-map keys) are byte-identical. When g_force_base is
@@ -244,8 +248,7 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
         g_nonpie_hi = basepage + span;
         g_nonpie_bias = bias;
     }
-    if (etype == 2 && nonpie_force_displaced())
-        nonpie_report_forced_displacement(basepage, basepage + span, (uint64_t)base);
+    if (force_displaced && bias != 0) nonpie_report_forced_displacement();
     for (int i = 0; i < phnum; i++) {
         uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
         if (rd32(ph) != 1) continue;

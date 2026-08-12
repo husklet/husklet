@@ -752,6 +752,7 @@ static void elf_mprotect_besteffort(const hl_host_memory_mapping *mapping, void 
 struct main_placement {
     uint64_t link_start;
     uint64_t link_end;
+    uint32_t flags;
     int etype;
 };
 
@@ -761,6 +762,7 @@ static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struc
         return -1;
     placement->link_start = plan->link_start;
     placement->link_end = plan->link_end;
+    placement->flags = plan->flags;
     placement->etype = plan->kind == 1 ? 2 : 3;
     return 0;
 }
@@ -787,10 +789,12 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
     int phnum = rd16(f + 56), phentsize = rd16(f + 54);
     uint64_t basepage, span;
     int etype;
+    int force_displaced = 0;
     if (placement != NULL) {
         basepage = placement->link_start;
         span = placement->link_end - placement->link_start;
         etype = placement->etype;
+        force_displaced = (placement->flags & HL_ENGINE_MAIN_IMAGE_PLAN_FORCE_DISPLACED) != 0;
     } else {
         uint64_t minv = ~0ull, maxv = 0;
         for (int i = 0; i < phnum; i++) {
@@ -816,7 +820,7 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
     // Placement: thread.c, "non-PIE image placement, per host". On Linux an ET_EXEC goes AT its link
     // address, so bias == 0 and nothing below arms. The link address is deterministic across runs, which
     // is all the g_force_base / snapshot-arena hints below exist to provide -- consume the one-shot.
-    if (etype == 2 && !nonpie_force_displaced())
+    if (etype == 2 && !force_displaced)
         base = (uint8_t *)(uintptr_t)nonpie_place_at_link_address(basepage, span, &image_mapping);
     if (base != NULL) {
         g_force_base = 0; // one-shot, consumed by the link-address placement
@@ -871,8 +875,8 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
         g_nonpie_hi = image_projection.guest_end;
         g_nonpie_bias = image_projection.storage_bias;
     }
-    if (etype == 2 && nonpie_force_displaced())
-        nonpie_report_forced_displacement(basepage, basepage + span, (uint64_t)base);
+    if (force_displaced && (image_projection.flags & HL_NATIVE_ADDRESS_PROJECTION_DISPLACED) != 0)
+        nonpie_report_forced_displacement();
     for (int i = 0; i < phnum; i++) {
         uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
         if (rd32(ph) != 1) continue;
