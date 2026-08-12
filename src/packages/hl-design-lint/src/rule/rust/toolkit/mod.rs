@@ -316,22 +316,39 @@ fn signature_types(signature: &syn::Signature) -> Vec<Type> {
 }
 
 fn generic_types(generics: &syn::Generics) -> Vec<Type> {
-    let mut types = Vec::new();
-    for parameter in &generics.params {
-        if let syn::GenericParam::Type(parameter) = parameter {
-            types.extend(parameter.bounds.iter().filter_map(bound_type));
-            if let Some(default) = &parameter.default {
-                types.push(default.clone());
-            }
-        }
-    }
-    for predicate in generics.where_clause.iter().flat_map(|clause| &clause.predicates) {
-        if let syn::WherePredicate::Type(predicate) = predicate {
-            types.push(predicate.bounded_ty.clone());
-            types.extend(predicate.bounds.iter().filter_map(bound_type));
-        }
-    }
-    types
+    generics
+        .params
+        .iter()
+        .flat_map(generic_parameter_types)
+        .chain(
+            generics
+                .where_clause
+                .iter()
+                .flat_map(|clause| &clause.predicates)
+                .flat_map(where_predicate_types),
+        )
+        .collect()
+}
+
+fn generic_parameter_types(parameter: &syn::GenericParam) -> Vec<Type> {
+    let syn::GenericParam::Type(parameter) = parameter else {
+        return Vec::new();
+    };
+    parameter
+        .bounds
+        .iter()
+        .filter_map(bound_type)
+        .chain(parameter.default.iter().cloned())
+        .collect()
+}
+
+fn where_predicate_types(predicate: &syn::WherePredicate) -> Vec<Type> {
+    let syn::WherePredicate::Type(predicate) = predicate else {
+        return Vec::new();
+    };
+    std::iter::once(predicate.bounded_ty.clone())
+        .chain(predicate.bounds.iter().filter_map(bound_type))
+        .collect()
 }
 
 fn collect_toolkit_uses(tree: &UseTree, prefix: Option<String>, aliases: &Aliases, leaks: &mut BTreeSet<String>) {
