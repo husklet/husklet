@@ -722,20 +722,35 @@
             ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
               -Isrc/runtime/hl-native/src/native -Isrc/runtime/hl-native/src/native/include \
               -c src/runtime/hl-native/src/native/bridge/host.c -o host-bridge.obj
-            file host-bridge.obj | grep -E 'Intel 80386|x86-64|PE|COFF'
+            ${windows.stdenv.cc.targetPrefix}objdump -f host-bridge.obj \
+              | grep -F 'file format pe-x86-64' >/dev/null
+            ${windows.stdenv.cc.targetPrefix}objdump -f host-bridge.obj \
+              | grep -F 'architecture: i386:x86-64' >/dev/null
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
               -DHL_SHARED -DHL_ABI_COMPILE_CONTRACT \
               -Isrc/runtime/hl-native/src/native/include \
               -c tests/native/host-abi/windows.c -o public-abi-c.obj
+            ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-c.obj \
+              | grep -F 'file format pe-x86-64' >/dev/null
+            ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-c.obj \
+              | grep -F 'architecture: i386:x86-64' >/dev/null
             ${lib.escapeShellArg cxx} -std=c++20 -Wall -Wextra -Werror \
               -DHL_SHARED -Isrc/runtime/hl-native/src/native/include \
               -c tests/native/host-abi/windows.cpp -o public-abi-cxx.obj
+            ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-cxx.obj \
+              | grep -F 'file format pe-x86-64' >/dev/null
+            ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-cxx.obj \
+              | grep -F 'architecture: i386:x86-64' >/dev/null
             ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
               -DHL_ABI_FIXTURE_EXPORT \
               -Isrc/runtime/hl-native/src/native/include \
               -L${windows.windows.mcfgthreads}/lib \
               -shared tests/native/host-abi/windows.c -o hl-abi-fixture.dll \
               -Wl,--out-implib,libhl-abi-fixture.dll.a
+            ${windows.stdenv.cc.targetPrefix}objdump -f hl-abi-fixture.dll \
+              | grep -F 'file format pei-x86-64' >/dev/null
+            ${windows.stdenv.cc.targetPrefix}objdump -f hl-abi-fixture.dll \
+              | grep -F 'architecture: i386:x86-64' >/dev/null
             file hl-abi-fixture.dll | grep -E 'PE32\+.*DLL.*x86-64'
             file libhl-abi-fixture.dll.a | grep -F 'current ar archive'
             ${windows.stdenv.cc.targetPrefix}nm -g libhl-abi-fixture.dll.a \
@@ -745,7 +760,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows Rust target, C/C++ public-header layout/linkage/signature checks, host-bridge compile, and ABI fixture DLL/import-library link; this is not MSVC SDK or runtime proof' \
+              'GNU Windows Rust target, exact x86-64 COFF host/public-consumer architecture, C/C++ public-header layout/linkage/signature checks, and ABI fixture DLL/import-library link; this is not MSVC SDK or runtime proof' \
               > "$out/evidence"
           '';
         };

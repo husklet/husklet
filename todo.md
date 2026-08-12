@@ -45,6 +45,9 @@ This is the authoritative checklist for the C-primary production migration. Chec
   Each Linux ISA cross-check also requires the same exact thirteen-symbol
   dynamic export set and SONAME, preventing ARM64/AMD64 ABI drift without
   claiming that a foreign-target library was executed.
+  The Windows GNU cross-check pins the host bridge and both public-header
+  consumers to x86-64 COFF, so a 32-bit object cannot satisfy the AMD64 lane;
+  it remains compile/link evidence rather than Windows runtime evidence.
 
 ## Host architecture
 
