@@ -14,27 +14,38 @@ pub(super) fn public_files(sources: &[&Source]) -> BTreeSet<PathBuf> {
         .map(|source| source.path.clone())
         .collect::<BTreeSet<_>>();
     loop {
-        let mut changed = false;
-        for source in sources {
-            if !public.contains(&source.path) {
-                continue;
-            }
-            for item in &source.syntax.items {
-                let Item::Mod(module) = item else { continue };
-                if !matches!(module.vis, Visibility::Public(_)) || module.content.is_some() {
-                    continue;
-                }
-                for path in module_paths(source, module) {
-                    if sources.iter().any(|candidate| candidate.path == path) {
-                        changed |= public.insert(path);
-                    }
-                }
-            }
-        }
+        let additions = reachable_module_files(&public, sources);
+        let changed = additions
+            .into_iter()
+            .fold(false, |changed, path| public.insert(path) || changed);
         if !changed {
             return public;
         }
     }
+}
+
+fn reachable_module_files(public: &BTreeSet<PathBuf>, sources: &[&Source]) -> Vec<PathBuf> {
+    sources
+        .iter()
+        .filter(|source| public.contains(&source.path))
+        .flat_map(|source| public_module_files(source, sources))
+        .collect()
+}
+
+fn public_module_files(source: &Source, sources: &[&Source]) -> Vec<PathBuf> {
+    source
+        .syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Mod(module) if matches!(module.vis, Visibility::Public(_)) && module.content.is_none() => {
+                Some(module)
+            }
+            _ => None,
+        })
+        .flat_map(|module| module_paths(source, module))
+        .filter(|path| sources.iter().any(|candidate| candidate.path == *path))
+        .collect()
 }
 
 pub(super) fn reexported_items(
