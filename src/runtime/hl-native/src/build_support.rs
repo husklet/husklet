@@ -5,6 +5,9 @@ use std::fmt::Write;
 pub(crate) const BUILD_POLICY_INPUTS: &[&str] =
     &["build.rs", "src/artifact.rs", "src/build_support.rs", "src/platform.rs"];
 
+pub(crate) const COMPILER_ENVIRONMENT_INPUTS: &[&str] =
+    &["AR", "ARFLAGS", "CC", "CFLAGS", "CPPFLAGS", "CRATE_CC_NO_DEFAULTS"];
+
 pub(crate) const WINDOWS_SYSTEM_LIBRARIES: &[&str] = &[
     "kernel32",
     "ntdll",
@@ -69,6 +72,14 @@ fn symbols_with_affixes(symbols: &[&str], header: &str, prefix: &str, suffix: &s
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compiler_environment_inputs_are_complete_and_stably_ordered() {
+        assert_eq!(
+            super::COMPILER_ENVIRONMENT_INPUTS,
+            &["AR", "ARFLAGS", "CC", "CFLAGS", "CPPFLAGS", "CRATE_CC_NO_DEFAULTS"]
+        );
+    }
+
     #[test]
     fn build_policy_modules_are_complete_and_stably_ordered() {
         assert_eq!(
