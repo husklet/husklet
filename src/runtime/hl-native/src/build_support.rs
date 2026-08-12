@@ -1,5 +1,7 @@
 //! Cargo build-script policy shared with its unit tests.
 
+use std::fmt::Write;
+
 pub(crate) const WINDOWS_SYSTEM_LIBRARIES: &[&str] = &[
     "kernel32",
     "ntdll",
@@ -42,6 +44,26 @@ pub(crate) fn static_archive_filename(target_os: &str, name: &str) -> String {
     }
 }
 
+pub(crate) fn darwin_export_list(symbols: &[&str]) -> String {
+    symbols_with_affixes(symbols, "", "_", "\n")
+}
+
+pub(crate) fn windows_export_definition(symbols: &[&str]) -> String {
+    symbols_with_affixes(symbols, "EXPORTS\n", "  ", "\n")
+}
+
+pub(crate) fn linux_export_map(symbols: &[&str]) -> String {
+    symbols_with_affixes(symbols, "HL_NATIVE_1 {\n  global:\n", "    ", ";\n") + "  local: *;\n};\n"
+}
+
+fn symbols_with_affixes(symbols: &[&str], header: &str, prefix: &str, suffix: &str) -> String {
+    let mut manifest = String::from(header);
+    for symbol in symbols {
+        write!(manifest, "{prefix}{symbol}{suffix}").expect("writing to a String cannot fail");
+    }
+    manifest
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -66,5 +88,22 @@ mod tests {
         assert_eq!(super::static_archive_filename("linux", "hl_engine"), "libhl_engine.a");
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ws2_32"));
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ntdll"));
+    }
+
+    #[test]
+    fn export_manifests_apply_each_platforms_linker_grammar() {
+        let symbols = ["hl_engine_abi", "hl_engine_version"];
+        assert_eq!(
+            super::darwin_export_list(&symbols),
+            "_hl_engine_abi\n_hl_engine_version\n"
+        );
+        assert_eq!(
+            super::windows_export_definition(&symbols),
+            "EXPORTS\n  hl_engine_abi\n  hl_engine_version\n"
+        );
+        assert_eq!(
+            super::linux_export_map(&symbols),
+            "HL_NATIVE_1 {\n  global:\n    hl_engine_abi;\n    hl_engine_version;\n  local: *;\n};\n"
+        );
     }
 }

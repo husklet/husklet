@@ -305,10 +305,7 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
     let mut command = compiler.to_command();
     if target_os == "macos" {
         let export_list = output.join("hl_native_engine.exports");
-        let exported = RUST_BRIDGE_EXPORTS
-            .iter()
-            .map(|symbol| format!("_{symbol}\n"))
-            .collect::<String>();
+        let exported = build_support::darwin_export_list(RUST_BRIDGE_EXPORTS);
         fs::write(&export_list, exported).expect("write Darwin native export list");
         command.args(["-dynamiclib", "-Wl,-install_name,@rpath/libhl_native_engine.dylib"]);
         command.arg(format!("-Wl,-exported_symbols_list,{}", export_list.display()));
@@ -320,11 +317,8 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
         }
     } else if target_os == "windows" {
         let definition = output.join("hl_native_engine.def");
-        let exported = RUST_BRIDGE_EXPORTS
-            .iter()
-            .map(|symbol| format!("  {symbol}\n"))
-            .collect::<String>();
-        fs::write(&definition, format!("EXPORTS\n{exported}")).expect("write Windows native export definition");
+        let exported = build_support::windows_export_definition(RUST_BRIDGE_EXPORTS);
+        fs::write(&definition, exported).expect("write Windows native export definition");
         command.arg("-shared");
         command.arg(format!("-Wl,/IMPLIB:{}", output.join("hl_native_engine.lib").display()));
         command.arg(format!("-Wl,/DEF:{}", definition.display()));
@@ -338,15 +332,8 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
         }
     } else {
         let export_map = output.join("hl_native_engine.map");
-        let exported = RUST_BRIDGE_EXPORTS
-            .iter()
-            .map(|symbol| format!("    {symbol};\n"))
-            .collect::<String>();
-        fs::write(
-            &export_map,
-            format!("HL_NATIVE_1 {{\n  global:\n{exported}  local: *;\n}};\n"),
-        )
-        .expect("write Linux native export map");
+        fs::write(&export_map, build_support::linux_export_map(RUST_BRIDGE_EXPORTS))
+            .expect("write Linux native export map");
         command.args([
             "-shared",
             "-Wl,-soname,libhl_native_engine.so",

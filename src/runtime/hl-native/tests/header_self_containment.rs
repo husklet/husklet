@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write as _,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -149,7 +150,6 @@ fn public_visibility_selects_export_and_import_annotations() {
             .stdout(std::process::Stdio::piped())
             .spawn()
             .expect("C preprocessor for visibility probe");
-        use std::io::Write as _;
         child
             .stdin
             .take()
@@ -167,4 +167,42 @@ fn public_visibility_selects_export_and_import_annotations() {
     assert!(windows_export.contains("__declspec(dllexport)"));
     let windows_import = preprocess(&["_WIN32", "HL_SHARED"]);
     assert!(windows_import.contains("__declspec(dllimport)"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cpp_bridge_declarations_retain_c_linkage() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-cpp-linkage-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("C++ linkage probe directory");
+    let source = scratch.join("probe.cpp");
+    let object = scratch.join("probe.o");
+    fs::write(
+        &source,
+        "#include \"bridge/api.h\"\nvoid probe() { hl_c_backend_destroy(nullptr); }\n",
+    )
+    .expect("C++ linkage probe source");
+    let compile = Command::new(std::env::var_os("CXX").unwrap_or_else(|| "c++".into()))
+        .args(["-std=c++17", "-c"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .expect("C++ linkage probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let symbols = Command::new("nm")
+        .arg("-u")
+        .arg(&object)
+        .output()
+        .expect("nm for C++ linkage probe");
+    assert!(symbols.status.success());
+    let symbols = String::from_utf8(symbols.stdout).expect("nm UTF-8");
+    assert!(
+        symbols.lines().any(|line| line.ends_with(" U hl_c_backend_destroy")),
+        "{symbols}"
+    );
+    fs::remove_dir_all(scratch).expect("remove C++ linkage probe directory");
 }
