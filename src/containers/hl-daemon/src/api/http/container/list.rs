@@ -224,19 +224,17 @@ impl NetworkPlan {
         }
         match containers.networks().create(NetworkSpec::none("none")).await {
             Ok(_) => Ok(()),
-            Err(ContainerError::NetworkConflict(_)) => containers
-                .networks()
-                .inspect("none")
-                .await
-                .and_then(|network| {
-                    if network.driver == NetworkDriver::None {
-                        Ok(network)
-                    } else {
-                        Err(ContainerError::NetworkConflict("none".into()))
-                    }
-                })
-                .map(|_| ())
-                .map_err(ApiError::container),
+            Err(ContainerError::NetworkConflict(_)) => {
+                let network = containers
+                    .networks()
+                    .inspect("none")
+                    .await
+                    .map_err(ApiError::container)?;
+                if network.driver != NetworkDriver::None {
+                    return Err(ApiError::container(ContainerError::NetworkConflict("none".into())));
+                }
+                Ok(())
+            }
             Err(error) => Err(ApiError::container(error)),
         }
     }

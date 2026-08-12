@@ -79,13 +79,7 @@ impl<'a> Changes<'a> {
             "EXPOSE" => {
                 metadata
                     .exposed_ports
-                    .extend(Words::new(value).parse().into_iter().map(|port| {
-                        if port.contains('/') {
-                            port
-                        } else {
-                            format!("{port}/tcp")
-                        }
-                    }));
+                    .extend(Words::new(value).parse().into_iter().map(Self::exposed_port));
             }
             "VOLUME" => {
                 let volumes = if value.starts_with('[') {
@@ -110,6 +104,14 @@ impl<'a> Changes<'a> {
             _ => return Err(Error::MalformedOci(format!("unsupported commit change {name}"))),
         }
         Ok(())
+    }
+
+    fn exposed_port(port: String) -> String {
+        if port.contains('/') {
+            port
+        } else {
+            format!("{port}/tcp")
+        }
     }
 }
 

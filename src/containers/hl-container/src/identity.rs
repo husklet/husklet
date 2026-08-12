@@ -100,14 +100,7 @@ impl Identity {
                 let Some(address) = endpoint.address else {
                     continue;
                 };
-                let mut names = vec![endpoint.name.clone()];
-                names.extend(endpoint.aliases.clone());
-                if endpoint.container == container.id {
-                    let hostname = container.hostname();
-                    if !names.contains(&hostname) {
-                        names.push(hostname);
-                    }
-                }
+                let names = Self::host_names(container, endpoint);
                 writeln!(contents, "{address}\t{}", names.join(" ")).expect("writing to String cannot fail");
             }
         }
@@ -115,6 +108,19 @@ impl Identity {
             writeln!(contents, "{address}\t{name}").expect("writing to String cannot fail");
         }
         contents
+    }
+
+    fn host_names(container: &Container, endpoint: &crate::Endpoint) -> Vec<String> {
+        let mut names = vec![endpoint.name.clone()];
+        names.extend(endpoint.aliases.clone());
+        if endpoint.container != container.id {
+            return names;
+        }
+        let hostname = container.hostname();
+        if !names.contains(&hostname) {
+            names.push(hostname);
+        }
+        names
     }
 
     fn resolver(container: &Container, networks: &[NetworkConfig]) -> Result<String> {
