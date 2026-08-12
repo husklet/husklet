@@ -562,7 +562,6 @@ static void pcache_save(void) {
         memcpy(w, g_pc_libs, (size_t)g_pc_nlib * sizeof(struct pc_lib));
         w += (size_t)g_pc_nlib * sizeof(struct pc_lib);
         memcpy(w, g_cache, h.arena_used); // read from W^X arena is always permitted
-        w += h.arena_used;
         h.csum = hl_digest_bytes(HL_DIGEST_SEED, buf + sizeof h, total - sizeof h);
         memcpy(buf, &h, sizeof h);
         ok = hl_persist_store_at(&g_pc_directory, path, buf, total);
