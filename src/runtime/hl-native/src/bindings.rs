@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{c_char, c_int, c_uint, c_ulonglong, c_void};
+use std::mem::offset_of;
 
 // These declarations mirror native/bridge/api.h. Including that header in the
 // defining C translation unit makes signature drift a compile-time error.
@@ -13,6 +14,24 @@ pub struct Backend {
     _private: [u8; 0],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct MainImagePlan {
+    pub abi: u32,
+    pub size: u32,
+    pub architecture: u32,
+    pub kind: u32,
+    pub link_start: u64,
+    pub link_end: u64,
+    pub has_interpreter: u32,
+    pub flags: u32,
+    pub interpreter_identity: u64,
+}
+
+const _: () = assert!(size_of::<MainImagePlan>() == 48);
+const _: () = assert!(offset_of!(MainImagePlan, link_start) == 16);
+const _: () = assert!(offset_of!(MainImagePlan, interpreter_identity) == 40);
+
 pub type SyscallDispatch = unsafe extern "C" fn(*mut c_void, c_uint, *mut c_void, *mut c_void) -> c_int;
 
 unsafe extern "C" {
@@ -24,7 +43,7 @@ unsafe extern "C" {
         rootfs: *const c_char,
         executable_host: *const c_char,
         executable_fd: c_int,
-        image_plan: *const c_void,
+        image_plan: *const MainImagePlan,
         option_count: c_uint,
         option_names: *const *const c_char,
         option_values: *const *const c_char,

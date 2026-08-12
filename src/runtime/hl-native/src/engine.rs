@@ -29,19 +29,7 @@ pub struct EngineConfig<'a> {
     pub syscall_dispatch: Option<SyscallDispatch>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(C)]
-struct Plan {
-    abi: u32,
-    size: u32,
-    architecture: u32,
-    kind: u32,
-    link_start: u64,
-    link_end: u64,
-    has_interpreter: u32,
-    flags: u32,
-    interpreter_identity: u64,
-}
+type Plan = crate::bindings::MainImagePlan;
 
 /// Validated information derived from an ELF program-header table before it
 /// is projected into the stable native ABI plan.
@@ -93,7 +81,7 @@ impl Engine {
                 config.rootfs.map_or(std::ptr::null(), std::ffi::CStr::as_ptr),
                 config.executable_host.map_or(std::ptr::null(), std::ffi::CStr::as_ptr),
                 config.executable_fd,
-                (&raw const image_plan).cast(),
+                &raw const image_plan,
                 count,
                 config.option_names.as_ptr(),
                 config.option_values.as_ptr(),
