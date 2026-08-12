@@ -5,6 +5,14 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-static-pie, -O2]
 cases:
+  - id: runtime/python/cpython-minimal
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: exec_python.c, output: exec-python-minimal, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/python/exec-python-minimal }
+    run: [-I, -u, -S, -c, "open('/tmp/husklet-cpython-proof', 'w').write('1\\n')"]
+    expect: { exit: 0, stdout: golden/cpython_minimal.out }
   - id: runtime/python/cpython-standard-library
     status: active
     compat: { class: compatibility }
