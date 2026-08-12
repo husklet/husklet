@@ -228,11 +228,12 @@
             // the peer's -- LOCAL_PEERPID, mapping the container init's host pid back to guest pid 1, self as
             // the container pid). IPC bootstrap may abort with "missing credentials" without it.
             int passcred_active = gc && gcl && (int)a0 >= 0 && (int)a0 < HL_NFD && g_sock_passcred[(int)a0];
-            int synth_passcred = passcred_active;
 #if defined(__linux__)
             // The Linux kernel attaches the sender's real SCM_CREDENTIALS.  Synthesizing the Darwin
             // fallback here would replace a post-fork sender pid with the socketpair creator's pid.
-            synth_passcred = 0;
+            int synth_passcred = 0;
+#else
+            int synth_passcred = passcred_active;
 #endif
             int cred_trunc = 0;
             size_t ln = 0;

@@ -108,7 +108,6 @@
         int logical_committed = 0;
         int logical_prepare_failed = 0;
         int logical_prepare_errno = 0;
-        int soft_activated_here = 0;
         int logical_transition_locked = 0;
         int logical_candidate =
             hp > (size_t)guest_pagesz() && (a3 & 0x10) && (a3 & 0x01) && !(a3 & 0x20) && (int)a4 >= 0 && a1;
@@ -117,9 +116,7 @@
                transition -> translation flush -> mapping STW -> ledger. */
             gbus_mapping_transition_lock();
             logical_transition_locked = 1;
-            if (jit_guest_soft_activate())
-                soft_activated_here = 1;
-            else {
+            if (!jit_guest_soft_activate()) {
                 logical_prepare_failed = 1;
                 logical_prepare_errno = ENOMEM;
             }

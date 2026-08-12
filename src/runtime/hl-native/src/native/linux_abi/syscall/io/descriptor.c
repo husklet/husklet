@@ -225,9 +225,7 @@ static int svc_fcntl_get_flags(struct cpu *c, int descriptor, uint64_t argument,
             int lf = r & 0x3;
             if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_proc_text_ro[(int)a0]) lf = 0;
             char fgetpath_buf[4096] = {0};
-            int have_fgetpath = 0;
             if ((lf & 0x3) && hl_native_fd_path((int)a0, fgetpath_buf, sizeof fgetpath_buf) == 0) {
-                have_fgetpath = 1;
                 if (proc_text_host_path(fgetpath_buf)) lf &= ~0x3;
             }
             // Preserve the architecture's native F_GETFL representation (see G_O_LARGEFILE above).
@@ -246,18 +244,6 @@ static int svc_fcntl_get_flags(struct cpu *c, int descriptor, uint64_t argument,
             // OWN blocking/non-blocking intent (g_eventfd_gnb), not the host flag. See vfs.c g_eventfd_gnb.
             if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
                 lf = eventfd_guest_nb((int)a0) ? (lf | 0x800) : (lf & ~0x800);
-            }
-            int proc_text_for_log = ((int)a0 >= 0 && (int)a0 < HL_NFD && g_proc_text_ro[(int)a0]) ||
-                                    (have_fgetpath && proc_text_host_path(fgetpath_buf));
-            if (0 && proc_text_for_log) {
-                char p[4096] = {0};
-                if (have_fgetpath) {
-                    snprintf(p, sizeof p, "%s", fgetpath_buf);
-                } else {
-                    (void)hl_native_fd_path((int)a0, p, sizeof p);
-                }
-                fprintf(stderr, "[HLFCNTL] pid=%d cpid=%d fd=%d mflags=0x%x lflags=0x%x path=%s\n", getpid(),
-                        container_pid(), (int)a0, r, lf, p);
             }
             G_RET(c) = (uint64_t)(unsigned)lf;
             break;
