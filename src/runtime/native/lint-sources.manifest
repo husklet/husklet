@@ -618,3 +618,4 @@ fixture	retained/tests/aarch64_interpreter_link_smoke.c
 fixture	retained/tests/options_contract.c
 source	retained/tools/lifecycle_runner.c
 source	shim.c
+fixture	tests/checkpoint_tree.c

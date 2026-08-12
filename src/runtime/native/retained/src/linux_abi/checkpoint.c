@@ -5389,8 +5389,7 @@ static void ckpt_fork_children(int gpid, struct cpu *parent) {
         pid_t p = fork();
         if (p < 0) {
             (void)hl_target_task_event(parent, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)source, 0);
-        } else if (!hl_target_task_event(parent, HL_TASK_EVENT_FORK_PROCESS, (uint64_t)cg, (uint64_t)source,
-                                         p == 0)) {
+        } else if (!hl_target_task_event(parent, HL_TASK_EVENT_FORK_PROCESS, (uint64_t)cg, (uint64_t)source, p == 0)) {
             if (p == 0) _exit(127);
             int status;
             kill(p, SIGKILL);
