@@ -342,6 +342,9 @@ fn corrected_upper(ratio: f64, left_floor: f64, right_floor: f64) -> Result<f64,
 fn verify_outputs(rows: &[Row]) -> Result<(), Error> {
     let mut expected = BTreeMap::new();
     for row in rows {
+        if !valid_identity(&row.output) {
+            return Err(format!("invalid exact-output identity for {}", row.key).into());
+        }
         let value = (
             row.output.as_str(),
             row.phases
@@ -355,6 +358,13 @@ fn verify_outputs(rows: &[Row]) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+fn valid_identity(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn paired(
@@ -573,6 +583,24 @@ mod tests {
         }
         evidence.host_load = "0.25".into();
         super::verify_host_load(&evidence).unwrap();
+    }
+
+    #[test]
+    fn exact_output_identity_must_be_a_canonical_digest() {
+        let digest = "0123456789abcdef".repeat(4);
+        assert!(super::valid_identity(&digest));
+        for invalid in [
+            "same".to_owned(),
+            "g".repeat(64),
+            "A".repeat(64),
+            "0".repeat(63),
+            "0".repeat(65),
+        ] {
+            assert!(!super::valid_identity(&invalid), "accepted {invalid:?}");
+        }
+        let mut evidence = row("malloc|plain|EE|0|0", "E", 1);
+        evidence.output = "corrupt".into();
+        assert!(super::verify_outputs(&[evidence]).is_err());
     }
 
     #[test]
