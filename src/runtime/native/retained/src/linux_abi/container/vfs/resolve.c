@@ -320,6 +320,7 @@ out:
 // Confined (parent-fd, final) for a guest *at path: absolute or tracked-dir-fd-relative; else deny.
 static int jail_at(int dirfd, const char *raw, char *final, size_t fn, int nofollow) {
     char abs[8192];
+    if (hl_provider_tree_files_active()) return -EACCES;
     if (raw[0] == '/')
         snprintf(abs, sizeof abs, "%s", raw);
     else if (dirfd == -100)

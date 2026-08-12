@@ -159,8 +159,11 @@ int32_t hl_c_backend_create(
   hl_engine_fd_binding bindings[3];
   hl_host_result imported[3];
   hl_engine_executable executable;
-  if (output == NULL)
+  if (output == NULL) {
+    if (provider_fd >= 0)
+      close(provider_fd);
     return HL_STATUS_INVALID_ARGUMENT;
+  }
   int validation_fd = executable_fd;
   int validation_owned = 0;
   if (validation_fd < 0 && executable_host != NULL) {
@@ -171,14 +174,22 @@ int32_t hl_c_backend_create(
                       hl_c_validate_main_image_plan(validation_fd, image_plan);
   if (validation_owned)
     close(validation_fd);
-  if (!validation_ok)
+  if (!validation_ok) {
+    if (provider_fd >= 0)
+      close(provider_fd);
     return HL_STATUS_INVALID_ARGUMENT;
+  }
   *output = NULL;
   backend = calloc(1, sizeof(*backend));
-  if (backend == NULL)
+  if (backend == NULL) {
+    if (provider_fd >= 0)
+      close(provider_fd);
     return HL_STATUS_OUT_OF_MEMORY;
+  }
   status = hl_host_linux_create(&backend->host, &backend->services);
   if (status != HL_STATUS_OK) {
+    if (provider_fd >= 0)
+      close(provider_fd);
     free(backend);
     return status;
   }

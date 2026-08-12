@@ -39,12 +39,24 @@ impl CGuestExecutor {
         encoded
     }
 
+    #[cfg(test)]
     pub(in crate::execution) fn create_with_streams(
         isa: GuestIsa,
         plan: &RuntimeLaunchPlan,
         executable_authority: Option<&crate::executable::ExecutableAuthority>,
         standard_fds: [c_int; 3],
         streams: Option<StreamBridge>,
+    ) -> Result<Self, EngineError> {
+        Self::create_with_provider(isa, plan, executable_authority, standard_fds, streams, None)
+    }
+
+    pub(in crate::execution) fn create_with_provider(
+        isa: GuestIsa,
+        plan: &RuntimeLaunchPlan,
+        executable_authority: Option<&crate::executable::ExecutableAuthority>,
+        standard_fds: [c_int; 3],
+        streams: Option<StreamBridge>,
+        provider_descriptor: Option<c_int>,
     ) -> Result<Self, EngineError> {
         if plan.result_path.is_some() {
             hl_log::hl_error!(
@@ -117,12 +129,6 @@ impl CGuestExecutor {
         } else {
             std::ptr::null_mut()
         };
-        let provider_descriptor = std::env::var("HL_C_PROVIDER_FD")
-            .ok()
-            .filter(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit()))
-            .and_then(|value| value.parse::<c_int>().ok())
-            .filter(|value| *value >= 3)
-            .unwrap_or(-1);
         // SAFETY: all borrowed records remain valid for the call; the backend copies configuration.
         let status = unsafe {
             hl_c_backend_create(
@@ -137,7 +143,7 @@ impl CGuestExecutor {
                 option_names.as_ptr(),
                 option_values.as_ptr(),
                 standard_fds.as_ptr(),
-                provider_descriptor,
+                provider_descriptor.unwrap_or(-1),
                 syscall_context,
                 runtime_exit.then_some(c_syscall_trap),
                 &raw mut handle,

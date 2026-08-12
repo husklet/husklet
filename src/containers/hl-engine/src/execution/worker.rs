@@ -43,10 +43,6 @@ pub(crate) fn run(
     let plan_file = unsafe { std::fs::File::from_raw_fd(plan_descriptor) };
     // SAFETY: same one-shot ownership contract, for the distinct control descriptor.
     let mut control = unsafe { std::os::unix::net::UnixStream::from_raw_fd(control_descriptor) };
-    let _provider = provider_descriptor.map(|descriptor| {
-        // SAFETY: the one-shot worker owns the distinct inherited provider descriptor.
-        unsafe { std::os::unix::net::UnixStream::from_raw_fd(descriptor) }
-    });
     let executable_authority = crate::executable::ExecutableAuthority::receive_optional(&control).map_err(|_| {
         send_error(&mut control, FailureStage::Control, 3);
         WorkerError::Control
@@ -65,12 +61,18 @@ pub(crate) fn run(
         WorkerError::Plan
     })?;
     let executor = Arc::new(
-        CGuestExecutor::create_with_streams(isa, &plan, executable_authority.as_ref(), [0, 1, 2], None).map_err(
-            |_| {
-                send_error(&mut control, FailureStage::Create, 1);
-                WorkerError::Create
-            },
-        )?,
+        CGuestExecutor::create_with_provider(
+            isa,
+            &plan,
+            executable_authority.as_ref(),
+            [0, 1, 2],
+            None,
+            provider_descriptor,
+        )
+        .map_err(|_| {
+            send_error(&mut control, FailureStage::Create, 1);
+            WorkerError::Create
+        })?,
     );
     write_message(&mut control, Message::Ready)?;
     if read_message(&mut control)? != Message::Start {

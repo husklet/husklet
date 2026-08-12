@@ -4105,6 +4105,22 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 if (l > bs) l = bs;
                 memcpy(buf, ep, l);
                 G_RET(c) = l;
+            } else if (hl_provider_tree_files_active()) {
+                char projected_path[4200];
+                guest_abspath_at((int)a0, p, projected_path, sizeof projected_path);
+                hl_host_result opened = hl_provider_tree_open_root(
+                    projected_path, strlen(projected_path),
+                    HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0, HL_PROVIDER_TREE_LINK);
+                if (opened.status != HL_STATUS_OK) {
+                    G_RET(c) = (uint64_t)(int64_t)vfs_host_error((hl_status)opened.status);
+                } else {
+                    hl_host_result linked = g_host_services->file->readlink(g_host_services->context, opened.value,
+                                                                            (hl_host_bytes){.data = buf, .size = bs});
+                    (void)g_host_services->file->close(g_host_services->context, opened.value);
+                    G_RET(c) = linked.status == HL_STATUS_OK
+                                   ? linked.value
+                                   : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
+                }
             } else {
                 // A path that EXISTS in the synthesized /proc (or cgroup /sys) view but is not one of the
                 // magic links above is a regular file/dir there -> EINVAL, exactly like Linux. It must NOT
