@@ -542,6 +542,49 @@ static enum translation_step translate_compare_zero_branch(uint64_t *guest_pc, u
     return TRANSLATION_STOP;
 }
 
+static enum translation_step translate_condition_branch(uint64_t *guest_pc, uint32_t instruction,
+                                                        struct conditional_branch_state *state) {
+    if ((instruction & 0xFF000010u) != 0x54000000u) return TRANSLATION_UNHANDLED;
+
+    int condition = instruction & 0xF;
+    int64_t offset = sext((instruction >> 5) & 0x7FFFF, 19) << 2;
+    uint64_t taken = *guest_pc + offset;
+    uint64_t fallthrough = *guest_pc + 4;
+    if (state->in_exclusive_region) {
+        int index = (*state->deferred_count)++;
+        state->deferred[index].patch = (uint32_t *)g_cp;
+        state->deferred[index].target = taken;
+        state->deferred[index].instruction = instruction;
+        emit32(0);
+        *guest_pc = fallthrough;
+        return TRANSLATION_CONTINUE;
+    }
+    if (taken == state->start && !g_notier2 && !loop_has_rmw_hazard(state->start, *guest_pc)) {
+        int slot = g_tier2_build ? 0 : t2_slot(state->start);
+        if (g_tier2_build || slot >= 0) {
+            emit_selfloop(instruction, state->start, fallthrough, state->body, slot);
+            return TRANSLATION_STOP;
+        }
+    }
+    /* AL and NV both execute unconditionally in A64, so neither may use the inverted-condition stitch. */
+    if (state->stitch_allowed && condition < 0xE && fallthrough != state->start &&
+        !seen_has(state->seen, *state->seen_count, fallthrough) && !map_body(fallthrough)) {
+        stitch_cond(instruction ^ 1u, taken);
+        state->seen[(*state->seen_count)++] = fallthrough;
+        (*state->trace_blocks)++;
+        (*state->conditional_count)++;
+        *guest_pc = fallthrough;
+        return TRANSLATION_CONTINUE;
+    }
+    uint32_t *patch = (uint32_t *)g_cp;
+    emit32(0);
+    emit_chain_exit(fallthrough);
+    int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+    *patch = 0x54000000u | ((uint32_t)(distance & 0x7FFFF) << 5) | (unsigned)condition;
+    emit_chain_exit(taken);
+    return TRANSLATION_STOP;
+}
+
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
        an executable view backed by an emulated host-page snapshot. */
@@ -937,56 +980,22 @@ static void *translate_block(uint64_t gpc) {
             //   (Section 3) -- deferred; Stage-B IBTC for the function-ptr return
             break;
         }
-        // b.cond
         if ((in & 0xFF000010u) == 0x54000000u) {
-            int cond = in & 0xF;
-            int64_t off = sext((in >> 5) & 0x7FFFF, 19) << 2;
-            uint64_t taken = gpc + off, fall = gpc + 4;
-            if (in_excl) {
-                defer[ndefer].patch = (uint32_t *)g_cp;
-                defer[ndefer].target = taken;
-                defer[ndefer].instruction = in;
-                ndefer++;
-                emit32(0);
-                gpc += 4;
-                continue;
-            }
-            // W4E tier-2: single-block self-loop (taken back-edge == block start). Intercept BEFORE the
-            // opt4 stitch so the redundant back-edge trampoline can be folded; non-self-loops (taken !=
-            // start) fall through to opt4 unchanged. NOTIER2 -> skipped (exact committed-opt4 baseline).
-            if (taken == start && !g_notier2 && !loop_has_rmw_hazard(start, gpc)) {
-                int slot = g_tier2_build ? 0 : t2_slot(start);
-                if (g_tier2_build || slot >= 0) {
-                    emit_selfloop(in, start, fall, body, slot);
-                    break;
-                }
-            }
-            // opt4: lay the fall-through inline; invert the condition so TAKEN is the exit. This inverts by
-            // flipping cond bit0 (stitch_cond: in ^ 1) -- valid ONLY for a genuinely conditional branch.
-            // The condition field 0b111x is special: 0b1110 = AL and 0b1111 = NV BOTH mean "always execute"
-            // in A64 (NV is not "never"; it is a reserved alias of AL). So a guest `b.al` is an
-            // UNCONDITIONAL branch with a DEAD fall-through, and flipping its bit0 yields NV -- still
-            // "always" -- so the "inverted" branch never actually diverts: the stitched superblock would
-            // then ALWAYS fall into the (guest-unreachable) fall-through and NEVER reach the guest's real
-            // always-taken target. HotSpot's generated interpreter emits `b.al` as a plain jump, so this
-            // silently mislowered its dispatch -> an infinite spin (#186). Exclude cond >= 0xE from the fold;
-            // an always-branch takes the ordinary b.cond emit below, which chains straight to `taken`.
-            if (STITCH_OK && cond < 0xE && fall != start && !seen_has(seen, nseen, fall) && !map_body(fall)) {
-                stitch_cond(in ^ 1u, taken);
-                seen[nseen++] = fall;
-                trace_blk++;
-                ncond++;
-                gpc = fall;
-                continue;
-            }
-            uint32_t *patch = (uint32_t *)g_cp;
-            // b.cond -> taken (backpatched)
-            emit32(0);
-            emit_chain_exit(fall);
-            int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-            *patch = 0x54000000u | ((uint32_t)(d & 0x7FFFF) << 5) | cond;
-            emit_chain_exit(taken);
-            break;
+            struct conditional_branch_state branch_state = {
+                .start = start,
+                .body = body,
+                .seen = seen,
+                .seen_count = &nseen,
+                .trace_blocks = &trace_blk,
+                .conditional_count = &ncond,
+                .deferred = defer,
+                .deferred_count = &ndefer,
+                .in_exclusive_region = in_excl,
+                .stitch_allowed = STITCH_OK,
+            };
+            enum translation_step step = translate_condition_branch(&gpc, in, &branch_state);
+            if (step == TRANSLATION_CONTINUE) continue;
+            if (step == TRANSLATION_STOP) break;
         }
         if ((in & 0x7E000000u) == 0x34000000u) {
             struct conditional_branch_state branch_state = {
