@@ -4,10 +4,11 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Stdio,
+    time::Duration,
 };
 
 const SCHEMA: &str = "husklet-benchmark-v1";
+const SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -140,14 +141,9 @@ impl Campaign {
             {
                 return Err(format!("arm {label} command is not bound to a hashed artifact").into());
             }
-            let status = HostProcess::standard(&arm.smoke[0])
-                .args(&arm.smoke[1..])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?;
-            if !status.success() {
-                return Err(format!("arm {label} smoke execution failed with {status}").into());
+            let outcome = HostProcess::bounded(&arm.smoke[0], &arm.smoke[1..], SMOKE_TIMEOUT)?;
+            if outcome != hl_process::Outcome::Exited(Some(0)) {
+                return Err(format!("arm {label} smoke execution failed with {outcome:?}").into());
             }
         }
         Ok(())

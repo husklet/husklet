@@ -238,8 +238,8 @@ impl Measurement {
         Self::acquire_with(
             Path::new("/var/tmp/husklet-box.wanted"),
             Path::new("/var/tmp/husklet-box.lock"),
-            quiet,
-            timeout,
+            Duration::from_secs(quiet),
+            Duration::from_secs(timeout),
             |lock_held| host_quiet(max_load, Path::new("/var/tmp/husklet-box.lock"), lock_held),
         )
     }
@@ -247,14 +247,17 @@ impl Measurement {
     fn acquire_with(
         intent_path: &Path,
         box_path: &Path,
-        quiet: u64,
-        timeout: u64,
+        quiet: Duration,
+        timeout: Duration,
         mut probe: impl FnMut(bool) -> Result<bool, Error>,
     ) -> Result<Self, Error> {
-        let intent = lock(intent_path, timeout)?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or("measurement acquisition timeout overflowed")?;
+        let intent = lock(intent_path, deadline)?;
         drop(open_lock(box_path)?);
-        sustained_quiet(quiet, timeout, &mut probe)?;
-        let box_lock = lock(box_path, timeout)?;
+        sustained_quiet(quiet, deadline, &mut probe)?;
+        let box_lock = lock(box_path, deadline)?;
         if !probe(true)? {
             return Err("box became busy while acquiring the measurement lock".into());
         }
@@ -265,14 +268,13 @@ impl Measurement {
     }
 }
 
-fn lock(path: &Path, timeout: u64) -> Result<File, Error> {
+fn lock(path: &Path, deadline: Instant) -> Result<File, Error> {
     let file = open_lock(path)?;
-    let deadline = Instant::now() + Duration::from_secs(timeout);
     while file.try_lock_exclusive().is_err() {
-        if Instant::now() >= deadline {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             return Err(format!("timed out acquiring {}", path.display()).into());
-        }
-        std::thread::sleep(Duration::from_secs(1));
+        };
+        std::thread::sleep(remaining.min(Duration::from_secs(1)));
     }
     Ok(file)
 }
@@ -287,23 +289,29 @@ fn open_lock(path: &Path) -> Result<File, Error> {
 }
 
 fn sustained_quiet(
-    seconds: u64,
-    timeout: u64,
+    quiet: Duration,
+    deadline: Instant,
     probe: &mut impl FnMut(bool) -> Result<bool, Error>,
 ) -> Result<(), Error> {
-    let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut quiet_since = None;
     while Instant::now() < deadline {
         if !probe(false)? {
             quiet_since = None;
-        } else if seconds == 0 {
+        } else if quiet.is_zero() {
             return Ok(());
         } else if quiet_since.is_none() {
             quiet_since = Some(Instant::now());
-        } else if quiet_since.is_some_and(|start| start.elapsed() >= Duration::from_secs(seconds)) {
+        } else if quiet_since.is_some_and(|start| start.elapsed() >= quiet) {
             return Ok(());
         }
-        std::thread::sleep(Duration::from_secs(5.min(seconds.max(1))));
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            break;
+        };
+        std::thread::sleep(
+            remaining
+                .min(Duration::from_secs(5))
+                .min(quiet.max(Duration::from_secs(1))),
+        );
     }
     Err("box did not remain quiet before measurement timeout".into())
 }
@@ -387,7 +395,11 @@ fn box_lock_holder_count(_path: &Path) -> Result<u64, Error> {
 #[cfg(test)]
 mod measurement_tests {
     use super::Measurement;
-    use std::{cell::Cell, fs::OpenOptions};
+    use std::{
+        cell::Cell,
+        fs::OpenOptions,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn quiet_is_rechecked_while_the_box_lock_is_held() {
@@ -395,22 +407,47 @@ mod measurement_tests {
         let intent = directory.path().join("wanted");
         let box_lock = directory.path().join("box");
         let probes = Cell::new(0);
-        let result = Measurement::acquire_with(&intent, &box_lock, 0, 1, |lock_held| {
-            probes.set(probes.get() + 1);
-            if probes.get() == 1 {
-                assert!(!lock_held);
-                return Ok(true);
-            }
-            assert!(lock_held);
-            let competing = OpenOptions::new().read(true).write(true).open(&box_lock).unwrap();
-            assert!(fs2::FileExt::try_lock_shared(&competing).is_err());
-            Ok(false)
-        });
+        let result = Measurement::acquire_with(
+            &intent,
+            &box_lock,
+            Duration::ZERO,
+            Duration::from_secs(1),
+            |lock_held| {
+                probes.set(probes.get() + 1);
+                if probes.get() == 1 {
+                    assert!(!lock_held);
+                    return Ok(true);
+                }
+                assert!(lock_held);
+                let competing = OpenOptions::new().read(true).write(true).open(&box_lock).unwrap();
+                assert!(fs2::FileExt::try_lock_shared(&competing).is_err());
+                Ok(false)
+            },
+        );
         let Err(error) = result else {
             panic!("measurement accepted a busy post-lock probe");
         };
         assert!(error.to_string().contains("became busy"));
         assert_eq!(probes.get(), 2);
+    }
+
+    #[test]
+    fn acquisition_timeout_is_one_deadline_across_quiet_and_box_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let intent = directory.path().join("wanted");
+        let box_path = directory.path().join("box");
+        let competing = super::open_lock(&box_path).unwrap();
+        fs2::FileExt::lock_shared(&competing).unwrap();
+        let started = Instant::now();
+        let result = Measurement::acquire_with(&intent, &box_path, Duration::ZERO, Duration::from_millis(200), |_| {
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(true)
+        });
+        let Err(error) = result else {
+            panic!("measurement acquired a lock held by a competitor");
+        };
+        assert!(error.to_string().contains("timed out acquiring"));
+        assert!(started.elapsed() < Duration::from_millis(300));
     }
 
     #[cfg(target_os = "linux")]
