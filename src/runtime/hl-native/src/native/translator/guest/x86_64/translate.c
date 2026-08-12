@@ -3361,6 +3361,94 @@ static int lower_group3_wide_muldiv(struct insn *instruction, uint64_t guest_pc,
     return TX_NEXT;
 }
 
+static int lower_group45(struct insn *instruction, uint64_t guest_pc, uint64_t next) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0xFE && opcode != 0xFF) return TX_FALL;
+    int operation = instruction->reg & 7;
+    int width = opcode == 0xFE ? 1 : instruction->opsize;
+    int wide = width == 8;
+    int memory;
+    if (operation == 0 || operation == 1) {
+        uint32_t access = X86_SOFT_READ | X86_SOFT_WRITE;
+        int value = rm_load_access(instruction, next, width, &memory, access);
+        if (instruction->lock && memory) {
+            e_movconst(19, operation == 0 ? 1 : (uint64_t)-1);
+            e_lse(LSE_LDADD, width, 19, 20, 17);
+            if (width >= 4) {
+                if (operation == 0)
+                    e_addi_s(21, 20, 1, wide);
+                else
+                    e_subi_s(21, 20, 1, wide);
+                e_af_addsub(20, 21, 31, 19);
+                e_nzcv_save_keepC();
+                e_pf_save(21);
+            } else {
+                int shift = 8 * (4 - width);
+                e_mov_rr(26, 20, 0);
+                e_lsl_i(21, 20, shift, 0);
+                e_movconst(19, 1u << shift);
+                if (operation == 0)
+                    e_rrr(A_ADDS, 21, 21, 19, 0, 0);
+                else
+                    e_rrr(A_SUBS, 21, 21, 19, 0, 0);
+                e_nzcv_save_keepC();
+                e_lsr_i(21, 21, shift, 0);
+                e_pf_save(21);
+                e_af_addsub(26, 21, 31, 19);
+            }
+            if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)width);
+            return TX_NEXT;
+        }
+        int output = memory ? 16 : instruction->rm_reg;
+        if (width >= 4) {
+            e_mov_rr(26, value, wide);
+            if (operation == 0)
+                e_addi_s(output, value, 1, wide);
+            else
+                e_subi_s(output, value, 1, wide);
+            e_nzcv_save_keepC();
+            e_pf_save(output);
+            e_af_addsub(26, output, 31, 19);
+            rm_store_after_guard(instruction, width, output);
+        } else {
+            int shift = 8 * (4 - width);
+            e_lsl_i(21, value, shift, 0);
+            e_movconst(19, 1u << shift);
+            if (operation == 0)
+                e_rrr(A_ADDS, 21, 21, 19, 0, 0);
+            else
+                e_rrr(A_SUBS, 21, 21, 19, 0, 0);
+            e_nzcv_save_keepC();
+            e_lsr_i(21, 21, shift, 0);
+            e_pf_save(21);
+            e_af_addsub(value, 21, 31, 19);
+            rm_store_after_guard(instruction, width, 21);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0xFF && (operation == 4 || operation == 2)) {
+        int target = rm_load(instruction, next, 8, &memory);
+        if (target != 16) e_mov_rr(16, target, 1);
+        e_movconst(19, guest_pc);
+        e_str(19, 28, OFF_IBSRC);
+        if (operation == 2) {
+            e_subi(RSP, RSP, 8, 1);
+            e_movconst(19, call_return_pc(next));
+            e_store(8, 19, RSP);
+        }
+        emit_ibranch();
+        return TX_BREAK;
+    }
+    if (opcode == 0xFF && operation == 6) {
+        int value = rm_load(instruction, next, 8, &memory);
+        if (value != 16) e_mov_rr(16, value, 1);
+        e_subi(RSP, RSP, 8, 1);
+        e_store(8, 16, RSP);
+        return TX_NEXT;
+    }
+    return TX_FALL;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -3489,96 +3577,12 @@ static void *translate_block(uint64_t gpc) {
                 report_unimpl(gpc, &I);
                 break;
             }
-            // ---- group4/5 (FE/FF): inc/dec, and FF: call/jmp/push (indirect) ----
-            if (op == 0xFE || op == 0xFF) {
-                int k = I.reg & 7, w = op == 0xFE ? 1 : I.opsize, mem;
-                if (k == 0 || k == 1) { // inc / dec: set N/Z/V (OF correct), PRESERVE CF
-                    uint32_t access = X86_SOFT_READ | X86_SOFT_WRITE;
-                    int rmv = rm_load_access(&I, next, w, &mem, access); // mem -> x16 (val), x17 (EA)
-                    if (I.lock && mem) {
-                        // LOCK inc/dec [mem] -> atomic RMW (e.g. glibc's spinlock `lock decl`): a plain
-                        // load-op-store races under contention and strands the lock with no owner -> hang.
-                        // LDADDAL of +1/-1 updates memory indivisibly and yields the old value for flags.
-                        e_movconst(19, k == 0 ? 1 : (uint64_t)-1); // delta (LSE size truncates to width w)
-                        e_lse(LSE_LDADD, w, 19, 20, 17);           // x20 = old; [x17] += delta (acq-rel)
-                        if (w >= 4) {
-                            if (k == 0)
-                                e_addi_s(21, 20, 1, sf);
-                            else
-                                e_subi_s(21, 20, 1, sf);
-                            e_af_addsub(20, 21, 31, 19); // x86 AF = bit 4 of (old ^ result) -- x20=old
-                            e_nzcv_save_keepC();         // (must precede keepC, which clobbers x20)
-                            e_pf_save(21);
-                        } else { // byte/word: flags from the high bits (mirror the non-atomic path)
-                            int sh = 8 * (4 - w);
-                            e_mov_rr(26, 20, 0); // save old before keepC clobbers x20
-                            e_lsl_i(21, 20, sh, 0);
-                            e_movconst(19, 1u << sh);
-                            if (k == 0)
-                                e_rrr(A_ADDS, 21, 21, 19, 0, 0);
-                            else
-                                e_rrr(A_SUBS, 21, 21, 19, 0, 0);
-                            e_nzcv_save_keepC();
-                            e_lsr_i(21, 21, sh, 0);
-                            e_pf_save(21);
-                            e_af_addsub(26, 21, 31, 19); // x86 AF = bit 4 of (old ^ result)
-                        }
-                        if (emit_soft_memory_active()) emit_soft_store_commit((uint64_t)w);
-                        gpc = next;
-                        continue;
-                    }
-                    int o = mem ? 16 : I.rm_reg;
-                    if (w >= 4) {
-                        e_mov_rr(26, rmv, sf); // save old (o aliases rmv for a register dest) for AF
-                        if (k == 0)
-                            e_addi_s(o, rmv, 1, sf);
-                        else
-                            e_subi_s(o, rmv, 1, sf);
-                        e_nzcv_save_keepC();
-                        e_pf_save(o);               // x86 PF source = result low byte
-                        e_af_addsub(26, o, 31, 19); // x86 AF = bit 4 of (old ^ result)
-                        rm_store_after_guard(&I, w, o);
-                    } else { // byte/word: flags from the high bits
-                        int sh = 8 * (4 - w);
-                        e_lsl_i(21, rmv, sh, 0);
-                        e_movconst(19, 1u << sh);
-                        if (k == 0)
-                            e_rrr(A_ADDS, 21, 21, 19, 0, 0);
-                        else
-                            e_rrr(A_SUBS, 21, 21, 19, 0, 0);
-                        e_nzcv_save_keepC();
-                        e_lsr_i(21, 21, sh, 0);
-                        e_pf_save(21);                // x86 PF source = result low byte
-                        e_af_addsub(rmv, 21, 31, 19); // x86 AF = bit 4 of (old ^ result)
-                        rm_store_after_guard(&I, w, 21);
-                    }
-                    gpc = next;
-                    continue;
-                }
-                if (op == 0xFF && (k == 4 || k == 2)) { // jmp / call r/m (indirect)
-                    int mem2;
-                    int tgt = rm_load(&I, next, 8, &mem2);
-                    if (tgt != 16) e_mov_rr(16, tgt, 1); // target -> x16
-                    e_movconst(19, gpc);
-                    e_str(19, 28, OFF_IBSRC); // debug
-                    if (k == 2) {
-                        e_subi(RSP, RSP, 8, 1);
-                        e_movconst(19, call_return_pc(next));
-                        e_store(8, 19, RSP);
-                    } // call: push ret
-                    emit_ibranch();
-                    break; // IBTC inline probe (target in x16)
-                }
-                if (op == 0xFF && k == 6) { // push r/m
-                    int mem2;
-                    int v = rm_load(&I, next, 8, &mem2);
-                    if (v != 16) e_mov_rr(16, v, 1);
-                    e_subi(RSP, RSP, 8, 1);
-                    e_store(8, 16, RSP);
-                    gpc = next;
-                    continue;
-                }
+            int group45_result = lower_group45(&I, gpc, next);
+            if (group45_result == TX_NEXT) {
+                gpc = next;
+                continue;
             }
+            if (group45_result == TX_BREAK) break;
             // ---- xchg (86/87) ----
             if (op == 0x86 || op == 0x87) {
                 int w = (op & 1) ? I.opsize : 1, mem;
