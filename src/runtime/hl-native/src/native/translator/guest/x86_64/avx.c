@@ -1342,6 +1342,43 @@ static enum avx_dispatch_result avx_dispatch_map1_sign_mask(const hl_x86_avx_sta
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_unpack(const hl_x86_avx_state *state, struct cpu *c,
+                                                        struct insn *instruction, uint64_t next, int map, int op,
+                                                        int prefix, int destination, int first_register, int width) {
+    int floating = op == 0x14 || op == 0x15;
+    int integer =
+        op == 0x60 || op == 0x61 || op == 0x62 || op == 0x6C || op == 0x68 || op == 0x69 || op == 0x6A || op == 0x6D;
+    if (map != 1 || (!floating && !integer)) return AVX_DISPATCH_UNMATCHED;
+
+    int element_size;
+    int high;
+    if (floating) {
+        element_size = prefix == 1 ? 8 : 4;
+        high = op == 0x15;
+    } else {
+        element_size = (op == 0x60 || op == 0x68)   ? 1
+                       : (op == 0x61 || op == 0x69) ? 2
+                       : (op == 0x62 || op == 0x6A) ? 4
+                                                    : 8;
+        high = op == 0x68 || op == 0x69 || op == 0x6A || op == 0x6D;
+    }
+    uint8_t first[64], second[64], output[64];
+    avx_get(c, first_register, first);
+    avx_get_rm(state, c, instruction, next, width, second);
+    int source_base = high ? 8 : 0;
+    int elements = 8 / element_size;
+    for (int lane = 0; lane < width; lane += 16)
+        for (int element = 0; element < elements; element++) {
+            int source_offset = lane + source_base + element * element_size;
+            int output_offset = lane + 2 * element * element_size;
+            memcpy(output + output_offset, first + source_offset, (size_t)element_size);
+            memcpy(output + output_offset + element_size, second + source_offset, (size_t)element_size);
+        }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1796,6 +1833,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_saturating_pack(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_packed_low_multiply(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_sign_mask(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map1_unpack(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -1850,29 +1888,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                     memcpy(d + lane + 4, a + lane + 4 * ((imm >> 2) & 3), 4);
                     memcpy(d + lane + 8, b + lane + 4 * ((imm >> 4) & 3), 4);
                     memcpy(d + lane + 12, b + lane + 4 * ((imm >> 6) & 3), 4);
-                }
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x14:   // vunpcklps(pp0)/vunpcklpd(pp1)
-        case 0x15: { // vunpckhps(pp0)/vunpckhpd(pp1) -- per-128-lane interleave, src1=vvvv, src2=rm
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            int hi = (op == 0x15);
-            if (pp == 1) { // qwords: dst = {a_sel, b_sel} per lane
-                int base = hi ? 8 : 0;
-                for (int lane = 0; lane < W; lane += 16) {
-                    memcpy(d + lane + 0, a + lane + base, 8);
-                    memcpy(d + lane + 8, b + lane + base, 8);
-                }
-            } else { // dwords: dst = {a[e], b[e], a[e+1], b[e+1]}, e=0(low)/2(high)
-                int e = hi ? 2 : 0;
-                for (int lane = 0; lane < W; lane += 16) {
-                    memcpy(d + lane + 0, a + lane + 4 * e, 4);
-                    memcpy(d + lane + 4, b + lane + 4 * e, 4);
-                    memcpy(d + lane + 8, a + lane + 4 * (e + 1), 4);
-                    memcpy(d + lane + 12, b + lane + 4 * (e + 1), 4);
                 }
             }
             avx_put(c, rd, d, W);
@@ -2318,32 +2333,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 }
             }
             avx_put(c, vv, d, W); // dst = VEX.vvvv
-            goto done;
-        }
-        case 0x60:
-        case 0x61:
-        case 0x62:
-        case 0x6C: // vpunpckl bw/wd/dq/qdq
-        case 0x68:
-        case 0x69:
-        case 0x6A:
-        case 0x6D: // vpunpckh bw/wd/dq/qdq -- per-128-lane interleave of src1(vvvv)/rm elements
-        {
-            int es = (op == 0x60 || op == 0x68)   ? 1
-                     : (op == 0x61 || op == 0x69) ? 2
-                     : (op == 0x62 || op == 0x6A) ? 4
-                                                  : 8;
-            int hi = (op == 0x68 || op == 0x69 || op == 0x6A || op == 0x6D); // 0x6C=punpcklqdq (low)
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16) {
-                int half = hi ? 8 : 0; // interleave the low (0) or high (8) 8 bytes of each lane
-                for (int i = 0; i < 8; i += es) {
-                    memcpy(d + lane + 2 * i, a + lane + half + i, (size_t)es);
-                    memcpy(d + lane + 2 * i + es, b + lane + half + i, (size_t)es);
-                }
-            }
-            avx_put(c, rd, d, W);
             goto done;
         }
         case 0xC2: { // vcmpps/pd/ss/sd: per-lane predicate compare -> all-ones/zero mask
