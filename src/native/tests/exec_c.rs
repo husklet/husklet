@@ -149,22 +149,32 @@ fn exec_c_programs_pass() {
     let sources = discover();
     assert!(!sources.is_empty(), "no C tests discovered in {SOURCES}");
 
+    let workers = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .min(sources.len());
+    let chunk_size = sources.len().div_ceil(workers);
     let mut results = std::thread::scope(|scope| {
         let handles = sources
-            .iter()
-            .map(|source| {
+            .chunks(chunk_size)
+            .map(|chunk| {
                 let scratch = scratch.path();
                 let helpers = &helpers;
                 scope.spawn(move || {
-                    let name = source.file_stem().expect("test name").to_string_lossy().into_owned();
-                    let outcome = evaluate(source, scratch, helpers);
-                    (name, outcome)
+                    chunk
+                        .iter()
+                        .map(|source| {
+                            let name = source.file_stem().expect("test name").to_string_lossy().into_owned();
+                            let outcome = evaluate(source, scratch, helpers);
+                            (name, outcome)
+                        })
+                        .collect::<Vec<_>>()
                 })
             })
             .collect::<Vec<_>>();
         handles
             .into_iter()
-            .map(|handle| handle.join().expect("join C test"))
+            .flat_map(|handle| handle.join().expect("join C test"))
             .collect::<Vec<_>>()
     });
     results.sort_by(|left, right| left.0.cmp(&right.0));
