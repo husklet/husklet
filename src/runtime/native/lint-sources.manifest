@@ -440,7 +440,6 @@ source	retained/src/linux_abi/fork.c
 source	retained/src/linux_abi/fork_codec.c
 source	retained/src/linux_abi/fork_codec.h
 source	retained/src/linux_abi/forwarded.h
-source	retained/src/linux_abi/goimage.h
 source	retained/src/linux_abi/guest_stat.h
 source	retained/src/linux_abi/host_dirent.h
 source	retained/src/linux_abi/host_fd.h

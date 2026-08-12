@@ -132,7 +132,6 @@ src/linux_abi/fork.c
 src/linux_abi/fork_codec.c
 src/linux_abi/fork_codec.h
 src/linux_abi/forwarded.h
-src/linux_abi/goimage.h
 src/linux_abi/guest_stat.h
 src/linux_abi/host_dirent.h
 src/linux_abi/host_fd.h
