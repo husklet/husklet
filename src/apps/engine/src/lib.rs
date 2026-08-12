@@ -153,7 +153,7 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
     let selected = match (forced_guest, parsed.guest.as_deref()) {
         (Some(_), Some(_)) => return Err(()),
         (Some(guest), None) => Some(guest),
-        (None, Some(guest)) => Guest::named(guest),
+        (None, Some(guest)) => Some(Guest::named(guest).ok_or(())?),
         (None, None) => None,
     };
     let guest = selected.unwrap_or(if cfg!(target_arch = "aarch64") {
@@ -256,5 +256,21 @@ mod tests {
         assert!(backend_receipt(&arguments("rust"), Some(Guest::Aarch64)).is_err());
         assert!(backend_receipt(&arguments("bogus"), Some(Guest::Aarch64)).is_err());
         assert!(backend_receipt(&arguments("c"), Some(Guest::X86_64)).is_ok());
+    }
+
+    #[test]
+    fn backend_receipt_rejects_an_explicit_unknown_guest() {
+        assert!(
+            backend_receipt(
+                &[
+                    "hl-engine".into(),
+                    "--backend-receipt".into(),
+                    "--guest-isa".into(),
+                    "riscv64".into(),
+                ],
+                None,
+            )
+            .is_err()
+        );
     }
 }
