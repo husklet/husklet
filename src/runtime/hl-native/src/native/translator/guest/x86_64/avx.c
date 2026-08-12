@@ -3576,6 +3576,48 @@ static enum avx_dispatch_result sse_dispatch_absolute(const hl_x86_avx_state *st
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result sse_dispatch_minmax(const hl_x86_avx_state *state, struct cpu *c, struct insn *I,
+                                                    uint64_t next, uint8_t destination[16]) {
+    int op = I->op;
+    if (I->map3 != 2 || op < 0x38 || op > 0x3F) return AVX_DISPATCH_UNMATCHED;
+    uint8_t source[16];
+    sse_get_rm(state, c, I, next, source);
+    int maximum = op >= 0x3C;
+    if (op == 0x38 || op == 0x3C) {
+        int8_t *left = (int8_t *)destination;
+        int8_t *right = (int8_t *)source;
+        for (int lane = 0; lane < 16; lane++)
+            left[lane] = maximum ? (left[lane] > right[lane] ? left[lane] : right[lane])
+                                 : (left[lane] < right[lane] ? left[lane] : right[lane]);
+    } else if (op == 0x3A || op == 0x3E) {
+        uint16_t left[8], right[8];
+        memcpy(left, destination, 16);
+        memcpy(right, source, 16);
+        for (int lane = 0; lane < 8; lane++)
+            left[lane] = maximum ? (left[lane] > right[lane] ? left[lane] : right[lane])
+                                 : (left[lane] < right[lane] ? left[lane] : right[lane]);
+        memcpy(destination, left, 16);
+    } else if (op == 0x39 || op == 0x3D) {
+        int32_t left[4], right[4];
+        memcpy(left, destination, 16);
+        memcpy(right, source, 16);
+        for (int lane = 0; lane < 4; lane++)
+            left[lane] = maximum ? (left[lane] > right[lane] ? left[lane] : right[lane])
+                                 : (left[lane] < right[lane] ? left[lane] : right[lane]);
+        memcpy(destination, left, 16);
+    } else {
+        uint32_t left[4], right[4];
+        memcpy(left, destination, 16);
+        memcpy(right, source, 16);
+        for (int lane = 0; lane < 4; lane++)
+            left[lane] = maximum ? (left[lane] > right[lane] ? left[lane] : right[lane])
+                                 : (left[lane] < right[lane] ? left[lane] : right[lane]);
+        memcpy(destination, left, 16);
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     struct insn I;
     hl_x86_decode(c->rip, &I);
@@ -3596,6 +3638,7 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
     if (sse_dispatch_packed_arithmetic(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_aes(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
     if (sse_dispatch_absolute(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
+    if (sse_dispatch_minmax(state, c, &I, next, D) == AVX_DISPATCH_HANDLED) return;
 
     // ---- the remaining ops are xmm-destructive: load the r/m source, compute into r, write to D -----
     sse_get_rm(state, c, &I, next, s);
@@ -3653,45 +3696,6 @@ static void do_sse3b(const hl_x86_avx_state *state, struct cpu *c) {
             o[0] = (a[0] > b[0]) ? ~0ull : 0;
             o[1] = (a[1] > b[1]) ? ~0ull : 0;
             memcpy(r, o, 16);
-            break;
-        }
-        case 0x38:
-        case 0x39:
-        case 0x3A:
-        case 0x3B:
-        case 0x3C:
-        case 0x3D:
-        case 0x3E:
-        case 0x3F: {                        // pmin/pmax sb/sd/uw/ud/sb.../
-            if (op == 0x38 || op == 0x3C) { // signed byte min/max
-                int8_t a[16], b[16], o[16];
-                memcpy(a, D, 16);
-                memcpy(b, s, 16);
-                for (int i = 0; i < 16; i++)
-                    o[i] = (op == 0x38) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
-                memcpy(r, o, 16);
-            } else if (op == 0x3A || op == 0x3E) { // unsigned word min/max
-                uint16_t a[8], b[8], o[8];
-                memcpy(a, D, 16);
-                memcpy(b, s, 16);
-                for (int i = 0; i < 8; i++)
-                    o[i] = (op == 0x3A) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
-                memcpy(r, o, 16);
-            } else if (op == 0x39 || op == 0x3D) { // signed dword min/max
-                int32_t a[4], b[4], o[4];
-                memcpy(a, D, 16);
-                memcpy(b, s, 16);
-                for (int i = 0; i < 4; i++)
-                    o[i] = (op == 0x39) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
-                memcpy(r, o, 16);
-            } else { // 0x3B/0x3F unsigned dword min/max
-                uint32_t a[4], b[4], o[4];
-                memcpy(a, D, 16);
-                memcpy(b, s, 16);
-                for (int i = 0; i < 4; i++)
-                    o[i] = (op == 0x3B) ? (a[i] < b[i] ? a[i] : b[i]) : (a[i] > b[i] ? a[i] : b[i]);
-                memcpy(r, o, 16);
-            }
             break;
         }
         case 0x40: { // pmulld: 32-bit low product
