@@ -680,7 +680,9 @@ static void service(struct cpu *c) {
     // On x86-64 the syscall NUMBER and the return value share RAX (G_RET), so once the interrupted call wrote
     // its -EINTR result the number is gone -- a transparent restart would re-issue `syscall` with -EINTR as
     // the number. Preserve the entry number register so the SA_RESTART restart re-executes the SAME syscall.
+#if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
     uint64_t _svc_nrreg = G_RET(c);
+#endif
     g_syscall_restart = 0;
     // Preserve the canonical syscall number across dispatch. x86 aliases the syscall-number and return-value
     // register (RAX), so G_NR(c) after service_local() would translate the result instead of identifying the

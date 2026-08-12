@@ -963,7 +963,6 @@ static void *translate_block(uint64_t gpc) {
                     uint64_t last = (gpc + 12) >> 6;
                     for (uint64_t line = gpc >> 6; line <= last; line++)
                         txln_put(line);
-                    tx_last_line = last;
                 }
                 if (gpc + 16 > guest_end) guest_end = gpc + 16;
                 emit_ibranch_ip2_ready(17, 1);
