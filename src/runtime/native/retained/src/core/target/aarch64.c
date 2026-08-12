@@ -234,7 +234,7 @@ static void emit_crash_diagnostic(const char *message, size_t size) {
 // Host-CPU fork: an AArch64 host takes the same-ISA transliterating JIT below; any other takes interp.c,
 // which supplies the same seam by decoding AArch64. Both share struct cpu: it is the checkpoint format.
 #include "../../host/host_cpu.h"
-#if defined(HL_HOST_CPU_AARCH64)
+#if defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE)
 // Keep the unity consumers' compact encoder vocabulary while the assembler itself is an independently
 // compiled, explicitly-stateful translator component.
 #include "../../translator/host/aarch64/asm.h"
@@ -382,7 +382,7 @@ static void do_sigreturn(struct cpu *c) {
 // Fault capture is per BACKEND: the JIT reconstructs guest state from the host mcontext and refines the host
 // PC via the provenance map and cpu->mscratch folds; the interpreter has cpu->pc current. Both return 0 for
 // "not a guest fault".
-#if defined(HL_HOST_CPU_AARCH64)
+#if defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE)
 static int sigframe_capture_fault(struct cpu *c, void *native_context) {
     if (!hl_aarch64_signal_capture(c, native_context, signal_cache_contains, NULL)) return 0;
     uint64_t exact_pc;
@@ -411,7 +411,7 @@ static int sigframe_capture_fault(struct cpu *c, void *native_context) {
 #endif
 
 // The JIT returns into block_return to unwind the translated frame; the interpreter siglongjmps to run_block.
-#if defined(HL_HOST_CPU_AARCH64)
+#if defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE)
 static void sigframe_resume_dispatch(struct cpu *c, void *native_context) {
     hl_aarch64_signal_resume(c, native_context, (uintptr_t)block_return);
 }

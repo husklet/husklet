@@ -45,7 +45,7 @@
 // registers live in the matching host registers, so it is the AArch64-host arm. Everything ABOVE this line
 // is pure guest ABI, shared by both.
 #include "../../../host/host_cpu.h"
-#if defined(HL_HOST_CPU_AARCH64)
+#if defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE)
 #include "dispatch.h"
 #else
 #include "interp_dispatch.h"

@@ -7,9 +7,9 @@ production backend while equivalent components are replaced incrementally.
 - Upstream repository: `../engine`
 - Source revision: `7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`
 - Closure manifest: `RUNTIME_SOURCES.manifest`
-- Manifest SHA-256: `0b8dce3514190f205b3b563295459d3c359b123ddecc230c61506208978efa27`
+- Manifest SHA-256: `5e2451d87384e2f357337a0c7a94a7a53740873e4a472885a55452d4d6214415`
 - Compiled-unit manifest: `COMPILED_TUS.tsv`
-- Compiled-unit manifest SHA-256: `8df39e6618305d80e38c4f605d36a19d9d75d53069466d71aa093097801e19f9`
+- Compiled-unit manifest SHA-256: `f0b74563a0686c6ef448ecd96cbbf9cd70580f6e596a9855efcf2e8831a5cfb1`
 - License: MIT; see `LICENSE`
 
 The closure intentionally excludes graphics, GPU, CUDA, OpenGL, Vulkan,

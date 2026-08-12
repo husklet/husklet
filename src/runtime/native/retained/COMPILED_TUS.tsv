@@ -63,4 +63,6 @@ normal_archive	hl-host-linux	src/host/resolve.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_
 normal_archive	hl-host-linux	src/host/sync.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 lifecycle_runner_direct	life_runner_aarch64	tools/lifecycle_e2e_runner.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0;_GNU_SOURCE;HL_TEST_HOST_LINUX=1;HL_TEST_GUEST_ISA=HL_GUEST_ISA_AARCH64	include
 target_unity_direct	life_target_aarch64	src/core/target/aarch64.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0;_GNU_SOURCE;HL_ENGINE_NO_MAIN=1;HL_ENGINE_NO_STANDALONE=1	include
+unity_include	life_target_aarch64	src/translator/guest/aarch64/interp.c	HL_A64_INTERPRETER_SMOKE=1	include
+interpreter_link_smoke	life_target_aarch64	tests/aarch64_interpreter_link_smoke.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0;_GNU_SOURCE;HL_ENGINE_NO_MAIN=1;HL_ENGINE_NO_STANDALONE=1;HL_A64_INTERPRETER_SMOKE=1	include
 lifecycle_direct	prod_life_aarch64	src/core/lifecycle.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0;HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_AARCH64	include
