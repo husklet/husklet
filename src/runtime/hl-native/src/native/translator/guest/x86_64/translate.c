@@ -3680,6 +3680,46 @@ static int lower_flag_stack_control(struct insn *instruction, uint64_t guest_pc)
     return TX_BREAK;
 }
 
+static int lower_accumulator_legacy(struct insn *instruction, int sf) {
+    uint8_t opcode = instruction->op;
+    if (opcode == 0x90) return TX_NEXT;
+    if (opcode >= 0x91 && opcode <= 0x97) {
+        int reg = (opcode - 0x90) | (instruction->rexB << 3);
+        if (instruction->opsize == 2) {
+            e_mov_rr(19, reg, 1);
+            e_bfi(reg, RAX, 0, 16, 1);
+            e_bfi(RAX, 19, 0, 16, 1);
+        } else {
+            e_mov_rr(19, RAX, sf);
+            e_mov_rr(RAX, reg, sf);
+            e_mov_rr(reg, 19, sf);
+        }
+        return TX_NEXT;
+    }
+    if (opcode == 0x98) {
+        if (sf) {
+            e_sxt(RAX, RAX, 4);
+        } else if (instruction->p66) {
+            emit32(0x13001C00u | (RAX << 5) | 16);
+            e_bfi(RAX, 16, 0, 16, 1);
+        } else {
+            emit32(0x13003C00u | (RAX << 5) | RAX);
+        }
+        return TX_NEXT;
+    }
+    if (opcode != 0x99) return TX_FALL;
+    if (sf) {
+        e_asr_i(RDX, RAX, 63, 1);
+    } else if (instruction->p66) {
+        e_sxt(19, RAX, 2);
+        e_asr_i(19, 19, 15, 0);
+        e_bfi(RDX, 19, 0, 16, 1);
+    } else {
+        e_asr_i(RDX, RAX, 31, 0);
+    }
+    return TX_NEXT;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -4527,7 +4567,8 @@ static void *translate_block(uint64_t gpc) {
                 gpc = next;
                 continue;
             }
-            if (op == 0x90) {
+            int accumulator_result = lower_accumulator_legacy(&I, sf);
+            if (accumulator_result == TX_NEXT) {
                 gpc = next;
                 continue;
             }
@@ -4541,45 +4582,6 @@ static void *translate_block(uint64_t gpc) {
             if (op == 0xF1) { // ICEBP/INT1 (#DB): userspace delivery is SIGTRAP with si_code TRAP_BRKPT (Linux
                 emit_guest_signal(next, 5, 1); // send_sigtrap), rip past the insn (a trap, not a fault, not an abort)
                 break;
-            }
-            if (op >= 0x91 && op <= 0x97) {
-                int r = (op - 0x90) | (I.rexB << 3);
-                if (I.opsize == 2) { // XCHG AX,r16: only bits 15:0 swap, 63:16 are preserved
-                    e_mov_rr(19, r, 1);
-                    e_bfi(r, RAX, 0, 16, 1);
-                    e_bfi(RAX, 19, 0, 16, 1);
-                } else {
-                    e_mov_rr(19, RAX, sf);
-                    e_mov_rr(RAX, r, sf);
-                    e_mov_rr(r, 19, sf);
-                }
-                gpc = next;
-                continue;
-            }
-            // ---- cbw/cwde/cdqe (98) and cwd/cdq/cqo (99) ----
-            if (op == 0x98) {
-                if (sf)
-                    e_sxt(RAX, RAX, 4); // cdqe: rax = sext32(eax)
-                else if (I.p66) {
-                    emit32(0x13001C00u | (RAX << 5) | 16); // cbw: x16 = sext8(AL) (sxtb Wd,Wn)
-                    e_bfi(RAX, 16, 0, 16, 1);              // AX = low 16, PRESERVE bits 63:16
-                } else
-                    emit32(0x13003C00u | (RAX << 5) | RAX); // cwde: eax = sext16(ax) (sxth Wd,Wn)
-                gpc = next;
-                continue;
-            }
-            if (op == 0x99) {
-                if (sf)
-                    e_asr_i(RDX, RAX, 63, 1); // cqo: rdx = rax>>63 (arith)
-                else if (I.p66) {
-                    e_sxt(19, RAX, 2);        // x19 = sext16(AX): bits 63:16 replicate AX bit 15
-                    e_asr_i(19, 19, 15, 0);   // w19 = all-ones if AX<0 else 0
-                    e_bfi(RDX, 19, 0, 16, 1); // DX = 0xFFFF/0x0000, preserve RDX 63:16
-                } // cwd: dx=sign(ax)
-                else
-                    e_asr_i(RDX, RAX, 31, 0); // cdq: edx = eax>>31 (arith)
-                gpc = next;
-                continue;
             }
             // ---- XLATB (D7): AL = [ (seg:) RBX + zero-extended AL ]. The table index is the *8-bit*
             // AL (bits 63:8 of RAX never participate), so it cannot ride the ModRM index path. Build
