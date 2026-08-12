@@ -189,8 +189,10 @@ fn append_cell(
         let mut ratios = paired(rows, workload, layout, &cell, left, right, phase, campaign.rounds)?;
         let ratio = median(&mut ratios);
         let phase_name = phase.as_str();
-        let floor = nulls[&(workload, layout, left, phase_name)].max(nulls[&(workload, layout, right, phase_name)]);
-        let upper = ratio * (1.0 + floor);
+        let left_floor = nulls[&(workload, layout, left, phase_name)];
+        let right_floor = nulls[&(workload, layout, right, phase_name)];
+        let floor = left_floor.max(right_floor);
+        let upper = corrected_upper(ratio, left_floor, right_floor)?;
         let judged = right == "I" && campaign.workloads[workload].phases.iter().any(|item| item == phase);
         let result = if judged && upper > limit {
             failed = true;
@@ -205,6 +207,21 @@ fn append_cell(
         ));
     }
     Ok(failed)
+}
+
+fn corrected_upper(ratio: f64, left_floor: f64, right_floor: f64) -> Result<f64, Error> {
+    if !ratio.is_finite()
+        || ratio < 0.0
+        || !left_floor.is_finite()
+        || !(0.0..1.0).contains(&left_floor)
+        || !right_floor.is_finite()
+        || !(0.0..1.0).contains(&right_floor)
+    {
+        return Err("invalid ratio or null floor in benchmark correction".into());
+    }
+    // The crossed ratio is smallest when the left sample is high by its null floor and
+    // the right sample is low by its null floor. Undo both directions before judging it.
+    Ok(ratio * (1.0 + left_floor) / (1.0 - right_floor))
 }
 
 fn verify_outputs(rows: &[Row]) -> Result<(), Error> {
@@ -348,6 +365,14 @@ mod tests {
         assert!((super::qualify_null(&[1.004, 0.997, 1.003, 0.998], false).unwrap() - 0.004).abs() < 1e-9);
         assert!(super::qualify_null(&[1.02; 4], false).is_err());
         assert!(super::qualify_null(&[1.051, 0.983, 0.983, 0.983], false).is_err());
+    }
+
+    #[test]
+    fn control_correction_accounts_for_drift_in_both_arms() {
+        let upper = super::corrected_upper(1.07, 0.02, 0.02).unwrap();
+        assert!(upper > 1.10);
+        assert!(1.07 * 1.02 < 1.10, "one-sided correction would falsely pass");
+        assert!(super::corrected_upper(1.0, 0.0, 1.0).is_err());
     }
 
     #[test]
