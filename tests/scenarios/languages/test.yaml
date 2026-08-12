@@ -556,7 +556,7 @@ cases:
   actions:
   - shell:
       script: |
-        export GOMAXPROCS=1 GOFLAGS=-p=1
+        export HOME=/tmp GOCACHE=/tmp/go-cache GOMAXPROCS=1 GOFLAGS=-p=1
         cat > /m.go <<'EOF'
         package main
         import "fmt"
@@ -572,7 +572,7 @@ cases:
   actions:
   - shell:
       script: |
-        export GOMAXPROCS=1 GOFLAGS=-p=1
+        export HOME=/tmp GOCACHE=/tmp/go-cache GOMAXPROCS=1 GOFLAGS=-p=1
         cat > /m.go <<'EOF'
         package main
         import "fmt"
@@ -588,7 +588,7 @@ cases:
   actions:
   - shell:
       script: |
-        export GOMAXPROCS=1 GOFLAGS=-p=1
+        export HOME=/tmp GOCACHE=/tmp/go-cache GOMAXPROCS=1 GOFLAGS=-p=1
         cat > /m.go <<'EOF'
         package main
         import "fmt"
