@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, fs, path::Path, process::Command};
 
-const RETAINED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/retained");
+const RETAINED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native");
 const INTERPRETER_SHA256: &str = "040ace03601d91e7bd3871dd2cd8ca5382790131bbf683b1ca31110b362961ec";
 const DISPATCH_SHA256: &str = "fe66d0be5e2aa2dd9a3282e533338eb2f5c9b5ac343775ac4d19d60337f5184f";
 const X86_DECODE_SHA256: &str = "1ba08d646d28f03b32c0455801a111c4d2492480e346ba9cca8e80bdcafb88b0";
@@ -90,7 +90,7 @@ fn imported_interpreter_is_pinned_licensed_and_inventoried() {
 #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "c-execution"))]
 fn imported_interpreter_unity_compiles_and_links_unselected() {
     let retained = Path::new(RETAINED);
-    let native = retained.parent().expect("native source root");
+    let native = retained;
     let units = fs::read_to_string(retained.join("COMPILED_TUS.tsv")).expect("TU manifest");
     let output = std::env::temp_dir().join(format!("husklet-a64-interpreter-smoke-{}", std::process::id()));
     let mut command = Command::new("cc");

@@ -4,9 +4,9 @@ use std::{env, fs, path::PathBuf};
 mod retained_platform;
 
 const C_ENGINE: &str = "../../runtime/native";
-const RETAINED: &str = "../../runtime/native/retained";
-const TU_MANIFEST: &str = "../../runtime/native/retained/COMPILED_TUS.tsv";
-const SOURCE_MANIFEST: &str = "../../runtime/native/retained/RUNTIME_SOURCES.manifest";
+const NATIVE_ROOT: &str = "../../runtime/native";
+const TU_MANIFEST: &str = "../../runtime/native/COMPILED_TUS.tsv";
+const SOURCE_MANIFEST: &str = "../../runtime/native/RUNTIME_SOURCES.manifest";
 
 #[derive(Debug)]
 struct TranslationUnit<'a> {
@@ -48,12 +48,12 @@ fn main() {
     for source in source_manifest.lines().filter(|line| !line.is_empty()) {
         println!(
             "cargo:rerun-if-changed={}",
-            PathBuf::from(RETAINED).join(source).display()
+            PathBuf::from(NATIVE_ROOT).join(source).display()
         );
     }
     let manifest = fs::read_to_string(TU_MANIFEST).expect("read retained C translation-unit manifest");
     let units = parse_manifest(&manifest);
-    let root = PathBuf::from(RETAINED);
+    let root = PathBuf::from(NATIVE_ROOT);
     for unit in &units {
         println!("cargo:rerun-if-changed={}", root.join(unit.source).display());
     }
@@ -139,7 +139,7 @@ fn parse_manifest(manifest: &str) -> Vec<TranslationUnit<'_>> {
             let include = columns.next().expect("translation-unit include directory");
             assert_eq!(
                 include, "include",
-                "retained include directory must be repository-relative"
+                "native include directory must be repository-relative"
             );
             assert!(columns.next().is_none(), "unexpected translation-unit manifest column");
             TranslationUnit {
@@ -189,8 +189,8 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
     build
         .cargo_metadata(false)
         .include(C_ENGINE)
-        .include(format!("{RETAINED}/include"))
-        .include(format!("{RETAINED}/src"))
+        .include(format!("{NATIVE_ROOT}/include"))
+        .include(format!("{NATIVE_ROOT}/src"))
         .opt_level(2)
         .debug(true)
         .pic(false)
@@ -228,7 +228,7 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         let path = if matches!(*source, "shim.c" | "executable_authority.c" | "address_projection.c") {
             PathBuf::from(C_ENGINE).join(source)
         } else {
-            PathBuf::from(RETAINED).join(source)
+            PathBuf::from(NATIVE_ROOT).join(source)
         };
         build.file(path);
     }

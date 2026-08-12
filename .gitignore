@@ -1,8 +1,8 @@
 /target/
 **/target/
 # This is retained C source, not a Cargo build directory.
-!src/native/c/engine/retained/src/core/target/
-!src/native/c/engine/retained/src/core/target/**
+!src/runtime/native/src/core/target/
+!src/runtime/native/src/core/target/**
 /artifacts/
 *.o
 dd.sock

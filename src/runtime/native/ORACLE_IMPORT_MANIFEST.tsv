@@ -1,80 +1,80 @@
 source_revision	source	destination	tranche	disposition	conflict
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/activation.c	retained/src/core/activation.c	standalone	import_unwired	Rust owns product activation; do not select from production yet
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/cli.c	retained/src/core/cli.c	standalone	import_unwired	Rust owns product CLI
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/cli.h	retained/src/core/cli.h	standalone	import_unwired	Rust owns product CLI
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/config.c	retained/src/core/config.c	standalone	import_unwired	Must not read product configuration directly
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/environment.c	retained/src/core/environment.c	standalone	import_unwired	Rust owns environment construction
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/environment.h	retained/src/core/environment.h	standalone	import_unwired	Rust owns environment construction
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/launch.c	retained/src/core/launch.c	standalone	import_unwired	Rust owns launch and lifecycle
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/launch.h	retained/src/core/launch.h	standalone	import_unwired	Rust owns launch and lifecycle
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/target/run.c	retained/src/core/target/run.c	x86_closure	import_adapt	Route through retained host services and Rust lifecycle
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/target/x86_64.c	retained/src/core/target/x86_64.c	x86_closure	import_adapt	Replace logical-VMA ownership with retained boundary
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/interp.c	retained/src/translator/guest/aarch64/interp.c	a64_interpreter	import_adapt	Rust remains architectural-state and fault authority
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/interp_dispatch.h	retained/src/translator/guest/aarch64/interp_dispatch.h	a64_interpreter	import	Generated dispatch companion
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/abi.h	retained/src/translator/guest/x86_64/abi.h	x86_closure	import	Guest ABI
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/address.c	retained/src/translator/guest/x86_64/address.c	x86_closure	import	Address lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/address.h	retained/src/translator/guest/x86_64/address.h	x86_closure	import	Address lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/avx.c	retained/src/translator/guest/x86_64/avx.c	x86_closure	import	Vector lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/avx.h	retained/src/translator/guest/x86_64/avx.h	x86_closure	import	Vector lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cache.c	retained/src/translator/guest/x86_64/cache.c	x86_closure	import_adapt	Rust-issued cache identity only
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cmpxchg.c	retained/src/translator/guest/x86_64/cmpxchg.c	x86_closure	import	Atomic lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cmpxchg.h	retained/src/translator/guest/x86_64/cmpxchg.h	x86_closure	import	Atomic lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cpuid.c	retained/src/translator/guest/x86_64/cpuid.c	x86_closure	import_adapt	Guest feature policy remains launch-owned
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cpuid.h	retained/src/translator/guest/x86_64/cpuid.h	x86_closure	import_adapt	Guest feature policy remains launch-owned
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cpu.h	retained/src/translator/guest/x86_64/cpu.h	x86_closure	import_adapt	Must match Rust snapshot codec
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/decode.c	retained/src/translator/guest/x86_64/decode.c	x86_closure	import	Decoder
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/decoder.h	retained/src/translator/guest/x86_64/decoder.h	x86_closure	import	Decoder
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/dispatch.h	retained/src/translator/guest/x86_64/dispatch.h	x86_closure	import	Dispatch ABI
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/emit.c	retained/src/translator/guest/x86_64/emit.c	x86_closure	import_adapt	Use retained arena and bounded publication
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/encoding.h	retained/src/translator/guest/x86_64/encoding.h	x86_closure	import	Encoding tables
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/flags.c	retained/src/translator/guest/x86_64/flags.c	x86_closure	import	Flag lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/flags.h	retained/src/translator/guest/x86_64/flags.h	x86_closure	import	Flag lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/frame.h	retained/src/translator/guest/x86_64/frame.h	x86_closure	import_adapt	Host signal ownership remains retained boundary
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/glue.c	retained/src/translator/guest/x86_64/glue.c	x86_closure	import_adapt	No oracle-global engine lookup
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/glue.h	retained/src/translator/guest/x86_64/glue.h	x86_closure	import_adapt	No oracle-global engine lookup
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/interp.c	retained/src/translator/guest/x86_64/interp.c	x86_closure	import_adapt	Rust remains architectural-state and fault authority
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/interp_dispatch.h	retained/src/translator/guest/x86_64/interp_dispatch.h	x86_closure	import	Generated dispatch companion
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/legacy.c	retained/src/translator/guest/x86_64/legacy.c	x86_closure	import	Legacy instruction lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/legacy.h	retained/src/translator/guest/x86_64/legacy.h	x86_closure	import	Legacy instruction lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/alu.c	retained/src/translator/guest/x86_64/lower/alu.c	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/alu.h	retained/src/translator/guest/x86_64/lower/alu.h	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/crypto.c	retained/src/translator/guest/x86_64/lower/crypto.c	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/crypto.h	retained/src/translator/guest/x86_64/lower/crypto.h	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/mov.c	retained/src/translator/guest/x86_64/lower/mov.c	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/mov.h	retained/src/translator/guest/x86_64/lower/mov.h	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/primitives.h	retained/src/translator/guest/x86_64/lower/primitives.h	x86_closure	import	Lowering primitives
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/repstr.c	retained/src/translator/guest/x86_64/lower/repstr.c	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/repstr.h	retained/src/translator/guest/x86_64/lower/repstr.h	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/shift.c	retained/src/translator/guest/x86_64/lower/shift.c	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/shift.h	retained/src/translator/guest/x86_64/lower/shift.h	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/sse4x.c	retained/src/translator/guest/x86_64/lower/sse4x.c	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/sse4x.h	retained/src/translator/guest/x86_64/lower/sse4x.h	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/trace.c	retained/src/translator/guest/x86_64/lower/trace.c	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/trace.h	retained/src/translator/guest/x86_64/lower/trace.h	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/x87.c	retained/src/translator/guest/x86_64/lower/x87.c	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/x87.h	retained/src/translator/guest/x86_64/lower/x87.h	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/x87_stack.c	retained/src/translator/guest/x86_64/lower/x87_stack.c	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/x87_stack.h	retained/src/translator/guest/x86_64/lower/x87_stack.h	x86_closure	import	Lowering family
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/operand.c	retained/src/translator/guest/x86_64/operand.c	x86_closure	import_adapt	Use Rust-owned projection boundary
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/operand.h	retained/src/translator/guest/x86_64/operand.h	x86_closure	import_adapt	Use Rust-owned projection boundary
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rep.c	retained/src/translator/guest/x86_64/rep.c	x86_closure	import	String lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rep.h	retained/src/translator/guest/x86_64/rep.h	x86_closure	import	String lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rep_runtime.c	retained/src/translator/guest/x86_64/rep_runtime.c	x86_closure	import_adapt	Host access through retained services
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rep_runtime.h	retained/src/translator/guest/x86_64/rep_runtime.h	x86_closure	import_adapt	Host access through retained services
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rotate.c	retained/src/translator/guest/x86_64/rotate.c	x86_closure	import	Rotate lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rotate.h	retained/src/translator/guest/x86_64/rotate.h	x86_closure	import	Rotate lowering
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/signal.c	retained/src/translator/guest/x86_64/signal.c	x86_closure	import_adapt	Rust owns signal delivery
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/translate.c	retained/src/translator/guest/x86_64/translate.c	x86_closure	import_adapt	Retained cache and projection contracts
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/translit/translit.c	retained/src/translator/guest/x86_64/translit/translit.c	x86_closure	import_adapt	Off by default; no product selection without evidence
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87math.c	retained/src/translator/guest/x86_64/x87math.c	x86_closure	import	X87 semantics
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87math.h	retained/src/translator/guest/x86_64/x87math.h	x86_closure	import	X87 semantics
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87state.c	retained/src/translator/guest/x86_64/x87state.c	x86_closure	import	X87 state
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87state.h	retained/src/translator/guest/x86_64/x87state.h	x86_closure	import	X87 state
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/host/x86_64/asm.h	retained/src/translator/host/x86_64/asm.h	x86_closure	import	Host assembler
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/window.c	retained/src/translator/window.c	x86_closure	import_adapt	Prefer active cache-local checked window helper where possible
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/window.h	retained/src/translator/window.h	x86_closure	import_adapt	Prefer active cache-local checked window helper where possible
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/cache.c	retained/src/translator/cache.c	conflict_audit	retain_active	Active cache identity and bounds differ
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/cache.c	retained/src/translator/guest/aarch64/cache.c	conflict_audit	retain_active	Active cache policy differs
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/dispatch.h	retained/src/translator/guest/aarch64/dispatch.h	conflict_audit	retain_active	Active Rust boundary ABI differs
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/stubs.c	retained/src/translator/guest/aarch64/stubs.c	conflict_audit	merge_mechanisms	Preserve active exits generations and diagnostics
-7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/translate.c	retained/src/translator/guest/aarch64/translate.c	conflict_audit	merge_mechanisms	Preserve active snapshot dirty and guard contracts
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/activation.c	src/core/activation.c	standalone	import_unwired	Rust owns product activation; do not select from production yet
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/cli.c	src/core/cli.c	standalone	import_unwired	Rust owns product CLI
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/cli.h	src/core/cli.h	standalone	import_unwired	Rust owns product CLI
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/config.c	src/core/config.c	standalone	import_unwired	Must not read product configuration directly
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/environment.c	src/core/environment.c	standalone	import_unwired	Rust owns environment construction
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/environment.h	src/core/environment.h	standalone	import_unwired	Rust owns environment construction
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/launch.c	src/core/launch.c	standalone	import_unwired	Rust owns launch and lifecycle
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/launch.h	src/core/launch.h	standalone	import_unwired	Rust owns launch and lifecycle
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/target/run.c	src/core/target/run.c	x86_closure	import_adapt	Route through retained host services and Rust lifecycle
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	core/target/x86_64.c	src/core/target/x86_64.c	x86_closure	import_adapt	Replace logical-VMA ownership with retained boundary
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/interp.c	src/translator/guest/aarch64/interp.c	a64_interpreter	import_adapt	Rust remains architectural-state and fault authority
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/interp_dispatch.h	src/translator/guest/aarch64/interp_dispatch.h	a64_interpreter	import	Generated dispatch companion
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/abi.h	src/translator/guest/x86_64/abi.h	x86_closure	import	Guest ABI
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/address.c	src/translator/guest/x86_64/address.c	x86_closure	import	Address lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/address.h	src/translator/guest/x86_64/address.h	x86_closure	import	Address lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/avx.c	src/translator/guest/x86_64/avx.c	x86_closure	import	Vector lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/avx.h	src/translator/guest/x86_64/avx.h	x86_closure	import	Vector lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cache.c	src/translator/guest/x86_64/cache.c	x86_closure	import_adapt	Rust-issued cache identity only
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cmpxchg.c	src/translator/guest/x86_64/cmpxchg.c	x86_closure	import	Atomic lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cmpxchg.h	src/translator/guest/x86_64/cmpxchg.h	x86_closure	import	Atomic lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cpuid.c	src/translator/guest/x86_64/cpuid.c	x86_closure	import_adapt	Guest feature policy remains launch-owned
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cpuid.h	src/translator/guest/x86_64/cpuid.h	x86_closure	import_adapt	Guest feature policy remains launch-owned
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/cpu.h	src/translator/guest/x86_64/cpu.h	x86_closure	import_adapt	Must match Rust snapshot codec
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/decode.c	src/translator/guest/x86_64/decode.c	x86_closure	import	Decoder
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/decoder.h	src/translator/guest/x86_64/decoder.h	x86_closure	import	Decoder
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/dispatch.h	src/translator/guest/x86_64/dispatch.h	x86_closure	import	Dispatch ABI
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/emit.c	src/translator/guest/x86_64/emit.c	x86_closure	import_adapt	Use retained arena and bounded publication
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/encoding.h	src/translator/guest/x86_64/encoding.h	x86_closure	import	Encoding tables
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/flags.c	src/translator/guest/x86_64/flags.c	x86_closure	import	Flag lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/flags.h	src/translator/guest/x86_64/flags.h	x86_closure	import	Flag lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/frame.h	src/translator/guest/x86_64/frame.h	x86_closure	import_adapt	Host signal ownership remains retained boundary
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/glue.c	src/translator/guest/x86_64/glue.c	x86_closure	import_adapt	No oracle-global engine lookup
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/glue.h	src/translator/guest/x86_64/glue.h	x86_closure	import_adapt	No oracle-global engine lookup
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/interp.c	src/translator/guest/x86_64/interp.c	x86_closure	import_adapt	Rust remains architectural-state and fault authority
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/interp_dispatch.h	src/translator/guest/x86_64/interp_dispatch.h	x86_closure	import	Generated dispatch companion
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/legacy.c	src/translator/guest/x86_64/legacy.c	x86_closure	import	Legacy instruction lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/legacy.h	src/translator/guest/x86_64/legacy.h	x86_closure	import	Legacy instruction lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/alu.c	src/translator/guest/x86_64/lower/alu.c	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/alu.h	src/translator/guest/x86_64/lower/alu.h	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/crypto.c	src/translator/guest/x86_64/lower/crypto.c	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/crypto.h	src/translator/guest/x86_64/lower/crypto.h	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/mov.c	src/translator/guest/x86_64/lower/mov.c	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/mov.h	src/translator/guest/x86_64/lower/mov.h	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/primitives.h	src/translator/guest/x86_64/lower/primitives.h	x86_closure	import	Lowering primitives
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/repstr.c	src/translator/guest/x86_64/lower/repstr.c	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/repstr.h	src/translator/guest/x86_64/lower/repstr.h	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/shift.c	src/translator/guest/x86_64/lower/shift.c	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/shift.h	src/translator/guest/x86_64/lower/shift.h	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/sse4x.c	src/translator/guest/x86_64/lower/sse4x.c	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/sse4x.h	src/translator/guest/x86_64/lower/sse4x.h	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/trace.c	src/translator/guest/x86_64/lower/trace.c	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/trace.h	src/translator/guest/x86_64/lower/trace.h	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/x87.c	src/translator/guest/x86_64/lower/x87.c	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/x87.h	src/translator/guest/x86_64/lower/x87.h	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/x87_stack.c	src/translator/guest/x86_64/lower/x87_stack.c	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/lower/x87_stack.h	src/translator/guest/x86_64/lower/x87_stack.h	x86_closure	import	Lowering family
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/operand.c	src/translator/guest/x86_64/operand.c	x86_closure	import_adapt	Use Rust-owned projection boundary
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/operand.h	src/translator/guest/x86_64/operand.h	x86_closure	import_adapt	Use Rust-owned projection boundary
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rep.c	src/translator/guest/x86_64/rep.c	x86_closure	import	String lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rep.h	src/translator/guest/x86_64/rep.h	x86_closure	import	String lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rep_runtime.c	src/translator/guest/x86_64/rep_runtime.c	x86_closure	import_adapt	Host access through retained services
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rep_runtime.h	src/translator/guest/x86_64/rep_runtime.h	x86_closure	import_adapt	Host access through retained services
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rotate.c	src/translator/guest/x86_64/rotate.c	x86_closure	import	Rotate lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/rotate.h	src/translator/guest/x86_64/rotate.h	x86_closure	import	Rotate lowering
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/signal.c	src/translator/guest/x86_64/signal.c	x86_closure	import_adapt	Rust owns signal delivery
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/translate.c	src/translator/guest/x86_64/translate.c	x86_closure	import_adapt	Retained cache and projection contracts
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/translit/translit.c	src/translator/guest/x86_64/translit/translit.c	x86_closure	import_adapt	Off by default; no product selection without evidence
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87math.c	src/translator/guest/x86_64/x87math.c	x86_closure	import	X87 semantics
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87math.h	src/translator/guest/x86_64/x87math.h	x86_closure	import	X87 semantics
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87state.c	src/translator/guest/x86_64/x87state.c	x86_closure	import	X87 state
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/x86_64/x87state.h	src/translator/guest/x86_64/x87state.h	x86_closure	import	X87 state
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/host/x86_64/asm.h	src/translator/host/x86_64/asm.h	x86_closure	import	Host assembler
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/window.c	src/translator/window.c	x86_closure	import_adapt	Prefer active cache-local checked window helper where possible
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/window.h	src/translator/window.h	x86_closure	import_adapt	Prefer active cache-local checked window helper where possible
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/cache.c	src/translator/cache.c	conflict_audit	retain_active	Active cache identity and bounds differ
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/cache.c	src/translator/guest/aarch64/cache.c	conflict_audit	retain_active	Active cache policy differs
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/dispatch.h	src/translator/guest/aarch64/dispatch.h	conflict_audit	retain_active	Active Rust boundary ABI differs
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/stubs.c	src/translator/guest/aarch64/stubs.c	conflict_audit	merge_mechanisms	Preserve active exits generations and diagnostics
+7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc	translator/guest/aarch64/translate.c	src/translator/guest/aarch64/translate.c	conflict_audit	merge_mechanisms	Preserve active snapshot dirty and guard contracts

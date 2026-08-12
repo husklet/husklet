@@ -21,13 +21,13 @@ set(HL_HARDENED_C_WARNINGS
 target_compile_options(hl_lint_native_objects PRIVATE ${HL_STRICT_C_WARNINGS})
 target_compile_options(hl_lint_native_objects PRIVATE ${HL_HARDENED_C_WARNINGS})
 set_source_files_properties(${HL_RUNTIME_C} PROPERTIES COMPILE_DEFINITIONS _GNU_SOURCE)
-target_include_directories(hl_lint_native_objects PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/retained/include" "${CMAKE_CURRENT_SOURCE_DIR}/retained/src")
+target_include_directories(hl_lint_native_objects PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 # Reconstruct each production retained-C compile group from the same manifest
 # Cargo consumes.  Besides keeping clang-tidy's compile database honest, these
 # object targets make strict warnings a real gate instead of an unused CMake
 # target that merely happens to configure successfully.
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/retained/COMPILED_TUS.tsv" HL_RETAINED_ROWS)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/COMPILED_TUS.tsv" HL_RETAINED_ROWS)
 list(POP_FRONT HL_RETAINED_ROWS)
 set(HL_RETAINED_GROUPS normal_archive target_aarch64_direct target_x86_64_direct lifecycle_aarch64_direct lifecycle_x86_64_direct)
 foreach(row IN LISTS HL_RETAINED_ROWS)
@@ -35,7 +35,7 @@ foreach(row IN LISTS HL_RETAINED_ROWS)
   list(GET columns 0 group)
   if(group IN_LIST HL_RETAINED_GROUPS)
     list(GET columns 2 source)
-    list(APPEND HL_RETAINED_${group}_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/retained/${source}")
+    list(APPEND HL_RETAINED_${group}_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
   endif()
 endforeach()
 set(HL_RETAINED_TUS)
@@ -60,7 +60,7 @@ foreach(group IN LISTS HL_RETAINED_GROUPS)
     target_compile_options(${target} PRIVATE ${HL_HARDENED_C_WARNINGS})
   endif()
   target_compile_options(${target} PRIVATE ${HL_STRICT_C_WARNINGS})
-  target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/retained/include" "${CMAKE_CURRENT_SOURCE_DIR}/retained/src")
+  target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src")
   list(APPEND HL_RETAINED_TUS ${HL_RETAINED_${group}_SOURCES})
   list(APPEND HL_STRICT_WARNING_TARGETS ${target})
 endforeach()

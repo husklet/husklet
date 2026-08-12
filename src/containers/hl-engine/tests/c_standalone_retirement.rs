@@ -22,7 +22,7 @@ const RETIRED_CONFIG_TOKENS: [&str; 8] = [
     "HL_LAUNCH_RESULT",
 ];
 
-const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/retained/");
+const RETAINED_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/native/");
 
 const RETIRED_SYMBOLS: [&str; 5] = [
     "hl_engine_entry",
@@ -239,7 +239,7 @@ fn retired_rust_differential_executor_stays_deleted() {
 fn product_manifest_excludes_the_retired_standalone_path() {
     let manifest = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../runtime/native/retained/COMPILED_TUS.tsv"
+        "/../../runtime/native/COMPILED_TUS.tsv"
     ))
     .unwrap();
     assert!(
