@@ -31,6 +31,8 @@ src/core/provider/demux.c
 src/core/provider/demux.h
 src/core/provider/files.c
 src/core/provider/files.h
+src/core/provider/tree_files.c
+src/core/provider/tree_files.h
 src/core/provider/handles.c
 src/core/provider/handles.h
 src/core/provider/namespace.c

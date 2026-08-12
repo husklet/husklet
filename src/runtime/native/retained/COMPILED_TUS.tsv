@@ -12,6 +12,7 @@ normal_archive	hl-engine	src/core/target/services.c	HL_ENABLE_LOGGING=0;HL_TRANS
 normal_archive	hl-engine	src/core/provider/client.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-engine	src/core/provider/demux.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-engine	src/core/provider/files.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
+normal_archive	hl-engine	src/core/provider/tree_files.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-engine	src/core/provider/handles.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-engine	src/core/provider/namespace.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include
 normal_archive	hl-translator	src/translator/arena.c	HL_ENABLE_LOGGING=0;HL_TRANSLIT_DEFAULT=0	include

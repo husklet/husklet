@@ -256,6 +256,7 @@ unsafe extern "C" {
         option_names: *const *const c_char,
         option_values: *const *const c_char,
         standard_fds: *const c_int,
+        provider_fd: c_int,
         syscall_context: *mut c_void,
         syscall_dispatch: Option<
             unsafe extern "C" fn(*mut c_void, c_uint, *mut CSyscallCpuAarch64, *mut CSyscallTrapResult) -> c_int,

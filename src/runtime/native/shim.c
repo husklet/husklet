@@ -1,5 +1,7 @@
 #include "core/engine_backend.h"
 #include "core/options.h"
+#include "core/provider/client.h"
+#include "core/provider/tree_files.h"
 #include "executable_authority.h"
 #include "hl/engine.h"
 #include "hl/linux.h"
@@ -25,8 +27,25 @@ typedef struct hl_c_backend {
   hl_engine *engine;
   hl_options options;
   uint32_t options_initialized;
+  hl_provider_client provider;
+  uint32_t provider_initialized;
+  uint32_t provider_files_installed;
+  int32_t provider_fd;
   hl_engine_exit result;
 } hl_c_backend;
+
+static void hl_c_backend_provider_discard(hl_c_backend *backend) {
+  if (backend == NULL || !backend->provider_initialized)
+    return;
+  if (backend->provider_files_installed) {
+    hl_provider_tree_files_revoke();
+    backend->provider_files_installed = 0;
+  }
+  hl_provider_client_destroy(&backend->provider);
+  close(backend->provider_fd);
+  backend->provider_fd = -1;
+  backend->provider_initialized = 0;
+}
 
 static uint32_t hl_c_backend_status_flags(uint64_t detail) {
   uint32_t flags;
@@ -131,8 +150,8 @@ int32_t hl_c_backend_create(
     int32_t executable_fd, const hl_c_main_image_plan *image_plan,
     uint32_t option_count, const char *const *option_names,
     const char *const *option_values, const int32_t standard_fds[3],
-    void *syscall_context, hl_syscall_trap_fn syscall_dispatch,
-    hl_c_backend **output) {
+    int32_t provider_fd, void *syscall_context,
+    hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output) {
   hl_c_backend *backend;
   hl_engine_config config;
   hl_status status;
@@ -163,6 +182,35 @@ int32_t hl_c_backend_create(
     free(backend);
     return status;
   }
+  backend->provider_fd = -1;
+  if (provider_fd >= 0) {
+    if (provider_fd < 3 ||
+        (standard_fds != NULL &&
+         (provider_fd == standard_fds[0] || provider_fd == standard_fds[1] ||
+          provider_fd == standard_fds[2]))) {
+      hl_host_linux_destroy(backend->host);
+      close(provider_fd);
+      free(backend);
+      return HL_STATUS_INVALID_ARGUMENT;
+    }
+    backend->provider_initialized = 1;
+    backend->provider_fd = provider_fd;
+    if (hl_provider_client_init(&backend->provider, provider_fd, 4096) != 0) {
+      backend->provider_initialized = 0;
+      hl_host_linux_destroy(backend->host);
+      close(provider_fd);
+      free(backend);
+      return HL_STATUS_INVALID_ARGUMENT;
+    }
+    if (hl_provider_tree_files_install(&backend->services,
+                                       &backend->provider) != 0) {
+      hl_c_backend_provider_discard(backend);
+      hl_host_linux_destroy(backend->host);
+      free(backend);
+      return HL_STATUS_INVALID_ARGUMENT;
+    }
+    backend->provider_files_installed = 1;
+  }
   memset(&config, 0, sizeof(config));
   hl_aarch64_target_register_backend();
   hl_x86_64_target_register_backend();
@@ -182,6 +230,7 @@ int32_t hl_c_backend_create(
         for (close_index = 0; close_index < index; ++close_index)
           (void)backend->services.file->close(backend->services.context,
                                               imported[close_index].value);
+        hl_c_backend_provider_discard(backend);
         hl_host_linux_destroy(backend->host);
         free(backend);
         return imported[index].status;
@@ -199,6 +248,7 @@ int32_t hl_c_backend_create(
   }
   if (hl_options_init_records(&backend->options, option_count, option_names,
                               option_values) != 0) {
+    hl_c_backend_provider_discard(backend);
     hl_host_linux_destroy(backend->host);
     free(backend);
     return HL_STATUS_INVALID_ARGUMENT;
@@ -215,6 +265,7 @@ int32_t hl_c_backend_create(
         for (index = 0; index < 3; ++index)
           (void)backend->services.file->close(backend->services.context,
                                               imported[index].value);
+      hl_c_backend_provider_discard(backend);
       hl_host_linux_destroy(backend->host);
       free(backend);
       return imported_executable.status == HL_STATUS_OK
@@ -236,6 +287,7 @@ int32_t hl_c_backend_create(
                                           &executable);
     if (status != HL_STATUS_OK) {
       hl_options_destroy(&backend->options);
+      hl_c_backend_provider_discard(backend);
       hl_host_linux_destroy(backend->host);
       free(backend);
       return status;
@@ -251,6 +303,7 @@ int32_t hl_c_backend_create(
       for (index = 0; index < 3; ++index)
         (void)backend->services.file->close(backend->services.context,
                                             imported[index].value);
+    hl_c_backend_provider_discard(backend);
     hl_host_linux_destroy(backend->host);
     hl_options_destroy(&backend->options);
     free(backend);
@@ -294,6 +347,7 @@ void hl_c_backend_destroy(hl_c_backend *backend) {
   hl_engine_destroy(backend->engine);
   if (backend->options_initialized)
     hl_options_destroy(&backend->options);
+  hl_c_backend_provider_discard(backend);
   hl_host_linux_destroy(backend->host);
   free(backend);
 }

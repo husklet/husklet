@@ -117,6 +117,12 @@ impl CGuestExecutor {
         } else {
             std::ptr::null_mut()
         };
+        let provider_descriptor = std::env::var("HL_C_PROVIDER_FD")
+            .ok()
+            .filter(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|value| value.parse::<c_int>().ok())
+            .filter(|value| *value >= 3)
+            .unwrap_or(-1);
         // SAFETY: all borrowed records remain valid for the call; the backend copies configuration.
         let status = unsafe {
             hl_c_backend_create(
@@ -131,6 +137,7 @@ impl CGuestExecutor {
                 option_names.as_ptr(),
                 option_values.as_ptr(),
                 standard_fds.as_ptr(),
+                provider_descriptor,
                 syscall_context,
                 runtime_exit.then_some(c_syscall_trap),
                 &raw mut handle,
