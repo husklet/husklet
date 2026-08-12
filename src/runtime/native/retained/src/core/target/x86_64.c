@@ -1074,7 +1074,7 @@ static int engine_global_init(void) {
     }
     g_trace = 0;
     g_systrace = 0;
-    g_prof = 0;
+    g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
     g_fwdskip = 8;
     g_notier2x = 0;
     extern void jit86_lazyguard(int, siginfo_t *, void *);
@@ -1213,8 +1213,9 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     run_guest(&c);
     c.exit_code = thread_process_owner_wait(&c, c.exit_code);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
-    if (g_fast_count)
-        fprintf(stderr, "[fastsys] enabled=%d inline-served=%llu\n", g_fastsys, (unsigned long long)g_fast_count);
+    // Fast-syscall counters are host telemetry, never guest output.  Explicit retained-C diagnostics
+    // remain available through the canonical [prof] report emitted by the exit path; normal launches
+    // must not synthesize a guest stderr line merely because an inline clock call happened.
     if (g_prof)
         fprintf(stderr, "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
                 (unsigned long long)g_disp_n, (unsigned long long)g_ibtc_fill, g_noibtc ? "OFF" : "ON");
