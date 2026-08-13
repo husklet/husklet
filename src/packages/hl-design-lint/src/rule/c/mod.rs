@@ -233,6 +233,7 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
     if node.is_error() || node.is_missing() {
         if macro_continuation(node, source)
             || terminal_macro_before_declaration(node, source)
+            || balanced_source_closing_brace(node, source)
             || line_macro_invocation(node, source)
             || conditional_statement_directive(node, source)
             || annotation_prefix(node, source)
@@ -248,6 +249,16 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .find_map(|child| first_unrecoverable_error(child, source))
+}
+
+fn balanced_source_closing_brace(node: tree_sitter::Node<'_>, source: &str) -> bool {
+    node.kind() == "}"
+        && node.is_missing()
+        && source.bytes().fold(0isize, |depth, byte| match byte {
+            b'{' => depth + 1,
+            b'}' => depth - 1,
+            _ => depth,
+        }) == 0
 }
 
 fn declared_identifier_macro(node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -750,6 +761,12 @@ mod test {
     #[test]
     fn parser_rejects_missing_semicolon_before_function() {
         let source = "int value(void) { return 1 }\n\nint main(void) { return 0; }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
+    }
+
+    #[test]
+    fn parser_rejects_missing_closing_brace_after_function_macro() {
+        let source = "int main(void) { return 0;\n";
         assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
