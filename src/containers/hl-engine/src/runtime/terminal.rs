@@ -161,26 +161,40 @@ fn spawn_stream_reader(
         .spawn(move || {
             let mut bytes = [0_u8; 8192];
             while !stop.load(Ordering::Acquire) {
-                let count = match reader.read(&mut bytes) {
-                    Ok(0) => break,
-                    Ok(count) => count,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(std::time::Duration::from_millis(5));
-                        continue;
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
+                let Some(count) = read_stream(&mut reader, &mut bytes) else {
+                    break;
                 };
-                let mut written = 0;
-                while written < count {
-                    match port.write(stream, &bytes[written..count]) {
-                        Ok(0) | Err(_) => return,
-                        Ok(count) => written += count,
-                    }
+                if !write_stream(port.as_ref(), stream, &bytes[..count]) {
+                    return;
                 }
             }
         })
         .map_err(|_| CompositionError::RuntimeConstruction)
+}
+
+fn read_stream(reader: &mut File, bytes: &mut [u8]) -> Option<usize> {
+    loop {
+        match reader.read(bytes) {
+            Ok(0) => return None,
+            Ok(count) => return Some(count),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+}
+
+fn write_stream(port: &dyn StandardStreamPort, stream: StandardStream, bytes: &[u8]) -> bool {
+    let mut written = 0;
+    while written < bytes.len() {
+        match port.write(stream, &bytes[written..]) {
+            Ok(0) | Err(_) => return false,
+            Ok(count) => written += count,
+        }
+    }
+    true
 }
 
 struct NativeTerminalControl {
