@@ -18,6 +18,7 @@ const IMAGE: &str = "alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68a
 const IMAGE_ID: &str = "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce";
 const MAC: &str = "/usr/local/bin/mac";
 const TIMEOUT: Duration = Duration::from_secs(30);
+const PYTHON_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -75,12 +76,14 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     let python = python::PythonProfile::stage(&output, &docker, &arch)?;
     let sqlite = sqlite::SqliteProfile::stage(&output, &docker, &arch)?;
     let husklet = HuskletProfile::stage(&workspace, &output, &options.mac_cargo)?;
+    let python_husklet = stage_python_rootfs(&output, &docker, &arch, &husklet.command)?;
     let mut identities = String::from("artifact\tidentity\n");
     for path in [
         &rootfs,
         &arch,
         &docker,
         &python.interpreter,
+        &python_husklet.interpreter,
         &sqlite.command,
         &husklet.command,
         &husklet.library,
@@ -262,6 +265,69 @@ fn husklet_guest(arch: &Path, command: &Path, guest: &Path) -> Result<Vec<u8>, E
     Ok(captured.stdout)
 }
 
+struct PythonHusklet {
+    interpreter: PathBuf,
+}
+
+fn stage_python_rootfs(output: &Path, docker: &Path, arch: &Path, command: &Path) -> Result<PythonHusklet, Error> {
+    let rootfs = output.join("python-rootfs");
+    let archive = output.join("python-rootfs.tar");
+    fs::create_dir(&rootfs)?;
+    let created = mac(&[
+        mac_path(docker),
+        "create".into(),
+        "--platform".into(),
+        "linux/amd64".into(),
+        python::IMAGE.into(),
+        "python3".into(),
+        "-c".into(),
+        "print(1)".into(),
+    ])?;
+    let container = String::from_utf8(created)?.trim().to_owned();
+    mac(&[
+        mac_path(docker),
+        "export".into(),
+        "--output".into(),
+        mac_path(&archive),
+        container.clone(),
+    ])?;
+    mac(&[mac_path(docker), "rm".into(), container])?;
+    mac(&[
+        "/mnt/mac/usr/bin/tar".into(),
+        "-xf".into(),
+        mac_path(&archive),
+        "-C".into(),
+        mac_path(&rootfs),
+    ])?;
+    fs::remove_file(&archive)?;
+    let interpreter = rootfs.join("usr/local/bin/python3.12");
+    let arguments = [
+        mac_path(arch),
+        "-x86_64".into(),
+        mac_path(command),
+        "--rootfs".into(),
+        rootfs.display().to_string(),
+        "usr/local/bin/python3.12".into(),
+        "-c".into(),
+        python::PLAIN_PROGRAM.into(),
+    ];
+    let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, PYTHON_TIMEOUT)?;
+    if captured.outcome != Outcome::Exited(Some(0)) || !captured.stderr.is_empty() {
+        return Err(format!(
+            "Husklet Rosetta Python failed with {:?}: {}",
+            captured.outcome,
+            String::from_utf8_lossy(&captured.stderr)
+        )
+        .into());
+    }
+    let native_frame = fs::read(output.join("python-plain-exact-output.frame"))?;
+    let husklet_frame = frame(&captured.stdout)?;
+    require_parity("python/plain Husklet", &native_frame, &husklet_frame)?;
+    fs::write(output.join("python-plain-husklet.out"), captured.stdout)?;
+    fs::write(output.join("python-plain-husklet-exact-output.frame"), husklet_frame)?;
+    Ok(PythonHusklet { interpreter })
+}
+
 fn mac_path(path: &Path) -> String {
     format!("/mnt/mac{}", path.display())
 }
@@ -311,7 +377,7 @@ fn require_parity(workload: &str, native: &[u8], docker: &[u8]) -> Result<(), Er
 }
 
 fn blockers() -> &'static str {
-    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a built, hashed Husklet x86_64 macOS command and private library with a Rosetta backend-receipt smoke; malloc/plain also completes through that command with exact-output parity.\nMissing: Husklet execution validation for the remaining workloads, balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
+    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a built, hashed Husklet x86_64 macOS command and private library with a Rosetta backend-receipt smoke; malloc/plain and Python/plain also complete through that command with exact-output parity.\nMissing: Husklet execution validation for the remaining workloads, balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
 }
 
 fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {

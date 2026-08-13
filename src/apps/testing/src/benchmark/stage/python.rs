@@ -5,7 +5,7 @@ const MACOS_PYTHON: &str = "/mnt/mac/usr/bin/python3";
 pub(super) const IMAGE: &str =
     "python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df";
 pub(super) const IMAGE_ID: &str = "sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df";
-const PLAIN_PROGRAM: &str = r#"import json,time
+pub(super) const PLAIN_PROGRAM: &str = r#"import json,time
 started=time.monotonic_ns()
 value=sum(i*i for i in range(200000))
 compute=max(1,(time.monotonic_ns()-started)//1000)
