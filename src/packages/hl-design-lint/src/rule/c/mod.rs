@@ -54,7 +54,10 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
 
 fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str) -> Option<tree_sitter::Node<'tree>> {
     if node.is_error() || node.is_missing() {
-        if macro_continuation(node, source) || enclosing_macro_invocation(node, source) {
+        if macro_continuation(node, source)
+            || annotation_prefix(node, source)
+            || enclosing_macro_invocation(node, source)
+        {
             return None;
         }
         return Some(node);
@@ -64,20 +67,42 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
         .find_map(|child| first_unrecoverable_error(child, source))
 }
 
+fn annotation_prefix(node: tree_sitter::Node<'_>, source: &str) -> bool {
+    let point = node.start_position();
+    let Some(line) = source.lines().nth(point.row) else {
+        return false;
+    };
+    let Some(prefix) = line.get(..point.column).map(str::trim) else {
+        return false;
+    };
+    let annotation = prefix.trim_end_matches(|character: char| character.is_whitespace());
+    !annotation.is_empty()
+        && annotation
+            .bytes()
+            .all(|byte| byte == b'_' || byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        && annotation.as_bytes()[0].is_ascii_uppercase()
+        && line.get(point.column..).is_some_and(|tail| tail.contains('('))
+        && node
+            .parent()
+            .is_some_and(|parent| matches!(parent.kind(), "function_definition" | "declaration"))
+}
+
 fn macro_continuation(node: tree_sitter::Node<'_>, source: &str) -> bool {
     let lines = source.lines().collect::<Vec<_>>();
     let mut row = node.start_position().row;
-    while row > 0 {
-        row -= 1;
+    loop {
         let line = lines[row].trim_end();
-        if !line.ends_with('\\') {
-            return false;
-        }
         if line.trim_start().starts_with("#define ") {
             return true;
         }
+        if row == 0 {
+            return false;
+        }
+        row -= 1;
+        if !line.ends_with('\\') {
+            return false;
+        }
     }
-    false
 }
 
 fn enclosing_macro_invocation(mut node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -247,5 +272,23 @@ mod test {
     #[test]
     fn parser_rejects_undeclared_top_level_recovery() {
         assert!(parse(Path::new("invalid.c"), "UNKNOWN(identity, int, )\n").is_err());
+    }
+
+    #[test]
+    fn parser_accepts_error_node_covering_a_multiline_definition() {
+        let source = "#define DISPATCH(context) \\\n+                          if ((context)->ready) { \\\n+                              continue; \\\n+                          } else { \\\n+                              break; \\\n+                          }\n";
+        assert!(parse(Path::new("dispatch.h"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_uppercase_function_annotation() {
+        let source = "PUBLIC_API int answer(void) { return 42; }\n";
+        assert!(parse(Path::new("annotated.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_arbitrary_tokens_before_a_function() {
+        let source = "not_an_annotation int answer(void) { return 42; }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 }
