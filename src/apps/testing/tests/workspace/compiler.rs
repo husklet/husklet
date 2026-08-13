@@ -1,18 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Freestanding `_start` guests issue raw syscalls; hosted guests link the C library statically.
-pub const FREESTANDING: &[&str] = &[
-    "-nostdlib",
-    "-static",
-    "-no-pie",
-    "-O2",
-    "-ffreestanding",
-    "-fno-stack-protector",
-    "-fno-ident",
-    "-Wl,-e,_start",
-    "-Wl,--build-id=none",
-];
+/// Hosted guests link the C library statically.
 pub const HOSTED: &[&str] = &["-static", "-no-pie", "-O2", "-std=gnu11"];
 
 /// Cross-compiles a guest source into `destination` for `isa`.
