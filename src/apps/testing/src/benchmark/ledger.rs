@@ -31,10 +31,30 @@ fn follows_schedule(row: &Row, step: &Step) -> bool {
 
 impl Ledger {
     pub fn open(directory: &Path, campaign: &Campaign, resume: bool) -> Result<Self, Error> {
+        Self::open_planned(
+            directory,
+            campaign,
+            resume,
+            schedule::measurements(campaign),
+            "acceptance",
+        )
+    }
+
+    pub fn open_planned(
+        directory: &Path,
+        campaign: &Campaign,
+        resume: bool,
+        steps: Vec<Step>,
+        mode: &str,
+    ) -> Result<Self, Error> {
         admit_destination(directory, resume)?;
         let manifest = directory.join("manifest.json");
         let raw = directory.join("raw.jsonl");
-        let identity = campaign.identity()?;
+        let identity = if mode == "acceptance" {
+            campaign.identity()?
+        } else {
+            format!("{}:{mode}", campaign.identity()?)
+        };
         if resume {
             let recorded: serde_json::Value = serde_json::from_slice(&fs::read(&manifest)?)?;
             if recorded["identity"] != identity {
@@ -47,10 +67,7 @@ impl Ledger {
                 serde_json::to_vec_pretty(&serde_json::json!({"identity": identity, "campaign": campaign}))?,
             )?;
         }
-        let planned: BTreeMap<String, Step> = schedule::measurements(campaign)
-            .into_iter()
-            .map(|step| (step.key(), step))
-            .collect();
+        let planned: BTreeMap<String, Step> = steps.into_iter().map(|step| (step.key(), step)).collect();
         let mut rows = read_rows(&raw, &planned)?;
         if resume && discard_partial_pairs(&mut rows, &planned) {
             rewrite(&raw, &rows)?;

@@ -38,6 +38,8 @@ struct Cli {
 enum Command {
     /// Run a controlled C-engine performance acceptance campaign.
     Benchmark(benchmark::Options),
+    /// Calibrate benchmark noise using identical baseline arms.
+    BenchmarkCalibrate(benchmark::CalibrationOptions),
     /// Print the exact artifact identity accepted by a benchmark campaign.
     BenchmarkHash(benchmark::HashOptions),
     /// Stage content-bound artifacts for a real three-arm benchmark campaign.
@@ -87,6 +89,7 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     match Cli::parse().command {
         Command::Benchmark(options) => benchmark::run(options),
+        Command::BenchmarkCalibrate(options) => benchmark::calibrate(options),
         Command::BenchmarkHash(options) => benchmark::hash(options),
         Command::BenchmarkStage(options) => benchmark::stage(options),
         Command::Runtime(options) => runtime::run(options).await,
@@ -116,6 +119,7 @@ mod cli_tests {
         let help = Cli::command().render_long_help().to_string();
         for command in [
             "benchmark",
+            "benchmark-calibrate",
             "benchmark-hash",
             "benchmark-stage",
             "runtime",

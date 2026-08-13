@@ -40,9 +40,10 @@ pub(super) fn warmups(campaign: &Campaign) -> Vec<Step> {
         .workloads
         .iter()
         .flat_map(|(workload, definition)| {
-            definition.commands.keys().flat_map(move |layout| {
-                warmup_steps(workload, layout, &definition.arm_support[layout])
-            })
+            definition
+                .commands
+                .keys()
+                .flat_map(move |layout| warmup_steps(workload, layout, &definition.arm_support[layout]))
         })
         .collect()
 }
@@ -66,6 +67,42 @@ pub(super) fn measurements(campaign: &Campaign) -> Vec<Step> {
     plan(campaign, campaign.rounds)
 }
 
+pub(super) fn calibration(campaign: &Campaign, arms: &[String], rounds: u32) -> Vec<Step> {
+    campaign
+        .workloads
+        .iter()
+        .flat_map(|(workload, definition)| {
+            definition.commands.keys().flat_map(move |layout| {
+                arms.iter().filter_map(move |arm| {
+                    definition.arm_support[layout]
+                        .get(arm)
+                        .is_some_and(ArmSupport::available)
+                        .then(|| cell_steps_owned(workload, layout, arm, rounds))
+                })
+            })
+        })
+        .flatten()
+        .collect()
+}
+
+fn cell_steps_owned(workload: &str, layout: &str, arm: &str, rounds: u32) -> Vec<Step> {
+    (0..rounds)
+        .flat_map(|round| {
+            ORDER[round as usize % ORDER.len()]
+                .into_iter()
+                .enumerate()
+                .map(move |(position, _)| Step {
+                    workload: workload.to_owned(),
+                    layout: layout.to_owned(),
+                    cell: format!("{arm}{arm}"),
+                    round,
+                    position,
+                    arm: arm.to_owned(),
+                })
+        })
+        .collect()
+}
+
 fn plan(campaign: &Campaign, rounds: u32) -> Vec<Step> {
     campaign
         .workloads
@@ -73,8 +110,7 @@ fn plan(campaign: &Campaign, rounds: u32) -> Vec<Step> {
         .flat_map(|(workload, definition)| {
             definition.commands.keys().flat_map(move |layout| {
                 let support = &definition.arm_support[layout];
-                supported_cells(support)
-                    .flat_map(move |cell| cell_steps(workload, layout, cell, rounds))
+                supported_cells(support).flat_map(move |cell| cell_steps(workload, layout, cell, rounds))
             })
         })
         .collect()
@@ -146,7 +182,10 @@ mod tests {
                 },
             ),
         ]);
-        assert_eq!(super::supported_cells(&support).collect::<Vec<_>>(), [("E", "E"), ("I", "I"), ("E", "I")]);
+        assert_eq!(
+            super::supported_cells(&support).collect::<Vec<_>>(),
+            [("E", "E"), ("I", "I"), ("E", "I")]
+        );
     }
 
     #[test]
@@ -164,8 +203,26 @@ mod tests {
             ),
         ]);
         let steps = super::warmup_steps("python", "plain", &support);
-        assert_eq!(steps.iter().map(|step| step.arm.as_str()).collect::<Vec<_>>(), ["E", "I"]);
-        assert!(steps.iter().all(|step| step.cell == format!("{}{}", step.arm, step.arm)));
+        assert_eq!(
+            steps.iter().map(|step| step.arm.as_str()).collect::<Vec<_>>(),
+            ["E", "I"]
+        );
+        assert!(
+            steps
+                .iter()
+                .all(|step| step.cell == format!("{}{}", step.arm, step.arm))
+        );
         assert!(steps.iter().all(|step| step.round == 0 && step.position == 0));
+    }
+
+    #[test]
+    fn calibration_contains_only_balanced_same_arm_pairs() {
+        let steps = super::cell_steps_owned("malloc", "plain", "E", 12);
+        assert_eq!(steps.len(), 24);
+        assert!(steps.iter().all(|step| step.cell == "EE" && step.arm == "E"));
+        for pair in steps.chunks_exact(2) {
+            assert_eq!(pair[0].round, pair[1].round);
+            assert_eq!([pair[0].position, pair[1].position], [0, 1]);
+        }
     }
 }

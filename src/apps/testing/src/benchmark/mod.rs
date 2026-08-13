@@ -1,5 +1,6 @@
 //! Controlled external/retained/integrated C-engine acceptance measurements.
 
+mod calibration;
 mod definition;
 mod evidence;
 mod ledger;
@@ -48,6 +49,7 @@ pub(crate) struct HashOptions {
     path: PathBuf,
 }
 
+pub(crate) use calibration::Options as CalibrationOptions;
 pub(crate) use stage::Options as StageOptions;
 
 pub(crate) fn hash(options: HashOptions) -> Result<(), Error> {
@@ -57,6 +59,10 @@ pub(crate) fn hash(options: HashOptions) -> Result<(), Error> {
 
 pub(crate) fn stage(options: StageOptions) -> Result<(), Error> {
     stage::run(options)
+}
+
+pub(crate) fn calibrate(options: CalibrationOptions) -> Result<(), Error> {
+    calibration::run(options)
 }
 
 pub(crate) fn run(options: Options) -> Result<(), Error> {
