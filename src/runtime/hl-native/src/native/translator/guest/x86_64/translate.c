@@ -6123,6 +6123,74 @@ static int lower_sse_float_arithmetic(struct insn I, uint64_t guest_pc, uint64_t
     return TX_NEXT;
 }
 
+typedef struct {
+    uint64_t start;
+    void *body;
+    uint64_t *seen;
+    int *seen_count;
+    int *trace_blocks;
+    int *conditional_stitches;
+    int stitch_allowed;
+} hl_x86_jcc_region;
+
+static int lower_short_conditional_branch(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
+                                          const hl_x86_trace_state *trace_state, hl_x86_jcc_region *region) {
+    if (instruction->op < 0x70 || instruction->op > 0x7F) return TX_FALL;
+    int condition = instruction->op & 0xF;
+    int parity = condition == 0xA || condition == 0xB;
+    int arm_condition = parity ? emit_parity_jcc_cond(condition) : x86cc_to_arm(condition);
+    if (arm_condition < 0) {
+        if (g_fl_pending) flags_materialize();
+        report_unimpl(*guest_pc, instruction);
+        return TX_BREAK;
+    }
+    uint64_t taken = next + (uint64_t)instruction->imm;
+    if (!parity && taken == region->start && !notier2x() &&
+        !hl_x86_trace_loop_hazard((uint64_t)region->body, (uint64_t)g_cp)) {
+        int slot = g_tier2_build ? 0 : t2_slot(region->start);
+        if (g_tier2_build || slot >= 0) {
+            hl_x86_trace_self_loop(trace_state, arm_condition, region->start, next, region->body, slot);
+            return TX_BREAK;
+        }
+    }
+    uint64_t fall = next;
+    int stitch_fall = region->stitch_allowed && fall != region->start &&
+                      !hl_x86_trace_seen(region->seen, *region->seen_count, fall) && !map_body(fall) &&
+                      !hl_x86_trace_trap_head(fall);
+    int save_taken = 0;
+    int save_fall = 0;
+    if (!parity)
+        hl_x86_trace_jcc_flags(trace_state, taken, fall, *guest_pc, stitch_fall, arm_condition, &save_taken,
+                               &save_fall);
+    if (stitch_fall) {
+        int inverse = (arm_condition ^ 1) & 0xF;
+        uint32_t *patch = (uint32_t *)g_cp;
+        emit32(0);
+        if (parity) e_nzcv_load();
+        emit_jcc_edge_spill(save_taken);
+        emit_chain_exit(taken);
+        int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+        *patch = 0x54000000u | (((uint32_t)distance & 0x7FFFF) << 5) | (uint32_t)inverse;
+        if (parity) e_nzcv_load();
+        region->seen[(*region->seen_count)++] = fall;
+        (*region->trace_blocks)++;
+        (*region->conditional_stitches)++;
+        *guest_pc = fall;
+        return TX_NEXT;
+    }
+    uint32_t *patch = (uint32_t *)g_cp;
+    emit32(0);
+    if (parity) e_nzcv_load();
+    emit_jcc_edge_spill(save_fall);
+    emit_chain_exit(next);
+    int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
+    *patch = 0x54000000u | (((uint32_t)distance & 0x7FFFF) << 5) | (arm_condition & 0xF);
+    if (parity) e_nzcv_load();
+    emit_jcc_edge_spill(save_taken);
+    emit_chain_exit(taken);
+    return TX_BREAK;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6304,84 +6372,10 @@ static void *translate_block(uint64_t gpc) {
             }
             int direct_loop_result = lower_direct_call_loop(&I, gpc, next, &trace_state);
             if (direct_loop_result == TX_BREAK) break;
-            // ---- jcc rel8 (70-7F) ----
-            if (op >= 0x70 && op <= 0x7F) {
-                int lo = op & 0xF, parity = (lo == 0xA || lo == 0xB);
-                int cc;
-                if (parity) {
-                    cc = emit_parity_jcc_cond(lo); // jp/jnp: PF lane -> live ARM Z, branch off it
-                } else {
-                    cc = x86cc_to_arm(lo);
-                    if (cc < 0) {
-                        if (g_fl_pending) flags_materialize(); // materialize before boundary
-                        report_unimpl(gpc, &I);
-                        break;
-                    }
-                }
-                uint64_t taken = next + (uint64_t)I.imm;
-                // W5B tier-2: single-block self-loop (taken back-edge == block start). Detected BEFORE the
-                // flag handling / superblock stitch below so the self-loop owns the back-edge; emit the
-                // hotness counter (tier-1) or the folded back-edge (tier-2). g_fl_pending is still pending
-                // here -- emit_selfloop_x86 does the flag handling itself. Parity already set the live Z
-                // (and spilled any pending producer) above, so it skips this purely-NZCV-flag path.
-                if (!parity && taken == start && !notier2x() &&
-                    !hl_x86_trace_loop_hazard((uint64_t)body, (uint64_t)g_cp)) {
-                    int slot = g_tier2_build ? 0 : t2_slot(start);
-                    if (g_tier2_build || slot >= 0) {
-                        hl_x86_trace_self_loop(&trace_state, cc, start, next, body, slot);
-                        break;
-                    }
-                }
-                uint64_t fall = next;
-                int stitch_fall = (STITCH_OK && fall != start && !hl_x86_trace_seen(seen, nseen, fall) &&
-                                   !map_body(fall) && !hl_x86_trace_trap_head(fall));
-                int save_taken = 0, save_fall = 0;
-                if (parity) {
-                    // live ARM Z already holds (PF==0) from emit_parity_jcc_cond; flags spilled there.
-                } else {
-                    // Fast path: live NZCV still holds the immediately-preceding width-4/8 producer's
-                    // flags, so branch straight off them. jcc_edge_flags (x86-xflags, trace.c) spills
-                    // the deferred producer exactly as flags_materialize() did -- EXCEPT on edges whose
-                    // successor provably overwrites the flags before reading: FL_SUB pushes its spill
-                    // onto only the flag-live edge(s) (save_taken/save_fall, emitted below), a stitched
-                    // fall keeps g_fl_pending for the inline continuation, and FL_ADD/FL_LOGIC drop the
-                    // dead store after the mandatory msr fixup. FL_NONE reloads membank as before.
-                    hl_x86_trace_jcc_flags(&trace_state, taken, fall, gpc, stitch_fall, cc, &save_taken, &save_fall);
-                }
-                // STITCH: lay the fall-through (`next`) inline; the taken side becomes a tiny
-                // out-of-line exit reached by the INVERTED condition. Both arms see canonical live
-                // flags; the taken stub spills cpu->nzcv iff its successor may read it. A parity jcc
-                // clobbered the live NZCV with its PF scratch -> restore the canonical membank flags
-                // on EVERY outgoing edge (parity-edge fix; see emit_parity_jcc_cond).
-                if (stitch_fall) {
-                    int inv = (cc ^ 1) & 0xF; // not-taken -> branch over the taken exit (x86cc_to_arm is 0..13)
-                    uint32_t *patch = (uint32_t *)g_cp;
-                    emit32(0);                       // b.inv -> fall (inline)
-                    if (parity) e_nzcv_load();       // taken edge: restore canonical live NZCV
-                    emit_jcc_edge_spill(save_taken); // FL_SUB (e_nzcv_save) or FL_LOGIC (e_nzcv_save_c1) spill on the
-                                                     // flag-live taken edge only
-                    emit_chain_exit(taken);
-                    int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-                    *patch = 0x54000000u | (((uint32_t)d & 0x7FFFF) << 5) | (uint32_t)inv;
-                    if (parity) e_nzcv_load(); // inline fall: restore before continuing
-                    seen[nseen++] = fall;
-                    trace_blk++;
-                    ncond++;
-                    gpc = fall;
-                    continue;
-                }
-                uint32_t *patch = (uint32_t *)g_cp;
-                emit32(0);                      // b.cond -> taken
-                if (parity) e_nzcv_load();      // fall edge: restore canonical live NZCV
-                emit_jcc_edge_spill(save_fall); // FL_SUB/FL_LOGIC spill for a flag-live fall successor
-                emit_chain_exit(next);
-                int64_t d = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-                *patch = 0x54000000u | (((uint32_t)d & 0x7FFFF) << 5) | (cc & 0xF);
-                if (parity) e_nzcv_load();       // taken edge: restore canonical live NZCV
-                emit_jcc_edge_spill(save_taken); // FL_SUB/FL_LOGIC spill for a flag-live taken successor
-                emit_chain_exit(taken);
-                break;
-            }
+            hl_x86_jcc_region jcc_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK};
+            int jcc_result = lower_short_conditional_branch(&I, &gpc, next, &trace_state, &jcc_region);
+            if (jcc_result == TX_NEXT) continue;
+            if (jcc_result == TX_BREAK) break;
             int flag_register_result = lower_flag_register_transfer(&I);
             if (flag_register_result == TX_NEXT) {
                 gpc = next;
