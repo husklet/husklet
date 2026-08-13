@@ -235,7 +235,9 @@ impl Campaign {
         }
         match definition.guest_path {
             GuestPath::HostAbsolute => Ok(guest.to_owned()),
-            GuestPath::RootfsAbsolute => Ok(Path::new("/").join(guest.strip_prefix(&self.rootfs.path)?)),
+            // The production engine CLI confines guest names beneath --rootfs and
+            // therefore accepts root-relative names without a host-leading slash.
+            GuestPath::RootfsAbsolute => Ok(guest.strip_prefix(&self.rootfs.path)?.to_owned()),
         }
     }
 }
@@ -452,7 +454,7 @@ mod tests {
         invariant_phases_valid, phase_names_valid, smoke_binds_profile, verify_artifact, workload_judgments_covered,
     };
     use crate::record::FramedIdentity;
-    use std::{collections::BTreeMap, fs};
+    use std::{collections::BTreeMap, fs, path::Path};
 
     #[test]
     fn arm_can_map_shared_linux_guest_to_hashed_host_native_equivalent() {
@@ -490,6 +492,34 @@ mod tests {
             invariant_phases: Vec::new(),
         };
         assert_eq!(campaign.guest("E", &linux).unwrap(), native);
+    }
+
+    #[test]
+    fn rootfs_guest_is_passed_as_a_confined_relative_name() {
+        let temporary = tempfile::tempdir().unwrap();
+        let rootfs = temporary.path().join("rootfs");
+        let guest = rootfs.join("benchmark/malloc-plain");
+        let arm = Arm {
+            command: vec!["/engine".into()],
+            artifacts: BTreeMap::new(),
+            smoke: vec!["/engine".into(), "--smoke".into()],
+            guest_path: GuestPath::RootfsAbsolute,
+            guest_map: BTreeMap::new(),
+        };
+        let campaign = Campaign {
+            schema: super::SCHEMA.into(),
+            rounds: 4,
+            samples_per_row: 3,
+            rootfs: Artifact {
+                path: rootfs,
+                sha256: String::new(),
+            },
+            arms: BTreeMap::from([("I".into(), arm)]),
+            layouts: BTreeMap::new(),
+            workloads: BTreeMap::new(),
+            invariant_phases: Vec::new(),
+        };
+        assert_eq!(campaign.guest("I", &guest).unwrap(), Path::new("benchmark/malloc-plain"));
     }
 
     #[test]
