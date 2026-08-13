@@ -470,7 +470,6 @@
                   exit 1
                 fi
                 valgrind \
-                  --quiet \
                   --leak-check=full \
                   --show-leak-kinds=definite,indirect \
                   --errors-for-leak-kinds=definite,indirect \
@@ -485,7 +484,6 @@
 
                 set +e
                 valgrind \
-                  --quiet \
                   --leak-check=full \
                   --show-leak-kinds=definite,indirect \
                   --errors-for-leak-kinds=definite,indirect \
