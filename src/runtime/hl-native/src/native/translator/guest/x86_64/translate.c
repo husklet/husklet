@@ -5635,6 +5635,25 @@ static int lower_sse_float_unpack(struct insn *instruction, uint64_t next, int v
     return TX_NEXT;
 }
 
+static int lower_sse_two_source_shuffle(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
+    if (instruction->op != 0xC6) return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    unsigned immediate = (unsigned)instruction->imm;
+    e_vmov(18, vd);
+    if (instruction->p66) {
+        e_ins_d(17, 0, 18, immediate & 1);
+        e_ins_d(17, 1, source, (immediate >> 1) & 1);
+    } else {
+        e_ins_s(17, 0, 18, immediate & 3);
+        e_ins_s(17, 1, 18, (immediate >> 2) & 3);
+        e_ins_s(17, 2, source, (immediate >> 4) & 3);
+        e_ins_s(17, 3, source, (immediate >> 6) & 3);
+    }
+    e_vmov(vd, 17);
+    return TX_NEXT;
+}
+
 static int lower_sse_packed_double_integer(struct insn *instruction, uint64_t next, int vd, int vm) {
     if (instruction->op != 0xE6 || (!instruction->rep && !instruction->p66 && !instruction->repne))
         return TX_FALL;
@@ -6437,24 +6456,8 @@ static void *translate_block(uint64_t gpc) {
                         e_v3(0x4EA01C00u, vd, vd, s); // or
                     else
                         e_v3(0x6E201C00u, vd, vd, s); // xor
-                } else if (op == 0xC6 && I.p66) {     // shufpd: 64-bit lanes (d[0]<-dst, d[1]<-src)
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    unsigned im = (unsigned)I.imm;
-                    e_vmov(18, vd);
-                    e_ins_d(17, 0, 18, im & 1);
-                    e_ins_d(17, 1, s, (im >> 1) & 1);
-                    e_vmov(vd, 17);
-                } else if (op == 0xC6) { // shufps xmm,xmm/m,imm8 (lanes 0,1 from dst; 2,3 from src)
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    unsigned im = (unsigned)I.imm;
-                    e_vmov(18, vd);
-                    e_ins_s(17, 0, 18, im & 3);
-                    e_ins_s(17, 1, 18, (im >> 2) & 3);
-                    e_ins_s(17, 2, s, (im >> 4) & 3);
-                    e_ins_s(17, 3, s, (im >> 6) & 3);
-                    e_vmov(vd, 17);
+                } else if (lower_sse_two_source_shuffle(&I, next, vd, vm, mmx) == TX_NEXT) {
+                    // The helper emitted SHUFPS or SHUFPD.
                 } else if (lower_sse_shuffle(&I, next, vd, vm, mmx) == TX_NEXT) {
                 } else if (lower_sse_packed_binary(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted the complete lane-wise operation.
