@@ -41,35 +41,64 @@ pub(super) fn sample(
         )
         .into());
     }
-    let text = std::str::from_utf8(&output.stdout)?;
-    require_line_framing(text)?;
-    let mut phases = BTreeMap::new();
-    let mut canonical = Vec::new();
-    let mut metadata_seen = false;
-    for line in text.lines() {
-        parse_output_line(
-            campaign,
-            step,
-            wall_us,
-            line,
-            &mut phases,
-            &mut canonical,
-            &mut metadata_seen,
-        )?;
+    let parsed = (|| {
+        let text = std::str::from_utf8(&output.stdout)?;
+        require_line_framing(text)?;
+        let mut phases = BTreeMap::new();
+        let mut canonical = Vec::new();
+        let mut metadata_seen = false;
+        for line in text.lines() {
+            parse_output_line(
+                campaign,
+                step,
+                wall_us,
+                line,
+                &mut phases,
+                &mut canonical,
+                &mut metadata_seen,
+            )?;
+        }
+        require_metadata(metadata_seen)?;
+        let expected = &campaign.workloads[&step.workload].layout_phases[&step.layout];
+        let observed = phases.keys().map(String::as_str).collect::<BTreeSet<_>>();
+        let expected = expected.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        if observed != expected {
+            return Err(format!(
+                "layout {} emitted an incomplete phase set: expected={expected:?} observed={observed:?}",
+                step.layout
+            )
+            .into());
+        }
+        let frame = canonical.join("\n");
+        let identity = FramedIdentity::of(frame.as_bytes());
+        Ok((phases, identity, frame, diagnostic))
+    })();
+    parsed.map_err(|error| parse_failure(step, output.status.to_string(), &output.stdout, &output.stderr, error))
+}
+
+const FAILURE_EXCERPT: usize = 4096;
+
+fn parse_failure(step: &Step, status: String, stdout: &[u8], stderr: &[u8], error: Error) -> Error {
+    fn evidence(bytes: &[u8]) -> String {
+        let excerpt = &bytes[..bytes.len().min(FAILURE_EXCERPT)];
+        format!(
+            "bytes={} sha256={} excerpt={:?}",
+            bytes.len(),
+            FramedIdentity::of(bytes),
+            String::from_utf8_lossy(excerpt)
+        )
     }
-    require_metadata(metadata_seen)?;
-    let expected = &campaign.workloads[&step.workload].layout_phases[&step.layout];
-    if phases.keys().map(String::as_str).collect::<BTreeSet<_>>() != expected.iter().map(String::as_str).collect() {
-        return Err(format!("layout {} emitted an incomplete phase set", step.layout).into());
-    }
-    let frame = canonical.join("\n");
-    let identity = FramedIdentity::of(frame.as_bytes());
-    Ok((phases, identity, frame, diagnostic))
+    format!(
+        "benchmark parse failed for {} status={status}: {error}; stdout {}; stderr {}",
+        step.key(),
+        evidence(stdout),
+        evidence(stderr)
+    )
+    .into()
 }
 
 fn accepted_diagnostic(stderr: &[u8]) -> Option<String> {
-    (stderr == b"hl-test-displaced-et-exec: displaced\n")
-        .then(|| "hl-test-displaced-et-exec: displaced".to_owned())
+    (stderr == b"hl-test-displaced-et-exec: displaced\n").then(|| "hl-test-displaced-et-exec: displaced".to_owned())
 }
 
 fn require_line_framing(text: &str) -> Result<(), Error> {
@@ -119,7 +148,10 @@ fn parse_phase(
 ) -> Result<(), Error> {
     let (name, measured, ok) = phase_fields(rest)?;
     let timed_by_wall = campaign.workloads[&step.workload].wall_time
-        && campaign.workloads[&step.workload].phases.iter().any(|phase| phase == name);
+        && campaign.workloads[&step.workload]
+            .phases
+            .iter()
+            .any(|phase| phase == name);
     let us = if timed_by_wall { wall_us } else { measured };
     if phases
         .insert(name.to_owned(), Phase { us, ok: ok.to_owned() })
@@ -403,9 +435,10 @@ fn box_lock_holder_count(_path: &Path) -> Result<u64, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Measurement, accepted_diagnostic, counter_metadata, metadata_line, phase_fields, require_line_framing,
-        require_metadata,
+        Measurement, accepted_diagnostic, counter_metadata, metadata_line, parse_failure, phase_fields,
+        require_line_framing, require_metadata,
     };
+    use crate::benchmark::schedule::Step;
     use std::{
         cell::Cell,
         fs::OpenOptions,
@@ -416,6 +449,32 @@ mod tests {
     fn exact_output_requires_identity_metadata() {
         require_metadata(true).unwrap();
         assert!(require_metadata(false).is_err());
+    }
+
+    #[test]
+    fn incomplete_phase_failure_carries_bounded_raw_evidence() {
+        let step = Step {
+            workload: "sqlite".into(),
+            layout: "sqlite".into(),
+            cell: "RR".into(),
+            round: 3,
+            position: 0,
+            arm: "R".into(),
+        };
+        let stdout = [b'M'; 5000];
+        let error = parse_failure(
+            &step,
+            "exit status: 0".into(),
+            &stdout,
+            b"retained diagnostic\n",
+            "incomplete phase set".into(),
+        )
+        .to_string();
+        assert!(error.contains("sqlite|sqlite|RR|3|0"));
+        assert!(error.contains("status=exit status: 0"));
+        assert!(error.contains("bytes=5000 sha256="));
+        assert!(error.contains("incomplete phase set"));
+        assert!(error.len() < 9000, "raw evidence was not bounded");
     }
 
     #[test]
