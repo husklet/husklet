@@ -453,6 +453,7 @@ static int fd_in_a0(uint64_t nr) {
     switch (nr) {
     case 46:
     case 47: // ftruncate/fallocate
+    case 50: // fchdir
     case 61:
     case 62:
     case 63:

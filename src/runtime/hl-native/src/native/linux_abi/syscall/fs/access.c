@@ -64,6 +64,11 @@ static void svc_fs_access_50(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                              uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 50: {
+        if (!g_untrusted && g_fdvis_control != NULL &&
+            !proc_fdvis_lookup((int)getpid(), (int)a0, NULL, NULL, NULL)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+            break;
+        }
         int changed;
         int handled = bound_handle_chdir((int)a0, &changed);
         char guest_cwd[sizeof g_cwd];
