@@ -72,9 +72,9 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     if String::from_utf8(python_inspect)?.trim() != python::IMAGE_ID {
         return Err("pinned Python Docker image identity mismatch".into());
     }
-    let python = python::stage(&output, &docker, &arch)?;
-    let sqlite = sqlite::stage(&output, &docker, &arch)?;
-    let husklet = stage_husklet_profile(&workspace, &output, &options.mac_cargo)?;
+    let python = python::PythonProfile::stage(&output, &docker, &arch)?;
+    let sqlite = sqlite::SqliteProfile::stage(&output, &docker, &arch)?;
+    let husklet = HuskletProfile::stage(&workspace, &output, &options.mac_cargo)?;
     let mut identities = String::from("artifact\tidentity\n");
     for path in [
         &rootfs,
@@ -126,7 +126,8 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         output.join("husklet-command.tsv"),
         format!(
             "command\t{}\narchitecture\tx86_64-apple-darwin\nsmoke\t--backend-receipt\nreceipt\t{}\n",
-            husklet.command.display(), husklet.receipt
+            husklet.command.display(),
+            husklet.receipt
         ),
     )?;
     fs::write(output.join("BLOCKERS.txt"), blockers())?;
@@ -143,53 +144,55 @@ struct HuskletProfile {
     receipt: String,
 }
 
-fn stage_husklet_profile(workspace: &Path, output: &Path, cargo: &Path) -> Result<HuskletProfile, Error> {
-    let build = output.join("husklet-build");
-    mac(&[
-        "env".into(),
-        "HL_NATIVE_COMPILE_CHECK=1".into(),
-        "RUSTFLAGS=-C link-arg=-Wl,-rpath,@executable_path".into(),
-        format!("CARGO_TARGET_DIR={}", mac_path(&build)),
-        cargo.display().to_string(),
-        "build".into(),
-        "--manifest-path".into(),
-        mac_path(&workspace.join("Cargo.toml")),
-        "--package".into(),
-        "engine".into(),
-        "--bin".into(),
-        "hl-x86_64".into(),
-        "--release".into(),
-        "--target".into(),
-        "x86_64-apple-darwin".into(),
-    ])?;
+impl HuskletProfile {
+    fn stage(workspace: &Path, output: &Path, cargo: &Path) -> Result<Self, Error> {
+        let build = output.join("husklet-build");
+        mac(&[
+            "env".into(),
+            "HL_NATIVE_COMPILE_CHECK=1".into(),
+            "RUSTFLAGS=-C link-arg=-Wl,-rpath,@executable_path".into(),
+            format!("CARGO_TARGET_DIR={}", mac_path(&build)),
+            cargo.display().to_string(),
+            "build".into(),
+            "--manifest-path".into(),
+            mac_path(&workspace.join("Cargo.toml")),
+            "--package".into(),
+            "engine".into(),
+            "--bin".into(),
+            "hl-x86_64".into(),
+            "--release".into(),
+            "--target".into(),
+            "x86_64-apple-darwin".into(),
+        ])?;
 
-    let built_command = build.join("x86_64-apple-darwin/release/hl-x86_64");
-    let built_library = native_library(&build)?;
-    let profile = output.join("husklet-x86_64-macos");
-    fs::create_dir(&profile)?;
-    let command = profile.join("hl-x86_64");
-    let library = profile.join("libhl_native_engine.dylib");
-    // Publication is deliberately separate from the completed Cargo invocation.
-    fs::copy(&built_command, &command)?;
-    fs::copy(&built_library, &library)?;
-    let smoke = mac(&[
-        "arch".into(),
-        "-x86_64".into(),
-        mac_path(&command),
-        "--backend-receipt".into(),
-    ])?;
-    let receipt = String::from_utf8(smoke)?.trim().to_owned();
-    if !receipt.starts_with(
-        "{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"",
-    ) || !receipt.ends_with("\"}")
-    {
-        return Err("Husklet x86 Rosetta smoke emitted an invalid backend receipt".into());
+        let built_command = build.join("x86_64-apple-darwin/release/hl-x86_64");
+        let built_library = native_library(&build)?;
+        let profile = output.join("husklet-x86_64-macos");
+        fs::create_dir(&profile)?;
+        let command = profile.join("hl-x86_64");
+        let library = profile.join("libhl_native_engine.dylib");
+        // Publication is deliberately separate from the completed Cargo invocation.
+        fs::copy(&built_command, &command)?;
+        fs::copy(&built_library, &library)?;
+        let smoke = mac(&[
+            "arch".into(),
+            "-x86_64".into(),
+            mac_path(&command),
+            "--backend-receipt".into(),
+        ])?;
+        let receipt = String::from_utf8(smoke)?.trim().to_owned();
+        if !receipt
+            .starts_with("{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"")
+            || !receipt.ends_with("\"}")
+        {
+            return Err("Husklet x86 Rosetta smoke emitted an invalid backend receipt".into());
+        }
+        Ok(Self {
+            command,
+            library,
+            receipt,
+        })
     }
-    Ok(HuskletProfile {
-        command,
-        library,
-        receipt,
-    })
 }
 
 fn native_library(build: &Path) -> Result<PathBuf, Error> {
