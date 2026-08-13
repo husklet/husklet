@@ -28,8 +28,8 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
-    let normalized = normalize_atomic_specifiers(&normalize_function_pointer_annotations(
-        &source.replace("_Thread_local", "             "),
+    let normalized = normalize_gnu_attributes(&normalize_atomic_specifiers(
+        &normalize_function_pointer_annotations(&source.replace("_Thread_local", "             ")),
     ));
     let tree = parser
         .parse(&normalized, None)
@@ -53,6 +53,43 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+fn normalize_gnu_attributes(source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut offset = 0;
+    while let Some(relative) = source[offset..].find("__attribute__") {
+        let start = offset + relative;
+        let mut cursor = start + "__attribute__".len();
+        while source.as_bytes().get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if source.as_bytes().get(cursor) != Some(&b'(') {
+            offset = cursor;
+            continue;
+        }
+        let mut depth = 0usize;
+        while cursor < source.len() {
+            match source.as_bytes()[cursor] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        cursor += 1;
+                        normalized[start..cursor].fill(b' ');
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        if depth != 0 {
+            break;
+        }
+        offset = cursor;
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
 }
 
 fn normalize_atomic_specifiers(source: &str) -> String {
@@ -511,6 +548,18 @@ mod test {
     fn parser_accepts_parenthesized_c11_atomic_type() {
         let source = "typedef struct Host Host;\nstatic _Atomic(const Host *) current;\n";
         assert!(parse(Path::new("atomic.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_gnu_attribute_after_declarator() {
+        let source = "void release(void *);\nvoid *value __attribute__((cleanup(release))) = 0;\n";
+        assert!(parse(Path::new("attribute.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_unclosed_gnu_attribute() {
+        let source = "void *value __attribute__((cleanup(release)) = 0;\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
