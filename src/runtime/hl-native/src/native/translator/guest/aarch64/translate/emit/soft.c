@@ -172,7 +172,6 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
     }
     e_ldr(tmp, CPUREG, OFF_SOFT_DELTA);
     emit32(0x8B000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)ea); /* add ea,ea,tmp */
-    if (guard.profile_sample) emit_prof_bump(&g_prof_soft_cached_sampled);
     guard.native = g_cp;
     return guard;
 }
@@ -263,15 +262,10 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
             *guard->miss[i] =
                 a64_tbz_x(guard->miss_reg[i], (unsigned)guard->miss_bit[i], (miss - (uint8_t *)guard->miss[i]) / 4);
     }
-    uint8_t *direct = guard->profile_sample ? g_cp : guard->native;
+    // Profiling must not insert register-using code into this live-EA path.
+    uint8_t *direct = guard->native;
     for (unsigned i = 0; i < guard->ndirect; ++i)
         *guard->direct[i] = a64_tbz_x(guard->tmp2, 0, (direct - (uint8_t *)guard->direct[i]) / 4);
-    if (guard->profile_sample) {
-        emit_prof_bump(&g_prof_soft_hull_sampled);
-        uint32_t *back = (uint32_t *)g_cp;
-        int64_t words = (guard->native - (uint8_t *)back) / 4;
-        emit32(0x14000000u | ((uint32_t)words & 0x03ffffffu));
-    }
 }
 
 static void aarch64_soft_filter_refresh(struct cpu *c) {
