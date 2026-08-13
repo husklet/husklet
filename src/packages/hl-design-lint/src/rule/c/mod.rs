@@ -28,11 +28,11 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
-    let normalized = normalize_gnu_attributes(&normalize_atomic_specifiers(
+    let normalized = normalize_computed_goto(&normalize_gnu_attributes(&normalize_atomic_specifiers(
         &normalize_function_pointer_annotations(&normalize_complex_macro(
             &source.replace("_Thread_local", "             "),
         )),
-    ));
+    )));
     let tree = parser
         .parse(&normalized, None)
         .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
@@ -55,6 +55,22 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+fn normalize_computed_goto(source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut offset = 0;
+    for line in source.split_inclusive('\n') {
+        if let Some(relative) = line.find("goto *") {
+            let start = offset + relative + "goto ".len();
+            if let Some(end) = line[relative..].find(';') {
+                normalized[start..offset + relative + end].fill(b' ');
+                normalized[start] = b'L';
+            }
+        }
+        offset += line.len();
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
 }
 
 fn normalize_complex_macro(source: &str) -> String {
@@ -605,6 +621,18 @@ mod test {
     fn parser_accepts_standard_complex_type_macro() {
         let source = "double magnitude(double complex value) { return 0; }\n";
         assert!(parse(Path::new("complex.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_gnu_computed_goto() {
+        let source = "int run(void **table, int index) { goto *table[index]; target: return 0; }\n";
+        assert!(parse(Path::new("goto.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_unterminated_gnu_computed_goto() {
+        let source = "int run(void **table, int index) { goto *table[index] }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
