@@ -6224,6 +6224,57 @@ static int lower_direct_jump(struct insn *instruction, uint64_t *guest_pc, uint6
     return TX_BREAK;
 }
 
+static int lower_sse_family(struct insn *instruction, uint64_t guest_pc, uint64_t next,
+                            hl_x86_crypto_state *crypto_state) {
+    int vd = instruction->reg;
+    int vm = instruction->rm_reg;
+    int mmx = sse_mmx_capable(instruction->op) && !instruction->p66 && !instruction->rep && !instruction->repne;
+    if (mmx) {
+        vd &= 7;
+        vm &= 7;
+    }
+    int writeback = mmx ? vd : -1;
+#define SSE_TRY(expression)     \
+    do {                        \
+        int result = expression; \
+        if (result != TX_FALL) { \
+            if (result == TX_NEXT && writeback >= 0) e_vmov8(writeback, writeback); \
+            return result;      \
+        }                       \
+    } while (0)
+    SSE_TRY(lower_sse_moves(instruction, guest_pc, next, vd, vm, mmx));
+    SSE_TRY(lower_sse_horizontal(instruction, guest_pc, next, vd, vm));
+    SSE_TRY(lower_sse_packed_shift(instruction, guest_pc, next, vd, vm, mmx, &writeback, crypto_state));
+    SSE_TRY(lower_sse_move_lane(instruction, next, vd, vm));
+    SSE_TRY(lower_sse_bitwise(instruction, next, vd, vm, mmx));
+    SSE_TRY(lower_sse_two_source_shuffle(instruction, next, vd, vm, mmx));
+    SSE_TRY(lower_sse_shuffle(instruction, next, vd, vm, mmx));
+    SSE_TRY(lower_sse_packed_binary(instruction, next, vd, vm, mmx));
+    SSE_TRY(lower_sse_widening_multiply(instruction, next, vd, vm, mmx));
+    SSE_TRY(lower_sse_float_unpack(instruction, next, vd, vm, mmx));
+    SSE_TRY(lower_sse_packed_double_integer(instruction, next, vd, vm));
+    SSE_TRY(lower_sse_unpack(instruction, next, vd, vm, mmx));
+    SSE_TRY(lower_sse_saturating_pack(instruction, next, vd, vm, mmx));
+    if (instruction->op == 0xD7 || instruction->op == 0x50) {
+        writeback = -1;
+        SSE_TRY(lower_sse_sign_mask(instruction, vm, mmx));
+    }
+    if (lower_mmx_fp_conversion(instruction, next, vd, vm) == TX_NEXT) return TX_NEXT;
+    SSE_TRY(lower_sse_integer_to_scalar(instruction, guest_pc, next, vd));
+    SSE_TRY(lower_sse_scalar_to_integer(instruction, guest_pc, next, vm));
+    SSE_TRY(lower_sse_minmax(instruction, guest_pc, next, vd, vm));
+    SSE_TRY(lower_sse_float_arithmetic(*instruction, guest_pc, next, vd, vm));
+    SSE_TRY(lower_sse_precision_conversion(*instruction, guest_pc, next, vd, vm));
+    SSE_TRY(lower_sse_word_lane(instruction, guest_pc, next, vd, vm, mmx, &writeback));
+    SSE_TRY(lower_sse_compare(*instruction, guest_pc, next, vd, vm));
+    SSE_TRY(lower_sse_flag_compare(*instruction, guest_pc, next, vd, vm));
+    SSE_TRY(lower_sse_widening_integer(instruction, next, vd, vm, mmx));
+    SSE_TRY(lower_sse_packed_conversion(*instruction, next, vd, vm));
+    SSE_TRY(lower_sse_nontemporal_store(instruction, guest_pc, next, vd, vm));
+#undef SSE_TRY
+    return TX_FALL;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6421,101 +6472,13 @@ static void *translate_block(uint64_t gpc) {
             // ===== two-byte (0F xx) =====
             int two_byte_boundary_result = lower_two_byte_boundary(&I, gpc, next);
             if (two_byte_boundary_result == TX_BREAK) break;
-            // ===== SSE / SSE2 (guest xmm0..15 == host v0..v15) =====
-            // mandatory prefix selects the variant: 66=packed-int/double, F3=scalar-single,
-            // F2=scalar-double, none=packed-single. reg/rm fields index xmm directly.
-            mark_vdirty(); // SSE lowering writes guest xmm (v0..v15) -> mark cpu->V dirty
-                int handled = 1;
-                int vd = I.reg, vm = I.rm_reg;
-                // MMX = the no-prefix form of an integer-SIMD opcode: the SAME operation at 64 bits, on
-                // mm0-7, which alias v0..v7's low halves here (see interp.c's register-file comment). Two
-                // things carry the width: g_ldr_vec_ea makes the memory operand an 8-byte load, and
-                // `mmx_wb` narrows the destination on write-back. Everything between is lane-local, so it
-                // computes the right low 64 on the zero-extension and the narrow drops the rest -- the
-                // cross-lane arms (punpck, pack, pmulh, pmaddwd, pmovmskb) are the ones that instead need
-                // their own 64-bit form below. REX.R/REX.B do not extend an MMX operand, hence the mask.
-                int mmx = sse_mmx_capable(op) && !I.p66 && !I.rep && !I.repne;
-                if (mmx) {
-                    vd &= 7;
-                    vm &= 7;
-                }
-                int mmx_wb = mmx ? vd : -1; // vector register the 64-bit write-back must narrow, or -1
-                int move_result = lower_sse_moves(&I, gpc, next, vd, vm, mmx);
-                if (move_result == TX_BREAK) break;
-                if (move_result == TX_NEXT) {
-                    gpc = next;
-                    continue;
-                }
-                int horizontal_result = lower_sse_horizontal(&I, gpc, next, vd, vm);
-                if (horizontal_result == TX_NEXT) {
-                    gpc = next;
-                    continue;
-                }
-                int shift_result = lower_sse_packed_shift(&I, gpc, next, vd, vm, mmx, &mmx_wb, &crypto_state);
-                if (shift_result == TX_BREAK) break;
-                if (shift_result == TX_NEXT) {
-                    if (mmx_wb >= 0) e_vmov8(mmx_wb, mmx_wb);
-                    gpc = next;
-                    continue;
-                }
-                if (lower_sse_move_lane(&I, next, vd, vm) == TX_NEXT) {
-                    // The helper emitted duplicate or low/high lane move forms.
-                } else if (lower_sse_bitwise(&I, next, vd, vm, mmx) == TX_NEXT) {
-                    // The helper emitted AND, ANDN, OR, or XOR.
-                } else if (lower_sse_two_source_shuffle(&I, next, vd, vm, mmx) == TX_NEXT) {
-                    // The helper emitted SHUFPS or SHUFPD.
-                } else if (lower_sse_shuffle(&I, next, vd, vm, mmx) == TX_NEXT) {
-                } else if (lower_sse_packed_binary(&I, next, vd, vm, mmx) == TX_NEXT) {
-                    // The helper emitted the complete lane-wise operation.
-                } else if (lower_sse_widening_multiply(&I, next, vd, vm, mmx) == TX_NEXT) {
-                    // The helper emitted the complete widening multiply operation.
-                } else if (lower_sse_float_unpack(&I, next, vd, vm, mmx) == TX_NEXT) {
-                    // The helper emitted UNPCKL/HPS or UNPCKL/HPD.
-                } else if (lower_sse_packed_double_integer(&I, next, vd, vm) == TX_NEXT) {
-                    // The helper emitted CVTDQ2PD, CVTTPD2DQ, or CVTPD2DQ.
-                } else if (lower_sse_unpack(&I, next, vd, vm, mmx) == TX_NEXT) {
-                    // The helper emitted PUNPCKL/H at MMX or XMM width.
-                } else if (lower_sse_saturating_pack(&I, next, vd, vm, mmx) == TX_NEXT) {
-                    // The helper emitted PACKUSWB, PACKSSWB, or PACKSSDW.
-                } else if (op == 0xD7) {
-                    mmx_wb = -1;
-                    (void)lower_sse_sign_mask(&I, vm, mmx);
-                } else if (lower_mmx_fp_conversion(&I, next, vd, vm) == TX_NEXT) {
-                    mmx_wb = -1;
-                } else if (lower_sse_integer_to_scalar(&I, gpc, next, vd) == TX_NEXT) {
-                    // The helper emitted CVTSI2SS/CVTSI2SD and preserved upper destination lanes.
-                } else if (lower_sse_scalar_to_integer(&I, gpc, next, vm) == TX_NEXT) {
-                    // The helper emitted scalar float-to-integer conversion and exception semantics.
-                } else if (lower_sse_minmax(&I, gpc, next, vd, vm) == TX_NEXT) {
-                    // The helper emitted packed or scalar MIN/MAX with x86 NaN and signed-zero semantics.
-                } else if (lower_sse_float_arithmetic(I, gpc, next, vd, vm) == TX_NEXT) {
-                    // The helper emitted the complete packed or scalar floating-point operation.
-                } else if (lower_sse_precision_conversion(I, gpc, next, vd, vm) == TX_NEXT) {
-                    // The helper emitted the scalar or packed precision conversion.
-                } else if (lower_sse_word_lane(&I, gpc, next, vd, vm, mmx, &mmx_wb) == TX_NEXT) {
-                    // The helper emitted PINSRW or PEXTRW.
-                } else if (lower_sse_compare(I, gpc, next, vd, vm) == TX_NEXT) {
-                    // The helper emitted the complete packed or scalar comparison.
-                } else if (lower_sse_flag_compare(I, gpc, next, vd, vm) == TX_NEXT) {
-                    // The helper emitted COMIS/UCOMIS and published its EFLAGS result.
-                } else if (lower_sse_widening_integer(&I, next, vd, vm, mmx) == TX_NEXT) {
-                    // The helper emitted PMULUDQ or PSADBW.
-                } else if (op == 0x50) {
-                    (void)lower_sse_sign_mask(&I, vm, mmx);
-                } else if (lower_sse_packed_conversion(I, next, vd, vm) == TX_NEXT) {
-                    // The helper emitted the packed integer/float conversion.
-                } else if (lower_sse_nontemporal_store(&I, gpc, next, vd, vm) == TX_NEXT) {
-                    // The helper emitted the explicit or implicit-destination store.
-                } else
-                    handled = 0;
-                if (handled) {
-                    // MMX write-back: mm is 64 bits, so drop bits 127:64 that the arms above computed at
-                    // NEON's 128-bit width. Without this a `paddb %mm0,%mm0` clobbers xmm0's high half,
-                    // which the aliasing register model makes guest-visible.
-                    if (mmx_wb >= 0) e_vmov8(mmx_wb, mmx_wb);
-                    gpc = next;
-                    continue;
-                }
+            mark_vdirty();
+            int sse_result = lower_sse_family(&I, gpc, next, &crypto_state);
+            if (sse_result == TX_NEXT) {
+                gpc = next;
+                continue;
+            }
+            if (sse_result == TX_BREAK) break;
             int system_query_result = lower_system_query(&I, next);
             if (system_query_result == TX_NEXT) {
                 gpc = next;
