@@ -75,12 +75,19 @@ fn normalize_declared_macro_lines(original: &str, source: &str) -> String {
 
 fn normalize_named_registers(source: &str) -> String {
     let mut normalized = source.as_bytes().to_vec();
-    let mut offset = 0;
-    while let Some(relative) = source[offset..].find("__asm__(\"") {
-        let start = offset + relative;
-        let Some(close) = source[start..].find("\")").map(|close| start + close + 2) else { break };
-        normalized[start..close].fill(b' ');
-        offset = close;
+    for spelling in ["__asm__(\"", "asm(\""] {
+        let mut offset = 0;
+        while let Some(relative) = source[offset..].find(spelling) {
+            let start = offset + relative;
+            let line_start = source[..start].rfind('\n').map_or(0, |line| line + 1);
+            if !source[line_start..start].contains("register ") {
+                offset = start + spelling.len();
+                continue;
+            }
+            let Some(close) = source[start..].find("\")").map(|close| start + close + 2) else { break };
+            normalized[start..close].fill(b' ');
+            offset = close;
+        }
     }
     String::from_utf8(normalized).expect("normalization preserves UTF-8")
 }
@@ -831,6 +838,18 @@ mod test {
     fn parser_accepts_gnu_named_register_declaration() {
         let source = "void run(void) { register unsigned long value __asm__(\"r15\") = 1; }\n";
         assert!(parse(Path::new("register.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_short_gnu_named_register_spelling() {
+        let source = "void run(void) { register unsigned long value asm(\"x0\") = 1; }\n";
+        assert!(parse(Path::new("register.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_does_not_consume_inline_assembly_as_a_named_register() {
+        let source = "void run(void) { asm(\"instruction %0\" : : \"r\"(1)); }\n";
+        assert!(parse(Path::new("assembly.c"), source).is_ok());
     }
 
     #[test]
