@@ -77,6 +77,8 @@ void e_str(int source, int base, int offset);
 void e_ldr(int destination, int base, int offset);
 void e_uxt(int destination, int source, int width);
 void e_rrr(uint32_t instruction, int destination, int left, int right, int sixty_four_bit, int shift);
+void e_mul(int destination, int left, int right, int sixty_four_bit);
+void e_smulh(int destination, int left, int right);
 void e_shv(uint32_t instruction, int destination, int source, int count, int sixty_four_bit);
 void e_ror_i(int destination, int source, int shift, int sixty_four_bit);
 void e_rot_flags_cl(int result, int kind, int width);

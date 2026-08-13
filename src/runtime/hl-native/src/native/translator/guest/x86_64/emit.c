@@ -512,7 +512,7 @@ void e_shv(uint32_t base32, int rd, int rn, int rm, int sf) {
     emit32(base32 | (sf ? 0x80000000u : 0) | (rm << 16) | (rn << 5) | rd);
 }
 
-static void e_mul(int rd, int rn, int rm, int sf) {
+void e_mul(int rd, int rn, int rm, int sf) {
     emit32((sf ? 0x9B007C00u : 0x1B007C00u) | (rm << 16) | (rn << 5) | rd);
 }
 
@@ -520,7 +520,7 @@ static void e_umulh(int rd, int rn, int rm) {
     emit32(0x9BC07C00u | (rm << 16) | (rn << 5) | rd);
 }
 
-static void e_smulh(int rd, int rn, int rm) {
+void e_smulh(int rd, int rn, int rm) {
     emit32(0x9B407C00u | (rm << 16) | (rn << 5) | rd);
 }
 
