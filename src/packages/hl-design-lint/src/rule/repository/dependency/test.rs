@@ -96,6 +96,17 @@ fn rejects_unresolved_inherited_dependency() {
 }
 
 #[test]
+fn rejects_duplicate_package_names() {
+    let root = fixture();
+    package(&root, "foundation", "shared", "");
+    package(&root, "services", "shared", "");
+    let workspace = Workspace::load([root.join("src")]).unwrap();
+    let error = Direction::new(policy()).check(&workspace).unwrap_err();
+    assert!(error.to_string().contains("duplicate package name"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn accepts_dependency_permitted_by_layer_policy() {
     let root = fixture();
     package(&root, "foundation", "clock", "");

@@ -134,18 +134,23 @@ impl Graph {
                 continue;
             }
             let dependencies = dependencies(&document, &manifest, &workspace_dependencies)?;
-            packages.insert(
-                name.to_owned(),
-                Package {
-                    name: name.to_owned(),
-                    layer: layer_directory(&manifest)
-                        .and_then(|directory| policy.layer(directory))
-                        .map(|layer| layer.name.clone()),
-                    manifest,
-                    text,
-                    dependencies,
-                },
-            );
+            let package = Package {
+                name: name.to_owned(),
+                layer: layer_directory(&manifest)
+                    .and_then(|directory| policy.layer(directory))
+                    .map(|layer| layer.name.clone()),
+                manifest,
+                text,
+                dependencies,
+            };
+            if let Some(previous) = packages.insert(name.to_owned(), package) {
+                let duplicate = &packages[name].manifest;
+                return Err(LintError::configuration(format!(
+                    "duplicate package name {name:?} in {} and {}",
+                    previous.manifest.display(),
+                    duplicate.display()
+                )));
+            }
         }
         let roots = paths
             .iter()
