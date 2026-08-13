@@ -506,9 +506,9 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         }
     }
     switch (nr) {
-#include "net/endpoint.c"
-#include "net/data.c"
-#include "net/message.c"
+#include "net/endpoint.inc"
+#include "net/data.inc"
+#include "net/message.inc"
     default: return 0;
     }
     return svc_done(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done
