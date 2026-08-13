@@ -53,7 +53,9 @@ This is the authoritative checklist for the C-primary production migration. Chec
   claiming that a foreign-target library was executed.
   The Windows GNU cross-check pins the host bridge and both public-header
   consumers to x86-64 COFF, so a 32-bit object cannot satisfy the AMD64 lane;
-  it remains compile/link evidence rather than Windows runtime evidence.
+  it also compiles every Windows host-service translation unit and combines
+  them into one exact x86-64 COFF object. It remains compile/link evidence
+  rather than a complete engine DLL or Windows runtime evidence.
   That lane cross-checks both `hl-native` and its `hl-engine` Rust consumer so
   Windows-only type or composition drift cannot hide behind a leaf-crate build.
   Native macOS CI requires the installed dylib and all three launchers to be

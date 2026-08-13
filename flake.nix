@@ -814,6 +814,21 @@
               | grep -F 'file format pe-x86-64' >/dev/null
             ${windows.stdenv.cc.targetPrefix}objdump -f host-bridge.obj \
               | grep -F 'architecture: i386:x86-64' >/dev/null
+            mkdir windows-host-objects
+            for source in src/runtime/hl-native/src/native/host/windows/*.c; do
+              object="windows-host-objects/$(basename "''${source%.c}").obj"
+              ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
+                -Isrc/runtime/hl-native/src/native \
+                -Isrc/runtime/hl-native/src/native/include \
+                -Isrc/runtime/hl-native/src/native/toolchain/msvc-posix/include \
+                -c "$source" -o "$object"
+              ${windows.stdenv.cc.targetPrefix}objdump -f "$object" \
+                | grep -F 'file format pe-x86-64' >/dev/null
+            done
+            ${windows.stdenv.cc.targetPrefix}ld -r windows-host-objects/*.obj \
+              -o windows-host-services.obj
+            ${windows.stdenv.cc.targetPrefix}objdump -f windows-host-services.obj \
+              | grep -F 'architecture: i386:x86-64' >/dev/null
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
               -DHL_SHARED -DHL_ABI_COMPILE_CONTRACT \
               -Isrc/runtime/hl-native/src/native/include \
@@ -848,7 +863,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows hl-native/hl-engine Rust target compile, exact x86-64 COFF host/public-consumer architecture, C/C++ public-header layout/linkage/signature checks, and ABI fixture DLL/import-library link; this is not MSVC SDK or runtime proof' \
+              'GNU Windows hl-native/hl-engine Rust target compile, every Windows host-service translation unit combined into one exact x86-64 COFF object, strict C/C++ public-header contracts, and ABI fixture DLL/import-library link; this is not the complete engine DLL, MSVC SDK, or runtime proof' \
               > "$out/evidence"
           '';
         };

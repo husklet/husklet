@@ -36,6 +36,9 @@
 
 #include_next <winternl.h>
 
+/* mingw-w64 already supplies the complete NT declarations below. */
+#if !defined(__MINGW32__)
+
 /* ---- FILE_INFORMATION_CLASS ---------------------------------------------
  * FileDirectoryInformation (1) comes from the SDK header above. */
 #define FileFullDirectoryInformation 2
@@ -243,5 +246,7 @@ typedef struct _FILE_FS_SIZE_INFORMATION {
     ULONG SectorsPerAllocationUnit;
     ULONG BytesPerSector;
 } FILE_FS_SIZE_INFORMATION, *PFILE_FS_SIZE_INFORMATION;
+
+#endif /* !defined(__MINGW32__) */
 
 #endif /* HL_MSVC_POSIX_WINTERNL_H */
