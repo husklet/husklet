@@ -79,9 +79,15 @@ fn dependency_tables<'a>(value: &'a toml::Value, output: &mut Vec<(&'a str, &'a 
 }
 
 fn local_package(specification: &toml::Value, owner_manifest: &Path) -> Result<Option<String>> {
-    let Some(path) = specification.get("path").and_then(toml::Value::as_str) else {
+    let Some(path) = specification.get("path") else {
         return Ok(None);
     };
+    let path = path.as_str().ok_or_else(|| {
+        LintError::configuration(format!(
+            "{} contains a local dependency with a non-string path",
+            owner_manifest.display()
+        ))
+    })?;
     let root = owner_manifest
         .parent()
         .ok_or_else(|| LintError::configuration(format!("{} has no parent directory", owner_manifest.display())))?
@@ -189,6 +195,21 @@ mod tests {
         .unwrap();
         let error = local_dependencies(&root.join("member/src/lib.rs")).unwrap_err();
         assert!(error.to_string().contains("missing/Cargo.toml"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_non_string_local_dependency_path() {
+        let root = std::env::temp_dir().join(format!("lint-model-local-path-type-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("member/src")).unwrap();
+        fs::write(
+            root.join("member/Cargo.toml"),
+            "[package]\nname = \"member\"\n[dependencies]\ntarget = { path = 42 }\n",
+        )
+        .unwrap();
+        let error = local_dependencies(&root.join("member/src/lib.rs")).unwrap_err();
+        assert!(error.to_string().contains("non-string path"));
         fs::remove_dir_all(root).unwrap();
     }
 }
