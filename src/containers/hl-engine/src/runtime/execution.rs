@@ -271,7 +271,7 @@ impl CheckpointControl {
     fn capture(&self, engine: &hl_native::Engine, isa: crate::activation::GuestIsa) -> Result<(), EngineError> {
         use std::time::{Duration, Instant};
 
-        self.transport.bump();
+        let _ = self.transport.bump();
         let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
             crate::activation::GuestIsa::Aarch64 => 1,
             crate::activation::GuestIsa::X86_64 => 2,
