@@ -21,7 +21,7 @@ impl Peer {
         timeout: std::time::Duration,
         reconnect: impl Fn() -> io::Result<std::os::unix::net::UnixStream>,
     ) -> io::Result<()> {
-        self.request(signal)?;
+        self.signal_group(signal)?;
         self.wait(timeout, reconnect)
     }
 
@@ -43,7 +43,7 @@ impl Peer {
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
-                peer.signal(libc::SIGKILL)?;
+                peer.signal_group(libc::SIGKILL)?;
                 return Self::wait_offline(reconnect, std::time::Duration::from_secs(2));
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -77,6 +77,10 @@ impl Peer {
 
     fn signal(&self, signal: libc::c_int) -> io::Result<()> {
         ffi::signal(self.process, signal)
+    }
+
+    fn signal_group(&self, signal: libc::c_int) -> io::Result<()> {
+        ffi::signal_group(self.process, signal)
     }
 
     pub(super) fn offline(error: &io::Error) -> bool {
@@ -140,16 +144,71 @@ mod ffi {
 
     #[hl_design::classify(domain = "unix")]
     pub(super) fn signal(process: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
-        // SAFETY: the kernel supplied this positive peer PID for a connected Unix socket. `kill`
-        // receives values only, retains no Rust storage, invokes no callback, and cannot unwind.
-        if unsafe { libc::kill(process, signal) } == 0 {
-            return Ok(());
+        signal_process_with(process, signal, |target, signal| {
+            // SAFETY: the target and signal are integer process identities. `kill` retains no
+            // Rust storage, invokes no callback, and cannot unwind.
+            let status = unsafe { libc::kill(target, signal) };
+            if status == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        })
+    }
+
+    pub(super) fn signal_group(process: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
+        signal_group_with(process, signal, |target, signal| {
+            // SAFETY: as above; a negative target addresses the owner process group.
+            let status = unsafe { libc::kill(target, signal) };
+            if status == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        })
+    }
+
+    fn signal_process_with(
+        process: libc::pid_t,
+        signal: libc::c_int,
+        mut deliver: impl FnMut(libc::pid_t, libc::c_int) -> io::Result<()>,
+    ) -> io::Result<()> {
+        validate(process)?;
+        match deliver(process, signal) {
+            Ok(()) => Ok(()),
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+            Err(error) => Err(error),
         }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
+    }
+
+    fn signal_group_with(
+        process: libc::pid_t,
+        signal: libc::c_int,
+        mut deliver: impl FnMut(libc::pid_t, libc::c_int) -> io::Result<()>,
+    ) -> io::Result<()> {
+        validate(process)?;
+        // Domain and daemon owners call setsid, making their verified PID the process-group ID.
+        // Address the group so terminating its leader cannot strand helpers. A non-group peer
+        // falls back to its kernel-verified PID.
+        match deliver(-process, signal) {
+            Ok(()) => Ok(()),
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => match deliver(process, signal) {
+                Ok(()) => Ok(()),
+                Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        }
+    }
+
+    fn validate(process: libc::pid_t) -> io::Result<()> {
+        if process > 1 {
             Ok(())
         } else {
-            Err(error)
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid socket owner identity",
+            ))
         }
     }
 
@@ -205,7 +264,7 @@ mod ffi {
 
 #[cfg(test)]
 mod tests {
-    use super::Peer;
+    use super::{ffi, Peer};
 
     #[test]
     fn unix_peer_identity_comes_from_the_kernel() {
@@ -218,5 +277,42 @@ mod tests {
 
         assert_eq!(Peer::new(&client).unwrap().process, std::process::id() as i32);
         drop(accepted);
+    }
+
+    #[test]
+    fn session_owner_signal_targets_the_owned_group() {
+        let mut calls = Vec::new();
+        ffi::signal_group_with(42, libc::SIGTERM, |target, signal| {
+            calls.push((target, signal));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, [(-42, libc::SIGTERM)]);
+    }
+
+    #[test]
+    fn control_request_targets_only_the_verified_peer() {
+        let mut calls = Vec::new();
+        ffi::signal_process_with(42, libc::SIGHUP, |target, signal| {
+            calls.push((target, signal));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, [(42, libc::SIGHUP)]);
+    }
+
+    #[test]
+    fn non_group_peer_falls_back_to_the_verified_process() {
+        let mut calls = Vec::new();
+        ffi::signal_group_with(42, libc::SIGKILL, |target, signal| {
+            calls.push((target, signal));
+            if target < 0 {
+                Err(io::Error::from_raw_os_error(libc::ESRCH))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        assert_eq!(calls, [(-42, libc::SIGKILL), (42, libc::SIGKILL)]);
     }
 }

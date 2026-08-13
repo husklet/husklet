@@ -5,6 +5,43 @@ use hl::config::{TerminalPreferences, WorkspaceConfig};
 use hl_ws::Arch;
 use hl_ws_term::CursorShape;
 
+#[test]
+fn removal_stops_the_runtime_before_deleting_its_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("workspaces.conf");
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store
+        .upsert(WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64))
+        .unwrap();
+    let observed = std::cell::Cell::new(false);
+
+    remove_workspace(&mut store, "demo", |workspace| {
+        assert_eq!(workspace.name, "demo");
+        assert!(WorkspaceStore::load(&path).unwrap().get("demo").is_some());
+        observed.set(true);
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(observed.get());
+    assert!(WorkspaceStore::load(path).unwrap().get("demo").is_none());
+}
+
+#[test]
+fn failed_runtime_teardown_preserves_the_workspace_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("workspaces.conf");
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store
+        .upsert(WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64))
+        .unwrap();
+
+    let error = remove_workspace(&mut store, "demo", |_| Err(std::io::Error::other("still running"))).unwrap_err();
+
+    assert_eq!(error.to_string(), "still running");
+    assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
+}
+
 // A captured `ps -axo pid=,ppid=,etime=,command=` slice: Husklet (43405) with two launcher shells for
 // the `general` workspace, one of which (43444) has a guest fork (90001); plus an orphaned launcher
 // (16020, ppid 1), an UNRELATED workspace launcher (`ubuntu-dev`), and noise that must be excluded.

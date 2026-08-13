@@ -148,7 +148,13 @@ fn main() -> glib::ExitCode {
         }
         let quit = gio::SimpleAction::new("quit", None);
         let app = application.clone();
-        quit.connect_activate(move |_, _| app.quit());
+        // Route quit through each window's close contract. Workspace windows checkpoint or kill
+        // their domain and wait for teardown; `Application::quit` bypasses close-request entirely.
+        quit.connect_activate(move |_, _| {
+            for window in app.windows() {
+                window.close();
+            }
+        });
         application.add_action(&quit);
         application.set_accels_for_action("app.quit", &["<Primary>q"]);
 
@@ -356,12 +362,9 @@ impl Application {
                 let workspace_name = name.clone();
                 RemoveWorkspace::new(name.clone()).present(parent.as_ref(), move || {
                     let mut store = WorkspaceStore::load(Home::current().workspaces_config())?;
-                    if !store.remove(&workspace_name)? {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            format!("Workspace {workspace_name:?} no longer exists."),
-                        ));
-                    }
+                    remove_workspace(&mut store, &workspace_name, |workspace| {
+                        hl::runtime::domain::Domain::new(workspace).close(hl::runtime::domain::Close::Kill)
+                    })?;
                     Application(app.clone()).refresh_workspace_list(&list);
                     Ok(())
                 });
@@ -393,6 +396,30 @@ impl Application {
 
         row.set_child(Some(&bx));
         row
+    }
+}
+
+fn remove_workspace(
+    store: &mut WorkspaceStore,
+    name: &str,
+    close: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let workspace = store.get(name).cloned().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Workspace {name:?} no longer exists."),
+        )
+    })?;
+    // Keep the persisted entry until teardown succeeds: it is the authority needed to locate and
+    // verify the runtime. Removing it first makes a live domain impossible to reclaim safely.
+    close(&workspace)?;
+    if store.remove(name)? {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Workspace {name:?} no longer exists."),
+        ))
     }
 }
 
