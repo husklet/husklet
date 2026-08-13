@@ -14,6 +14,7 @@
 #include "lower/trace.h"
 #include "lower/legacy.h"
 #include "lower/sse.h"
+#include "lower/simd.h"
 #include "lower/x87.h"
 #include "lower/x87_decode.h"
 
@@ -190,224 +191,8 @@ void hl_x86_legacy_direction_set(enum hl_x86_direction direction) { g_df = direc
 #include "lower/branch.h"
 #include "lower/core.h"
 
-// Gather the 16 byte-MSBs of vm into the low 16 bits of GPR `dst` (the proven sse2neon
-// _mm_movemask_epi8 cascade). Scratch: host v17 and GPR x16 -- so `dst` must not be 16 and the
-// caller must not need v17 preserved. Used by the PCMP*STR* fast path below (movemask of the
-// pcmpeqb / cmeq-zero lanes) and mirrors the pmovmskb lowering.
-static void emit_pmovmask(int vm, int dst) {
-    e_vshr_imm(17, vm, 8, 7, 0);                         // ushr v17.16b, vm.16b, #7
-    emit32(0x6F001400u | (25u << 16) | (17 << 5) | 17);  // usra v17.8h, v17.8h, #7
-    emit32(0x6F001400u | (50u << 16) | (17 << 5) | 17);  // usra v17.4s, v17.4s, #14
-    emit32(0x6F001400u | (100u << 16) | (17 << 5) | 17); // usra v17.2d, v17.2d, #28
-    emit32(0x0E003C00u | (1u << 16) | (17 << 5) | 16);   // umov w16, v17.b[0]
-    emit32(0x0E003C00u | (17u << 16) | (17 << 5) | dst); // umov wdst, v17.b[8]
-    e_rrr(A_ORR, dst, 16, dst, 0, 8);                    // orr wdst, w16, wdst, lsl #8
-}
-
-// PCMPISTRI (0F3A 63), implicit-length EQUAL-EACH byte form -- the exact idiom glibc's SSE4.2
-// strcmp/strncmp run once per 16 bytes. Emitting it inline (no dispatcher round-trip, no C
-// softmulator, no full spill/reload) is ~20x faster than the R_SSE3B exit on the same data.
-// Bit-for-bit mirror of avx.c's sse42_ilen/sse42_intres(agg=2)/sse42_index/sse42_flags, with the
-// imm8 control (polarity bits [5:4], index-direction bit 6) resolved at TRANSLATE time. `av`/`bv`
-// are the host vector regs holding operand1/operand2 (guest xmm == host v). Writes guest RCX (host
-// x1), ARM NZCV (+ cpu->nzcv membank), and cpu->pf/af. Scratch: x16,x17,x19..x26,x20; v17..v21.
-static void emit_pcmpistri_eqeach_byte(int av, int bv, int imm) {
-    int neg = imm & 0x10, masked = imm & 0x20, msb = imm & 0x40;
-    // per-byte comparisons into vector scratch v18/v19/v21 (v17 is the movemask scratch)
-    emit32(0x6E208C00u | (bv << 16) | (av << 5) | 18); // cmeq v18.16b, av, bv  -> op1[i]==op2[i]
-    emit32(0x4E209800u | (av << 5) | 19);              // cmeq v19.16b, av, #0  -> op1[i]==0 (nulls)
-    emit32(0x4E209800u | (bv << 5) | 21);              // cmeq v21.16b, bv, #0  -> op2[i]==0 (nulls)
-    emit_pmovmask(18, 19);                             // w19 = eqmask
-    emit_pmovmask(19, 21);                             // w21 = op1 null mask
-    emit_pmovmask(21, 24);                             // w24 = op2 null mask
-    // la/lb = index of first null (implicit length), or 16 when none: ctz(mask | 0x10000)
-    e_movz(16, 1, 1);               // x16 = 0x10000 (sentinel bit @16)
-    e_rrr(A_ORR, 17, 21, 16, 0, 0); // w17 = op1nulls | 0x10000
-    e_rbit(17, 17, 0);
-    e_clz(22, 17, 0);               // la = ctz(...) -> w22
-    e_rrr(A_ORR, 17, 24, 16, 0, 0); // w17 = op2nulls | 0x10000
-    e_rbit(17, 17, 0);
-    e_clz(23, 17, 0); // lb -> w23
-    // valid-lane masks va=(1<<la)-1, vb=(1<<lb)-1  (la,lb in [0,16] -> fits 32-bit, 16 -> 0xFFFF)
-    e_movz(16, 1, 0); // w16 = 1
-    e_shv(S_LSLV, 25, 16, 22, 0);
-    e_subi(25, 25, 1, 0); // va -> w25
-    e_shv(S_LSLV, 26, 16, 23, 0);
-    e_subi(26, 26, 1, 0); // vb -> w26
-    // equal-each IntRes1 = (eqmask & va & vb) | ~(va|vb)   (both-valid: use eq; both-invalid: 1; else 0)
-    e_rrr(A_AND, 17, 19, 25, 0, 0); // w17 = eqmask & va
-    e_rrr(A_AND, 17, 17, 26, 0, 0); // w17 = eqmask & (va&vb)
-    e_rrr(A_ORR, 16, 25, 26, 0, 0); // w16 = va | vb
-    e_rrr(A_ORN, 17, 17, 16, 0, 0); // w17 = (eq & both_valid) | ~(va|vb)
-    e_uxt(17, 17, 2);               // IntRes1 &= 0xFFFF (uxth: width in BYTES)
-    // polarity (imm[5:4]) -> IntRes2 (w17); imm resolved at translate time
-    if (neg) {
-        if (masked)
-            e_rrr(A_EOR, 17, 17, 26, 0, 0); // negate only valid op2 lanes (^ vb)
-        else {
-            e_movz(16, 0xFFFF, 0);
-            e_rrr(A_EOR, 17, 17, 16, 0, 0); // negate all 16 lanes
-        }
-        e_uxt(17, 17, 2); // uxth: mask IntRes2 to 16 bits
-    }
-    // index (imm[6]) -> guest RCX (host x1), zero-extended
-    if (!msb) {           // least-significant set bit, else n(=16)
-        e_movz(16, 1, 1); // x16 = 0x10000
-        e_rrr(A_ORR, 16, 17, 16, 0, 0);
-        e_rbit(16, 16, 0);
-        e_clz(1, 16, 0); // RCX = ctz(IntRes2 | 0x10000) -> 16 when IntRes2==0
-    } else {             // most-significant set bit, else n
-        e_clz(16, 17, 0);
-        e_movz(25, 31, 0);
-        e_rrr(A_SUB, 16, 25, 16, 0, 0); // w16 = 31 - clz (msb index; -1 when IntRes2==0)
-        e_subi_s(31, 17, 0, 0);         // cmp IntRes2, #0
-        e_movz(25, 16, 0);
-        e_csel(1, 25, 16, 0, 0); // RCX = (IntRes2==0) ? 16 : msb
-    }
-    // flags: N=SF=(la<16), Z=ZF=(lb<16), C=(NOT x86CF)=(IntRes2==0), V=OF=IntRes2&1; PF=0, AF=0
-    e_movz(20, 0, 0);
-    e_subi_s(31, 22, 16, 0);
-    e_cset(16, 3, 0);
-    e_rrr(A_ORR, 20, 20, 16, 0, 31); // SF<<31 (LO: la<16)
-    e_subi_s(31, 23, 16, 0);
-    e_cset(16, 3, 0);
-    e_rrr(A_ORR, 20, 20, 16, 0, 30); // ZF<<30 (lb<16)
-    e_subi_s(31, 17, 0, 0);
-    e_cset(16, 0, 0);
-    e_rrr(A_ORR, 20, 20, 16, 0, 29); // (NOT CF)<<29 (EQ: IntRes2==0)
-    e_movz(25, 1, 0);
-    e_rrr(A_AND, 16, 17, 25, 0, 0);
-    e_rrr(A_ORR, 20, 20, 16, 0, 28); // OF<<28 (IntRes2 bit0)
-    e_str(20, 28, OFF_NZCV);
-    emit32(0xD51B4200u | 20); // msr nzcv, x20
-    e_movz(16, 1, 0);
-    e_str(16, 28, OFF_PF); // cpu->pf = 1  => x86 PF = 0 (matches sse42_flags)
-    e_str(31, 28, OFF_AF); // cpu->af = 0
-}
-
-// SSE2 variable-count packed shift (PSLLW/D/Q, PSRLW/D/Q, PSRAW/D by xmm/m): shift every
-// `esize`-bit lane of `vn` by the SCALAR count held in the low 64 bits of `vs`, result -> `vd`.
-// x86 saturates the count: any count >= esize yields 0 (logical) or the sign bit replicated
-// (arithmetic right). NEON USHL/SSHL take a per-lane signed amount from the low byte of each
-// lane, so we clamp the (unsigned) count to esize -- which is < 128, keeping the signed byte
-// valid -- and DUP it across all lanes (negated for a right shift).
-void e_sse_var_shift(int vd, int vn, int vs, int esize, int left, int arith) {
-    uint32_t sz = esize == 16 ? 1u : esize == 32 ? 2u : 3u; // NEON element size field
-    uint32_t imm5 = esize == 16 ? 2u : esize == 32 ? 4u : 8u;
-    emit32(0x4E083C00u | (vs << 5) | 16); // umov x16, vs.d[0]   (the 64-bit count)
-    e_movconst(19, esize);
-    // The count clamp needs a flag-setting compare, but the LIVE ARM NZCV may be carrying the
-    // guest's deferred x86 flags (lazy-flag producer not yet materialized) -- this instruction is
-    // not a guest flag producer and must not disturb them. Save/restore around the compare.
-    // Without this, `adcb`; `psraw %xmm,%xmm`; `rclb %cl,%bl` fed the carry consumer a carry bit
-    // manufactured by the clamp instead of the one the adcb produced.
-    emit32(0xD53B4200u | 22);                                        // mrs x22, nzcv
-    e_rrr(A_SUBS, 31, 16, 19, 1, 0);                                 // cmp x16, esize
-    e_csel(16, 19, 16, 8 /*HI*/, 1);                                 // x16 = (count u> esize) ? esize : count
-    emit32(0xD51B4200u | 22);                                        // msr nzcv, x22
-    if (!left) e_rrr(A_SUB, 16, 31, 16, 1, 0);                       // right shift -> negative NEON amount (neg x16)
-    emit32(0x4E000C00u | (imm5 << 16) | (16 << 5) | 17);             // dup v17.<T>, w16/x16
-    uint32_t shl = (arith ? 0x4E204400u : 0x6E204400u) | (sz << 22); // SSHL (arith) / USHL
-    emit32(shl | (17 << 16) | (vn << 5) | vd);                       // [s|u]shl vd, vn, v17
-}
-
-// x86 default/indefinite-NaN sign fixup for the inline SSE FP arithmetic (add/sub/mul/div/sqrt).
-// When such an op GENERATES a NaN with NO NaN input (0/0, inf/inf, 0*inf, inf-inf, sqrt(-1)), x86
-// yields the QNaN floating-point INDEFINITE whose SIGN BIT IS SET: single 0xFFC00000, double
-// 0xFFF8000000000000. ARM's FDIV/FADD/FSUB/FMUL/FSQRT instead produce the DEFAULT NaN with sign CLEAR
-// (0x7FC00000 / 0x7FF8000000000000) -- identical payload, opposite sign. A NaN PROPAGATED from an input
-// keeps that input's sign on BOTH ISAs, so we must fix up ONLY generated default-NaNs, identified as
-// "result is NaN AND no input is NaN". Branchless: v20/v21 scratch, per-lane so scalar and packed share
-// one path (scalar upper lanes are 0.0 in the result -> never flagged). Set NOXFPDNAN to disable (A/B).
 static int fpdnan_on(void) {
     return 1;
-}
-
-// PRE (emit BEFORE the arithmetic, while vd still holds src1): v20 <- per-lane PRESIGN mask =
-// (x86 indefinite sign bit) on lanes whose inputs are ALL non-NaN, else 0. Building the sign here
-// (off the arithmetic's result-dependency chain, overlapped with the long FP-op latency) shortens
-// POST to a 2-op chain from the result. two_in: 1 for add/sub/mul/div (src1=vd, src2=s); 0 for sqrt.
-// SHL.T #(esize-1) turns an all-ones "not-NaN" lane into exactly the sign bit (0x8000...), a 0 lane
-// stays 0 -- no constant/DUP needed.
-// NaN-INPUT gate for the PACKED SSE3 horizontal / addsub family (0F 7C haddp*, 0F 7D hsubp*,
-// 0F D0 addsubp*), the exact analogue of the inline gate the vertical 0F 58/59/5C/5E arithmetic
-// carries. Those NEON sequences (UZP1/UZP2 + FADD/FSUB, or FSUB/FADD + BSL) are bit-exact with x86
-// for finite inputs and for a lane with a SINGLE NaN input, but when a result lane has TWO NaN
-// inputs ARM picks SNaN-first-else-src1 where x86 picks QNaN-first-else-second-operand -- the exact
-// mirror. Reproducing x86's per-lane priority inline would cost more than the op itself, so gate:
-// if ANY lane of either source is a NaN, exit to the x86-exact C softmulator (R_SSE3B ->
-// hl_x86_sse_run, which grew coverage for these three opcodes alongside this gate). Real FP code
-// has no NaN inputs, so the inline path below is untouched. Emit while src1 is still live in vd.
-// Scratch: v24/v25 and x16 (all dead here -- s is v16 at most, a different register file).
-static void emit_nan_input_gate(int vd, int s, int dbl, uint64_t gpc);
-
-static void emit_dnan_pre(int vd, int s, int two_in, int dbl) {
-    uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u; // FCMEQ Vd.2d/.4s (all-ones per lane where NOT NaN)
-    unsigned immhb = dbl ? (64u + 63u) : (32u + 31u);
-    if (two_in) {
-        emit32(EQ | (vd << 16) | (vd << 5) | 20); // v20 = (src1 == src1)
-        emit32(EQ | (s << 16) | (s << 5) | 21);   // v21 = (src2 == src2)
-        e_v3(0x4E201C00u, 20, 20, 21);            // v20 = in_notnan = src1nn & src2nn  (AND.16b)
-    } else {
-        emit32(EQ | (s << 16) | (s << 5) | 20); // v20 = (src == src)
-    }
-    emit32(0x4F005400u | (immhb << 16) | (20 << 5) | 20); // v20 = PRESIGN (SHL v20.T, v20, #esize-1)
-}
-
-// POST (emit AFTER the arithmetic; vd = result): OR the x86 indefinite sign into lanes that are a
-// GENERATED default NaN (result is NaN AND no input was NaN). Payload already matches x86, so only the
-// sign bit must be set. Critical path from the result is just 2 ops: FCMEQ then BIC (the ORR is off the
-// vd->vd forwarding path only by the OR itself). BIC(PRESIGN, res_notnan) keeps the sign bit only on
-// lanes where the result IS NaN (res_notnan==0), i.e. exactly the freshly generated default-NaN lanes.
-static void emit_dnan_post(int vd, int dbl, int packed) {
-    uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u;
-    if (packed) {
-        // Packed: keep the branchless per-lane fixup (a generated NaN can appear in any lane, and a
-        // scalar FCMP cannot gate all lanes). Unchanged this round.
-        emit32(EQ | (vd << 16) | (vd << 5) | 21); // v21 = (res == res)  (all-ones where result NOT NaN)
-        e_v3(0x4E601C00u, 20, 20, 21);            // v20 = PRESIGN & ~res_notnan = sign on generated-NaN lanes
-        e_v3(0x4EA01C00u, vd, vd, 20);            // vd |= sign mask  (ORR.16b)
-        return;
-    }
-    // Scalar: the branchless ORR sat on the loop-carried vd->vd FP forwarding chain (~+12 cyc/iter). A
-    // NaN input already routes to the C softmulator (NaN-INPUT gate above), so on this inline path a NaN
-    // result can ONLY be a GENERATED NaN (0*inf, inf-inf, ...) -- extremely rare. Hoist the whole fixup
-    // behind a predicted-not-taken branch keyed on the scalar result: FCMP dst,dst sets V iff dst is NaN.
-    // The common (non-NaN) path is now just FCMP+b.vc, neither of which writes vd, so the fixup is off the
-    // forwarding chain entirely. The taken (rare) path runs the ORIGINAL 3-op sequence verbatim, so it is
-    // bit-for-bit identical to the old branchless output (which was a no-op whenever the result was not NaN,
-    // and stamped the sign -- masking the always-zero scalar upper lane via ~res_notnan -- when it was).
-    // The FCMP below WRITES the ARM NZCV, which may still be carrying the guest's deferred x86
-    // flags (a scalar SSE op is not an x86 flag producer, so a later jcc/cmov/adc/rcl must see the
-    // flags of whatever integer instruction preceded it). Bracket the whole hoisted fixup with a
-    // save/restore so both the taken and the not-taken path leave NZCV exactly as they found it.
-    emit32(0xD53B4200u | 22);                                           // mrs x22, nzcv
-    emit32((dbl ? 0x1E602000u : 0x1E202000u) | (vd << 16) | (vd << 5)); // FCMP dst,dst  (V=1 iff dst is NaN)
-    uint32_t *p_bvc = (uint32_t *)g_cp;
-    emit32(0);                                // b.vc Lok  (NOT NaN -> skip fixup; patched below)
-    emit32(EQ | (vd << 16) | (vd << 5) | 21); // v21 = (res == res)  (all-ones where result NOT NaN)
-    e_v3(0x4E601C00u, 20, 20, 21);            // v20 = PRESIGN & ~res_notnan = sign on generated-NaN lanes
-    e_v3(0x4EA01C00u, vd, vd, 20);            // vd |= sign mask  (ORR.16b)
-    uint8_t *Lok = (uint8_t *)g_cp;
-    *p_bvc = 0x54000000u | ((uint32_t)(((Lok - (uint8_t *)p_bvc) / 4) & 0x7FFFF) << 5) | 7; // b.vc (cond VC=7)
-    emit32(0xD51B4200u | 22);                                                               // msr nzcv, x22
-}
-
-// See the forward declaration above for the rationale. Packed-only: every 0F 7C/7D/D0 form is packed.
-static void emit_nan_input_gate(int vd, int s, int dbl, uint64_t gpc) {
-    uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u; // FCMEQ .2d/.4s (all-ones per NON-NaN lane)
-    emit32(EQ | (vd << 16) | (vd << 5) | 24);      // v24 = (src1 == src1)
-    emit32(EQ | (s << 16) | (s << 5) | 25);        // v25 = (src2 == src2)
-    e_v3(0x4E201C00u, 24, 24, 25);                 // v24 = src1nn & src2nn  (AND.16b)
-    e_ext(25, 24, 24, 8);                          // fold the two 64-bit halves -> low 64 = all lanes
-    e_v3(0x4E201C00u, 24, 24, 25);
-    e_fmov_from_d(16, 24);          // x16 = lane mask (all-ones iff no NaN in ANY lane of either source)
-    e_rrr(A_ORN, 16, 31, 16, 1, 0); // x16 = ~mask (0 iff clean; nonzero iff a NaN input)
-    uint32_t *p_cbz = (uint32_t *)g_cp;
-    emit32(0);                     // cbz x16, Lfast (patched below)
-    emit_exit_const(gpc, R_SSE3B); // NaN present -> x86-exact C emulation of this instruction
-    uint8_t *Lfast = (uint8_t *)g_cp;
-    *p_cbz = 0xB4000000u | ((uint32_t)(((Lfast - (uint8_t *)p_cbz) / 4) & 0x7FFFF) << 5) | 16;
 }
 
 // ---- AVX2 FMA (vfmadd/vfmsub/vfnmadd/vfnmsub) -> NEON FMLA/FMLS ----
@@ -641,7 +426,7 @@ static int lower_vector_family(struct insn *instruction, uint64_t guest_pc, uint
             g_ldr_q_ea(16, instruction, next);
         else
             right = instruction->rm_reg;
-        emit_pcmpistri_eqeach_byte(instruction->reg, right, (int)instruction->imm);
+        hl_x86_emit_pcmpistri_eqeach_byte(instruction->reg, right, (int)instruction->imm);
         return TX_NEXT;
     }
     emit_exit_const(guest_pc, R_SSE3B);
@@ -811,12 +596,12 @@ static int lower_sse_horizontal(struct insn *instruction, uint64_t guest_pc, uin
         source = 16;
     }
     int double_precision = instruction->p66 != 0;
-    emit_nan_input_gate(vd, source, double_precision, guest_pc);
+    hl_x86_emit_nan_input_gate(vd, source, double_precision, guest_pc);
     int fix_nan = fpdnan_on();
     if (opcode == 0xD0) {
         // Compute each operation before selecting even/odd lanes. Flipping the
         // source sign before FADD would also flip an input NaN's sign.
-        if (fix_nan) emit_dnan_pre(vd, source, 1, double_precision);
+        if (fix_nan) hl_x86_emit_dnan_pre(vd, source, 1, double_precision);
         if (double_precision) {
             e_v3(0x4EE0D400u, 17, vd, source);
             e_v3(0x4E60D400u, 18, vd, source);
@@ -830,7 +615,7 @@ static int lower_sse_horizontal(struct insn *instruction, uint64_t guest_pc, uin
         }
         e_v3(0x6E601C00u, 19, 17, 18);
         e_vmov(vd, 19);
-        if (fix_nan) emit_dnan_post(vd, double_precision, 1);
+        if (fix_nan) hl_x86_emit_dnan_post(vd, double_precision, 1);
         return TX_NEXT;
     }
 
@@ -851,7 +636,7 @@ static int lower_sse_horizontal(struct insn *instruction, uint64_t guest_pc, uin
         e_v3(0x4E20D400u | size, vd, 18, 17); // HADD uses odd + even for x86 NaN selection.
     else
         e_v3(0x4EA0D400u | size, vd, 17, 18);
-    if (fix_nan) emit_dnan_post(vd, double_precision, 1);
+    if (fix_nan) hl_x86_emit_dnan_post(vd, double_precision, 1);
     return TX_NEXT;
 }
 
@@ -1215,7 +1000,7 @@ static int lower_sse_float_arithmetic(struct insn I, uint64_t guest_pc, uint64_t
             *p_cbz = cbz | ((uint32_t)(((Lfast - (uint8_t *)p_cbz) / 4) & 0x7FFFF) << 5) | 16;
         }
         int fixnan = fpdnan_on();
-        if (fixnan) emit_dnan_pre(vd, s, !unary, dbl); // capture "no input NaN" (uses v20/v21)
+        if (fixnan) hl_x86_emit_dnan_pre(vd, s, !unary, dbl); // capture "no input NaN" (uses v20/v21)
         if (packed) {                                  // vector FP: 66 -> .2d (sz bit), none -> .4s
             uint32_t d = I.p66 ? 0x00400000u : 0;
             uint32_t b = op == 0x58   ? 0x4E20D400u  // FADD
@@ -1260,7 +1045,7 @@ static int lower_sse_float_arithmetic(struct insn I, uint64_t guest_pc, uint64_t
                 emit32(b | ty | (s << 16) | (vd << 5) | 18); // FADD/... s18/d18, vd, s
         }
         int res = packed ? vd : 18;
-        if (fixnan) emit_dnan_post(res, dbl, packed); // stamp x86's negative default-NaN sign
+        if (fixnan) hl_x86_emit_dnan_post(res, dbl, packed); // stamp x86's negative default-NaN sign
         if (!packed) {
             if (dbl)
                 e_ins_d(vd, 0, 18, 0);
