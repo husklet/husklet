@@ -79,16 +79,20 @@ impl CheckpointSource for Store {
     }
 }
 
-fn plan(executable: &Path, release: &Path, option: &str) -> RuntimePlan {
+fn plan(executable: &Path, release: &Path, final_release: &Path, options_to_set: &[&str]) -> RuntimePlan {
     let mut options = Options::default();
-    options.set(option, "1", true).unwrap();
+    for option in options_to_set {
+        options.set(option, "1", true).unwrap();
+    }
     RuntimePlan {
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
-        arguments: vec![
+        arguments: [
             executable.as_os_str().as_encoded_bytes().to_vec(),
             release.as_os_str().as_encoded_bytes().to_vec(),
-        ],
+            final_release.as_os_str().as_encoded_bytes().to_vec(),
+        ]
+        .into(),
         environment: Vec::new(),
         result_path: None,
         options,
@@ -110,15 +114,31 @@ fn wait_ready(path: &Path) {
     panic!("guest process tree did not become ready");
 }
 
+fn wait_cycle_ready(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let output = std::fs::read_to_string(path).unwrap_or_default();
+        if ["CYCLE-READY 1", "CYCLE-READY 2", "CYCLE-READY 3"]
+            .iter()
+            .all(|marker| output.contains(marker))
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("restored guest process tree did not reach the second checkpoint");
+}
+
 fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
+    let final_release = temporary.path().join("final-release");
     let output = temporary.path().join("release.output");
     let store = Arc::new(Store::default());
 
     let capture = Engine::with_checkpoint(
         isa,
-        plan(executable, &release, "HL_CHECKPOINT"),
+        plan(executable, &release, &final_release, &["HL_CHECKPOINT"]),
         StandardStreams::default(),
         store.clone(),
         store.clone(),
@@ -141,9 +161,28 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     }
 
     std::fs::write(&release, []).unwrap();
+    let recapture = Engine::with_checkpoint(
+        isa,
+        plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
+        StandardStreams::default(),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    recapture.start().unwrap();
+    wait_cycle_ready(&output);
+    recapture.capture_checkpoint().unwrap_or_else(|error| {
+        panic!(
+            "second checkpoint failed: {error:?}\n{}",
+            std::fs::read_to_string(&output).unwrap_or_default()
+        )
+    });
+    assert_eq!(recapture.wait().unwrap().guest_status, 0);
+
+    std::fs::write(&final_release, []).unwrap();
     let restore = Engine::with_checkpoint(
         isa,
-        plan(executable, &release, "HL_RESTORE"),
+        plan(executable, &release, &final_release, &["HL_RESTORE"]),
         StandardStreams::default(),
         store.clone(),
         store,
