@@ -229,6 +229,28 @@ static int interp_alignment_fault(struct cpu *cpu, uint64_t address) {
     return INTERP_END;
 }
 
+#define DEFINE_INTERP_LSE_MINMAX(name, type, signed_type)                                                           \
+    static uint64_t name(void *pointer, uint64_t operand, int want_max, int is_signed) {                            \
+        type *slot = (type *)pointer;                                                                               \
+        type argument = (type)operand;                                                                              \
+        type current = __atomic_load_n(slot, __ATOMIC_SEQ_CST);                                                     \
+        for (;;) {                                                                                                  \
+            int argument_greater =                                                                                  \
+                is_signed ? ((signed_type)argument > (signed_type)current) : (argument > current);                  \
+            type chosen = (argument_greater == (want_max != 0)) ? argument : current;                              \
+            if (chosen == current) break;                                                                           \
+            if (__atomic_compare_exchange_n(slot, &current, chosen, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) break; \
+        }                                                                                                           \
+        return (uint64_t)current;                                                                                   \
+    }
+
+DEFINE_INTERP_LSE_MINMAX(interp_lse_minmax_u8, uint8_t, int8_t)
+DEFINE_INTERP_LSE_MINMAX(interp_lse_minmax_u16, uint16_t, int16_t)
+DEFINE_INTERP_LSE_MINMAX(interp_lse_minmax_u32, uint32_t, int32_t)
+DEFINE_INTERP_LSE_MINMAX(interp_lse_minmax_u64, uint64_t, int64_t)
+
+#undef DEFINE_INTERP_LSE_MINMAX
+
 static int interp_exec_load_store_structures(struct cpu *cpu, uint32_t insn) {
     uint64_t gpc = cpu->pc;
     int rt = (int)(insn & 31), rn = (int)((insn >> 5) & 31);
@@ -793,28 +815,12 @@ static int interp_exec_load_store_atomic(struct cpu *cpu, uint32_t insn) {
                 // peer's update land in between. Comparison is at the ACCESS width and signedness.
                 unsigned want_max = opc == 4 || opc == 6;
                 unsigned is_signed = opc < 6;
-#define INTERP_LSE_MINMAX(type, signed_type)                                                                           \
-    do {                                                                                                               \
-        type *slot = (type *)pointer;                                                                                  \
-        type argument = (type)operand;                                                                                 \
-        type current = __atomic_load_n(slot, __ATOMIC_SEQ_CST);                                                        \
-        for (;;) {                                                                                                     \
-            int argument_greater = is_signed ? ((signed_type)argument > (signed_type)current) : (argument > current);  \
-            type chosen = (argument_greater == (int)(want_max != 0)) ? argument : current;                             \
-            /* Already correct: nothing to store, and `current` is still the pre-existing value to return. */          \
-            if (chosen == current) break;                                                                              \
-            if (__atomic_compare_exchange_n(slot, &current, chosen, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) break;     \
-            /* A peer won the race; `current` now holds its value, so re-decide against that. */                       \
-        }                                                                                                              \
-        old = (uint64_t)current;                                                                                       \
-    } while (0)
                 switch (bytes) {
-                case 1: INTERP_LSE_MINMAX(uint8_t, int8_t); break;
-                case 2: INTERP_LSE_MINMAX(uint16_t, int16_t); break;
-                case 4: INTERP_LSE_MINMAX(uint32_t, int32_t); break;
-                default: INTERP_LSE_MINMAX(uint64_t, int64_t); break;
+                case 1: old = interp_lse_minmax_u8(pointer, operand, want_max, is_signed); break;
+                case 2: old = interp_lse_minmax_u16(pointer, operand, want_max, is_signed); break;
+                case 4: old = interp_lse_minmax_u32(pointer, operand, want_max, is_signed); break;
+                default: old = interp_lse_minmax_u64(pointer, operand, want_max, is_signed); break;
                 }
-#undef INTERP_LSE_MINMAX
                 break;
             }
             default:
