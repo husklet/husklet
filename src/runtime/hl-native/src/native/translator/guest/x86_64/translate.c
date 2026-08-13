@@ -5691,6 +5691,22 @@ static int lower_sse_move_lane(struct insn *instruction, uint64_t next, int vd, 
     return TX_NEXT;
 }
 
+static int lower_sse_bitwise(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0x54 && opcode != 0x55 && opcode != 0x56 && opcode != 0x57) return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    if (opcode == 0x54)
+        e_v3(0x4E201C00u, vd, vd, source);
+    else if (opcode == 0x55)
+        e_v3(0x4E601C00u, vd, source, vd);
+    else if (opcode == 0x56)
+        e_v3(0x4EA01C00u, vd, vd, source);
+    else
+        e_v3(0x6E201C00u, vd, vd, source);
+    return TX_NEXT;
+}
+
 static int lower_sse_packed_double_integer(struct insn *instruction, uint64_t next, int vd, int vm) {
     if (instruction->op != 0xE6 || (!instruction->rep && !instruction->p66 && !instruction->repne))
         return TX_FALL;
@@ -6447,18 +6463,8 @@ static void *translate_block(uint64_t gpc) {
                 }
                 if (lower_sse_move_lane(&I, next, vd, vm) == TX_NEXT) {
                     // The helper emitted duplicate or low/high lane move forms.
-                } else if (op == 0x54 || op == 0x55 || op == 0x56 ||
-                           op == 0x57) { // andps/andnps/orps/xorps (FP bitwise)
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    if (op == 0x54)
-                        e_v3(0x4E201C00u, vd, vd, s); // and
-                    else if (op == 0x55)
-                        e_v3(0x4E601C00u, vd, s, vd); // andn: ~vd & s -> bic vd,s,vd
-                    else if (op == 0x56)
-                        e_v3(0x4EA01C00u, vd, vd, s); // or
-                    else
-                        e_v3(0x6E201C00u, vd, vd, s); // xor
+                } else if (lower_sse_bitwise(&I, next, vd, vm, mmx) == TX_NEXT) {
+                    // The helper emitted AND, ANDN, OR, or XOR.
                 } else if (lower_sse_two_source_shuffle(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted SHUFPS or SHUFPD.
                 } else if (lower_sse_shuffle(&I, next, vd, vm, mmx) == TX_NEXT) {
