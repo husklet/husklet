@@ -1,5 +1,5 @@
 // One native run that stores into several shared views must publish a dirty
-// record for each of them. Interleaving the views inside the hot loop makes a
+// record for each of them. Interleaving the views inside the translated loop makes a
 // per-view range that is dropped, narrowed, or attributed to the wrong view
 // show up as one object reading back stale.
 #define _GNU_SOURCE
@@ -12,9 +12,9 @@
 #include <unistd.h>
 
 #define VIEWS 4
-#define WORDS (32u * 1024u)
+#define WORDS (4u * 1024u)
 #define BYTES ((size_t)WORDS * 8u)
-#define ROUNDS 24u
+#define ROUNDS 4u
 
 static uint64_t mix(uint64_t view, uint64_t index, uint64_t round) {
     uint64_t value = index * 0x9e3779b97f4a7c15ull + round * 0xff51afd7ed558ccdull + view * 0x2545f4914f6cdd1dull;

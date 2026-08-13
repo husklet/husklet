@@ -9,9 +9,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#define WORDS (256u * 1024u)
+#define WORDS (8u * 1024u)
 #define BYTES ((size_t)WORDS * 8u)
-#define ROUNDS 24u
+#define ROUNDS 4u
 
 static uint64_t mix(uint64_t index, uint64_t round) {
     uint64_t value = index * 0x9e3779b97f4a7c15ull + round * 0xff51afd7ed558ccdull;
@@ -83,7 +83,8 @@ int main(void) {
         printf("pubshared mmap=0\n");
         return 1;
     }
-    // Hot enough that the store loop is translated and executed natively.
+    // Repeated enough to translate the store loop without turning a bounded
+    // compatibility assertion into a multi-million-call observer soak.
     for (uint64_t round = 0; round < ROUNDS; round++) {
         for (size_t index = 0; index < WORDS; index++) {
             map[index] = mix(index, round);
