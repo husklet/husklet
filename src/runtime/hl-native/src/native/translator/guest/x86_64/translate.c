@@ -5020,22 +5020,6 @@ static int lower_x87_register_control(struct insn *instruction, uint64_t guest_p
     return TX_NEXT;
 }
 
-static void emit_x87_add(int destination, int left, int right) {
-    emit32(0x1E602800u | (right << 16) | (left << 5) | destination);
-}
-
-static void emit_x87_subtract(int destination, int left, int right) {
-    emit32(0x1E603800u | (right << 16) | (left << 5) | destination);
-}
-
-static void emit_x87_multiply(int destination, int left, int right) {
-    emit32(0x1E600800u | (right << 16) | (left << 5) | destination);
-}
-
-static void emit_x87_divide(int destination, int left, int right) {
-    emit32(0x1E601800u | (right << 16) | (left << 5) | destination);
-}
-
 static int lower_x87_memory_arithmetic(struct insn *instruction, uint64_t guest_pc, int reg) {
     uint8_t opcode = instruction->op;
     if (opcode != 0xD8 && opcode != 0xDC && opcode != 0xDA && opcode != 0xDE) return TX_FALL;
@@ -5074,17 +5058,17 @@ static int lower_x87_memory_arithmetic(struct insn *instruction, uint64_t guest_
     hl_x86_x87_rc_enter();
     hl_x86_x87_dnan_pre(18, 16); // x86 indefinite is NEGATIVE; ARM's default NaN is not
     if (reg == 0)
-        emit_x87_add(18, 18, 16);
+        hl_x86_x87_add(18, 18, 16);
     else if (reg == 1)
-        emit_x87_multiply(18, 18, 16);
+        hl_x86_x87_multiply(18, 18, 16);
     else if (reg == 4)
-        emit_x87_subtract(18, 18, 16);
+        hl_x86_x87_subtract(18, 18, 16);
     else if (reg == 5)
-        emit_x87_subtract(18, 16, 18);
+        hl_x86_x87_subtract(18, 16, 18);
     else if (reg == 6)
-        emit_x87_divide(18, 18, 16);
+        hl_x86_x87_divide(18, 18, 16);
     else if (reg == 7)
-        emit_x87_divide(18, 16, 18);
+        hl_x86_x87_divide(18, 16, 18);
     else {
         report_unimpl(guest_pc, instruction);
         return TX_BREAK;
@@ -5119,30 +5103,30 @@ static int lower_x87_register_arithmetic(struct insn *instruction, uint64_t gues
         hl_x86_x87_rc_enter();
         hl_x86_x87_dnan_pre(18, 16); // x86 indefinite is NEGATIVE; ARM's default NaN is not
         if (reg == 0)
-            emit_x87_add(a, a, b);
+            hl_x86_x87_add(a, a, b);
         else if (reg == 1)
-            emit_x87_multiply(a, a, b);
+            hl_x86_x87_multiply(a, a, b);
         else if (reg == 4) {
             if (opcode == 0xD8)
-                emit_x87_subtract(a, a, b);
+                hl_x86_x87_subtract(a, a, b);
             else
-                emit_x87_subtract(a, b, a);
+                hl_x86_x87_subtract(a, b, a);
         } // DC/DE reverse sub
         else if (reg == 5) {
             if (opcode == 0xD8)
-                emit_x87_subtract(a, b, a);
+                hl_x86_x87_subtract(a, b, a);
             else
-                emit_x87_subtract(a, a, b);
+                hl_x86_x87_subtract(a, a, b);
         } else if (reg == 6) {
             if (opcode == 0xD8)
-                emit_x87_divide(a, a, b);
+                hl_x86_x87_divide(a, a, b);
             else
-                emit_x87_divide(a, b, a);
+                hl_x86_x87_divide(a, b, a);
         } else if (reg == 7) {
             if (opcode == 0xD8)
-                emit_x87_divide(a, b, a);
+                hl_x86_x87_divide(a, b, a);
             else
-                emit_x87_divide(a, a, b);
+                hl_x86_x87_divide(a, a, b);
         } else {
             report_unimpl(guest_pc, instruction);
             return TX_BREAK;

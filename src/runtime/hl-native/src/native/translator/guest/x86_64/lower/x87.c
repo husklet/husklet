@@ -562,3 +562,19 @@ void hl_x86_x87_function(int fn, uint64_t next) {
     e_str(16, 28, OFF_X87EA);
     emit_exit_const(next, R_X87FUNC);
 }
+
+void hl_x86_x87_add(int destination, int left, int right) {
+    emit32(0x1E602800u | ((uint32_t)right << 16) | ((uint32_t)left << 5) | (uint32_t)destination);
+}
+
+void hl_x86_x87_subtract(int destination, int left, int right) {
+    emit32(0x1E603800u | ((uint32_t)right << 16) | ((uint32_t)left << 5) | (uint32_t)destination);
+}
+
+void hl_x86_x87_multiply(int destination, int left, int right) {
+    emit32(0x1E600800u | ((uint32_t)right << 16) | ((uint32_t)left << 5) | (uint32_t)destination);
+}
+
+void hl_x86_x87_divide(int destination, int left, int right) {
+    emit32(0x1E601800u | ((uint32_t)right << 16) | ((uint32_t)left << 5) | (uint32_t)destination);
+}

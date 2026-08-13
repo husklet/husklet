@@ -32,5 +32,9 @@ void hl_x86_x87_status(void);
 void hl_x86_x87_clear_exceptions(void);
 void hl_x86_x87_classify(void);
 void hl_x86_x87_function(int function, uint64_t next);
+void hl_x86_x87_add(int destination, int left, int right);
+void hl_x86_x87_subtract(int destination, int left, int right);
+void hl_x86_x87_multiply(int destination, int left, int right);
+void hl_x86_x87_divide(int destination, int left, int right);
 
 #endif
