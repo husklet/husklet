@@ -42,24 +42,30 @@ int main(void) {
         return 3;
     }
 #endif
-    uint64_t checksum = 0;
+    uint64_t compute_proof = 0;
     uint64_t started = micros();
-    for (uint64_t index = 0; index < UINT64_C(200000); ++index) {
-        checksum = checksum * UINT64_C(6364136223846793005) + index + UINT64_C(1442695040888963407);
+    for (uint64_t index = 0; index < UINT64_C(128000000); ++index) {
+        compute_proof = compute_proof * UINT64_C(6364136223846793005) + index + UINT64_C(1442695040888963407);
     }
     uint64_t compute = micros() - started;
 
+    uint64_t malloc_proof = 0;
     started = micros();
-    for (size_t size = 1; size <= 4096; size += 17) {
-        unsigned char *allocation = malloc(size);
-        if (allocation == NULL) {
-            return 2;
+    for (size_t sweep = 0; sweep < 4096; ++sweep) {
+        for (size_t slot = 0; slot < 241; ++slot) {
+            size_t size = 1 + ((slot * 17 + sweep * 131) % 4096);
+            volatile unsigned char *allocation = malloc(size);
+            if (allocation == NULL) {
+                return 2;
+            }
+            unsigned char first = (unsigned char)(size ^ sweep);
+            unsigned char last = (unsigned char)((size >> 8) ^ slot);
+            allocation[0] = first;
+            allocation[size - 1] = last;
+            malloc_proof = malloc_proof * UINT64_C(1099511628211) + size;
+            malloc_proof ^= (uint64_t)allocation[0] | (uint64_t)allocation[size - 1] << 8;
+            free((void *)allocation);
         }
-        allocation[0] = (unsigned char)size;
-        allocation[size - 1] = (unsigned char)(size >> 8);
-        checksum += allocation[0];
-        checksum += allocation[size - 1];
-        free(allocation);
     }
     uint64_t malloc_time = micros() - started;
 
@@ -68,7 +74,7 @@ int main(void) {
                           "META workload=malloc layout=%s version=1\n"
                           "PHASE compute us=%" PRIu64 " ok=%" PRIu64 "\n"
                           "PHASE malloc us=%" PRIu64 " ok=%" PRIu64 "\n",
-                          HL_LAYOUT, compute ? compute : 1, checksum, malloc_time ? malloc_time : 1, checksum);
+                          HL_LAYOUT, compute ? compute : 1, compute_proof, malloc_time ? malloc_time : 1, malloc_proof);
     if (length < 0 || (size_t)length >= sizeof(frame) || write_all(frame, (size_t)length) != 0) {
         return 4;
     }

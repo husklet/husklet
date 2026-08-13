@@ -32,6 +32,7 @@ const MAC: &str = "/usr/local/bin/mac";
 const TIMEOUT: Duration = Duration::from_secs(30);
 const PYTHON_TIMEOUT: Duration = Duration::from_secs(90);
 const PREPARATION_COMPILE_TIMEOUT: Duration = Duration::from_secs(180);
+const MINIMUM_MALLOC_PHASE_MICROS: u64 = 5_000;
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -146,8 +147,8 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
             IMAGE.into(),
             layout.linux.display().to_string(),
         ])?;
-        let native_frame = frame(&native_output)?;
-        let docker_frame = frame(&docker_output)?;
+        let native_frame = malloc_frame(&native_output)?;
+        let docker_frame = malloc_frame(&docker_output)?;
         require_parity(&format!("malloc/{}", layout.name), &native_frame, &docker_frame)?;
         if layout.name == "plain" {
             let guest = layout
@@ -156,7 +157,7 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
                 .to_str()
                 .ok_or("malloc guest path is not UTF-8")?;
             let husklet_output = husklet_rootfs_guest(&husklet.command, &rootfs, guest, &[])?;
-            let husklet_frame = frame(&husklet_output)?;
+            let husklet_frame = malloc_frame(&husklet_output)?;
             require_parity("malloc/plain Husklet", &native_frame, &husklet_frame)?;
             fs::write(output.join("husklet-plain.out"), husklet_output)?;
             fs::write(output.join("exact-output-husklet-plain.frame"), husklet_frame)?;
@@ -448,7 +449,11 @@ impl RetainedProfile {
         fs::copy(source, &command)?;
         let smoke = husklet_rootfs_guest(&command, rootfs, "benchmark/malloc-plain", &[])?;
         let plain_native = mac(&[mac_path(&layouts[0].native)])?;
-        require_parity("malloc/plain retained", &frame(&plain_native)?, &frame(&smoke)?)?;
+        require_parity(
+            "malloc/plain retained",
+            &malloc_frame(&plain_native)?,
+            &malloc_frame(&smoke)?,
+        )?;
         let python = capture_rootfs_guest(
             &command,
             rootfs,
@@ -463,8 +468,8 @@ impl RetainedProfile {
             let native = mac(&[mac_path(&layout.native)])?;
             require_parity(
                 &format!("malloc/{} retained", layout.name),
-                &frame(&native)?,
-                &frame(&output_bytes)?,
+                &malloc_frame(&native)?,
+                &malloc_frame(&output_bytes)?,
             )?;
         }
         let sqlite_output = husklet_rootfs_guest(&command, rootfs, "benchmark/sqlite", &[])?;
@@ -764,6 +769,36 @@ fn frame(output: &[u8]) -> Result<Vec<u8>, Error> {
     Ok((framed.join("\n") + "\n").into_bytes())
 }
 
+fn malloc_frame(output: &[u8]) -> Result<Vec<u8>, Error> {
+    let text = std::str::from_utf8(output)?;
+    let mut phases = BTreeMap::new();
+    for line in text.lines().filter(|line| line.starts_with("PHASE ")) {
+        let fields = line.split_ascii_whitespace().collect::<Vec<_>>();
+        let [_, name, micros, _] = fields.as_slice() else {
+            return Err("staged malloc PHASE must have exactly name, us, and ok fields".into());
+        };
+        let micros = micros
+            .strip_prefix("us=")
+            .ok_or("staged malloc PHASE has no duration")?
+            .parse::<u64>()?;
+        if phases.insert(*name, micros).is_some() {
+            return Err(format!("staged malloc phase {name} is duplicated").into());
+        }
+    }
+    for phase in ["compute", "malloc"] {
+        let micros = phases
+            .get(phase)
+            .ok_or_else(|| format!("staged malloc output is missing {phase}"))?;
+        if *micros < MINIMUM_MALLOC_PHASE_MICROS {
+            return Err(format!(
+                "staged malloc phase {phase} is a smoke workload at {micros}us; minimum is {MINIMUM_MALLOC_PHASE_MICROS}us"
+            )
+            .into());
+        }
+    }
+    frame(output)
+}
+
 fn require_parity(workload: &str, native: &[u8], docker: &[u8]) -> Result<(), Error> {
     if native == docker {
         Ok(())
@@ -787,7 +822,7 @@ fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{classified_failure, frame, require_parity, stage_output, support};
+    use super::{classified_failure, frame, malloc_frame, require_parity, stage_output, support};
     use crate::benchmark::definition::ArmSupport;
     use hl_process::Outcome;
 
@@ -811,6 +846,20 @@ mod tests {
         assert!(frame(b"PHASE malloc us=42\n").is_err());
         assert!(frame(b"META x\nnoise\n").is_err());
         assert!(frame(b"META x\nMETA y\n").is_err());
+    }
+
+    #[test]
+    fn malloc_stage_rejects_smoke_duration_and_requires_both_phases() {
+        let valid = b"META workload=malloc layout=plain version=1\nPHASE compute us=5000 ok=7\nPHASE malloc us=5001 ok=8\n";
+        assert!(malloc_frame(valid).is_ok());
+        assert!(malloc_frame(
+            b"META workload=malloc layout=plain version=1\nPHASE compute us=4999 ok=7\nPHASE malloc us=5001 ok=8\n"
+        )
+        .is_err());
+        assert!(malloc_frame(
+            b"META workload=malloc layout=plain version=1\nPHASE compute us=5000 ok=7\n"
+        )
+        .is_err());
     }
 
     #[test]
