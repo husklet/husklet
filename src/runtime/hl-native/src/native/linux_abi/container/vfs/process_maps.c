@@ -686,8 +686,8 @@ static int maptable_build(struct maptable *t) {
     {
         struct stat es;
         if (hostexe[0] && stat(hostexe, &es) == 0) {
-            exe_dmaj = (unsigned)major(es.st_dev);
-            exe_dmin = (unsigned)minor(es.st_dev);
+            exe_dmaj = hl_linux_device_major((uint64_t)es.st_dev);
+            exe_dmin = hl_linux_device_minor((uint64_t)es.st_dev);
             exe_ino = (unsigned long long)es.st_ino;
         }
     }
@@ -746,7 +746,7 @@ static int maptable_build(struct maptable *t) {
             char *nm = names + (size_t)fm * MAPTABLE_NAME_MAX;
             if (!nm[0] && !filemap_guest_path(g_filemap[fm].fd, nm, MAPTABLE_NAME_MAX)) nm[0] = 0;
             MAPROW_ADD_F(lo, hi, "rw-p", g_filemap[fm].offset + (lo - g_filemap[fm].lo),
-                         (unsigned)major((dev_t)g_filemap[fm].device), (unsigned)minor((dev_t)g_filemap[fm].device),
+                         hl_linux_device_major(g_filemap[fm].device), hl_linux_device_minor(g_filemap[fm].device),
                          g_filemap[fm].inode, nm);
         } else
             MAPROW_ADD(lo, hi, "rw-p", "");

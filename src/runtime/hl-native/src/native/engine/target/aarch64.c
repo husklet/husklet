@@ -40,6 +40,7 @@
 #include "../../linux_abi/host_tty.h"
 #include "../../linux_abi/host_proc.h"
 #include "../../linux_abi/host_wait.h"
+#include "../../linux_abi/device.h"
 #include <stdatomic.h>
 #if !defined(_WIN32)
 #include <dlfcn.h>

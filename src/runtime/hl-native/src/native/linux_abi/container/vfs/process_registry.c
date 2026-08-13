@@ -624,8 +624,8 @@ static int proc_maps_pid_fd(int gp, int host) {
     unsigned long long ino = 0;
     struct stat es;
     if (stat(exe, &es) == 0) {
-        dmaj = (unsigned)major(es.st_dev);
-        dmin = (unsigned)minor(es.st_dev);
+        dmaj = hl_linux_device_major((uint64_t)es.st_dev);
+        dmin = hl_linux_device_minor((uint64_t)es.st_dev);
         ino = (unsigned long long)es.st_ino;
     }
     n += proc_map_region_p(buf + n, sizeof buf - (size_t)n, 0x400000, 0x500000, "r-xp", 0, dmaj, dmin, ino, exe, 0);

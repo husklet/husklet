@@ -69,4 +69,9 @@ typedef unsigned short mode_t;
 typedef unsigned int useconds_t;
 #endif
 
+#ifndef HL_MSVC_POSIX_SUSECONDS_T
+#define HL_MSVC_POSIX_SUSECONDS_T
+typedef long suseconds_t;
+#endif
+
 #endif /* HL_MSVC_POSIX_SYS_TYPES_H */

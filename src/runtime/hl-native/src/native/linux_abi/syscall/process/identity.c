@@ -158,7 +158,7 @@ static int svc_proc_51(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
             char isolated[128], backing[4200];
             snprintf(isolated, sizeof isolated, "/.hl-proc-chroot-%d", (int)getpid());
             confine_in(g_rootfs_canon, g_rootfs_canon_len, isolated, backing, sizeof backing, 1);
-            if (mkdir(backing, 0700) != 0 && errno != EEXIST) {
+            if (hl_compat_mkdir(backing, 0700) != 0 && errno != EEXIST) {
                 G_RET(c) = (uint64_t)(int64_t)(-errno);
                 break;
             }

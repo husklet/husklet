@@ -21,4 +21,6 @@
 #define LOCK_NB 4
 #define LOCK_UN 8
 
+int flock(int descriptor, int operation);
+
 #endif /* HL_MSVC_POSIX_SYS_FILE_H */

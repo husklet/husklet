@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -556,6 +557,31 @@ int gettimeofday(struct timeval *now, void *timezone_unused) {
 }
 
 /* ---- files --------------------------------------------------------------- */
+
+int flock(int descriptor, int operation) {
+    intptr_t native = _get_osfhandle(descriptor);
+    OVERLAPPED range = {0};
+    DWORD flags = 0;
+    BOOL succeeded;
+    if (native == -1) {
+        errno = EBADF;
+        return -1;
+    }
+    if (operation & LOCK_UN) {
+        succeeded = UnlockFileEx((HANDLE)native, 0, MAXDWORD, MAXDWORD, &range);
+    } else {
+        if (operation & LOCK_EX) flags |= LOCKFILE_EXCLUSIVE_LOCK;
+        if (operation & LOCK_NB) flags |= LOCKFILE_FAIL_IMMEDIATELY;
+        if (!(operation & (LOCK_SH | LOCK_EX)) || (operation & ~(LOCK_SH | LOCK_EX | LOCK_NB))) {
+            errno = EINVAL;
+            return -1;
+        }
+        succeeded = LockFileEx((HANDLE)native, flags, 0, MAXDWORD, MAXDWORD, &range);
+    }
+    if (succeeded) return 0;
+    errno = GetLastError() == ERROR_LOCK_VIOLATION ? EWOULDBLOCK : EIO;
+    return -1;
+}
 
 int ftruncate(int descriptor, off_t length) {
     /* _chsize_s takes a 64-bit length even though off_t here is 32-bit, so the
