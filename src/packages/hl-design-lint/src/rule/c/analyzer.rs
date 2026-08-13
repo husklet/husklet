@@ -1,11 +1,12 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 const TIDY_CHECKS: &str = "clang-analyzer-*,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.MmapWriteExec,-clang-analyzer-unix.BlockInCriticalSection,bugprone-assignment-in-if-condition,bugprone-branch-clone,bugprone-inc-dec-in-conditions,bugprone-infinite-loop,bugprone-not-null-terminated-result,bugprone-posix-return,bugprone-signal-handler,bugprone-sizeof-expression,bugprone-suspicious-memory-comparison,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation";
 
@@ -22,10 +23,12 @@ pub struct AnalyzerConfig {
     pub compilation_database: PathBuf,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Compilation {
     directory: PathBuf,
     file: PathBuf,
+    #[serde(flatten)]
+    metadata: BTreeMap<String, Value>,
 }
 
 /// Runs the Nix-provided C analyzers over arbitrary source roots.
@@ -47,12 +50,13 @@ pub fn run(config: &AnalyzerConfig, roots: &[PathBuf]) -> Result<bool, String> {
 
     let database = config.compilation_database.join("compile_commands.json");
     let translation_units = translation_units(&database, roots)?;
+    let filtered_database = filtered_database(&database, &translation_units)?;
     for file in translation_units {
         clean &= invoke(
             "clang-tidy",
             Command::new(&config.clang_tidy)
                 .args(["--quiet", "-p"])
-                .arg(&config.compilation_database)
+                .arg(filtered_database.path())
                 .arg(format!("--checks={TIDY_CHECKS}"))
                 .args(["--extra-arg=-std=c11", "--warnings-as-errors=*"])
                 .arg(&file),
@@ -77,8 +81,11 @@ pub fn run(config: &AnalyzerConfig, roots: &[PathBuf]) -> Result<bool, String> {
                 "--suppress=preprocessorErrorDirective",
                 "--error-exitcode=1",
             ])
-            .arg(format!("--project={}", database.display())),
-        Some(&database),
+            .arg(format!(
+                "--project={}",
+                filtered_database.path().join("compile_commands.json").display()
+            )),
+        Some(&filtered_database.path().join("compile_commands.json")),
     )?;
     Ok(clean)
 }
@@ -175,6 +182,32 @@ fn translation_units(database: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>,
     Ok(files.into_iter().collect())
 }
 
+fn filtered_database(database: &Path, translation_units: &[PathBuf]) -> Result<tempfile::TempDir, String> {
+    let bytes = fs::read(database).map_err(|error| format!("read {}: {error}", database.display()))?;
+    let commands: Vec<Compilation> =
+        serde_json::from_slice(&bytes).map_err(|error| format!("decode {}: {error}", database.display()))?;
+    let requested = translation_units.iter().collect::<BTreeSet<_>>();
+    let commands = commands
+        .into_iter()
+        .filter(|command| {
+            let file = if command.file.is_absolute() {
+                command.file.clone()
+            } else {
+                command.directory.join(&command.file)
+            };
+            file.canonicalize().is_ok_and(|file| requested.contains(&file))
+        })
+        .collect::<Vec<_>>();
+    let directory = tempfile::Builder::new()
+        .prefix("hl-design-lint-c-database-")
+        .tempdir()
+        .map_err(|error| format!("create filtered compilation database: {error}"))?;
+    let output = directory.path().join("compile_commands.json");
+    let bytes = serde_json::to_vec(&commands).map_err(|error| format!("encode {}: {error}", output.display()))?;
+    fs::write(&output, bytes).map_err(|error| format!("write {}: {error}", output.display()))?;
+    Ok(directory)
+}
+
 fn roots_contain_c_source(roots: &[PathBuf]) -> Result<bool, String> {
     Ok(source_files(roots)?
         .iter()
@@ -183,7 +216,7 @@ fn roots_contain_c_source(roots: &[PathBuf]) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{source_files, translation_units};
+    use super::{Compilation, filtered_database, source_files, translation_units};
     use std::{fs, path::PathBuf};
 
     fn fixture(name: &str) -> PathBuf {
@@ -274,6 +307,32 @@ mod tests {
         .unwrap();
         let error = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap_err();
         assert!(error.contains("src/missing.c"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn filtered_database_excludes_unrequested_and_generated_commands() {
+        let root = fixture("filtered-database");
+        fs::write(root.join("src/a.c"), "int a;\n").unwrap();
+        fs::write(root.join("outside.c"), "int b;\n").unwrap();
+        fs::write(
+            root.join("compile_commands.json"),
+            format!(
+                "[{{\"directory\":{0:?},\"file\":\"src/a.c\",\"arguments\":[\"cc\",\"-c\",\"src/a.c\"],\"output\":\"a.o\"}},\
+                  {{\"directory\":{0:?},\"file\":\"outside.c\",\"command\":\"cc -c outside.c\"}},\
+                  {{\"directory\":{0:?},\"file\":\"target/generated.c\",\"command\":\"cc -c target/generated.c\"}}]",
+                root.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let units = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap();
+        let database = filtered_database(&root.join("compile_commands.json"), &units).unwrap();
+        let commands: Vec<Compilation> =
+            serde_json::from_slice(&fs::read(database.path().join("compile_commands.json")).unwrap()).unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].file, PathBuf::from("src/a.c"));
+        assert_eq!(commands[0].metadata["output"], "a.o");
+        assert_eq!(commands[0].metadata["arguments"][0], "cc");
         fs::remove_dir_all(root).unwrap();
     }
 }
