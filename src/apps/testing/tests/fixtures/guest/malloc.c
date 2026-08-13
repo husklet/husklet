@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -36,7 +37,43 @@ static int write_all(const char *buffer, size_t length) {
     return 0;
 }
 
-int main(void) {
+struct work_factor {
+    const char *text;
+    uint64_t factor;
+    uint64_t compute_proof;
+    uint64_t malloc_proof;
+};
+
+/* Fixed proof constants make each allowed factor validate independently of its loop bounds. */
+static const struct work_factor FACTORS[] = {
+    {"1", UINT64_C(1), UINT64_C(9686655140321103872), UINT64_C(10725705084448409897)},
+    {"2", UINT64_C(2), UINT64_C(17644014193459470336), UINT64_C(6528316421022001472)},
+    {"4", UINT64_C(4), UINT64_C(5739948047395471360), UINT64_C(1674606823239620224)},
+    {"8", UINT64_C(8), UINT64_C(13729380265047392256), UINT64_C(1493020912505358080)},
+};
+
+static const struct work_factor *parse_factor(const char *text, size_t length) {
+    for (size_t index = 0; index < sizeof(FACTORS) / sizeof(FACTORS[0]); ++index) {
+        if (strlen(FACTORS[index].text) == length && memcmp(FACTORS[index].text, text, length) == 0) {
+            return &FACTORS[index];
+        }
+    }
+    return NULL;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2) {
+        return 1;
+    }
+    const char *separator = strchr(argv[1], ',');
+    if (separator == NULL || strchr(separator + 1, ',') != NULL) {
+        return 1;
+    }
+    const struct work_factor *compute_factor = parse_factor(argv[1], (size_t)(separator - argv[1]));
+    const struct work_factor *malloc_factor = parse_factor(separator + 1, strlen(separator + 1));
+    if (compute_factor == NULL || malloc_factor == NULL) {
+        return 1;
+    }
 #if defined(HL_SQLITE_LAYOUT)
     if (sqlite3_initialize() != SQLITE_OK) {
         return 3;
@@ -44,14 +81,14 @@ int main(void) {
 #endif
     uint64_t compute_proof = 0;
     uint64_t started = micros();
-    for (uint64_t index = 0; index < UINT64_C(128000000); ++index) {
+    for (uint64_t index = 0; index < UINT64_C(128000000) * compute_factor->factor; ++index) {
         compute_proof = compute_proof * UINT64_C(6364136223846793005) + index + UINT64_C(1442695040888963407);
     }
     uint64_t compute = micros() - started;
 
     uint64_t malloc_proof = 0;
     started = micros();
-    for (size_t sweep = 0; sweep < 4096; ++sweep) {
+    for (size_t sweep = 0; sweep < (size_t)4096 * (size_t)malloc_factor->factor; ++sweep) {
         for (size_t slot = 0; slot < 241; ++slot) {
             size_t size = 1 + ((slot * 17 + sweep * 131) % 4096);
             volatile unsigned char *allocation = malloc(size);
@@ -68,16 +105,17 @@ int main(void) {
         }
     }
     uint64_t malloc_time = micros() - started;
-    if (compute_proof != UINT64_C(9686655140321103872) || malloc_proof != UINT64_C(10725705084448409897)) {
+    if (compute_proof != compute_factor->compute_proof || malloc_proof != malloc_factor->malloc_proof) {
         return 5;
     }
 
     char frame[256];
     int length = snprintf(frame, sizeof(frame),
-                          "META workload=malloc layout=%s version=1\n"
+                          "META workload=malloc layout=%s version=1 factor=%s,%s\n"
                           "PHASE compute us=%" PRIu64 " ok=%" PRIu64 "\n"
                           "PHASE malloc us=%" PRIu64 " ok=%" PRIu64 "\n",
-                          HL_LAYOUT, compute ? compute : 1, compute_proof, malloc_time ? malloc_time : 1, malloc_proof);
+                          HL_LAYOUT, compute_factor->text, malloc_factor->text, compute ? compute : 1, compute_proof,
+                          malloc_time ? malloc_time : 1, malloc_proof);
     if (length < 0 || (size_t)length >= sizeof(frame) || write_all(frame, (size_t)length) != 0) {
         return 4;
     }
