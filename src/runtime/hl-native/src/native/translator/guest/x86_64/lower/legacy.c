@@ -661,9 +661,14 @@ int lower_bit_scan(struct insn *instruction, uint64_t next, int sf) {
         e_rrr(A_ANDS, 31, destination, destination, sf, 0);
         e_nzcv_save_setcf(19);
     } else {
-        e_rrr(A_ANDS, 31, source, source, sf, 0);
+        if (word_form) {
+            e_lsl_i(19, source, 16, 0);
+            e_tst(19, 0);
+        } else {
+            e_tst(source, sf);
+        }
         e_csel(destination, destination, 22, 0, sf);
-        e_nzcv_save();
+        e_nzcv_save_c1();
     }
     if (word_form) e_bfi(instruction->reg, destination, 0, 16, 1);
     return TX_NEXT;

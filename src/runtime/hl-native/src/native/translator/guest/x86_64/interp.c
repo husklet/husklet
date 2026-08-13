@@ -1104,11 +1104,12 @@ static int interp_two_byte_bit_count(struct cpu *cpu, struct insn *insn, uint64_
         interp_reg_write(cpu, insn, insn->reg, width, result);
     } else if (source == 0) {
         interp_flags_nzcv(cpu, 0, 1, 0, 0);
-        cpu->pf = 0xff;
+        // BSF/BSR leave the destination undefined for a zero source, but a 32-bit
+        // destination write still zero-extends its retained low half.
+        if (width == 4) interp_reg_write(cpu, insn, insn->reg, width, interp_reg_read(cpu, insn, insn->reg, width));
     } else {
         uint64_t result = op == 0xBC ? (uint64_t)__builtin_ctzll(source) : (uint64_t)(63 - __builtin_clzll(source));
-        interp_flags_nzcv(cpu, 0, 0, 0, 0);
-        cpu->pf = result & 0xff;
+        interp_flags_nzcv(cpu, interp_msb(source, width), 0, 0, 0);
         interp_reg_write(cpu, insn, insn->reg, width, result);
     }
     cpu->rip = next;
