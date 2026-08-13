@@ -9,12 +9,12 @@ SELECT 'META workload=sqlite layout=sqlite version=1';
 SELECT 'PHASE sqlite-write us=1 ok=' || count(*) FROM values_;
 SELECT 'PHASE sqlite-read us=1 ok=' || sum(value) FROM values_;"#;
 
-pub(super) struct Staged {
+pub(super) struct SqliteProfile {
     pub command: std::path::PathBuf,
     pub linux_identity: String,
 }
 
-pub(super) fn stage(output: &Path, docker: &Path, arch_tool: &Path) -> Result<Staged, Error> {
+pub(super) fn stage(output: &Path, docker: &Path, arch_tool: &Path) -> Result<SqliteProfile, Error> {
     let command = output.join("native/sqlite3");
     let slices = mac(&["/mnt/mac/usr/bin/lipo".into(), "-archs".into(), MACOS_SQLITE.into()])?;
     if !std::str::from_utf8(&slices)?
@@ -69,7 +69,7 @@ pub(super) fn stage(output: &Path, docker: &Path, arch_tool: &Path) -> Result<St
         output.join("sqlite-exact-output.frame"),
         frame(&fs::read(output.join("sqlite-native.out"))?)?,
     )?;
-    Ok(Staged {
+    Ok(SqliteProfile {
         command,
         linux_identity,
     })

@@ -31,12 +31,12 @@ print('META workload=python layout=sqlite version=1')
 print(f'PHASE python-sqlite-write us={write} ok={proof}')
 print(f'PHASE python-sqlite-read us={read} ok={proof}')"#;
 
-pub(super) struct Staged {
+pub(super) struct PythonProfile {
     pub interpreter: std::path::PathBuf,
     pub sqlite_identity: String,
 }
 
-pub(super) fn stage(output: &Path, docker: &Path, arch_tool: &Path) -> Result<Staged, Error> {
+pub(super) fn stage(output: &Path, docker: &Path, arch_tool: &Path) -> Result<PythonProfile, Error> {
     let interpreter = output.join("native/python3");
     let slices = mac(&["/mnt/mac/usr/bin/lipo".into(), "-archs".into(), MACOS_PYTHON.into()])?;
     if !std::str::from_utf8(&slices)?
@@ -87,7 +87,7 @@ pub(super) fn stage(output: &Path, docker: &Path, arch_tool: &Path) -> Result<St
         "-c".into(),
         "import sqlite3; print(sqlite3.sqlite_version)".into(),
     ])?;
-    Ok(Staged {
+    Ok(PythonProfile {
         interpreter,
         sqlite_identity: String::from_utf8(sqlite_identity)?.trim().to_owned(),
     })
