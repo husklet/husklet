@@ -2021,6 +2021,51 @@ static enum avx_dispatch_result avx_dispatch_map1_packed_integer_arithmetic(cons
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_horizontal_floating(const hl_x86_avx_state *state, struct cpu *c,
+                                                                      struct insn *instruction, uint64_t next, int map,
+                                                                      int width) {
+    int op = instruction->op;
+    if (map != 1 || (op != 0x7C && op != 0x7D && op != 0xD0)) return AVX_DISPATCH_UNMATCHED;
+    int dbl = instruction->vex_pp == 1;
+    int subtract = op == 0x7D;
+    uint8_t left[64], right[64], result[64];
+    avx_get(c, instruction->vvvv, left);
+    avx_get_rm(state, c, instruction, next, width, right);
+    for (int lane = 0; lane < width; lane += 16) {
+        if (!dbl) {
+            float x[4], y[4], output[4];
+            memcpy(x, left + lane, 16);
+            memcpy(y, right + lane, 16);
+            if (op == 0xD0) {
+                for (int element = 0; element < 4; element++)
+                    output[element] = (element & 1) ? avx_dnan_f32(x[element] + y[element], x[element], y[element])
+                                                    : avx_dnan_f32(x[element] - y[element], x[element], y[element]);
+            } else {
+                output[0] = subtract ? avx_dnan_f32(x[0] - x[1], x[0], x[1]) : avx_dnan_f32(x[0] + x[1], x[0], x[1]);
+                output[1] = subtract ? avx_dnan_f32(x[2] - x[3], x[2], x[3]) : avx_dnan_f32(x[2] + x[3], x[2], x[3]);
+                output[2] = subtract ? avx_dnan_f32(y[0] - y[1], y[0], y[1]) : avx_dnan_f32(y[0] + y[1], y[0], y[1]);
+                output[3] = subtract ? avx_dnan_f32(y[2] - y[3], y[2], y[3]) : avx_dnan_f32(y[2] + y[3], y[2], y[3]);
+            }
+            memcpy(result + lane, output, 16);
+        } else {
+            double x[2], y[2], output[2];
+            memcpy(x, left + lane, 16);
+            memcpy(y, right + lane, 16);
+            if (op == 0xD0) {
+                output[0] = avx_dnan_f64(x[0] - y[0], x[0], y[0]);
+                output[1] = avx_dnan_f64(x[1] + y[1], x[1], y[1]);
+            } else {
+                output[0] = subtract ? avx_dnan_f64(x[0] - x[1], x[0], x[1]) : avx_dnan_f64(x[0] + x[1], x[0], x[1]);
+                output[1] = subtract ? avx_dnan_f64(y[0] - y[1], y[0], y[1]) : avx_dnan_f64(y[0] + y[1], y[0], y[1]);
+            }
+            memcpy(result + lane, output, 16);
+        }
+    }
+    avx_put(c, instruction->reg, result, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2069,11 +2114,10 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map1_sign_mask(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_unpack(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_bitwise(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map1_horizontal_floating(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
-    if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED)
-        return;
-    if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED)
-        return;
+    if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_root_reciprocal(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
@@ -2147,48 +2191,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + 8, b, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        // SSE3 horizontal FP + addsub: 7C haddps/pd, 7D hsubps/pd, D0 addsubps/pd. pp==1 => double,
-        // pp==3 => single. src1=vvvv, src2=rm; horizontal ops pair within each 128-bit lane.
-        case 0x7C:
-        case 0x7D:
-        case 0xD0: {
-            int dbl = (pp == 1);
-            int sub = (op == 0x7D);
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16) {
-                if (!dbl) {
-                    float x[4], y[4], o[4];
-                    memcpy(x, a + lane, 16);
-                    memcpy(y, b + lane, 16);
-                    if (op == 0xD0) { // addsub: even lanes subtract, odd lanes add
-                        for (int i = 0; i < 4; i++)
-                            o[i] =
-                                (i & 1) ? avx_dnan_f32(x[i] + y[i], x[i], y[i]) : avx_dnan_f32(x[i] - y[i], x[i], y[i]);
-                    } else { // hadd/hsub pair EVEN-lane-first (measured: the even lane is the NaN src1)
-                        o[0] = sub ? avx_dnan_f32(x[0] - x[1], x[0], x[1]) : avx_dnan_f32(x[0] + x[1], x[0], x[1]);
-                        o[1] = sub ? avx_dnan_f32(x[2] - x[3], x[2], x[3]) : avx_dnan_f32(x[2] + x[3], x[2], x[3]);
-                        o[2] = sub ? avx_dnan_f32(y[0] - y[1], y[0], y[1]) : avx_dnan_f32(y[0] + y[1], y[0], y[1]);
-                        o[3] = sub ? avx_dnan_f32(y[2] - y[3], y[2], y[3]) : avx_dnan_f32(y[2] + y[3], y[2], y[3]);
-                    }
-                    memcpy(d + lane, o, 16);
-                } else {
-                    double x[2], y[2], o[2];
-                    memcpy(x, a + lane, 16);
-                    memcpy(y, b + lane, 16);
-                    if (op == 0xD0) {
-                        o[0] = avx_dnan_f64(x[0] - y[0], x[0], y[0]);
-                        o[1] = avx_dnan_f64(x[1] + y[1], x[1], y[1]);
-                    } else {
-                        o[0] = sub ? avx_dnan_f64(x[0] - x[1], x[0], x[1]) : avx_dnan_f64(x[0] + x[1], x[0], x[1]);
-                        o[1] = sub ? avx_dnan_f64(y[0] - y[1], y[0], y[1]) : avx_dnan_f64(y[0] + y[1], y[0], y[1]);
-                    }
-                    memcpy(d + lane, o, 16);
-                }
-            }
-            avx_put(c, rd, d, W);
             goto done;
         }
         // variable (scalar-count) shifts: count = low 64 bits of rm applied to every element.
