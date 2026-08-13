@@ -92,7 +92,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Correctly report the optional same-ISA transliterator as Linux AMD64-only.
 - [x] Merge the host-capability matrix and host-specific source selection onto the shared-library/Windows tip.
 - [ ] Verify every supported target through authoritative platform CI.
-- [ ] Compare ARM64 and AMD64 scheduler paths whenever either is changed; neither architecture may silently lag.
+- [x] Compare ARM64 and AMD64 scheduler paths whenever either is changed; neither architecture may silently lag.
+  The production engine now routes both ISAs through the shared C dispatcher. Merged commit `cbabbe7f2` fixed the remaining checkpoint-placement drift and adds direct two-ISA coverage; future target-specific changes must repeat the side-by-side enumeration.
 
 ## Generic ELF and compatibility
 
