@@ -82,7 +82,7 @@ static _Thread_local int hl_default_options_ready;
 
 void hl_options_import_environment(hl_options *options) {
 #if defined(HL_ENABLE_LOGGING) && HL_ENABLE_LOGGING
-    const char *selector = hl_environment_debug_log();
+    const char *selector = getenv("HL_LOG");
     if (selector != NULL) (void)hl_options_set(options, "HL_LOG", selector, 0);
 #else
     (void)options;
