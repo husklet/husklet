@@ -242,7 +242,12 @@ fn tree_hash(root: &Path) -> Result<String, Error> {
         Ok(())
     }
 
-    fn walk(root: &Path, directory: &Path, identity: &mut FramedIdentity) -> Result<(), Error> {
+    fn walk(
+        root: &Path,
+        directory: &Path,
+        identity: &mut FramedIdentity,
+        links: &mut BTreeMap<(u64, u64), PathBuf>,
+    ) -> Result<(), Error> {
         let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
         entries.sort_by_key(std::fs::DirEntry::file_name);
         for entry in entries {
@@ -256,9 +261,10 @@ fn tree_hash(root: &Path) -> Result<String, Error> {
                 identity.field(fs::read_link(path)?.as_os_str().as_encoded_bytes())?;
             } else if metadata.is_dir() {
                 identity.field(b"D")?;
-                walk(root, &path, identity)?;
+                walk(root, &path, identity, links)?;
             } else if metadata.is_file() {
                 identity.field(b"F")?;
+                hardlink(relative, &metadata, identity, links)?;
                 identity.field(&fs::read(path)?)?;
             } else {
                 return Err("rootfs contains an unsupported entry type".into());
@@ -266,10 +272,33 @@ fn tree_hash(root: &Path) -> Result<String, Error> {
         }
         Ok(())
     }
-    let mut identity = FramedIdentity::new(b"husklet-rootfs-tree-v2")?;
+    let mut identity = FramedIdentity::new(b"husklet-rootfs-tree-v3")?;
     permissions(&fs::symlink_metadata(root)?, &mut identity)?;
-    walk(root, root, &mut identity)?;
+    walk(root, root, &mut identity, &mut BTreeMap::new())?;
     Ok(identity.finish())
+}
+
+fn hardlink(
+    relative: &Path,
+    metadata: &fs::Metadata,
+    identity: &mut FramedIdentity,
+    links: &mut BTreeMap<(u64, u64), PathBuf>,
+) -> Result<(), Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.nlink() > 1 {
+            let first = links
+                .entry((metadata.dev(), metadata.ino()))
+                .or_insert_with(|| relative.to_owned());
+            identity.field(b"H")?;
+            identity.field(first.as_os_str().as_encoded_bytes())?;
+            return Ok(());
+        }
+    }
+    let _ = (relative, metadata, links);
+    identity.field(b"U")?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -428,6 +457,28 @@ mod tests {
         };
         assert_ne!(attributes(1000, 1000), attributes(1001, 1000));
         assert_ne!(attributes(1000, 1000), attributes(1000, 1001));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rootfs_identity_includes_hardlink_topology() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let linked = tempfile::tempdir().unwrap();
+        fs::write(linked.path().join("a"), b"same bytes").unwrap();
+        fs::hard_link(linked.path().join("a"), linked.path().join("b")).unwrap();
+
+        let copied = tempfile::tempdir().unwrap();
+        fs::write(copied.path().join("a"), b"same bytes").unwrap();
+        fs::write(copied.path().join("b"), b"same bytes").unwrap();
+        for root in [linked.path(), copied.path()] {
+            fs::set_permissions(root.join("a"), fs::Permissions::from_mode(0o644)).unwrap();
+            fs::set_permissions(root.join("b"), fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        assert_ne!(
+            super::tree_hash(linked.path()).unwrap(),
+            super::tree_hash(copied.path()).unwrap()
+        );
     }
 
     #[cfg(unix)]
