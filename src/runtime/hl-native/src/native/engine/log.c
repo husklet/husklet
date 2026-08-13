@@ -109,3 +109,17 @@ void hl_log_format(const hl_log_context *context, uint32_t tag, const char *form
     (void)format;
 #endif
 }
+
+void hl_log_guest_fatal(const hl_log_context *context, uint32_t signal, uint64_t pc, uint64_t sp, uint64_t lr) {
+#if defined(HL_ENABLE_LOGGING) && HL_ENABLE_LOGGING
+    if (!hl_log_enabled(context, HL_LOG_TAG_SIGNAL)) return;
+    hl_log_format(context, HL_LOG_TAG_SIGNAL, "fatal-guest-signal signal=%u pc=%#llx sp=%#llx lr=%#llx", signal,
+                  (unsigned long long)pc, (unsigned long long)sp, (unsigned long long)lr);
+#else
+    (void)context;
+    (void)signal;
+    (void)pc;
+    (void)sp;
+    (void)lr;
+#endif
+}

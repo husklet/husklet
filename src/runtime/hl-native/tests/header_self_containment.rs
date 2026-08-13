@@ -42,6 +42,7 @@ int main(void) {
     if (short_buffer[0] != '\0') return 6;
     return 0;
 }
+
 "#,
     )
     .expect("write path composition probe source");
@@ -57,6 +58,70 @@ int main(void) {
     let run = Command::new(&executable).status().expect("path composition probe execution");
     assert!(run.success(), "path composition probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove path composition probe directory");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fatal_guest_signal_diagnostic_is_exact_and_selector_gated() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-fatal-log-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create fatal log probe directory");
+    let source = scratch.join("fatal_log.c");
+    let executable = scratch.join("fatal_log");
+    fs::write(
+        &source,
+        r#"
+#include "hl/log.h"
+#include <string.h>
+
+static char captured[256];
+static size_t captured_size;
+static unsigned calls;
+
+static void emit(void *context, uint32_t tag, const char *message, size_t size) {
+    (void)context;
+    if (tag != HL_LOG_TAG_SIGNAL || size >= sizeof captured) return;
+    memcpy(captured, message, size);
+    captured[size] = '\0';
+    captured_size = size;
+    calls++;
+}
+
+int main(void) {
+    const hl_host_log_services logs = {HL_HOST_LOG_ABI, sizeof(logs), emit};
+    hl_host_services host = {0};
+    host.abi = HL_HOST_SERVICES_ABI;
+    host.size = sizeof(host);
+    host.capabilities = HL_HOST_CAP_LOG;
+    host.log = &logs;
+    hl_log_context disabled;
+    if (hl_log_context_init(&disabled, &host, "") != HL_STATUS_OK) return 1;
+    hl_log_guest_fatal(&disabled, 11, 0x1234, 0x5678, 0x9abc);
+    if (calls != 0 || captured_size != 0) return 2;
+    hl_log_context enabled;
+    if (hl_log_context_init(&enabled, &host, "signal") != HL_STATUS_OK) return 3;
+    hl_log_guest_fatal(&enabled, 11, 0x1234, 0x5678, 0x9abc);
+    const char expected[] = "[hl:signal] fatal-guest-signal signal=11 pc=0x1234 sp=0x5678 lr=0x9abc\n";
+    if (calls != 1 || captured_size != sizeof expected - 1 || strcmp(captured, expected) != 0) return 4;
+    return 0;
+}
+"#,
+    )
+    .expect("write fatal log probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-DHL_ENABLE_LOGGING=1"])
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("engine/log.c"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("fatal log probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("fatal log probe execution");
+    assert!(run.success(), "fatal log probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove fatal log probe directory");
 }
 
 #[test]

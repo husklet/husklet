@@ -1081,23 +1081,15 @@ static void sig_diag_sync_reraise(int sig, int ls, siginfo_t *si, void *ucv) {
 
 static void sig_diag_raise_default(struct cpu *c, int sig) {
     // An engine-internal diagnostic for a guest taking a fatal-default signal. It must NEVER reach the
-    // guest's own stderr fd, so route it through the engine's tagged logging facility (HL_LOG_TAG_SIGNAL)
-    // exactly like every other engine diagnostic -- gated on the HL_LOG selector and compiled out entirely
-    // in a production (HL_ENABLE_LOGGING=0) build. A raw write(STDERR_FILENO) here leaked "[HLRAISE] ..."
-    // into the guest's captured stderr on any uncaught fatal signal (e.g. `kill -TERM $$`).
-    HL_LOGF(
-        &g_jit_log, HL_LOG_TAG_SIGNAL,
-        "raise-default pid=%#llx cpid=%#llx tid=%#llx sig=%#llx pc=%#llx sp=%#llx lr=%#llx handler=%#llx mask=%#llx",
-        (unsigned long long)getpid(), (unsigned long long)container_pid(),
-        (unsigned long long)(c ? (uint64_t)cpu_tid(c) : 0), (unsigned long long)sig,
-        (unsigned long long)(c ? G_PC(c) : 0), (unsigned long long)(c ? G_SP(c) : 0),
+    // guest's own stderr fd, so route it through the tagged logging service. Formatting is gated on the
+    // signal selector and compiled out in a production (HL_ENABLE_LOGGING=0) build.
+    hl_log_guest_fatal(&g_jit_log, (uint32_t)sig, c ? G_PC(c) : 0, c ? G_SP(c) : 0,
 #if G_GPC_HASH_SHIFT == 2
-        (unsigned long long)(c ? c->x[30] : 0),
+                       c ? c->x[30] : 0
 #else
-        0ull,
+                       0
 #endif
-        (unsigned long long)((sig >= 1 && sig <= 64) ? g_sigact[sig].handler : 0),
-        (unsigned long long)(c ? c->sigmask : 0));
+    );
 }
 
 // a GENUINE synchronous CPU fault (SIGSEGV/SIGBUS/...) taken in translated code for which the guest
