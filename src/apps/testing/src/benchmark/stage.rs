@@ -9,6 +9,8 @@ use std::{
 };
 
 mod malloc;
+#[path = "stage/python.rs"]
+mod python;
 
 const IMAGE: &str = "alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce";
 const IMAGE_ID: &str = "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce";
@@ -57,6 +59,20 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     }
     let mut identities = String::from("artifact\tidentity\n");
     for path in [&rootfs, &arch, &docker] {
+    let python_inspect = mac(&[
+        mac_path(&docker),
+        "image".into(),
+        "inspect".into(),
+        python::IMAGE.into(),
+        "--format".into(),
+        "{{.Id}}".into(),
+    ])?;
+    if String::from_utf8(python_inspect)?.trim() != python::IMAGE_ID {
+        return Err("pinned Python Docker image identity mismatch".into());
+    }
+    let python = python::stage(&output, &docker, &arch)?;
+    let mut identities = String::from("artifact\tidentity\n");
+    for path in [&rootfs, &arch, &docker, &python] {
         identities.push_str(&format!("{}\t{}\n", path.display(), artifact_identity(path)?));
     }
     for layout in &layouts {
@@ -90,10 +106,11 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         }
     }
     identities.push_str(&format!("docker-image\t{IMAGE_ID}\n"));
+    identities.push_str(&format!("python-docker-image\t{}\n", python::IMAGE_ID));
     fs::write(output.join("artifacts.tsv"), identities)?;
     fs::write(output.join("BLOCKERS.txt"), blockers())?;
     println!(
-        "READY malloc/plain malloc/sqlite\nBLOCKED campaign: see {}/BLOCKERS.txt",
+        "READY malloc/plain malloc/sqlite python/plain\nBLOCKED campaign: see {}/BLOCKERS.txt",
         output.display()
     );
     Ok(())
@@ -163,16 +180,16 @@ fn frame(output: &[u8]) -> Result<Vec<u8>, Error> {
     Ok((framed.join("\n") + "\n").into_bytes())
 }
 
-fn require_parity(native: &[u8], docker: &[u8]) -> Result<(), Error> {
+fn require_parity(workload: &str, native: &[u8], docker: &[u8]) -> Result<(), Error> {
     if native == docker {
         Ok(())
     } else {
-        Err("malloc/plain exact-output parity failed".into())
+        Err(format!("{workload} exact-output parity failed").into())
     }
 }
 
 fn blockers() -> &'static str {
-    "Campaign not emitted: the strict schema requires real malloc/python/sqlite workloads across plain/sqlite layouts.\nAvailable and exact-output matched: malloc/plain and malloc/sqlite Linux x86_64 ELF and x86_64 Mach-O.\nMissing: python/plain, python/sqlite, sqlite/sqlite paired artifacts and their declared phases.\nMissing: selected, built Husklet x86 command profile and its smoke proof.\nPinned Docker image: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce.\n"
+    "Campaign not emitted: the strict schema requires real malloc/python/sqlite workloads across plain/sqlite layouts.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, and python/plain on Linux x86_64 and x86_64 Mach-O.\nMissing: python/sqlite, sqlite/sqlite paired artifacts and their declared phases.\nMissing: selected, built Husklet x86 command profile and its smoke proof.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
 }
 
 fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
@@ -209,15 +226,22 @@ mod tests {
     fn incomplete_stage_refuses_to_claim_a_campaign() {
         let text = blockers();
         assert!(text.starts_with("Campaign not emitted"));
-        for missing in ["python/plain", "python/sqlite", "sqlite/sqlite", "Husklet x86"] {
+        for missing in ["python/sqlite", "sqlite/sqlite", "Husklet x86"] {
             assert!(text.contains(missing));
         }
     }
 
     #[test]
     fn checksum_difference_refuses_cross_provider_parity() {
-        assert!(require_parity(b"PHASE malloc us=<time> ok=7\n", b"PHASE malloc us=<time> ok=8\n").is_err());
-        require_parity(b"same\n", b"same\n").unwrap();
+        assert!(
+            require_parity(
+                "malloc/plain",
+                b"PHASE malloc us=<time> ok=7\n",
+                b"PHASE malloc us=<time> ok=8\n"
+            )
+            .is_err()
+        );
+        require_parity("malloc/plain", b"same\n", b"same\n").unwrap();
     }
 
     #[test]
