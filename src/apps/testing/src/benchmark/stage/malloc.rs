@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-pub(super) const SOURCE: &str = "tests/benchmark/malloc.c";
+pub(super) const SOURCE: &str = "src/apps/testing/tests/fixtures/guest/malloc.c";
 
 pub(super) struct Layout {
     pub name: &'static str,
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn plain_and_sqlite_layouts_share_one_source_and_differ_only_by_link_contract() {
         let layouts = layouts(
-            std::path::Path::new("/workspace/tests/benchmark/malloc.c"),
+            std::path::Path::new("/workspace/src/apps/testing/tests/fixtures/guest/malloc.c"),
             std::path::Path::new("/stage/rootfs"),
             std::path::Path::new("/stage"),
         );
