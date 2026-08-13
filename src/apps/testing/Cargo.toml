@@ -21,7 +21,6 @@ hl-native = { path = "../../runtime/hl-native" }
 hl-process = { path = "../../packages/hl-process" }
 hl-engine = { path = "../../containers/hl-engine" }
 libc = "0.2"
-nix = { version = "0.30", features = ["signal"] }
 reflink-copy.workspace = true
 ring = "0.17.14"
 sha2.workspace = true

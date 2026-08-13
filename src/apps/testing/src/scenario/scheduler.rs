@@ -12,9 +12,6 @@ use tokio::{
     task::JoinSet,
 };
 
-#[path = "scheduler_lifecycle.rs"]
-mod process_lifecycle;
-
 pub(super) struct Summary {
     pub passed: usize,
     pub expected_failures: usize,

@@ -2663,7 +2663,6 @@ dependencies = [
  "hl-native",
  "hl-process",
  "libc",
- "nix",
  "reflink-copy",
  "ring",
  "serde",
