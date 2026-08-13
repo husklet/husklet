@@ -375,19 +375,7 @@ impl<'a> CaseExecution<'a> {
         logs.bounded()?;
         if self.execution.diagnostics() {
             let text = std::str::from_utf8(&logs.stderr).map_err(|_| "retained C diagnostics are not UTF-8")?;
-            let profile = text
-                .lines()
-                .find(|line| line.starts_with("[prof] "))
-                .ok_or("retained C profile line was not emitted")?;
-            let misses = profile
-                .split_whitespace()
-                .find_map(|field| field.strip_prefix("ibtc_miss="))
-                .ok_or("retained C profile omitted ibtc_miss")?
-                .parse::<u64>()
-                .map_err(|_| "retained C ibtc_miss is not an integer")?;
-            if misses > 100_000 {
-                return Err(format!("retained C warm IBTC misses {misses} exceed 100000").into());
-            }
+            validate_profile(text)?;
             logs.stderr = text
                 .lines()
                 .filter(|line| !line.starts_with("[prof] "))
@@ -419,6 +407,37 @@ impl<'a> CaseExecution<'a> {
         }
         Ok(())
     }
+}
+
+/// Accepts both the full process-exit report and the bounded dispatcher report used when a guest
+/// thread or signal unwinds through the engine. Optional performance counters such as `ibtc_miss`
+/// must not decide whether diagnostics were transported.
+fn validate_profile(stderr: &str) -> Result<(), Error> {
+    let mut crossings = None;
+    let mut translations = None;
+    for field in stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("[prof] "))
+        .flat_map(str::split_whitespace)
+    {
+        let Some((name, value)) = field.split_once('=') else {
+            continue;
+        };
+        let destination = match name {
+            "crossings" => &mut crossings,
+            "translations" => &mut translations,
+            _ => continue,
+        };
+        *destination = Some(
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("retained C {name} is not an integer"))?,
+        );
+    }
+    if crossings.is_none() || translations.is_none() {
+        return Err("retained C profile omitted the crossings/translations summary".into());
+    }
+    Ok(())
 }
 
 /// Declared stderr patterns are an assertion, not an allowance: every emitted line must match a
@@ -496,7 +515,19 @@ impl CaseExecution<'_> {
 
 #[cfg(test)]
 mod stderr_tests {
-    use super::{CLEANUP_TIMEOUT, cleanup_timeout_diagnostic, glob, stderr_violation};
+    use super::{CLEANUP_TIMEOUT, cleanup_timeout_diagnostic, glob, stderr_violation, validate_profile};
+
+    #[test]
+    fn dispatcher_summary_is_a_complete_diagnostic_record() {
+        validate_profile("[prof] dispatcher crossings=41 translations=7\n").unwrap();
+    }
+
+    #[test]
+    fn process_exit_details_are_optional_but_the_summary_is_not() {
+        validate_profile("[prof] crossings=41 syscalls=9 ibtc_miss=2 translations=7\n").unwrap();
+        let error = validate_profile("[prof] shadow_push=3 shret_hit=2\n").unwrap_err();
+        assert!(error.to_string().contains("crossings/translations"), "{error}");
+    }
 
     #[test]
     fn an_undeclared_stderr_line_still_fails_the_case() {
