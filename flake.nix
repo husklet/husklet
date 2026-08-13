@@ -829,6 +829,15 @@
               -o windows-host-services.obj
             ${windows.stdenv.cc.targetPrefix}objdump -f windows-host-services.obj \
               | grep -F 'architecture: i386:x86-64' >/dev/null
+            ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
+              -Isrc/runtime/hl-native/src/native \
+              -Isrc/runtime/hl-native/src/native/include \
+              -Isrc/runtime/hl-native/src/native/toolchain/msvc-posix/include \
+              -include src/runtime/hl-native/src/native/toolchain/msvc-posix/include/prelude.h \
+              -c src/runtime/hl-native/src/native/toolchain/msvc-posix/compatibility.c \
+              -o windows-posix-compatibility.obj
+            ${windows.stdenv.cc.targetPrefix}objdump -f windows-posix-compatibility.obj \
+              | grep -F 'architecture: i386:x86-64' >/dev/null
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
               -DHL_SHARED -DHL_ABI_COMPILE_CONTRACT \
               -Isrc/runtime/hl-native/src/native/include \
@@ -863,7 +872,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows hl-native/hl-engine Rust target compile, every Windows host-service translation unit combined into one exact x86-64 COFF object, strict C/C++ public-header contracts, and ABI fixture DLL/import-library link; this is not the complete engine DLL, MSVC SDK, or runtime proof' \
+              'GNU Windows hl-native/hl-engine Rust target compile, every Windows host-service translation unit combined into one exact x86-64 COFF object, the forced POSIX compatibility prelude/implementation, strict C/C++ public-header contracts, and ABI fixture DLL/import-library link; this is not the complete engine DLL, MSVC SDK, or runtime proof' \
               > "$out/evidence"
           '';
         };

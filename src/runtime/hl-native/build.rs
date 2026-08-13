@@ -289,6 +289,12 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
     }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         build.include("src/native/toolchain/msvc-posix/include");
+        let prelude = "src/native/toolchain/msvc-posix/include/prelude.h";
+        if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+            build.flag(&format!("/FI{prelude}"));
+        } else {
+            build.flag("-include").flag(prelude);
+        }
     }
     if name == "hl_c_backend_shim" {
         // This archive is the narrow Rust/C bridge. The engine itself stays
