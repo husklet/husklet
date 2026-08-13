@@ -41,6 +41,18 @@
 #include <stddef.h>
 #include <time.h>
 
+/* Windows has no sysconf namespace or Unix load averages. Keep these names
+ * private to the compatibility seam so mingw libraries cannot accidentally
+ * satisfy a different ABI spelling. */
+#define sysconf hl_windows_sysconf
+#define getloadavg hl_windows_getloadavg
+#define arc4random_buf hl_windows_arc4random_buf
+#ifndef _SC_CLK_TCK
+#define _SC_CLK_TCK 1
+#define _SC_OPEN_MAX 2
+#define _SC_NPROCESSORS_ONLN 3
+#endif
+
 /* PATH_MAX. Not a Windows concept: the UCRT's nearest equivalent is _MAX_PATH
  * (260), the legacy limit, while the actual limit with a \\?\ prefix is 32767
  * UTF-16 units. This tree uses PATH_MAX to size buffers holding GUEST paths,
@@ -81,6 +93,9 @@ extern "C" {
 int clock_gettime(clockid_t clock_id, struct timespec *now);
 int clock_getres(clockid_t clock_id, struct timespec *resolution);
 int nanosleep(const struct timespec *requested, struct timespec *remaining);
+long hl_windows_sysconf(int name);
+int hl_windows_getloadavg(double averages[], int count);
+void hl_windows_arc4random_buf(void *buffer, size_t size);
 
 /* Three string functions that mingw-w64 declares from <string.h> as GNU
  * extensions and the UCRT spells differently. The call sites include

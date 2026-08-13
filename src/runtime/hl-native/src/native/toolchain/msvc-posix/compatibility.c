@@ -24,12 +24,43 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sched.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+
+long hl_windows_sysconf(int name) {
+    switch (name) {
+        case _SC_CLK_TCK:
+            return 100;
+        case _SC_OPEN_MAX:
+            return _getmaxstdio();
+        case _SC_NPROCESSORS_ONLN: {
+            DWORD count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+            return count == 0 ? 1 : (long)count;
+        }
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+}
+
+int hl_windows_getloadavg(double averages[], int count) {
+    (void)averages;
+    (void)count;
+    errno = ENOSYS;
+    return -1;
+}
+
+void hl_windows_arc4random_buf(void *buffer, size_t size) {
+    if (size == 0) return;
+    if (buffer == NULL || size > ULONG_MAX ||
+        BCryptGenRandom(NULL, buffer, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+        abort();
+}
 
 /* pthread.h declares SRWLOCK and CONDITION_VARIABLE structurally so that
  * locking a mutex does not drag <windows.h> into every TU. That is only sound
