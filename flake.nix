@@ -542,6 +542,13 @@
               awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' |
               sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
             printf '%s\n' \
+              hl_c_backend_checkpoint_adopt \
+              hl_c_backend_checkpoint_broker_accept \
+              hl_c_backend_checkpoint_broker_pair \
+              hl_c_backend_checkpoint_interrupt_signal \
+              hl_c_backend_checkpoint_trigger_bump \
+              hl_c_backend_checkpoint_trigger_create \
+              hl_c_backend_checkpoint_trigger_destroy \
               hl_c_backend_create \
               hl_c_backend_destroy \
               hl_c_backend_executable_discard \
@@ -657,6 +664,13 @@
               | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
               | sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
             printf '%s\n' \
+              hl_c_backend_checkpoint_adopt \
+              hl_c_backend_checkpoint_broker_accept \
+              hl_c_backend_checkpoint_broker_pair \
+              hl_c_backend_checkpoint_interrupt_signal \
+              hl_c_backend_checkpoint_trigger_bump \
+              hl_c_backend_checkpoint_trigger_create \
+              hl_c_backend_checkpoint_trigger_destroy \
               hl_c_backend_create \
               hl_c_backend_destroy \
               hl_c_backend_executable_discard \
@@ -813,6 +827,13 @@
             file "$dll" | grep -E 'PE32\+.*DLL.*x86-64'
             file "$import" | grep -F 'current ar archive'
             cat > expected-engine-exports <<'EOF'
+            hl_c_backend_checkpoint_adopt
+            hl_c_backend_checkpoint_broker_accept
+            hl_c_backend_checkpoint_broker_pair
+            hl_c_backend_checkpoint_interrupt_signal
+            hl_c_backend_checkpoint_trigger_bump
+            hl_c_backend_checkpoint_trigger_create
+            hl_c_backend_checkpoint_trigger_destroy
             hl_c_backend_create
             hl_c_backend_destroy
             hl_c_backend_executable_discard
@@ -916,6 +937,13 @@
           otool -D "$library" | grep -Fx '@rpath/libhl_native_engine.dylib' >/dev/null
           nm -gjU "$library" | sort -u > "$TMPDIR/actual-exports"
           printf '%s\n' \
+            _hl_c_backend_checkpoint_adopt \
+            _hl_c_backend_checkpoint_broker_accept \
+            _hl_c_backend_checkpoint_broker_pair \
+            _hl_c_backend_checkpoint_interrupt_signal \
+            _hl_c_backend_checkpoint_trigger_bump \
+            _hl_c_backend_checkpoint_trigger_create \
+            _hl_c_backend_checkpoint_trigger_destroy \
             _hl_c_backend_create \
             _hl_c_backend_destroy \
             _hl_c_backend_executable_discard \
