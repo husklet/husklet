@@ -2677,6 +2677,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "xattr",
 ]
 
 [[package]]

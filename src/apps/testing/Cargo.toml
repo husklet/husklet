@@ -32,6 +32,9 @@ tempfile.workspace = true
 tar.workspace = true
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "signal"] }
 
+[target.'cfg(unix)'.dependencies]
+xattr = "1.6.1"
+
 [[bin]]
 name = "testing"
 path = "src/main.rs"

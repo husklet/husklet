@@ -256,6 +256,9 @@ fn tree_hash(root: &Path) -> Result<String, Error> {
             identity.field(relative.as_os_str().as_encoded_bytes())?;
             let metadata = fs::symlink_metadata(&path)?;
             permissions(&metadata, identity)?;
+            if !metadata.file_type().is_symlink() {
+                attributes(&path, identity)?;
+            }
             if metadata.file_type().is_symlink() {
                 identity.field(b"L")?;
                 identity.field(fs::read_link(path)?.as_os_str().as_encoded_bytes())?;
@@ -272,10 +275,29 @@ fn tree_hash(root: &Path) -> Result<String, Error> {
         }
         Ok(())
     }
-    let mut identity = FramedIdentity::new(b"husklet-rootfs-tree-v3")?;
+    let mut identity = FramedIdentity::new(b"husklet-rootfs-tree-v4")?;
     permissions(&fs::symlink_metadata(root)?, &mut identity)?;
+    attributes(root, &mut identity)?;
     walk(root, root, &mut identity, &mut BTreeMap::new())?;
     Ok(identity.finish())
+}
+
+fn attributes(path: &Path, identity: &mut FramedIdentity) -> Result<(), Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let mut names = xattr::list(path)?.collect::<Vec<_>>();
+        names.sort();
+        identity.field(&(names.len() as u64).to_le_bytes())?;
+        for name in names {
+            identity.field(name.as_bytes())?;
+            let value = xattr::get(path, &name)?.ok_or("rootfs xattr disappeared while hashing")?;
+            identity.field(&value)?;
+        }
+    }
+    #[cfg(not(unix))]
+    identity.field(&0_u64.to_le_bytes())?;
+    Ok(())
 }
 
 fn hardlink(
@@ -479,6 +501,17 @@ mod tests {
             super::tree_hash(linked.path()).unwrap(),
             super::tree_hash(copied.path()).unwrap()
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rootfs_identity_includes_extended_attributes() {
+        let directory = tempfile::tempdir().unwrap();
+        let guest = directory.path().join("guest");
+        fs::write(&guest, b"same bytes").unwrap();
+        let before = super::tree_hash(directory.path()).unwrap();
+        xattr::set(&guest, "user.husklet-benchmark", b"changed behavior").unwrap();
+        assert_ne!(before, super::tree_hash(directory.path()).unwrap());
     }
 
     #[cfg(unix)]
