@@ -160,7 +160,7 @@ static inline void interp_access_end(void) {
 
 int interp_signal_capture(struct cpu *cpu, void *native_context);
 void interp_signal_resume(struct cpu *cpu, void *native_context);
-static int translit_signal_capture(struct cpu *cpu, void *native_context); // translit.c
+static int translit_signal_capture(struct cpu *cpu, void *native_context); // translit.inc
 
 // 1 only for a fault the GUEST caused: inside a marked interpreter access, or -- when the transliterator
 // is on -- at a host PC inside the code cache, where every access is a guest access by construction and

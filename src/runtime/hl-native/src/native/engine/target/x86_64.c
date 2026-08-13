@@ -435,7 +435,7 @@ void emit_load_mem(struct insn *insn, uint64_t next, int width, int rt) {
 #include "../../translator/guest/x86_64/cache.c"     // persistent translated-code cache (HL_PCACHE=1)
 
 // The same-ISA transliterator is a THIRD arm of this fork and belongs to the interpreter's side of it
-// (translator/guest/x86_64/translit.c, included by interp.c). The two hooks the rest of this file calls
+// (translator/guest/x86_64/translit.inc, included by interp.c). The two hooks the rest of this file calls
 // exist here too, so the ARM64 host arm needs no #ifdef at either call site.
 static int translit_enabled(void) {
     return 0;

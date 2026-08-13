@@ -373,7 +373,7 @@ static uint64_t interp_locked_rmw(uint64_t guest_address, int width, enum interp
 // host_entry_off is the whole of the transliterator's intrusion on this backend: 0 means "interpret this
 // block", anything else is the offset to same-ISA host code emitted straight after the header. Both kinds
 // live in one cache and the dispatcher cannot tell them apart, which is what makes the second backend
-// strictly additive (translit.c).
+// strictly additive (translit.inc).
 struct interp_block {
     uint64_t magic;
     uint64_t gpc;
@@ -383,7 +383,7 @@ struct interp_block {
     uint32_t host_len;
 };
 
-#include "../translit.c"
+#include "../translit.inc"
 
 // Must return a distinct non-NULL pointer per guest PC: non-NULL from map_host() suppresses re-translation.
 static void *translate_block(uint64_t gpc) {
