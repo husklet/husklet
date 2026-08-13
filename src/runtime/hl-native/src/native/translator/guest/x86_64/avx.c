@@ -1490,6 +1490,52 @@ static enum avx_dispatch_result avx_dispatch_scalar_integer_conversion(const hl_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_precision_conversion(const hl_x86_avx_state *state, struct cpu *c,
+                                                                 struct insn *instruction, uint64_t next, int map,
+                                                                 int op, int prefix, int destination,
+                                                                 int merge_register, int width) {
+    if (map != 1 || op != 0x5A) return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t input[64], output[64];
+    if (prefix == 2 || prefix == 3) { // scalar ss->sd or sd->ss
+        int input_size = prefix == 2 ? 4 : 8;
+        avx_get(c, merge_register, output);
+        avx_get_rm(state, c, instruction, next, input_size, input);
+        if (prefix == 2) {
+            float value;
+            memcpy(&value, input, 4);
+            double converted = (double)value;
+            memcpy(output, &converted, 8);
+        } else {
+            double value;
+            memcpy(&value, input, 8);
+            float converted = (float)value;
+            memcpy(output, &converted, 4);
+        }
+        avx_put(c, destination, output, 16);
+    } else if (prefix == 0) { // packed ps->pd
+        avx_get_rm(state, c, instruction, next, width / 2, input);
+        for (int element = 0; element < width / 8; element++) {
+            float value;
+            memcpy(&value, input + 4 * element, 4);
+            double converted = (double)value;
+            memcpy(output + 8 * element, &converted, 8);
+        }
+        avx_put(c, destination, output, width);
+    } else { // packed pd->ps
+        avx_get_rm(state, c, instruction, next, width, input);
+        for (int element = 0; element < width / 8; element++) {
+            double value;
+            memcpy(&value, input + 8 * element, 8);
+            float converted = (float)value;
+            memcpy(output + 4 * element, &converted, 4);
+        }
+        avx_put(c, destination, output, width / 2);
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1949,6 +1995,8 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED)
         return;
+    if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED)
+        return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2067,48 +2115,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + 8, b, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0x5A: {       // vcvtss2sd/sd2ss (scalar) or vcvtps2pd/pd2ps (packed) per pp
-            if (pp == 2) { // F3: ss->sd scalar, rest of low-128 from src1
-                avx_get(c, vv, a);
-                avx_get_rm(state, c, &I, next, 4, b);
-                memcpy(d, a, 16);
-                float x;
-                memcpy(&x, b, 4);
-                double y = (double)x;
-                memcpy(d, &y, 8);
-                avx_put(c, rd, d, 16);
-            } else if (pp == 3) { // F2: sd->ss scalar
-                avx_get(c, vv, a);
-                avx_get_rm(state, c, &I, next, 8, b);
-                memcpy(d, a, 16);
-                double x;
-                memcpy(&x, b, 8);
-                float y = (float)x;
-                memcpy(d, &y, 4);
-                avx_put(c, rd, d, 16);
-            } else if (pp == 0) { // np: ps->pd, src is W/2 bytes of floats -> W bytes doubles
-                avx_get_rm(state, c, &I, next, W / 2, b);
-                int n = W / 8;
-                for (int i = 0; i < n; i++) {
-                    float x;
-                    memcpy(&x, b + 4 * i, 4);
-                    double y = (double)x;
-                    memcpy(d + 8 * i, &y, 8);
-                }
-                avx_put(c, rd, d, W);
-            } else { // 66: pd->ps, src W bytes doubles -> W/2 bytes floats
-                avx_get_rm(state, c, &I, next, W, b);
-                int n = W / 8;
-                for (int i = 0; i < n; i++) {
-                    double x;
-                    memcpy(&x, b + 8 * i, 8);
-                    float y = (float)x;
-                    memcpy(d + 4 * i, &y, 4);
-                }
-                avx_put(c, rd, d, W / 2);
-            }
             goto done;
         }
         case 0x51: { // vsqrtps(NP)/pd(66)/ss(F3)/sd(F2): packed source = rm only; scalar low = sqrt(rm), rest = vvvv
