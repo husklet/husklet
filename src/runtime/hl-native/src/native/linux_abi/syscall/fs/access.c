@@ -533,7 +533,14 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
             char hb[4200];
             const char *hp = xresolve_overlay(ep, hb, sizeof hb);
             int ef = open(hp, O_RDONLY);
-            if (ef >= 0 && (lf & 0x80000)) fcntl(ef, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+            if (ef >= 0) {
+                if (lf & 0x80000) fcntl(ef, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
+                if (ef < HL_NFD) {
+                    if (path_copy(g_fdpath[ef], sizeof g_fdpath[ef], hp) != 0) g_fdpath[ef][0] = 0;
+                    g_fdpath_guest[ef] = 0;
+                    (void)proc_fdvis_publish_native_fd(ef);
+                }
+            }
             G_RET(c) = ef < 0 ? (uint64_t)(-errno) : (uint64_t)ef;
             return 1;
         }
@@ -680,6 +687,14 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
             // /dev/tty (and /dev/console, backed by /dev/null): tty read semantics -- a nonblocking
             // empty read is EAGAIN, never EOF (see g_devtty). Flag the fd so svc_io maps 0->EAGAIN.
             if (d >= 0 && d < HL_NFD) g_devtty[d] = (!strcmp(rp, "/dev/tty") || !strcmp(rp, "/dev/console"));
+            if (d >= 0 && d < HL_NFD) {
+                // Native device opens still occupy the guest descriptor namespace. Publish their
+                // guest-visible name so /proc/self/fd never tries to rebase the host's /dev path
+                // through the rootfs (or mistakes an engine-private descriptor with the same number).
+                if (path_copy(g_fdpath[d], sizeof g_fdpath[d], rp) != 0) g_fdpath[d][0] = 0;
+                g_fdpath_guest[d] = g_fdpath[d][0] != 0;
+                (void)proc_fdvis_publish_native_fd(d);
+            }
             // This dev open uses only the access mode (mf gains O_NONBLOCK below, after this block),
             // so propagate the guest's O_NONBLOCK onto the tty fd now -- both so its host reads are
             // genuinely nonblocking and so F_GETFL reflects it for the 0->EAGAIN remap in svc_io.
@@ -782,7 +797,13 @@ if (jail_routed_at((int)a0, (const char *)a1)) {
         if (opened >= 0 && (projected != NULL || hl_provider_tree_files_active()) && opened < HL_NFD) {
             if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], overlay_guest) != 0)
                 g_fdpath[(int)opened][0] = 0;
+            g_fdpath_guest[(int)opened] = g_fdpath[(int)opened][0] != 0;
         } else if (opened >= 0 && have_typed_host_path) {
+            if (opened < HL_NFD) {
+                if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], typed_host_path) != 0)
+                    g_fdpath[(int)opened][0] = 0;
+                g_fdpath_guest[(int)opened] = 0;
+            }
             hl_fdcache_fd_setpath((int)opened, typed_host_path);
             if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
                 HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "open-cache-evict path=%s typed=1 created=%d",
@@ -832,6 +853,14 @@ if (jail_routed_at((int)a0, (const char *)a1)) {
             // next open of the same guest path is a single open(). hl_fdcache_open_store re-checks
             // in-jail+epoch.
             if (cacheable) hl_fdcache_open_store(gkey, gp);
+        }
+        // A bound launch still has a few deliberately native opens (directories and special
+        // filesystem objects). Publish those logical descriptors too: fdvis is the complete
+        // /proc/self/fd authority in bound mode and must not fall through to worker-private fds.
+        if (!bound_source_is_native()) (void)proc_fdvis_publish_native_fd(r);
+        if (r < HL_NFD) {
+            if (path_copy(g_fdpath[r], sizeof g_fdpath[r], typed_guest_path) != 0) g_fdpath[r][0] = 0;
+            g_fdpath_guest[r] = g_fdpath[r][0] != 0;
         }
     }
     G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;

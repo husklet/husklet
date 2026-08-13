@@ -6,7 +6,9 @@ int main(void) {
     pid_t pid = getpid();
     pid_t ppid = getppid();
     int pid_ok = pid > 0;
-    int ppid_ok = ppid > 0 && ppid != pid;
+    // PID-namespace init is the one valid zero-parent process. Outside that role, parent identity is
+    // positive and distinct. This normalization is true both under native/QEMU and in a real container.
+    int ppid_ok = (pid == 1) ? ppid == 0 : ppid > 0 && ppid != pid;
     int uid_ok = getuid() == geteuid() || geteuid() >= 0; // euid sane
     int gid_ok = getgid() >= 0 && getegid() >= 0;
     pid_t pg = getpgrp();

@@ -255,6 +255,7 @@ static int table_clone_locked(const struct sentry_proc *source) {
         hl_native_kqueue_duplicate(source->real[v], duplicate);
         if (duplicate < HL_NFD && source->real[v] >= 0 && source->real[v] < HL_NFD) {
             memmove(g_fdpath[duplicate], g_fdpath[source->real[v]], sizeof g_fdpath[duplicate]);
+            g_fdpath_guest[duplicate] = g_fdpath_guest[source->real[v]];
             memmove(g_proc_text_desc[duplicate], g_proc_text_desc[source->real[v]], sizeof g_proc_text_desc[duplicate]);
             g_proc_text_ro[duplicate] = g_proc_text_ro[source->real[v]];
             g_pagemap_fd[duplicate] = g_pagemap_fd[source->real[v]];

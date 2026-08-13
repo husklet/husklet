@@ -765,17 +765,14 @@ static int proc_fd_link_pid(int host, int fd, char *out, size_t n) {
         memcpy(out, logical, (size_t)length);
         return length;
     }
-    /* A provider-backed (bound-volume) regular file has no reliable native
-     * descriptor in this process's fd table -- resolving it by device/object
-     * identity can collide with an unrelated engine-private fd.  The engine's
-     * own fd->path table is authoritative, so a self file descriptor with a
-     * tracked host path resolves through it and is rebased into the guest
-     * namespace, matching what native inspection produces for host-backed fds. */
-    if (host == (int)getpid() && logical_found && logical_kind == HL_HOST_FD_FILE && fd >= 0 && fd < HL_NFD &&
-        g_fdpath[fd][0]) {
+    /* A provider-backed descriptor has no reliable native descriptor in this
+     * process's fd table -- resolving it by device/object identity can collide
+     * with an unrelated engine-private fd. The engine's fd->path table is
+     * authoritative for every tracked self descriptor, including directories. */
+    if (host == (int)getpid() && logical_found && fd >= 0 && fd < HL_NFD && g_fdpath[fd][0]) {
         char tracked[4200];
         snprintf(tracked, sizeof tracked, "%s", g_fdpath[fd]);
-        int mapped = proc_fd_rebase(tracked, sizeof tracked);
+        int mapped = g_fdpath_guest[fd] ? 1 : proc_fd_rebase(tracked, sizeof tracked);
         if (mapped < 0 || (g_rootfs && mapped == 0)) return -1;
         size_t l = strlen(tracked);
         if (l > n) l = n;

@@ -308,6 +308,50 @@ static int readlink_procfd_special(struct cpu *c, int fd, char *buf, size_t size
 }
 
 static int readlink_procfd_typed(struct cpu *c, int fd, char *buf, size_t size) {
+    if (fd >= 0 && fd < HL_NFD && g_fdpath[fd][0]) {
+        char target[4200];
+        snprintf(target, sizeof target, "%s", g_fdpath[fd]);
+        int mapped = g_fdpath_guest[fd] ? 1 : proc_fd_rebase(target, sizeof target);
+        if (mapped < 0 || (g_rootfs && mapped == 0))
+            G_RET(c) = (uint64_t)(int64_t)(mapped < 0 ? mapped : -EACCES);
+        else
+            readlink_copy(c, buf, size, target, strlen(target));
+        return 1;
+    }
+    if (bound_source_is_native() && fcntl(fd, F_GETFD) < 0) {
+        G_RET(c) = (uint64_t)(-ENOENT);
+        return 1;
+    }
+    uint32_t kind;
+    uint64_t device, object;
+    if (proc_fdvis_lookup((int)getpid(), fd, &kind, &device, &object)) {
+        if (!bound_source_is_native() && kind == HL_HOST_FD_FILE) {
+            hl_linux_fd_snapshot snapshot;
+            if (g_linux_box == NULL ||
+                hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)fd, &snapshot) != HL_STATUS_OK) {
+                G_RET(c) = (uint64_t)(-ENOENT);
+                return 1;
+            }
+            char target[4200];
+            if (bound_handle_host_path(snapshot.host_handle, target, sizeof target) != 0) {
+                G_RET(c) = (uint64_t)(-ENOENT);
+                return 1;
+            }
+            int mapped = proc_fd_rebase(target, sizeof target);
+            if (mapped < 0 || (g_rootfs && mapped == 0))
+                G_RET(c) = (uint64_t)(int64_t)(mapped < 0 ? mapped : -EACCES);
+            else
+                readlink_copy(c, buf, size, target, strlen(target));
+            return 1;
+        }
+        char target[4200];
+        int length = proc_fd_link_pid((int)getpid(), fd, target, sizeof target);
+        if (length < 0)
+            G_RET(c) = (uint64_t)(-ENOENT);
+        else
+            readlink_copy(c, buf, size, target, (size_t)length);
+        return 1;
+    }
     if (!bound_source_is_native()) {
         hl_linux_fd_snapshot typed;
         char target[4200];
@@ -320,17 +364,13 @@ static int readlink_procfd_typed(struct cpu *c, int fd, char *buf, size_t size) 
                 readlink_copy(c, buf, size, target, strlen(target));
             return 1;
         }
-    }
-    uint32_t kind;
-    uint64_t device, object;
-    if (!proc_fdvis_lookup((int)getpid(), fd, &kind, &device, &object)) return 0;
-    char target[4200];
-    int length = proc_fd_link_pid((int)getpid(), fd, target, sizeof target);
-    if (length < 0)
+        // In bound mode fdvis plus the typed table are the complete guest descriptor authority.
+        // Falling through to the worker's native table can resolve an unrelated private descriptor
+        // that happens to reuse the closed guest number.
         G_RET(c) = (uint64_t)(-ENOENT);
-    else
-        readlink_copy(c, buf, size, target, (size_t)length);
-    return 1;
+        return 1;
+    }
+    return 0;
 }
 
 static int readlink_procfd_pipe(struct cpu *c, int fd, char *buf, size_t size) {

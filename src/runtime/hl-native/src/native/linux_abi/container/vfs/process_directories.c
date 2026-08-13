@@ -237,6 +237,20 @@ static int ns_link_target(const char *name, char *out, size_t cap) {
     return -1;
 }
 
+// Clone/setns namespace type corresponding to a procfs namespace leaf. The two *_for_children
+// links name the namespace type they would place a child into, so setns validates them as PID/TIME.
+static unsigned ns_clone_flag(const char *name) {
+    if (!strcmp(name, "cgroup")) return 0x02000000u;
+    if (!strcmp(name, "ipc")) return 0x08000000u;
+    if (!strcmp(name, "mnt")) return 0x00020000u;
+    if (!strcmp(name, "net")) return 0x40000000u;
+    if (!strcmp(name, "pid") || !strcmp(name, "pid_for_children")) return 0x20000000u;
+    if (!strcmp(name, "time") || !strcmp(name, "time_for_children")) return 0x00000080u;
+    if (!strcmp(name, "user")) return 0x10000000u;
+    if (!strcmp(name, "uts")) return 0x04000000u;
+    return 0;
+}
+
 // ================= guest-pid namespace (kill/pidfd host-authority containment) =================
 // hl runs every guest process as a real host (macOS) process, and historically used the host pid 1:1 as
 // the guest pid. That let a guest kill(2)/pidfd_send_signal an ARBITRARY same-user HOST pid -- a sibling

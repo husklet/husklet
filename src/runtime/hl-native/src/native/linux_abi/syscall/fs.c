@@ -569,6 +569,8 @@ static void fd_reset_emul(int fd) {
         g_memfd_is[fd] = 0;
         g_memfd_seal[fd] = 0;
         g_proc_text_desc[fd][0] = 0;
+        g_fdpath[fd][0] = 0;
+        g_fdpath_guest[fd] = 0;
         g_proc_text_ro[fd] = 0;
         g_pagemap_fd[fd] = 0;
         g_pipesz[fd] = 0;     // drop this fd's emulated F_SETPIPE_SZ so a reused number reports the default

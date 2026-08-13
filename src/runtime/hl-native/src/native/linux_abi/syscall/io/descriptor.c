@@ -17,6 +17,7 @@ static int svc_dup(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // carry path + socket-emulation metadata to the new fd
         if (r >= 0 && r < HL_NFD && (int)a0 >= 0 && (int)a0 < HL_NFD) {
             memmove(g_fdpath[r], g_fdpath[(int)a0], sizeof g_fdpath[r]);
+            g_fdpath_guest[r] = g_fdpath_guest[(int)a0];
             memmove(g_proc_text_desc[r], g_proc_text_desc[(int)a0], sizeof g_proc_text_desc[r]);
             g_proc_text_ro[r] = g_proc_text_ro[(int)a0]; // dup shares the open file description (dup3/F_DUPFD do too)
             g_pagemap_fd[r] = g_pagemap_fd[(int)a0];
@@ -92,6 +93,7 @@ static int svc_dup3(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             if (d3flags & 0x80000) fcntl(r, F_SETFD, FD_CLOEXEC); // O_CLOEXEC
             if ((int)a1 >= 0 && (int)a1 < HL_NFD && (int)a0 >= 0 && (int)a0 < HL_NFD) {
                 memmove(g_fdpath[(int)a1], g_fdpath[(int)a0], sizeof g_fdpath[(int)a1]);
+                g_fdpath_guest[(int)a1] = g_fdpath_guest[(int)a0];
                 memmove(g_proc_text_desc[(int)a1], g_proc_text_desc[(int)a0], sizeof g_proc_text_desc[(int)a1]);
                 g_proc_text_ro[(int)a1] = g_proc_text_ro[(int)a0];
                 g_pagemap_fd[(int)a1] = g_pagemap_fd[(int)a0];
@@ -608,6 +610,7 @@ static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         if (r >= 0 && (lcmd == 0 || lcmd == 1030) && r < HL_NFD && (int)a0 >= 0 && (int)a0 < HL_NFD) {
             // F_DUPFD(_CLOEXEC)
             memmove(g_fdpath[r], g_fdpath[(int)a0], sizeof g_fdpath[r]);
+            g_fdpath_guest[r] = g_fdpath_guest[(int)a0];
             memmove(g_proc_text_desc[r], g_proc_text_desc[(int)a0], sizeof g_proc_text_desc[r]);
             g_proc_text_ro[r] = g_proc_text_ro[(int)a0];
             g_pagemap_fd[r] = g_pagemap_fd[(int)a0];

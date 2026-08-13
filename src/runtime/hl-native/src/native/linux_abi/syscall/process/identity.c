@@ -308,7 +308,22 @@ static int svc_proc_97(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
 
 static int svc_proc_268(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
-    case 268: G_RET(c) = ((int)a0 < 0) ? (uint64_t)(int64_t)(-EBADF) : 0; break;
+    case 268: {
+        int fd = (int)a0;
+        if (fd < 0 || fd >= HL_NFD || strncmp(g_proc_text_desc[fd], "namespace:", 10)) {
+            G_RET(c) = (uint64_t)(int64_t)(fd < 0 || fcntl(fd, F_GETFD) < 0 ? -EBADF : -EINVAL);
+            break;
+        }
+        unsigned actual = ns_clone_flag(g_proc_text_desc[fd] + 10);
+        unsigned requested = (unsigned)a1;
+        if (!actual || (requested && requested != actual))
+            G_RET(c) = (uint64_t)(int64_t)-EINVAL;
+        else
+            // The container's namespace set is immutable and the default capability set lacks
+            // CAP_SYS_ADMIN, so a valid matching namespace fd reaches Linux's permission check.
+            G_RET(c) = (uint64_t)(int64_t)-EPERM;
+        break;
+    }
     // futex
     default: return 0;
     }
@@ -331,9 +346,9 @@ static int svc_proc_173(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (g_self_gppid >= 0)
             G_RET(c) = (uint64_t)g_self_gppid;
         else if (container_pid() == 1)
-            // Husklet's container contract presents the launcher boundary as pid 1, matching the
-            // established retained-engine process oracle rather than exposing the outer C worker.
-            G_RET(c) = 1;
+            // A PID-namespace init has no parent inside its namespace. Keep this equal to the PPid
+            // rendered by /proc/self/{stat,status}; exposing the outer engine worker would leak host identity.
+            G_RET(c) = 0;
         else {
             pid_t parent = getppid();
             G_RET(c) = (uint64_t)((g_init_hostpid && parent == g_init_hostpid) ? 1 : parent);

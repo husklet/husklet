@@ -268,6 +268,9 @@ static char g_rootfs_canon[4200];
 static size_t g_rootfs_canon_len;
 // fd -> host path it was opened with (dir-fd confinement + cache)
 static char g_fdpath[HL_NFD][192];
+// g_fdpath normally holds a canonical host path. Provider and synthetic-device descriptors instead
+// carry an already guest-absolute name; mark that representation so procfs does not rebase it twice.
+static uint8_t g_fdpath_guest[HL_NFD];
 // overlay: dir-fd -> its GUEST path (for merged getdents); "" = not an overlay dir
 //
 // Sized [HL_NFD], like every other fd-indexed table in this file. It was [1024] until an audit found the

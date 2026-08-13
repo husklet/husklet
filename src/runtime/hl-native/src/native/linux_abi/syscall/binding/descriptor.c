@@ -180,6 +180,7 @@ activation_failed: {
 static void bound_path_duplicate(hl_linux_fd source, int64_t target) {
     if (source >= HL_NFD || target < 0 || target >= HL_NFD) return;
     memmove(g_fdpath[(int)target], g_fdpath[(int)source], sizeof g_fdpath[(int)target]);
+    g_fdpath_guest[(int)target] = g_fdpath_guest[(int)source];
 }
 
 static int64_t bound_dup_at_least(hl_linux_fd source, int minimum, uint32_t descriptor_flags) {
@@ -353,10 +354,13 @@ static int64_t bound_relocate_lowest(int64_t opened) {
     int64_t duplicated;
     hl_linux_fd_snapshot snapshot;
     char guest_path[sizeof g_fdpath[0]];
+    uint8_t guest_path_is_guest = 0;
     guest_path[0] = 0;
     if (opened < 0) return opened;
-    if (opened < HL_NFD && g_fdpath[(int)opened][0])
+    if (opened < HL_NFD && g_fdpath[(int)opened][0]) {
         snprintf(guest_path, sizeof guest_path, "%s", g_fdpath[(int)opened]);
+        guest_path_is_guest = g_fdpath_guest[(int)opened];
+    }
     shadow = bound_shadow_reserve(0);
     if (shadow < 0) return opened;
     /* `opened` already holds a descriptor, so bound_shadow_reserve()'s lowest-free scan can never return
@@ -386,9 +390,14 @@ static int64_t bound_relocate_lowest(int64_t opened) {
     (void)hl_linux_close(g_linux_box, (hl_linux_fd)opened);
     proc_fdvis_close((int)opened);
     (void)close((int)opened);
-    if (opened < HL_NFD) g_fdpath[(int)opened][0] = 0;
-    if (duplicated >= 0 && duplicated < HL_NFD && guest_path[0])
+    if (opened < HL_NFD) {
+        g_fdpath[(int)opened][0] = 0;
+        g_fdpath_guest[(int)opened] = 0;
+    }
+    if (duplicated >= 0 && duplicated < HL_NFD && guest_path[0]) {
         snprintf(g_fdpath[(int)duplicated], sizeof g_fdpath[(int)duplicated], "%s", guest_path);
+        g_fdpath_guest[(int)duplicated] = guest_path_is_guest;
+    }
     {
         hl_linux_fd_snapshot duplicate;
         hl_host_file_metadata metadata = {0};

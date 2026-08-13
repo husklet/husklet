@@ -486,6 +486,11 @@ static int proc_open_self_process(const char *rp) {
     // Per-process files for the guest's own pid: /proc/[self|pid]/{fd,maps,smaps,status,stat,environ}.
     const char *leaf = proc_self_leaf(rp);
     if (leaf) {
+        if (!strncmp(leaf, "ns/", 3) && leaf[3] && ns_clone_flag(leaf + 3)) {
+            char desc[64];
+            snprintf(desc, sizeof desc, "namespace:%s", leaf + 3);
+            return proc_text_fd_tagged("", 0, desc);
+        }
         if (!strcmp(leaf, "fd")) return proc_fd_dir_open();
         if (!strncmp(leaf, "fdinfo/", 7) && leaf[7]) { // /proc/self/fdinfo/<N> body
             int isnum = 1;
@@ -582,6 +587,11 @@ static int proc_open_peer_process(const char *rp) {
             if (proc_pid_member(gp2, &host) ||
                 (is_oom_leaf && (host = (gp2 == 1 && g_init_hostpid) ? g_init_hostpid : gp2) > 0 &&
                  !(kill(host, 0) != 0 && errno == ESRCH))) {
+                if (!strncmp(fl, "ns/", 3) && fl[3] && ns_clone_flag(fl + 3)) {
+                    char desc[64];
+                    snprintf(desc, sizeof desc, "namespace:%s", fl + 3);
+                    return proc_text_fd_tagged("", 0, desc);
+                }
                 // Peer /proc/<pid>/fd: a listable dir of symlinks built from the peer descriptor snapshot, so
                 // each entry readlinks to the fd's target. (Opening a peer fd link stays deferred -- needs
                 // cross-process fd passing; see proc_fd_dir_pid_open.)
