@@ -1,8 +1,9 @@
 use super::definition::{ArmSupport, Campaign};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const CELLS: [(&str, &str); 6] = [("E", "E"), ("R", "R"), ("I", "I"), ("E", "R"), ("E", "I"), ("R", "I")];
 const ORDER: [[usize; 2]; 4] = [[0, 1], [1, 0], [1, 0], [0, 1]];
+const WARMUP_INVOCATIONS: usize = 6;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct Step {
@@ -35,32 +36,39 @@ impl Step {
     }
 }
 
-pub(super) fn warmups(campaign: &Campaign) -> Vec<Step> {
-    campaign
-        .workloads
-        .iter()
-        .flat_map(|(workload, definition)| {
-            definition
-                .commands
-                .keys()
-                .flat_map(move |layout| warmup_steps(workload, layout, &definition.arm_support[layout]))
+/// Fixed, timing-independent warmups immediately preceding a cell's first measured pair.
+pub(super) fn pair_warmups(pair: &[Step]) -> Vec<Step> {
+    let mut arms = pair.iter().map(|step| step.arm.as_str()).collect::<Vec<_>>();
+    arms.sort_unstable();
+    arms.dedup();
+    arms.into_iter()
+        .flat_map(|arm| {
+            (0..WARMUP_INVOCATIONS).map(move |_| Step {
+                workload: pair[0].workload.clone(),
+                layout: pair[0].layout.clone(),
+                cell: pair[0].cell.clone(),
+                round: pair[0].round,
+                position: 0,
+                arm: arm.to_owned(),
+            })
         })
         .collect()
 }
 
-fn warmup_steps(workload: &str, layout: &str, support: &BTreeMap<String, ArmSupport>) -> Vec<Step> {
-    support
-        .iter()
-        .filter(|(_, state)| state.available())
-        .map(|(arm, _)| Step {
-            workload: workload.to_owned(),
-            layout: layout.to_owned(),
-            cell: format!("{arm}{arm}"),
-            round: 0,
-            position: 0,
-            arm: arm.clone(),
-        })
-        .collect()
+pub(super) fn warmups_for_first_missing(
+    warmed: &mut BTreeSet<(String, String, String)>,
+    pair: &[Step],
+    already_complete: bool,
+) -> Vec<Step> {
+    if already_complete || pair.is_empty() {
+        return Vec::new();
+    }
+    let context = (pair[0].workload.clone(), pair[0].layout.clone(), pair[0].cell.clone());
+    if warmed.insert(context) {
+        pair_warmups(pair)
+    } else {
+        Vec::new()
+    }
 }
 
 pub(super) fn measurements(campaign: &Campaign) -> Vec<Step> {
@@ -189,33 +197,6 @@ mod tests {
     }
 
     #[test]
-    fn warmup_is_once_per_available_arm_without_cross_cells() {
-        let support = BTreeMap::from([
-            ("E".into(), ArmSupport::Available),
-            ("I".into(), ArmSupport::Available),
-            (
-                "R".into(),
-                ArmSupport::Incompatible {
-                    status: 1,
-                    stderr: "failure".into(),
-                    artifact_sha256: "a".repeat(64),
-                },
-            ),
-        ]);
-        let steps = super::warmup_steps("python", "plain", &support);
-        assert_eq!(
-            steps.iter().map(|step| step.arm.as_str()).collect::<Vec<_>>(),
-            ["E", "I"]
-        );
-        assert!(
-            steps
-                .iter()
-                .all(|step| step.cell == format!("{}{}", step.arm, step.arm))
-        );
-        assert!(steps.iter().all(|step| step.round == 0 && step.position == 0));
-    }
-
-    #[test]
     fn calibration_contains_only_balanced_same_arm_pairs() {
         let steps = super::cell_steps_owned("malloc", "plain", "E", 12);
         assert_eq!(steps.len(), 24);
@@ -224,5 +205,36 @@ mod tests {
             assert_eq!(pair[0].round, pair[1].round);
             assert_eq!([pair[0].position, pair[1].position], [0, 1]);
         }
+    }
+
+    #[test]
+    fn just_in_time_warmups_are_fixed_and_cover_each_distinct_arm() {
+        let pair = super::cell_steps("malloc", "sqlite", ("E", "I"), 1);
+        let warmups = super::pair_warmups(&pair);
+        assert_eq!(warmups.len(), 12);
+        assert_eq!(warmups.iter().filter(|step| step.arm == "E").count(), 6);
+        assert_eq!(warmups.iter().filter(|step| step.arm == "I").count(), 6);
+        assert!(
+            warmups
+                .iter()
+                .all(|step| step.workload == "malloc" && step.layout == "sqlite")
+        );
+    }
+
+    #[test]
+    fn resume_warms_immediately_before_each_contexts_first_missing_pair() {
+        let first = super::cell_steps("malloc", "plain", ("E", "E"), 2);
+        let second = super::cell_steps("malloc", "sqlite", ("E", "E"), 1);
+        let mut warmed = std::collections::BTreeSet::new();
+        assert!(super::warmups_for_first_missing(&mut warmed, &first[..2], true).is_empty());
+        assert_eq!(
+            super::warmups_for_first_missing(&mut warmed, &first[2..4], false).len(),
+            6
+        );
+        assert!(super::warmups_for_first_missing(&mut warmed, &first[..2], false).is_empty());
+        assert_eq!(
+            super::warmups_for_first_missing(&mut warmed, &second[..2], false).len(),
+            6
+        );
     }
 }

@@ -14,7 +14,7 @@ use clap::Args;
 use definition::Campaign;
 use evidence::Measurement;
 use ledger::Ledger;
-use std::path::PathBuf;
+use std::{collections::BTreeSet, path::PathBuf};
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -62,16 +62,16 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
         measurement.max_load,
     )?;
 
-    // A resumed process has cold process/cache state, so warmups deliberately run again.
-    for step in schedule::warmups(&campaign) {
-        evidence::sample(&campaign, &step)?;
-    }
     let measurements = schedule::measurements(&campaign);
+    let mut warmed = BTreeSet::new();
     for pair in measurements.chunks_exact(2) {
         let [first, second] = pair else {
             unreachable!("benchmark schedule is made of pairs")
         };
         let present = [ledger.contains(&first.key()), ledger.contains(&second.key())];
+        for step in schedule::warmups_for_first_missing(&mut warmed, pair, present == [true, true]) {
+            evidence::sample(&campaign, &step)?;
+        }
         if present == [true, true] {
             continue;
         }

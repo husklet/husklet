@@ -1,7 +1,10 @@
 use super::{definition::Campaign, evidence, evidence::Measurement, ledger::Ledger, schedule};
 use crate::suite::Error;
 use clap::Args;
-use std::{collections::BTreeMap, fs};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+};
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -39,15 +42,13 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         measurement.lock_timeout,
         measurement.max_load,
     )?;
-    for step in schedule::warmups(&campaign)
-        .into_iter()
-        .filter(|step| options.arms.contains(&step.arm))
-    {
-        evidence::sample(&campaign, &step)?;
-    }
+    let mut warmed = BTreeSet::new();
     for pair in plan.chunks_exact(2) {
         let [first, second] = pair else { unreachable!() };
         let present = [ledger.contains(&first.key()), ledger.contains(&second.key())];
+        for step in schedule::warmups_for_first_missing(&mut warmed, pair, present == [true, true]) {
+            evidence::sample(&campaign, &step)?;
+        }
         if present == [true, true] {
             continue;
         }
