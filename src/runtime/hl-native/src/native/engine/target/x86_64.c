@@ -52,6 +52,7 @@
 #include "../../linux_abi/host_socket.h"
 #include "../../linux_abi/host_proc.h"
 #include "../../linux_abi/host_wait.h"
+#include "../../linux_abi/device.h"
 #include "../../linux_abi/host_poll.h" // <poll.h>, or a typed absence where the host has no mixed-handle readiness
 #include "../../host/native_compat.h"
 #include "../../host/native_context.h"
