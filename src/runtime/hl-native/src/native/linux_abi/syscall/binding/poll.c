@@ -365,51 +365,6 @@ done:
     return result;
 }
 
-static int bound_rights_reference(uint64_t message_address) {
-    uint8_t message[56];
-    uint8_t *control;
-    uint64_t control_address;
-    uint64_t control_size;
-    uint64_t offset = 0;
-    hl_linux_fd_snapshot snapshot;
-    if (guest_copy_from(message, message_address, sizeof(message)) != (ssize_t)sizeof(message)) return 0;
-    memcpy(&control_address, message + 32, sizeof(control_address));
-    memcpy(&control_size, message + 40, sizeof(control_size));
-#if SIZE_MAX < UINT64_MAX
-    if (control_size > SIZE_MAX) return 0;
-#endif
-    if (control_address == 0 || control_size < 16) return 0;
-    control = malloc((size_t)control_size);
-    if (control == NULL || guest_copy_from(control, control_address, (size_t)control_size) != (ssize_t)control_size) {
-        free(control);
-        return 0;
-    }
-    while (offset + 16 <= control_size) {
-        uint64_t length;
-        int32_t level;
-        int32_t type;
-        uint64_t data;
-        memcpy(&length, control + offset, sizeof(length));
-        memcpy(&level, control + offset + 8, sizeof(level));
-        memcpy(&type, control + offset + 12, sizeof(type));
-        if (length < 16 || length > control_size - offset) break;
-        if (level == LX_SOL_SOCKET && type == SCM_RIGHTS) {
-            for (data = 16; data + sizeof(int32_t) <= length; data += sizeof(int32_t)) {
-                int32_t fd;
-                memcpy(&fd, control + offset + data, sizeof(fd));
-                if (fd >= 0 && bound_snapshot((uint64_t)(uint32_t)fd, &snapshot)) {
-                    free(control);
-                    return 1;
-                }
-            }
-        }
-        if (length > UINT64_MAX - 7u) break;
-        offset += (length + 7u) & ~UINT64_C(7);
-    }
-    free(control);
-    return 0;
-}
-
 /* Return 1 with a scoped native alias for a typed file, 0 for an already-native fd, or -errno. */
 static int bound_attachment_borrow(int guest_fd, int *native_fd) {
     hl_linux_fd_snapshot snapshot;
