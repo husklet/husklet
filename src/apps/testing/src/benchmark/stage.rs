@@ -14,6 +14,8 @@ use std::{
 mod malloc;
 #[path = "stage/python.rs"]
 mod python;
+#[path = "stage/rootfs.rs"]
+mod rootfs;
 #[path = "stage/sqlite.rs"]
 mod sqlite;
 
@@ -40,7 +42,6 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     let rootfs = output.join("rootfs");
     let arch = output.join("tools/arch");
     let docker = output.join("tools/docker");
-    fs::create_dir_all(rootfs.join("benchmark"))?;
     fs::create_dir_all(output.join("native"))?;
     fs::create_dir_all(arch.parent().ok_or("tool has no parent")?)?;
 
@@ -76,13 +77,14 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     if String::from_utf8(python_inspect)?.trim() != python::IMAGE_ID {
         return Err("pinned Python Docker image identity mismatch".into());
     }
+    rootfs::stage(&output, &docker)?;
     let python = python::PythonProfile::stage(&output, &docker, &arch)?;
     let sqlite = sqlite::SqliteProfile::stage(&output, &docker, &arch)?;
     let husklet = HuskletProfile::stage(&workspace, &output, &options.mac_cargo)?;
-    let python_husklet = PythonHusklet::stage(&output, &docker, &husklet.command)?;
+    let python_husklet = PythonHusklet::stage(&output, &rootfs, &husklet.command)?;
     let sqlite_husklet = sqlite::SqliteProfile::stage_husklet(
         &output,
-        &docker,
+        &rootfs,
         &husklet.command,
         &output.join("sqlite-exact-output.frame"),
     )?;
@@ -93,7 +95,6 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         &docker,
         &python.interpreter,
         &python_husklet.interpreter,
-        &sqlite_husklet.rootfs,
         &sqlite_husklet.interpreter,
         &sqlite.command,
         &husklet.command,
@@ -124,7 +125,12 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         let docker_frame = frame(&docker_output)?;
         require_parity(&format!("malloc/{}", layout.name), &native_frame, &docker_frame)?;
         if layout.name == "plain" {
-            let husklet_output = husklet_guest(&husklet.command, &layout.linux)?;
+            let guest = layout
+                .linux
+                .strip_prefix(&rootfs)?
+                .to_str()
+                .ok_or("malloc guest path is not UTF-8")?;
+            let husklet_output = husklet_rootfs_guest(&husklet.command, &rootfs, guest, &[])?;
             let husklet_frame = frame(&husklet_output)?;
             require_parity("malloc/plain Husklet", &native_frame, &husklet_frame)?;
             fs::write(output.join("husklet-plain.out"), husklet_output)?;
@@ -278,28 +284,6 @@ fn mac(arguments: &[String]) -> Result<Vec<u8>, Error> {
     checked(Path::new(MAC), arguments)
 }
 
-fn husklet_guest(command: &Path, guest: &Path) -> Result<Vec<u8>, Error> {
-    let arguments = [mac_path(command), mac_path(guest)];
-    let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, TIMEOUT)?;
-    if captured.outcome != Outcome::Exited(Some(0)) {
-        return Err(format!(
-            "native-arm64 Husklet x86 guest failed with {:?}: {}",
-            captured.outcome,
-            String::from_utf8_lossy(&captured.stderr)
-        )
-        .into());
-    }
-    let diagnostic = b"hl-test-displaced-et-exec: displaced\n";
-    if !captured.stderr.is_empty() && captured.stderr != diagnostic {
-        return Err(format!(
-            "native-arm64 Husklet x86 guest wrote unexpected stderr: {}",
-            String::from_utf8_lossy(&captured.stderr)
-        )
-        .into());
-    }
-    Ok(captured.stdout)
-}
-
 fn husklet_rootfs_guest(
     command: &Path,
     rootfs: &Path,
@@ -330,37 +314,7 @@ struct PythonHusklet {
 }
 
 impl PythonHusklet {
-    fn stage(output: &Path, docker: &Path, command: &Path) -> Result<Self, Error> {
-        let rootfs = output.join("python-rootfs");
-        let archive = output.join("python-rootfs.tar");
-        fs::create_dir(&rootfs)?;
-        let created = mac(&[
-            mac_path(docker),
-            "create".into(),
-            "--platform".into(),
-            "linux/amd64".into(),
-            python::IMAGE.into(),
-            "python3".into(),
-            "-c".into(),
-            "print(1)".into(),
-        ])?;
-        let container = String::from_utf8(created)?.trim().to_owned();
-        mac(&[
-            mac_path(docker),
-            "export".into(),
-            "--output".into(),
-            mac_path(&archive),
-            container.clone(),
-        ])?;
-        mac(&[mac_path(docker), "rm".into(), container])?;
-        mac(&[
-            "/mnt/mac/usr/bin/tar".into(),
-            "-xf".into(),
-            mac_path(&archive),
-            "-C".into(),
-            mac_path(&rootfs),
-        ])?;
-        fs::remove_file(&archive)?;
+    fn stage(output: &Path, rootfs: &Path, command: &Path) -> Result<Self, Error> {
         let interpreter = rootfs.join("usr/local/bin/python3.12");
         let arguments = [
             mac_path(command),

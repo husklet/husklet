@@ -2,7 +2,7 @@ use super::{Error, frame, husklet_rootfs_guest, mac, mac_path, require_parity};
 use std::{fs, path::Path};
 
 const MACOS_SQLITE: &str = "/mnt/mac/usr/bin/sqlite3";
-const PACKAGE: &str = "sqlite=3.49.2-r1";
+pub(super) const PACKAGE: &str = "sqlite=3.49.2-r1";
 const PROGRAM: &str = r#"CREATE TABLE values_(value INTEGER NOT NULL);
 WITH RECURSIVE sequence(value) AS (VALUES(1) UNION ALL SELECT value+1 FROM sequence WHERE value<20000) INSERT INTO values_ SELECT value FROM sequence;
 SELECT 'META workload=sqlite layout=sqlite version=1';
@@ -15,7 +15,6 @@ pub(super) struct SqliteProfile {
 }
 
 pub(super) struct SqliteHusklet {
-    pub rootfs: std::path::PathBuf,
     pub interpreter: std::path::PathBuf,
 }
 
@@ -83,48 +82,17 @@ impl SqliteProfile {
 
     pub(super) fn stage_husklet(
         output: &Path,
-        docker: &Path,
+        rootfs: &Path,
         command: &Path,
         expected: &Path,
     ) -> Result<SqliteHusklet, Error> {
-        let rootfs = output.join("sqlite-rootfs");
-        let archive = output.join("sqlite-rootfs.tar");
-        fs::create_dir(&rootfs)?;
-        let created = mac(&[
-            mac_path(docker),
-            "create".into(),
-            "--platform".into(),
-            "linux/amd64".into(),
-            super::IMAGE.into(),
-            "sh".into(),
-            "-c".into(),
-            format!("apk add --no-cache {PACKAGE} >/dev/null"),
-        ])?;
-        let container = String::from_utf8(created)?.trim().to_owned();
-        mac(&[mac_path(docker), "start".into(), "--attach".into(), container.clone()])?;
-        mac(&[
-            mac_path(docker),
-            "export".into(),
-            "--output".into(),
-            mac_path(&archive),
-            container.clone(),
-        ])?;
-        mac(&[mac_path(docker), "rm".into(), container])?;
-        mac(&[
-            "/mnt/mac/usr/bin/tar".into(),
-            "-xf".into(),
-            mac_path(&archive),
-            "-C".into(),
-            mac_path(&rootfs),
-        ])?;
-        fs::remove_file(&archive)?;
         let interpreter = rootfs.join("usr/bin/sqlite3");
-        let captured = husklet_rootfs_guest(command, &rootfs, "usr/bin/sqlite3", &[":memory:", PROGRAM])?;
+        let captured = husklet_rootfs_guest(command, rootfs, "usr/bin/sqlite3", &[":memory:", PROGRAM])?;
         let actual = frame(&captured)?;
         require_parity("sqlite/sqlite Husklet", &fs::read(expected)?, &actual)?;
         fs::write(output.join("sqlite-husklet.out"), captured)?;
         fs::write(output.join("sqlite-husklet-exact-output.frame"), actual)?;
-        Ok(SqliteHusklet { rootfs, interpreter })
+        Ok(SqliteHusklet { interpreter })
     }
 }
 
