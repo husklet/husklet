@@ -204,6 +204,7 @@ fn normalize_function_pointer_annotations(source: &str) -> String {
 fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str) -> Option<tree_sitter::Node<'tree>> {
     if node.is_error() || node.is_missing() {
         if macro_continuation(node, source)
+            || terminal_macro_before_declaration(node, source)
             || line_macro_invocation(node, source)
             || conditional_statement_directive(node, source)
             || annotation_prefix(node, source)
@@ -431,6 +432,13 @@ fn macro_continuation(node: tree_sitter::Node<'_>, source: &str) -> bool {
     let mut first = true;
     loop {
         let line = lines[row].trim_end();
+        if first && line.trim().is_empty() {
+            if row == 0 {
+                return false;
+            }
+            row -= 1;
+            continue;
+        }
         if line.trim_start().starts_with("#define ") {
             return true;
         }
@@ -443,6 +451,33 @@ fn macro_continuation(node: tree_sitter::Node<'_>, source: &str) -> bool {
         first = false;
         row -= 1;
     }
+}
+
+fn terminal_macro_before_declaration(node: tree_sitter::Node<'_>, source: &str) -> bool {
+    if node.kind() != ";" || !node.is_missing() {
+        return false;
+    }
+    let lines = source.lines().collect::<Vec<_>>();
+    let row = node.start_position().row;
+    if !lines.get(row).is_some_and(|line| line.contains('(') && line.contains('{')) {
+        return false;
+    }
+    let Some(mut row) = lines[..row].iter().rposition(|line| !line.trim().is_empty()) else {
+        return false;
+    };
+    if lines[row].trim_end().ends_with('\\') {
+        return false;
+    }
+    while row > 0 {
+        row -= 1;
+        if lines[row].trim_start().starts_with("#define ") {
+            return true;
+        }
+        if !lines[row].trim_end().ends_with('\\') {
+            return false;
+        }
+    }
+    false
 }
 
 fn enclosing_macro_invocation(mut node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -644,6 +679,19 @@ mod test {
     fn parser_accepts_error_on_final_uncontinued_macro_line() {
         let source = "#define BODY(value) \\\n+                          do { \\\n+                              value++; \\\n+                          } while (0)\n";
         assert!(parse(Path::new("dispatch.h"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_function_after_uncontinued_macro_body() {
+        let source = "#define BODY(value) do { \\\n+                          value++; \\\n+                      } while (0)\n\n\
+                      int main(void) { return 0; }\n";
+        assert!(parse(Path::new("macro.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_missing_semicolon_before_function() {
+        let source = "int value(void) { return 1 }\n\nint main(void) { return 0; }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
