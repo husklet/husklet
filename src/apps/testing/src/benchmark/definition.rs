@@ -13,7 +13,7 @@ const SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Campaign {
-    schema: String,
+    pub(super) schema: String,
     pub rounds: u32,
     pub samples_per_row: u32,
     pub rootfs: Artifact,
@@ -23,6 +23,8 @@ pub(super) struct Campaign {
     #[serde(default)]
     pub invariant_phases: Vec<String>,
 }
+
+pub(super) const CAMPAIGN_SCHEMA: &str = SCHEMA;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

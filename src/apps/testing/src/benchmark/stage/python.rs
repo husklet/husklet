@@ -17,7 +17,7 @@ proof=decoded['value']+len(decoded['words'])
 print('META workload=python layout=plain version=1')
 print(f'PHASE python-compute us={compute} ok={proof}')
 print(f'PHASE python-codec us={codec} ok={proof}')"#;
-const SQLITE_PROGRAM: &str = r#"import sqlite3,time
+pub(super) const SQLITE_PROGRAM: &str = r#"import sqlite3,time
 database=sqlite3.connect(':memory:')
 started=time.monotonic_ns()
 database.execute('create table values_(value integer not null)')

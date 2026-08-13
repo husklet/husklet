@@ -1,4 +1,4 @@
-use super::definition::artifact_identity;
+use super::definition::{Arm, ArmSupport, Artifact, CAMPAIGN_SCHEMA, Campaign, GuestPath, Layout as CampaignLayout, Workload, artifact_identity};
 use crate::{platform::HostProcess, suite::Error};
 use clap::Args;
 use hl_process::Outcome;
@@ -8,6 +8,7 @@ use std::{
     fs,
     io::Read as _,
     path::{Path, PathBuf},
+    collections::BTreeMap,
     time::Duration,
 };
 
@@ -33,6 +34,9 @@ pub(crate) struct Options {
     /// Cargo executable available on the macOS host.
     #[arg(long, default_value = "cargo")]
     mac_cargo: PathBuf,
+    /// Previously built standalone retained-C x86-64 engine oracle.
+    #[arg(long)]
+    retained: PathBuf,
 }
 
 pub(super) fn run(options: Options) -> Result<(), Error> {
@@ -88,6 +92,9 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         &husklet.command,
         &output.join("sqlite-exact-output.frame"),
     )?;
+    merge_rootfs(&python_husklet.rootfs, &rootfs)?;
+    merge_rootfs(&sqlite_husklet.rootfs, &rootfs)?;
+    let retained = RetainedProfile::stage(&options.retained, &output, &rootfs, &layouts)?;
     let mut identities = String::from("artifact\tidentity\n");
     for path in [
         &rootfs,
@@ -157,12 +164,247 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
             husklet.receipt
         ),
     )?;
-    fs::write(output.join("BLOCKERS.txt"), blockers())?;
-    println!(
-        "READY malloc/plain malloc/sqlite python/plain python/sqlite sqlite/sqlite husklet/arm64-macos-x86_64-guest-malloc-python-sqlite\nBLOCKED campaign: see {}/BLOCKERS.txt",
-        output.display()
-    );
+    let campaign = campaign(&output, &rootfs, &arch, &layouts, &python, &sqlite, &husklet, &retained)?;
+    let campaign_path = output.join("campaign.yaml");
+    fs::write(&campaign_path, serde_yaml::to_string(&campaign)?)?;
+    Campaign::load(&campaign_path)?.verify_artifacts()?;
+    println!("READY campaign {}", campaign_path.display());
     Ok(())
+}
+
+fn merge_rootfs(source: &Path, destination: &Path) -> Result<(), Error> {
+    mac(&[
+        "/mnt/mac/bin/cp".into(),
+        "-a".into(),
+        format!("{}/.", mac_path(source)),
+        mac_path(destination),
+    ])?;
+    Ok(())
+}
+
+fn artifact(path: &Path) -> Result<Artifact, Error> {
+    Ok(Artifact {
+        path: path.to_owned(),
+        sha256: artifact_identity(path)?,
+    })
+}
+
+fn support(retained: ArmSupport) -> BTreeMap<String, ArmSupport> {
+    BTreeMap::from([
+        ("E".into(), ArmSupport::Available),
+        ("I".into(), ArmSupport::Available),
+        ("R".into(), retained),
+    ])
+}
+
+fn campaign(
+    output: &Path,
+    rootfs: &Path,
+    arch: &Path,
+    layouts: &[malloc::Layout],
+    python: &python::PythonProfile,
+    sqlite: &sqlite::SqliteProfile,
+    integrated: &HuskletProfile,
+    retained: &RetainedProfile,
+) -> Result<Campaign, Error> {
+    let mac_proxy = output.join("tools/mac");
+    fs::copy(MAC, &mac_proxy)?;
+    let linux = |relative: &str| rootfs.join(relative);
+    let host = |path: &Path| mac_path(path);
+    let malloc_map = layouts
+        .iter()
+        .map(|layout| (layout.linux.clone(), layout.native.clone()));
+    let guest_map = malloc_map
+        .chain([
+            (linux("usr/local/bin/python3.12"), python.interpreter.clone()),
+            (linux("usr/bin/sqlite3"), sqlite.command.clone()),
+        ])
+        .collect();
+    let external_artifacts = std::iter::once(("command".into(), artifact(&mac_proxy)?))
+        .chain(std::iter::once(("arch".into(), artifact(arch)?)))
+        .chain(layouts.iter().map(|layout| Ok((format!("malloc-{}", layout.name), artifact(&layout.native)?))))
+        .chain([
+            Ok(("python".into(), artifact(&python.interpreter)?)),
+            Ok(("sqlite".into(), artifact(&sqlite.command)?)),
+        ])
+        .collect::<Result<BTreeMap<_, _>, Error>>()?;
+    let smoke_guest = host(&layouts[0].native);
+    let rootfs_host = rootfs.display().to_string();
+    let arms = BTreeMap::from([
+        (
+            "E".into(),
+            Arm {
+                command: vec![mac_proxy.display().to_string(), host(arch), "-x86_64".into()],
+                artifacts: external_artifacts,
+                smoke: vec![mac_proxy.display().to_string(), host(arch), "-x86_64".into(), smoke_guest],
+                guest_path: GuestPath::HostAbsolute,
+                guest_map,
+            },
+        ),
+        (
+            "I".into(),
+            Arm {
+                command: vec![
+                    mac_proxy.display().to_string(),
+                    host(&integrated.command),
+                    "--rootfs".into(),
+                    rootfs_host.clone(),
+                ],
+                artifacts: BTreeMap::from([
+                    ("command".into(), artifact(&mac_proxy)?),
+                    ("engine".into(), artifact(&integrated.command)?),
+                    ("library".into(), artifact(&integrated.library)?),
+                ]),
+                smoke: vec![
+                    mac_proxy.display().to_string(),
+                    host(&integrated.command),
+                    "--rootfs".into(),
+                    rootfs_host.clone(),
+                    "/benchmark/malloc-plain".into(),
+                ],
+                guest_path: GuestPath::RootfsAbsolute,
+                guest_map: BTreeMap::new(),
+            },
+        ),
+        (
+            "R".into(),
+            Arm {
+                command: vec![
+                    mac_proxy.display().to_string(),
+                    host(&retained.command),
+                    "--rootfs".into(),
+                    rootfs_host.clone(),
+                ],
+                artifacts: BTreeMap::from([
+                    ("command".into(), artifact(&mac_proxy)?),
+                    ("engine".into(), artifact(&retained.command)?),
+                ]),
+                smoke: vec![
+                    mac_proxy.display().to_string(),
+                    host(&retained.command),
+                    "--rootfs".into(),
+                    rootfs_host,
+                    "/benchmark/malloc-plain".into(),
+                ],
+                guest_path: GuestPath::RootfsAbsolute,
+                guest_map: BTreeMap::new(),
+            },
+        ),
+    ]);
+    let available = || ArmSupport::Available;
+    let malloc_support = || support(available());
+    let python_support = || support(retained.python_failure.clone());
+    Ok(Campaign {
+        schema: CAMPAIGN_SCHEMA.into(),
+        rounds: 4,
+        samples_per_row: 3,
+        rootfs: artifact(rootfs)?,
+        arms,
+        layouts: BTreeMap::from([
+            ("plain".into(), CampaignLayout { phases: vec!["compute".into(), "malloc".into()] }),
+            (
+                "sqlite".into(),
+                CampaignLayout {
+                    phases: vec!["compute".into(), "malloc".into(), "sqlite-write".into(), "sqlite-read".into()],
+                },
+            ),
+        ]),
+        workloads: BTreeMap::from([
+            (
+                "malloc".into(),
+                Workload {
+                    commands: BTreeMap::from([
+                        ("plain".into(), vec![linux("benchmark/malloc-plain").display().to_string()]),
+                        ("sqlite".into(), vec![linux("benchmark/malloc-sqlite").display().to_string()]),
+                    ]),
+                    layout_phases: BTreeMap::from([
+                        ("plain".into(), vec!["compute".into(), "malloc".into()]),
+                        ("sqlite".into(), vec!["compute".into(), "malloc".into()]),
+                    ]),
+                    arm_support: BTreeMap::from([("plain".into(), malloc_support()), ("sqlite".into(), malloc_support())]),
+                    phases: vec!["compute".into(), "malloc".into()],
+                    timeout_seconds: 30,
+                    wall_time: false,
+                },
+            ),
+            (
+                "python".into(),
+                Workload {
+                    commands: BTreeMap::from([
+                        ("plain".into(), vec![linux("usr/local/bin/python3.12").display().to_string(), "-c".into(), python::PLAIN_PROGRAM.into()]),
+                        ("sqlite".into(), vec![linux("usr/local/bin/python3.12").display().to_string(), "-c".into(), python::SQLITE_PROGRAM.into()]),
+                    ]),
+                    layout_phases: BTreeMap::from([
+                        ("plain".into(), vec!["python-compute".into(), "python-codec".into()]),
+                        ("sqlite".into(), vec!["python-sqlite-write".into(), "python-sqlite-read".into()]),
+                    ]),
+                    arm_support: BTreeMap::from([("plain".into(), python_support()), ("sqlite".into(), python_support())]),
+                    phases: vec!["python-compute".into(), "python-codec".into(), "python-sqlite-write".into(), "python-sqlite-read".into()],
+                    timeout_seconds: 90,
+                    wall_time: false,
+                },
+            ),
+            (
+                "sqlite".into(),
+                Workload {
+                    commands: BTreeMap::from([("sqlite".into(), vec![linux("usr/bin/sqlite3").display().to_string(), ":memory:".into(), sqlite::PROGRAM.into()])]),
+                    layout_phases: BTreeMap::from([("sqlite".into(), vec!["sqlite-write".into(), "sqlite-read".into()])]),
+                    arm_support: BTreeMap::from([("sqlite".into(), support(available()))]),
+                    phases: vec!["sqlite-write".into(), "sqlite-read".into()],
+                    timeout_seconds: 30,
+                    wall_time: false,
+                },
+            ),
+        ]),
+        invariant_phases: vec!["compute".into()],
+    })
+}
+
+struct RetainedProfile {
+    command: PathBuf,
+    python_failure: ArmSupport,
+}
+
+impl RetainedProfile {
+    fn stage(source: &Path, output: &Path, rootfs: &Path, layouts: &[malloc::Layout]) -> Result<Self, Error> {
+        if !source.is_absolute() || !source.is_file() {
+            return Err("--retained must name an absolute regular file".into());
+        }
+        let command = output.join("retained/hl-engine-linux-x86_64");
+        fs::create_dir(command.parent().ok_or("retained command has no parent")?)?;
+        fs::copy(source, &command)?;
+        let smoke = husklet_rootfs_guest(&command, rootfs, "benchmark/malloc-plain", &[])?;
+        require_parity("malloc/plain retained", &fs::read(output.join("exact-output-plain.frame"))?, &frame(&smoke)?)?;
+        let python = capture_rootfs_guest(&command, rootfs, "usr/local/bin/python3.12", &["-c", python::PLAIN_PROGRAM])?;
+        let artifact_sha256 = raw_sha256(&rootfs.join("usr/local/bin/python3.12"))?;
+        let python_failure = classified_failure(python.outcome, &python.stderr, artifact_sha256)?;
+        for layout in layouts {
+            let output_bytes = husklet_rootfs_guest(&command, rootfs, &format!("benchmark/malloc-{}", layout.name), &[])?;
+            require_parity(
+                &format!("malloc/{} retained", layout.name),
+                &fs::read(output.join(format!("exact-output-{}.frame", layout.name)))?,
+                &frame(&output_bytes)?,
+            )?;
+        }
+        let sqlite_output = husklet_rootfs_guest(&command, rootfs, "usr/bin/sqlite3", &[":memory:", sqlite::PROGRAM])?;
+        require_parity("sqlite/sqlite retained", &fs::read(output.join("sqlite-exact-output.frame"))?, &frame(&sqlite_output)?)?;
+        Ok(Self { command, python_failure })
+    }
+}
+
+fn classified_failure(outcome: Outcome, stderr: &[u8], artifact_sha256: String) -> Result<ArmSupport, Error> {
+    let status = match outcome {
+        Outcome::Exited(Some(status)) if status != 0 => status,
+        other => return Err(format!("retained Python failure was not a nonzero exit: {other:?}").into()),
+    };
+    if stderr.is_empty() {
+        return Err("retained Python failure did not emit stderr".into());
+    }
+    Ok(ArmSupport::Incompatible {
+        status,
+        stderr: String::from_utf8(stderr.to_vec())?.trim().to_owned(),
+        artifact_sha256,
+    })
 }
 
 struct HuskletProfile {
@@ -311,6 +553,7 @@ fn husklet_rootfs_guest(
 
 struct PythonHusklet {
     interpreter: PathBuf,
+    rootfs: PathBuf,
 }
 
 impl PythonHusklet {
@@ -338,7 +581,7 @@ impl PythonHusklet {
         require_parity("python/plain Husklet", &native_frame, &husklet_frame)?;
         fs::write(output.join("python-plain-husklet.out"), captured.stdout)?;
         fs::write(output.join("python-plain-husklet-exact-output.frame"), husklet_frame)?;
-        Ok(Self { interpreter })
+        Ok(Self { interpreter, rootfs })
     }
 }
 
@@ -390,10 +633,6 @@ fn require_parity(workload: &str, native: &[u8], docker: &[u8]) -> Result<(), Er
     }
 }
 
-fn blockers() -> &'static str {
-    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a native-arm64 macOS Husklet command selecting the x86_64 Linux guest engine, with command-bound backend receipt and private library identities; malloc/plain, Python/plain, and sqlite/sqlite complete through that command with exact-output parity.\nMissing: Husklet execution validation for the remaining workloads (sqlite-linked malloc and Python/sqlite), balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
-}
-
 fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
     let output = if requested.is_absolute() {
         requested.to_owned()
@@ -409,7 +648,9 @@ fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{blockers, frame, require_parity, stage_output};
+    use super::{classified_failure, frame, require_parity, stage_output, support};
+    use crate::benchmark::definition::ArmSupport;
+    use hl_process::Outcome;
 
     #[test]
     fn exact_output_frame_changes_only_phase_time() {
@@ -425,15 +666,34 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_stage_refuses_to_claim_a_campaign() {
-        let text = blockers();
-        assert!(text.starts_with("Campaign not emitted"));
-        for missing in ["balanced-order", "unique ledger", "remaining workloads"] {
-            assert!(text.contains(missing));
-        }
-        assert!(text.contains("native-arm64 macOS Husklet"));
-        assert!(text.contains("Python/plain, and sqlite/sqlite complete"));
-        assert!(text.contains("sqlite/sqlite complete through that command"));
+    fn support_is_explicit_for_external_integrated_and_retained_arms() {
+        let retained = ArmSupport::Incompatible {
+            status: 1,
+            stderr: "failure".into(),
+            artifact_sha256: "a".repeat(64),
+        };
+        let support = support(retained);
+        assert_eq!(support.keys().map(String::as_str).collect::<Vec<_>>(), ["E", "I", "R"]);
+        assert!(matches!(support["E"], ArmSupport::Available));
+        assert!(matches!(support["I"], ArmSupport::Available));
+        assert!(matches!(support["R"], ArmSupport::Incompatible { .. }));
+    }
+
+    #[test]
+    fn retained_python_failure_requires_exact_exit_stderr_and_hash() {
+        let support = classified_failure(
+            Outcome::Exited(Some(1)),
+            b"_PySys_Create: failed\n",
+            "b".repeat(64),
+        )
+        .unwrap();
+        assert!(matches!(
+            support,
+            ArmSupport::Incompatible { status: 1, ref stderr, ref artifact_sha256 }
+                if stderr == "_PySys_Create: failed" && artifact_sha256 == &"b".repeat(64)
+        ));
+        assert!(classified_failure(Outcome::Exited(Some(0)), b"failure", "b".repeat(64)).is_err());
+        assert!(classified_failure(Outcome::Exited(Some(1)), b"", "b".repeat(64)).is_err());
     }
 
     #[test]
