@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,12 +45,19 @@ struct work_factor {
     uint64_t malloc_proof;
 };
 
+_Static_assert(UINT64_MAX / UINT64_C(128) >= UINT64_C(128000000), "compute factor multiplication overflows");
+_Static_assert(SIZE_MAX / (size_t)128 >= (size_t)4096, "malloc factor multiplication overflows");
+
 /* Fixed proof constants make each allowed factor validate independently of its loop bounds. */
 static const struct work_factor FACTORS[] = {
     {"1", UINT64_C(1), UINT64_C(9686655140321103872), UINT64_C(10725705084448409897)},
     {"2", UINT64_C(2), UINT64_C(17644014193459470336), UINT64_C(6528316421022001472)},
     {"4", UINT64_C(4), UINT64_C(5739948047395471360), UINT64_C(1674606823239620224)},
     {"8", UINT64_C(8), UINT64_C(13729380265047392256), UINT64_C(1493020912505358080)},
+    {"16", UINT64_C(16), UINT64_C(13090333494462185472), UINT64_C(336581374273486336)},
+    {"32", UINT64_C(32), UINT64_C(3136977997641416704), UINT64_C(16331624503495730176)},
+    {"64", UINT64_C(64), UINT64_C(5071912503035035648), UINT64_C(5324999304749099008)},
+    {"128", UINT64_C(128), UINT64_C(13694331945478520832), UINT64_C(17599653024954822656)},
 };
 
 static const struct work_factor *parse_factor(const char *text, size_t length) {

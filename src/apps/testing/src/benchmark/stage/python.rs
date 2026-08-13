@@ -5,15 +5,15 @@ const MACOS_PYTHON: &str = "/mnt/mac/usr/bin/python3";
 pub(super) const IMAGE: &str =
     "python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df";
 pub(super) const IMAGE_ID: &str = "sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df";
-pub(super) const PLAIN_PROGRAM: &str = r#"import json,sys,time
+pub(super) const PLAIN_PROGRAM: &str = r"import json,sys,time
 if len(sys.argv)!=2:
  raise SystemExit('expected exactly one factors token')
 parts=sys.argv[1].split(',')
-if len(parts)!=2 or any(part not in ('1','2','4','8') for part in parts):
- raise SystemExit('factors must be <1|2|4|8>,<1|2|4|8>')
+if len(parts)!=2 or any(part not in ('1','2','4','8','16','32','64','128') for part in parts):
+ raise SystemExit('factors must be two powers of two from 1 through 128')
 compute_factor,codec_factor=map(int,parts)
-compute_expected={1:2666646666700000,2:21333253333400000,4:170666346666800000,8:1365332053333600000}
-codec_expected={1:6172890675,2:12345783850,4:24691577700,8:49383195400}
+compute_expected={1:2666646666700000,2:21333253333400000,4:170666346666800000,8:1365332053333600000,16:10922661546667200000,32:87381312853334400000,64:699050584746668800000,128:5592405005653337600000}
+codec_expected={1:6172890675,2:12345783850,4:24691577700,8:49383195400,16:98766550800,32:197533741600,64:395070043200,128:790150326400}
 started=time.monotonic_ns()
 value=sum(i*i for i in range(200000*compute_factor))
 compute=max(1,(time.monotonic_ns()-started)//1000)
@@ -29,16 +29,16 @@ codec=max(1,(time.monotonic_ns()-started)//1000)
 assert proof==codec_expected[codec_factor]
 print(f'META workload=python layout=plain version=1 factors={compute_factor},{codec_factor}')
 print(f'PHASE python-compute us={compute} ok={value}')
-print(f'PHASE python-codec us={codec} ok={proof}')"#;
-pub(super) const SQLITE_PROGRAM: &str = r#"import sqlite3,sys,time
+print(f'PHASE python-codec us={codec} ok={proof}')";
+pub(super) const SQLITE_PROGRAM: &str = r"import sqlite3,sys,time
 if len(sys.argv)!=2:
  raise SystemExit('expected exactly one factors token')
 parts=sys.argv[1].split(',')
-if len(parts)!=2 or any(part not in ('1','2','4','8') for part in parts):
- raise SystemExit('factors must be <1|2|4|8>,<1|2|4|8>')
+if len(parts)!=2 or any(part not in ('1','2','4','8','16','32','64','128') for part in parts):
+ raise SystemExit('factors must be two powers of two from 1 through 128')
 write_factor,read_factor=map(int,parts)
-write_expected={1:(20000,200010000),2:(40000,800020000),4:(80000,3200040000),8:(160000,12800080000)}
-read_expected={1:4000200000,2:8000400000,4:16000800000,8:32001600000}
+write_expected={1:(20000,200010000),2:(40000,800020000),4:(80000,3200040000),8:(160000,12800080000),16:(320000,51200160000),32:(640000,204800320000),64:(1280000,819200640000),128:(2560000,3276801280000)}
+read_expected={1:4000200000,2:8000400000,4:16000800000,8:32001600000,16:64003200000,32:128006400000,64:256012800000,128:512025600000}
 database=sqlite3.connect(':memory:')
 database.execute('create table read_values(value integer not null)')
 database.executemany('insert into read_values values (?)',((value,) for value in range(1,20001)))
@@ -58,7 +58,7 @@ read=max(1,(time.monotonic_ns()-started)//1000)
 assert read_proof==read_expected[read_factor]
 print(f'META workload=python layout=sqlite version=1 factors={write_factor},{read_factor}')
 print(f'PHASE python-sqlite-write us={write} ok={write_proof[0]}:{write_proof[1]}')
-print(f'PHASE python-sqlite-read us={read} ok={read_proof}')"#;
+print(f'PHASE python-sqlite-read us={read} ok={read_proof}')";
 
 pub(super) struct PythonProfile {
     pub interpreter: std::path::PathBuf,
@@ -167,13 +167,17 @@ mod tests {
     fn programs_require_two_strict_factors_and_independent_proofs() {
         for program in [PLAIN_PROGRAM, SQLITE_PROGRAM] {
             assert!(program.contains("len(sys.argv)!=2"));
-            assert!(program.contains("part not in ('1','2','4','8')"));
+            assert!(program.contains("part not in ('1','2','4','8','16','32','64','128')"));
             assert!(program.contains("factors={"));
         }
         assert!(PLAIN_PROGRAM.contains("compute_expected={1:2666646666700000"));
         assert!(PLAIN_PROGRAM.contains("codec_expected={1:6172890675"));
+        assert!(PLAIN_PROGRAM.contains("128:5592405005653337600000"));
+        assert!(PLAIN_PROGRAM.contains("128:790150326400"));
         assert!(SQLITE_PROGRAM.contains("write_expected={1:(20000,200010000)"));
         assert!(SQLITE_PROGRAM.contains("read_expected={1:4000200000"));
+        assert!(SQLITE_PROGRAM.contains("128:(2560000,3276801280000)"));
+        assert!(SQLITE_PROGRAM.contains("128:512025600000"));
         assert!(SQLITE_PROGRAM.contains("read_values"));
     }
 }

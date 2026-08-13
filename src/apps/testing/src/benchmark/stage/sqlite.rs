@@ -15,7 +15,6 @@ pub(super) struct SqliteProfile {
 }
 
 pub(super) struct SqliteHusklet {
-    pub rootfs: std::path::PathBuf,
     pub interpreter: std::path::PathBuf,
 }
 
@@ -165,10 +164,7 @@ impl SqliteProfile {
         require_parity("sqlite/sqlite Husklet", &fs::read(expected)?, &actual)?;
         fs::write(output.join("sqlite-husklet.out"), captured)?;
         fs::write(output.join("sqlite-husklet-exact-output.frame"), actual)?;
-        Ok(SqliteHusklet {
-            rootfs: rootfs.to_path_buf(),
-            interpreter,
-        })
+        Ok(SqliteHusklet { interpreter })
     }
 }
 
@@ -209,6 +205,9 @@ mod tests {
         assert!(source.contains("static const struct work_factor FACTORS[]"));
         assert!(source.contains("written != write_factor->expected_written"));
         assert!(source.contains("scanned != read_factor->expected_scanned"));
+        assert!(source.contains("{\"128\", 128, INT64_C(25600000), INT64_C(128000000)}"));
+        assert!(source.contains("INT_MAX / 128 >= WRITE_BATCHES"));
+        assert!(source.contains("INT_MAX / 128 >= READ_SCANS"));
         assert!(source.contains("write <= 1 || read <= 1"));
         assert_eq!(source.matches("write(STDOUT_FILENO").count(), 1);
         assert!(source.contains("snprintf(frame, sizeof(frame)"));

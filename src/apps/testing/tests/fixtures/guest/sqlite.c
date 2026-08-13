@@ -1,6 +1,7 @@
 #include <sqlite3.h>
 
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,9 @@
 #include <unistd.h>
 
 enum { ROWS = 20000, WRITE_BATCHES = 10, READ_SCANS = 50 };
+
+_Static_assert(INT_MAX / 128 >= WRITE_BATCHES, "write factor multiplication overflows");
+_Static_assert(INT_MAX / 128 >= READ_SCANS, "read factor multiplication overflows");
 
 struct work_factor {
     const char *text;
@@ -23,6 +27,10 @@ static const struct work_factor FACTORS[] = {
     {"2", 2, INT64_C(400000), INT64_C(2000000)},
     {"4", 4, INT64_C(800000), INT64_C(4000000)},
     {"8", 8, INT64_C(1600000), INT64_C(8000000)},
+    {"16", 16, INT64_C(3200000), INT64_C(16000000)},
+    {"32", 32, INT64_C(6400000), INT64_C(32000000)},
+    {"64", 64, INT64_C(12800000), INT64_C(64000000)},
+    {"128", 128, INT64_C(25600000), INT64_C(128000000)},
 };
 
 static const struct work_factor *parse_factor(const char *text, size_t length) {

@@ -19,10 +19,27 @@ impl FromStr for WorkFactor {
         if second.contains(',')
             || [first, second]
                 .into_iter()
-                .any(|part| !matches!(part, "1" | "2" | "4" | "8"))
+                .any(|part| !matches!(part, "1" | "2" | "4" | "8" | "16" | "32" | "64" | "128"))
         {
-            return Err("each work factor must be one of 1,2,4,8".into());
+            return Err("each work factor must be one of 1,2,4,8,16,32,64,128".into());
         }
         Ok(Self(value.into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkFactor;
+
+    #[test]
+    fn accepts_only_canonical_bounded_factor_pairs() {
+        for value in ["1,2", "4,8", "16,32", "64,128"] {
+            assert_eq!(value.parse::<WorkFactor>().unwrap().as_str(), value);
+        }
+        for value in [
+            "", "1", "1,", ",1", "1,2,4", "0,1", "3,4", "256,1", "01,2", "+1,2", " 1,2", "1,2 ",
+        ] {
+            assert!(value.parse::<WorkFactor>().is_err(), "accepted {value:?}");
+        }
     }
 }

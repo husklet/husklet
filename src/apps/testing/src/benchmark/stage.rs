@@ -33,8 +33,8 @@ use factor::WorkFactor;
 const IMAGE: &str = "alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce";
 const IMAGE_ID: &str = "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce";
 const MAC: &str = "/usr/local/bin/mac";
-const TIMEOUT: Duration = Duration::from_secs(30);
-const PYTHON_TIMEOUT: Duration = Duration::from_secs(90);
+const TIMEOUT: Duration = Duration::from_secs(600);
+const PYTHON_TIMEOUT: Duration = Duration::from_secs(1_800);
 const PREPARATION_COMPILE_TIMEOUT: Duration = Duration::from_secs(180);
 const MINIMUM_MALLOC_PHASE_MICROS: u64 = 5_000;
 
@@ -49,20 +49,20 @@ pub(crate) struct Options {
     /// Previously built standalone retained-C x86-64 engine oracle.
     #[arg(long)]
     retained: PathBuf,
-    /// Offline SQLite 3.50.1 amalgamation archive with the pinned content hash.
+    /// Offline `SQLite` 3.50.1 amalgamation archive with the pinned content hash.
     #[arg(long)]
     sqlite_amalgamation: PathBuf,
     /// Compute,malloc work factors selected without rebuilding the guest.
-    #[arg(long, default_value = "8,8")]
+    #[arg(long, default_value = "32,32")]
     malloc_factor: WorkFactor,
     /// Compute,codec work factors for the plain Python workload.
-    #[arg(long, default_value = "4,4")]
+    #[arg(long, default_value = "64,128")]
     python_plain_factor: WorkFactor,
-    /// Write,read work factors for the Python SQLite workload.
-    #[arg(long, default_value = "4,2")]
+    /// Write,read work factors for the Python `SQLite` workload.
+    #[arg(long, default_value = "64,64")]
     python_sqlite_factor: WorkFactor,
-    /// Write,read work factors for the compiled SQLite workload.
-    #[arg(long, default_value = "4,4")]
+    /// Write,read work factors for the compiled `SQLite` workload.
+    #[arg(long, default_value = "32,32")]
     sqlite_factor: WorkFactor,
 }
 
@@ -263,3 +263,53 @@ pub(super) use output::mac_preparation_compile;
 
 #[path = "stage/output.rs"]
 mod output;
+
+#[cfg(test)]
+mod option_tests {
+    use super::Options;
+    use clap::{Args as _, FromArgMatches as _};
+
+    fn parse(extra: &[&str]) -> Options {
+        let mut arguments = vec![
+            "stage",
+            "--output",
+            "stage-output",
+            "--retained",
+            "/oracle",
+            "--sqlite-amalgamation",
+            "/sqlite.zip",
+        ];
+        arguments.extend_from_slice(extra);
+        let matches = Options::augment_args(clap::Command::new("stage"))
+            .try_get_matches_from(arguments)
+            .unwrap();
+        Options::from_arg_matches(&matches).unwrap()
+    }
+
+    #[test]
+    fn calibration_defaults_are_bound_to_requested_work_factors() {
+        let options = parse(&[]);
+        assert_eq!(options.malloc_factor.as_str(), "32,32");
+        assert_eq!(options.python_plain_factor.as_str(), "64,128");
+        assert_eq!(options.python_sqlite_factor.as_str(), "64,64");
+        assert_eq!(options.sqlite_factor.as_str(), "32,32");
+    }
+
+    #[test]
+    fn every_calibration_factor_remains_independently_configurable() {
+        let options = parse(&[
+            "--malloc-factor",
+            "16,32",
+            "--python-plain-factor",
+            "32,64",
+            "--python-sqlite-factor",
+            "64,128",
+            "--sqlite-factor",
+            "128,16",
+        ]);
+        assert_eq!(options.malloc_factor.as_str(), "16,32");
+        assert_eq!(options.python_plain_factor.as_str(), "32,64");
+        assert_eq!(options.python_sqlite_factor.as_str(), "64,128");
+        assert_eq!(options.sqlite_factor.as_str(), "128,16");
+    }
+}

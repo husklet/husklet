@@ -77,8 +77,8 @@ mod timeout_tests {
 
     #[test]
     fn long_timeout_is_scoped_to_preparation_compilation() {
-        assert_eq!(TIMEOUT, Duration::from_secs(30));
-        assert_eq!(PYTHON_TIMEOUT, Duration::from_secs(90));
+        assert_eq!(TIMEOUT, Duration::from_secs(600));
+        assert_eq!(PYTHON_TIMEOUT, Duration::from_secs(1_800));
         assert_eq!(PREPARATION_COMPILE_TIMEOUT, Duration::from_secs(180));
     }
 }

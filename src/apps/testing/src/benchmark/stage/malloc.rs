@@ -138,5 +138,10 @@ mod tests {
         assert!(source.contains("static const struct work_factor FACTORS[]"));
         assert!(source.contains("compute_proof != compute_factor->compute_proof"));
         assert!(source.contains("malloc_proof != malloc_factor->malloc_proof"));
+        assert!(
+            source.contains("{\"128\", UINT64_C(128), UINT64_C(13694331945478520832), UINT64_C(17599653024954822656)}")
+        );
+        assert!(source.contains("UINT64_MAX / UINT64_C(128)"));
+        assert!(source.contains("SIZE_MAX / (size_t)128"));
     }
 }
