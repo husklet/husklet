@@ -39,5 +39,3 @@ static hl_host_result hl_macos_architectural_counter(void *context) {
     if (frequency == 0) return hl_macos_result(HL_STATUS_PLATFORM_FAILURE, 0, 0);
     return hl_macos_result(HL_STATUS_OK, frequency, 0);
 }
-
-static hl_host_result hl_macos_backoff(void *context, uint64_t interval_ns) {
