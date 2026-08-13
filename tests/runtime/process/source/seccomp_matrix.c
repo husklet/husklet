@@ -14,6 +14,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* Linux exposes this siginfo si_code in asm-generic/siginfo.h, but some
+ * cross-libc header sets omit the public spelling.  The UAPI value is stable
+ * and shared by both supported guest architectures. */
+#ifndef SYS_SECCOMP
+#define SYS_SECCOMP 1
+#endif
+
 static int filter(unsigned action, unsigned flags) {
     struct sock_filter code[] = {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
