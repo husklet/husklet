@@ -408,7 +408,7 @@ void e_lsr_i(int rd, int rn, int sh, int sf); // defined below; used by the PF h
 // The ARM V bit must NOT survive into the stored NZCV: x86 OF is architecturally 0 for every
 // (U)COMISS/(U)COMISD and fcomi/fucomi, and leaving V set made `jo`/`seto`/`cmovo` (and the
 // SF!=OF signed conditions) read OF=1 after any NaN-operand compare.
-static void e_nzcv_save_fcmp(void) {
+void e_nzcv_save_fcmp(void) {
     emit32(0xD53B4200u | 20);       // mrs x20, nzcv  (N,Z,C,V from FCMP)
     e_movconst(22, 1u << 28);       // V is bit 28
     e_rrr(A_AND, 22, 20, 22, 1, 0); // x22 = V (at bit 28)
@@ -561,7 +561,7 @@ void e_clz(int rd, int rn, int sf) {
 }
 
 // ---- NEON / SSE encoders (guest xmm0..15 live in host v0..v15) ----
-static void e_str_q(int t, int rn, int off) {
+void e_str_q(int t, int rn, int off) {
     emit32(0x3D800000u | (((unsigned)off / 16) << 10) | (rn << 5) | t);
 }
 
@@ -606,7 +606,7 @@ static void e_str_s(int t, int rn) {
 // Guest SIMD/x87 accesses. Keep these distinct from relaxed engine spills to cpu/scratch storage.
 static void emit_bus_guard_mem17(uint64_t size, int offset);
 
-static void g_ldr_q(int t, int rn, int off) {
+void g_ldr_q(int t, int rn, int off) {
     if (rn == 17) emit_bus_guard_mem17(16, off);
     e_ldr_q(t, rn, off);
     e_dmb_ishld();
@@ -616,7 +616,7 @@ void hl_x86_emit_vector_load128(int destination, int address, int offset) {
     g_ldr_q(destination, address, offset);
 }
 
-static void g_str_q(int t, int rn, int off) {
+void g_str_q(int t, int rn, int off) {
     if (rn == 17) emit_bus_guard_mem17(16, off);
     e_dmb_ish();
     e_str_q(t, rn, off);
@@ -638,7 +638,7 @@ void g_str_d(int t, int rn) {
     e_str_d(t, rn);
 }
 
-static void g_ldr_s(int t, int rn) {
+void g_ldr_s(int t, int rn) {
     if (rn == 17) emit_bus_guard_mem17(4, 0);
     e_ldr_s(t, rn);
     e_dmb_ishld();
@@ -678,7 +678,7 @@ void e_fmov_from_s(int wd, int vn) {
     emit32(0x1E260000u | (vn << 5) | wd);
 } // fmov w[wd], s[vn]
 
-static void e_vmov(int vd, int vn) {
+void e_vmov(int vd, int vn) {
     emit32(0x4EA01C00u | (vn << 16) | (vn << 5) | vd);
 } // mov vd.16b, vn.16b (orr)
 
@@ -691,11 +691,11 @@ void hl_x86_emit_vector_broadcast32(int destination, int source, int lane) {
            (uint32_t)destination);
 }
 
-static void e_vmov8(int vd, int vn) {
+void e_vmov8(int vd, int vn) {
     emit32(0x0EA01C00u | (vn << 16) | (vn << 5) | vd);
 } // mov vd.8b, vn.8b (low 64, zero upper)
 
-static void e_ins_d(int vd, int ld, int vn, int ls) { // ins vd.d[ld], vn.d[ls]
+void e_ins_d(int vd, int ld, int vn, int ls) { // ins vd.d[ld], vn.d[ls]
     emit32(0x6E000400u | ((unsigned)((ld << 4) | 8) << 16) | ((unsigned)(ls << 3) << 11) | (vn << 5) | vd);
 }
 
@@ -703,7 +703,7 @@ void hl_x86_emit_vector_insert64(int destination, int destination_lane, int sour
     e_ins_d(destination, destination_lane, source, source_lane);
 }
 
-static void e_ins_s(int vd, int ls_lane, int vn, int sl) { // ins vd.s[ls_lane], vn.s[sl]
+void e_ins_s(int vd, int ls_lane, int vn, int sl) { // ins vd.s[ls_lane], vn.s[sl]
     emit32(0x6E000400u | ((unsigned)((ls_lane << 3) | 4) << 16) | ((unsigned)(sl << 2) << 11) | (vn << 5) | vd);
 }
 
@@ -780,7 +780,7 @@ void e_fcom_setfpsw(int n, int m, int signaling) {
 }
 
 // SSE shift-by-immediate -> NEON USHR/SSHR/SHL (esize in bits: 16/32/64)
-static void e_vshr_imm(int vd, int vn, int esize, int sh, int sgn) {
+void e_vshr_imm(int vd, int vn, int esize, int sh, int sgn) {
     if (sh <= 0) {
         e_vmov(vd, vn);
         return;
@@ -794,7 +794,7 @@ void hl_x86_emit_vector_shift_right(int destination, int source, int width, int 
     e_vshr_imm(destination, source, width, shift, arithmetic);
 }
 
-static void e_vshl_imm(int vd, int vn, int esize, int sh) {
+void e_vshl_imm(int vd, int vn, int esize, int sh) {
     if (sh <= 0) {
         e_vmov(vd, vn);
         return;
@@ -807,7 +807,7 @@ static void e_vshl_imm(int vd, int vn, int esize, int sh) {
     emit32(0x4F005400u | (immhb << 16) | (vn << 5) | vd);
 }
 
-static void e_ext(int vd, int vn, int vm, int idx) {
+void e_ext(int vd, int vn, int vm, int idx) {
     emit32(0x6E000000u | (vm << 16) | ((idx & 0xF) << 11) | (vn << 5) | vd);
 }
 
@@ -815,7 +815,7 @@ void hl_x86_emit_vector_extract(int destination, int low, int high, int byte) {
     e_ext(destination, low, high, byte);
 }
 
-static void e_v3(uint32_t base, int vd, int vn, int vm) {
+void e_v3(uint32_t base, int vd, int vn, int vm) {
     emit32(base | (vm << 16) | (vn << 5) | vd);
 } // NEON 3-same .16b/.Ns
 

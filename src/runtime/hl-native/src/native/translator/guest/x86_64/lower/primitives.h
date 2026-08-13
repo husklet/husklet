@@ -164,5 +164,26 @@ void hl_x86_emit_vector_load128(int destination, int address, int offset);
 void hl_x86_emit_vector_load64(int destination, int address);
 void hl_x86_emit_vector_load32(int destination, int address);
 void hl_x86_emit_constant_part(int destination, uint32_t immediate, int shift);
+void g_ldr_vec_ea(int, struct insn *, uint64_t, int);
+void g_ldr_d_ea(int, struct insn *, uint64_t);
+void g_ldr_q_ea(int, struct insn *, uint64_t);
+void g_str_q_ea(int, struct insn *, uint64_t);
+void g_str_d_ea(int, struct insn *, uint64_t);
+void emit_pd2i32_pieces(int, int, int, int, int, int, int, int);
+void emit_ps2dq_128(int, int, int, int, int, int, int);
+void e_sse_var_shift(int, int, int, int, int, int);
+void e_v3(uint32_t, int, int, int);
+void e_vmov(int, int);
+void e_vmov8(int, int);
+void e_ext(int, int, int, int);
+void e_ins_s(int, int, int, int);
+void e_ins_d(int, int, int, int);
+void e_vshr_imm(int, int, int, int, int);
+void e_vshl_imm(int, int, int, int);
+void e_str_q(int, int, int);
+void g_ldr_q(int, int, int);
+void g_str_q(int, int, int);
+void g_ldr_s(int, int);
+void e_nzcv_save_fcmp(void);
 
 #endif
