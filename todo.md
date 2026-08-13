@@ -124,9 +124,9 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Split Linux ABI ELF and thread support below all configured C structure limits.
 - [x] Split Linux ABI context, fork monitoring, socket ABI vocabulary, and number translation below the configured limits.
 - [ ] Split ARM64 interpreter/translator units and oversized functions.
-- [ ] Split AMD64 AVX, interpreter, translator, legacy, crypto, move, and shift units/functions.
-- [ ] Refactor remaining oversized test C functions rather than suppressing them.
-- [ ] Reach zero `c-file-length`, `c-function-length`, and `c-maximum-nesting` findings.
+- [x] Split AMD64 AVX, interpreter, translator, legacy, crypto, move, and shift units/functions.
+- [x] Refactor remaining oversized test C functions rather than suppressing them.
+- [x] Reach zero `c-file-length`, `c-function-length`, and `c-maximum-nesting` findings.
 
 ## Generic reusable linter
 
@@ -144,7 +144,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Move detached constructors reported by the live scan onto their owned result types, including `Schedule` and `Sample`.
 - [x] Fix the remaining Rust nesting finding; merged-tip self-lint reports zero `maximum-nesting` errors.
 - [x] Repair stale linter self-test expectations and make `cargo test -p hl-design-lint --lib` fully green.
-- [ ] Run the full linter to zero findings on the final merged repository.
+- [x] Run the full linter to zero findings on the merged repository.
+  Immutable commit `554a889cd` completed the full configured scan with exact output `wrote 0 case(s) to lint`; future merged tips must repeat this evidence.
 
 ## Testing ownership and fixtures
 
@@ -166,7 +167,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Integrate clang-format verification, clang-tidy, and cppcheck without Make/CMake. Cargo owns C compilation and the embedded tree-sitter rules; Nix supplies Bear, clang-format, clang-tidy, and cppcheck, and the normal verification derivation runs them through `hl-design-lint` with Cargo's real compilation database and file-level diagnostics.
 - [x] Classify and fix the 17 path-sensitive reports found by `scan-build` 21.1.8. Current ARM64 and AMD64 analyses both report zero findings using target-matched Nix compiler/sysroot closures.
 - [x] Make zero-finding ARM64 and AMD64 `scan-build` analysis a bounded Nix hard gate using target-matched compiler/sysroot closures and disposable analyzer outputs.
-- [ ] Make the complete `hl-design-lint` suite green.
+- [x] Make the complete `hl-design-lint` suite green.
 - [x] Run `cargo check --workspace --all-targets` successfully on the integrated C-backed workspace; rerun on the final delivery tip.
 - [x] Run `cargo test --workspace --lib --bins` successfully after restoring the C-backed engine/testing applications; rerun again on the final delivery tip.
 - [ ] Run `cargo test -p hl-native --all-targets` and all C executable/compatibility tests on the final merged tip.
