@@ -161,7 +161,7 @@ fn spawn_stream_reader(
         .spawn(move || {
             let mut bytes = [0_u8; 8192];
             while !stop.load(Ordering::Acquire) {
-                let Some(count) = read_stream(&mut reader, &mut bytes) else {
+                let Some(count) = read_stream(&mut reader, &mut bytes, &stop) else {
                     break;
                 };
                 if !write_stream(port.as_ref(), stream, &bytes[..count]) {
@@ -172,8 +172,8 @@ fn spawn_stream_reader(
         .map_err(|_| CompositionError::RuntimeConstruction)
 }
 
-fn read_stream(reader: &mut File, bytes: &mut [u8]) -> Option<usize> {
-    loop {
+fn read_stream(reader: &mut File, bytes: &mut [u8], stop: &AtomicBool) -> Option<usize> {
+    while !stop.load(Ordering::Acquire) {
         match reader.read(bytes) {
             Ok(0) => return None,
             Ok(count) => return Some(count),
@@ -184,6 +184,7 @@ fn read_stream(reader: &mut File, bytes: &mut [u8]) -> Option<usize> {
             Err(_) => return None,
         }
     }
+    None
 }
 
 fn write_stream(port: &dyn StandardStreamPort, stream: StandardStream, bytes: &[u8]) -> bool {
@@ -410,8 +411,8 @@ fn write_output(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::NativeTerminalBridge;
-    use crate::composition::{Terminal, TerminalPort};
+    use super::{NativeOutputBridge, NativeTerminalBridge};
+    use crate::composition::{StandardStream, StandardStreamPort, Terminal, TerminalPort};
     use std::collections::VecDeque;
     use std::io::{Read, Write};
     use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
@@ -453,6 +454,33 @@ mod tests {
             state.2 = true;
             self.changed.notify_all();
         }
+    }
+
+    struct OutputPort(AtomicBool);
+
+    impl StandardStreamPort for OutputPort {
+        fn write(&self, _stream: StandardStream, input: &[u8]) -> std::io::Result<usize> {
+            Ok(input.len())
+        }
+
+        fn close(&self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn idle_output_bridge_drop_reaps_readers() {
+        let port = Arc::new(OutputPort(AtomicBool::new(false)));
+        let bridge = NativeOutputBridge::attach(port.clone()).unwrap();
+        let (finished, completed) = mpsc::channel();
+        std::thread::spawn(move || {
+            drop(bridge);
+            finished.send(()).unwrap();
+        });
+        completed
+            .recv_timeout(Duration::from_secs(1))
+            .expect("idle output bridge did not reap its readers");
+        assert!(port.0.load(Ordering::Acquire));
     }
 
     #[test]
