@@ -26,16 +26,3 @@ int32_t hl_native_address_projection_init_elf(hl_native_address_projection *p, u
     if (span > UINT64_MAX - storage_start) return -1;
     return hl_native_address_projection_init(p, storage_start, storage_start + span, storage_start);
 }
-
-int32_t hl_native_address_projection_storage(const hl_native_address_projection *p, uint64_t address,
-                                             uint64_t *output) {
-    if (!hl_native_address_projection_valid(p) || !output) return -1;
-    *output = hl_native_address_projection_storage_unchecked(p, address);
-    return 0;
-}
-
-int32_t hl_native_address_projection_guest(const hl_native_address_projection *p, uint64_t address, uint64_t *output) {
-    if (!hl_native_address_projection_valid(p) || !output) return -1;
-    *output = hl_native_address_projection_guest_unchecked(p, address);
-    return 0;
-}

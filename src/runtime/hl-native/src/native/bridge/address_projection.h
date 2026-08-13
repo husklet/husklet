@@ -13,8 +13,6 @@ typedef struct hl_native_address_projection {
 
 int32_t hl_native_address_projection_init(hl_native_address_projection *, uint64_t, uint64_t, uint64_t);
 int32_t hl_native_address_projection_init_elf(hl_native_address_projection *, uint32_t, uint64_t, uint64_t, uint64_t);
-int32_t hl_native_address_projection_storage(const hl_native_address_projection *, uint64_t, uint64_t *);
-int32_t hl_native_address_projection_guest(const hl_native_address_projection *, uint64_t, uint64_t *);
 
 static inline int hl_native_address_projection_valid(const hl_native_address_projection *p) {
     if (!p || p->abi != HL_NATIVE_ADDRESS_PROJECTION_ABI || p->size < sizeof(*p) || p->reserved ||
