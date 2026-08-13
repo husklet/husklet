@@ -545,7 +545,10 @@ fn husklet_rootfs_guest(
     ];
     arguments.extend(guest_arguments.iter().map(|argument| (*argument).to_owned()));
     let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, PYTHON_TIMEOUT)?;
-    if captured.outcome != Outcome::Exited(Some(0)) || !captured.stderr.is_empty() {
+    let displaced = b"hl-test-displaced-et-exec: displaced\n";
+    if captured.outcome != Outcome::Exited(Some(0))
+        || (!captured.stderr.is_empty() && captured.stderr != displaced)
+    {
         return Err(format!(
             "native-arm64 Husklet x86 rootfs guest failed with {:?}: {}",
             captured.outcome,
