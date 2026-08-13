@@ -6,6 +6,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -53,6 +54,13 @@ static int worker(const char *release, const char *final_release, int role) {
     pthread_mutexattr_t mutex_attributes;
     pthread_t helper_thread;
     struct helper_context helper_state = {.release = release};
+    char directory[256], original_cwd[256], restored_cwd[256];
+
+    if (snprintf(directory, sizeof directory, "/tmp/husklet-checkpoint-cwd-%ld-%d", (long)original_pid, role) >=
+        (int)sizeof directory)
+        return 24 + role;
+    if (mkdir(directory, 0700) < 0 && errno != EEXIST) return 27 + role;
+    if (chdir(directory) < 0 || getcwd(original_cwd, sizeof original_cwd) == NULL) return 30 + role;
 
     if (snprintf(file_path, sizeof file_path, "%s.file.%d", release, role) >= (int)sizeof file_path) return 10 + role;
     file = open(file_path, O_CREAT | O_TRUNC | O_RDWR, 0600);
@@ -85,6 +93,7 @@ static int worker(const char *release, const char *final_release, int role) {
         if (errno != ENOENT) return 30 + role;
     }
     if (getpid() != original_pid || getppid() != original_ppid) return 40 + role;
+    if (getcwd(restored_cwd, sizeof restored_cwd) == NULL || strcmp(restored_cwd, original_cwd) != 0) return 43 + role;
     if (state <= 1000003ul * (unsigned long)role) return 50 + role;
     if ((fcntl(descriptors[0], F_GETFL) & O_NONBLOCK) != 0) return 56 + role;
     void *helper_result = NULL;
@@ -121,6 +130,8 @@ static int worker(const char *release, const char *final_release, int role) {
     close(descriptors[0]);
     close(sockets[0]);
     close(sockets[1]);
+    if (getcwd(restored_cwd, sizeof restored_cwd) == NULL || strcmp(restored_cwd, original_cwd) != 0) return 153 + role;
+    if (chdir("/") < 0 || rmdir(directory) < 0) return 46 + role;
     dprintf(STDOUT_FILENO, "RESTORED %d %ld %ld %lu\n", role, (long)getpid(), (long)getppid(), state);
     return 20 + role;
 }

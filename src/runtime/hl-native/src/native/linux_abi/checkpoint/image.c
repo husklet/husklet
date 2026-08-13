@@ -815,6 +815,7 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     if (ckpt_dump_epoll(sink, group, fdrecs, nfd) != 0) goto done;
     if (ckpt_dump_inotify(sink, group) != 0) goto done;
     if (ckpt_dump_signal_state(sink, group) != 0) goto done;
+    if (ckpt_dump_filesystem_state(sink, group) != 0) goto done;
 
     // meta written LAST within the group (it carries the section counts).
     if (ckpt_sink_put(sink, group, "meta", 0, &m, sizeof m) != 0) goto done;

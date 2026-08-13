@@ -515,6 +515,7 @@ static void ckpt_restore_proc_run(int gpid) {
     snprintf(pd, sizeof pd, "proc.%d", gpid);
     struct ckpt_meta m;
     if (ckpt_read_meta_dir(pd, &m) != 0) _exit(70);
+    if (ckpt_restore_filesystem_state(pd) != 0) _exit(70);
 
     // adopt our restored identity BEFORE any pid-reporting syscall or /proc publish
     g_self_gpid = m.self_gpid;
@@ -621,6 +622,9 @@ static int ckpt_restore_tree(const char *rootfs) {
     } // init RAM before any engine allocation
 
     container_init(rootfs); // sets g_init_hostpid = getpid() -> this process becomes guest pid 1
+    // container_init establishes the rootfs and its default cwd; replay the captured process context after it
+    // so neither the rootfs chdir nor HL_CWD can overwrite the checkpointed directory.
+    if (ckpt_restore_filesystem_state(ipd) != 0) return 2;
     int irc = engine_global_init();
     if (irc) return irc;
     if (ckpt_prepare_restore_socket_states() != 0) {

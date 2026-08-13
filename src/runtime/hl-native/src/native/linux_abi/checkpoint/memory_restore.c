@@ -49,6 +49,10 @@ static int ckpt_read_meta_dir(const char *procdir, struct ckpt_meta *m) {
         fprintf(stderr, "[restore] invalid checkpoint thread count %llu\n", (unsigned long long)m->n_threads);
         return -1;
     }
+    if (memchr(m->exe_path, 0, sizeof m->exe_path) == NULL) {
+        fprintf(stderr, "[restore] invalid process executable path\n");
+        return -1;
+    }
     return 0;
 }
 

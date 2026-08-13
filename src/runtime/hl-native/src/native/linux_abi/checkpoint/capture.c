@@ -61,7 +61,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 1                                   // current checkpoint images are advertised and written as v1
+#define CKPT_VERSION 2                                   // v2 adds the process filesystem context
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -252,6 +252,14 @@ struct ckpt_signal_state {
     struct sigq_ent queue[65][SIGQ_DEPTH];
 };
 
+#define CKPT_FILESYSTEM_MAGIC UINT64_C(0x484c465354415431)
+
+struct ckpt_filesystem_state {
+    uint64_t magic;
+    char guest_cwd[4200];
+    char guest_root[4200];
+};
+
 static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capacity);
 static int ckpt_capture_right_resource(int fd, struct ckpt_fd *record);
 static void ckpt_release_captured_right(int fd);
@@ -370,6 +378,52 @@ static int ckpt_restore_signal_state(const char *procdir) {
     }
     pthread_mutex_unlock(&g_sigq_lk);
     __atomic_store_n(&g_pending, state->pending, __ATOMIC_SEQ_CST);
+    free(state);
+    return 0;
+}
+
+static int ckpt_dump_filesystem_state(struct ckpt_sink *sink, const char *group) {
+    struct ckpt_filesystem_state *state = calloc(1, sizeof *state);
+    if (state == NULL) return -1;
+    state->magic = CKPT_FILESYSTEM_MAGIC;
+    if (g_rootfs) {
+        snprintf(state->guest_cwd, sizeof state->guest_cwd, "%s", g_cwd[0] ? g_cwd : "/");
+    } else if (getcwd(state->guest_cwd, sizeof state->guest_cwd) == NULL) {
+        fprintf(stderr, "[ckpt] refuse: cannot capture cwd: %s\n", strerror(errno));
+        free(state);
+        return -1;
+    }
+    snprintf(state->guest_root, sizeof state->guest_root, "%s", g_chroot);
+    int result = ckpt_sink_put(sink, group, "filesystem", 0, state, sizeof *state);
+    free(state);
+    return result;
+}
+
+static int ckpt_restore_filesystem_state(const char *procdir) {
+    char path[1300], host[4200];
+    char previous_root[sizeof g_chroot];
+    snprintf(path, sizeof path, "%s/filesystem", procdir);
+    struct ckpt_filesystem_state *state = malloc(sizeof *state);
+    if (state == NULL || ckpt_source_load(path, state, sizeof *state) != 0 || state->magic != CKPT_FILESYSTEM_MAGIC ||
+        memchr(state->guest_cwd, 0, sizeof state->guest_cwd) == NULL ||
+        memchr(state->guest_root, 0, sizeof state->guest_root) == NULL || state->guest_cwd[0] != '/' ||
+        (state->guest_root[0] != 0 && state->guest_root[0] != '/')) {
+        free(state);
+        return -1;
+    }
+    memcpy(previous_root, g_chroot, sizeof previous_root);
+    memcpy(g_chroot, state->guest_root, sizeof state->guest_root);
+    const char *resolved = atpath(-100, state->guest_cwd, host, sizeof host, 0);
+    if (resolved == NULL || chdir(resolved) != 0) {
+        // Resolution needs the restored root projection, but failure must not leave init's process-global
+        // namespace half-restored while the caller reports the image error. Child restorers exit immediately;
+        // init can return through its normal teardown path with the exact prior root still installed.
+        memcpy(g_chroot, previous_root, sizeof previous_root);
+        fprintf(stderr, "[restore] cannot restore guest cwd %s: %s\n", state->guest_cwd, strerror(errno));
+        free(state);
+        return -1;
+    }
+    memcpy(g_cwd, state->guest_cwd, sizeof state->guest_cwd);
     free(state);
     return 0;
 }
