@@ -239,7 +239,12 @@ static int svc_proc_281(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     static char path[4200];
     const char *source = (const char *)a1;
     int error;
-    if (source && !source[0] && ((int)a4 & 0x1000))
+    // Linux validates the complete flag word before resolving either the pathname or dirfd. The only
+    // accepted bits are AT_SYMLINK_NOFOLLOW and AT_EMPTY_PATH; silently ignoring another bit can execute
+    // a program after the caller's execveat was required to fail with EINVAL.
+    if ((int)a4 & ~(0x100 | 0x1000))
+        error = -EINVAL;
+    else if (source && !source[0] && ((int)a4 & 0x1000))
         error = execveat_empty_path((int)a0, path, sizeof path);
     else if (!source || !source[0])
         error = -ENOENT;
