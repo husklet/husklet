@@ -45,6 +45,7 @@ void hl_x86_emit_reload(void);
 void hl_x86_emit_host_pointer(int destination, uint64_t pointer);
 void hl_x86_emit_vector_reset(void);
 void hl_x86_emit_flags_load(void);
+void hl_x86_emit_flags_save_fcompare(void);
 uint32_t *hl_x86_emit_cursor(void);
 
 void emit_ea(struct insn *insn, uint64_t next);
@@ -106,6 +107,7 @@ void e_fp_st(int source, int index);
 void e_fp_push(int source);
 void e_fcom_setfpsw(int left, int right, int signaling);
 void hl_x86_emit_load_scalar32(int destination, int address);
+void hl_x86_emit_store_scalar32(int source, int address);
 void hl_x86_emit_insert_scalar32(int destination, int destination_lane, int source, int source_lane);
 void hl_x86_emit_vector3(uint32_t base, int destination, int left, int right);
 void hl_x86_emit_vector_copy(int destination, int source);

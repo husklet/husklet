@@ -426,6 +426,10 @@ static void e_nzcv_save_fcmp(void) {
     e_str(31, 28, OFF_AF); // x86 SSE compares (UCOMISS/UCOMISD/COMISS/COMISD) clear AF
 }
 
+void hl_x86_emit_flags_save_fcompare(void) {
+    e_nzcv_save_fcmp();
+}
+
 // x86 PF consumer: rd = x86 PF (even parity of the low byte of cpu->pf) in {0,1}. Scratch x16.
 static void e_pf_compute(int rd) {
     e_ldr(rd, 28, OFF_PF);
@@ -652,6 +656,10 @@ static void g_str_s(int t, int rn) {
     if (rn == 17) emit_bus_guard_mem17(4, 0);
     e_dmb_ish();
     e_str_s(t, rn);
+}
+
+void hl_x86_emit_store_scalar32(int source, int address) {
+    g_str_s(source, address);
 }
 
 void e_fmov_to_d(int vd, int xn) {
