@@ -5719,6 +5719,28 @@ static int lower_sse_scalar_to_integer(struct insn *instruction, uint64_t guest_
     return TX_NEXT;
 }
 
+static int lower_sse_integer_to_scalar(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd) {
+    if (instruction->op != 0x2A) return TX_FALL;
+    int source;
+    if (instruction->is_mem) {
+        emit_ea(instruction, next);
+        if (emit_soft_memory_active())
+            emit_memory_guard(17, instruction->rexW ? 8u : 4u, guest_pc, X86_SOFT_READ);
+        e_load(instruction->rexW ? 8 : 4, 16, 17);
+        source = 16;
+    } else {
+        source = instruction->rm_reg;
+    }
+    // Convert into scratch and merge lane zero: CVTSI2SS/SD preserve all upper destination bits.
+    emit32(0x1E220000u | (instruction->rexW ? 0x80000000u : 0) |
+           (instruction->repne ? 0x00400000u : 0) | (source << 5) | 18);
+    if (instruction->repne)
+        e_ins_d(vd, 0, 18, 0);
+    else
+        e_ins_s(vd, 0, 18, 0);
+    return TX_NEXT;
+}
+
 static int lower_sse_minmax(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t opcode = instruction->op;
     if (opcode != 0x5D && opcode != 0x5F) return TX_FALL;
@@ -6437,23 +6459,8 @@ static void *translate_block(uint64_t gpc) {
                     (void)lower_sse_sign_mask(&I, vm, mmx);
                 } else if (lower_mmx_fp_conversion(&I, next, vd, vm) == TX_NEXT) {
                     mmx_wb = -1;
-                } else if (op == 0x2A) { // cvtsi2sd/ss: int r/m -> xmm (F2=double,F3=single)
-                    int src;
-                    if (I.is_mem) {
-                        emit_ea(&I, next);
-                        if (emit_soft_memory_active()) emit_memory_guard(17, I.rexW ? 8u : 4u, gpc, X86_SOFT_READ);
-                        e_load(I.rexW ? 8 : 4, 16, 17);
-                        src = 16;
-                    } else
-                        src = I.rm_reg;
-                    // CVTSI2SS/CVTSI2SD write ONLY the low element and preserve the rest of the
-                    // destination register, so convert into scratch v18 and merge lane 0 back.
-                    emit32(0x1E220000u | (I.rexW ? 0x80000000u : 0) | (I.repne ? 0x00400000u : 0) | (src << 5) |
-                           18); // scvtf d18/s18, src
-                    if (I.repne)
-                        e_ins_d(vd, 0, 18, 0);
-                    else
-                        e_ins_s(vd, 0, 18, 0);
+                } else if (lower_sse_integer_to_scalar(&I, gpc, next, vd) == TX_NEXT) {
+                    // The helper emitted CVTSI2SS/CVTSI2SD and preserved upper destination lanes.
                 } else if (lower_sse_scalar_to_integer(&I, gpc, next, vm) == TX_NEXT) {
                     // The helper emitted scalar float-to-integer conversion and exception semantics.
                 } else if (lower_sse_minmax(&I, gpc, next, vd, vm) == TX_NEXT) {
