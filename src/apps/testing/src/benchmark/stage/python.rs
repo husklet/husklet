@@ -5,7 +5,7 @@ const MACOS_PYTHON: &str = "/mnt/mac/usr/bin/python3";
 pub(super) const IMAGE: &str =
     "python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df";
 pub(super) const IMAGE_ID: &str = "sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df";
-const PLAIN_PROGRAM: &str = r#"import json,sys,time
+pub(super) const PLAIN_PROGRAM: &str = r#"import json,sys,time
 if len(sys.argv)!=2:
  raise SystemExit('expected exactly one factors token')
 parts=sys.argv[1].split(',')
@@ -30,7 +30,7 @@ assert proof==codec_expected[codec_factor]
 print(f'META workload=python layout=plain version=1 factors={compute_factor},{codec_factor}')
 print(f'PHASE python-compute us={compute} ok={value}')
 print(f'PHASE python-codec us={codec} ok={proof}')"#;
-const SQLITE_PROGRAM: &str = r#"import sqlite3,sys,time
+pub(super) const SQLITE_PROGRAM: &str = r#"import sqlite3,sys,time
 if len(sys.argv)!=2:
  raise SystemExit('expected exactly one factors token')
 parts=sys.argv[1].split(',')
@@ -65,8 +65,36 @@ pub(super) struct PythonProfile {
     pub sqlite_identity: String,
 }
 
+pub(super) fn profile_frame(layout: &str, output: &[u8]) -> Result<Vec<u8>, Error> {
+    let phases: &[&str] = match layout {
+        "plain" => &["python-compute", "python-codec"],
+        "sqlite" => &["python-sqlite-write", "python-sqlite-read"],
+        _ => return Err(format!("unknown Python benchmark layout {layout}").into()),
+    };
+    let text = std::str::from_utf8(output)?;
+    for phase in phases {
+        let prefix = format!("PHASE {phase} us=");
+        let elapsed = text
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .and_then(|fields| fields.split_ascii_whitespace().next())
+            .ok_or_else(|| format!("Python workload omitted {phase}"))?
+            .parse::<u64>()?;
+        if elapsed < 5_000 {
+            return Err(format!("Python phase {phase} was shorter than the 5 ms smoke floor").into());
+        }
+    }
+    frame(output)
+}
+
 impl PythonProfile {
-    pub(super) fn stage(output: &Path, docker: &Path, arch_tool: &Path) -> Result<Self, Error> {
+    pub(super) fn stage(
+        output: &Path,
+        docker: &Path,
+        arch_tool: &Path,
+        plain_factors: &str,
+        sqlite_factors: &str,
+    ) -> Result<Self, Error> {
         let interpreter = output.join("native/python3");
         let slices = mac(&["/mnt/mac/usr/bin/lipo".into(), "-archs".into(), MACOS_PYTHON.into()])?;
         if !std::str::from_utf8(&slices)?
@@ -85,8 +113,8 @@ impl PythonProfile {
         }
 
         for (layout, program, factors) in [
-            ("plain", PLAIN_PROGRAM, "4,4"),
-            ("sqlite", SQLITE_PROGRAM, "4,2"),
+            ("plain", PLAIN_PROGRAM, plain_factors),
+            ("sqlite", SQLITE_PROGRAM, sqlite_factors),
         ] {
             let native_output = mac(&[
                 mac_path(arch_tool),

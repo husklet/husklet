@@ -15,8 +15,36 @@ use std::{
     fs,
     io::Read as _,
     path::{Path, PathBuf},
+    str::FromStr,
     time::Duration,
 };
+
+#[derive(Clone)]
+struct WorkFactor(String);
+
+impl WorkFactor {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for WorkFactor {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let Some((first, second)) = value.split_once(',') else {
+            return Err("work factor must be a pair such as 4,2".into());
+        };
+        if second.contains(',')
+            || [first, second]
+                .into_iter()
+                .any(|part| !matches!(part, "1" | "2" | "4" | "8"))
+        {
+            return Err("each work factor must be one of 1,2,4,8".into());
+        }
+        Ok(Self(value.into()))
+    }
+}
 
 mod malloc;
 #[path = "stage/python.rs"]
@@ -48,6 +76,18 @@ pub(crate) struct Options {
     /// Offline SQLite 3.50.1 amalgamation archive with the pinned content hash.
     #[arg(long)]
     sqlite_amalgamation: PathBuf,
+    /// Compute,malloc work factors selected without rebuilding the guest.
+    #[arg(long, default_value = "8,8")]
+    malloc_factor: WorkFactor,
+    /// Compute,codec work factors for the plain Python workload.
+    #[arg(long, default_value = "4,4")]
+    python_plain_factor: WorkFactor,
+    /// Write,read work factors for the Python SQLite workload.
+    #[arg(long, default_value = "4,2")]
+    python_sqlite_factor: WorkFactor,
+    /// Write,read work factors for the compiled SQLite workload.
+    #[arg(long, default_value = "4,4")]
+    sqlite_factor: WorkFactor,
 }
 
 pub(super) fn run(options: Options) -> Result<(), Error> {
@@ -94,7 +134,13 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     for layout in &layouts {
         malloc::build_linux(layout, &source, &rootfs, &docker)?;
     }
-    let python = python::PythonProfile::stage(&output, &docker, &arch)?;
+    let python = python::PythonProfile::stage(
+        &output,
+        &docker,
+        &arch,
+        options.python_plain_factor.as_str(),
+        options.python_sqlite_factor.as_str(),
+    )?;
     let sqlite = sqlite::SqliteProfile::stage(
         &output,
         &rootfs,
@@ -102,17 +148,28 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         &options.sqlite_amalgamation,
         &docker,
         &arch,
+        options.sqlite_factor.as_str(),
     )?;
     let husklet = HuskletProfile::stage(&workspace, &output, &options.mac_cargo)?;
-    let python_husklet = PythonHusklet::stage(&output, &rootfs, &husklet.command)?;
+    let python_husklet =
+        PythonHusklet::stage(&output, &rootfs, &husklet.command, options.python_plain_factor.as_str())?;
     let sqlite_husklet = sqlite::SqliteProfile::stage_husklet(
         &output,
         &rootfs,
         &husklet.command,
         &output.join("sqlite-exact-output.frame"),
+        options.sqlite_factor.as_str(),
     )?;
     merge_rootfs(&python_husklet.rootfs, &rootfs)?;
-    let retained = RetainedProfile::stage(&options.retained, &output, &rootfs, &layouts)?;
+    let retained = RetainedProfile::stage(
+        &options.retained,
+        &output,
+        &rootfs,
+        &layouts,
+        options.malloc_factor.as_str(),
+        options.python_plain_factor.as_str(),
+        options.sqlite_factor.as_str(),
+    )?;
     let mut identities = String::from("artifact\tidentity\n");
     for path in [
         &rootfs,
@@ -131,7 +188,12 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     identities.push_str(&format!("linux-sqlite\t{}\n", sqlite.linux_identity));
     identities.push_str(&format!("sqlite-amalgamation\t{}\n", sqlite.source_identity));
     for layout in &layouts {
-        let native_output = mac(&[mac_path(&arch), "-x86_64".into(), mac_path(&layout.native)])?;
+        let native_output = mac(&[
+            mac_path(&arch),
+            "-x86_64".into(),
+            mac_path(&layout.native),
+            options.malloc_factor.0.clone(),
+        ])?;
         let docker_output = mac(&[
             mac_path(&docker),
             "run".into(),
@@ -146,6 +208,7 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
             ),
             IMAGE.into(),
             layout.linux.display().to_string(),
+            options.malloc_factor.0.clone(),
         ])?;
         let native_frame = malloc_frame(&native_output)?;
         let docker_frame = malloc_frame(&docker_output)?;
@@ -156,7 +219,8 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
                 .strip_prefix(&rootfs)?
                 .to_str()
                 .ok_or("malloc guest path is not UTF-8")?;
-            let husklet_output = husklet_rootfs_guest(&husklet.command, &rootfs, guest, &[])?;
+            let husklet_output =
+                husklet_rootfs_guest(&husklet.command, &rootfs, guest, &[options.malloc_factor.as_str()])?;
             let husklet_frame = malloc_frame(&husklet_output)?;
             require_parity("malloc/plain Husklet", &native_frame, &husklet_frame)?;
             fs::write(output.join("husklet-plain.out"), husklet_output)?;
@@ -183,7 +247,20 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
             husklet.receipt
         ),
     )?;
-    let campaign = campaign(&output, &rootfs, &arch, &layouts, &python, &sqlite, &husklet, &retained)?;
+    let campaign = campaign(
+        &output,
+        &rootfs,
+        &arch,
+        &layouts,
+        &python,
+        &sqlite,
+        &husklet,
+        &retained,
+        &options.malloc_factor,
+        &options.python_plain_factor,
+        &options.python_sqlite_factor,
+        &options.sqlite_factor,
+    )?;
     let campaign_path = output.join("campaign.yaml");
     fs::write(&campaign_path, serde_yaml::to_string(&campaign)?)?;
     Campaign::load(&campaign_path)?.verify_artifacts()?;
@@ -225,6 +302,10 @@ fn campaign(
     sqlite: &sqlite::SqliteProfile,
     integrated: &HuskletProfile,
     retained: &RetainedProfile,
+    malloc_factor: &WorkFactor,
+    python_plain_factor: &WorkFactor,
+    python_sqlite_factor: &WorkFactor,
+    sqlite_factor: &WorkFactor,
 ) -> Result<Campaign, Error> {
     let mac_proxy = output.join("tools/mac");
     fs::copy(MAC, &mac_proxy)?;
@@ -261,6 +342,7 @@ fn campaign(
                     host(arch),
                     "-x86_64".into(),
                     smoke_guest,
+                    malloc_factor.0.clone(),
                 ],
                 guest_path: GuestPath::HostAbsolute,
                 guest_map,
@@ -286,6 +368,7 @@ fn campaign(
                     "--rootfs".into(),
                     rootfs_host.clone(),
                     "benchmark/malloc-plain".into(),
+                    malloc_factor.0.clone(),
                 ],
                 guest_path: GuestPath::RootfsAbsolute,
                 guest_map: BTreeMap::new(),
@@ -310,6 +393,7 @@ fn campaign(
                     "--rootfs".into(),
                     rootfs_host,
                     "benchmark/malloc-plain".into(),
+                    malloc_factor.0.clone(),
                 ],
                 guest_path: GuestPath::RootfsAbsolute,
                 guest_map: BTreeMap::new(),
@@ -351,11 +435,17 @@ fn campaign(
                     commands: BTreeMap::from([
                         (
                             "plain".into(),
-                            vec![linux("benchmark/malloc-plain").display().to_string()],
+                            vec![
+                                linux("benchmark/malloc-plain").display().to_string(),
+                                malloc_factor.0.clone(),
+                            ],
                         ),
                         (
                             "sqlite".into(),
-                            vec![linux("benchmark/malloc-sqlite").display().to_string()],
+                            vec![
+                                linux("benchmark/malloc-sqlite").display().to_string(),
+                                malloc_factor.0.clone(),
+                            ],
                         ),
                     ]),
                     layout_phases: BTreeMap::from([
@@ -382,6 +472,7 @@ fn campaign(
                                 "-B".into(),
                                 "-c".into(),
                                 python::PLAIN_PROGRAM.into(),
+                                python_plain_factor.0.clone(),
                             ],
                         ),
                         (
@@ -391,6 +482,7 @@ fn campaign(
                                 "-B".into(),
                                 "-c".into(),
                                 python::SQLITE_PROGRAM.into(),
+                                python_sqlite_factor.0.clone(),
                             ],
                         ),
                     ]),
@@ -418,7 +510,10 @@ fn campaign(
             (
                 "sqlite".into(),
                 Workload {
-                    commands: BTreeMap::from([("sqlite".into(), vec![sqlite.guest.display().to_string()])]),
+                    commands: BTreeMap::from([(
+                        "sqlite".into(),
+                        vec![sqlite.guest.display().to_string(), sqlite_factor.0.clone()],
+                    )]),
                     layout_phases: BTreeMap::from([(
                         "sqlite".into(),
                         vec!["sqlite-write".into(), "sqlite-read".into()],
@@ -440,15 +535,23 @@ struct RetainedProfile {
 }
 
 impl RetainedProfile {
-    fn stage(source: &Path, output: &Path, rootfs: &Path, layouts: &[malloc::Layout]) -> Result<Self, Error> {
+    fn stage(
+        source: &Path,
+        output: &Path,
+        rootfs: &Path,
+        layouts: &[malloc::Layout],
+        malloc_factor: &str,
+        python_factor: &str,
+        sqlite_factor: &str,
+    ) -> Result<Self, Error> {
         if !source.is_absolute() || !source.is_file() {
             return Err("--retained must name an absolute regular file".into());
         }
         let command = output.join("retained/hl-engine-linux-x86_64");
         fs::create_dir(command.parent().ok_or("retained command has no parent")?)?;
         fs::copy(source, &command)?;
-        let smoke = husklet_rootfs_guest(&command, rootfs, "benchmark/malloc-plain", &[])?;
-        let plain_native = mac(&[mac_path(&layouts[0].native)])?;
+        let smoke = husklet_rootfs_guest(&command, rootfs, "benchmark/malloc-plain", &[malloc_factor])?;
+        let plain_native = mac(&[mac_path(&layouts[0].native), malloc_factor.into()])?;
         require_parity(
             "malloc/plain retained",
             &malloc_frame(&plain_native)?,
@@ -458,21 +561,25 @@ impl RetainedProfile {
             &command,
             rootfs,
             "usr/local/bin/python3.12",
-            &["-B", "-c", python::PLAIN_PROGRAM],
+            &["-B", "-c", python::PLAIN_PROGRAM, python_factor],
         )?;
         let artifact_sha256 = raw_sha256(&rootfs.join("usr/local/bin/python3.12"))?;
         let python_failure = classified_failure(python.outcome, &python.stderr, artifact_sha256)?;
         for layout in layouts {
-            let output_bytes =
-                husklet_rootfs_guest(&command, rootfs, &format!("benchmark/malloc-{}", layout.name), &[])?;
-            let native = mac(&[mac_path(&layout.native)])?;
+            let output_bytes = husklet_rootfs_guest(
+                &command,
+                rootfs,
+                &format!("benchmark/malloc-{}", layout.name),
+                &[malloc_factor],
+            )?;
+            let native = mac(&[mac_path(&layout.native), malloc_factor.into()])?;
             require_parity(
                 &format!("malloc/{} retained", layout.name),
                 &malloc_frame(&native)?,
                 &malloc_frame(&output_bytes)?,
             )?;
         }
-        let sqlite_output = husklet_rootfs_guest(&command, rootfs, "benchmark/sqlite", &[])?;
+        let sqlite_output = husklet_rootfs_guest(&command, rootfs, "benchmark/sqlite", &[sqlite_factor])?;
         require_parity(
             "sqlite/sqlite retained",
             &fs::read(output.join("sqlite-exact-output.frame"))?,
@@ -697,7 +804,7 @@ struct PythonHusklet {
 }
 
 impl PythonHusklet {
-    fn stage(output: &Path, rootfs: &Path, command: &Path) -> Result<Self, Error> {
+    fn stage(output: &Path, rootfs: &Path, command: &Path, factor: &str) -> Result<Self, Error> {
         let interpreter = rootfs.join("usr/local/bin/python3.12");
         let arguments = [
             mac_path(command),
@@ -707,6 +814,7 @@ impl PythonHusklet {
             "-B".into(),
             "-c".into(),
             python::PLAIN_PROGRAM.into(),
+            factor.into(),
         ];
         let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, PYTHON_TIMEOUT)?;
         if captured.outcome != Outcome::Exited(Some(0)) || !captured.stderr.is_empty() {
@@ -850,16 +958,16 @@ mod tests {
 
     #[test]
     fn malloc_stage_rejects_smoke_duration_and_requires_both_phases() {
-        let valid = b"META workload=malloc layout=plain version=1\nPHASE compute us=5000 ok=7\nPHASE malloc us=5001 ok=8\n";
+        let valid =
+            b"META workload=malloc layout=plain version=1\nPHASE compute us=5000 ok=7\nPHASE malloc us=5001 ok=8\n";
         assert!(malloc_frame(valid).is_ok());
-        assert!(malloc_frame(
-            b"META workload=malloc layout=plain version=1\nPHASE compute us=4999 ok=7\nPHASE malloc us=5001 ok=8\n"
-        )
-        .is_err());
-        assert!(malloc_frame(
-            b"META workload=malloc layout=plain version=1\nPHASE compute us=5000 ok=7\n"
-        )
-        .is_err());
+        assert!(
+            malloc_frame(
+                b"META workload=malloc layout=plain version=1\nPHASE compute us=4999 ok=7\nPHASE malloc us=5001 ok=8\n"
+            )
+            .is_err()
+        );
+        assert!(malloc_frame(b"META workload=malloc layout=plain version=1\nPHASE compute us=5000 ok=7\n").is_err());
     }
 
     #[test]

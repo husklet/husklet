@@ -27,6 +27,7 @@ impl SqliteProfile {
         amalgamation_archive: &Path,
         docker: &Path,
         arch_tool: &Path,
+        factor: &str,
     ) -> Result<Self, Error> {
         let command = output.join("native/sqlite");
         let guest = rootfs.join("benchmark/sqlite");
@@ -113,7 +114,7 @@ impl SqliteProfile {
             linux_build.into(),
         ])?;
 
-        let native_output = mac(&[mac_path(arch_tool), "-x86_64".into(), mac_path(&command)])?;
+        let native_output = mac(&[mac_path(arch_tool), "-x86_64".into(), mac_path(&command), factor.into()])?;
         let linux_output = mac(&[
             mac_path(docker),
             "run".into(),
@@ -128,6 +129,7 @@ impl SqliteProfile {
             ),
             super::IMAGE.into(),
             guest.display().to_string(),
+            factor.into(),
         ])?;
         require_parity(
             "sqlite/sqlite",
@@ -155,9 +157,10 @@ impl SqliteProfile {
         rootfs: &Path,
         command: &Path,
         expected: &Path,
+        factor: &str,
     ) -> Result<SqliteHusklet, Error> {
         let interpreter = rootfs.join("benchmark/sqlite");
-        let captured = husklet_rootfs_guest(command, rootfs, "benchmark/sqlite", &[])?;
+        let captured = husklet_rootfs_guest(command, rootfs, "benchmark/sqlite", &[factor])?;
         let actual = profile_frame(&captured)?;
         require_parity("sqlite/sqlite Husklet", &fs::read(expected)?, &actual)?;
         fs::write(output.join("sqlite-husklet.out"), captured)?;
