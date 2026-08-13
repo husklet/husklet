@@ -481,27 +481,6 @@ static void ep_mem_clear(int ep) {
     }
 }
 
-// Re-arm one watched fd's kqueue knotes on epoll instance `ep`, from its recorded interest (events+udata).
-// Shared by the fork-child rebuild and the close-with-surviving-dup re-home. `ident` is the fd whose knote
-// is (re)armed on the kqueue; `slot` is the interest-table fd the events/udata come from (they differ only
-// when re-homing a closed fd onto a surviving alias). Returns the armed read/write direction bits.
-static void ep_rearm_from_interest(int ep, int ident, int slot) {
-    uint32_t ev = g_ep_events[slot];
-    uint16_t xf = (uint16_t)((ev & 0x80000000u ? EV_CLEAR : 0) | (ev & 0x40000000u ? EV_ONESHOT : 0));
-    void *ud = (void *)g_ep_udata[slot];
-    struct kevent kv[2];
-    int n = 0;
-    if (ev & 0x1) { // EPOLLIN
-        EV_SET(&kv[n++], ident, EVFILT_READ, EV_ADD | xf, 0, 0, ud);
-    }
-    if (ev & 0x4) { // EPOLLOUT
-        EV_SET(&kv[n++], ident, EVFILT_WRITE, EV_ADD | xf, 0, 0, ud);
-    }
-    for (int i = 0; i < n; i++) {
-        kevent(ep, &kv[i], 1, NULL, 0, NULL);
-    }
-}
-
 static void ep_rearm_native_watch(const ep_native_watch *watch) {
     uint16_t flags = (uint16_t)((watch->events & UINT32_C(0x80000000) ? EV_CLEAR : 0) |
                                 (watch->events & UINT32_C(0x40000000) ? EV_ONESHOT : 0));
