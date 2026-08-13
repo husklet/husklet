@@ -110,6 +110,17 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [ ] Run the full compatibility corpus on the final C-backed product and classify every remaining failure.
   The immutable exact-tip `64606792f` baseline executed 3,247 of 3,279 rows: 3,105 passed, 142 failed, and 32 were explicitly `NOT_RUN` (ledger `64606792f-20260813T120100Z-immutable-j8.tsv`, SHA-256 `9b49a23bf30b24183e57d83f39a75b9f7571fc1bf3e2470024307e0ae2088a49`). The copied runner and shared library retained their pre-run hashes after the run, and the failure extract is preserved at `/var/tmp/husklet-corpus-64606792f-immutable-j8/failures.tsv`. This is a classified baseline, not final-tip closure.
   Since that baseline, merged commit `54b5a23f4` fixed and activated `runtime/process/ptrace-attach-blocked` on both ISAs. Merged commits `18e90b9e1`, `39c70af13`, and `e27906445` repair the two-ISA `sticky-dir`, `unlink-errno`, and launch-user capability rows. These six filesystem rows and two formerly `NOT_RUN` ptrace rows need inclusion in the next immutable full-tip corpus before updating the aggregate totals.
+  Current-tip targeted reruns additionally prove 19 of the baseline's 22 AMD64
+  soft-span-signature timeouts closed by `b4b5c65bb`, including 14 cases rerun
+  together with immutable runner/library hashes. `abi-corpus-x_vex_sse2int` and
+  `publication/shared-writeback` still time out; `publication/multi-view` passes
+  at 29.784 seconds and is therefore correctness evidence but not a healthy
+  timing margin. Together with the six filesystem-policy and six `O_PATH`/
+  sentry-fchdir closures, 31 of the original 142 failures now have focused
+  closure evidence, leaving 111 baseline failures before a new full-tip corpus.
+  The exhaustive classification is preserved at `/var/tmp/failure-clusters.tsv`.
+  Merged commit `49acf42ef` also activates five isolated scratch-rootfs rows;
+  all five pass the integrated engine and QEMU oracle with non-vacuity evidence.
 
 ## C source structure cleanup
 
@@ -179,6 +190,15 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [ ] Run `cargo test -p hl-native --all-targets` and all C executable/compatibility tests on the final merged tip.
 - [ ] Run feature-gated application Clippy checks and Nix flake checks on the final merged tip.
 - [ ] Obtain macOS CI evidence for platform-specific application/native code.
+- [x] Build, package, sign, and smoke-launch the macOS ARM64 GUI from the C-backed
+  merged product, including relocation of Cargo's private native dylib.
+  Commit `69e7449c1` teaches the bundler where Cargo emitted the dylib; the
+  resulting 149 MiB application passed deep strict signature verification,
+  contained no `/nix/store` linkage, and remained live after launch. Subsequent
+  merged commits `cb7220abf` and `5be65ead6` keep terminal sessions inside the
+  Linux guest as root, retain launch errors, and remove unsupported Applications
+  and Compute/CUDA settings; the rebuilt application passed signature and launch
+  smoke checks. This local evidence does not replace the still-open macOS CI gate.
 - [ ] Obtain Windows CI compile/link/ABI smoke evidence and runtime evidence.
 
 ## Performance and production readiness
