@@ -8,7 +8,7 @@ const PROCESS_CAPTURE_LIMIT: u64 = 64 * 1024;
 /// Owns construction of host processes used by the testing application.
 pub(crate) struct HostProcess;
 
-pub(crate) struct Captured {
+pub(crate) struct ProcessCapture {
     pub outcome: Outcome,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -32,7 +32,7 @@ impl HostProcess {
         program: impl AsRef<OsStr>,
         arguments: &[String],
         timeout: Duration,
-    ) -> io::Result<Captured> {
+    ) -> io::Result<ProcessCapture> {
         let directory = tempfile::tempdir()?;
         let capture = Capture {
             stdout: directory.path().join("stdout"),
@@ -43,7 +43,7 @@ impl HostProcess {
         let mut command = Command::new(program);
         command.args(arguments);
         let outcome = hl_process::run(&command, &capture, timeout, &AtomicBool::new(false))?;
-        Ok(Captured {
+        Ok(ProcessCapture {
             outcome,
             stdout: std::fs::read(capture.stdout)?,
             stderr: std::fs::read(capture.stderr)?,
