@@ -6207,6 +6207,23 @@ static int lower_short_conditional_branch(struct insn *instruction, uint64_t *gu
     return TX_BREAK;
 }
 
+static int lower_direct_jump(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
+                             const hl_x86_trace_state *trace_state, hl_x86_jcc_region *region) {
+    if (instruction->op != 0xE9 && instruction->op != 0xEB) return TX_FALL;
+    uint64_t target = next + (uint64_t)instruction->imm;
+    if (region->stitch_allowed && target != region->start &&
+        !hl_x86_trace_seen(region->seen, *region->seen_count, target) && !map_body(target) &&
+        !hl_x86_trace_trap_head(target)) {
+        region->seen[(*region->seen_count)++] = target;
+        (*region->trace_blocks)++;
+        *guest_pc = target;
+        return TX_NEXT;
+    }
+    hl_x86_trace_flags_edge(trace_state, target, *guest_pc);
+    emit_chain_exit(target);
+    return TX_BREAK;
+}
+
 // Translate the basic block at guest address gpc; returns host entry pointer.
 static void *translate_block(uint64_t gpc) {
     /* Observe writes made through another MAP_SHARED alias before decoding
@@ -6363,33 +6380,13 @@ static void *translate_block(uint64_t gpc) {
                 continue;
             }
             if (string_result == TX_BREAK) break;
-            // ---- jmp rel (E9/EB) ----
-            if (op == 0xE9 || op == 0xEB) {
-                uint64_t tgt = next + (uint64_t)I.imm;
-                // STITCH: follow the unconditional edge inline. Under x86-xflags the top-of-loop
-                // did NOT materialize a deferred producer for this jmp: the inlined continuation is
-                // the same host block, so g_fl_pending simply stays live across the (vanished) edge
-                // and the continuation's own consumers handle it exactly as intra-block code.
-                // (Without x86-xflags, g_fl_pending is FL_NONE here as before.) Skip if the target
-                // is the region head, already laid in this region, an already-registered block, or
-                // a dead trap arm.
-                if (STITCH_OK && tgt != start && !hl_x86_trace_seen(seen, nseen, tgt) && !map_body(tgt) &&
-                    !hl_x86_trace_trap_head(tgt)) {
-                    seen[nseen++] = tgt;
-                    trace_blk++;
-                    gpc = tgt;
-                    continue;
-                }
-                // x86-xflags: chained/exit edge -- materialize unless the successor provably kills
-                // the flags first (no-op when nothing is pending).
-                hl_x86_trace_flags_edge(&trace_state, tgt, gpc);
-                emit_chain_exit(tgt);
-                break;
-            }
+            hl_x86_jcc_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK};
+            int jump_result = lower_direct_jump(&I, &gpc, next, &trace_state, &branch_region);
+            if (jump_result == TX_NEXT) continue;
+            if (jump_result == TX_BREAK) break;
             int direct_loop_result = lower_direct_call_loop(&I, gpc, next, &trace_state);
             if (direct_loop_result == TX_BREAK) break;
-            hl_x86_jcc_region jcc_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK};
-            int jcc_result = lower_short_conditional_branch(&I, &gpc, next, &trace_state, &jcc_region);
+            int jcc_result = lower_short_conditional_branch(&I, &gpc, next, &trace_state, &branch_region);
             if (jcc_result == TX_NEXT) continue;
             if (jcc_result == TX_BREAK) break;
             int flag_register_result = lower_flag_register_transfer(&I);
