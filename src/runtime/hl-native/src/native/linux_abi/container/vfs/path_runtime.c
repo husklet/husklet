@@ -1152,33 +1152,6 @@ static ssize_t memf_write_pos(struct memf *m, const void *buf, size_t n) {
     return k;
 }
 
-static ssize_t memf_preadv(struct memf *m, const struct iovec *iov, int cnt, off_t off, int advance) {
-    off_t p = advance ? m->pos : off;
-    ssize_t tot = 0;
-    for (int i = 0; i < cnt; i++) {
-        ssize_t k = memf_pread(m, iov[i].iov_base, iov[i].iov_len, p);
-        if (k < 0) return tot ? tot : k;
-        tot += k;
-        p += k;
-        if ((size_t)k < iov[i].iov_len) break; // short read -> EOF
-    }
-    if (advance) m->pos = p;
-    return tot;
-}
-
-static ssize_t memf_pwritev(struct memf *m, const struct iovec *iov, int cnt, off_t off, int advance) {
-    off_t p = advance ? m->pos : off;
-    ssize_t tot = 0;
-    for (int i = 0; i < cnt; i++) {
-        ssize_t k = memf_pwrite(m, iov[i].iov_base, iov[i].iov_len, p);
-        if (k < 0) return tot ? tot : k;
-        tot += k;
-        p += k;
-    }
-    if (advance) m->pos = p;
-    return tot;
-}
-
 // lseek on RAM. Returns the new offset, -1 for EINVAL, or -2 to mean "unsupported whence -> materialize".
 static off_t memf_lseek(struct memf *m, off_t off, int whence) {
     off_t np;
