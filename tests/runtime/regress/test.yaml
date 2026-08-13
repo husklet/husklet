@@ -70,12 +70,20 @@ cases:
     timeout: 120
     expect: { exit: 0, stdout: golden/pair_atomics.out }
   - id: runtime/regress/go-cgo-sigurg
-    status: !unsupported
-      reason: "the runtime YAML compiler contract cannot express a cgo external-static Go build, and generated executables are not source artifacts"
-      evidence: "tests/runtime/regress/EVIDENCE.md"
+    status: active
     targets: [arm64]
     compat: { class: compatibility }
-    build: { source: cgo_stack.go, output: cgo_stack, flags: [] }
+    build:
+      source: cgo_stack.go
+      output: cgo_stack
+      compiler: { arm64: go, amd64: go }
+      arguments: [build, -trimpath, "-ldflags=-linkmode external -extldflags -static"]
+      environment:
+        GOOS: linux
+        GOARCH: arm64
+        CGO_ENABLED: "1"
+        CC: aarch64-linux-gnu-gcc
+      flags: []
     artifact: { destination: /opt/husklet/regress/cgo_stack }
     run: []
     timeout: 120

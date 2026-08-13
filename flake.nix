@@ -1105,6 +1105,7 @@
               packages = [
                 pkgs.clang-tools
                 pkgs.cppcheck
+                pkgs.go
                 pkgs.nixfmt
                 pkgs.pkg-config
                 (rustFor pkgs)

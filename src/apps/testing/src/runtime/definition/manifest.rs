@@ -4,7 +4,10 @@ use crate::{
     suite::{Commands, Error, Execution, SafePath as _, Target},
 };
 use serde::Deserialize;
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,6 +62,14 @@ pub(super) struct Build {
 pub(super) struct CaseBuild {
     source: ManifestPath,
     output: String,
+    /// Per-case tool override for artifacts that are not compiled by the document's C compiler.
+    compiler: Option<Commands>,
+    /// Arguments placed immediately after the compiler, before the standard `-o OUTPUT SOURCE`.
+    #[serde(default)]
+    arguments: Vec<String>,
+    /// Deterministic additions/replacements to the inherited compiler environment.
+    #[serde(default)]
+    environment: BTreeMap<String, String>,
     flags: Vec<String>,
     #[serde(default)]
     inputs: Vec<ManifestPath>,
@@ -260,11 +271,26 @@ impl Build {
         case: Option<CaseBuild>,
         artifact: Option<Artifact>,
         default_artifact: Option<&Artifact>,
-    ) -> Result<(ManifestPath, String, Vec<String>, Vec<ManifestPath>, String), Error> {
+    ) -> Result<
+        (
+            ManifestPath,
+            String,
+            Option<Commands>,
+            Vec<String>,
+            BTreeMap<String, String>,
+            Vec<String>,
+            Vec<ManifestPath>,
+            String,
+        ),
+        Error,
+    > {
         match (case, artifact) {
             (Some(build), Some(artifact)) => Ok((
                 build.source,
                 build.output,
+                build.compiler,
+                build.arguments,
+                build.environment,
                 build.flags,
                 build.inputs,
                 artifact.destination,
@@ -272,6 +298,9 @@ impl Build {
             (None, None) => Ok((
                 self.source.clone().ok_or("document build has no default source")?,
                 self.output.clone().ok_or("document build has no default output")?,
+                None,
+                Vec::new(),
+                BTreeMap::new(),
                 self.flags.clone(),
                 self.inputs.clone(),
                 default_artifact

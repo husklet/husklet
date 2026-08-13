@@ -16,7 +16,7 @@ use input::ManifestPath;
 use manifest::{CompatClass, Oracle, RuntimeManifest, Status};
 pub(crate) use manifest::{GuestElf, GuestFile, GuestLibrary};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Component, Path, PathBuf},
     sync::atomic::AtomicBool,
@@ -47,6 +47,9 @@ pub struct Workload {
     pub(crate) output: String,
     elf: Option<elf::Expectation>,
     pub(crate) flags: Vec<String>,
+    build_compiler: Option<Commands>,
+    build_arguments: Vec<String>,
+    build_environment: BTreeMap<String, String>,
     pub(in crate::runtime) inputs: Vec<ManifestPath>,
     status: Status,
     pub(crate) compat: CompatClass,
@@ -145,7 +148,7 @@ impl App {
                     )
                     .into());
                 }
-                let (source, output, flags, inputs, destination) =
+                let (source, output, build_compiler, build_arguments, build_environment, flags, inputs, destination) =
                     document
                         .build
                         .resolve(case.build, case.artifact, document.artifact.as_ref())?;
@@ -192,6 +195,9 @@ impl App {
                     output,
                     elf: case.elf,
                     flags,
+                    build_compiler,
+                    build_arguments,
+                    build_environment,
                     inputs,
                     status: case.status,
                     compat: case.compat.class,
@@ -228,8 +234,10 @@ impl App {
             .tempdir_in(&root)
             .map_err(|error| format!("create build directory in {}: {error}", root.display()))?;
         let output = directory.path().join(&case.output);
-        let declared_compiler = self.compiler.for_target(target);
-        let compiler = compatibility_compiler(target, declared_compiler);
+        let compiler = case.build_compiler.as_ref().map_or_else(
+            || compatibility_compiler(target, self.compiler.for_target(target)),
+            |commands| commands.for_target(target).to_owned(),
+        );
         let source = self.directory.join(case.source.native());
         let capture = hl_process::Capture {
             stdout: directory.path().join("compiler.stdout"),
@@ -238,8 +246,13 @@ impl App {
             stderr_limit: COMPILER_CAPTURE_LIMIT,
         };
         let mut command = hl_process::Command::new(&compiler);
-        command.arg("-o").arg(&output).arg(&source).args(&case.flags);
-        sanitizer_free_tool_environment(&mut command)?;
+        command
+            .args(&case.build_arguments)
+            .arg("-o")
+            .arg(&output)
+            .arg(&source)
+            .args(&case.flags);
+        compiler_environment(&mut command, &case.build_environment)?;
         let outcome = hl_process::run(&command, &capture, COMPILER_TIMEOUT, &AtomicBool::new(false))
             .map_err(|error| format!("run {compiler} on {}: {error}", source.display()))?;
         if outcome != hl_process::Outcome::Exited(Some(0)) {
@@ -361,6 +374,39 @@ fn sanitizer_free_tool_environment(command: &mut hl_process::Command) -> Result<
         .collect::<Result<Vec<_>, _>>()?;
     command.exact_environment(environment)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn compiler_environment(command: &mut hl_process::Command, overrides: &BTreeMap<String, String>) -> Result<(), Error> {
+    use std::os::unix::ffi::OsStrExt as _;
+    if overrides.is_empty() {
+        return sanitizer_free_tool_environment(command);
+    }
+    let sanitizer = std::env::var_os("HL_C_SANITIZER").is_some();
+    let mut environment = std::env::vars_os()
+        .filter(|(name, _)| !overrides.contains_key(&name.to_string_lossy().into_owned()))
+        .filter(|(name, _)| {
+            !sanitizer || !matches!(name.to_str(), Some("LD_PRELOAD" | "ASAN_OPTIONS" | "LSAN_OPTIONS"))
+        })
+        .map(|(name, value)| hl_process::EnvironmentEntry::new(name.as_bytes(), value.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()?;
+    environment.extend(
+        overrides
+            .iter()
+            .map(|(name, value)| hl_process::EnvironmentEntry::new(name, value))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    command.exact_environment(environment)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn compiler_environment(command: &mut hl_process::Command, overrides: &BTreeMap<String, String>) -> Result<(), Error> {
+    if overrides.is_empty() {
+        sanitizer_free_tool_environment(command)
+    } else {
+        Err("per-case compiler environments are not implemented on Windows".into())
+    }
 }
 
 #[cfg(not(unix))]
@@ -619,6 +665,45 @@ mod tests {
                 .unwrap()
                 .join("target/testing/runtime")
                 .join(&app.name),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn per_case_compiler_orders_arguments_and_uses_exact_overrides() {
+        let directory = tempfile::tempdir().unwrap();
+        let compiler = directory.path().join("record-tool");
+        fs::write(
+            &compiler,
+            "#!/bin/sh\n[ \"$1\" = build ] || exit 41\n[ \"$2\" = -trimpath ] || exit 42\n[ \"$3\" = -o ] || exit 43\nout=$4\n[ \"$5\" = \"$HL_EXPECTED_SOURCE\" ] || exit 44\n[ \"$6\" = -flag ] || exit 45\n[ \"$HL_BUILD_MODE\" = exact ] || exit 46\nprintf 'ordered environment=%s inherited=%s\\n' \"$HL_BUILD_MODE\" \"${HL_INHERITED_SENTINEL-unset}\" > \"$out\"\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&compiler, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::write(directory.path().join("one.c"), "one").unwrap();
+        fs::create_dir_all(directory.path().join("golden")).unwrap();
+        fs::write(directory.path().join("golden/one.out"), []).unwrap();
+        let source = directory.path().join("one.c").display().to_string();
+        let definition = directory.path().join("test.yaml");
+        fs::write(
+            &definition,
+            format!(
+                "targets: [arm64]\nimage: alpine\nexecution: {{}}\nbuild:\n  compiler: {{ arm64: false, amd64: false }}\n  flags: []\ncases:\n  - id: runtime/one\n    build:\n      source: one.c\n      output: one\n      compiler: {{ arm64: {}, amd64: {} }}\n      arguments: [build, -trimpath]\n      environment: {{ HL_BUILD_MODE: exact, HL_EXPECTED_SOURCE: {:?}, HL_INHERITED_SENTINEL: isolated }}\n      flags: [-flag]\n    artifact: {{ destination: /opt/one }}\n    status: active\n    compat: {{ class: compatibility }}\n    run: []\n    expect: {{ exit: 0, stdout: golden/one.out }}\n",
+                compiler.display(),
+                compiler.display(),
+                source,
+            ),
+        )
+        .unwrap();
+        let app = App::load(directory.path(), &definition).unwrap();
+
+        let artifact = app.build(&app.cases[0], crate::suite::Target::Arm64).unwrap();
+        assert_eq!(
+            fs::read_to_string(artifact.path()).unwrap(),
+            "ordered environment=exact inherited=isolated\n"
         );
     }
 

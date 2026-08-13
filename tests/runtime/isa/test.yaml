@@ -65,23 +65,33 @@ cases:
     timeout: 120
     expect: { exit: 0, stdout: golden/glibc_min.out }
   - id: runtime/isa/x86_64/go-static-goro
-    status: !unsupported
-      reason: "The folder runner cannot yet express deterministic per-case GOOS/GOARCH compiler environments"
-      evidence: "tests/runtime/isa/ORACLE.md"
+    status: active
     targets: [amd64]
     compat: { class: compatibility }
-    build: { source: go_scheduler.go, output: go-static-goro, flags: [] }
+    build:
+      source: go_scheduler.go
+      output: go-static-goro
+      compiler: { arm64: go, amd64: go }
+      arguments: [build, -trimpath]
+      environment: { GOOS: linux, GOARCH: amd64, CGO_ENABLED: "0" }
+      flags: []
     artifact: { destination: /opt/husklet/isa-go-static-goro }
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/go_scheduler.out }
   - id: runtime/isa/x86_64/go-static-heapgc
-    status: !unsupported
-      reason: "The folder runner cannot yet express deterministic per-case GOOS/GOARCH compiler environments"
+    status: !broken
+      reason: "The pinned Go 1.26.4 static guest reaches a runtime fatal error ('timer when must be positive') under the amd64 engine; the runner/compiler contract is now available, but the engine does not pass this GC/timer workload"
       evidence: "tests/runtime/isa/ORACLE.md"
     targets: [amd64]
     compat: { class: compatibility }
-    build: { source: go_heapgc.go, output: go-static-heapgc, flags: [] }
+    build:
+      source: go_heapgc.go
+      output: go-static-heapgc
+      compiler: { arm64: go, amd64: go }
+      arguments: [build, -trimpath]
+      environment: { GOOS: linux, GOARCH: amd64, CGO_ENABLED: "0" }
+      flags: []
     artifact: { destination: /opt/husklet/isa-go-static-heapgc }
     run: []
     timeout: 120
