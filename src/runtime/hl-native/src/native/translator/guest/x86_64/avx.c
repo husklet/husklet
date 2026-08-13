@@ -1536,6 +1536,47 @@ static enum avx_dispatch_result avx_dispatch_precision_conversion(const hl_x86_a
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_root_reciprocal(const hl_x86_avx_state *state, struct cpu *c,
+                                                             struct insn *instruction, uint64_t next, int map, int op,
+                                                             int prefix, int destination, int merge_register,
+                                                             int width) {
+    if (map != 1 || (op != 0x51 && op != 0x52 && op != 0x53)) return AVX_DISPATCH_UNMATCHED;
+
+    int scalar = prefix == 2 || prefix == 3;
+    int double_precision = op == 0x51 && (prefix == 1 || prefix == 3);
+    int element_size = double_precision ? 8 : 4;
+    uint8_t input[64], output[64];
+    avx_get_rm(state, c, instruction, next, scalar ? element_size : width, input);
+    if (scalar) avx_get(c, merge_register, output);
+    unsigned parked_flags = op == 0x51 ? 0 : cvt_fp_flags();
+    int limit = scalar ? element_size : width;
+    for (int offset = 0; offset < limit; offset += element_size) {
+        if (double_precision) {
+            double value;
+            memcpy(&value, input + offset, 8);
+            double result = avx_dnan_f64(__builtin_sqrt(value), value, value);
+            memcpy(output + offset, &result, 8);
+        } else {
+            float value;
+            memcpy(&value, input + offset, 4);
+            float result;
+            if (op == 0x51)
+                result = avx_dnan_f32(__builtin_sqrtf(value), value, value);
+            else if (op == 0x52)
+                result = avx_dnan_f32(1.0f / __builtin_sqrtf(value), value, value);
+            else
+                result = avx_dnan_f32(1.0f / value, value, value);
+            memcpy(output + offset, &result, 4);
+        }
+    }
+    avx_put(c, destination, output, scalar ? 16 : width);
+    // RCP/RSQRT specify an accuracy bound rather than exact bits and raise no SIMD FP exceptions. The exact
+    // result satisfies the bound; restore sticky flags parked around the host arithmetic.
+    if (op != 0x51) cvt_fp_flags_set(parked_flags);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1997,6 +2038,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
         return;
     if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED)
         return;
+    if (avx_dispatch_root_reciprocal(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2115,85 +2157,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + 8, b, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0x51: { // vsqrtps(NP)/pd(66)/ss(F3)/sd(F2): packed source = rm only; scalar low = sqrt(rm), rest = vvvv
-            int dbl = (pp == 1 || pp == 3), scalar = (pp == 2 || pp == 3);
-            int es = dbl ? 8 : 4;
-            avx_get_rm(state, c, &I, next, scalar ? es : W, b);
-            if (scalar) {
-                avx_get(c, vv, a);
-                memcpy(d, a, 16);
-                if (dbl) {
-                    double y;
-                    memcpy(&y, b, 8);
-                    double z = avx_dnan_f64(__builtin_sqrt(y), y, y);
-                    memcpy(d, &z, 8);
-                } else {
-                    float y;
-                    memcpy(&y, b, 4);
-                    float z = avx_dnan_f32(__builtin_sqrtf(y), y, y);
-                    memcpy(d, &z, 4);
-                }
-                avx_put(c, rd, d, 16);
-            } else {
-                for (int i = 0; i < W; i += es) {
-                    if (dbl) {
-                        double y;
-                        memcpy(&y, b + i, 8);
-                        double z = avx_dnan_f64(__builtin_sqrt(y), y, y);
-                        memcpy(d + i, &z, 8);
-                    } else {
-                        float y;
-                        memcpy(&y, b + i, 4);
-                        float z = avx_dnan_f32(__builtin_sqrtf(y), y, y);
-                        memcpy(d + i, &z, 4);
-                    }
-                }
-                avx_put(c, rd, d, W);
-            }
-            goto done;
-        }
-        case 0x52:   // vrsqrtps(NP)/ss(F3): approximate reciprocal square root
-        case 0x53: { // vrcpps(NP)/ss(F3): approximate reciprocal.
-            // VALUE: the EXACT reciprocal, not the hardware estimate -- the same choice the legacy 0F 52/53
-            // lowering makes (translate.c), decided once for both encodings. The SDM specifies only a bound,
-            // |relerr| <= 1.5*2^-12, never a value, and the exact result satisfies it with error 0. There is
-            // no single hardware answer to copy: the 12-bit table is microarchitecture-specific (unlike
-            // VRCP14PS, which IS defined), so "match hardware" means "match one vendor's ROM" and a guest
-            // that depends on the raw bits already breaks when moved between native x86 parts. Measured on
-            // this host (Zen 4, legacy and VEX bit-identical): rcpps worst relative error 2^-11.63,
-            // rsqrtps 2^-11.92, both inside the bound. On the aarch64 host there is no cheap conforming
-            // approximation either -- FRECPE is an 8-bit estimate, outside the x86 bound, so it would need a
-            // Newton step anyway, at which point exact is simpler and strictly closer.
-            // FLAGS: these raise NO SIMD floating-point exception whatsoever -- measured against native for
-            // a denormal source, an overflow, a zero, a negative and both NaN classes -- but the 1.0f/x
-            // standing in for the table is a real division and reports #D, #O, #P and (under DAZ) #Z. Park
-            // the sticky flags across the whole loop; the result is untouched.
-            // NaN: avx_dnan_f32 applies x86's rules host-independently -- a NaN input propagates quieted
-            // (7f800001 -> 7fc00001), and rsqrt of a negative yields x86's NEGATIVE indefinite ffc00000,
-            // where a bare ARM FSQRT would produce 7fc00000.
-            unsigned parked = cvt_fp_flags();
-            int rsqrt = (op == 0x52), scalar = (pp == 2);
-            avx_get_rm(state, c, &I, next, scalar ? 4 : W, b);
-            if (scalar) {
-                avx_get(c, vv, a);
-                memcpy(d, a, 16);
-                float x;
-                memcpy(&x, b, 4);
-                float y = avx_dnan_f32(rsqrt ? 1.0f / __builtin_sqrtf(x) : 1.0f / x, x, x);
-                memcpy(d, &y, 4);
-                avx_put(c, rd, d, 16);
-            } else {
-                for (int i = 0; i < W; i += 4) {
-                    float x;
-                    memcpy(&x, b + i, 4);
-                    float y = avx_dnan_f32(rsqrt ? 1.0f / __builtin_sqrtf(x) : 1.0f / x, x, x);
-                    memcpy(d + i, &y, 4);
-                }
-                avx_put(c, rd, d, W);
-            }
-            cvt_fp_flags_set(parked);
             goto done;
         }
         // SSE3 horizontal FP + addsub: 7C haddps/pd, 7D hsubps/pd, D0 addsubps/pd. pp==1 => double,
