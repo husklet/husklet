@@ -5664,6 +5664,46 @@ static int lower_sse_compare(struct insn I, uint64_t guest_pc, uint64_t next, in
     return TX_NEXT;
 }
 
+static int lower_sse_minmax(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0x5D && opcode != 0x5F) return TX_FALL;
+    // x86 selects the r/m source for NaN and equal operands, including opposite signed zero.
+    // ARM FMIN/FMAX differ there, so use an ordered greater-than mask and a byte select.
+    int packed = !instruction->repne && !instruction->rep;
+    int source = vm;
+    if (instruction->is_mem) {
+        if (packed) {
+            g_ldr_q_ea(16, instruction, next);
+        } else {
+            emit_ea(instruction, next);
+            if (emit_soft_memory_active())
+                emit_memory_guard(17, instruction->repne ? 8u : 4u, guest_pc, X86_SOFT_READ);
+            if (instruction->repne)
+                g_ldr_d(16, 17);
+            else
+                g_ldr_s(16, 17);
+        }
+        source = 16;
+    }
+    uint32_t size_bit = (packed ? instruction->p66 : instruction->repne) ? 0x00400000u : 0;
+    uint32_t greater_than = (packed ? 0x6EA0E400u : 0x7EA0E400u) | size_bit;
+    if (opcode == 0x5D)
+        emit32(greater_than | (vd << 16) | (source << 5) | 17);
+    else
+        emit32(greater_than | (source << 16) | (vd << 5) | 17);
+    if (packed) {
+        e_v3(0x6E601C00u, 17, vd, source);
+        e_vmov(vd, 17);
+    } else {
+        e_v3(0x2E601C00u, 17, vd, source);
+        if (instruction->repne)
+            e_ins_d(vd, 0, 17, 0);
+        else
+            e_ins_s(vd, 0, 17, 0);
+    }
+    return TX_NEXT;
+}
+
 static int lower_sse_precision_conversion(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     if (I.op != 0x5A) return TX_FALL;
     // 0F 5A is FOUR instructions, selected by the mandatory prefix:
@@ -6427,46 +6467,8 @@ static void *translate_block(uint64_t gpc) {
                         e_csel(I.reg, 20, I.reg, 2 /*CS: s>=thr or NaN*/, sf);
                         emit32(0xD51B4200u | 21); // msr nzcv, x21
                     }
-                } else if (op == 0x5D || op == 0x5F) { // H10: minps/maxps/minpd/maxpd + scalar minss/minsd/maxss/maxsd
-                    // x86 MIN(a,b) = (a<b)?a:b ; MAX(a,b) = (a>b)?a:b -- and if either operand is NaN, or they
-                    // compare equal (incl +0/-0), the result is the SECOND source (the r/m operand). ARM
-                    // FMIN/FMAX instead quiet-propagate NaN and select +-0 by sign, so lower to a compare+select:
-                    //   mask = (op==min) ? FCMGT(src2,dst) : FCMGT(dst,src2)   -> 0 on NaN/equal/+-0 -> pick src2
-                    //   result = mask ? dst : src2   via BSL. Byte-exact with x86 on NaN/+-0.
-                    int packed = !I.repne && !I.rep;
-                    int s = vm;
-                    if (I.is_mem) {
-                        if (packed) {
-                            g_ldr_q_ea(16, &I, next);
-                        } else {
-                            emit_ea(&I, next);
-                            if (emit_soft_memory_active()) emit_memory_guard(17, I.repne ? 8u : 4u, gpc, X86_SOFT_READ);
-                            if (I.repne)
-                                g_ldr_d(16, 17);
-                            else
-                                g_ldr_s(16, 17);
-                        }
-                        s = 16;
-                    }
-                    uint32_t szb = (packed ? I.p66 : I.repne) ? 0x00400000u : 0;
-                    uint32_t GT = (packed ? 0x6EA0E400u : 0x7EA0E400u) | szb; // FCMGT (Rd = Rn > Rm)
-                    if (op == 0x5D)
-                        emit32(GT | (vd << 16) | (s << 5) | 17); // v17 = (src2 > dst)  [min mask]
-                    else
-                        emit32(GT | (s << 16) | (vd << 5) | 17); // v17 = (dst > src2)  [max mask]
-                    if (packed) {
-                        e_v3(0x6E601C00u, 17, vd, s); // BSL v17.16b, dst.16b, src2.16b -> mask?dst:src2
-                        e_vmov(vd, 17);
-                    } else {
-                        e_v3(0x2E601C00u, 17, vd, s); // BSL v17.8b (low lane) -> mask?dst:src2
-                        // MINSS/MINSD/MAXSS/MAXSD write ONLY the low element; bits 127:64 (127:32 for
-                        // the ss forms) of the destination are architecturally PRESERVED. Merge the
-                        // low lane back with INS rather than FMOV, which would zero the upper bits.
-                        if (I.repne)
-                            e_ins_d(vd, 0, 17, 0);
-                        else
-                            e_ins_s(vd, 0, 17, 0);
-                    }
+                } else if (lower_sse_minmax(&I, gpc, next, vd, vm) == TX_NEXT) {
+                    // The helper emitted packed or scalar MIN/MAX with x86 NaN and signed-zero semantics.
                 } else if (lower_sse_float_arithmetic(I, gpc, next, vd, vm) == TX_NEXT) {
                     // The helper emitted the complete packed or scalar floating-point operation.
                 } else if (lower_sse_precision_conversion(I, gpc, next, vd, vm) == TX_NEXT) {
