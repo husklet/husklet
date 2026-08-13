@@ -550,7 +550,9 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // filter mode (2) here AND as Seccomp:2 in /proc/self/status. Match it (unfiltered Linux returns 0);
         // software that gates behaviour on being sandboxed reads this. arg2..5 are ignored by the kernel.
         if ((int)a0 == 21) {
-            G_RET(c) = 2;
+            const char *baseline = hl_option_get("HL_SECCOMP_BASELINE");
+            G_RET(c) = t_seccomp_mode != 0 ? t_seccomp_mode
+                                           : (baseline != NULL && strcmp(baseline, "disabled") == 0 ? 0 : 2);
             break;
         }
         // PR_SET_SECCOMP(22): the legacy entry point for seccomp, ENFORCED like the seccomp(2) syscall
