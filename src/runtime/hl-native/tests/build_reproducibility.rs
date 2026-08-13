@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -50,7 +51,10 @@ fn find_artifact(directory: &Path, filename: &str) -> Option<PathBuf> {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+    Sha256::digest(bytes).iter().fold(String::with_capacity(64), |mut hash, byte| {
+        write!(hash, "{byte:02x}").expect("writing to a string cannot fail");
+        hash
+    })
 }
 
 #[test]
