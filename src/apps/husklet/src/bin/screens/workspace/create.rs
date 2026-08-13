@@ -7,12 +7,10 @@ pub enum Page {
     Mounts,
     Docker,
     Network,
-    Applications,
-    Compute,
 }
 
 impl Page {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 7] = [
         Self::General,
         Self::Terminal,
         Self::Resources,
@@ -20,8 +18,6 @@ impl Page {
         Self::Mounts,
         Self::Docker,
         Self::Network,
-        Self::Applications,
-        Self::Compute,
     ];
 
     #[must_use]
@@ -34,8 +30,6 @@ impl Page {
             Self::Mounts => "Mounts",
             Self::Docker => "Docker",
             Self::Network => "Network",
-            Self::Applications => "Applications",
-            Self::Compute => "Compute",
         }
     }
 }
@@ -52,7 +46,7 @@ pub struct View {
 
 impl View {
     #[must_use]
-    pub fn new(content: [(Page, gtk::Box); 9]) -> Self {
+    pub fn new(content: [(Page, gtk::Box); 7]) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let split = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         split.set_vexpand(true);
@@ -147,3 +141,24 @@ impl View {
 use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+#[cfg(test)]
+mod tests {
+    use super::Page;
+
+    #[test]
+    fn navigation_contains_only_supported_workspace_settings() {
+        assert_eq!(
+            Page::ALL.map(Page::title),
+            [
+                "General",
+                "Terminal",
+                "Resources",
+                "Environment",
+                "Mounts",
+                "Docker",
+                "Network"
+            ]
+        );
+    }
+}

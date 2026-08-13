@@ -7,6 +7,4 @@ pub enum Section {
     Mounts,
     Docker,
     Network,
-    Applications,
-    Compute,
 }

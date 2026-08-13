@@ -40,33 +40,6 @@ fn vpn_spec_parses_and_roundtrips() {
 }
 
 #[test]
-fn cuda_device_spec_parses_and_roundtrips() {
-    let d = CudaDevice::default_device();
-    assert_eq!(d.compute_capability, "8.6");
-    assert_eq!(CudaDevice::parse(&d.to_spec()).unwrap(), d);
-    let full = CudaDevice::parse("My GPU|7.5|8192").unwrap();
-    assert_eq!(
-        (full.name.as_str(), full.compute_capability.as_str(), full.vram_mb),
-        ("My GPU", "7.5", 8192)
-    );
-    let bare = CudaDevice::parse("JustAName").unwrap();
-    assert_eq!(
-        (bare.name.as_str(), bare.compute_capability.as_str(), bare.vram_mb),
-        ("JustAName", "8.6", 4096)
-    );
-    assert_eq!(CudaDevice::parse(""), None);
-    for malformed in [
-        "|8.6|4096",
-        "GPU|eight.six|4096",
-        "GPU|8.6|nope",
-        "GPU|8.6|0",
-        "GPU|8.6|4096|extra",
-    ] {
-        assert_eq!(CudaDevice::parse(malformed), None, "{malformed}");
-    }
-}
-
-#[test]
 fn store_persists_across_reload() {
     let path = tmp_path("persist");
     let _ = std::fs::remove_file(&path);
@@ -99,7 +72,6 @@ fn rich_config_roundtrips() {
     cfg.cpus = Some(4);
     cfg.memory_mb = Some(2048);
     cfg.docker_sock = false;
-    cfg.gui = true;
     cfg.scrollback = Some(5000);
     cfg.ws.env = vec![("FOO".into(), "bar=baz".into()), ("N".into(), "1".into())];
     cfg.ws.mounts = vec![Mount {
@@ -108,7 +80,6 @@ fn rich_config_roundtrips() {
         ro: true,
     }];
     cfg.vpn = Some(VpnConfig::socks5("127.30.0.1:1080"));
-    cfg.cuda = Some(CudaDevice::parse("hl Metal (CUDA-sim) Device|8.6|16384").unwrap());
     cfg.terminal = TerminalPreferences {
         font_family: Some("Berkeley Mono".into()),
         font_size: Some(14),

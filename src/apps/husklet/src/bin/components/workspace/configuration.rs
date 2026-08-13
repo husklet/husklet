@@ -36,9 +36,7 @@ impl Form {
             cursor_blink: Some(self.cursor_blink.is_active()),
         };
         workspace.docker_sock = self.features.docker.is_active();
-        workspace.gui = self.features.graphical.is_active();
         workspace.vpn = self.vpn()?;
-        workspace.cuda = self.cuda()?;
         for (key, value) in self.env_rows.borrow().iter() {
             let key = key.text().trim().to_string();
             if !key.is_empty() {
@@ -80,21 +78,6 @@ impl Form {
         VpnConfig::parse(value.trim())
             .map(Some)
             .ok_or_else(|| Self::invalid("VPN endpoint is invalid."))
-    }
-
-    fn cuda(&self) -> std::io::Result<Option<CudaDevice>> {
-        if !self.features.cuda.is_active() {
-            return Ok(None);
-        }
-        let spec = format!(
-            "{}|{}|{}",
-            self.features.cuda_name.text().trim(),
-            self.features.cuda_capability.text().trim(),
-            self.features.cuda_memory.text().trim()
-        );
-        CudaDevice::parse(&spec).map(Some).ok_or_else(|| {
-            Self::invalid("CUDA requires a name, numeric major.minor capability, and positive memory size.")
-        })
     }
 
     fn invalid(message: &str) -> std::io::Error {

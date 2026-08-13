@@ -94,9 +94,7 @@ impl<'a> Configuration<'a> {
             self.0.cpus.map(|value| value.to_string()).unwrap_or_default(),
             self.0.memory_mb.map(|value| value.to_string()).unwrap_or_default(),
             self.0.docker_sock.to_string(),
-            self.0.gui.to_string(),
             format!("{:?}", self.0.vpn),
-            format!("{:?}", self.0.cuda),
         ] {
             Self::field(&mut value, &item);
         }

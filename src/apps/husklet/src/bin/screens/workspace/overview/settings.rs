@@ -51,9 +51,7 @@ impl Overview<'_> {
         main.append(&form.environment());
         main.append(&form.mounts());
         main.append(&form.docker());
-        main.append(&form.applications());
         main.append(&form.network());
-        main.append(&form.compute());
 
         Self::populate(&form, workspace);
         main.append(&Self::save_row(form));
@@ -92,15 +90,8 @@ impl Overview<'_> {
             form.scrollback.set_text(&scrollback.to_string());
         }
         form.features.docker.set_active(workspace.docker_sock);
-        form.features.graphical.set_active(workspace.gui);
         if let Some(vpn) = &workspace.vpn {
             form.features.vpn.set_text(&vpn.to_spec());
-        }
-        if let Some(cuda) = &workspace.cuda {
-            form.features.cuda.set_active(true);
-            form.features.cuda_name.set_text(&cuda.name);
-            form.features.cuda_capability.set_text(&cuda.compute_capability);
-            form.features.cuda_memory.set_text(&cuda.vram_mb.to_string());
         }
     }
 

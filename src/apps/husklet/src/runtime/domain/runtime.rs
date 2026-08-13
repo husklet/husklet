@@ -45,12 +45,6 @@ impl Runtime {
     }
 
     pub(super) async fn open(workspace: &WorkspaceConfig) -> io::Result<(Containers, Platform)> {
-        if workspace.gui || workspace.cuda.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "GUI and CUDA workspaces are unavailable while Surface is being replaced",
-            ));
-        }
         let external = Images::open(paths::images_dir()).map_err(io::Error::other)?;
         let platform = Self::platform(workspace.arch);
         let workspace_root = workspace.storage_dir(&paths::hl_root());

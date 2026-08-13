@@ -51,8 +51,6 @@ impl Form {
             (CreatePage::Mounts, form.mounts()),
             (CreatePage::Docker, form.docker()),
             (CreatePage::Network, form.network()),
-            (CreatePage::Applications, form.applications()),
-            (CreatePage::Compute, form.compute()),
         ]);
 
         {
@@ -347,21 +345,9 @@ impl Form {
         pane.append(&self.features.docker());
         pane
     }
-    pub(crate) fn applications(&self) -> gtk::Box {
-        let p = Panel::new("Applications").into_widget();
-        p.append(&self.features.applications());
-        p
-    }
-
     pub(crate) fn network(&self) -> gtk::Box {
         let p = Panel::new("Network").into_widget();
         p.append(&self.features.network());
-        p
-    }
-
-    pub(crate) fn compute(&self) -> gtk::Box {
-        let p = Panel::new("Compute").into_widget();
-        p.append(&self.features.cuda());
         p
     }
 }

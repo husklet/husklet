@@ -1,4 +1,4 @@
-use super::{io, Arch, CudaDevice, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig};
+use super::{io, Arch, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig};
 
 #[derive(Default)]
 pub(super) struct WorkspaceDocument {
@@ -83,10 +83,8 @@ struct WsBuilder {
     env: Vec<(String, String)>,
     mounts: Vec<Mount>,
     docker_sock: Option<bool>,
-    gui: Option<bool>,
     scrollback: Option<u64>,
     vpn: Option<VpnConfig>,
-    cuda: Option<CudaDevice>,
     terminal: TerminalPreferences,
 }
 
@@ -101,13 +99,9 @@ impl WsBuilder {
             "cpus" => self.cpus = Some(Value::new("cpus", v).number()?),
             "memory" => self.memory_mb = Some(Value::new("memory", v).number()?),
             "docker_sock" => self.docker_sock = Some(Value::new("docker_sock", v).boolean()?),
-            "gui" => self.gui = Some(Value::new("gui", v).boolean()?),
             "scrollback" => self.scrollback = Some(Value::new("scrollback", v).number()?),
             "vpn" if !v.is_empty() => {
                 self.vpn = Some(VpnConfig::parse(v).ok_or_else(|| Value::new("vpn", v).invalid())?);
-            }
-            "cuda" if !v.is_empty() => {
-                self.cuda = Some(CudaDevice::parse(v).ok_or_else(|| Value::new("cuda", v).invalid())?);
             }
             "terminal_font" if !v.is_empty() => self.terminal.font_family = Some(v.to_owned()),
             "terminal_size" => self.terminal.font_size = Some(Value::new("terminal_size", v).number()?),
@@ -172,10 +166,8 @@ impl WsBuilder {
                 mounts: self.mounts,
             },
             docker_sock: self.docker_sock.unwrap_or(true),
-            gui: self.gui.unwrap_or(false),
             scrollback: self.scrollback,
             vpn: self.vpn,
-            cuda: self.cuda,
             terminal: self.terminal,
         })
     }

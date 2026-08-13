@@ -68,18 +68,6 @@ impl Overview<'_> {
                 .as_ref()
                 .map_or_else(|| "direct".into(), hl::config::VpnConfig::to_spec),
         );
-        append(
-            "CUDA device",
-            workspace.cuda.as_ref().map_or_else(
-                || "none".into(),
-                |cuda| {
-                    format!(
-                        "{} (cc {}, {} MB) → host Metal",
-                        cuda.name, cuda.compute_capability, cuda.vram_mb
-                    )
-                },
-            ),
-        );
         if !workspace.env.is_empty() {
             append(
                 "Environment",

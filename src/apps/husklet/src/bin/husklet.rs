@@ -24,7 +24,7 @@ use std::rc::Rc;
 use vte4::prelude::*;
 use vte4::TerminalExtManual;
 
-use hl::config::{CudaDevice, TerminalPreferences, VpnConfig, WorkspaceConfig, WorkspaceStore};
+use hl::config::{TerminalPreferences, VpnConfig, WorkspaceConfig, WorkspaceStore};
 use hl_ws::{Arch, Mount};
 use hl_ws_term::config::{CursorShape, TermConfig};
 use hl_ws_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir};

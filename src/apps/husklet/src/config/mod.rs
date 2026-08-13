@@ -1,10 +1,10 @@
 //! `hl`-side workspace CONFIG: the bare [`hl_ws::Workspace`] run primitive PLUS its per-workspace FEATURE
 //! settings, and their file-backed persistence.
 //!
-//! `hl-ws` owns only what is needed to RUN a workspace. A feature (vpn egress, a simulated CUDA device, the
-//! GUI display toggle, the docker-socket mount, terminal scrollback) is NOT part of that primitive — it is
-//! `hl`-side config. This module holds:
-//!   - the feature DATA types ([`VpnConfig`]/[`VpnKind`], [`CudaDevice`]) — plain data, no mechanism;
+//! `hl-ws` owns only what is needed to run a workspace. Features such as VPN egress, the Docker-socket
+//! mount, and terminal scrollback are application-side configuration rather than part of that primitive.
+//! This module holds:
+//!   - the feature data types ([`VpnConfig`]/[`VpnKind`]) — plain data, no mechanism;
 //!   - [`WorkspaceConfig`], the wrapper = a bare `Workspace` + its feature settings (Derefs to `Workspace`
 //!     so identity/run fields read through transparently);
 //!   - [`WorkspaceStore`], the persistence (`~/.hl/workspaces.conf`) that round-trips the full config.
@@ -137,20 +137,6 @@ impl VpnConfig {
     }
 }
 
-/// A per-workspace **simulated CUDA device** SETTING. `None` on a [`WorkspaceConfig`] = no GPU device
-/// presented. These fields are exactly what NVML / `cudaGetDeviceProperties` report — *presentation* data,
-/// not real hardware. The injection MECHANISM (NVML shim, `nvidia-smi`, command-forward to Metal) is an
-/// GPU configuration retained in persisted input while the replacement Surface service is built.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct CudaDevice {
-    /// Reported device name, e.g. `"hl Metal (CUDA-sim) Device"`.
-    pub name: String,
-    /// Reported compute capability as `"major.minor"`, e.g. `"8.6"`.
-    pub compute_capability: String,
-    /// Reported VRAM in MB (on Apple Silicon this is carved from unified memory).
-    pub vram_mb: u32,
-}
-
 /// Terminal preferences persisted with one workspace. Unset fields use built-in defaults.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct TerminalPreferences {
@@ -160,69 +146,6 @@ pub struct TerminalPreferences {
     pub background: Option<String>,
     pub cursor_shape: Option<String>,
     pub cursor_blink: Option<bool>,
-}
-
-impl CudaDevice {
-    /// A sensible default simulated device (Ampere-class, 4 GiB reported).
-    #[must_use]
-    pub fn default_device() -> CudaDevice {
-        CudaDevice {
-            name: "hl Metal (CUDA-sim) Device".to_string(),
-            compute_capability: "8.6".to_string(),
-            vram_mb: 4096,
-        }
-    }
-    /// Parse the persisted `name | cc | vram_mb` spec (pipe-separated so the name may contain spaces).
-    /// A bare non-empty string with no pipes is treated as just the device name with default cc/VRAM.
-    /// Empty → `None`.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<CudaDevice> {
-        let s = s.trim();
-        if s.is_empty() {
-            return None;
-        }
-        let mut d = CudaDevice::default_device();
-        let parts: Vec<&str> = s.split('|').collect();
-        if parts.len() > 3 {
-            return None;
-        }
-        let name = parts.first()?.trim();
-        if name.is_empty() {
-            return None;
-        }
-        name.clone_into(&mut d.name);
-        if let Some(cc) = parts.get(1) {
-            let cc = cc.trim();
-            if !Self::valid_capability(cc) {
-                return None;
-            }
-            d.compute_capability = cc.to_string();
-        }
-        if let Some(v) = parts.get(2) {
-            let mb = v.trim().parse::<u32>().ok()?;
-            if mb == 0 {
-                return None;
-            }
-            d.vram_mb = mb;
-        }
-        Some(d)
-    }
-
-    fn valid_capability(value: &str) -> bool {
-        let Some((major, minor)) = value.split_once('.') else {
-            return false;
-        };
-        !major.is_empty()
-            && !minor.is_empty()
-            && !minor.contains('.')
-            && major.bytes().all(|byte| byte.is_ascii_digit())
-            && minor.bytes().all(|byte| byte.is_ascii_digit())
-    }
-    /// The canonical persisted form (round-trips through [`CudaDevice::parse`]).
-    #[must_use]
-    pub fn to_spec(&self) -> String {
-        format!("{}|{}|{}", self.name, self.compute_capability, self.vram_mb)
-    }
 }
 
 /// The full `hl`-side per-workspace config: the bare [`Workspace`] run primitive PLUS the feature settings
@@ -235,16 +158,11 @@ pub struct WorkspaceConfig {
     pub ws: Workspace,
     /// Mount the docker socket + set `DOCKER_HOST` so `docker` works inside (default on).
     pub docker_sock: bool,
-    /// GUI display request (default OFF). Opening this configuration currently fails clearly because
-    /// the graphics stack has moved out of Husklet and its replacement is not integrated yet.
-    pub gui: bool,
     /// Terminal scrollback (lines of history each shell retains). `None` = unlimited (the default). A
     /// TERMINAL knob (see `hl-ws-term`'s `TermConfig::scrollback`) persisted per-workspace here.
     pub scrollback: Option<u64>,
     /// Per-workspace VPN/proxy egress setting. `None` = direct (default).
     pub vpn: Option<VpnConfig>,
-    /// Per-workspace simulated CUDA device setting. `None` = no GPU device presented (default).
-    pub cuda: Option<CudaDevice>,
     /// Terminal appearance persisted with this workspace.
     pub terminal: TerminalPreferences,
 }
@@ -278,10 +196,8 @@ impl WorkspaceConfig {
         WorkspaceConfig {
             ws,
             docker_sock: true,
-            gui: false,
             scrollback: None,
             vpn: None,
-            cuda: None,
             terminal: TerminalPreferences::default(),
         }
     }
@@ -407,17 +323,11 @@ impl WorkspaceStore {
                 out.field("memory", &m.to_string());
             }
             out.field("docker_sock", if w.docker_sock { "true" } else { "false" });
-            if w.gui {
-                out.field("gui", "true");
-            }
             if let Some(sb) = w.scrollback {
                 out.field("scrollback", &sb.to_string());
             }
             if let Some(vpn) = &w.vpn {
                 out.field("vpn", &vpn.to_spec());
-            }
-            if let Some(cuda) = &w.cuda {
-                out.field("cuda", &cuda.to_spec());
             }
             if let Some(value) = &w.terminal.font_family {
                 out.field("terminal_font", value);
