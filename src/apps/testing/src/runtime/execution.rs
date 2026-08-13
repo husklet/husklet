@@ -38,16 +38,11 @@ impl CaseResult {
     }
 }
 
-/// A case outcome plus the engine counters observed while it ran.
-///
-/// The counters were stderr-only and vanished with the run, so no sweep could be audited
-/// afterwards for which cases actually translated their own body.
 pub struct Report {
     pub results: Vec<CaseResult>,
     /// One `native counter=value ...` line, empty when the app does not emit diagnostics.
     pub counters: String,
 }
-
 pub async fn run_case(app: Arc<App>, case_index: usize, target: Target) -> Result<Report, Error> {
     let case = &app.cases[case_index];
     worker::run(&app.name, &case.id, target, case.declared_timeout(), &case.diagnostics).await
@@ -70,8 +65,6 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
     })
     .await??;
     let case = &app.cases[case_index];
-    // A mount that must be populated needs a materialized tree, exactly as the
-    // product's `create_image` falls back from overlay to a full copy.
     let mode = if case.engine_options.mounts().iter().any(|mount| mount.populate) {
         Materialization::Copy
     } else {
@@ -96,7 +89,6 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
     Ok(results)
 }
 
-/// Stages the case artifact into the writable root: the overlay upper, or the copied tree.
 async fn stage(
     fixture: &TestImage,
     case: &super::definition::Workload,
@@ -117,11 +109,6 @@ async fn stage(
     provision(root, fixture.lower(), case, target).await
 }
 
-/// Proves the run really took the product's overlay path rather than a flat copy.
-///
-/// The staged program must exist in the upper and nowhere in the lower, and the
-/// lower must still carry image content the upper does not: a resolution that
-/// launches the program at all has crossed both layers.
 fn assert_overlay(fixture: &TestImage, case: &super::definition::Workload) -> Result<(), Error> {
     let Some(lower) = fixture.lower() else {
         return Ok(());
@@ -147,7 +134,6 @@ fn assert_overlay(fixture: &TestImage, case: &super::definition::Workload) -> Re
     Ok(())
 }
 
-/// Stages the guest-side state a case declares, so a fixture never has to depend on the image alone.
 async fn provision(
     root: &std::path::Path,
     lower: Option<&std::path::Path>,
@@ -214,7 +200,6 @@ fn set_private(_path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Names the failing operation and its path, so a bare `os error 2` is never the whole diagnostic.
 fn context(operation: &str, path: &std::path::Path, error: &std::io::Error) -> String {
     format!("{operation} {}: {error}", path.display())
 }
@@ -430,9 +415,6 @@ impl<'a> CaseExecution<'a> {
     }
 }
 
-/// Accepts both the full process-exit report and the bounded dispatcher report used when a guest
-/// thread or signal unwinds through the engine. Optional performance counters such as `ibtc_miss`
-/// must not decide whether diagnostics were transported.
 fn validate_profile(stderr: &str) -> Result<(), Error> {
     let mut crossings = None;
     let mut translations = None;

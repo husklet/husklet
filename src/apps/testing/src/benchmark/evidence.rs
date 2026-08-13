@@ -4,7 +4,9 @@ use super::{
 };
 use crate::{platform::HostProcess, record::FramedIdentity, suite::Error};
 use fs2::FileExt as _;
-use serde::{Deserialize, Serialize};
+#[path = "evidence_model.rs"]
+mod model;
+pub(in crate::benchmark) use model::{Phase, Row};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -13,27 +15,6 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-
-#[derive(Clone, Deserialize, Serialize)]
-pub(super) struct Phase {
-    pub us: u64,
-    pub ok: String,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub(super) struct Row {
-    pub key: String,
-    pub workload: String,
-    pub layout: String,
-    pub cell: String,
-    pub round: u32,
-    pub position: usize,
-    pub arm: String,
-    pub output: String,
-    pub output_frame: String,
-    pub phases: BTreeMap<String, Phase>,
-    pub host_load: String,
-}
 
 pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<String, Phase>, String, String), Error> {
     let arm = &campaign.arms[&step.arm];
@@ -77,10 +58,9 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
         )?;
     }
     require_metadata(metadata_seen)?;
-    let expected = if step.workload == "python" {
-        &campaign.workloads[&step.workload].phases
-    } else {
-        &campaign.layouts[&step.layout].phases
+    let expected = match step.workload.as_str() {
+        "python" => &campaign.workloads[&step.workload].phases,
+        _ => &campaign.layouts[&step.layout].phases,
     };
     if phases.keys().map(String::as_str).collect::<BTreeSet<_>>() != expected.iter().map(String::as_str).collect() {
         return Err(format!("layout {} emitted an incomplete phase set", step.layout).into());
@@ -96,13 +76,8 @@ fn require_line_framing(text: &str) -> Result<(), Error> {
     }
     Ok(())
 }
-
 fn require_metadata(seen: bool) -> Result<(), Error> {
-    if seen {
-        Ok(())
-    } else {
-        Err("benchmark output omitted metadata".into())
-    }
+    seen.then_some(()).ok_or_else(|| "benchmark output omitted metadata".into())
 }
 
 fn parse_output_line(

@@ -10,7 +10,6 @@ pub(super) struct Report {
     pub verdict: &'static str,
     pub text: String,
 }
-
 impl Report {
     pub(super) fn evaluate(campaign: &Campaign, rows: &[Row], limit: f64) -> Result<Self, Error> {
         if !limit.is_finite() || limit < 1.0 {
