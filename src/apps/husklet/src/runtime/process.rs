@@ -104,8 +104,9 @@ mod ffi {
             use std::os::unix::process::CommandExt;
 
             #[cfg(target_os = "linux")]
-            // Capture before fork so the child can close the race between prctl and an owner
-            // that exits immediately after spawning it.
+            // SAFETY: `getpid` takes no pointers, retains no Rust storage, invokes no callback,
+            // and cannot unwind. Capture it before fork so the child can close the race between
+            // `prctl` and an owner that exits immediately after spawning it.
             let owner = unsafe { libc::getpid() };
 
             // SAFETY: the hook runs in the child after `fork` and before `exec`. It invokes only
