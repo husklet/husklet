@@ -291,7 +291,7 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         build.include("src/native/toolchain/msvc-posix/include");
         let prelude = "src/native/toolchain/msvc-posix/include/prelude.h";
         if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-            build.flag(&format!("/FI{prelude}"));
+            build.flag(format!("/FI{prelude}"));
         } else {
             build.flag("-include").flag(prelude);
         }
