@@ -2276,8 +2276,8 @@ static enum avx_dispatch_result avx_dispatch_map1_immediate_shuffle(const hl_x86
 }
 
 static enum avx_dispatch_result avx_dispatch_map2_horizontal_integer(const hl_x86_avx_state *state, struct cpu *c,
-                                                                      struct insn *instruction, uint64_t next, int map,
-                                                                      int width) {
+                                                                     struct insn *instruction, uint64_t next, int map,
+                                                                     int width) {
     int op = instruction->op;
     int supported = op == 0x01 || op == 0x02 || op == 0x03 || op == 0x05 || op == 0x06 || op == 0x07;
     if (map != 2 || !supported) return AVX_DISPATCH_UNMATCHED;
@@ -2432,6 +2432,56 @@ static enum avx_dispatch_result avx_dispatch_map2_ssse3_arithmetic(const hl_x86_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_gather(const hl_x86_avx_state *state, struct cpu *c,
+                                                         struct insn *instruction, uint64_t next, int map, int op,
+                                                         int width) {
+    if (map != 2 || op < 0x90 || op > 0x93) return AVX_DISPATCH_UNMATCHED;
+    if (instruction->evex) return AVX_DISPATCH_UNIMPLEMENTED;
+    int destination = instruction->reg;
+    int mask_register = instruction->vvvv;
+    if (destination == instruction->m_index || destination == mask_register || mask_register == instruction->m_index)
+        avx_undefined();
+    int element_size = instruction->vex_w ? 8 : 4;
+    int index_size = (op == 0x90 || op == 0x92) ? 4 : 8;
+    int lane_count = index_size == 4 ? width / element_size : width / 8;
+    int result_bytes = lane_count * element_size;
+    uint8_t indices[64], mask[64], output[64];
+    avx_get(c, instruction->m_index, indices);
+    avx_get(c, mask_register, mask);
+    avx_get(c, destination, output);
+    uint64_t base = instruction->m_hasbase ? c->r[instruction->m_base] : 0;
+    base += (uint64_t)instruction->disp;
+    if (instruction->seg == 1)
+        base += c->fs_base;
+    else if (instruction->seg == 2)
+        base += c->gs_base;
+    int64_t scale = (int64_t)1 << instruction->m_scale;
+    for (int lane = 0; lane < lane_count; lane++) {
+        if (mask[(lane + 1) * element_size - 1] & 0x80) {
+            int64_t index;
+            if (index_size == 4) {
+                int32_t narrow_index;
+                memcpy(&narrow_index, indices + lane * 4, 4);
+                index = narrow_index;
+            } else {
+                memcpy(&index, indices + lane * 8, 8);
+            }
+            uint64_t address = hl_x86_avx_address(state, base + (uint64_t)(index * scale));
+            if (!avx_try_read(state, address, output + lane * element_size, (size_t)element_size)) {
+                avx_put(c, destination, output, 64);
+                avx_put(c, mask_register, mask, 64);
+                avx_abandon(address, (uint64_t)element_size, X86_SOFT_READ);
+            }
+        }
+        memset(mask + lane * element_size, 0, (size_t)element_size);
+    }
+    avx_put(c, destination, output, result_bytes);
+    uint8_t zero[64] = {0};
+    avx_put(c, mask_register, zero, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2462,6 +2512,9 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     enum avx_dispatch_result bmi = avx_dispatch_bmi(state, c, &I, next, map, op, pp, rd, vv);
     if (bmi == AVX_DISPATCH_HANDLED) return;
     if (bmi == AVX_DISPATCH_UNIMPLEMENTED) goto avx_unimpl;
+    enum avx_dispatch_result gather = avx_dispatch_map2_gather(state, c, &I, next, map, op, W);
+    if (gather == AVX_DISPATCH_HANDLED) return;
+    if (gather == AVX_DISPATCH_UNIMPLEMENTED) goto avx_unimpl;
     if (avx_dispatch_fma(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_crypto(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_memory(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
@@ -2617,71 +2670,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
         case 0x2A: { // vmovntdqa: streaming aligned load m128/m256 -> reg
             avx_get_rm(state, c, &I, next, W, b);
             avx_put(c, rd, b, W);
-            goto done;
-        }
-        case 0x90:   // vpgatherd{d,q}: 32-bit (dword) indices
-        case 0x92:   // vgatherd{ps,pd}: 32-bit indices (same addressing; element bits are float)
-        case 0x91:   // vpgatherq{d,q}: 64-bit (qword) indices
-        case 0x93: { // vgatherq{ps,pd}: 64-bit indices
-            // AVX2 masked gather. VSIB: the index is a VECTOR register (I.m_index) scaled by 1<<m_scale off
-            // a GPR base+disp; the mask is VEX.vvvv, one element per destination element, tested on its top
-            // bit. elem = destination element size (W0=dword, W1=qword), isz = index element size.
-            //
-            // THE ADDRESS IS GUEST DATA: base + (int)index_element * scale spans the whole 64-bit space
-            // whatever the base register holds, so every element goes through the fault bracket above.
-            //
-            // RESTARTABILITY is what the mask semantics exist for, and it is exact here (measured on
-            // silicon: a gather whose 3rd element hits a guard page faults ONCE, and after the handler maps
-            // the page the completed elements are NOT re-gathered while the remaining ones read the page's
-            // new contents). So: clear each mask element as its element COMPLETES, and on a fault commit the
-            // partial destination and the partially cleared mask before abandoning -- rip is left on the
-            // instruction, so the retry gathers exactly the elements whose mask bit survived. The whole
-            // mask register is cleared only on full completion.
-            if (I.evex) goto avx_unimpl; // EVEX gathers mask on k1, not vvvv; emulating them as VEX is wrong
-            // #UD if any two of destination, index and mask are the same register (SDM); measured: SIGILL,
-            // ILL_ILLOPN. `c4 e2 78 91 04 8b` -- dest == mask == xmm0 -- is this case, not a memory fault.
-            if (rd == I.m_index || rd == vv || vv == I.m_index) avx_undefined();
-            int elem = I.vex_w ? 8 : 4;
-            int isz = (op == 0x90 || op == 0x92) ? 4 : 8;
-            int nlanes = (isz == 4) ? (W / elem) : (W / 8);
-            int result_bytes = nlanes * elem;
-            uint8_t idxv[64], mask[64];
-            avx_get(c, I.m_index, idxv); // VSIB vector index register
-            avx_get(c, vv, mask);        // mask register (VEX.vvvv)
-            avx_get(c, rd, d);           // masked-off lanes keep the old destination value
-            uint64_t base = 0;
-            if (I.m_hasbase) base += c->r[I.m_base];
-            base += (uint64_t)I.disp;
-            if (I.seg == 1)
-                base += c->fs_base;
-            else if (I.seg == 2)
-                base += c->gs_base;
-            int64_t scale = (int64_t)1 << I.m_scale;
-            for (int i = 0; i < nlanes; i++) {
-                if (mask[(i + 1) * elem - 1] & 0x80) {
-                    int64_t index;
-                    if (isz == 4) {
-                        int32_t t;
-                        memcpy(&t, idxv + i * 4, 4);
-                        index = t;
-                    } else {
-                        memcpy(&index, idxv + i * 8, 8);
-                    }
-                    uint64_t addr = hl_x86_avx_address(state, base + (uint64_t)(index * scale));
-                    if (!avx_try_read(state, addr, d + i * elem, (size_t)elem)) {
-                        // Suspended, not abandoned: elements < i are done and must survive. 64-byte writes,
-                        // so nothing this instruction has not touched moves (no upper-zeroing on a fault).
-                        avx_put(c, rd, d, 64);
-                        avx_put(c, vv, mask, 64);
-                        avx_abandon(addr, (uint64_t)elem, X86_SOFT_READ);
-                    }
-                }
-                memset(mask + i * elem, 0, (size_t)elem); // this element is complete
-            }
-            avx_put(c, rd, d, result_bytes); // dst above the result width is zeroed
-            uint8_t zero[64];
-            memset(zero, 0, 64);
-            avx_put(c, vv, zero, W); // the entire mask register is cleared after a completed gather
             goto done;
         }
         }
