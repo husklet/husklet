@@ -28,7 +28,7 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
-    let normalized = source.replace("_Thread_local", "             ");
+    let normalized = normalize_function_pointer_annotations(&source.replace("_Thread_local", "             "));
     let tree = parser
         .parse(&normalized, None)
         .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
@@ -51,6 +51,34 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+fn normalize_function_pointer_annotations(source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut start = 0;
+    while start < source.len() {
+        if !source.as_bytes()[start].is_ascii_uppercase() {
+            start += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < source.len() && matches!(source.as_bytes()[end], b'_' | b'0'..=b'9' | b'A'..=b'Z') {
+            end += 1;
+        }
+        let before = source.as_bytes()[..start]
+            .iter()
+            .rfind(|byte| !byte.is_ascii_whitespace());
+        let tail = source[end..].trim_start();
+        let pointer = tail.strip_prefix('*').map(str::trim_start).and_then(|tail| {
+            let name_end = tail.find(|character: char| !character.is_ascii_alphanumeric() && character != '_')?;
+            identifier(&tail[..name_end]).then_some(tail[name_end..].trim_start())
+        });
+        if before == Some(&b'(') && pointer.is_some_and(|tail| tail.starts_with(")(")) {
+            normalized[start..end].fill(b' ');
+        }
+        start = end;
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
 }
 
 fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str) -> Option<tree_sitter::Node<'tree>> {
@@ -158,19 +186,49 @@ fn annotation_prefix(node: tree_sitter::Node<'_>, source: &str) -> bool {
     let Some(line) = source.lines().nth(point.row) else {
         return false;
     };
-    let Some(prefix) = line.get(..point.column).map(str::trim) else {
+    let Some(before) = line.get(..point.column).map(str::trim) else {
         return false;
     };
-    let annotation = prefix.trim_end_matches(|character: char| character.is_whitespace());
-    !annotation.is_empty()
-        && annotation
+    let embedded = node.utf8_text(source.as_bytes()).ok().filter(|token| {
+        let after = line.get(node.end_position().column..).unwrap_or_default();
+        !before.is_empty()
+            && after
+                .trim_start()
+                .split_once('(')
+                .is_some_and(|(name, _)| identifier(name.trim()))
+            && macro_identifier(token)
+    });
+    let leading = before
+        .split_whitespace()
+        .next_back()
+        .filter(|token| macro_identifier(token))
+        .filter(|_| line.get(point.column..).is_some_and(|tail| tail.contains('(')));
+    (embedded.is_some() || leading.is_some()) && declaration_ancestor(node)
+}
+
+fn declaration_ancestor(mut node: tree_sitter::Node<'_>) -> bool {
+    while let Some(parent) = node.parent() {
+        if matches!(parent.kind(), "function_definition" | "declaration" | "type_definition") {
+            return true;
+        }
+        node = parent;
+    }
+    false
+}
+
+fn macro_identifier(token: &str) -> bool {
+    token.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+        && token
             .bytes()
             .all(|byte| byte == b'_' || byte.is_ascii_uppercase() || byte.is_ascii_digit())
-        && annotation.as_bytes()[0].is_ascii_uppercase()
-        && line.get(point.column..).is_some_and(|tail| tail.contains('('))
-        && node
-            .parent()
-            .is_some_and(|parent| matches!(parent.kind(), "function_definition" | "declaration"))
+}
+
+fn identifier(token: &str) -> bool {
+    token
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| *byte == b'_' || byte.is_ascii_alphabetic())
+        && token.bytes().all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 fn macro_continuation(node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -414,8 +472,26 @@ mod test {
     }
 
     #[test]
+    fn parser_accepts_uppercase_calling_convention_annotation() {
+        let source = "static void CALLBACK wait_callback(void) {}\n";
+        assert!(parse(Path::new("annotated.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_uppercase_function_pointer_calling_convention() {
+        let source = "typedef long(NTAPI *clone_fn)(unsigned long, void *);\n";
+        assert!(parse(Path::new("annotated.c"), source).is_ok());
+    }
+
+    #[test]
     fn parser_rejects_arbitrary_tokens_before_a_function() {
         let source = "not_an_annotation int answer(void) { return 42; }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
+    }
+
+    #[test]
+    fn parser_rejects_lowercase_calling_convention_tokens() {
+        let source = "static void not_an_annotation wait_callback(void) {}\n";
         assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
