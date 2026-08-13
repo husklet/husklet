@@ -229,8 +229,8 @@ void hl_host_macos_destroy(hl_host_macos *host) {
     pthread_mutex_lock(&host->lock);
     host->destroying = 1;
     for (index = 0; index < host->process_capacity; ++index) {
-        hl_macos_process *process = &host->processes[index];
-        if (process->active && !process->reaped) kill(process->pid, SIGKILL);
+        hl_macos_process *process_entry = &host->processes[index];
+        if (process_entry->active && !process_entry->reaped) kill(process_entry->pid, SIGKILL);
     }
     pthread_mutex_unlock(&host->lock);
     /* Subscription threads may call user code and own three descriptors each.
@@ -296,20 +296,20 @@ void hl_host_macos_destroy(hl_host_macos *host) {
         hl_host_hole_set_release(&mapping->retired);
     }
     for (index = 0; index < host->file_capacity; ++index) {
-        hl_macos_file *file = &host->files[index];
-        if (!file->active) continue;
-        close(file->descriptor);
-        if (file->directory != NULL) closedir(file->directory);
-        if (file->append_descriptor >= 0) close(file->append_descriptor);
-        hl_macos_stream_release(file->stream);
-        hl_macos_directory_shared_release(file->directory_shared);
+        hl_macos_file *file_entry = &host->files[index];
+        if (!file_entry->active) continue;
+        close(file_entry->descriptor);
+        if (file_entry->directory != NULL) closedir(file_entry->directory);
+        if (file_entry->append_descriptor >= 0) close(file_entry->append_descriptor);
+        hl_macos_stream_release(file_entry->stream);
+        hl_macos_directory_shared_release(file_entry->directory_shared);
     }
     for (index = 0; index < host->process_capacity; ++index) {
-        hl_macos_process *process = &host->processes[index];
+        hl_macos_process *process_entry = &host->processes[index];
         int status;
-        if (!process->active || process->reaped) continue;
-        kill(process->pid, SIGKILL);
-        while (waitpid(process->pid, &status, 0) < 0 && errno == EINTR) {}
+        if (!process_entry->active || process_entry->reaped) continue;
+        kill(process_entry->pid, SIGKILL);
+        while (waitpid(process_entry->pid, &status, 0) < 0 && errno == EINTR) {}
     }
     pthread_cond_destroy(&host->process_changed);
     pthread_mutex_destroy(&host->fork_gate);
