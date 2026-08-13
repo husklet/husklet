@@ -479,6 +479,14 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
                 break;
             }
+            // Linux validates the destination before dequeuing the signal.  A
+            // failed copyout must leave both the pending instance and the
+            // signalfd readability intact so the caller can retry with a valid
+            // buffer.
+            if (guest_accessible_prefix(a1, 128, HL_LOGICAL_VMA_WRITE) != 128) {
+                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+                break;
+            }
             char b;
             // drain one wake byte (one byte was written per queued instance -> keeps readability accurate)
             ssize_t pr = read(rfd, &b, 1);
@@ -505,7 +513,7 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 sig = (unsigned char)b;
                 if (sig > 0 && sig < 64) __atomic_and_fetch(&g_pending, ~(1ull << (unsigned)sig), __ATOMIC_SEQ_CST);
             }
-            if (a1 && a2 >= 128) {
+            if (a2 >= 128) {
                 // a1 is a raw guest buffer we write directly -> EFAULT a bad pointer instead of faulting the engine
                 uint8_t info[128] = {0};
                 uint32_t signo = (uint32_t)sig, pid = (uint32_t)(popped ? ent.pid : g_sigpid[sig]);
