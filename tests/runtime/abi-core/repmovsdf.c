@@ -18,6 +18,9 @@ __attribute__((noinline)) static void rep_stosb(void *dst_last, int val, size_t 
     unsigned long a = (unsigned char)val;
     asm volatile("rep stosb" : "+D"(dst_last), "+c"(n) : "a"(a) : "memory", "cc");
 }
+__attribute__((noinline)) static void plain_movsb(void *destination, const void *source) {
+    asm volatile("movsb" : "+D"(destination), "+S"(source) : : "memory", "cc");
+}
 static void set_df(void) { asm volatile("std" : : : "memory", "cc"); }
 static void clr_df(void) { asm volatile("cld" : : : "memory", "cc"); }
 // Set DF via popfq (bit10) -- exercises the popfq DF-restore path specifically.
@@ -78,6 +81,19 @@ int main(void) {
         clr_df();
         rep_movsb(dst, src, 4); // forward: dst/src at FIRST byte
         dump("movsb-fwd ", dst, 4);
+    }
+    // 6) Plain (non-REP) MOVSB uses the runtime DF stride too. In the translated
+    // soft-memory path its address guards share emitter scratch registers with
+    // stride construction, so both directions must update the pointers by one.
+    {
+        unsigned char src[2] = {0x31, 0x42};
+        unsigned char dst[2] = {0, 0};
+        clr_df();
+        plain_movsb(dst, src);
+        set_df();
+        plain_movsb(dst + 1, src + 1);
+        clr_df();
+        dump("movsb-one ", dst, 2);
     }
     return 0;
 }
