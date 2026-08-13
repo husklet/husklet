@@ -90,6 +90,7 @@ fn annotation_prefix(node: tree_sitter::Node<'_>, source: &str) -> bool {
 fn macro_continuation(node: tree_sitter::Node<'_>, source: &str) -> bool {
     let lines = source.lines().collect::<Vec<_>>();
     let mut row = node.start_position().row;
+    let mut first = true;
     loop {
         let line = lines[row].trim_end();
         if line.trim_start().starts_with("#define ") {
@@ -98,10 +99,11 @@ fn macro_continuation(node: tree_sitter::Node<'_>, source: &str) -> bool {
         if row == 0 {
             return false;
         }
-        row -= 1;
-        if !line.ends_with('\\') {
+        if !first && !line.ends_with('\\') {
             return false;
         }
+        first = false;
+        row -= 1;
     }
 }
 
@@ -277,6 +279,12 @@ mod test {
     #[test]
     fn parser_accepts_error_node_covering_a_multiline_definition() {
         let source = "#define DISPATCH(context) \\\n+                          if ((context)->ready) { \\\n+                              continue; \\\n+                          } else { \\\n+                              break; \\\n+                          }\n";
+        assert!(parse(Path::new("dispatch.h"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_error_on_final_uncontinued_macro_line() {
+        let source = "#define BODY(value) \\\n+                          do { \\\n+                              value++; \\\n+                          } while (0)\n";
         assert!(parse(Path::new("dispatch.h"), source).is_ok());
     }
 
