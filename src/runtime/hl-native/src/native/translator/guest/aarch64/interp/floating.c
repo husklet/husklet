@@ -976,18 +976,6 @@ static uint64_t interp_sqrdmlah_element(uint64_t accumulator, uint64_t a, uint64
     return interp_signed_sat(total >> esize, size);
 }
 
-static void interp_poly_mul(uint64_t a, uint64_t b, unsigned bits, uint64_t *low, uint64_t *high) {
-    uint64_t result_low = 0, result_high = 0;
-    for (unsigned bit = 0; bit < bits; bit++) {
-        if (!((b >> bit) & 1u)) continue;
-        // A shift by 0 must not become a shift of the high word by 64, which is undefined in C.
-        result_low ^= a << bit;
-        if (bit) result_high ^= a >> (64u - bit);
-    }
-    *low = result_low;
-    *high = result_high;
-}
-
 // AES, SHA1 and SHA256. hwcap 0x1fb advertises HWCAP_AES/PMULL/SHA1/SHA2, so guest ifunc resolvers pick
 // these paths. The tables are GENERATED (GF(2^8) inverse then the FIPS-197 affine transform).
 static const uint8_t interp_aes_sbox[256] = {
