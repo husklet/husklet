@@ -615,7 +615,6 @@ mod ledger_tests {
         fs::write(directory.path().join("report.tsv"), "PASS\n").unwrap();
         let error = admit_destination(directory.path(), true).unwrap_err();
         assert!(error.to_string().contains("already published"), "{error}");
-        // A non-resume run still reaches create_dir, which independently enforces uniqueness.
         admit_destination(directory.path(), false).unwrap();
     }
 }
