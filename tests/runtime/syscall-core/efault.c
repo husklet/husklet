@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -63,6 +64,13 @@ int main(void) {
     r = fcntl(fd, F_SETLK, (struct flock *)NULL);
     e = errno;
     int nullp = (r == -1 && e == EFAULT);
+    /* A top-half/non-canonical pointer must be rejected before the guarded
+       host load.  On AArch64 Linux the kernel may canonicalize the reported
+       fault address, so relying on an exact signal-window comparison kills
+       the engine instead of returning EFAULT. */
+    r = fcntl(fd, F_SETLK, (struct flock *)(uintptr_t)UINT64_C(0xf900378df900338c));
+    e = errno;
+    int noncanonical = (r == -1 && e == EFAULT);
 
     memset(&ok, 0, sizeof ok);
     ok.l_type = F_WRLCK;
@@ -77,7 +85,7 @@ int main(void) {
     ok.l_len = 1;
     int getlk = (fcntl(fd, F_GETLK, &ok) == 0 && ok.l_type == F_UNLCK);
 
-    printf("efault unmapped=%d again=%d straddle=%d null=%d valid=%d getlk=%d\n",
-           unmapped, again, strad, nullp, valid, getlk);
+    printf("efault unmapped=%d again=%d straddle=%d null=%d noncanonical=%d valid=%d getlk=%d\n",
+           unmapped, again, strad, nullp, noncanonical, valid, getlk);
     return 0;
 }

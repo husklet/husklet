@@ -132,8 +132,12 @@ static int hrm_fault_hook(siginfo_t *si) {
 
 static int host_range_mapped(uintptr_t a, size_t len) {
     if (!len) return 1;
+    /* User mappings live in the lower half of every supported host address
+       space.  Reject a non-canonical/top-byte-corrupted guest pointer before
+       the guarded load: some kernels canonicalize si_addr for such faults,
+       placing it outside the armed probe window and bypassing hrm_fault_hook. */
+    if (a > (uintptr_t)INTPTR_MAX || len > (size_t)((uintptr_t)INTPTR_MAX - a)) return 0;
     uintptr_t end = a + len;
-    if (end < a) return 0; // wrap -> bogus pointer
     // A guest PROT_NONE mapping is physically R+W under hl (see the g_gna registry above), so the page
     // probe below would call it mapped; the kernel's copy_to/from_user faults it. Reject up front.
     if (gna_hit((uint64_t)a, (uint64_t)len) || hl_linux_bus_hit((uint64_t)a, (uint64_t)len)) return 0;
