@@ -852,7 +852,7 @@ static int ckpt_recovery_report_queue(FILE *report, const struct ckpt_proc *proc
 static int ckpt_recovery_report(int policy) {
     char *buffer = NULL;
     size_t buffered = 0;
-    FILE *file = open_memstream(&buffer, &buffered);
+    FILE *file = tmpfile();
     if (!file) return -1;
     fprintf(file, "{\"type\":\"summary\",\"format\":1,\"policy\":%d,\"processes\":%d}\n", policy, g_nrprocs);
     for (int i = 0; i < g_nrprocs; ++i) {
@@ -888,7 +888,14 @@ static int ckpt_recovery_report(int policy) {
         }
     }
     {
-        int failed = fclose(file) != 0;
+        long length = -1;
+        int failed = fflush(file) != 0 || (length = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0;
+        if (!failed) {
+            buffered = (size_t)length;
+            buffer = malloc(buffered == 0 ? 1 : buffered);
+            failed = buffer == NULL || (buffered != 0 && fread(buffer, 1, buffered, file) != buffered);
+        }
+        if (fclose(file) != 0) failed = 1;
         if (!failed) {
             struct ckpt_sink_stream *object = NULL;
             failed = ckpt_sink_stream_begin(NULL, NULL, "RECOVERY.jsonl", 0, &object) != 0 ||

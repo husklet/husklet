@@ -136,7 +136,6 @@ static int ckpt_source_digest(uint64_t *hash, uint64_t *files, uint64_t *bytes) 
 
 static struct {
     FILE *file;
-    void *bytes;
 } g_ckpt_source_open[CKPT_SOURCE_OPEN_MAX];
 
 // Open an image object for reading. Mirrors fopen(name, "rb") over the materialised bytes.
@@ -152,33 +151,34 @@ static FILE *ckpt_source_fopen(const char *name) {
         free(bytes);
         return NULL;
     }
-    FILE *file = fmemopen(bytes, (size_t)size, "rb");
+    FILE *file = tmpfile();
     if (!file) {
         free(bytes);
         return NULL;
     }
+    if ((size != 0 && fwrite(bytes, 1, (size_t)size, file) != (size_t)size) || fflush(file) != 0 ||
+        fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        free(bytes);
+        return NULL;
+    }
+    free(bytes);
     for (int index = 0; index < CKPT_SOURCE_OPEN_MAX; ++index)
         if (g_ckpt_source_open[index].file == NULL) {
             g_ckpt_source_open[index].file = file;
-            g_ckpt_source_open[index].bytes = bytes;
             return file;
         }
     fclose(file);
-    free(bytes);
     return NULL;
 }
 
-// Close a handle from ckpt_source_fopen, releasing the materialised bytes if there were any.
+// Close a handle from ckpt_source_fopen.
 static int ckpt_source_fclose(FILE *file) {
     if (!file) return 0;
     for (int index = 0; index < CKPT_SOURCE_OPEN_MAX; ++index)
         if (g_ckpt_source_open[index].file == file) {
-            void *bytes = g_ckpt_source_open[index].bytes;
             g_ckpt_source_open[index].file = NULL;
-            g_ckpt_source_open[index].bytes = NULL;
-            int result = fclose(file);
-            free(bytes);
-            return result;
+            return fclose(file);
         }
     return fclose(file);
 }
