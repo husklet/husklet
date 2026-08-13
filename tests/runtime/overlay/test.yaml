@@ -8,9 +8,7 @@ build:
   flags: []
 cases:
   - id: runtime/overlay/coherence
-    status: !broken
-      reason: "re-derived 2026-08-08, both ISAs: the fixture reaches exit 15 exactly as recorded, so both halves of the previous reason hold. (1) /etc/hostname is a name bind -- Spec::filesystem emits HL_NAME_BINDS for every file mount and Identity writes hostname/hosts/resolv.conf per container -- and path::mutation::prepare refuses to rename a binding. (2) Permitting the rename would still fail at exit 17: the bind holds Container::hostname(), the first 12 characters of the container id plus a newline, so bytes 2..4 are random hex and can never be the fixture's expected 'ca'. The case itself is the wrong shape: under any container runtime /etc/hostname is a bind-mounted file, and rename(2) across a bind mount is refused on native Linux too, so this is not an overlay-coherence gap. Re-point the fixture at a plain lower-layer file to make it test what its comment claims."
-      evidence: "tests/runtime/overlay/EVIDENCE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: coherence.c, output: coherence, flags: [-static, -O2, -std=c11] }
     artifact: { destination: /opt/husklet/overlay/coherence }
