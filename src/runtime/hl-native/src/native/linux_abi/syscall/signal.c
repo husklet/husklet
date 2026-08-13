@@ -867,9 +867,8 @@ static int svc_signal_mask(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
     }
     case 139:
         sigreturn_frame(c); // do_sigreturn + the non-PIE frame fold (../signal.c)
+        signal_return_complete(c);
         c->redirect = 1;
-        // rt_sigreturn (restorer path). The handler-return defer-pop + serial next-signal delivery happen in
-        // the shared dispatcher's SIGRETURN_PC path (core/dispatch.c), which is where glibc's restorer lands.
         break;
     default: return 0;
     }

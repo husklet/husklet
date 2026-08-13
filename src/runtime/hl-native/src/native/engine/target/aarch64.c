@@ -352,6 +352,13 @@ static void e_ldp_q(int rt, int rt2, int rn, int off) {
 #endif
 // clone/futex/threads (declares run_guest)
 #include "../../linux_abi/thread.c"
+// The guest-visible signal trampoline is stored in each AArch64 frame.  A
+// normal handler return reaches this readable instruction pair; the
+// dispatcher recognizes it before translation and performs rt_sigreturn.
+#define G_IS_SIGNAL_RETURN(c)                                                                                           \
+    (G_PC(c) == SIGRETURN_PC ||                                                                                         \
+     ((c)->sig_depth > 0 && G_PC(c) == (c)->sig_frame_sp[(c)->sig_depth - 1] + UINT64_C(4608)))
+
 // signal delivery
 #include "../../linux_abi/signal.c"
 

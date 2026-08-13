@@ -772,7 +772,12 @@ static void build_signal_frame(struct cpu *c, int sig, int synchronous) {
         .address = synchronous ? &c->sync_address : &g_sigaddr[sig],
         .pid = &g_sigpid[sig],
         .uid = &g_siguid[sig],
-        .sigreturn_pc = SIGRETURN_PC,
+        // x86 glibc supplies SA_RESTORER.  Returning through its real guest
+        // trampoline gives forced unwinders valid CFI instead of the engine's
+        // unreadable sentinel; fall back for raw actions without a restorer.
+        .sigreturn_pc = sig == 32 && (g_sigact[sig].flags & UINT64_C(0x04000000)) && g_sigact[sig].restorer
+                            ? g_sigact[sig].restorer
+                            : SIGRETURN_PC,
         .trace = g_trace,
     };
     hl_x86_signal_build(c, sig, &state);

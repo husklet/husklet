@@ -187,6 +187,10 @@ static void sigq_flush(int sig) {
 // sentinel lr: handler return -> sigreturn
 #define SIGRETURN_PC 0xFFFFFFFFFFF0ull
 
+#ifndef G_IS_SIGNAL_RETURN
+#define G_IS_SIGNAL_RETURN(c) (G_PC(c) == SIGRETURN_PC)
+#endif
+
 static int sig_is_sync(int s) {
     return s == 4 || s == 5 || s == 7 || s == 8 || s == 11;
     // ILL TRAP BUS FPE SEGV (Linux nums)
@@ -630,7 +634,7 @@ static void maybe_deliver_signal(struct cpu *c) {
     // return address when it reaches the synthetic sigreturn PC.  That is not
     // a siglongjmp unwind: the dispatcher's sigreturn arm still has to restore
     // this frame before releasing its deferred pending set.
-    while (G_PC(c) != SIGRETURN_PC && c->sig_depth > 0 && G_SP(c) > c->sig_frame_sp[c->sig_depth - 1]) {
+    while (!G_IS_SIGNAL_RETURN(c) && c->sig_depth > 0 && G_SP(c) > c->sig_frame_sp[c->sig_depth - 1]) {
         c->sig_depth--;
         c->sig_defer = c->sig_depth > 0 ? c->sig_defer_stack[c->sig_depth] : 0;
     }
@@ -740,6 +744,18 @@ static void maybe_deliver_signal(struct cpu *c) {
             return;
         }
     }
+}
+
+// Complete one normal handler return after its frame has restored the guest
+// context.  Both the engine sentinel/AArch64 frame trampoline and an x86
+// SA_RESTORER syscall converge here so deferred pending signals are released
+// in the same order.
+static void signal_return_complete(struct cpu *c) {
+    if (c->sig_depth > 0) {
+        c->sig_depth--;
+        c->sig_defer = c->sig_depth > 0 ? c->sig_defer_stack[c->sig_depth] : 0;
+    }
+    maybe_deliver_signal(c);
 }
 
 // A signal aimed at our own process (raise/abort/pthread_kill/kill-self/sigqueue). Deliver it through our

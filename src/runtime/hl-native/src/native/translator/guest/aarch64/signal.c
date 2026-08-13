@@ -111,8 +111,21 @@ void hl_aarch64_signal_build(struct cpu *c, int sig, const hl_aarch64_signal_sta
     c->x[1] = frame;
     // handler(signo, siginfo*, ucontext*)
     c->x[2] = uc;
-    // return address -> sigreturn
-    c->x[30] = state->sigreturn_pc;
+    // Linux returns through a readable VDSO trampoline.  The unwinder used by
+    // asynchronous pthread cancellation inspects that code while crossing a
+    // signal frame; the old non-canonical sentinel address faulted the
+    // unwinder before it could reach the thread's cleanup stack.  Keep the
+    // canonical two-instruction AArch64 rt_sigreturn sequence in unused frame
+    // tail space.  The dispatcher recognizes this address before translating
+    // it, exactly as it recognizes the historical sentinel.
+    if (sig == 32) {
+        uint64_t trampoline = frame + 4608;
+        *(uint32_t *)(uintptr_t)(trampoline + 0) = UINT32_C(0xd2801168); // mov x8, #139 (__NR_rt_sigreturn)
+        *(uint32_t *)(uintptr_t)(trampoline + 4) = UINT32_C(0xd4000001); // svc #0
+        c->x[30] = trampoline;
+    } else {
+        c->x[30] = state->sigreturn_pc;
+    }
     c->sp = frame;
     c->pc = state->handler;
     c->sigmask |= state->mask;
