@@ -32,14 +32,15 @@
 #define EPOLL_ONESHOT (1U << 30)
 #define EPOLL_EDGE (1U << 31)
 
-struct epoll_event {
+#if defined(__x86_64__)
+#define EPOLL_EVENT_LAYOUT __attribute__((packed))
+#else
+#define EPOLL_EVENT_LAYOUT
+#endif
+struct EPOLL_EVENT_LAYOUT epoll_event {
     uint32_t events;
     uint64_t data;
-#if defined(__x86_64__)
-} __attribute__((packed));
-#else
 };
-#endif
 
 static long call6(long number, long first, long second, long third,
                   long fourth, long fifth, long sixth) {
