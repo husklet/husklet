@@ -23,18 +23,12 @@
  * keeps the shape honest and makes the absence a refusal at the call rather
  * than a lie in the data.
  *
- * So on Windows: the TYPES and the DT_* constants are SHAPE, with Linux values
- * and the Linux structure, and every call is a REFUSAL.  The refusal is ENOSYS
- * and never an empty directory -- "opendir succeeded and the directory has no
- * entries" is a factual claim about the filesystem that this host cannot make,
- * and a guest that acts on it deletes nothing, finds nothing, and reports
- * success.
- *
- * Making these REAL is a self-contained piece of work with a clear shape: a
- * FindFirstFileW/FindNextFileW walk, d_type derived from
+ * The Windows implementation therefore uses a Linux-shaped public entry and a
+ * FindFirstFileW/FindNextFileW walk, with d_type derived from
  * dwFileAttributes (DIRECTORY -> DT_DIR, REPARSE_POINT with a symlink tag ->
- * DT_LNK, otherwise DT_REG), and d_ino from the file index.  It needs no
- * descriptor table, which is what distinguishes it from fdopendir below.
+ * DT_LNK, otherwise DT_REG), and d_ino from the file index. fdopendir resolves
+ * a CRT descriptor through its Win32 handle and transfers ownership as POSIX
+ * requires.
  */
 
 #if !defined(_WIN32)
@@ -44,8 +38,12 @@
 #else /* Windows */
 
 #include <errno.h>
+#include <io.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <windows.h>
 
 /* SHAPE.  Linux d_type values.  They are handed straight into the guest's
  * dirent64 record by getdents64, so they are the guest's numbers by
@@ -71,65 +69,183 @@ struct dirent {
     char d_name[256];
 };
 
-/* SHAPE.  Opaque on every host; this layer only ever holds the pointer. */
-typedef struct hl_linux_host_dir DIR;
+typedef struct hl_linux_host_dir {
+    HANDLE search;
+    WIN32_FIND_DATAW found;
+    wchar_t directory[PATH_MAX];
+    wchar_t pattern[PATH_MAX];
+    long position;
+    int descriptor;
+    struct dirent entry;
+} DIR;
 
-/* REFUSAL -- see the header note.  Never an empty directory. */
+static inline uint64_t hl_dirent_inode(const DIR *directory, const wchar_t *name) {
+    wchar_t path[PATH_MAX];
+    BY_HANDLE_FILE_INFORMATION information;
+    size_t base = wcslen(directory->directory), leaf = wcslen(name);
+    HANDLE handle;
+    uint64_t inode = 0;
+    if (base + leaf + 2 > PATH_MAX) return 0;
+    memcpy(path, directory->directory, base * sizeof(*path));
+    if (base != 0 && path[base - 1] != L'/' && path[base - 1] != L'\\') path[base++] = L'\\';
+    memcpy(path + base, name, (leaf + 1) * sizeof(*path));
+    handle = CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (handle != INVALID_HANDLE_VALUE) {
+        if (GetFileInformationByHandle(handle, &information))
+            inode = ((uint64_t)information.nFileIndexHigh << 32) | information.nFileIndexLow;
+        CloseHandle(handle);
+    }
+    return inode;
+}
+
+static inline int hl_dirent_utf8_to_wide(const char *path, wchar_t *wide, size_t capacity) {
+    int count;
+    if (!path || capacity > INT_MAX) return -1;
+    count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, (int)capacity);
+    if (count == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+static inline DIR *hl_dirent_open_wide(const wchar_t *path, int descriptor) {
+    DWORD attributes = GetFileAttributesW(path);
+    size_t length;
+    DIR *directory;
+    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        errno = ENOTDIR;
+        return NULL;
+    }
+    directory = calloc(1, sizeof(*directory));
+    if (!directory) return NULL;
+    length = wcslen(path);
+    if (length + 3 > PATH_MAX) {
+        free(directory);
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    memcpy(directory->directory, path, (length + 1) * sizeof(*path));
+    memcpy(directory->pattern, path, length * sizeof(*path));
+    if (length != 0 && path[length - 1] != L'/' && path[length - 1] != L'\\') directory->pattern[length++] = L'\\';
+    directory->pattern[length++] = L'*';
+    directory->pattern[length] = L'\0';
+    directory->search = INVALID_HANDLE_VALUE;
+    directory->descriptor = descriptor;
+    if (descriptor < 0) {
+        HANDLE handle = CreateFileW(path, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        if (handle == INVALID_HANDLE_VALUE ||
+            (directory->descriptor = _open_osfhandle((intptr_t)handle, _O_RDONLY)) < 0) {
+            if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+            free(directory);
+            errno = EACCES;
+            return NULL;
+        }
+    }
+    return directory;
+}
+
 static inline DIR *opendir(const char *path) {
-    (void)path;
-    errno = ENOSYS;
-    return NULL;
+    wchar_t wide[PATH_MAX];
+    return hl_dirent_utf8_to_wide(path, wide, PATH_MAX) == 0 ? hl_dirent_open_wide(wide, -1) : NULL;
 }
 
-/*
- * REFUSAL, and the one here that would still be a refusal after the
- * FindFirstFileW walk above exists: fdopendir starts from a descriptor, and on
- * this host a descriptor in this layer is a guest number that names no host
- * object -- the same gap host_mman.h records for a file-backed mmap.  It is
- * listed separately from opendir for exactly that reason.
- */
 static inline DIR *fdopendir(int descriptor) {
-    (void)descriptor;
-    errno = ENOSYS;
-    return NULL;
+    intptr_t handle = _get_osfhandle(descriptor);
+    wchar_t path[PATH_MAX];
+    DWORD length;
+    if (handle == -1) {
+        errno = EBADF;
+        return NULL;
+    }
+    length = GetFinalPathNameByHandleW((HANDLE)handle, path, PATH_MAX, FILE_NAME_NORMALIZED);
+    if (length == 0 || length >= PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    return hl_dirent_open_wide(path, descriptor);
 }
 
-/* REFUSAL.  NULL from readdir is indistinguishable from end-of-directory by
- * return value alone, which is why POSIX has callers clear errno first; this
- * sets it so a caller that checks sees ENOSYS rather than a clean end. */
 static inline struct dirent *readdir(DIR *directory) {
-    (void)directory;
-    errno = ENOSYS;
-    return NULL;
+    WIN32_FIND_DATAW *found;
+    int length;
+    if (!directory) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (directory->search == INVALID_HANDLE_VALUE) {
+        directory->search = FindFirstFileW(directory->pattern, &directory->found);
+        if (directory->search == INVALID_HANDLE_VALUE) {
+            if (GetLastError() == ERROR_FILE_NOT_FOUND) errno = 0;
+            else errno = EIO;
+            return NULL;
+        }
+    } else if (!FindNextFileW(directory->search, &directory->found)) {
+        if (GetLastError() == ERROR_NO_MORE_FILES) errno = 0;
+        else errno = EIO;
+        return NULL;
+    }
+    found = &directory->found;
+    memset(&directory->entry, 0, sizeof(directory->entry));
+    length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, found->cFileName, -1, directory->entry.d_name,
+                                 (int)sizeof(directory->entry.d_name), NULL, NULL);
+    if (length == 0) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    directory->entry.d_off = ++directory->position;
+    directory->entry.d_reclen = (unsigned short)(offsetof(struct dirent, d_name) + (size_t)length);
+    if ((found->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && found->dwReserved0 == IO_REPARSE_TAG_SYMLINK)
+        directory->entry.d_type = DT_LNK;
+    else if (found->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        directory->entry.d_type = DT_DIR;
+    else
+        directory->entry.d_type = DT_REG;
+    directory->entry.d_ino = hl_dirent_inode(directory, found->cFileName);
+    return &directory->entry;
 }
 
 static inline int closedir(DIR *directory) {
-    (void)directory;
-    errno = ENOSYS;
-    return -1;
+    int failed = 0;
+    if (!directory) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (directory->search != INVALID_HANDLE_VALUE && !FindClose(directory->search)) failed = -1;
+    if (_close(directory->descriptor) != 0) failed = -1;
+    free(directory);
+    return failed;
 }
 
 static inline void rewinddir(DIR *directory) {
-    (void)directory;
+    if (!directory) return;
+    if (directory->search != INVALID_HANDLE_VALUE) FindClose(directory->search);
+    directory->search = INVALID_HANDLE_VALUE;
+    directory->position = 0;
 }
 
 static inline long telldir(DIR *directory) {
-    (void)directory;
-    errno = ENOSYS;
-    return -1;
+    if (!directory) {
+        errno = EINVAL;
+        return -1;
+    }
+    return directory->position;
 }
 
 static inline void seekdir(DIR *directory, long position) {
-    (void)directory;
-    (void)position;
+    if (!directory || position < 0) return;
+    rewinddir(directory);
+    while (directory->position < position && readdir(directory)) {}
 }
 
-/* REFUSAL.  -1 is the POSIX failure value and is not a valid descriptor, so a
- * caller that passes it on gets EBADF rather than acting on fd 0. */
 static inline int dirfd(DIR *directory) {
-    (void)directory;
-    errno = ENOSYS;
-    return -1;
+    if (!directory) {
+        errno = EINVAL;
+        return -1;
+    }
+    return directory->descriptor;
 }
 
 #endif /* _WIN32 */

@@ -30,7 +30,7 @@
 #include "../../host/native_compat.h"
 #include "../../host/native_context.h"
 #include <signal.h>
-#include <dirent.h>
+#include "../../linux_abi/host_dirent.h"
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/mach_vm.h> // Mach exception diagnostics; JIT mappings belong to src/host/macos
