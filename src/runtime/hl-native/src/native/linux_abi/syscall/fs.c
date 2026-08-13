@@ -150,6 +150,20 @@ static int dac_create_at(int directory, const char *raw) {
     return status != 0 ? status : -hl_dac_authorize_create(&snapshot, &credentials);
 }
 
+static int dac_open_at(int directory, const char *raw, int flags, int path_only) {
+    if (path_only) return 0;
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_at(directory, raw, 0, &snapshot);
+    if (status == -ENOENT && (flags & 0x40) != 0) return dac_create_at(directory, raw);
+    if (status != 0) return status;
+    unsigned requested = (flags & 3) == 0 ? HL_DAC_READ : (flags & 3) == 1 ? HL_DAC_WRITE
+                                                                              : HL_DAC_READ | HL_DAC_WRITE;
+    if ((flags & 0x200) != 0) requested |= HL_DAC_WRITE;
+    return -hl_dac_authorize_access(&snapshot, &credentials, requested);
+}
+
 static int dac_sticky_at(int directory, const char *raw) {
     hl_dac_snapshot parent, entry;
     uint32_t groups[HL_NGROUPS_MAX];

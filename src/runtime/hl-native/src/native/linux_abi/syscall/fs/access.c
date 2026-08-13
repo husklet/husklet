@@ -922,6 +922,13 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             break;
         }
         if (open_synthetic_path(c, a0, a1, lf, mf, is_opath)) break;
+        if (jail_routed_at((int)a0, (const char *)a1)) {
+            int dac_status = dac_open_at((int)a0, (const char *)a1, lf, is_opath);
+            if (dac_status != 0) {
+                G_RET(c) = (uint64_t)(int64_t)dac_status;
+                break;
+            }
+        }
         if (lf & 0x40) mf |= O_CREAT;
         if (lf & 0x80) mf |= O_EXCL;
         if (lf & 0x200) mf |= O_TRUNC;

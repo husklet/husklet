@@ -921,6 +921,7 @@ static size_t g_authorized_executable_size;
 static int g_engine_inited;
 
 static int container_init(const char *rootfs) {
+    g_rootfs_mode = rootfs != NULL && rootfs[0] != 0;
 #if defined(__APPLE__)
     hl_linux_dns_prepare();
 #endif

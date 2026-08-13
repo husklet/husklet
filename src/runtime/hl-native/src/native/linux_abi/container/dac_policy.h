@@ -24,6 +24,7 @@ typedef struct hl_dac_credentials {
 enum {
     HL_DAC_CAP_CHOWN = 0,
     HL_DAC_CAP_DAC_OVERRIDE = 1,
+    HL_DAC_CAP_DAC_READ_SEARCH = 2,
     HL_DAC_CAP_FOWNER = 3,
 };
 
@@ -70,6 +71,24 @@ static inline int hl_dac_authorize_create(const hl_dac_snapshot *parent, const h
     unsigned shift = credentials->fsuid == parent->uid ? 6 : hl_dac_in_group(credentials, parent->gid) ? 3 : 0;
     unsigned permissions = (parent->mode >> shift) & 7u;
     return (permissions & 3u) == 3u ? 0 : EACCES; /* parent needs W|X */
+}
+
+enum { HL_DAC_READ = 4, HL_DAC_WRITE = 2, HL_DAC_EXECUTE = 1 };
+
+static inline int hl_dac_authorize_access(const hl_dac_snapshot *inode, const hl_dac_credentials *credentials,
+                                          unsigned requested) {
+    if (hl_dac_has_capability(credentials, HL_DAC_CAP_DAC_OVERRIDE)) {
+        /* CAP_DAC_OVERRIDE does not manufacture execute permission for a regular file. */
+        if ((requested & HL_DAC_EXECUTE) == 0 || (inode->mode & 0170000u) == 0040000u ||
+            (inode->mode & 0111u) != 0)
+            return 0;
+    }
+    if ((requested & ~HL_DAC_READ) == 0 &&
+        hl_dac_has_capability(credentials, HL_DAC_CAP_DAC_READ_SEARCH))
+        return 0;
+    unsigned shift = credentials->fsuid == inode->uid ? 6 : hl_dac_in_group(credentials, inode->gid) ? 3 : 0;
+    unsigned permissions = (inode->mode >> shift) & 7u;
+    return (permissions & requested) == requested ? 0 : EACCES;
 }
 
 static inline int hl_dac_authorize_sticky(const hl_dac_snapshot *parent, const hl_dac_snapshot *entry,

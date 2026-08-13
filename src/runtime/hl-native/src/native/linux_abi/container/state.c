@@ -28,6 +28,8 @@ static int g_pids_max = 0;
 static int g_cpu_max = 0;
 // docker --read-only: writes to the rootfs/overlay-upper jail fail EROFS (/proc /dev /sys /tmp /run stay writable).
 static int g_rootfs_ro = 0;
+// Rootfs-backed launches cannot use the unpacking host user's uid/gid as guest ownership authority.
+static int g_rootfs_mode = 0;
 // Runtime `mount -o remount,ro <subpath>` targets: a guest ABSOLUTE path whose subtree is enforced
 // read-only (write-intent syscalls -> EROFS), independent of the bind-vol table and the whole-rootfs
 // g_rootfs_ro. This is a PATH-based deny (like rootfs_ro_denies) so it enforces RO without perturbing
@@ -490,8 +492,11 @@ static mode_t stat_virt_mode(const struct stat *status, const char *hostpath, in
 }
 
 static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, uint32_t *out_uid, uint32_t *out_gid) {
-    uint32_t uid = (s->st_uid == (uid_t)getuid()) ? (uint32_t)cuid() : (uint32_t)s->st_uid;
-    uint32_t gid = (s->st_gid == (gid_t)getgid()) ? (uint32_t)cgid() : (uint32_t)s->st_gid;
+    /* A rootfs is unpacked by the unprivileged host process, so host ownership is only a storage
+     * implementation detail.  OCI entries without explicit owner metadata are guest-root owned;
+     * runtime-created entries are stamped below with their current fsuid/fsgid. */
+    uint32_t uid = (s->st_uid == (uid_t)getuid()) ? (uint32_t)(g_rootfs_mode ? 0 : cuid()) : (uint32_t)s->st_uid;
+    uint32_t gid = (s->st_gid == (gid_t)getgid()) ? (uint32_t)(g_rootfs_mode ? 0 : cgid()) : (uint32_t)s->st_gid;
     int64_t xu, xg;
     if (hl_owner_get(hostpath, fd, s, hostpath != NULL && S_ISLNK(s->st_mode), &xu, &xg)) {
         if (xu >= 0) uid = (uint32_t)xu;
@@ -633,6 +638,7 @@ static int g_ngroups = 0;       // count in g_groups (may be 0 after a guest set
 static int g_groups_parsed = 0; // 1 once container_parse_groups ran (rootfs mode); gates getgroups/setgroups
 
 static void cred_reset_initial(void) {
+    uint64_t initial = cuid() == 0 ? HL_CAP_DEFAULT : 0;
     g_cred_init = 0;
     g_keepcaps = 0;
     g_cap_setid_perm = 0;
@@ -640,8 +646,8 @@ static void cred_reset_initial(void) {
     g_nnp = 0;
     g_fsuid_ovr = -1;
     g_fsgid_ovr = -1;
-    g_cap_eff = HL_CAP_DEFAULT;
-    g_cap_prm = HL_CAP_DEFAULT;
+    g_cap_eff = initial;
+    g_cap_prm = initial;
     g_cap_bnd = HL_CAP_DEFAULT;
     g_securebits = 0;
     g_ngroups = 0;
@@ -722,14 +728,13 @@ static int newfile_gid(void) {
     return g_fsgid_ovr >= 0 ? g_fsgid_ovr : cred_egid();
 }
 
-// True only when a runtime cred drop makes the new-file owner differ from the cuid/cgid default -- the
-// create paths gate their pre-existence probe + stamp on this so the common (no-drop) case is free.
+// A rootfs must stamp every runtime-created inode because unstamped host ownership denotes guest root.
+// Bare launches retain the cheaper historical rule and stamp only after a credential change.
 static int newfile_stamp_wanted(void) {
-    return newfile_uid() != cuid() || newfile_gid() != cgid();
+    return g_rootfs_mode || newfile_uid() != cuid() || newfile_gid() != cgid();
 }
 
-// Stamp a freshly-created inode's owner, but only the id(s) that differ from the default (so a
-// root-created file stays xattr-free). fd form for openat(O_CREAT); path form for mkdir/mknod.
+// Stamp a freshly-created inode. fd form for openat(O_CREAT); path form for mkdir/mknod.
 static void newfile_stamp_fd(int fd) {
     int u = newfile_uid(), g = newfile_gid();
     /* Linux inherits the group of a setgid parent directory.  Host ownership is deliberately not the
@@ -751,12 +756,13 @@ static void newfile_stamp_fd(int fd) {
             }
         }
     }
-    hl_owner_set_fd(fd, u != cuid() ? u : -1, g != cgid() ? g : -1);
+    hl_owner_set_fd(fd, g_rootfs_mode || u != cuid() ? u : -1, g_rootfs_mode || g != cgid() ? g : -1);
 }
 
 static void newfile_stamp_path(const char *hostpath, int nofollow) {
     int u = newfile_uid(), g = newfile_gid();
-    hl_owner_set_path(hostpath, u != cuid() ? u : -1, g != cgid() ? g : -1, nofollow);
+    hl_owner_set_path(hostpath, g_rootfs_mode || u != cuid() ? u : -1, g_rootfs_mode || g != cgid() ? g : -1,
+                      nofollow);
 }
 
 // ---- NET ns Phase 1: port-map (docker run -p H:C). bind(:C) actually binds the host port :H;
