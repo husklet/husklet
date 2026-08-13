@@ -59,10 +59,46 @@ pub(super) struct Layout {
 #[serde(deny_unknown_fields)]
 pub(super) struct Workload {
     pub commands: BTreeMap<String, Vec<String>>,
+    /// Exact phases emitted by each layout. The judged `phases` are their union.
+    pub layout_phases: BTreeMap<String, Vec<String>>,
+    /// Per-layout compatibility evidence. E and I must be available; R may be classified incompatible.
+    pub arm_support: BTreeMap<String, BTreeMap<String, ArmSupport>>,
     pub phases: Vec<String>,
     pub timeout_seconds: u64,
     #[serde(default)]
     pub wall_time: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case", deny_unknown_fields)]
+pub(super) enum ArmSupport {
+    Available,
+    Incompatible {
+        status: i32,
+        stderr: String,
+        artifact_sha256: String,
+    },
+}
+
+impl ArmSupport {
+    pub(super) fn available(&self) -> bool {
+        matches!(self, Self::Available)
+    }
+
+    fn valid(&self) -> bool {
+        match self {
+            Self::Available => true,
+            Self::Incompatible {
+                stderr,
+                artifact_sha256,
+                ..
+            } => {
+                !stderr.is_empty()
+                    && artifact_sha256.len() == 64
+                    && artifact_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }
+        }
+    }
 }
 
 impl Campaign {
@@ -108,6 +144,22 @@ impl Campaign {
         for (name, workload) in &self.workloads {
             if workload.commands.is_empty()
                 || !phase_names_valid(&workload.phases, false)
+                || workload.layout_phases.keys().collect::<Vec<_>>() != workload.commands.keys().collect::<Vec<_>>()
+                || workload.arm_support.keys().collect::<Vec<_>>() != workload.commands.keys().collect::<Vec<_>>()
+                || workload.arm_support.values().any(|support| {
+                    support.keys().map(String::as_str).collect::<Vec<_>>() != ["E", "I", "R"]
+                        || !support["E"].available()
+                        || !support["I"].available()
+                        || support.values().any(|entry| !entry.valid())
+                })
+                || workload.layout_phases.values().any(|phases| {
+                    !phase_names_valid(phases, false)
+                        || phases.iter().any(|phase| !workload.phases.contains(phase))
+                })
+                || workload
+                    .phases
+                    .iter()
+                    .any(|phase| !workload.layout_phases.values().any(|phases| phases.contains(phase)))
                 || !(1..=3600).contains(&workload.timeout_seconds)
                 || workload
                     .commands
@@ -207,8 +259,7 @@ fn command_profiles_distinct<'a>(commands: impl IntoIterator<Item = &'a Vec<Stri
 fn workload_judgments_covered(name: &str, workload: &Workload, layouts: &BTreeMap<String, Layout>) -> bool {
     name == "python"
         || workload.commands.keys().all(|layout| {
-            workload
-                .phases
+            workload.layout_phases[layout]
                 .iter()
                 .all(|phase| layouts[layout].phases.contains(phase))
         })
@@ -395,7 +446,7 @@ fn file_hash(path: &Path) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Arm, Artifact, Campaign, GuestPath, Layout, Workload, command_profiles_distinct, guest_is_hashed,
+        Arm, ArmSupport, Artifact, Campaign, GuestPath, Layout, Workload, command_profiles_distinct, guest_is_hashed,
         invariant_phases_valid, phase_names_valid, smoke_binds_profile, verify_artifact, workload_judgments_covered,
     };
     use crate::record::FramedIdentity;
@@ -663,6 +714,35 @@ mod tests {
     }
 
     #[test]
+    fn incompatible_arm_requires_a_bound_failure_record() {
+        assert!(ArmSupport::Available.valid());
+        assert!(
+            ArmSupport::Incompatible {
+                status: 1,
+                stderr: "_PySys_Create: failed to create a module object".into(),
+                artifact_sha256: "a".repeat(64),
+            }
+            .valid()
+        );
+        assert!(
+            !ArmSupport::Incompatible {
+                status: 1,
+                stderr: String::new(),
+                artifact_sha256: "a".repeat(64),
+            }
+            .valid()
+        );
+        assert!(
+            !ArmSupport::Incompatible {
+                status: 1,
+                stderr: "failure".into(),
+                artifact_sha256: "unbound".into(),
+            }
+            .valid()
+        );
+    }
+
+    #[test]
     fn judged_phases_exist_in_every_workload_layout() {
         let layouts = [
             (
@@ -685,12 +765,30 @@ mod tests {
                 ("sqlite".into(), vec!["guest".into()]),
             ]
             .into(),
+            layout_phases: [
+                ("plain".into(), vec!["malloc".into()]),
+                ("sqlite".into(), vec!["malloc".into()]),
+            ]
+            .into(),
+            arm_support: ["plain", "sqlite"]
+                .into_iter()
+                .map(|layout| {
+                    (
+                        layout.into(),
+                        ["E", "I", "R"]
+                            .into_iter()
+                            .map(|arm| (arm.into(), ArmSupport::Available))
+                            .collect(),
+                    )
+                })
+                .collect(),
             phases: vec!["malloc".into()],
             timeout_seconds: 1,
             wall_time: false,
         };
         assert!(workload_judgments_covered("malloc", &workload, &layouts));
         workload.phases = vec!["sqlite".into()];
+        workload.layout_phases.get_mut("plain").unwrap()[0] = "sqlite".into();
         assert!(!workload_judgments_covered("malloc", &workload, &layouts));
         assert!(workload_judgments_covered("python", &workload, &layouts));
     }

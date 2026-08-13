@@ -46,6 +46,24 @@ impl Report {
                 lines.push(format!("{arm}/{name}\t{}", artifact.sha256));
             }
         }
+        lines.push("compatibility\tstate\tstatus\tartifact_sha256\tstderr".to_owned());
+        for (workload, definition) in &campaign.workloads {
+            for (layout, support) in &definition.arm_support {
+                for (arm, state) in support {
+                    if let super::definition::ArmSupport::Incompatible {
+                        status,
+                        stderr,
+                        artifact_sha256,
+                    } = state
+                    {
+                        lines.push(format!(
+                            "{workload}/{layout}/{arm}\tincompatible\t{status}\t{artifact_sha256}\t{}",
+                            stderr.replace(['\r', '\n', '\t'], " ")
+                        ));
+                    }
+                }
+            }
+        }
         lines.push(format!("rootfs\t{}", campaign.rootfs.sha256));
         lines.push("sample\trepetition\thost_load_before\thost_load_after".to_owned());
         for row in rows {
@@ -59,19 +77,47 @@ impl Report {
 }
 
 fn verify_complete_plan(campaign: &Campaign, plan: &[Step]) -> Result<(), Error> {
-    let contexts = campaign
+    let expected = campaign
         .workloads
         .iter()
         .flat_map(|(workload, definition)| {
-            definition
-                .commands
-                .keys()
-                .map(move |layout| (workload.as_str(), layout.as_str()))
+            definition.commands.keys().flat_map(move |layout| {
+                let support = &definition.arm_support[layout];
+                CELLS.into_iter()
+                    .filter(move |(left, right)| support[*left].available() && support[*right].available())
+                    .flat_map(move |(left, right)| {
+                        (0..campaign.rounds).flat_map(move |round| {
+                            [left, right].into_iter().map(move |arm| {
+                                (workload.as_str(), layout.as_str(), format!("{left}{right}"), round, arm)
+                            })
+                        })
+                    })
+            })
         })
-        .collect::<Vec<_>>();
-    verify_context_plan(&contexts, campaign.rounds, plan)
+        .fold(BTreeMap::new(), |mut counts, key| {
+            *counts.entry(key).or_insert(0_u8) += 1;
+            counts
+        });
+    verify_expected_plan(expected, plan)
 }
 
+fn verify_expected_plan(
+    expected: BTreeMap<(&str, &str, String, u32, &str), u8>,
+    plan: &[Step],
+) -> Result<(), Error> {
+    let observed = plan.iter().fold(BTreeMap::new(), |mut counts, step| {
+        *counts
+            .entry((step.workload.as_str(), step.layout.as_str(), step.cell.clone(), step.round, step.arm.as_str()))
+            .or_insert(0_u8) += 1;
+        counts
+    });
+    if observed != expected {
+        return Err("benchmark schedule does not cover every compatible campaign arm, layout, workload, cell, and round exactly once".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn verify_context_plan(contexts: &[(&str, &str)], rounds: u32, plan: &[Step]) -> Result<(), Error> {
     let expected = contexts
         .iter()
@@ -88,25 +134,7 @@ fn verify_context_plan(contexts: &[(&str, &str)], rounds: u32, plan: &[Step]) ->
             *counts.entry(key).or_insert(0_u8) += 1;
             counts
         });
-    let observed = plan.iter().fold(BTreeMap::new(), |mut counts, step| {
-        *counts
-            .entry((
-                step.workload.as_str(),
-                step.layout.as_str(),
-                step.cell.clone(),
-                step.round,
-                step.arm.as_str(),
-            ))
-            .or_insert(0_u8) += 1;
-        counts
-    });
-    if observed != expected {
-        return Err(
-            "benchmark schedule does not cover every campaign arm, layout, workload, cell, and round exactly once"
-                .into(),
-        );
-    }
-    Ok(())
+    verify_expected_plan(expected, plan)
 }
 
 fn verify_balanced_order(plan: &[Step]) -> Result<(), Error> {
@@ -244,11 +272,7 @@ fn verify_phase_coverage(row: &Row, expected: &[String]) -> Result<(), Error> {
 type NullKey<'a> = (&'a str, &'a str, &'a str, &'a str);
 
 fn phases<'a>(campaign: &'a Campaign, workload: &str, layout: &str) -> &'a [String] {
-    if workload == "python" {
-        &campaign.workloads[workload].phases
-    } else {
-        &campaign.layouts[layout].phases
-    }
+    &campaign.workloads[workload].layout_phases[layout]
 }
 
 fn collect_nulls<'a>(
@@ -273,7 +297,7 @@ fn collect_layout_nulls<'a>(
     layout: &'a str,
     nulls: &mut BTreeMap<NullKey<'a>, f64>,
 ) -> Result<(), Error> {
-    for arm in ["E", "R", "I"] {
+    for arm in ["E", "R", "I"].into_iter().filter(|arm| campaign.workloads[workload].arm_support[layout][*arm].available()) {
         let cell = format!("{arm}{arm}");
         for phase in phases(campaign, workload, layout) {
             let ratios = paired(rows, workload, layout, &cell, arm, arm, phase, campaign.rounds)?;
@@ -298,6 +322,10 @@ fn append_comparisons(
     let mut failed = false;
     for layout in definition.commands.keys() {
         for &(left, right) in &CELLS[3..] {
+            let support = &definition.arm_support[layout];
+            if !support[left].available() || !support[right].available() {
+                continue;
+            }
             failed |= append_cell(campaign, rows, nulls, workload, layout, left, right, limit, lines)?;
         }
     }

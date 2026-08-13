@@ -1,4 +1,5 @@
-use super::definition::Campaign;
+use super::definition::{ArmSupport, Campaign};
+use std::collections::BTreeMap;
 
 pub(super) const CELLS: [(&str, &str); 6] = [("E", "E"), ("R", "R"), ("I", "I"), ("E", "R"), ("E", "I"), ("R", "I")];
 const ORDER: [[usize; 2]; 4] = [[0, 1], [1, 0], [1, 0], [0, 1]];
@@ -49,12 +50,18 @@ fn plan(campaign: &Campaign, rounds: u32) -> Vec<Step> {
         .iter()
         .flat_map(|(workload, definition)| {
             definition.commands.keys().flat_map(move |layout| {
-                CELLS
-                    .into_iter()
+                let support = &definition.arm_support[layout];
+                supported_cells(support)
                     .flat_map(move |cell| cell_steps(workload, layout, cell, rounds))
             })
         })
         .collect()
+}
+
+fn supported_cells(support: &BTreeMap<String, ArmSupport>) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+    CELLS
+        .into_iter()
+        .filter(|(left, right)| support[*left].available() && support[*right].available())
 }
 
 fn cell_steps(workload: &str, layout: &str, (left, right): (&str, &str), rounds: u32) -> Vec<Step> {
@@ -78,7 +85,7 @@ fn cell_steps(workload: &str, layout: &str, (left, right): (&str, &str), rounds:
 
 #[cfg(test)]
 mod tests {
-    use super::{ORDER, Step};
+    use super::{ArmSupport, BTreeMap, ORDER, Step};
 
     #[test]
     fn crossed_order_balances_position_and_temporal_strata() {
@@ -101,5 +108,22 @@ mod tests {
         assert_eq!(step.paired_key().as_deref(), Some("malloc|plain|EI|2|0"));
         step.position = 2;
         assert!(step.paired_key().is_none());
+    }
+
+    #[test]
+    fn classified_retained_failure_removes_only_retained_cells() {
+        let support = BTreeMap::from([
+            ("E".into(), ArmSupport::Available),
+            ("I".into(), ArmSupport::Available),
+            (
+                "R".into(),
+                ArmSupport::Incompatible {
+                    status: 1,
+                    stderr: "failure".into(),
+                    artifact_sha256: "a".repeat(64),
+                },
+            ),
+        ]);
+        assert_eq!(super::supported_cells(&support).collect::<Vec<_>>(), [("E", "E"), ("I", "I"), ("E", "I")]);
     }
 }

@@ -54,10 +54,7 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
         )?;
     }
     require_metadata(metadata_seen)?;
-    let expected = match step.workload.as_str() {
-        "python" => &campaign.workloads[&step.workload].phases,
-        _ => &campaign.layouts[&step.layout].phases,
-    };
+    let expected = &campaign.workloads[&step.workload].layout_phases[&step.layout];
     if phases.keys().map(String::as_str).collect::<BTreeSet<_>>() != expected.iter().map(String::as_str).collect() {
         return Err(format!("layout {} emitted an incomplete phase set", step.layout).into());
     }
@@ -113,10 +110,7 @@ fn parse_phase(
 ) -> Result<(), Error> {
     let (name, measured, ok) = phase_fields(rest)?;
     let timed_by_wall = campaign.workloads[&step.workload].wall_time
-        && campaign.workloads[&step.workload]
-            .phases
-            .iter()
-            .any(|phase| phase == name);
+        && campaign.workloads[&step.workload].phases.iter().any(|phase| phase == name);
     let us = if timed_by_wall { wall_us } else { measured };
     if phases
         .insert(name.to_owned(), Phase { us, ok: ok.to_owned() })
