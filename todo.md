@@ -15,7 +15,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Keep only intentional Markdown: `AGENTS.md`, `README.md`, this checklist, and the positive/negative lint examples; fold the former pipeline proposal into this checklist.
 - [x] Restore and update root `AGENTS.md` for the Cargo-owned C architecture.
 - [x] Restore `lint/examples/positive.md` and `lint/examples/negative.md` as executable design documentation.
-- [x] Run a final unused-file, unused-package, reachability, and generated-artifact audit on the merged tip. Current evidence covers all 18 Cargo packages and 74 targets, reaches all 310 C files across the four modeled host closures, finds no unused direct dependencies, and finds no tracked build artifacts, ignored files, empty files, or broken links.
+- [ ] Re-run the unused-file, unused-package, reachability, and generated-artifact audit after the active native-source decomposition settles. The previous audit covered 310 native C files, while the current merged tip contains 336, so its source-closure evidence is no longer final; tracked ignored and empty-file scans remain clean.
 
 ## `hl-native` package and C boundary
 
@@ -25,6 +25,7 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Keep all C and headers inside `hl-native/src/native`; keep Rust bindings/wrapper under `hl-native/src`.
 - [x] Expose a slim opaque Rust API around the C engine and isolate/document every unsafe ABI boundary.
 - [x] Route `hl-engine` lifecycle through `hl-native` and remove dependencies on deleted Rust runtime packages.
+- [ ] Make `hl-engine` own and service `hl-native`'s checkpoint broker/trigger transport for every checkpoint-enabled production machine; prove an actual guest checkpoint reaches the configured sink instead of exiting for a missing broker descriptor.
 - [x] Give `hl-native` a configured zero-local-dependency budget in `lint.toml`.
 - [x] Install the Cargo-built private shared library beside packaged products with relocatable Linux/macOS loader paths and portable artifact naming.
 - [x] Prove installed-product execution on Linux from a fresh copied prefix, including sibling-library selection, relocatable RUNPATH, backend receipts, and artifact hashes.
@@ -99,7 +100,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Audit production native sources and confirm ELF behavior is generic rather than selected by Go, V8, Node, Python, or executable names.
 - [ ] Finish generic ET_EXEC/non-PIE address placement and translation without Go-, V8-, Node-, Python-, sqlite-, or executable-name detection.
 - [ ] Prove PIE, static PIE, non-PIE, Go, V8/Node, Python, sqlite, self-modifying code, signals, threads, writes, atomics, and both guest ISAs.
-- [ ] Diagnose and repair the deterministic AMD64 static ET_EXEC/thread/TLS compatibility cluster.
+- [ ] Diagnose and repair the deterministic displaced ET_EXEC/thread/TLS compatibility clusters on both guest ISAs.
+- [ ] Make native stdout/stderr bridge teardown bounded when a nonblocking pipe is idle, and prove real CPython startup/exit cannot hang while joining its output workers.
 - [ ] Run the full compatibility corpus on the final C-backed product and classify every remaining failure.
 
 ## C source structure cleanup
