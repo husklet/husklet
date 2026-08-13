@@ -524,6 +524,8 @@ static void proc_reg_publish(const char *exe, int argc, char *const argv[]) {
                                   // exec keeps the script's name even though `exe` is the interpreter
     char buf[4096];
     int o = snprintf(buf, sizeof buf, "%s\n", comm), wrote = 0;
+    if (o < 0) return;
+    if (o >= (int)sizeof buf) o = (int)sizeof buf - 1;
     if (argv)
         for (int i = 0; i < argc && argv[i] && o < (int)sizeof buf - 1; i++) {
             int L = (int)strlen(argv[i]);

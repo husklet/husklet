@@ -160,9 +160,8 @@ int hl_aarch64_signal_capture(struct cpu *c, void *ucv, hl_aarch64_signal_cache_
     ucontext_t *uc = (ucontext_t *)ucv;
     uint64_t hpc = (uint64_t)HL_HOST_UC_PC(uc);
     if (!cache_contains(callback_context, hpc)) return 0; // host PC outside all retained code caches -> engine fault
-    uint64_t *X = HL_HOST_UC_REGS(uc);
     for (int r = 0; r <= 30; r++)
-        if (!is_stolen(r)) c->x[r] = X[r];
+        if (!is_stolen(r)) c->x[r] = hl_host_uc_a64_gpr_get(uc, (unsigned)r);
     c->sp = HL_HOST_UC_SP(uc);
     c->nzcv = HL_HOST_UC_PSTATE(uc);
     __uint128_t *V = HL_HOST_UC_VREGS(uc);
@@ -173,7 +172,7 @@ int hl_aarch64_signal_capture(struct cpu *c, void *ucv, hl_aarch64_signal_cache_
 void hl_aarch64_signal_resume(struct cpu *c, void *ucv, uintptr_t dispatcher_return) {
     ucontext_t *uc = (ucontext_t *)ucv;
     uint64_t cpu_address = (uint64_t)c;
-    memcpy(HL_HOST_UC_REGS(uc), &cpu_address, sizeof(cpu_address)); // block_return reads &cpu from x0
+    hl_host_uc_a64_gpr_set(uc, 0, cpu_address); // block_return reads &cpu from x0
     HL_HOST_UC_PC(uc) = (uint64_t)dispatcher_return;
 }
 #else

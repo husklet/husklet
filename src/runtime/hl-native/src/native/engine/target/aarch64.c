@@ -576,21 +576,20 @@ static void diag_crash(int s, siginfo_t *si, void *uc) {
     if (deliver_guest_fault(s, si, uc)) return;
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     ucontext_t *u = (ucontext_t *)uc;
-#if defined(HL_HOST_HAS_A64_CONTEXT)
     // These are the JIT's scratch and link registers -- which trampoline was mid-flight -- and mean nothing
     // under another register file. Keep the column layout; they read zero.
-    uint64_t *regs = u ? HL_HOST_UC_REGS(u) : NULL;
-#else
-    uint64_t *regs = NULL;
-#endif
     uint64_t hpc = u ? (uint64_t)HL_HOST_UC_PC(u) : 0;
-    uint64_t hx0 = regs ? regs[0] : 0;
-    uint64_t hx1 = regs ? regs[1] : 0;
-    uint64_t hx9 = regs ? regs[9] : 0;
-    uint64_t hx10 = regs ? regs[10] : 0;
-    uint64_t hx16 = regs ? regs[16] : 0;
-    uint64_t hx17 = regs ? regs[17] : 0;
-    uint64_t hx30 = regs ? regs[30] : 0;
+#if defined(HL_HOST_HAS_A64_CONTEXT)
+    uint64_t hx0 = u ? hl_host_uc_a64_gpr_get(u, 0) : 0;
+    uint64_t hx1 = u ? hl_host_uc_a64_gpr_get(u, 1) : 0;
+    uint64_t hx9 = u ? hl_host_uc_a64_gpr_get(u, 9) : 0;
+    uint64_t hx10 = u ? hl_host_uc_a64_gpr_get(u, 10) : 0;
+    uint64_t hx16 = u ? hl_host_uc_a64_gpr_get(u, 16) : 0;
+    uint64_t hx17 = u ? hl_host_uc_a64_gpr_get(u, 17) : 0;
+    uint64_t hx30 = u ? hl_host_uc_a64_gpr_get(u, 30) : 0;
+#else
+    uint64_t hx0 = 0, hx1 = 0, hx9 = 0, hx10 = 0, hx16 = 0, hx17 = 0, hx30 = 0;
+#endif
     char b[1600];
     for (int i = 0; i < 1600; i++)
         b[i] = ' ';
@@ -632,14 +631,16 @@ static void diag_crash(int s, siginfo_t *si, void *uc) {
     bp += 7;
     diag_hx(b + bp, hx10);
     bp += 16;
+#if defined(HL_HOST_HAS_A64_CONTEXT)
     if (u) {
         for (int r = 2; r <= 8; r++)
-            bp = diag_reg(b, bp, r, regs[r]);
+            bp = diag_reg(b, bp, r, hl_host_uc_a64_gpr_get(u, (unsigned)r));
         for (int r = 11; r <= 15; r++)
-            bp = diag_reg(b, bp, r, regs[r]);
+            bp = diag_reg(b, bp, r, hl_host_uc_a64_gpr_get(u, (unsigned)r));
         for (int r = 18; r <= 27; r++)
-            bp = diag_reg(b, bp, r, regs[r]);
+            bp = diag_reg(b, bp, r, hl_host_uc_a64_gpr_get(u, (unsigned)r));
     }
+#endif
     extern int jit_pc_in_retained_cache(uint64_t pc);
     memcpy(b + bp, " jit=0x", 7);
     bp += 7;

@@ -20,6 +20,22 @@
 #define HL_HOST_UC_SP(uc) ((uc)->uc_mcontext->__ss.__sp)
 #define HL_HOST_UC_PSTATE(uc) ((uc)->uc_mcontext->__ss.__cpsr)
 
+static inline uint64_t hl_host_uc_a64_gpr_get(const ucontext_t *context, unsigned reg) {
+    if (reg < 29) return context->uc_mcontext->__ss.__x[reg];
+    if (reg == 29) return context->uc_mcontext->__ss.__fp;
+    if (reg == 30) return context->uc_mcontext->__ss.__lr;
+    return 0;
+}
+
+static inline void hl_host_uc_a64_gpr_set(ucontext_t *context, unsigned reg, uint64_t value) {
+    if (reg < 29)
+        context->uc_mcontext->__ss.__x[reg] = value;
+    else if (reg == 29)
+        context->uc_mcontext->__ss.__fp = value;
+    else if (reg == 30)
+        context->uc_mcontext->__ss.__lr = value;
+}
+
 /* macOS / x86-64 -- NOT supported; host-neutral macros only, so the matrix is
  * total. Without the CPU test `__APPLE__` defined the AArch64 accessors
  * unconditionally on an Intel Mac. */
@@ -37,6 +53,14 @@
 #define HL_HOST_UC_REGS(uc) ((uint64_t *)(void *)((uc)->uc_mcontext.regs))
 #define HL_HOST_UC_SP(uc) ((uc)->uc_mcontext.sp)
 #define HL_HOST_UC_PSTATE(uc) ((uc)->uc_mcontext.pstate)
+
+static inline uint64_t hl_host_uc_a64_gpr_get(const ucontext_t *context, unsigned reg) {
+    return reg <= 30 ? context->uc_mcontext.regs[reg] : 0;
+}
+
+static inline void hl_host_uc_a64_gpr_set(ucontext_t *context, unsigned reg, uint64_t value) {
+    if (reg <= 30) context->uc_mcontext.regs[reg] = value;
+}
 
 static inline __uint128_t *hl_host_uc_vregs(ucontext_t *context) {
     struct _aarch64_ctx *record = (struct _aarch64_ctx *)(void *)context->uc_mcontext.__reserved;

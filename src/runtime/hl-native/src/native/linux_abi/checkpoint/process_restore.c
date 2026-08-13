@@ -777,21 +777,23 @@ static void ckpt_process_stop(struct ckpt_proc *process, const char *reason) {
     }
 }
 
-static void ckpt_json_string(FILE *file, const char *value) {
+static void ckpt_json_string(FILE *file, const char *value, size_t capacity) {
+    size_t length = value != NULL ? strnlen(value, capacity) : 0;
     fputc('"', file);
-    for (const unsigned char *p = (const unsigned char *)(value ? value : ""); *p; ++p) {
-        if (*p == '"' || *p == '\\')
-            fprintf(file, "\\%c", *p);
-        else if (*p == '\n')
+    for (size_t index = 0; index < length; ++index) {
+        unsigned char byte = (unsigned char)value[index];
+        if (byte == '"' || byte == '\\')
+            fprintf(file, "\\%c", byte);
+        else if (byte == '\n')
             fputs("\\n", file);
-        else if (*p == '\r')
+        else if (byte == '\r')
             fputs("\\r", file);
-        else if (*p == '\t')
+        else if (byte == '\t')
             fputs("\\t", file);
-        else if (*p < 0x20)
-            fprintf(file, "\\u%04x", *p);
+        else if (byte < 0x20)
+            fprintf(file, "\\u%04x", byte);
         else
-            fputc(*p, file);
+            fputc(byte, file);
     }
     fputc('"', file);
 }
@@ -838,7 +840,10 @@ static int ckpt_recovery_report_queue(FILE *report, const struct ckpt_proc *proc
                 report,
                 "{\"type\":\"resource\",\"gpid\":%d,\"fd\":-1,\"kind\":%d,\"queued\":true,\"outcome\":\"%s\",\"path\":",
                 process->gpid, right.kind, outcome);
-            ckpt_json_string(report, (right.kind == CKF_FILE || right.kind == CKF_DEVICE) ? right.path : "");
+            if (right.kind == CKF_FILE || right.kind == CKF_DEVICE)
+                ckpt_json_string(report, right.path, sizeof right.path);
+            else
+                fputs("\"\"", report);
             fputs("}\n", report);
         }
     }
@@ -859,7 +864,7 @@ static int ckpt_recovery_report(int policy) {
         struct ckpt_proc *process = &g_rprocs[i];
         fprintf(file, "{\"type\":\"process\",\"gpid\":%d,\"ppid\":%d,\"outcome\":\"%s\",\"reason\":", process->gpid,
                 process->ppid, process->viable ? "restored" : "stopped");
-        ckpt_json_string(file, process->reason);
+        ckpt_json_string(file, process->reason, sizeof process->reason);
         fputs("}\n", file);
         char fd_path[1300];
         snprintf(fd_path, sizeof fd_path, "proc.%d/fds", process->gpid);
@@ -875,7 +880,10 @@ static int ckpt_recovery_report(int policy) {
                     outcome = "reconnected";
                 fprintf(file, "{\"type\":\"resource\",\"gpid\":%d,\"fd\":%d,\"kind\":%d,\"outcome\":\"%s\",\"path\":",
                         process->gpid, record.gfd, record.kind, outcome);
-                ckpt_json_string(file, (record.kind == CKF_FILE || record.kind == CKF_DEVICE) ? record.path : "");
+                if (record.kind == CKF_FILE || record.kind == CKF_DEVICE)
+                    ckpt_json_string(file, record.path, sizeof record.path);
+                else
+                    fputs("\"\"", file);
                 fputs("}\n", file);
                 if (record.kind == CKF_SOCKETPAIR && ckpt_recovery_report_queue(file, process, &record) != 0) {
                     ckpt_source_fclose(fds);

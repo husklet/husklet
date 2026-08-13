@@ -224,9 +224,11 @@ static enum avx_dispatch_result avx_dispatch_map1_immediate_shift(struct cpu *c,
         for (int lane = 0; lane < width; lane += 16)
             for (int offset = 0; offset < 16; offset++) {
                 if (extension == 3)
-                    result[lane + offset] = offset + immediate < 16 ? source[lane + offset + immediate] : 0;
+                    result[lane + offset] =
+                        immediate < 16 && offset < 16 - immediate ? source[lane + offset + immediate] : 0;
                 else
-                    result[lane + offset] = offset - immediate >= 0 ? source[lane + offset - immediate] : 0;
+                    result[lane + offset] =
+                        immediate < 16 && offset >= immediate ? source[lane + offset - immediate] : 0;
             }
     } else {
         int left = extension == 6;
