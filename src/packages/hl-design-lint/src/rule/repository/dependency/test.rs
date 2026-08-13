@@ -124,6 +124,36 @@ fn rejects_package_manifest_without_string_name() {
 }
 
 #[test]
+fn rejects_malformed_dependency_path_type() {
+    let root = fixture();
+    package(
+        &root,
+        "services",
+        "scheduler",
+        "[dependencies]\nclock = { path = 42 }\n",
+    );
+    let workspace = Workspace::load([root.join("src")]).unwrap();
+    let error = Direction::new(policy()).check(&workspace).unwrap_err();
+    assert!(error.to_string().contains("non-string path"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejects_malformed_workspace_flag_type() {
+    let root = fixture();
+    package(
+        &root,
+        "services",
+        "scheduler",
+        "[dependencies]\nclock = { workspace = \"yes\" }\n",
+    );
+    let workspace = Workspace::load([root.join("src")]).unwrap();
+    let error = Direction::new(policy()).check(&workspace).unwrap_err();
+    assert!(error.to_string().contains("non-boolean workspace flag"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn accepts_dependency_permitted_by_layer_policy() {
     let root = fixture();
     package(&root, "foundation", "clock", "");

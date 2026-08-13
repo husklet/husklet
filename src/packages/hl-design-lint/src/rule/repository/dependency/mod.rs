@@ -417,6 +417,20 @@ fn tables(
             continue;
         };
         for (alias, specification) in values {
+            if let Some(table) = specification.as_table() {
+                if table.get("path").is_some_and(|path| !path.is_str()) {
+                    return Err(LintError::configuration(format!(
+                        "{} dependency {alias:?} has a non-string path",
+                        manifest.display()
+                    )));
+                }
+                if table.get("workspace").is_some_and(|value| !value.is_bool()) {
+                    return Err(LintError::configuration(format!(
+                        "{} dependency {alias:?} has a non-boolean workspace flag",
+                        manifest.display()
+                    )));
+                }
+            }
             let inherits = specification
                 .as_table()
                 .and_then(|value| value.get("workspace"))
