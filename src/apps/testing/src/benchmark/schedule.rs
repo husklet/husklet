@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 
 pub(super) const CELLS: [(&str, &str); 6] = [("E", "E"), ("R", "R"), ("I", "I"), ("E", "R"), ("E", "I"), ("R", "I")];
 const ORDER: [[usize; 2]; 4] = [[0, 1], [1, 0], [1, 0], [0, 1]];
-const WARMUP_PAIRS: u32 = 4;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct Step {
@@ -37,7 +36,30 @@ impl Step {
 }
 
 pub(super) fn warmups(campaign: &Campaign) -> Vec<Step> {
-    plan(campaign, WARMUP_PAIRS)
+    campaign
+        .workloads
+        .iter()
+        .flat_map(|(workload, definition)| {
+            definition.commands.keys().flat_map(move |layout| {
+                warmup_steps(workload, layout, &definition.arm_support[layout])
+            })
+        })
+        .collect()
+}
+
+fn warmup_steps(workload: &str, layout: &str, support: &BTreeMap<String, ArmSupport>) -> Vec<Step> {
+    support
+        .iter()
+        .filter(|(_, state)| state.available())
+        .map(|(arm, _)| Step {
+            workload: workload.to_owned(),
+            layout: layout.to_owned(),
+            cell: format!("{arm}{arm}"),
+            round: 0,
+            position: 0,
+            arm: arm.clone(),
+        })
+        .collect()
 }
 
 pub(super) fn measurements(campaign: &Campaign) -> Vec<Step> {
@@ -125,5 +147,25 @@ mod tests {
             ),
         ]);
         assert_eq!(super::supported_cells(&support).collect::<Vec<_>>(), [("E", "E"), ("I", "I"), ("E", "I")]);
+    }
+
+    #[test]
+    fn warmup_is_once_per_available_arm_without_cross_cells() {
+        let support = BTreeMap::from([
+            ("E".into(), ArmSupport::Available),
+            ("I".into(), ArmSupport::Available),
+            (
+                "R".into(),
+                ArmSupport::Incompatible {
+                    status: 1,
+                    stderr: "failure".into(),
+                    artifact_sha256: "a".repeat(64),
+                },
+            ),
+        ]);
+        let steps = super::warmup_steps("python", "plain", &support);
+        assert_eq!(steps.iter().map(|step| step.arm.as_str()).collect::<Vec<_>>(), ["E", "I"]);
+        assert!(steps.iter().all(|step| step.cell == format!("{}{}", step.arm, step.arm)));
+        assert!(steps.iter().all(|step| step.round == 0 && step.position == 0));
     }
 }
