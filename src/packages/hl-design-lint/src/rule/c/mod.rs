@@ -28,11 +28,11 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
-    let normalized = normalize_va_arg_types(&normalize_offsetof_designators(&normalize_computed_goto(
+    let normalized = normalize_named_registers(&normalize_va_arg_types(&normalize_offsetof_designators(&normalize_computed_goto(
         &normalize_gnu_attributes(&normalize_atomic_specifiers(&normalize_function_pointer_annotations(
             &normalize_complex_macro(&source.replace("_Thread_local", "             ")),
         ))),
-    )));
+    ))));
     let tree = parser
         .parse(&normalized, None)
         .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
@@ -55,6 +55,18 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+fn normalize_named_registers(source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut offset = 0;
+    while let Some(relative) = source[offset..].find("__asm__(\"") {
+        let start = offset + relative;
+        let Some(close) = source[start..].find("\")").map(|close| start + close + 2) else { break };
+        normalized[start..close].fill(b' ');
+        offset = close;
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
 }
 
 fn normalize_va_arg_types(source: &str) -> String {
@@ -771,6 +783,18 @@ mod test {
     fn parser_accepts_gnu_computed_goto() {
         let source = "int run(void **table, int index) { goto *table[index]; target: return 0; }\n";
         assert!(parse(Path::new("goto.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_gnu_named_register_declaration() {
+        let source = "void run(void) { register unsigned long value __asm__(\"r15\") = 1; }\n";
+        assert!(parse(Path::new("register.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_unclosed_gnu_named_register_declaration() {
+        let source = "void run(void) { register unsigned long value __asm__(\"r15\" = 1; }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
