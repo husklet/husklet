@@ -1252,10 +1252,42 @@ static enum avx_dispatch_result avx_dispatch_map2_qword_comparison(const hl_x86_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_integer_comparison(const hl_x86_avx_state *state, struct cpu *c,
+                                                                     struct insn *instruction, uint64_t next, int map,
+                                                                     int op, int destination, int first_register,
+                                                                     int width) {
+    int equal = op >= 0x74 && op <= 0x76;
+    int greater = op >= 0x64 && op <= 0x66;
+    if (map != 1 || (!equal && !greater)) return AVX_DISPATCH_UNMATCHED;
+
+    int element_size = (op == 0x74 || op == 0x64) ? 1 : (op == 0x75 || op == 0x65) ? 2 : 4;
+    uint8_t first[64], second[64], output[64];
+    avx_get(c, first_register, first);
+    avx_get_rm(state, c, instruction, next, width, second);
+    for (int offset = 0; offset < width; offset += element_size) {
+        uint64_t left = 0, right = 0;
+        memcpy(&left, first + offset, (size_t)element_size);
+        memcpy(&right, second + offset, (size_t)element_size);
+        int matched;
+        if (equal) {
+            matched = left == right;
+        } else {
+            uint64_t sign = UINT64_C(1) << (element_size * 8 - 1);
+            int64_t signed_left = (int64_t)((left ^ sign) - sign);
+            int64_t signed_right = (int64_t)((right ^ sign) - sign);
+            matched = signed_left > signed_right;
+        }
+        uint64_t mask = matched ? UINT64_MAX : 0;
+        memcpy(output + offset, &mask, (size_t)element_size);
+    }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_saturating_pack(const hl_x86_avx_state *state, struct cpu *c,
-                                                             struct insn *instruction, uint64_t next, int map,
-                                                             int op, int destination, int first_register,
-                                                             int width) {
+                                                             struct insn *instruction, uint64_t next, int map, int op,
+                                                             int destination, int first_register, int width) {
     int unsigned_output = (map == 1 && op == 0x67) || (map == 2 && op == 0x2B);
     int source_size = (map == 1 && (op == 0x63 || op == 0x67)) ? 2 : 4;
     if (!((map == 1 && (op == 0x63 || op == 0x67 || op == 0x6B)) || (map == 2 && op == 0x2B)))
@@ -1290,9 +1322,9 @@ static enum avx_dispatch_result avx_dispatch_saturating_pack(const hl_x86_avx_st
 }
 
 static enum avx_dispatch_result avx_dispatch_packed_low_multiply(const hl_x86_avx_state *state, struct cpu *c,
-                                                                struct insn *instruction, uint64_t next, int map,
-                                                                int op, int destination, int first_register,
-                                                                int width) {
+                                                                 struct insn *instruction, uint64_t next, int map,
+                                                                 int op, int destination, int first_register,
+                                                                 int width) {
     if (!((map == 1 && op == 0xF4) || (map == 2 && op == 0x40))) return AVX_DISPATCH_UNMATCHED;
 
     uint8_t first[64], second[64], output[64];
@@ -2152,6 +2184,8 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_immediate_permutation(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_qword_comparison(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
         return;
+    if (avx_dispatch_map1_integer_comparison(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
+        return;
     if (avx_dispatch_saturating_pack(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_packed_low_multiply(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_sign_mask(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
@@ -2235,34 +2269,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + 8, b, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        // compare-equal / greater (signed) by element width -> all-ones/zero mask
-        case 0x74:
-        case 0x75:
-        case 0x76: // vpcmpeqb/w/d
-        case 0x64:
-        case 0x65:
-        case 0x66: // vpcmpgtb/w/d (signed)
-        {
-            int es = (op == 0x74 || op == 0x64) ? 1 : (op == 0x75 || op == 0x65) ? 2 : 4;
-            int gt = (op >= 0x64 && op <= 0x66);
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += es) {
-                int64_t x = 0, y = 0;
-                memcpy(&x, a + i, (size_t)es);
-                memcpy(&y, b + i, (size_t)es);
-                if (es < 8) { // sign-extend for gt
-                    int sh = 64 - es * 8;
-                    x = (x << sh) >> sh;
-                    y = (y << sh) >> sh;
-                }
-                int t = gt ? (x > y) : (x == y);
-                uint64_t m = t ? ~0ull : 0ull;
-                memcpy(d + i, &m, (size_t)es);
-            }
-            avx_put(c, rd, d, W);
             goto done;
         }
         case 0x70: { // vpshufd(66)/vpshuflw(F2)/vpshufhw(F3) reg <- rm, imm8 (per 128-bit lane)
