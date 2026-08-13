@@ -128,6 +128,12 @@ static int checkpoint_parse_descriptor(const char *text) {
     return (int)value;
 }
 
+static void checkpoint_private_descriptor_close(int descriptor) {
+    if (descriptor < 0) return;
+    hl_host_process_fd_private_remove(descriptor);
+    (void)close(descriptor);
+}
+
 int hl_ckpt_channel_adopt(const char *broker, const char *trigger) {
     int broker_descriptor = checkpoint_parse_descriptor(broker);
     int trigger_descriptor = checkpoint_parse_descriptor(trigger);
@@ -138,7 +144,16 @@ int hl_ckpt_channel_adopt(const char *broker, const char *trigger) {
      * handed: the guest descriptor scan must never see them. */
     broker_descriptor = hl_host_process_fd_private_adopt(broker_descriptor);
     trigger_descriptor = hl_host_process_fd_private_adopt(trigger_descriptor);
-    if (broker_descriptor < 0 || trigger_descriptor < 0) return -1;
+    if (broker_descriptor < 0 || trigger_descriptor < 0) {
+        checkpoint_private_descriptor_close(broker_descriptor);
+        checkpoint_private_descriptor_close(trigger_descriptor);
+        return -1;
+    }
+    checkpoint_private_descriptor_close(checkpoint_channel);
+    checkpoint_channel = -1;
+    checkpoint_channel_owner = 0;
+    checkpoint_private_descriptor_close(checkpoint_broker);
+    checkpoint_private_descriptor_close(checkpoint_trigger);
     checkpoint_broker = broker_descriptor;
     checkpoint_trigger = trigger_descriptor;
     return 0;

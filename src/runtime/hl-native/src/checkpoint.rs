@@ -144,6 +144,11 @@ impl Drop for CheckpointTransport {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn open_descriptor_count() -> usize {
+        std::fs::read_dir("/dev/fd").expect("descriptor directory").count()
+    }
+
     #[test]
     fn transport_resources_are_live_and_generation_advances() {
         let (_broker, transport) = CheckpointTransport::create().expect("checkpoint transport");
@@ -151,6 +156,18 @@ mod tests {
         assert_eq!(transport.bump(), 2);
         assert!(CheckpointTransport::interrupt_signal(1) > 0);
         transport.adopt(1).expect("adopt transport descriptors");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn repeated_adoption_replaces_owned_descriptors() {
+        let (_broker, transport) = CheckpointTransport::create().expect("checkpoint transport");
+        transport.adopt(1).expect("initial adoption");
+        let initial = open_descriptor_count();
+        for _ in 0..32 {
+            transport.adopt(1).expect("replacement adoption");
+        }
+        assert_eq!(open_descriptor_count(), initial);
     }
 
     #[test]
