@@ -4,6 +4,13 @@
 #include <stdlib.h>
 #include <time.h>
 
+#if defined(HL_SQLITE_LAYOUT)
+#include <sqlite3.h>
+#define HL_LAYOUT "sqlite"
+#else
+#define HL_LAYOUT "plain"
+#endif
+
 static uint64_t micros(void) {
     struct timespec value;
     if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) {
@@ -13,6 +20,11 @@ static uint64_t micros(void) {
 }
 
 int main(void) {
+#if defined(HL_SQLITE_LAYOUT)
+    if (sqlite3_initialize() != SQLITE_OK) {
+        return 3;
+    }
+#endif
     uint64_t checksum = 0;
     uint64_t started = micros();
     for (uint64_t index = 0; index < UINT64_C(200000); ++index) {
@@ -34,8 +46,11 @@ int main(void) {
     }
     uint64_t malloc_time = micros() - started;
 
-    printf("META workload=malloc layout=plain version=1\n");
+    printf("META workload=malloc layout=%s version=1\n", HL_LAYOUT);
     printf("PHASE compute us=%" PRIu64 " ok=%" PRIu64 "\n", compute ? compute : 1, checksum);
     printf("PHASE malloc us=%" PRIu64 " ok=%" PRIu64 "\n", malloc_time ? malloc_time : 1, checksum);
+#if defined(HL_SQLITE_LAYOUT)
+    sqlite3_shutdown();
+#endif
     return 0;
 }

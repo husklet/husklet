@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 
+mod malloc;
+
 const IMAGE: &str = "alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce";
 const IMAGE_ID: &str = "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce";
 const MAC: &str = "/usr/local/bin/mac";
@@ -26,35 +28,19 @@ pub(crate) struct Options {
 pub(super) fn run(options: Options) -> Result<(), Error> {
     let workspace = crate::runtime::workspace()?;
     let output = stage_output(&workspace, &options.output)?;
-    let source = workspace.join("tests/benchmark/three-arm/malloc_plain.c");
+    let source = workspace.join(malloc::SOURCE);
     let rootfs = output.join("rootfs");
-    let linux = rootfs.join("benchmark/malloc-plain");
-    let native = output.join("native/malloc-plain");
     let arch = output.join("tools/arch");
     let docker = output.join("tools/docker");
-    fs::create_dir_all(linux.parent().ok_or("Linux guest has no parent")?)?;
-    fs::create_dir_all(native.parent().ok_or("native guest has no parent")?)?;
+    fs::create_dir_all(rootfs.join("benchmark"))?;
+    fs::create_dir_all(output.join("native"))?;
     fs::create_dir_all(arch.parent().ok_or("tool has no parent")?)?;
 
-    checked(
-        &options.linux_cc,
-        &[
-            "-O3".into(),
-            "-static".into(),
-            source.display().to_string(),
-            "-o".into(),
-            linux.display().to_string(),
-        ],
-    )?;
-    mac(&[
-        "/mnt/mac/usr/bin/clang".into(),
-        "-O3".into(),
-        "-arch".into(),
-        "x86_64".into(),
-        mac_path(&source),
-        "-o".into(),
-        mac_path(&native),
-    ])?;
+    let layouts = malloc::layouts(&source, &rootfs, &output);
+    for layout in &layouts {
+        checked(&options.linux_cc, &layout.linux_arguments)?;
+        mac(&layout.native_arguments)?;
+    }
     mac(&["cp".into(), "/mnt/mac/usr/bin/arch".into(), mac_path(&arch)])?;
     mac(&["cp".into(), "/mnt/mac/usr/local/bin/docker".into(), mac_path(&docker)])?;
 
@@ -69,37 +55,45 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     if String::from_utf8(inspect)?.trim() != IMAGE_ID {
         return Err("pinned Docker image identity mismatch".into());
     }
-    let native_output = mac(&[mac_path(&arch), "-x86_64".into(), mac_path(&native)])?;
-    let docker_output = mac(&[
-        mac_path(&docker),
-        "run".into(),
-        "--rm".into(),
-        "--platform".into(),
-        "linux/amd64".into(),
-        "--mount".into(),
-        format!(
-            "type=bind,source={},target={},readonly",
-            mac_path(&rootfs),
-            rootfs.display()
-        ),
-        IMAGE.into(),
-        linux.display().to_string(),
-    ])?;
-    let native_frame = frame(&native_output)?;
-    let docker_frame = frame(&docker_output)?;
-    require_parity(&native_frame, &docker_frame)?;
-    fs::write(output.join("native.out"), native_output)?;
-    fs::write(output.join("docker.out"), docker_output)?;
-    fs::write(output.join("exact-output.frame"), &native_frame)?;
     let mut identities = String::from("artifact\tidentity\n");
-    for path in [&rootfs, &linux, &native, &arch, &docker] {
+    for path in [&rootfs, &arch, &docker] {
         identities.push_str(&format!("{}\t{}\n", path.display(), artifact_identity(path)?));
+    }
+    for layout in &layouts {
+        let native_output = mac(&[mac_path(&arch), "-x86_64".into(), mac_path(&layout.native)])?;
+        let docker_output = mac(&[
+            mac_path(&docker),
+            "run".into(),
+            "--rm".into(),
+            "--platform".into(),
+            "linux/amd64".into(),
+            "--mount".into(),
+            format!(
+                "type=bind,source={},target={},readonly",
+                mac_path(&rootfs),
+                rootfs.display()
+            ),
+            IMAGE.into(),
+            layout.linux.display().to_string(),
+        ])?;
+        let native_frame = frame(&native_output)?;
+        let docker_frame = frame(&docker_output)?;
+        require_parity(&native_frame, &docker_frame)?;
+        fs::write(output.join(format!("native-{}.out", layout.name)), native_output)?;
+        fs::write(output.join(format!("docker-{}.out", layout.name)), docker_output)?;
+        fs::write(
+            output.join(format!("exact-output-{}.frame", layout.name)),
+            &native_frame,
+        )?;
+        for path in [&layout.linux, &layout.native] {
+            identities.push_str(&format!("{}\t{}\n", path.display(), artifact_identity(path)?));
+        }
     }
     identities.push_str(&format!("docker-image\t{IMAGE_ID}\n"));
     fs::write(output.join("artifacts.tsv"), identities)?;
     fs::write(output.join("BLOCKERS.txt"), blockers())?;
     println!(
-        "READY malloc/plain\nBLOCKED campaign: see {}/BLOCKERS.txt",
+        "READY malloc/plain malloc/sqlite\nBLOCKED campaign: see {}/BLOCKERS.txt",
         output.display()
     );
     Ok(())
@@ -178,7 +172,7 @@ fn require_parity(native: &[u8], docker: &[u8]) -> Result<(), Error> {
 }
 
 fn blockers() -> &'static str {
-    "Campaign not emitted: the strict schema requires real malloc/python/sqlite workloads across plain/sqlite layouts.\nAvailable and exact-output matched: malloc/plain Linux x86_64 ELF and x86_64 Mach-O.\nMissing: malloc/sqlite, python/plain, python/sqlite, sqlite/sqlite paired artifacts and their declared phases.\nMissing: selected, built Husklet x86 command profile and its smoke proof.\nPinned Docker image: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce.\n"
+    "Campaign not emitted: the strict schema requires real malloc/python/sqlite workloads across plain/sqlite layouts.\nAvailable and exact-output matched: malloc/plain and malloc/sqlite Linux x86_64 ELF and x86_64 Mach-O.\nMissing: python/plain, python/sqlite, sqlite/sqlite paired artifacts and their declared phases.\nMissing: selected, built Husklet x86 command profile and its smoke proof.\nPinned Docker image: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce.\n"
 }
 
 fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
@@ -215,13 +209,7 @@ mod tests {
     fn incomplete_stage_refuses_to_claim_a_campaign() {
         let text = blockers();
         assert!(text.starts_with("Campaign not emitted"));
-        for missing in [
-            "malloc/sqlite",
-            "python/plain",
-            "python/sqlite",
-            "sqlite/sqlite",
-            "Husklet x86",
-        ] {
+        for missing in ["python/plain", "python/sqlite", "sqlite/sqlite", "Husklet x86"] {
             assert!(text.contains(missing));
         }
     }
