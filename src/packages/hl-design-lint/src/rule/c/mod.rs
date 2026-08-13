@@ -28,8 +28,9 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
+    let normalized = source.replace("_Thread_local", "             ");
     let tree = parser
-        .parse(source, None)
+        .parse(&normalized, None)
         .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
     if let Some(node) = first_unrecoverable_error(tree.root_node(), source) {
         let point = node.start_position();
@@ -286,6 +287,12 @@ mod test {
     fn parser_accepts_error_on_final_uncontinued_macro_line() {
         let source = "#define BODY(value) \\\n+                          do { \\\n+                              value++; \\\n+                          } while (0)\n";
         assert!(parse(Path::new("dispatch.h"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_c11_thread_local_storage() {
+        let source = "typedef struct Options Options;\nstatic _Thread_local Options *current;\n";
+        assert!(parse(Path::new("storage.c"), source).is_ok());
     }
 
     #[test]
