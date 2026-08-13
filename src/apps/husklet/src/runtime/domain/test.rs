@@ -117,6 +117,22 @@ fn a_live_compatible_domain_is_served_and_never_replaced() {
 }
 
 #[test]
+fn a_live_domain_with_changed_settings_is_replaced() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut workspace, domain, _listener) = live_domain(root.path());
+    PublishedProtocol::new(&domain.directory).publish().unwrap();
+    PublishedConfiguration::new(&domain.directory)
+        .publish(&workspace)
+        .unwrap();
+    workspace.env.push(("MODE".into(), "changed".into()));
+
+    let Decision::Replace(_, reason) = domain.decide(&workspace).unwrap() else {
+        panic!("a domain with a stale configuration must be replaced");
+    };
+    assert!(reason.contains("configuration"));
+}
+
+#[test]
 fn a_domain_that_has_not_published_yet_is_awaited_rather_than_judged_incompatible() {
     let root = tempfile::tempdir().unwrap();
     let (workspace, domain, _listener) = live_domain(root.path());

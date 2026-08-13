@@ -124,8 +124,13 @@ impl Domain {
             };
             match PublishedProtocol::new(&self.directory).state()? {
                 Publication::Compatible => {
-                    PublishedConfiguration::new(&self.directory).validate(workspace)?;
-                    return Ok(Decision::Serve);
+                    if PublishedConfiguration::new(&self.directory).matches(workspace)? {
+                        return Ok(Decision::Serve);
+                    }
+                    return Ok(Decision::Replace(
+                        Peer::new(&connection)?,
+                        "workspace configuration or runtime build identity changed".into(),
+                    ));
                 }
                 Publication::Mismatched(published) => {
                     return Ok(Decision::Replace(

@@ -68,14 +68,7 @@ impl ConfigurationIdentity {
     }
 
     pub(super) fn validate(&self, workspace: &WorkspaceConfig) -> io::Result<()> {
-        let effective = std::fs::read_to_string(&self.path).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("live workspace domain has no verifiable configuration identity: {error}"),
-            )
-        })?;
-        let requested = Configuration::new(workspace).signature();
-        if effective.trim() == requested {
+        if self.matches(workspace)? {
             Ok(())
         } else {
             Err(io::Error::new(
@@ -83,6 +76,19 @@ impl ConfigurationIdentity {
                 "workspace settings changed while its execution domain is running; stop the workspace runtime before reopening",
             ))
         }
+    }
+
+    /// Returns whether the live domain was published for this exact workspace
+    /// configuration. A missing or unreadable identity remains an error: only
+    /// an authenticated mismatch is safe to classify as a replacement.
+    pub(super) fn matches(&self, workspace: &WorkspaceConfig) -> io::Result<bool> {
+        let effective = std::fs::read_to_string(&self.path).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("live workspace domain has no verifiable configuration identity: {error}"),
+            )
+        })?;
+        Ok(effective.trim() == Configuration::new(workspace).signature())
     }
 
     pub(super) fn remove(&self) -> io::Result<()> {
