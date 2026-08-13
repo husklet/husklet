@@ -330,29 +330,10 @@ static int robust_futex_address(uint64_t entry, long offset, uint64_t *address) 
     return 1;
 }
 
-static int robust_pin(uint64_t address, size_t length, uint32_t protection, hl_logical_vma_pin *pin, void **host) {
-    memset(pin, 0, sizeof(*pin));
-    int logical = hl_logical_vma_pin_data(address, length, protection, pin);
-    if (logical < 0 || pin->contiguous < length) {
-        hl_logical_vma_unpin(pin);
-        return 0;
-    }
-    if (logical > 0) {
-        *host = pin->host;
-        return 1;
-    }
-    if (!host_range_mapped((uintptr_t)address, length)) {
-        hl_logical_vma_unpin(pin);
-        return 0;
-    }
-    *host = (void *)(uintptr_t)address;
-    return 1;
-}
-
 static int robust_copy_from(void *destination, uint64_t source, size_t length) {
     hl_logical_vma_pin pin;
     void *host;
-    if (!robust_pin(source, length, HL_LOGICAL_VMA_READ, &pin, &host)) return 0;
+    if (!futex_teardown_pin(source, length, HL_LOGICAL_VMA_READ, &pin, &host)) return 0;
     memcpy(destination, host, length);
     hl_logical_vma_unpin(&pin);
     return 1;
@@ -363,7 +344,7 @@ static int robust_copy_from(void *destination, uint64_t source, size_t length) {
 static void robust_handle_death(uint64_t futex_addr, int mytid) {
     hl_logical_vma_pin pin;
     void *host;
-    if (!futex_addr || !robust_pin(futex_addr, 4, HL_LOGICAL_VMA_WRITE, &pin, &host)) return;
+    if (!futex_addr || !futex_teardown_pin(futex_addr, 4, HL_LOGICAL_VMA_WRITE, &pin, &host)) return;
     int *w = host;
     int v = __atomic_load_n(w, __ATOMIC_SEQ_CST);
     for (;;) {

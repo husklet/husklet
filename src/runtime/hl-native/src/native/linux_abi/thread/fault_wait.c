@@ -682,6 +682,31 @@ static long futex_op(struct cpu *c, int *uaddr, const void *key, int op, int pri
     return 0;
 }
 
+/* Resolve and hold a guest teardown word while it is accessed. Logical VMAs
+ * need a pin because their guest address is not necessarily a host mapping;
+ * identity mappings still use the fault-guarded access probe. */
+static int futex_teardown_pin(uint64_t address, size_t length, uint32_t protection, hl_logical_vma_pin *pin,
+                              void **host) {
+    memset(pin, 0, sizeof(*pin));
+    int logical = hl_logical_vma_pin_data(address, length, protection, pin);
+    if (logical < 0 || pin->contiguous < length) {
+        hl_logical_vma_unpin(pin);
+        return 0;
+    }
+    if (logical > 0) {
+        *host = pin->host;
+        return 1;
+    }
+    int accessible = (protection & HL_LOGICAL_VMA_WRITE) ? host_range_writable((uintptr_t)address, length)
+                                                         : host_range_mapped((uintptr_t)address, length);
+    if (!accessible) {
+        hl_logical_vma_unpin(pin);
+        return 0;
+    }
+    *host = (void *)(uintptr_t)address;
+    return 1;
+}
+
 static void futex_wake_addr(uint64_t uaddr) {
     if (!uaddr) return;
     uaddr = nonpie_fold(uaddr); // clear_child_tid is stored in guest coordinates; this is its deref
@@ -692,8 +717,10 @@ static void futex_wake_addr(uint64_t uaddr) {
     // that fault; a raw store here would instead SIGSEGV/SIGBUS the whole process (the flaky rustc-at-exit
     // teardown crash). Skip the store+wake when the address is gone -- a detached thread has no joiner to
     // wake, and a joinable thread never unmaps its own stack so its ctid is always still live.
-    if (!host_addr_mapped((uintptr_t)uaddr)) return;
-    *(int *)uaddr = 0;
+    hl_logical_vma_pin pin;
+    void *host;
+    if (!futex_teardown_pin(uaddr, sizeof(int), HL_LOGICAL_VMA_WRITE, &pin, &host)) return;
+    __atomic_store_n((int *)host, 0, __ATOMIC_SEQ_CST);
     // libc implementations use both private and shared futex operations for
     // thread joins.  The kernel-generated clear-child-tid wake is not tagged
     // by the exiting guest syscall, so notify both key spaces.  The word is
@@ -702,13 +729,14 @@ static void futex_wake_addr(uint64_t uaddr) {
     struct futex_bucket *tables[] = {g_fbk_private, g_fbk};
     for (size_t i = 0; i < sizeof tables / sizeof tables[0]; ++i) {
         g_fbk_active = tables[i];
-        struct futex_bucket *b = fbk_of((const void *)(uintptr_t)uaddr);
+        struct futex_bucket *b = fbk_of(host);
         pthread_mutex_lock(&b->m);
         int registered = 0;
-        (void)fbk_wait_grant(b, futex_key((const void *)(uintptr_t)uaddr), INT_MAX, ~0u, &registered);
+        (void)fbk_wait_grant(b, futex_key(host), INT_MAX, ~0u, &registered);
         pthread_cond_broadcast(&b->c);
         pthread_mutex_unlock(&b->m);
     }
+    hl_logical_vma_unpin(&pin);
 }
 
 static volatile int g_next_tid = 1000;
