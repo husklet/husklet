@@ -402,7 +402,14 @@ impl<'a> CaseExecution<'a> {
             Vec::new()
         };
         if status != ExitStatus::Code(self.case.exit) {
-            return Err(format!("exit {status:?}, expected {}", self.case.exit).into());
+            let stderr = String::from_utf8_lossy(&logs.stderr);
+            let diagnostic = stderr.chars().take(4096).collect::<String>();
+            return Err(if diagnostic.is_empty() {
+                format!("exit {status:?}, expected {}", self.case.exit)
+            } else {
+                format!("exit {status:?}, expected {}; stderr={diagnostic:?}", self.case.exit)
+            }
+            .into());
         }
         if logs.stdout != expected {
             return Err(super::diagnostic::compare("stdout", &logs.stdout, &expected).into());
