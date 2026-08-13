@@ -425,6 +425,8 @@ static int overlay_create_precheck(const char *guest) {
 // left missing so a genuine bad path still fails ENOENT as the kernel would. Overlay mode only (no-op when
 // g_nlower==0 -> non-overlay behavior is byte-identical); rootfs-routed paths only (a volume has its own
 // real backing dir and must not be mirrored into the upper).
+static void ovl_copy_meta(const char *src, const char *dst, const struct stat *st);
+
 static void overlay_mkparents(const char *guest) {
     if (!g_nlower || !guest || guest[0] != '/') return;
     const char *canon;
@@ -458,7 +460,13 @@ static void overlay_mkparents(const char *guest) {
                 char lo[4300];
                 layer_follow(g_lower[i].canon, g_lower[i].clen, acc, lo, sizeof lo, 0);
                 if (lstat(lo, &st) == 0 && S_ISDIR(st.st_mode)) {
-                    if (hl_compat_mkdir(up, st.st_mode & 0777) == 0) made = 1;
+                    if (hl_compat_mkdir(up, st.st_mode & 0777) == 0) {
+                        // mkdir is umask-filtered and its creation mode omits special bits. Preserve the
+                        // lower directory exactly: Ubuntu's /tmp is 01777, and apt delegates signature
+                        // verification to an unprivileged helper which must create files there.
+                        ovl_copy_meta(lo, up, &st);
+                        made = 1;
+                    }
                     break;
                 }
             }
@@ -598,8 +606,10 @@ static void overlay_copyup(const char *guest, char *host, size_t hn) {
             if (lstat(lp, &ds) == 0) {
                 if (S_ISDIR(ds.st_mode)) {
                     overlay_mkparents(guest);
-                    if (hl_compat_mkdir(up, ds.st_mode & 0777) == 0)
+                    if (hl_compat_mkdir(up, ds.st_mode & 0777) == 0) {
+                        ovl_copy_meta(lp, up, &ds);
                         hl_fdcache_resolution_bump(); // upper dir materialized
+                    }
                     return;
                 }
                 break; // lower provides it as a non-dir (symlink/special): leave to the caller's fallback

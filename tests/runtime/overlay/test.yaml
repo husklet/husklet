@@ -37,6 +37,13 @@ cases:
     artifact: { destination: /opt/husklet/overlay/lower-copy-up }
     run: [copy-up]
     expect: { exit: 0, stdout: golden/lower-copy-up.out }
+  - id: runtime/overlay/lower-directory-mode-copy-up
+    status: active
+    compat: { class: compatibility }
+    build: { source: lower.c, output: lower-directory-mode-copy-up, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/lower-directory-mode-copy-up }
+    run: [directory-mode-copy-up]
+    expect: { exit: 0, stdout: golden/lower-directory-mode-copy-up.out }
   - id: runtime/overlay/lower-whiteout
     status: active
     compat: { class: compatibility }

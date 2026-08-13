@@ -60,6 +60,33 @@ static int probe_copy_up(void) {
     return 0;
 }
 
+/* Creating a file below a lower-only directory materializes that directory in
+   the upper.  Copy-up must preserve all four mode octets, including /tmp's
+   sticky bit, and must not let the process umask narrow its permissions. */
+static int probe_directory_mode_copy_up(void) {
+    struct stat status;
+    pid_t child;
+    int result;
+    mode_t previous = umask(0077);
+    int fd = open("/tmp/husklet-root", O_CREAT | O_EXCL | O_WRONLY, 0600);
+    umask(previous);
+    if (fd < 0 || close(fd) != 0) return 24;
+    if (stat("/tmp", &status) != 0 || (status.st_mode & 07777) != 01777) return 25;
+    child = fork();
+    if (child < 0) return 26;
+    if (child == 0) {
+        if (setgid(65534) != 0 || setuid(65534) != 0) _exit(27);
+        fd = open("/tmp/husklet-unprivileged", O_CREAT | O_EXCL | O_WRONLY, 0600);
+        if (fd < 0 || close(fd) != 0) _exit(28);
+        if (unlink("/tmp/husklet-root") == 0 || errno != EPERM) _exit(29);
+        _exit(0);
+    }
+    if (waitpid(child, &result, 0) != child || !WIFEXITED(result) || WEXITSTATUS(result) != 0)
+        return WIFEXITED(result) ? WEXITSTATUS(result) : 30;
+    puts("lower directory mode copy-up ok");
+    return 0;
+}
+
 /* Removing a lower name must whiteout: gone from lookup and from the merged
    directory listing, while its lower siblings remain visible. */
 static int probe_whiteout(void) {
@@ -226,6 +253,7 @@ int main(int count, char **arguments) {
     if (strcmp(arguments[1], "read") == 0) return probe_read();
     if (strcmp(arguments[1], "negative") == 0) return probe_negative();
     if (strcmp(arguments[1], "copy-up") == 0) return probe_copy_up();
+    if (strcmp(arguments[1], "directory-mode-copy-up") == 0) return probe_directory_mode_copy_up();
     if (strcmp(arguments[1], "whiteout") == 0) return probe_whiteout();
     if (strcmp(arguments[1], "whiteout-dir") == 0) return probe_whiteout_dir();
     if (strcmp(arguments[1], "merge") == 0) return probe_merge();
