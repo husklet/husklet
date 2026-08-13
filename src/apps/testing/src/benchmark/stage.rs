@@ -70,9 +70,6 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     if String::from_utf8(inspect)?.trim() != IMAGE_ID {
         return Err("pinned Docker image identity mismatch".into());
     }
-    for layout in &layouts {
-        malloc::build_linux(layout, &source, &rootfs, &docker)?;
-    }
     let python_inspect = mac(&[
         mac_path(&docker),
         "image".into(),
@@ -85,6 +82,9 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         return Err("pinned Python Docker image identity mismatch".into());
     }
     rootfs::stage(&output, &docker)?;
+    for layout in &layouts {
+        malloc::build_linux(layout, &source, &rootfs, &docker)?;
+    }
     let python = python::PythonProfile::stage(&output, &docker, &arch)?;
     let sqlite = sqlite::SqliteProfile::stage(&output, &docker, &arch)?;
     let husklet = HuskletProfile::stage(&workspace, &output, &options.mac_cargo)?;
