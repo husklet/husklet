@@ -109,6 +109,13 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         let native_frame = frame(&native_output)?;
         let docker_frame = frame(&docker_output)?;
         require_parity(&format!("malloc/{}", layout.name), &native_frame, &docker_frame)?;
+        if layout.name == "plain" {
+            let husklet_output = husklet_guest(&arch, &husklet.command, &layout.linux)?;
+            let husklet_frame = frame(&husklet_output)?;
+            require_parity("malloc/plain Husklet", &native_frame, &husklet_frame)?;
+            fs::write(output.join("husklet-plain.out"), husklet_output)?;
+            fs::write(output.join("exact-output-husklet-plain.frame"), husklet_frame)?;
+        }
         fs::write(output.join(format!("native-{}.out", layout.name)), native_output)?;
         fs::write(output.join(format!("docker-{}.out", layout.name)), docker_output)?;
         fs::write(
@@ -233,6 +240,28 @@ fn mac(arguments: &[String]) -> Result<Vec<u8>, Error> {
     checked(Path::new(MAC), arguments)
 }
 
+fn husklet_guest(arch: &Path, command: &Path, guest: &Path) -> Result<Vec<u8>, Error> {
+    let arguments = [mac_path(arch), "-x86_64".into(), mac_path(command), mac_path(guest)];
+    let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, TIMEOUT)?;
+    if captured.outcome != Outcome::Exited(Some(0)) {
+        return Err(format!(
+            "Husklet Rosetta guest failed with {:?}: {}",
+            captured.outcome,
+            String::from_utf8_lossy(&captured.stderr)
+        )
+        .into());
+    }
+    let diagnostic = b"hl-test-displaced-et-exec: displaced\n";
+    if !captured.stderr.is_empty() && captured.stderr != diagnostic {
+        return Err(format!(
+            "Husklet Rosetta guest wrote unexpected stderr: {}",
+            String::from_utf8_lossy(&captured.stderr)
+        )
+        .into());
+    }
+    Ok(captured.stdout)
+}
+
 fn mac_path(path: &Path) -> String {
     format!("/mnt/mac{}", path.display())
 }
@@ -282,7 +311,7 @@ fn require_parity(workload: &str, native: &[u8], docker: &[u8]) -> Result<(), Er
 }
 
 fn blockers() -> &'static str {
-    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a built, hashed Husklet x86_64 macOS command and private library with a Rosetta backend-receipt smoke.\nBlocked: actual Linux guest execution under the Rosetta Husklet command does not complete.\nMissing: balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
+    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a built, hashed Husklet x86_64 macOS command and private library with a Rosetta backend-receipt smoke; malloc/plain also completes through that command with exact-output parity.\nMissing: Husklet execution validation for the remaining workloads, balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
 }
 
 fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
@@ -319,7 +348,7 @@ mod tests {
     fn incomplete_stage_refuses_to_claim_a_campaign() {
         let text = blockers();
         assert!(text.starts_with("Campaign not emitted"));
-        for missing in ["balanced-order", "unique ledger", "Linux guest execution"] {
+        for missing in ["balanced-order", "unique ledger", "remaining workloads"] {
             assert!(text.contains(missing));
         }
         assert!(text.contains("Husklet x86_64 macOS"));
