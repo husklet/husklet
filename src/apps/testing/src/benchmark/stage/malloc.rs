@@ -1,3 +1,4 @@
+use super::{Error, mac};
 use std::path::{Path, PathBuf};
 
 pub(super) const SOURCE: &str = "src/apps/testing/tests/fixtures/guest/malloc.c";
@@ -6,7 +7,6 @@ pub(super) struct Layout {
     pub name: &'static str,
     pub linux: PathBuf,
     pub native: PathBuf,
-    pub linux_arguments: Vec<String>,
     pub native_arguments: Vec<String>,
 }
 
@@ -14,7 +14,6 @@ impl Layout {
     fn new(name: &'static str, sqlite: bool, source: &Path, rootfs: &Path, output: &Path) -> Self {
         let linux = rootfs.join(format!("benchmark/malloc-{name}"));
         let native = output.join(format!("native/malloc-{name}"));
-        let mut linux_arguments = vec!["-O3".into(), "-static".into()];
         let mut native_arguments = vec![
             "/mnt/mac/usr/bin/clang".into(),
             "-O3".into(),
@@ -22,17 +21,52 @@ impl Layout {
             "x86_64".into(),
         ];
         if sqlite {
-            linux_arguments.push("-DHL_SQLITE_LAYOUT".into());
             native_arguments.push("-DHL_SQLITE_LAYOUT".into());
         }
-        linux_arguments.extend([source.display().to_string(), "-o".into(), linux.display().to_string()]);
         native_arguments.extend([mac_path(source), "-o".into(), mac_path(&native)]);
         if sqlite {
-            linux_arguments.push("-lsqlite3".into());
             native_arguments.push("-lsqlite3".into());
         }
-        Self { name, linux, native, linux_arguments, native_arguments }
+        Self {
+            name,
+            linux,
+            native,
+            native_arguments,
+        }
     }
+}
+
+pub(super) fn build_linux(layout: &Layout, source: &Path, rootfs: &Path, docker: &Path) -> Result<(), Error> {
+    let sqlite = if layout.name == "sqlite" {
+        " -DHL_SQLITE_LAYOUT -lsqlite3"
+    } else {
+        ""
+    };
+    let command = format!(
+        "apk add --no-cache build-base sqlite-dev sqlite-static >/dev/null && cc -O3 -static /source.c -o /out/{}{}",
+        layout
+            .linux
+            .file_name()
+            .ok_or("Linux workload has no filename")?
+            .to_string_lossy(),
+        sqlite
+    );
+    mac(&[
+        mac_path(docker),
+        "run".into(),
+        "--rm".into(),
+        "--platform".into(),
+        "linux/amd64".into(),
+        "--mount".into(),
+        format!("type=bind,source={},target=/source.c,readonly", mac_path(source)),
+        "--mount".into(),
+        format!("type=bind,source={},target=/out", mac_path(&rootfs.join("benchmark"))),
+        super::IMAGE.into(),
+        "sh".into(),
+        "-c".into(),
+        command,
+    ])?;
+    Ok(())
 }
 
 pub(super) fn layouts(source: &Path, rootfs: &Path, output: &Path) -> [Layout; 2] {
@@ -63,21 +97,23 @@ mod tests {
         );
         assert!(
             !layouts[0]
-                .linux_arguments
+                .native_arguments
                 .iter()
                 .any(|argument| argument.contains("sqlite"))
         );
-        for arguments in [&layouts[1].linux_arguments, &layouts[1].native_arguments] {
-            assert!(arguments.iter().any(|argument| argument == "-DHL_SQLITE_LAYOUT"));
-            assert!(arguments.iter().any(|argument| argument == "-lsqlite3"));
-        }
+        assert!(
+            layouts[1]
+                .native_arguments
+                .iter()
+                .any(|argument| argument == "-DHL_SQLITE_LAYOUT")
+        );
+        assert!(
+            layouts[1]
+                .native_arguments
+                .iter()
+                .any(|argument| argument == "-lsqlite3")
+        );
         for layout in layouts {
-            assert!(
-                layout
-                    .linux_arguments
-                    .iter()
-                    .any(|argument| argument.ends_with("/malloc.c"))
-            );
             assert!(
                 layout
                     .native_arguments

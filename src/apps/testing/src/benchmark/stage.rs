@@ -24,9 +24,6 @@ pub(crate) struct Options {
     /// New machine-local artifact directory beneath the repository workspace.
     #[arg(long)]
     output: PathBuf,
-    /// Linux x86-64 static C compiler.
-    #[arg(long, default_value = "x86_64-linux-gnu-gcc")]
-    linux_cc: PathBuf,
 }
 
 pub(super) fn run(options: Options) -> Result<(), Error> {
@@ -42,7 +39,6 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
 
     let layouts = malloc::layouts(&source, &rootfs, &output);
     for layout in &layouts {
-        checked(&options.linux_cc, &layout.linux_arguments)?;
         mac(&layout.native_arguments)?;
     }
     mac(&["cp".into(), "/mnt/mac/usr/bin/arch".into(), mac_path(&arch)])?;
@@ -58,6 +54,9 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     ])?;
     if String::from_utf8(inspect)?.trim() != IMAGE_ID {
         return Err("pinned Docker image identity mismatch".into());
+    }
+    for layout in &layouts {
+        malloc::build_linux(layout, &source, &rootfs, &docker)?;
     }
     let python_inspect = mac(&[
         mac_path(&docker),
