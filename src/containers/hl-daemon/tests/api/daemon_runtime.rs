@@ -48,6 +48,7 @@ pub(crate) async fn run(containers: Containers, rootfs: &Path, work: &Path) -> R
     logs(&client).await?;
     let mut session = client.containers().attach("daemon-runtime", true, true, true).await?;
     client.containers().start("daemon-runtime").await?;
+    terminal_job_control(&client).await?;
     exec(&client, rootfs).await?;
     session.write(b"input\n").await?;
     session.close().await?;
@@ -78,6 +79,56 @@ pub(crate) async fn run(containers: Containers, rootfs: &Path, work: &Path) -> R
     )?;
     let _ = shutdown.send(());
     server.await??;
+    Ok(())
+}
+
+async fn terminal_job_control(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    let exec = client
+        .executions()
+        .create(
+            "daemon-runtime",
+            &ExecConfig {
+                attach: Attachment {
+                    stdin: true,
+                    stdout: true,
+                    stderr: true,
+                },
+                tty: true,
+                command: vec![
+                    "/bin/sh".into(),
+                    "-ic".into(),
+                    "read pid comm state ppid pgrp session tty_nr tpgid rest < /proc/self/stat; test \"$tty_nr\" -ne 0 && test \"$pgrp\" = \"$tpgid\" && printf 'job-control:%s:%s\\n' \"$pgrp\" \"$tpgid\"".into(),
+                ],
+                ..ExecConfig::default()
+            },
+        )
+        .await?;
+    let mut execution = client
+        .executions()
+        .start(
+            &exec.id,
+            &ExecStart {
+                tty: true,
+                console_size: Some([24, 80]),
+                ..ExecStart::default()
+            },
+        )
+        .await?;
+    execution.close().await?;
+    let mut output = Vec::new();
+    while let Some(frame) = timeout(TIMEOUT, execution.next()).await?? {
+        output.extend_from_slice(frame.bytes());
+    }
+    let status = client.executions().wait(&exec.id).await?;
+    let text = String::from_utf8_lossy(&output);
+    require(
+        status.status_code == 0,
+        &format!("interactive terminal failed: {text:?}"),
+    )?;
+    require(
+        text.contains("job-control:") && !text.contains("job control turned off"),
+        &format!("interactive shell did not own its terminal foreground group: {text:?}"),
+    )?;
     Ok(())
 }
 

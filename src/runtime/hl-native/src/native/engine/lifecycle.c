@@ -14,6 +14,9 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <errno.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
 
 extern int hl_ckpt_channel_adopt(const char *broker, const char *trigger);
@@ -445,6 +448,48 @@ static int32_t hl_production_cold_entry(void *opaque) {
 #endif
 
 #if !defined(_WIN32)
+/* A terminal binding is more than three readable/writable file descriptors.
+ * The guest process must lead the terminal's session and foreground process
+ * group too, otherwise an interactive shell's first tcgetpgrp() fails ENOTTY
+ * even though isatty(0) succeeds.  Engine runs are fork children, so establish
+ * that kernel relationship here, before any guest code observes fd 0. */
+static hl_status hl_production_claim_terminal(const hl_production_entry_context *context) {
+    hl_linux_fd_snapshot input;
+    const hl_host_posix_attachment_services *attachments;
+    hl_host_result borrowed;
+    int descriptor;
+    int saved_errno;
+    if (context->box == NULL ||
+        hl_linux_fd_snapshot_get(context->box, 0, &input) != HL_STATUS_OK ||
+        input.host_handle == HL_HOST_HANDLE_INVALID)
+        return HL_STATUS_OK;
+    attachments = context->host->posix_attachment;
+    if (attachments == NULL || attachments->borrow_file == NULL || attachments->release == NULL)
+        return HL_STATUS_OK;
+    borrowed = attachments->borrow_file(context->host->context, input.host_handle);
+    if (borrowed.status != HL_STATUS_OK) return (hl_status)borrowed.status;
+    descriptor = (int)borrowed.value;
+    if (!isatty(descriptor)) {
+        (void)attachments->release(context->host->context, borrowed.value);
+        return HL_STATUS_OK;
+    }
+    /* A directly launched engine may inherit an already-owned terminal.  Keep
+     * that session intact; only an unattached slave (the container PTY path)
+     * needs a new session and TIOCSCTTY. */
+    if (tcgetsid(descriptor) >= 0) {
+        (void)attachments->release(context->host->context, borrowed.value);
+        return HL_STATUS_OK;
+    }
+    if (setsid() < 0 || ioctl(descriptor, TIOCSCTTY, 0) < 0 || tcsetpgrp(descriptor, getpgrp()) < 0) {
+        saved_errno = errno;
+        (void)attachments->release(context->host->context, borrowed.value);
+        errno = saved_errno;
+        return HL_STATUS_PLATFORM_FAILURE;
+    }
+    (void)attachments->release(context->host->context, borrowed.value);
+    return HL_STATUS_OK;
+}
+
 static void *hl_checkpoint_control_main(void *opaque) {
     int descriptor = (int)(intptr_t)opaque;
     unsigned char command;
@@ -462,6 +507,8 @@ static void *hl_checkpoint_control_main(void *opaque) {
 
 static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;
+    hl_status terminal_status = hl_production_claim_terminal(context);
+    if (terminal_status != HL_STATUS_OK) return terminal_status;
     active_result = context->result;
     atomic_store_explicit(&result_published, 0, memory_order_release);
     hl_options *previous = hl_options_bind_process(context->options);
