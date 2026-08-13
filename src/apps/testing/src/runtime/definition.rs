@@ -1,6 +1,7 @@
 use super::{scheduler, workspace};
 use crate::suite::SafePath as _;
 pub(super) mod diagnostics;
+pub(crate) mod elf;
 mod engine_options;
 mod environment;
 mod host;
@@ -13,7 +14,7 @@ pub(crate) use host::EngineHost;
 use host::HostExclusion;
 use input::ManifestPath;
 use manifest::{CompatClass, Oracle, RuntimeManifest, Status};
-pub(crate) use manifest::{GuestFile, GuestLibrary};
+pub(crate) use manifest::{GuestElf, GuestFile, GuestLibrary};
 use std::{
     collections::BTreeSet,
     fs,
@@ -39,10 +40,12 @@ pub struct Workload {
     pub(crate) diagnostics: Vec<diagnostics::Assertion>,
     pub(crate) guest_files: Vec<GuestFile>,
     pub(crate) guest_libraries: Vec<GuestLibrary>,
+    pub(crate) guest_elf: Vec<GuestElf>,
     pub(crate) working_directory: Option<String>,
     pub destination: String,
     pub(in crate::runtime) source: ManifestPath,
     pub(crate) output: String,
+    elf: Option<elf::Expectation>,
     pub(crate) flags: Vec<String>,
     pub(in crate::runtime) inputs: Vec<ManifestPath>,
     status: Status,
@@ -166,7 +169,7 @@ impl App {
                 let declared = case.expect.diagnostics.unwrap_or_else(|| floor.clone());
                 let diagnostics = diagnostics::validate(declared, emits_diagnostics)
                     .map_err(|error| format!("{}: {error}", case.id))?;
-                let (guest_files, guest_libraries, working_directory) =
+                let (guest_files, guest_libraries, guest_elf, working_directory) =
                     case.guest.validate().map_err(|error| format!("{}: {error}", case.id))?;
                 let (environment, engine_options) =
                     EngineOptions::split(&case.environment).map_err(|error| format!("{}: {error}", case.id))?;
@@ -182,10 +185,12 @@ impl App {
                     diagnostics,
                     guest_files,
                     guest_libraries,
+                    guest_elf,
                     working_directory,
                     destination,
                     source,
                     output,
+                    elf: case.elf,
                     flags,
                     inputs,
                     status: case.status,
@@ -245,6 +250,9 @@ impl App {
                 compiler_diagnostic(&stderr)
             )
             .into());
+        }
+        if let Some(expectation) = case.elf {
+            elf::verify(&output, target, expectation)?;
         }
         Ok(GuestBuild {
             _directory: directory,
@@ -513,17 +521,20 @@ mod tests {
         };
 
         let app = category(&row(
-            "    guest: { files: [{ path: /data, size: 12288, fill: 42 }], cwd: /opt/deep }\n",
+            "    guest: { files: [{ path: /data, size: 12288, fill: 42 }], elf: [{ path: /bin/probe, type: dyn, interpreter: true }], cwd: /opt/deep }\n",
         ))
         .unwrap();
         assert_eq!(app.cases[0].stderr, ["probe *"]);
         assert_eq!(app.cases[0].guest_files[0].contents().len(), 12288);
+        assert_eq!(app.cases[0].guest_elf[0].path(), "/bin/probe");
         assert_eq!(app.cases[0].working_directory.as_deref(), Some("/opt/deep"));
 
         for invalid in [
             "    guest: { files: [{ path: data, size: 8, fill: 0 }] }\n",
             "    guest: { files: [{ path: /data, size: 0, fill: 0 }] }\n",
             "    guest: { cwd: relative }\n",
+            "    guest: { elf: [{ path: relative, type: exec, interpreter: false }] }\n",
+            "    guest: { files: [{ path: /same, size: 8, fill: 0 }], elf: [{ path: /same, type: exec, interpreter: false }] }\n",
         ] {
             assert!(category(&row(invalid)).is_err(), "{invalid}");
         }

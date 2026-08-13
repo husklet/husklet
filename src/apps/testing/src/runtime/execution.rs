@@ -97,7 +97,13 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
 }
 
 /// Stages the case artifact into the writable root: the overlay upper, or the copied tree.
-async fn stage(root: &Path, case: &super::definition::Workload, artifact: &Path, target: Target) -> Result<(), Error> {
+async fn stage(
+    fixture: &TestImage,
+    case: &super::definition::Workload,
+    artifact: &Path,
+    target: Target,
+) -> Result<(), Error> {
+    let root = fixture.path();
     let destination = root.join(case.destination.trim_start_matches('/'));
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)
@@ -108,7 +114,7 @@ async fn stage(root: &Path, case: &super::definition::Workload, artifact: &Path,
         .await
         .map_err(|error| format!("stage {} into {}: {error}", artifact.display(), destination.display()))?;
     make_executable(&destination).map_err(|error| context("make executable", &destination, &error))?;
-    provision(root, case, target).await
+    provision(root, fixture.lower(), case, target).await
 }
 
 /// Proves the run really took the product's overlay path rather than a flat copy.
@@ -142,7 +148,12 @@ fn assert_overlay(fixture: &TestImage, case: &super::definition::Workload) -> Re
 }
 
 /// Stages the guest-side state a case declares, so a fixture never has to depend on the image alone.
-async fn provision(root: &std::path::Path, case: &super::definition::Workload, target: Target) -> Result<(), Error> {
+async fn provision(
+    root: &std::path::Path,
+    lower: Option<&std::path::Path>,
+    case: &super::definition::Workload,
+    target: Target,
+) -> Result<(), Error> {
     // A dynamically linked case needs its PT_INTERP loader and shared libraries, which the base
     // image's libc does not supply; they come from the same cross toolchain that built the binary.
     for library in &case.guest_libraries {
@@ -171,6 +182,16 @@ async fn provision(root: &std::path::Path, case: &super::definition::Workload, t
             .await
             .map_err(|error| context("write guest file", &path, &error))?;
         set_private(&path).map_err(|error| context("set guest file mode", &path, &error))?;
+    }
+    for elf in &case.guest_elf {
+        let relative = elf.path().trim_start_matches('/');
+        let upper = root.join(relative);
+        let path = if upper.exists() {
+            upper
+        } else {
+            lower.map_or(upper, |base| base.join(relative))
+        };
+        super::definition::elf::verify(&path, target, elf.expectation())?;
     }
     if let Some(cwd) = &case.working_directory {
         let path = root.join(cwd.trim_start_matches('/'));
@@ -298,7 +319,7 @@ impl<'a> CaseExecution<'a> {
             if refork {
                 fixture.refork()?;
             }
-            stage(fixture.path(), self.case, artifact, self.target).await?;
+            stage(fixture, self.case, artifact, self.target).await?;
             assert_overlay(fixture, self.case)
         }
         .await;

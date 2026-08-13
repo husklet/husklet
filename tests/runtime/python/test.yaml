@@ -107,6 +107,8 @@ cases:
     timeout: 120
     build: { source: exec.c, output: exec-python, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python }
+    guest:
+      elf: [{ path: /usr/local/bin/python3.12, type: dyn, interpreter: true }]
     run:
       - -I
       - -u

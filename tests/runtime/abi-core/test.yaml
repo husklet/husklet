@@ -112,6 +112,7 @@ cases:
     status: active
     compat: { class: compatibility }
     build: { source: hello.c, output: hello, flags: [-static-pie, -O2, -pthread, -lm] }
+    elf: { type: dyn, interpreter: false }
     artifact: { destination: /opt/husklet/abi-core-hello }
     run: []
     timeout: 120

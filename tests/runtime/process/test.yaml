@@ -383,6 +383,7 @@ cases:
     status: active
     compat: { class: compatibility }
     build: { source: source/nonpie_dladdr.c, output: nonpie-dladdr, flags: ["-no-pie", "-O2", "-rdynamic", "-pthread", "-ldl"] }
+    elf: { type: exec, interpreter: true }
     artifact: { destination: /opt/husklet/nonpie-dladdr }
     # The only dynamically linked case in the corpus; the musl image has no glibc loader, so its
     # PT_INTERP and libc come from the cross toolchain that built it.

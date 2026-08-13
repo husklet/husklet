@@ -1,4 +1,4 @@
-use super::{EngineHost, EnvironmentEntry, HostExclusion, ManifestPath, environment};
+use super::{EngineHost, EnvironmentEntry, HostExclusion, ManifestPath, elf, environment};
 use crate::{
     runtime::scheduler,
     suite::{Commands, Error, Execution, SafePath as _, Target},
@@ -69,6 +69,8 @@ pub(super) struct CaseBuild {
 pub(super) struct RuntimeSpecification {
     pub(super) id: String,
     pub(super) build: Option<CaseBuild>,
+    /// Mechanical contract for the ELF artifact produced by this case.
+    pub(super) elf: Option<elf::Expectation>,
     pub(super) artifact: Option<Artifact>,
     #[serde(default)]
     pub(super) targets: BTreeSet<Target>,
@@ -95,7 +97,28 @@ pub(super) struct Guest {
     /// Host files a dynamically linked case needs inside the image, such as its `PT_INTERP` loader.
     #[serde(default)]
     libraries: Vec<GuestLibrary>,
+    /// ELF identities asserted directly against image-provided guest executables.
+    #[serde(default)]
+    elf: Vec<GuestElf>,
     cwd: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuestElf {
+    path: String,
+    #[serde(flatten)]
+    expectation: elf::Expectation,
+}
+
+impl GuestElf {
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(crate) const fn expectation(&self) -> elf::Expectation {
+        self.expectation
+    }
 }
 
 /// A host file copied into the case root filesystem at mode 0755, with both sides chosen per target
@@ -190,7 +213,7 @@ impl GuestFile {
 }
 
 impl Guest {
-    pub(super) fn validate(self) -> Result<(Vec<GuestFile>, Vec<GuestLibrary>, Option<String>), Error> {
+    pub(super) fn validate(self) -> Result<(Vec<GuestFile>, Vec<GuestLibrary>, Vec<GuestElf>, Option<String>), Error> {
         let mut seen = BTreeSet::new();
         for library in &self.libraries {
             for target in [Target::Arm64, Target::Amd64] {
@@ -209,10 +232,16 @@ impl Guest {
                 return Err(format!("guest file {:?} is declared twice", file.path).into());
             }
         }
+        for elf in &self.elf {
+            std::path::Path::new(&elf.path).safe_absolute()?;
+            if !seen.insert(elf.path.clone()) {
+                return Err(format!("guest ELF {:?} is declared twice", elf.path).into());
+            }
+        }
         if let Some(cwd) = &self.cwd {
             std::path::Path::new(cwd).safe_absolute()?;
         }
-        Ok((self.files, self.libraries, self.cwd))
+        Ok((self.files, self.libraries, self.elf, self.cwd))
     }
 }
 

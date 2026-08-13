@@ -13,6 +13,7 @@ cases:
     targets: [arm64]
     compat: { class: compatibility }
     build: { source: regress_arm64.c, output: isa-regress-arm64, flags: [-O2, -static, -no-pie] }
+    elf: { type: exec, interpreter: false }
     artifact: { destination: /opt/husklet/isa-regress-arm64 }
     run: []
     timeout: 120
@@ -22,6 +23,7 @@ cases:
     targets: [amd64]
     compat: { class: compatibility }
     build: { source: hello.c, output: hello, flags: [-O2, -static, -no-pie, -nostdlib] }
+    elf: { type: exec, interpreter: false }
     artifact: { destination: /opt/husklet/isa-hello }
     run: []
     timeout: 120
