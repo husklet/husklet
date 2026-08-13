@@ -2275,6 +2275,46 @@ static enum avx_dispatch_result avx_dispatch_map1_immediate_shuffle(const hl_x86
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_horizontal_integer(const hl_x86_avx_state *state, struct cpu *c,
+                                                                      struct insn *instruction, uint64_t next, int map,
+                                                                      int width) {
+    int op = instruction->op;
+    int supported = op == 0x01 || op == 0x02 || op == 0x03 || op == 0x05 || op == 0x06 || op == 0x07;
+    if (map != 2 || !supported) return AVX_DISPATCH_UNMATCHED;
+    uint8_t left[64], right[64], result[64];
+    avx_get(c, instruction->vvvv, left);
+    avx_get_rm(state, c, instruction, next, width, right);
+    int subtract = op >= 0x05;
+    int saturate = op == 0x03 || op == 0x07;
+    int dword = op == 0x02 || op == 0x06;
+    for (int lane = 0; lane < width; lane += 16) {
+        if (dword) {
+            int32_t x[4], y[4], output[4];
+            memcpy(x, left + lane, 16);
+            memcpy(y, right + lane, 16);
+            output[0] = subtract ? x[0] - x[1] : x[0] + x[1];
+            output[1] = subtract ? x[2] - x[3] : x[2] + x[3];
+            output[2] = subtract ? y[0] - y[1] : y[0] + y[1];
+            output[3] = subtract ? y[2] - y[3] : y[2] + y[3];
+            memcpy(result + lane, output, 16);
+        } else {
+            int16_t x[8], y[8], output[8];
+            memcpy(x, left + lane, 16);
+            memcpy(y, right + lane, 16);
+            for (int pair = 0; pair < 4; pair++) {
+                int left_value = subtract ? x[2 * pair] - x[2 * pair + 1] : x[2 * pair] + x[2 * pair + 1];
+                int right_value = subtract ? y[2 * pair] - y[2 * pair + 1] : y[2 * pair] + y[2 * pair + 1];
+                output[pair] = saturate ? (int16_t)sat_s16(left_value) : (int16_t)left_value;
+                output[pair + 4] = saturate ? (int16_t)sat_s16(right_value) : (int16_t)right_value;
+            }
+            memcpy(result + lane, output, 16);
+        }
+    }
+    avx_put(c, instruction->reg, result, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2327,6 +2367,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map1_immediate_shift(c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_packed_numeric_conversion(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_immediate_shuffle(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map2_horizontal_integer(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
@@ -2435,41 +2476,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                     uint8_t ctl = b[lane + i];
                     d[lane + i] = (ctl & 0x80) ? 0 : a[lane + (ctl & 0x0F)];
                 }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x01:   // vphaddw    per-128-lane horizontal add/sub of adjacent pairs; src1=vvvv, src2=rm.
-        case 0x02:   // vphaddd    (03/07 saturate the 16-bit results)
-        case 0x03:   // vphaddsw
-        case 0x05:   // vphsubw
-        case 0x06:   // vphsubd
-        case 0x07: { // vphsubsw
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            int sub = (op >= 0x05), sat = (op == 0x03 || op == 0x07), dword = (op == 0x02 || op == 0x06);
-            for (int lane = 0; lane < W; lane += 16) {
-                if (dword) {
-                    int32_t x[4], y[4], o[4];
-                    memcpy(x, a + lane, 16);
-                    memcpy(y, b + lane, 16);
-                    o[0] = sub ? x[0] - x[1] : x[0] + x[1];
-                    o[1] = sub ? x[2] - x[3] : x[2] + x[3];
-                    o[2] = sub ? y[0] - y[1] : y[0] + y[1];
-                    o[3] = sub ? y[2] - y[3] : y[2] + y[3];
-                    memcpy(d + lane, o, 16);
-                } else {
-                    int16_t x[8], y[8], o[8];
-                    memcpy(x, a + lane, 16);
-                    memcpy(y, b + lane, 16);
-                    for (int i = 0; i < 4; i++) {
-                        int va = sub ? x[2 * i] - x[2 * i + 1] : x[2 * i] + x[2 * i + 1];
-                        int vb = sub ? y[2 * i] - y[2 * i + 1] : y[2 * i] + y[2 * i + 1];
-                        o[i] = sat ? (int16_t)sat_s16(va) : (int16_t)va;
-                        o[i + 4] = sat ? (int16_t)sat_s16(vb) : (int16_t)vb;
-                    }
-                    memcpy(d + lane, o, 16);
-                }
-            }
             avx_put(c, rd, d, W);
             goto done;
         }
