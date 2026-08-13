@@ -1,6 +1,10 @@
 use std::fmt;
+use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Failure from durable checkpoint object storage.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,16 +91,85 @@ impl CheckpointImages for DirectoryImages {
         let root = self.root.join(namespace);
         std::fs::create_dir_all(&root)
             .map_err(|error| CheckpointError::new(format!("create checkpoint image: {error}")))?;
-        Ok(Arc::new(DirectoryImage { root }))
+        let current = match std::fs::read(root.join("current")) {
+            Ok(bytes) => {
+                let generation = std::str::from_utf8(&bytes)
+                    .map_err(|_| CheckpointError::new("checkpoint current generation is not UTF-8"))?;
+                if !DirectoryImage::valid_generation(generation) {
+                    return Err(CheckpointError::new("checkpoint current generation is invalid"));
+                }
+                let path = root.join(generation);
+                if !path.is_dir() || !path.join("MANIFEST").is_file() {
+                    return Err(CheckpointError::new("checkpoint current generation is incomplete"));
+                }
+                Some(path)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                root.join("MANIFEST").is_file().then_some(root.clone())
+            }
+            Err(error) => {
+                return Err(CheckpointError::new(format!(
+                    "read checkpoint current generation: {error}"
+                )));
+            }
+        };
+        let generation = DirectoryImage::generation();
+        Ok(Arc::new(DirectoryImage {
+            root: root.clone(),
+            state: Mutex::new(DirectoryImageState {
+                current,
+                staging: root.join(&generation),
+                generation,
+            }),
+        }))
     }
 }
 
 struct DirectoryImage {
     root: PathBuf,
+    state: Mutex<DirectoryImageState>,
+}
+
+struct DirectoryImageState {
+    current: Option<PathBuf>,
+    staging: PathBuf,
+    generation: String,
+}
+
+impl Drop for DirectoryImage {
+    fn drop(&mut self) {
+        if let Ok(state) = self.state.get_mut() {
+            let _ = std::fs::remove_dir_all(&state.staging);
+        }
+    }
 }
 
 impl DirectoryImage {
-    fn path(&self, name: &str) -> Result<PathBuf, CheckpointError> {
+    fn generation() -> String {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        format!(
+            "generation-{time}-{}-{}",
+            std::process::id(),
+            GENERATION.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    fn valid_generation(generation: &str) -> bool {
+        generation.starts_with("generation-")
+            && generation
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    }
+
+    fn state(&self) -> Result<MutexGuard<'_, DirectoryImageState>, CheckpointError> {
+        self.state
+            .lock()
+            .map_err(|_| CheckpointError::new("checkpoint generation lock is poisoned"))
+    }
+
+    fn path(root: &Path, name: &str) -> Result<PathBuf, CheckpointError> {
         let path = Path::new(name);
         if path.is_absolute()
             || path
@@ -107,24 +180,39 @@ impl DirectoryImage {
                 "invalid checkpoint object name: {name:?}"
             )));
         }
-        Ok(self.root.join(path))
+        Ok(root.join(path))
     }
 
-    fn collect(&self, directory: &Path, objects: &mut Vec<String>) -> Result<(), CheckpointError> {
+    fn collect(
+        root: &Path,
+        directory: &Path,
+        exclude_generation_metadata: bool,
+        objects: &mut Vec<String>,
+    ) -> Result<(), CheckpointError> {
         for entry in std::fs::read_dir(directory)
             .map_err(|error| CheckpointError::new(format!("list checkpoint objects: {error}")))?
         {
             let entry = entry.map_err(|error| CheckpointError::new(format!("read checkpoint object: {error}")))?;
+            if exclude_generation_metadata
+                && directory == root
+                && (entry.file_name() == "current"
+                    || entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("generation-")))
+            {
+                continue;
+            }
             if entry
                 .file_type()
                 .map_err(|error| CheckpointError::new(error.to_string()))?
                 .is_dir()
             {
-                self.collect(&entry.path(), objects)?;
+                Self::collect(root, &entry.path(), exclude_generation_metadata, objects)?;
             } else {
                 let relative = entry
                     .path()
-                    .strip_prefix(&self.root)
+                    .strip_prefix(root)
                     .map_err(|error| CheckpointError::new(error.to_string()))?
                     .components()
                     .map(|component| component.as_os_str().to_string_lossy())
@@ -135,28 +223,174 @@ impl DirectoryImage {
         }
         Ok(())
     }
-}
 
-impl CheckpointImage for DirectoryImage {
-    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CheckpointError> {
-        let path = self.path(name)?;
+    fn replace(path: &Path, bytes: &[u8]) -> Result<(), CheckpointError> {
         let parent = path
             .parent()
             .ok_or_else(|| CheckpointError::new("checkpoint object has no parent"))?;
         std::fs::create_dir_all(parent)
-            .and_then(|()| std::fs::write(path, bytes))
-            .map_err(|error| CheckpointError::new(error.to_string()))
+            .map_err(|error| CheckpointError::new(format!("create checkpoint object directory: {error}")))?;
+        let result = (|| {
+            let mut file = tempfile::NamedTempFile::new_in(parent)?;
+            file.write_all(bytes)?;
+            file.as_file().sync_all()?;
+            file.persist(path).map_err(|error| error.error)?;
+            #[cfg(unix)]
+            std::fs::File::open(parent)?.sync_all()?;
+            Ok::<(), std::io::Error>(())
+        })();
+        result.map_err(|error| CheckpointError::new(format!("replace checkpoint object: {error}")))
+    }
+
+    #[cfg(unix)]
+    fn sync_tree(directory: &Path) -> Result<(), CheckpointError> {
+        for entry in std::fs::read_dir(directory)
+            .map_err(|error| CheckpointError::new(format!("read checkpoint generation: {error}")))?
+        {
+            let entry = entry.map_err(|error| CheckpointError::new(format!("read checkpoint object: {error}")))?;
+            if entry
+                .file_type()
+                .map_err(|error| CheckpointError::new(format!("inspect checkpoint object: {error}")))?
+                .is_dir()
+            {
+                Self::sync_tree(&entry.path())?;
+            }
+        }
+        std::fs::File::open(directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| CheckpointError::new(format!("sync checkpoint generation: {error}")))
+    }
+}
+
+impl CheckpointImage for DirectoryImage {
+    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CheckpointError> {
+        let state = self.state()?;
+        Self::replace(&Self::path(&state.staging, name)?, bytes)
     }
 
     fn get(&self, name: &str) -> Result<Vec<u8>, CheckpointError> {
-        std::fs::read(self.path(name)?)
+        let state = self.state()?;
+        let current = state
+            .current
+            .as_ref()
+            .ok_or_else(|| CheckpointError::new("checkpoint has no committed generation"))?;
+        std::fs::read(Self::path(current, name)?)
             .map_err(|error| CheckpointError::new(format!("read checkpoint object: {error}")))
     }
 
     fn list(&self) -> Result<Vec<String>, CheckpointError> {
+        let state = self.state()?;
+        let Some(current) = &state.current else {
+            return Ok(Vec::new());
+        };
         let mut objects = Vec::new();
-        self.collect(&self.root, &mut objects)?;
+        Self::collect(current, current, current == &self.root, &mut objects)?;
         objects.sort();
         Ok(objects)
+    }
+
+    fn commit(&self, manifest: &[u8]) -> Result<(), CheckpointError> {
+        let mut state = self.state()?;
+        Self::replace(&state.staging.join("MANIFEST"), manifest)?;
+        #[cfg(unix)]
+        {
+            Self::sync_tree(&state.staging)?;
+            std::fs::File::open(&self.root)
+                .and_then(|root| root.sync_all())
+                .map_err(|error| CheckpointError::new(format!("sync checkpoint namespace: {error}")))?;
+        }
+        Self::replace(&self.root.join("current"), state.generation.as_bytes())?;
+        state.current = Some(state.staging.clone());
+        state.generation = Self::generation();
+        state.staging = self.root.join(&state.generation);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CheckpointImages as _, DirectoryImages};
+
+    #[test]
+    fn incomplete_capture_cannot_modify_committed_generation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let images = DirectoryImages::open(temporary.path().join("checkpoints")).unwrap();
+        let first = images.open("container").unwrap();
+        first.put("proc.1/pages", b"first").unwrap();
+        first.commit(b"manifest-one").unwrap();
+
+        let failed = images.open("container").unwrap();
+        failed.put("proc.1/pages", b"torn-second").unwrap();
+
+        let restored = images.open("container").unwrap();
+        assert_eq!(restored.get("proc.1/pages").unwrap(), b"first");
+        assert_eq!(restored.get("MANIFEST").unwrap(), b"manifest-one");
+        assert_eq!(restored.list().unwrap(), ["MANIFEST", "proc.1/pages"]);
+    }
+
+    #[test]
+    fn corrupt_current_pointer_fails_closed() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("checkpoints");
+        let images = DirectoryImages::open(root.clone()).unwrap();
+        let image = images.open("container").unwrap();
+        image.put("state", b"complete").unwrap();
+        image.commit(b"manifest").unwrap();
+
+        std::fs::write(root.join("container/current"), b"../other").unwrap();
+        assert!(images.open("container").is_err());
+    }
+
+    #[test]
+    fn legacy_flat_generation_remains_restorable_until_replaced() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("checkpoints");
+        let namespace = root.join("container");
+        std::fs::create_dir_all(namespace.join("proc.1")).unwrap();
+        std::fs::write(namespace.join("MANIFEST"), b"legacy-manifest").unwrap();
+        std::fs::write(namespace.join("proc.1/pages"), b"legacy-pages").unwrap();
+
+        let images = DirectoryImages::open(root).unwrap();
+        let image = images.open("container").unwrap();
+        assert_eq!(image.get("MANIFEST").unwrap(), b"legacy-manifest");
+        assert_eq!(image.get("proc.1/pages").unwrap(), b"legacy-pages");
+        assert_eq!(image.list().unwrap(), ["MANIFEST", "proc.1/pages"]);
+
+        image.put("proc.1/pages", b"replacement-pages").unwrap();
+        assert_eq!(image.get("proc.1/pages").unwrap(), b"legacy-pages");
+        image.commit(b"replacement-manifest").unwrap();
+        assert_eq!(image.get("proc.1/pages").unwrap(), b"replacement-pages");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_publication_preserves_current_and_cleans_staging() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("checkpoints");
+        let images = DirectoryImages::open(root.clone()).unwrap();
+        let first = images.open("container").unwrap();
+        first.put("state", b"first").unwrap();
+        first.commit(b"manifest-one").unwrap();
+        drop(first);
+
+        let failed = images.open("container").unwrap();
+        failed.put("state", b"second").unwrap();
+        let namespace = root.join("container");
+        std::fs::set_permissions(&namespace, std::fs::Permissions::from_mode(0o500)).unwrap();
+        assert!(failed.commit(b"manifest-two").is_err());
+        std::fs::set_permissions(&namespace, std::fs::Permissions::from_mode(0o700)).unwrap();
+        drop(failed);
+
+        let restored = images.open("container").unwrap();
+        assert_eq!(restored.get("state").unwrap(), b"first");
+        assert_eq!(restored.get("MANIFEST").unwrap(), b"manifest-one");
+        let generations = std::fs::read_dir(namespace)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .count();
+        assert_eq!(generations, 1, "failed staging generation leaked");
     }
 }
