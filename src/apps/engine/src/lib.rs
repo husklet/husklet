@@ -3,6 +3,7 @@
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::io::Read as _;
+use std::path::PathBuf;
 
 /// The fixed guest architecture selected by a worker executable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +52,21 @@ struct BackendReceiptArguments {
     guest: Option<String>,
 }
 
+#[derive(Parser)]
+#[command(trailing_var_arg = true)]
+struct LaunchArguments {
+    #[arg(long = "guest-isa")]
+    guest: Option<String>,
+    #[arg(long)]
+    report_exit: bool,
+    /// Existing container root used to resolve the guest entry and PT_INTERP.
+    #[arg(long)]
+    rootfs: Option<PathBuf>,
+    executable: PathBuf,
+    #[arg(allow_hyphen_values = true)]
+    arguments: Vec<String>,
+}
+
 impl Worker {
     pub fn run(guest: Guest) -> ! {
         let arguments = std::env::args().collect::<Vec<_>>();
@@ -77,8 +93,9 @@ impl Worker {
             "engine.process.starting",
             isa = isa
         );
-        let report = arguments.iter().any(|argument| argument == "--report-exit");
-        let result = execute(guest, &arguments);
+        let launch = LaunchArguments::try_parse_from(&arguments).unwrap_or_else(|_| std::process::exit(2));
+        let report = launch.report_exit;
+        let result = execute(guest, &launch);
         if let Err(error) = result {
             hl_log::hl_error!(hl_log::tag::EXEC, "engine process failed isa={isa} reason={error:?}");
             hl_log::hl_event!(
@@ -113,24 +130,43 @@ impl Worker {
 
 fn execute(
     guest: Guest,
-    arguments: &[String],
+    launch: &LaunchArguments,
 ) -> Result<hl_engine::engine::EngineExit, hl_engine::engine::EngineError> {
-    let mut launch = arguments[1..].iter();
-    let executable = loop {
-        let argument = launch.next().ok_or(hl_engine::engine::EngineError::LaunchFailed)?;
-        match argument.as_str() {
-            "--guest-isa" => {
-                launch.next().ok_or(hl_engine::engine::EngineError::LaunchFailed)?;
-            }
-            "--report-exit" => {}
-            _ => break argument,
-        }
-    };
-    let mut builder = hl_engine::runtime::Builder::new(guest.isa(), executable);
-    for argument in launch {
-        builder = builder.with_argument(argument.as_bytes().to_vec());
+    if let Some(selected) = launch.guest.as_deref()
+        && Guest::named(selected) != Some(guest)
+    {
+        return Err(hl_engine::engine::EngineError::LaunchFailed);
     }
-    let engine = builder.build()?;
+    let engine = if let Some(rootfs) = &launch.rootfs {
+        if launch.executable.is_absolute()
+            || launch
+                .executable
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(hl_engine::engine::EngineError::LaunchFailed);
+        }
+        let entry = &launch.executable;
+        let host = rootfs.join(entry);
+        let guest_entry = std::path::Path::new("/").join(entry);
+        let plan = hl_engine::launcher::plan::RuntimePlan {
+            rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
+            executable_host: Some(host.as_os_str().as_encoded_bytes().to_vec()),
+            arguments: std::iter::once(guest_entry.as_os_str().as_encoded_bytes().to_vec())
+                .chain(launch.arguments.iter().map(|argument| argument.as_bytes().to_vec()))
+                .collect(),
+            environment: Vec::new(),
+            result_path: None,
+            options: hl_engine::options::Options::default(),
+        };
+        hl_engine::runtime::Engine::from_plan(guest.isa(), plan)?
+    } else {
+        let mut builder = hl_engine::runtime::Builder::new(guest.isa(), &launch.executable);
+        for argument in &launch.arguments {
+            builder = builder.with_argument(argument.as_bytes().to_vec());
+        }
+        builder.build()?
+    };
     engine.start()?;
     let exit = engine.wait()?;
     engine.destroy()?;
@@ -193,7 +229,8 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{Guest, backend_receipt};
+    use super::{Guest, LaunchArguments, backend_receipt};
+    use clap::Parser;
 
     #[test]
     fn worker_identity_is_architecture_specific() {
@@ -239,5 +276,21 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn launch_parser_owns_rootfs_and_trailing_guest_arguments() {
+        let launch = LaunchArguments::try_parse_from([
+            "hl-x86_64",
+            "--rootfs",
+            "/staged/rootfs",
+            "usr/local/bin/python3",
+            "-c",
+            "print(42)",
+        ])
+        .unwrap();
+        assert_eq!(launch.rootfs.unwrap(), std::path::Path::new("/staged/rootfs"));
+        assert_eq!(launch.executable, std::path::Path::new("usr/local/bin/python3"));
+        assert_eq!(launch.arguments, ["-c", "print(42)"]);
     }
 }
