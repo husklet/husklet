@@ -2227,6 +2227,54 @@ static enum avx_dispatch_result avx_dispatch_packed_numeric_conversion(const hl_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_immediate_shuffle(const hl_x86_avx_state *state, struct cpu *c,
+                                                                    struct insn *instruction, uint64_t next, int map,
+                                                                    int width) {
+    int op = instruction->op;
+    if (map != 1 || (op != 0xC6 && op != 0x70)) return AVX_DISPATCH_UNMATCHED;
+    int immediate = (uint8_t)instruction->imm;
+    int prefix = instruction->vex_pp;
+    uint8_t left[64], right[64], result[64];
+    if (op == 0xC6) {
+        avx_get(c, instruction->vvvv, left);
+        avx_get_rm(state, c, instruction, next, width, right);
+        if (prefix == 1) {
+            for (int qword = 0; qword < width / 8; qword++) {
+                const uint8_t *source = (qword & 1) ? right : left;
+                int lane = (qword / 2) * 16;
+                memcpy(result + qword * 8, source + lane + (((immediate >> qword) & 1) ? 8 : 0), 8);
+            }
+        } else {
+            for (int lane = 0; lane < width; lane += 16) {
+                memcpy(result + lane, left + lane + 4 * (immediate & 3), 4);
+                memcpy(result + lane + 4, left + lane + 4 * ((immediate >> 2) & 3), 4);
+                memcpy(result + lane + 8, right + lane + 4 * ((immediate >> 4) & 3), 4);
+                memcpy(result + lane + 12, right + lane + 4 * ((immediate >> 6) & 3), 4);
+            }
+        }
+    } else {
+        avx_get_rm(state, c, instruction, next, width, right);
+        for (int lane = 0; lane < width; lane += 16) {
+            if (prefix == 1) {
+                for (int dword = 0; dword < 4; dword++) {
+                    int selected = (immediate >> (2 * dword)) & 3;
+                    memcpy(result + lane + 4 * dword, right + lane + 4 * selected, 4);
+                }
+            } else {
+                memcpy(result + lane, right + lane, 16);
+                int base = prefix == 3 ? 8 : 0;
+                for (int word = 0; word < 4; word++) {
+                    int selected = (immediate >> (2 * word)) & 3;
+                    memcpy(result + lane + base + 2 * word, right + lane + base + 2 * selected, 2);
+                }
+            }
+        }
+    }
+    avx_put(c, instruction->reg, result, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2278,6 +2326,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map1_scalar_shift(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_immediate_shift(c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_packed_numeric_conversion(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map1_immediate_shuffle(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
@@ -2309,27 +2358,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             avx_put(c, rd, d, 16); // zero bits [128:VLMAX)
             goto done;
         }
-        case 0xC6: { // vshufps (pp=0) / vshufpd (pp=1) imm8; src1=vvvv, src2=rm, per-128-lane
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            int imm = (int)I.imm;
-            if (pp == 1) { // shufpd: one imm bit per output qword; even qword from src1, odd from src2
-                for (int q = 0; q < W / 8; q++) {
-                    const uint8_t *srcp = (q & 1) ? b : a;
-                    int lane = (q / 2) * 16;
-                    memcpy(d + q * 8, srcp + lane + (((imm >> q) & 1) ? 8 : 0), 8);
-                }
-            } else { // shufps: low two dwords from src1, high two from src2 (same imm per 128-lane)
-                for (int lane = 0; lane < W; lane += 16) {
-                    memcpy(d + lane + 0, a + lane + 4 * ((imm >> 0) & 3), 4);
-                    memcpy(d + lane + 4, a + lane + 4 * ((imm >> 2) & 3), 4);
-                    memcpy(d + lane + 8, b + lane + 4 * ((imm >> 4) & 3), 4);
-                    memcpy(d + lane + 12, b + lane + 4 * ((imm >> 6) & 3), 4);
-                }
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
         case 0x12: {
             // pp==0: VMOVHLPS (reg-reg) / VMOVLPS (m64); pp==1: VMOVLPD (m64). dst=reg, src1=vvvv.
             avx_get(c, vv, d);
@@ -2354,27 +2382,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + 8, b, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0x70: { // vpshufd(66)/vpshuflw(F2)/vpshufhw(F3) reg <- rm, imm8 (per 128-bit lane)
-            avx_get_rm(state, c, &I, next, W, b);
-            uint8_t imm = (uint8_t)I.imm;
-            for (int lane = 0; lane < W; lane += 16) {
-                if (pp == 1) { // vpshufd: 4 dwords
-                    for (int j = 0; j < 4; j++) {
-                        int sel = (imm >> (2 * j)) & 3;
-                        memcpy(d + lane + 4 * j, b + lane + 4 * sel, 4);
-                    }
-                } else { // pshuflw(F2)/pshufhw(F3): shuffle low/high 4 words, copy the other half
-                    memcpy(d + lane, b + lane, 16);
-                    int base = (pp == 3) ? 8 : 0; // F3=high half, F2=low half
-                    for (int j = 0; j < 4; j++) {
-                        int sel = (imm >> (2 * j)) & 3;
-                        memcpy(d + lane + base + 2 * j, b + lane + base + 2 * sel, 2);
-                    }
-                }
-            }
-            avx_put(c, rd, d, W);
             goto done;
         }
         case 0xC2: { // vcmpps/pd/ss/sd: per-lane predicate compare -> all-ones/zero mask
