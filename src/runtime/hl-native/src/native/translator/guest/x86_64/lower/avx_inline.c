@@ -1,5 +1,6 @@
 #include "avx_inline.h"
 
+#include "execution_control.h"
 #include "primitives.h"
 #include "../cpu.h"
 #include "../encoding.h"

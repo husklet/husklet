@@ -6,6 +6,7 @@
 #include "shift.h"
 #include "trace.h"
 #include "x87.h"
+#include "execution_control.h"
 #include "primitives.h"
 #include "../cpu.h"
 #include "../encoding.h"
