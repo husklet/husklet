@@ -35,7 +35,7 @@ cases:
     timeout: 120
     build: { source: exec_python.c, output: exec-python-json, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-json }
-    run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w', encoding='utf-8').write(json.dumps({'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False) + '\\n')"]
+    run: [-X, faulthandler, -I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w', encoding='utf-8').write(json.dumps({'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_json.out }
   - id: runtime/python/cpython-json-import
     status: active
