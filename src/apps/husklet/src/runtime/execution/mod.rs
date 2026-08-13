@@ -221,6 +221,7 @@ pub fn launch(
         input,
         output: Output::new(output),
         exited,
+        pane,
     }))
 }
 
