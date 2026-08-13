@@ -5,6 +5,10 @@
 #include "../encoding.h"
 #include "../glue.h"
 
+static uint32_t sse_register_field(int register_index, unsigned shift) {
+    return (uint32_t)register_index << shift;
+}
+
 static uint32_t sse_packed_binary_opcode(uint8_t opcode) {
     switch (opcode) {
     case 0xEF: return 0x6E201C00u; // PXOR
@@ -62,22 +66,24 @@ int lower_sse_widening_multiply(struct insn *instruction, uint64_t next, int vd,
     int source = instruction->is_mem ? 16 : vm;
     if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
     if (opcode == 0xF5) { // PMADDWD: signed products followed by adjacent pair addition.
-        emit32(0x0E60C000u | (source << 16) | (vd << 5) | 18);
+        emit32(0x0E60C000u | sse_register_field(source, 16) | sse_register_field(vd, 5) | 18u);
         int high = mmx ? 18 : 19;
-        if (!mmx) emit32(0x4E60C000u | (source << 16) | (vd << 5) | 19);
-        emit32(0x4EA0BC00u | (high << 16) | (18 << 5) | vd);
+        if (!mmx) emit32(0x4E60C000u | sse_register_field(source, 16) | sse_register_field(vd, 5) | 19u);
+        emit32(0x4EA0BC00u | sse_register_field(high, 16) | sse_register_field(18, 5) |
+               sse_register_field(vd, 0));
         return TX_NEXT;
     }
     // PMULHW/PMULHUW widen each half independently; UZP2 selects the upper
     // word of each 32-bit product. MMX has only the low four input words.
     uint32_t low = opcode == 0xE5 ? 0x0E60C000u : 0x2E60C000u;
     uint32_t high = opcode == 0xE5 ? 0x4E60C000u : 0x6E60C000u;
-    emit32(low | (source << 16) | (vd << 5) | 18);
+    emit32(low | sse_register_field(source, 16) | sse_register_field(vd, 5) | 18u);
     if (mmx) {
-        emit32(0x0F108400u | (18 << 5) | vd);
+        emit32(0x0F108400u | sse_register_field(18, 5) | sse_register_field(vd, 0));
     } else {
-        emit32(high | (source << 16) | (vd << 5) | 19);
-        emit32(0x4E405800u | (19 << 16) | (18 << 5) | vd);
+        emit32(high | sse_register_field(source, 16) | sse_register_field(vd, 5) | 19u);
+        emit32(0x4E405800u | sse_register_field(19, 16) | sse_register_field(18, 5) |
+               sse_register_field(vd, 0));
     }
     return TX_NEXT;
 }
@@ -92,7 +98,7 @@ int lower_sse_shuffle(struct insn *instruction, uint64_t next, int vd, int vm, i
         } else if (immediate == 0x4E) {
             e_ext(vd, source, source, 8);
         } else if (immediate == 0xB1) {
-            emit32(0x4EA00800u | (source << 5) | vd);
+            emit32(0x4EA00800u | sse_register_field(source, 5) | sse_register_field(vd, 0));
         } else if (immediate == 0x00 || immediate == 0x55 || immediate == 0xAA || immediate == 0xFF) {
             hl_x86_emit_vector_broadcast32(vd, source, (int)(immediate & 3));
         } else {
@@ -110,7 +116,7 @@ int lower_sse_shuffle(struct insn *instruction, uint64_t next, int vd, int vm, i
             int destination_lane = high ? 4 + lane : lane;
             int source_lane = (high ? 4 : 0) + (int)((immediate >> (2 * lane)) & 3);
             emit32(0x6E000400u | ((((unsigned)destination_lane << 2) | 2u) << 16) |
-                   (((unsigned)source_lane << 1) << 11) | (source << 5) | 17);
+                   (((unsigned)source_lane << 1) << 11) | sse_register_field(source, 5) | 17u);
         }
         e_vmov(vd, 17);
         return TX_NEXT;
@@ -122,12 +128,14 @@ int lower_sse_sign_mask(struct insn *instruction, int vm, int mmx) {
     if (instruction->op == 0x50) {
         if (instruction->p66) {
             e_vshr_imm(17, vm, 64, 63, 0);
-            emit32(0x4E003C00u | ((0u * 16 + 8) << 16) | (17 << 5) | instruction->reg);
+            emit32(0x4E003C00u | ((0u * 16 + 8) << 16) | sse_register_field(17, 5) |
+                   sse_register_field(instruction->reg, 0));
             emit32(0x4E003C00u | ((1u * 16 + 8) << 16) | (17 << 5) | 19);
             e_rrr(A_ORR, instruction->reg, instruction->reg, 19, 1, 1);
         } else {
             e_vshr_imm(17, vm, 32, 31, 0);
-            emit32(0x0E003C00u | ((0u * 8 + 4) << 16) | (17 << 5) | instruction->reg);
+            emit32(0x0E003C00u | ((0u * 8 + 4) << 16) | sse_register_field(17, 5) |
+                   sse_register_field(instruction->reg, 0));
             for (int lane = 1; lane < 4; lane++) {
                 emit32(0x0E003C00u | (((unsigned)lane * 8 + 4) << 16) | (17 << 5) | 19);
                 e_rrr(A_ORR, instruction->reg, instruction->reg, 19, 0, lane);
@@ -148,7 +156,8 @@ int lower_sse_sign_mask(struct insn *instruction, int vm, int mmx) {
         emit32(0x6F001400u | (50u << 16) | (17 << 5) | 17);
         emit32(0x6F001400u | (100u << 16) | (17 << 5) | 17);
         emit32(0x0E003C00u | (1u << 16) | (17 << 5) | 16);
-        emit32(0x0E003C00u | (17u << 16) | (17 << 5) | instruction->reg);
+        emit32(0x0E003C00u | (17u << 16) | sse_register_field(17, 5) |
+               sse_register_field(instruction->reg, 0));
         e_rrr(A_ORR, instruction->reg, 16, instruction->reg, 0, 8);
     } else {
         e_str_q(source, 28, OFF_MM);
@@ -157,8 +166,8 @@ int lower_sse_sign_mask(struct insn *instruction, int vm, int mmx) {
         for (int lane = 0; lane < 16; lane++) {
             emit32(0x39400000u | ((unsigned)lane << 10) | (17 << 5) | 16);
             emit32(0x53071C00u | (16 << 5) | 16);
-            emit32(0x2A000000u | (16 << 16) | ((unsigned)lane << 10) | (instruction->reg << 5) |
-                   instruction->reg);
+            emit32(0x2A000000u | sse_register_field(16, 16) | ((unsigned)lane << 10) |
+                   sse_register_field(instruction->reg, 5) | sse_register_field(instruction->reg, 0));
         }
     }
     return TX_NEXT;
@@ -176,11 +185,11 @@ int lower_mmx_fp_conversion(struct insn *instruction, uint64_t next, int vd, int
             source = 16;
         }
         if (instruction->p66) {
-            emit32(0x0F20A400u | (source << 5) | 18);
+            emit32(0x0F20A400u | sse_register_field(source, 5) | 18u);
             emit32(0x4E61D800u | (18 << 5) | 18);
             e_vmov(vd, 18);
         } else {
-            emit32(0x0E21D800u | (source << 5) | 18);
+            emit32(0x0E21D800u | sse_register_field(source, 5) | 18u);
             e_ins_d(vd, 0, 18, 0);
         }
         return TX_NEXT;
@@ -210,15 +219,15 @@ int lower_mmx_fp_conversion(struct insn *instruction, uint64_t next, int vd, int
         source = 16;
     }
     if (truncate) {
-        emit32(0x0EA1B800u | (source << 5) | 21);
+        emit32(0x0EA1B800u | sse_register_field(source, 5) | 21u);
     } else {
-        emit32(0x2E219800u | (source << 5) | 21);
+        emit32(0x2E219800u | sse_register_field(source, 5) | 21u);
         emit32(0x0EA1B800u | (21 << 5) | 21);
     }
     e_movconst(16, 0x4F000000ull);
     emit32(0x0E040C00u | (16 << 5) | 17);
-    emit32(0x2E20E400u | (17 << 16) | (source << 5) | 19);
-    emit32(0x0E20E400u | (source << 16) | (source << 5) | 20);
+    emit32(0x2E20E400u | sse_register_field(17, 16) | sse_register_field(source, 5) | 19u);
+    emit32(0x0E20E400u | sse_register_field(source, 16) | sse_register_field(source, 5) | 20u);
     emit32(0x2E205800u | (20 << 5) | 20);
     e_v3(0x0EA01C00u, 19, 19, 20);
     e_movconst(16, 0x80000000ull);
@@ -295,7 +304,8 @@ int lower_sse_packed_conversion(struct insn I, uint64_t next, int vd, int vm) {
         emit_ps2dq_128(17, s, I.rep != 0, 25, 26, 27, 28);
         e_vmov(vd, 17);
     } else {
-        emit32(0x4E21D800u | (s << 5) | vd); // NP: cvtdq2ps -> SCVTF .4S (s32->f32)
+        emit32(0x4E21D800u | sse_register_field(s, 5) |
+               sse_register_field(vd, 0)); // NP: cvtdq2ps -> SCVTF .4S (s32->f32)
     }
     return TX_NEXT;
 }
@@ -331,7 +341,8 @@ int lower_sse_word_lane(struct insn *instruction, uint64_t guest_pc, uint64_t ne
     int lane = (int)instruction->imm & (mmx ? 3 : 7);
     if (instruction->op == 0xC5) { // pextrw: extract H lane to r32, zero-extended
         *mmx_writeback = -1;
-        emit32(0x0E003C00u | ((((unsigned)lane << 2) | 2u) << 16) | (vm << 5) | instruction->reg);
+        emit32(0x0E003C00u | ((((unsigned)lane << 2) | 2u) << 16) | sse_register_field(vm, 5) |
+               sse_register_field(instruction->reg, 0));
         return TX_NEXT;
     }
 
@@ -345,7 +356,8 @@ int lower_sse_word_lane(struct insn *instruction, uint64_t guest_pc, uint64_t ne
     } else {
         source = instruction->rm_reg;
     }
-    emit32(0x4E001C00u | ((((unsigned)lane << 2) | 2u) << 16) | (source << 5) | vd);
+    emit32(0x4E001C00u | ((((unsigned)lane << 2) | 2u) << 16) | sse_register_field(source, 5) |
+           sse_register_field(vd, 0));
     return TX_NEXT;
 }
 
@@ -355,14 +367,15 @@ int lower_sse_widening_integer(struct insn *instruction, uint64_t next, int vd, 
     int source = instruction->is_mem ? 16 : vm;
     if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
     if (opcode == 0xF4) { // pmuludq: multiply even unsigned 32-bit lanes into 64-bit products
-        emit32(0x4E801800u | (vd << 16) | (vd << 5) | 17);
-        emit32(0x4E801800u | (source << 16) | (source << 5) | 18);
-        emit32(0x2EA0C000u | (18 << 16) | (17 << 5) | vd);
+        emit32(0x4E801800u | sse_register_field(vd, 16) | sse_register_field(vd, 5) | 17u);
+        emit32(0x4E801800u | sse_register_field(source, 16) | sse_register_field(source, 5) | 18u);
+        emit32(0x2EA0C000u | sse_register_field(18, 16) | sse_register_field(17, 5) |
+               sse_register_field(vd, 0));
         return TX_NEXT;
     }
 
     // psadbw: widen and pairwise-add absolute byte differences into each 64-bit half.
-    emit32(0x6E207400u | (source << 16) | (vd << 5) | 17);
+    emit32(0x6E207400u | sse_register_field(source, 16) | sse_register_field(vd, 5) | 17u);
     emit32(0x6E202800u | (17 << 5) | 17);
     emit32(0x6E602800u | (17 << 5) | 17);
     emit32(0x6EA02800u | (17 << 5) | 17);
@@ -380,11 +393,12 @@ int lower_sse_saturating_pack(struct insn *instruction, uint64_t next, int vd, i
     uint32_t narrow_high = opcode == 0x67 ? 0x6E212800u : 0x4E214800u;
     if (mmx) {
         // Concatenate both 64-bit operands before narrowing; MMX has no architectural high lanes.
-        emit32(0x4EC03800u | (source << 16) | (vd << 5) | 17);
-        emit32(narrow_low | (element_size << 22) | (17 << 5) | vd);
+        emit32(0x4EC03800u | sse_register_field(source, 16) | sse_register_field(vd, 5) | 17u);
+        emit32(narrow_low | ((uint32_t)element_size << 22) | sse_register_field(17, 5) |
+               sse_register_field(vd, 0));
     } else {
-        emit32(narrow_low | (element_size << 22) | (vd << 5) | 17);
-        emit32(narrow_high | (element_size << 22) | (source << 5) | 17);
+        emit32(narrow_low | ((uint32_t)element_size << 22) | sse_register_field(vd, 5) | 17u);
+        emit32(narrow_high | ((uint32_t)element_size << 22) | sse_register_field(source, 5) | 17u);
         e_vmov(vd, 17);
     }
     return TX_NEXT;
@@ -458,7 +472,7 @@ int lower_sse_move_lane(struct insn *instruction, uint64_t next, int vd, int vm)
             g_ldr_d_ea(16, instruction, next);
             source = 16;
         }
-        emit32(0x4E080400u | (source << 5) | vd);
+        emit32(0x4E080400u | sse_register_field(source, 5) | sse_register_field(vd, 0));
         return TX_NEXT;
     }
     if (opcode == 0x12 || opcode == 0x16) {
@@ -502,8 +516,8 @@ int lower_sse_packed_double_integer(struct insn *instruction, uint64_t next, int
             g_ldr_d_ea(16, instruction, next);
             source = 16;
         }
-        emit32(0x0F20A400u | (source << 5) | 16);
-        emit32(0x4E61D800u | (16 << 5) | vd);
+        emit32(0x0F20A400u | sse_register_field(source, 5) | 16u);
+        emit32(0x4E61D800u | sse_register_field(16, 5) | sse_register_field(vd, 0));
         return TX_NEXT;
     }
     if (instruction->is_mem) {
@@ -542,8 +556,8 @@ int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int 
     // on ANY NaN operand, including qNaN. UCOMISS/UCOMISD (0x2E) is quiet: IE only for
     // sNaN. Map 0x2F -> FCMPE (bit4 set) and 0x2E -> FCMP. EFLAGS result is identical
     // for both (unordered -> N0 Z0 C1 V1), so the fixup below is unchanged.
-    emit32((I.p66 ? 0x1E602000u : 0x1E202000u) | (op == 0x2F ? 0x10u : 0u) | (s << 16) |
-           (vd << 5));   // FCMP/FCMPE Dvd, Ds  (Rd=0)
+    emit32((I.p66 ? 0x1E602000u : 0x1E202000u) | (op == 0x2F ? 0x10u : 0u) |
+           sse_register_field(s, 16) | sse_register_field(vd, 5)); // FCMP/FCMPE Dvd, Ds  (Rd=0)
     e_nzcv_save_fcmp();  // unordered fixup: x86 ZF=PF=CF=1, SF=0 (ARM FCMP gives N0 Z0 C1 V1)
     return TX_NEXT;
 }
@@ -578,10 +592,13 @@ int lower_sse_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, i
     // element. So scalar results are built in v18 and inserted back into lane 0.
     int res = packed ? vd : 18;
     if (pred == 3 || pred == 7) {                       // UNORD/ORD: ordered(a)&ordered(b)
-        emit32(EQ | (vd << 16) | (vd << 5) | 17);       // v17 = a==a (ordered a)
-        emit32(EQ | (s << 16) | (s << 5) | res);        // res = b==b (ordered b)
-        emit32(ANDb | (17 << 16) | (res << 5) | res);   // res = ORD
-        if (pred == 3) emit32(NOTb | (res << 5) | res); // UNORD = ~ORD
+        emit32(EQ | sse_register_field(vd, 16) | sse_register_field(vd, 5) | 17u); // v17 = a==a
+        emit32(EQ | sse_register_field(s, 16) | sse_register_field(s, 5) |
+               sse_register_field(res, 0)); // res = b==b
+        emit32(ANDb | sse_register_field(17, 16) | sse_register_field(res, 5) |
+               sse_register_field(res, 0)); // res = ORD
+        if (pred == 3)
+            emit32(NOTb | sse_register_field(res, 5) | sse_register_field(res, 0)); // UNORD = ~ORD
     } else {
         // predicates handled here: 0 EQ, 1 LT, 2 LE, 4 NEQ, 5 NLT, 6 NLE.
         // LT/LE/NLT/NLE build the ordered comparison a<b / a<=b via the swapped GT/GE (a<b ==
@@ -593,8 +610,11 @@ int lower_sse_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, i
         int neg = (pred == 4 || pred == 5 || pred == 6); // NEQ/NLT/NLE invert (NaN -> true)
         int n = lt_like ? s : vd, m = lt_like ? vd : s;
         uint32_t fc = (pred == 0 || pred == 4) ? EQ : use_ge ? GE : GT;
-        emit32(fc | (m << 16) | (n << 5) | res);  // FCMxx res, n, m
-        if (neg) emit32(NOTb | (res << 5) | res); // invert -> NaN lane becomes all-ones
+        emit32(fc | sse_register_field(m, 16) | sse_register_field(n, 5) |
+               sse_register_field(res, 0)); // FCMxx res, n, m
+        if (neg)
+            emit32(NOTb | sse_register_field(res, 5) |
+                   sse_register_field(res, 0)); // invert -> NaN lane becomes all-ones
     }
     if (!packed) { // merge the scalar lane back
         if (I.repne)
@@ -622,11 +642,12 @@ int lower_sse_scalar_to_integer(struct insn *instruction, uint64_t guest_pc, uin
     int original_source = source;
     if (opcode == 0x2D) {
         uint32_t round_integral = instruction->repne ? 0x1E67C000u : 0x1E27C000u;
-        emit32(round_integral | (source << 5) | 18);
+        emit32(round_integral | sse_register_field(source, 5) | 18u);
         source = 18;
     }
     emit32(0x1E380000u | (instruction->rexW ? 0x80000000u : 0) |
-           (instruction->repne ? 0x00400000u : 0) | (source << 5) | instruction->reg);
+           (instruction->repne ? 0x00400000u : 0) | sse_register_field(source, 5) |
+           sse_register_field(instruction->reg, 0));
 
     // x86 returns integer-indefinite for positive overflow and NaN while ARM saturates.
     int sf = instruction->rexW ? 1 : 0;
@@ -640,19 +661,19 @@ int lower_sse_scalar_to_integer(struct insn *instruction, uint64_t guest_pc, uin
         e_fmov_to_s(19, 20);
     uint32_t compare = instruction->repne ? 0x1E602000u : 0x1E202000u;
     emit32(0xD53B4200u | 21);
-    emit32(compare | (19 << 16) | (source << 5));
+    emit32(compare | sse_register_field(19, 16) | sse_register_field(source, 5));
     if (opcode == 0x2D) {
         // Raise precision only for in-range inexact rounding. Mask both overflow directions
         // before FRINTX so out-of-range inputs retain x86's invalid-only exception behavior.
         emit32(0xDA9F33E0u | 22);
         emit32((instruction->repne ? 0x1E614000u : 0x1E214000u) | (19 << 5) | 20);
-        emit32(compare | (20 << 16) | (source << 5));
+        emit32(compare | sse_register_field(20, 16) | sse_register_field(source, 5));
         emit32(0xDA9F53E0u | 23);
         e_rrr(A_ORR, 22, 22, 23, 1, 0);
         e_fmov_to_d(20, 22);
         e_v3(0x0E601C00u, 20, original_source, 20);
         emit32((instruction->repne ? 0x1E674000u : 0x1E274000u) | (20 << 5) | 20);
-        emit32(compare | (19 << 16) | (source << 5));
+        emit32(compare | sse_register_field(19, 16) | sse_register_field(source, 5));
     }
     e_movconst(20, sf ? 0x8000000000000000ull : 0x80000000ull);
     e_csel(instruction->reg, 20, instruction->reg, 2, sf);
@@ -674,7 +695,7 @@ int lower_sse_integer_to_scalar(struct insn *instruction, uint64_t guest_pc, uin
     }
     // Convert into scratch and merge lane zero: CVTSI2SS/SD preserve all upper destination bits.
     emit32(0x1E220000u | (instruction->rexW ? 0x80000000u : 0) |
-           (instruction->repne ? 0x00400000u : 0) | (source << 5) | 18);
+           (instruction->repne ? 0x00400000u : 0) | sse_register_field(source, 5) | 18u);
     if (instruction->repne)
         e_ins_d(vd, 0, 18, 0);
     else
@@ -706,9 +727,9 @@ int lower_sse_minmax(struct insn *instruction, uint64_t guest_pc, uint64_t next,
     uint32_t size_bit = (packed ? instruction->p66 : instruction->repne) ? 0x00400000u : 0;
     uint32_t greater_than = (packed ? 0x6EA0E400u : 0x7EA0E400u) | size_bit;
     if (opcode == 0x5D)
-        emit32(greater_than | (vd << 16) | (source << 5) | 17);
+        emit32(greater_than | sse_register_field(vd, 16) | sse_register_field(source, 5) | 17u);
     else
-        emit32(greater_than | (source << 16) | (vd << 5) | 17);
+        emit32(greater_than | sse_register_field(source, 16) | sse_register_field(vd, 5) | 17u);
     if (packed) {
         e_v3(0x6E601C00u, 17, vd, source);
         e_vmov(vd, 17);
