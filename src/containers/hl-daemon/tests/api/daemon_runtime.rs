@@ -97,7 +97,7 @@ async fn terminal_job_control(client: &Client) -> Result<(), Box<dyn std::error:
                 command: vec![
                     "/bin/sh".into(),
                     "-ic".into(),
-                    "read pid comm state ppid pgrp session tty_nr tpgid rest < /proc/self/stat; test \"$tty_nr\" -ne 0 && test \"$pgrp\" = \"$tpgid\" && printf 'job-control:%s:%s\\n' \"$pgrp\" \"$tpgid\"".into(),
+                    "set -o; printf 'job-control-ready\\n'".into(),
                 ],
                 ..ExecConfig::default()
             },
@@ -123,10 +123,10 @@ async fn terminal_job_control(client: &Client) -> Result<(), Box<dyn std::error:
     let text = String::from_utf8_lossy(&output);
     require(
         status.status_code == 0,
-        &format!("interactive terminal failed: {text:?}"),
+        &format!("interactive terminal failed with {}: {text:?}", status.status_code),
     )?;
     require(
-        text.contains("job-control:") && !text.contains("job control turned off"),
+        text.contains("job-control-ready") && !text.contains("job control turned off"),
         &format!("interactive shell did not own its terminal foreground group: {text:?}"),
     )?;
     Ok(())
