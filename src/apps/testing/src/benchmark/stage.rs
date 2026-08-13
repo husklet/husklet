@@ -80,6 +80,12 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     let sqlite = sqlite::SqliteProfile::stage(&output, &docker, &arch)?;
     let husklet = HuskletProfile::stage(&workspace, &output, &options.mac_cargo)?;
     let python_husklet = stage_python_rootfs(&output, &docker, &husklet.command)?;
+    let sqlite_husklet = sqlite::SqliteProfile::stage_husklet(
+        &output,
+        &docker,
+        &husklet.command,
+        &output.join("sqlite-exact-output.frame"),
+    )?;
     let mut identities = String::from("artifact\tidentity\n");
     for path in [
         &rootfs,
@@ -87,6 +93,8 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         &docker,
         &python.interpreter,
         &python_husklet.interpreter,
+        &sqlite_husklet.rootfs,
+        &sqlite_husklet.interpreter,
         &sqlite.command,
         &husklet.command,
         &husklet.library,
@@ -145,7 +153,7 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     )?;
     fs::write(output.join("BLOCKERS.txt"), blockers())?;
     println!(
-        "READY malloc/plain malloc/sqlite python/plain python/sqlite sqlite/sqlite husklet/arm64-macos-x86_64-guest-malloc\nBLOCKED campaign: see {}/BLOCKERS.txt",
+        "READY malloc/plain malloc/sqlite python/plain python/sqlite sqlite/sqlite husklet/arm64-macos-x86_64-guest-malloc-python-sqlite\nBLOCKED campaign: see {}/BLOCKERS.txt",
         output.display()
     );
     Ok(())
@@ -292,6 +300,31 @@ fn husklet_guest(command: &Path, guest: &Path) -> Result<Vec<u8>, Error> {
     Ok(captured.stdout)
 }
 
+fn husklet_rootfs_guest(
+    command: &Path,
+    rootfs: &Path,
+    guest: &str,
+    guest_arguments: &[&str],
+) -> Result<Vec<u8>, Error> {
+    let mut arguments = vec![
+        mac_path(command),
+        "--rootfs".into(),
+        rootfs.display().to_string(),
+        guest.into(),
+    ];
+    arguments.extend(guest_arguments.iter().map(|argument| (*argument).to_owned()));
+    let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, PYTHON_TIMEOUT)?;
+    if captured.outcome != Outcome::Exited(Some(0)) || !captured.stderr.is_empty() {
+        return Err(format!(
+            "native-arm64 Husklet x86 rootfs guest failed with {:?}: {}",
+            captured.outcome,
+            String::from_utf8_lossy(&captured.stderr)
+        )
+        .into());
+    }
+    Ok(captured.stdout)
+}
+
 struct PythonHusklet {
     interpreter: PathBuf,
 }
@@ -402,7 +435,7 @@ fn require_parity(workload: &str, native: &[u8], docker: &[u8]) -> Result<(), Er
 }
 
 fn blockers() -> &'static str {
-    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a native-arm64 macOS Husklet command selecting the x86_64 Linux guest engine, with command-bound backend receipt and private library identities; malloc/plain completes through that command with exact-output parity.\nBlocked: Python/plain through the native-arm64 Husklet x86 engine exits from guest SIGSEGV with status 139; the stage must not substitute an x86_64 Mach-O Husklet under Rosetta, because that selects the per-instruction interpreter rather than the production ARM64 translator.\nMissing: the Python compatibility fix, Husklet execution validation for the remaining workloads, balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
+    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a native-arm64 macOS Husklet command selecting the x86_64 Linux guest engine, with command-bound backend receipt and private library identities; malloc/plain, Python/plain, and sqlite/sqlite complete through that command with exact-output parity.\nMissing: Husklet execution validation for the remaining workloads (sqlite-linked malloc and Python/sqlite), balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
 }
 
 fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
@@ -443,9 +476,8 @@ mod tests {
             assert!(text.contains(missing));
         }
         assert!(text.contains("native-arm64 macOS Husklet"));
-        assert!(text.contains("Python/plain through the native-arm64 Husklet x86 engine"));
-        assert!(text.contains("status 139"));
-        assert!(text.contains("must not substitute an x86_64 Mach-O Husklet under Rosetta"));
+        assert!(text.contains("Python/plain, and sqlite/sqlite complete"));
+        assert!(text.contains("sqlite/sqlite complete through that command"));
     }
 
     #[test]
