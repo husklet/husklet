@@ -11,6 +11,8 @@ use std::{
 mod malloc;
 #[path = "stage/python.rs"]
 mod python;
+#[path = "stage/sqlite.rs"]
+mod sqlite;
 
 const IMAGE: &str = "alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce";
 const IMAGE_ID: &str = "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce";
@@ -69,10 +71,13 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         return Err("pinned Python Docker image identity mismatch".into());
     }
     let python = python::stage(&output, &docker, &arch)?;
+    let sqlite = sqlite::stage(&output, &docker, &arch)?;
     let mut identities = String::from("artifact\tidentity\n");
-    for path in [&rootfs, &arch, &docker, &python] {
+    for path in [&rootfs, &arch, &docker, &python.interpreter, &sqlite.command] {
         identities.push_str(&format!("{}\t{}\n", path.display(), artifact_identity(path)?));
     }
+    identities.push_str(&format!("python-sqlite\t{}\n", python.sqlite_identity));
+    identities.push_str(&format!("linux-sqlite\t{}\n", sqlite.linux_identity));
     for layout in &layouts {
         let native_output = mac(&[mac_path(&arch), "-x86_64".into(), mac_path(&layout.native)])?;
         let docker_output = mac(&[
@@ -108,7 +113,7 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     fs::write(output.join("artifacts.tsv"), identities)?;
     fs::write(output.join("BLOCKERS.txt"), blockers())?;
     println!(
-        "READY malloc/plain malloc/sqlite python/plain\nBLOCKED campaign: see {}/BLOCKERS.txt",
+        "READY malloc/plain malloc/sqlite python/plain python/sqlite sqlite/sqlite\nBLOCKED campaign: see {}/BLOCKERS.txt",
         output.display()
     );
     Ok(())
@@ -187,7 +192,7 @@ fn require_parity(workload: &str, native: &[u8], docker: &[u8]) -> Result<(), Er
 }
 
 fn blockers() -> &'static str {
-    "Campaign not emitted: the strict schema requires real malloc/python/sqlite workloads across plain/sqlite layouts.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, and python/plain on Linux x86_64 and x86_64 Mach-O.\nMissing: python/sqlite, sqlite/sqlite paired artifacts and their declared phases.\nMissing: selected, built Husklet x86 command profile and its smoke proof.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
+    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nMissing: selected, built Husklet x86 command profile and its smoke proof.\nMissing: balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
 }
 
 fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
@@ -224,7 +229,7 @@ mod tests {
     fn incomplete_stage_refuses_to_claim_a_campaign() {
         let text = blockers();
         assert!(text.starts_with("Campaign not emitted"));
-        for missing in ["python/sqlite", "sqlite/sqlite", "Husklet x86"] {
+        for missing in ["balanced-order", "unique ledger", "Husklet x86"] {
             assert!(text.contains(missing));
         }
     }
