@@ -1,12 +1,7 @@
 #include <errno.h>
-#include <stdint.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
-#include <sys/ptrace.h>
-#include <sys/uio.h>
-#include <elf.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
@@ -27,10 +22,6 @@ int main(int argc, char **argv) {
         if (diagnostic == NULL) {
             _exit(126);
         }
-        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0) {
-            perror("exec-python: ptrace");
-            _exit(126);
-        }
         execv(interpreter, arguments);
         const int error = errno;
         fprintf(stderr, "exec-python: %s: ", interpreter);
@@ -48,35 +39,6 @@ int main(int argc, char **argv) {
         perror("exec-python: waitpid");
         free(arguments);
         return 126;
-    }
-    if (WIFSTOPPED(status) && ptrace(PTRACE_CONT, child, NULL, NULL) != 0) {
-        perror("exec-python: continue");
-        return 126;
-    }
-    while (WIFSTOPPED(status)) {
-        if (waitpid(child, &status, 0) != child) {
-            perror("exec-python: trace wait");
-            return 126;
-        }
-        if (!WIFSTOPPED(status)) {
-            break;
-        }
-        const int signal = WSTOPSIG(status);
-        if (signal == SIGSEGV) {
-            unsigned long registers[64] = {0};
-            struct iovec view = {.iov_base = registers, .iov_len = sizeof(registers)};
-            if (ptrace(PTRACE_GETREGSET, child, (void *)(uintptr_t)NT_PRSTATUS, &view) == 0) {
-#if defined(__aarch64__)
-                fprintf(stderr, "exec-python: fault pc=%#lx sp=%#lx\n", registers[32], registers[31]);
-#elif defined(__x86_64__)
-                fprintf(stderr, "exec-python: fault pc=%#lx sp=%#lx\n", registers[16], registers[19]);
-#endif
-            }
-        }
-        if (ptrace(PTRACE_CONT, child, NULL, (void *)(uintptr_t)signal) != 0) {
-            perror("exec-python: signal continue");
-            return 126;
-        }
     }
     free(arguments);
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
