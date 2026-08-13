@@ -2,8 +2,11 @@ use super::definition::artifact_identity;
 use crate::{platform::HostProcess, suite::Error};
 use clap::Args;
 use hl_process::Outcome;
+use sha2::{Digest as _, Sha256};
 use std::{
+    fmt::Write as _,
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -76,7 +79,7 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     let python = python::PythonProfile::stage(&output, &docker, &arch)?;
     let sqlite = sqlite::SqliteProfile::stage(&output, &docker, &arch)?;
     let husklet = HuskletProfile::stage(&workspace, &output, &options.mac_cargo)?;
-    let python_husklet = stage_python_rootfs(&output, &docker, &arch, &husklet.command)?;
+    let python_husklet = stage_python_rootfs(&output, &docker, &husklet.command)?;
     let mut identities = String::from("artifact\tidentity\n");
     for path in [
         &rootfs,
@@ -113,7 +116,7 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         let docker_frame = frame(&docker_output)?;
         require_parity(&format!("malloc/{}", layout.name), &native_frame, &docker_frame)?;
         if layout.name == "plain" {
-            let husklet_output = husklet_guest(&arch, &husklet.command, &layout.linux)?;
+            let husklet_output = husklet_guest(&husklet.command, &layout.linux)?;
             let husklet_frame = frame(&husklet_output)?;
             require_parity("malloc/plain Husklet", &native_frame, &husklet_frame)?;
             fs::write(output.join("husklet-plain.out"), husklet_output)?;
@@ -135,14 +138,14 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     fs::write(
         output.join("husklet-command.tsv"),
         format!(
-            "command\t{}\narchitecture\tx86_64-apple-darwin\nsmoke\t--backend-receipt\nreceipt\t{}\n",
+            "command\t{}\nhost-architecture\taarch64-apple-darwin\nguest-architecture\tx86_64-linux\nsmoke\t--backend-receipt\nreceipt\t{}\n",
             husklet.command.display(),
             husklet.receipt
         ),
     )?;
     fs::write(output.join("BLOCKERS.txt"), blockers())?;
     println!(
-        "READY malloc/plain malloc/sqlite python/plain python/sqlite sqlite/sqlite husklet/x86_64-macos\nBLOCKED campaign: see {}/BLOCKERS.txt",
+        "READY malloc/plain malloc/sqlite python/plain python/sqlite sqlite/sqlite husklet/arm64-macos-x86_64-guest-malloc\nBLOCKED campaign: see {}/BLOCKERS.txt",
         output.display()
     );
     Ok(())
@@ -164,6 +167,7 @@ impl HuskletProfile {
             format!("CARGO_TARGET_DIR={}", mac_path(&build)),
             cargo.display().to_string(),
             "build".into(),
+            "--quiet".into(),
             "--manifest-path".into(),
             mac_path(&workspace.join("Cargo.toml")),
             "--package".into(),
@@ -171,11 +175,9 @@ impl HuskletProfile {
             "--bin".into(),
             "hl-x86_64".into(),
             "--release".into(),
-            "--target".into(),
-            "x86_64-apple-darwin".into(),
         ])?;
 
-        let built_command = build.join("x86_64-apple-darwin/release/hl-x86_64");
+        let built_command = build.join("release/hl-x86_64");
         let built_library = native_library(&build)?;
         let profile = output.join("husklet-x86_64-macos");
         fs::create_dir(&profile)?;
@@ -184,18 +186,24 @@ impl HuskletProfile {
         // Publication is deliberately separate from the completed Cargo invocation.
         fs::copy(&built_command, &command)?;
         fs::copy(&built_library, &library)?;
-        let smoke = mac(&[
-            "arch".into(),
-            "-x86_64".into(),
-            mac_path(&command),
-            "--backend-receipt".into(),
-        ])?;
+        let slices = mac(&["/mnt/mac/usr/bin/lipo".into(), "-archs".into(), mac_path(&command)])?;
+        if String::from_utf8(slices)?.split_ascii_whitespace().collect::<Vec<_>>() != ["arm64"] {
+            return Err("Husklet profiling command is not a native arm64-only Mach-O".into());
+        }
+        let smoke = mac(&[mac_path(&command), "--backend-receipt".into()])?;
         let receipt = String::from_utf8(smoke)?.trim().to_owned();
         if !receipt
             .starts_with("{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"")
             || !receipt.ends_with("\"}")
         {
-            return Err("Husklet x86 Rosetta smoke emitted an invalid backend receipt".into());
+            return Err("native-arm64 Husklet x86 guest smoke emitted an invalid backend receipt".into());
+        }
+        let reported = receipt
+            .strip_prefix("{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"")
+            .and_then(|value| value.strip_suffix("\"}"))
+            .ok_or("Husklet backend receipt framing changed")?;
+        if reported != raw_sha256(&command)? {
+            return Err("Husklet backend receipt is not bound to the staged command".into());
         }
         Ok(Self {
             command,
@@ -205,8 +213,27 @@ impl HuskletProfile {
     }
 }
 
+fn raw_sha256(path: &Path) -> Result<String, Error> {
+    let mut file = fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let hash = digest.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in hash {
+        write!(hex, "{byte:02x}")?;
+    }
+    Ok(hex)
+}
+
 fn native_library(build: &Path) -> Result<PathBuf, Error> {
-    let directory = build.join("x86_64-apple-darwin/release/build");
+    let directory = build.join("release/build");
     let libraries = fs::read_dir(&directory)?
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -214,7 +241,7 @@ fn native_library(build: &Path) -> Result<PathBuf, Error> {
         .filter(|path| path.is_file())
         .collect::<Vec<_>>();
     let [library] = libraries.as_slice() else {
-        return Err("x86 macOS build did not produce exactly one native engine library".into());
+        return Err("native macOS build did not produce exactly one native engine library".into());
     };
     Ok(library.clone())
 }
@@ -243,12 +270,12 @@ fn mac(arguments: &[String]) -> Result<Vec<u8>, Error> {
     checked(Path::new(MAC), arguments)
 }
 
-fn husklet_guest(arch: &Path, command: &Path, guest: &Path) -> Result<Vec<u8>, Error> {
-    let arguments = [mac_path(arch), "-x86_64".into(), mac_path(command), mac_path(guest)];
+fn husklet_guest(command: &Path, guest: &Path) -> Result<Vec<u8>, Error> {
+    let arguments = [mac_path(command), mac_path(guest)];
     let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, TIMEOUT)?;
     if captured.outcome != Outcome::Exited(Some(0)) {
         return Err(format!(
-            "Husklet Rosetta guest failed with {:?}: {}",
+            "native-arm64 Husklet x86 guest failed with {:?}: {}",
             captured.outcome,
             String::from_utf8_lossy(&captured.stderr)
         )
@@ -257,7 +284,7 @@ fn husklet_guest(arch: &Path, command: &Path, guest: &Path) -> Result<Vec<u8>, E
     let diagnostic = b"hl-test-displaced-et-exec: displaced\n";
     if !captured.stderr.is_empty() && captured.stderr != diagnostic {
         return Err(format!(
-            "Husklet Rosetta guest wrote unexpected stderr: {}",
+            "native-arm64 Husklet x86 guest wrote unexpected stderr: {}",
             String::from_utf8_lossy(&captured.stderr)
         )
         .into());
@@ -269,7 +296,7 @@ struct PythonHusklet {
     interpreter: PathBuf,
 }
 
-fn stage_python_rootfs(output: &Path, docker: &Path, arch: &Path, command: &Path) -> Result<PythonHusklet, Error> {
+fn stage_python_rootfs(output: &Path, docker: &Path, command: &Path) -> Result<PythonHusklet, Error> {
     let rootfs = output.join("python-rootfs");
     let archive = output.join("python-rootfs.tar");
     fs::create_dir(&rootfs)?;
@@ -302,8 +329,6 @@ fn stage_python_rootfs(output: &Path, docker: &Path, arch: &Path, command: &Path
     fs::remove_file(&archive)?;
     let interpreter = rootfs.join("usr/local/bin/python3.12");
     let arguments = [
-        mac_path(arch),
-        "-x86_64".into(),
         mac_path(command),
         "--rootfs".into(),
         rootfs.display().to_string(),
@@ -314,7 +339,7 @@ fn stage_python_rootfs(output: &Path, docker: &Path, arch: &Path, command: &Path
     let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, PYTHON_TIMEOUT)?;
     if captured.outcome != Outcome::Exited(Some(0)) || !captured.stderr.is_empty() {
         return Err(format!(
-            "Husklet Rosetta Python failed with {:?}: {}",
+            "native-arm64 Husklet x86 Python failed with {:?}: {}",
             captured.outcome,
             String::from_utf8_lossy(&captured.stderr)
         )
@@ -377,7 +402,7 @@ fn require_parity(workload: &str, native: &[u8], docker: &[u8]) -> Result<(), Er
 }
 
 fn blockers() -> &'static str {
-    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a built, hashed Husklet x86_64 macOS command and private library with a Rosetta backend-receipt smoke; malloc/plain and Python/plain also complete through that command with exact-output parity.\nMissing: Husklet execution validation for the remaining workloads, balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
+    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a native-arm64 macOS Husklet command selecting the x86_64 Linux guest engine, with command-bound backend receipt and private library identities; malloc/plain completes through that command with exact-output parity.\nBlocked: Python/plain through the native-arm64 Husklet x86 engine exits from guest SIGSEGV with status 139; the stage must not substitute an x86_64 Mach-O Husklet under Rosetta, because that selects the per-instruction interpreter rather than the production ARM64 translator.\nMissing: the Python compatibility fix, Husklet execution validation for the remaining workloads, balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
 }
 
 fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
@@ -417,7 +442,10 @@ mod tests {
         for missing in ["balanced-order", "unique ledger", "remaining workloads"] {
             assert!(text.contains(missing));
         }
-        assert!(text.contains("Husklet x86_64 macOS"));
+        assert!(text.contains("native-arm64 macOS Husklet"));
+        assert!(text.contains("Python/plain through the native-arm64 Husklet x86 engine"));
+        assert!(text.contains("status 139"));
+        assert!(text.contains("must not substitute an x86_64 Mach-O Husklet under Rosetta"));
     }
 
     #[test]
