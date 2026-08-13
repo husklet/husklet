@@ -1,5 +1,5 @@
 use super::{
-    definition::{Campaign, GuestPath},
+    definition::Campaign,
     schedule::{self, Step},
 };
 use crate::{platform::HostProcess, record::FramedIdentity, suite::Error};
@@ -39,13 +39,7 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     let arm = &campaign.arms[&step.arm];
     let workload = &campaign.workloads[&step.workload];
     let guest = &workload.commands[&step.layout];
-    let executable = match arm.guest_path {
-        GuestPath::HostAbsolute => guest[0].clone(),
-        GuestPath::RootfsAbsolute => format!(
-            "/{}",
-            Path::new(&guest[0]).strip_prefix(&campaign.rootfs.path)?.display()
-        ),
-    };
+    let executable = campaign.guest(&step.arm, Path::new(&guest[0]))?;
     let mut command = HostProcess::standard(&arm.command[0]);
     command
         .args(&arm.command[1..])

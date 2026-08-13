@@ -38,6 +38,8 @@ pub(super) struct Arm {
     pub artifacts: BTreeMap<String, Artifact>,
     pub smoke: Vec<String>,
     pub guest_path: GuestPath,
+    #[serde(default)]
+    pub guest_map: BTreeMap<PathBuf, PathBuf>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -89,6 +91,13 @@ impl Campaign {
         for (name, arm) in &self.arms {
             if arm.command.is_empty() || arm.artifacts.is_empty() || arm.smoke.is_empty() {
                 return Err(format!("benchmark arm {name} is incomplete").into());
+            }
+            if arm.guest_map.values().any(|guest| {
+                !guest.is_absolute()
+                    || !guest.is_file()
+                    || !arm.artifacts.values().any(|artifact| artifact.path == *guest)
+            }) {
+                return Err(format!("benchmark arm {name} guest map is not bound to hashed artifacts").into());
             }
         }
         for (name, layout) in &self.layouts {
@@ -163,6 +172,17 @@ impl Campaign {
             }
         }
         Ok(())
+    }
+
+    pub fn guest(&self, arm: &str, guest: &Path) -> Result<PathBuf, Error> {
+        let definition = &self.arms[arm];
+        if let Some(mapped) = definition.guest_map.get(guest) {
+            return Ok(mapped.clone());
+        }
+        match definition.guest_path {
+            GuestPath::HostAbsolute => Ok(guest.to_owned()),
+            GuestPath::RootfsAbsolute => Ok(Path::new("/").join(guest.strip_prefix(&self.rootfs.path)?)),
+        }
     }
 }
 
@@ -366,11 +386,49 @@ fn file_hash(path: &Path) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Artifact, Layout, Workload, command_profiles_distinct, guest_is_hashed, invariant_phases_valid,
-        phase_names_valid, smoke_binds_profile, verify_artifact, workload_judgments_covered,
+        Arm, Artifact, Campaign, GuestPath, Layout, Workload, command_profiles_distinct, guest_is_hashed,
+        invariant_phases_valid, phase_names_valid, smoke_binds_profile, verify_artifact, workload_judgments_covered,
     };
     use crate::record::FramedIdentity;
-    use std::fs;
+    use std::{collections::BTreeMap, fs};
+
+    #[test]
+    fn arm_can_map_shared_linux_guest_to_hashed_host_native_equivalent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let rootfs = temporary.path().join("rootfs");
+        fs::create_dir(&rootfs).unwrap();
+        let linux = rootfs.join("bench");
+        let native = temporary.path().join("bench-macho-x86_64");
+        fs::write(&linux, b"linux elf").unwrap();
+        fs::write(&native, b"mach-o x86_64").unwrap();
+        let arm = Arm {
+            command: vec!["/usr/bin/arch".into(), "-x86_64".into()],
+            artifacts: BTreeMap::from([(
+                "guest".into(),
+                Artifact {
+                    path: native.clone(),
+                    sha256: super::file_hash(&native).unwrap(),
+                },
+            )]),
+            smoke: vec!["/usr/bin/arch".into(), "-x86_64".into(), native.display().to_string()],
+            guest_path: GuestPath::HostAbsolute,
+            guest_map: BTreeMap::from([(linux.clone(), native.clone())]),
+        };
+        let campaign = Campaign {
+            schema: super::SCHEMA.into(),
+            rounds: 4,
+            samples_per_row: 3,
+            rootfs: Artifact {
+                path: rootfs,
+                sha256: String::new(),
+            },
+            arms: BTreeMap::from([("E".into(), arm)]),
+            layouts: BTreeMap::new(),
+            workloads: BTreeMap::new(),
+            invariant_phases: Vec::new(),
+        };
+        assert_eq!(campaign.guest("E", &linux).unwrap(), native);
+    }
 
     #[test]
     fn regular_file_artifact_is_accepted() {
