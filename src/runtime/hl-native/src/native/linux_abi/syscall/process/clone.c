@@ -1,4 +1,6 @@
 // Cohesive process-syscall handlers. Included by ../proc.c after shared process state.
+#include "../../../host/process.h"
+
 static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 220: {
@@ -71,7 +73,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
-        pid_t pid = fork();
+        pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
         if (is_vfork) {
             if (pid == 0) {
@@ -302,7 +304,7 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
-        pid_t pid = fork();
+        pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
         bound_status = bound_fork_complete(&bound_fork, pid == 0, pid == 0 ? (int)getpid() : (int)pid);
         if (bound_status != 0) {

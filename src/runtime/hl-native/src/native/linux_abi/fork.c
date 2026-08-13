@@ -562,7 +562,7 @@ static int hl_server_main(int argc, char **argv) {
                 close(fds[i]);
             continue;
         }
-        pid_t pid = fork();
+        pid_t pid = hl_host_process_clone_current();
         if (pid == 0) hl_forkserver_runner(conn, fds, nfd, wac, wargv, wenv, wcwd); // never returns
         for (int i = 0; i < nfd; i++)
             close(fds[i]); // ours were only for the runner

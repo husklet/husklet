@@ -643,7 +643,7 @@ static void sentry_init(void) {
         fprintf(stderr, "[sentry] host fork prepare failed: %d\n", bound_status);
         _exit(71);
     }
-    pid_t pid = fork(); // sentry forks AFTER load -> inherits the fd table / jail config / auxv / cwd
+    pid_t pid = hl_host_process_clone_current(); // clone AFTER load -> inherits fd table / jail config / auxv / cwd
     int fork_error = errno;
     bound_status = bound_fork_complete(&bound_fork, pid == 0, pid == 0 ? (int)getpid() : (int)pid);
     if (bound_status != 0) {

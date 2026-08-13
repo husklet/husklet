@@ -41,6 +41,7 @@
 #include "../../linux_abi/host_proc.h"
 #include "../../linux_abi/host_wait.h"
 #include "../../linux_abi/device.h"
+#include "../../host/process.h"
 #include <stdatomic.h>
 #if !defined(_WIN32)
 #include <dlfcn.h>

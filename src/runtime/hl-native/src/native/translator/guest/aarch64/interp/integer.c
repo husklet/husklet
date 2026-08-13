@@ -142,6 +142,13 @@ static int interp_signal_capture(struct cpu *c, void *ucontext) {
 // compute CPU and 99.96% of the process's host syscalls -- to
 // save a mask that only this rare path ever reads.
 static void interp_restore_handler_mask(void *ucontext) {
+#if defined(_WIN32)
+    // A Windows vectored exception supplies a CONTEXT record but does not
+    // modify a POSIX signal mask. Returning or long-jumping therefore owes no
+    // mask restoration; uc_sigmask has no Windows analogue by design.
+    (void)ucontext;
+    return;
+#else
     if (ucontext != NULL) {
         pthread_sigmask(SIG_SETMASK, &((ucontext_t *)ucontext)->uc_sigmask, NULL);
         return;
@@ -157,6 +164,7 @@ static void interp_restore_handler_mask(void *ucontext) {
     sigaddset(&fault, SIGFPE);
     sigaddset(&fault, SIGTRAP);
     pthread_sigmask(SIG_UNBLOCK, &fault, NULL);
+#endif
 }
 
 // Called (via sigframe_resume_dispatch) once the handler has set c->sync_signal/sync_code/tpending/reason.

@@ -9,6 +9,16 @@
 #include <unistd.h>
 
 static inline ssize_t hl_sentry_pipe_write(int fd, const void *data, size_t size) {
+#if defined(_WIN32)
+    // Win32 anonymous/named-pipe writes report a disconnected reader as an
+    // error; they do not raise POSIX SIGPIPE, so there is no pending signal to
+    // consume and no handler mask to restore.
+    ssize_t result;
+    do
+        result = write(fd, data, size);
+    while (result < 0 && errno == EINTR);
+    return result;
+#else
     sigset_t blocked;
     sigset_t previous;
     sigemptyset(&blocked);
@@ -35,6 +45,7 @@ static inline ssize_t hl_sentry_pipe_write(int fd, const void *data, size_t size
     pthread_sigmask(SIG_SETMASK, &previous, NULL);
     errno = saved;
     return result;
+#endif
 }
 
 #endif
