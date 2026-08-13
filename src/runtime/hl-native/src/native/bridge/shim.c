@@ -149,6 +149,13 @@ HL_API void hl_c_backend_checkpoint_trigger_destroy(void *mapping, int32_t descr
 }
 
 HL_API int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
+#if defined(_WIN32)
+    if (broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
+    /* The Windows checkpoint channel is deliberately unavailable until its
+     * named-pipe and DuplicateHandle transport exists.  Keep the ABI present,
+     * but do not pretend POSIX descriptor adoption succeeded. */
+    return HL_STATUS_PLATFORM_FAILURE;
+#else
     char broker_text[32];
     char trigger_text[32];
     int broker_copy;
@@ -167,6 +174,7 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger) {
     (void)close(broker_copy);
     (void)close(trigger_copy);
     return HL_STATUS_PLATFORM_FAILURE;
+#endif
 }
 
 extern int hl_ckpt_interrupt_signal(void);
