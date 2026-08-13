@@ -118,13 +118,12 @@ void _start(void) {
             (long)stat_buffer, AT_SYMLINK_NOFOLLOW, 0, 0) != 0) finish(16);
     if (call6(SYS_UNLINKAT, directory, (long)work_link, 0, 0, 0, 0) != 0) finish(17);
     if (call6(SYS_UNLINKAT, directory, (long)work, AT_REMOVEDIR, 0, 0, 0) != 0) finish(18);
-    long child = call6(SYS_FORK,
 #if defined(__aarch64__)
-        17,
+    long fork_flags = 17;
 #else
-        0,
+    long fork_flags = 0;
 #endif
-        0, 0, 0, 0, 0);
+    long child = call6(SYS_FORK, fork_flags, 0, 0, 0, 0, 0);
     if (child < 0) finish(19);
     if (child == 0) {
         long created = call6(SYS_OPENAT, AT_FDCWD, (long)forked,
