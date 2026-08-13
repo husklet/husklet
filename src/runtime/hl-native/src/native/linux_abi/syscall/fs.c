@@ -150,6 +150,15 @@ static int dac_create_at(int directory, const char *raw) {
     return status != 0 ? status : -hl_dac_authorize_create(&snapshot, &credentials);
 }
 
+static int dac_sticky_at(int directory, const char *raw) {
+    hl_dac_snapshot parent, entry;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_parent_at(directory, raw, &parent);
+    if (status == 0) status = dac_snapshot_at(directory, raw, 1, &entry);
+    return status != 0 ? status : -hl_dac_authorize_sticky(&parent, &entry, &credentials);
+}
+
 // statx(2) creation time. A plain Linux struct stat carries no birth time, so the engine must consult
 // a host statx to answer it -- AND to answer HONESTLY: a caller trusts stx_mask before reading
 // stx_btime, so STATX_BTIME must be advertised only when the backing filesystem actually reports it

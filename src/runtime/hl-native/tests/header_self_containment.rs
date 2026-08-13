@@ -60,6 +60,11 @@ int main(void) {
     if (hl_dac_authorize_create(&closed, &user) != EACCES) return 10;
     user.capabilities = UINT64_C(1) << HL_DAC_CAP_DAC_OVERRIDE;
     if (hl_dac_authorize_create(&closed, &user) != 0) return 11;
+    const hl_dac_snapshot sticky = {1000, 1000, 01777};
+    hl_dac_credentials owner = user;
+    owner.fsuid = 2000;
+    if (hl_dac_authorize_sticky(&sticky, &owned, &other) != EPERM) return 15;
+    if (hl_dac_authorize_sticky(&sticky, &owned, &owner) != 0) return 16;
     return 0;
 }
 "#,

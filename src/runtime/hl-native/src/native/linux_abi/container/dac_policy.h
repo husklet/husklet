@@ -72,4 +72,12 @@ static inline int hl_dac_authorize_create(const hl_dac_snapshot *parent, const h
     return (permissions & 3u) == 3u ? 0 : EACCES; /* parent needs W|X */
 }
 
+static inline int hl_dac_authorize_sticky(const hl_dac_snapshot *parent, const hl_dac_snapshot *entry,
+                                          const hl_dac_credentials *credentials) {
+    if ((parent->mode & 01000u) == 0 || credentials->fsuid == parent->uid || credentials->fsuid == entry->uid ||
+        hl_dac_has_capability(credentials, HL_DAC_CAP_FOWNER))
+        return 0;
+    return EPERM;
+}
+
 #endif

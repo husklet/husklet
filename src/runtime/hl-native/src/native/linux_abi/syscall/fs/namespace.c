@@ -167,6 +167,13 @@ static void svc_fs_namespace_35(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
         }
+        {
+            int authorization = dac_sticky_at((int)a0, (const char *)a1);
+            if (authorization != 0) {
+                G_RET(c) = (uint64_t)(int64_t)authorization;
+                break;
+            }
+        }
         // RAM-backed scratch adoption: SQLite et al. open a temp file O_CREAT|O_EXCL then unlink it while
         // still open (delete-on-close). After this unlink drops its last link the file is anonymous, so we
         // may adopt it into RAM. Cheap pre-filter (avoid the fd scan on ordinary unlinks): a temp-dir path
@@ -598,6 +605,21 @@ static void svc_fs_namespace_38(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
         if (jail_ro_at((int)a0, (const char *)a1) || jail_ro_at((int)a2, (const char *)a3)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
+        }
+        {
+            int authorization = dac_sticky_at((int)a0, (const char *)a1);
+            if (authorization != 0) {
+                G_RET(c) = (uint64_t)(int64_t)authorization;
+                break;
+            }
+            hl_dac_snapshot destination;
+            if (dac_snapshot_at((int)a2, (const char *)a3, 1, &destination) == 0) {
+                authorization = dac_sticky_at((int)a2, (const char *)a3);
+                if (authorization != 0) {
+                    G_RET(c) = (uint64_t)(int64_t)authorization;
+                    break;
+                }
+            }
         }
         // inotify: a rename generates IN_MOVED_FROM(src)/IN_MOVED_TO(dst) with a shared cookie on any watch
         // covering the source / destination directory. Queue them now (before the move) so a watch's read()
