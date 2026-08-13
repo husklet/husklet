@@ -402,25 +402,42 @@ impl<'a> CaseExecution<'a> {
         } else {
             Vec::new()
         };
-        if status != ExitStatus::Code(self.case.exit) {
-            let stderr = String::from_utf8_lossy(&logs.stderr);
-            let diagnostic = stderr.chars().take(4096).collect::<String>();
-            return Err(if diagnostic.is_empty() {
-                format!("exit {status:?}, expected {}", self.case.exit)
-            } else {
-                format!("exit {status:?}, expected {}; stderr={diagnostic:?}", self.case.exit)
-            }
-            .into());
-        }
-        if logs.stdout != expected {
-            return Err(super::diagnostic::compare("stdout", &logs.stdout, &expected).into());
-        }
-        if let Some(violation) = output::stderr_violation(&self.case.stderr, &logs.stderr) {
-            return Err(violation.into());
-        }
-        profile_validation?;
-        Ok(())
+        validate_outcome(
+            status,
+            self.case.exit,
+            &logs,
+            &expected,
+            &self.case.stderr,
+            profile_validation,
+        )
     }
+}
+
+fn validate_outcome(
+    status: ExitStatus,
+    expected_exit: i32,
+    logs: &hl_container::Logs,
+    expected_stdout: &[u8],
+    expected_stderr: &[String],
+    profile_validation: Result<(), Error>,
+) -> Result<(), Error> {
+    if status != ExitStatus::Code(expected_exit) {
+        let stderr = String::from_utf8_lossy(&logs.stderr);
+        let diagnostic = stderr.chars().take(4096).collect::<String>();
+        return Err(if diagnostic.is_empty() {
+            format!("exit {status:?}, expected {expected_exit}")
+        } else {
+            format!("exit {status:?}, expected {expected_exit}; stderr={diagnostic:?}")
+        }
+        .into());
+    }
+    if logs.stdout != expected_stdout {
+        return Err(super::diagnostic::compare("stdout", &logs.stdout, expected_stdout).into());
+    }
+    if let Some(violation) = output::stderr_violation(expected_stderr, &logs.stderr) {
+        return Err(violation.into());
+    }
+    profile_validation
 }
 
 fn cleanup_timeout_diagnostic(timeout: Duration) -> String {
@@ -455,7 +472,12 @@ impl CaseExecution<'_> {
 
 #[cfg(test)]
 mod stderr_tests {
-    use super::{CLEANUP_TIMEOUT, cleanup_timeout_diagnostic};
+    use super::{CLEANUP_TIMEOUT, cleanup_timeout_diagnostic, validate_outcome};
+    use hl_container::{ExitStatus, Logs};
+
+    fn missing_profile() -> Result<(), super::Error> {
+        Err("retained C profile omitted the crossings/translations summary".into())
+    }
 
     #[test]
     fn cleanup_timeout_names_the_stuck_lifecycle_stage() {
@@ -463,5 +485,29 @@ mod stderr_tests {
             cleanup_timeout_diagnostic(CLEANUP_TIMEOUT),
             "forced cleanup timed out after 10000 milliseconds"
         );
+    }
+
+    #[test]
+    fn exit_failure_precedes_missing_profile() {
+        let error =
+            validate_outcome(ExitStatus::Code(7), 0, &Logs::default(), b"", &[], missing_profile()).unwrap_err();
+        assert_eq!(error.to_string(), "exit Code(7), expected 0");
+    }
+
+    #[test]
+    fn stdout_failure_precedes_missing_profile() {
+        let logs = Logs {
+            stdout: b"wrong".to_vec(),
+            stderr: Vec::new(),
+        };
+        let error = validate_outcome(ExitStatus::Code(0), 0, &logs, b"right", &[], missing_profile()).unwrap_err();
+        assert!(error.to_string().starts_with("stdout differs:"), "{error}");
+    }
+
+    #[test]
+    fn otherwise_valid_output_still_requires_profile() {
+        let error =
+            validate_outcome(ExitStatus::Code(0), 0, &Logs::default(), b"", &[], missing_profile()).unwrap_err();
+        assert!(error.to_string().contains("crossings/translations"), "{error}");
     }
 }
