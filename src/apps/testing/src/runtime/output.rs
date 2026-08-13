@@ -104,15 +104,6 @@ mod tests {
     }
 
     #[test]
-    fn dispatcher_exit_categories_preserve_the_profile_contract() {
-        validate_profile(
-            "[prof] dispatcher crossings=41 translations=7 exit_softmiss=3 exit_softspan=2 \
-             exit_branch=29 exit_syscall=5 exit_other=2 ibtc_miss=11 ibtc_fill=9\n",
-        )
-        .unwrap();
-    }
-
-    #[test]
     fn process_exit_details_are_optional_but_the_summary_is_not() {
         validate_profile("[prof] crossings=41 syscalls=9 ibtc_miss=2 translations=7\n").unwrap();
         let error = validate_profile("[prof] shadow_push=3 shret_hit=2\n").unwrap_err();
