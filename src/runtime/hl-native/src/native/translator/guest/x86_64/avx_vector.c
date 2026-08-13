@@ -119,6 +119,7 @@ static enum avx_dispatch_result avx_dispatch_map1_packed_integer_arithmetic(cons
         return AVX_DISPATCH_UNMATCHED;
     }
     avx_put(c, instruction->reg, result, width);
+    c->rip = next;
     return AVX_DISPATCH_HANDLED;
 }
 
