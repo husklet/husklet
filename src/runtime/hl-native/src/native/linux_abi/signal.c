@@ -1083,13 +1083,12 @@ static void sig_diag_raise_default(struct cpu *c, int sig) {
     // An engine-internal diagnostic for a guest taking a fatal-default signal. It must NEVER reach the
     // guest's own stderr fd, so route it through the tagged logging service. Formatting is gated on the
     // signal selector and compiled out in a production (HL_ENABLE_LOGGING=0) build.
-    hl_log_guest_fatal(&g_jit_log, (uint32_t)sig, c ? G_PC(c) : 0, c ? G_SP(c) : 0,
 #if G_GPC_HASH_SHIFT == 2
-                       c ? c->x[30] : 0
+    uint64_t link = c ? c->x[30] : 0;
 #else
-                       0
+    uint64_t link = 0;
 #endif
-    );
+    hl_log_guest_fatal(&g_jit_log, (uint32_t)sig, c ? G_PC(c) : 0, c ? G_SP(c) : 0, link);
 }
 
 // a GENUINE synchronous CPU fault (SIGSEGV/SIGBUS/...) taken in translated code for which the guest
@@ -1107,15 +1106,14 @@ static int deliver_guest_fatal_fault(int hostsig, siginfo_t *si, void *ucv) {
     int sig = sig_m2l(hostsig);
     if (sig < 1 || sig > 64 || !ucv) return 0;
     // Apply the same async-signal-safe host-to-guest classification as the guest-handler path above.
-    if (hostsig == SIGBUS &&
 #if defined(__APPLE__)
-        !g_in_service && si && !hl_linux_bus_hit((uint64_t)si->si_addr, 1)
+    int bus_is_guest_fault = !g_in_service && si && !hl_linux_bus_hit((uint64_t)si->si_addr, 1);
 #else
-        HOST_SIGNAL_HAS_FAULT_ADDRESS(si) && si->si_addr &&
-        (gna_hit((uint64_t)si->si_addr, 1) || !host_addr_mapped((uintptr_t)si->si_addr))
+    int bus_is_guest_fault = HOST_SIGNAL_HAS_FAULT_ADDRESS(si) && si->si_addr &&
+                             (gna_hit((uint64_t)si->si_addr, 1) ||
+                              !host_addr_mapped((uintptr_t)si->si_addr));
 #endif
-    )
-        sig = 11;
+    if (hostsig == SIGBUS && bus_is_guest_fault) sig = 11;
     if (g_sigact[sig].handler > 1) return 0; // a guest handler exists -> not ours (deliver_guest_fault owns it)
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     if (!c) return 0;
