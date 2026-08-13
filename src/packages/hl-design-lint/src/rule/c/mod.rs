@@ -29,7 +29,9 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
     let normalized = normalize_gnu_attributes(&normalize_atomic_specifiers(
-        &normalize_function_pointer_annotations(&source.replace("_Thread_local", "             ")),
+        &normalize_function_pointer_annotations(&normalize_complex_macro(
+            &source.replace("_Thread_local", "             "),
+        )),
     ));
     let tree = parser
         .parse(&normalized, None)
@@ -53,6 +55,14 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+fn normalize_complex_macro(source: &str) -> String {
+    ["float complex", "double complex", "long double complex"]
+        .into_iter()
+        .fold(source.to_owned(), |source, spelling| {
+            source.replace(spelling, &spelling.replace("complex", "       "))
+        })
 }
 
 fn normalize_gnu_attributes(source: &str) -> String {
@@ -263,8 +273,38 @@ fn builtin_offsetof_type_argument(mut node: tree_sitter::Node<'_>, source: &str)
 fn line_macro_invocation(node: tree_sitter::Node<'_>, source: &str) -> bool {
     let lines = source.lines().collect::<Vec<_>>();
     let row = node.start_position().row;
-    (row.saturating_sub(1)..=row.saturating_add(1).min(lines.len().saturating_sub(1)))
-        .any(|row| defined_macro_invocation(lines[row].trim(), source))
+    (row.saturating_sub(8)..=row).any(|start| {
+        let invocation = lines[start..=row.min(lines.len().saturating_sub(1))].join(" ");
+        defined_macro_invocation(invocation.trim(), source) || declared_macro_within(&invocation, source)
+    })
+}
+
+fn declared_macro_within(text: &str, source: &str) -> bool {
+    source.lines().filter_map(|line| {
+        let definition = line.trim_start().strip_prefix("#define")?.trim_start();
+        let open = definition.find('(')?;
+        identifier(definition[..open].trim()).then_some(definition[..open].trim())
+    }).any(|name| {
+        text.find(&format!("{name}(")).is_some_and(|start| {
+            has_balanced_parenthesized_prefix(&text[start + name.len()..])
+        })
+    })
+}
+
+fn has_balanced_parenthesized_prefix(text: &str) -> bool {
+    let mut depth = 0usize;
+    for byte in text.bytes() {
+        match byte {
+            b'(' => depth += 1,
+            b')' => {
+                let Some(next) = depth.checked_sub(1) else { return false };
+                depth = next;
+                if depth == 0 { return true; }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn annotation_prefix(node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -539,9 +579,32 @@ mod test {
     }
 
     #[test]
+    fn parser_accepts_multiline_invocation_of_a_declared_macro() {
+        let source = "#define SIGNATURE(value, type) _Generic((value), type: 1, default: 0)\n\
+                      _Static_assert(SIGNATURE(&function,\n\
+                                               void (*)(void)),\n\
+                                     \"signature changed\");\n";
+        assert!(parse(Path::new("signature.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_multiline_invocation_of_an_undeclared_macro() {
+        let source = "_Static_assert(UNKNOWN(&function,\n\
+                                             void (*)(void)),\n\
+                                   \"signature changed\");\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
+    }
+
+    #[test]
     fn parser_accepts_c11_thread_local_storage() {
         let source = "typedef struct Options Options;\nstatic _Thread_local Options *current;\n";
         assert!(parse(Path::new("storage.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_standard_complex_type_macro() {
+        let source = "double magnitude(double complex value) { return 0; }\n";
+        assert!(parse(Path::new("complex.c"), source).is_ok());
     }
 
     #[test]
