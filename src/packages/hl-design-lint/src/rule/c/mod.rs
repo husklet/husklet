@@ -57,6 +57,7 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
     if node.is_error() || node.is_missing() {
         if macro_continuation(node, source)
             || annotation_prefix(node, source)
+            || builtin_offsetof_type_argument(node, source)
             || enclosing_macro_invocation(node, source)
         {
             return None;
@@ -66,6 +67,23 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .find_map(|child| first_unrecoverable_error(child, source))
+}
+
+fn builtin_offsetof_type_argument(mut node: tree_sitter::Node<'_>, source: &str) -> bool {
+    loop {
+        if node.kind() == "call_expression"
+            && node
+                .child_by_field_name("function")
+                .and_then(|function| function.utf8_text(source.as_bytes()).ok())
+                == Some("__builtin_offsetof")
+        {
+            return true;
+        }
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        node = parent;
+    }
 }
 
 fn annotation_prefix(node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -293,6 +311,13 @@ mod test {
     fn parser_accepts_c11_thread_local_storage() {
         let source = "typedef struct Options Options;\nstatic _Thread_local Options *current;\n";
         assert!(parse(Path::new("storage.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_builtin_offsetof_with_a_struct_type() {
+        let source = "struct cpu { unsigned long sigmask; };\n\
+                      int offset(void) { return (int)__builtin_offsetof(struct cpu, sigmask); }\n";
+        assert!(parse(Path::new("offset.c"), source).is_ok());
     }
 
     #[test]
