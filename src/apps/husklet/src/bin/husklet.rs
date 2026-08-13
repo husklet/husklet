@@ -136,34 +136,39 @@ fn main() -> glib::ExitCode {
         .ok()
         .expect("application config initialized once");
     let app = gtk::Application::builder().application_id(APP_ID).build();
-    app.connect_startup(|application| {
-        if let Some(s) = gtk::Settings::default() {
-            s.set_gtk_application_prefer_dark_theme(true);
-        }
-        host::appearance::Appearance::apply();
-        let p = gtk::CssProvider::new();
-        p.load_from_data(&css());
-        if let Some(d) = gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(&d, &p, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-        }
-        let quit = gio::SimpleAction::new("quit", None);
-        let app = application.clone();
-        // Route quit through each window's close contract. Workspace windows checkpoint or kill
-        // their domain and wait for teardown; `Application::quit` bypasses close-request entirely.
-        quit.connect_activate(move |_, _| {
-            for window in app.windows() {
-                window.close();
-            }
-        });
-        application.add_action(&quit);
-        application.set_accels_for_action("app.quit", &["<Primary>q"]);
-
-        let menu = gio::Menu::new();
-        menu.append(Some("Quit Husklet"), Some("app.quit"));
-        application.set_menubar(Some(&menu));
-    });
+    app.connect_startup(configure_application);
     app.connect_activate(|application| Application(application.clone()).open_manager());
     app.run()
+}
+
+fn configure_application(application: &gtk::Application) {
+    if let Some(settings) = gtk::Settings::default() {
+        settings.set_gtk_application_prefer_dark_theme(true);
+    }
+    host::appearance::Appearance::apply();
+    let provider = gtk::CssProvider::new();
+    provider.load_from_data(&css());
+    if let Some(display) = gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+
+    let quit = gio::SimpleAction::new("quit", None);
+    let app = application.clone();
+    quit.connect_activate(move |_, _| close_windows(&app));
+    application.add_action(&quit);
+    application.set_accels_for_action("app.quit", &["<Primary>q"]);
+
+    let menu = gio::Menu::new();
+    menu.append(Some("Quit Husklet"), Some("app.quit"));
+    application.set_menubar(Some(&menu));
+}
+
+/// Routes quit through each window's close contract. Workspace windows checkpoint or kill
+/// their domain and wait for teardown; `Application::quit` bypasses close-request entirely.
+fn close_windows(application: &gtk::Application) {
+    for window in application.windows() {
+        window.close();
+    }
 }
 
 // =================================================================================================
