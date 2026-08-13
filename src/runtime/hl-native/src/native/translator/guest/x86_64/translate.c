@@ -5635,6 +5635,38 @@ static int lower_sse_float_unpack(struct insn *instruction, uint64_t next, int v
     return TX_NEXT;
 }
 
+static int lower_sse_packed_double_integer(struct insn *instruction, uint64_t next, int vd, int vm) {
+    if (instruction->op != 0xE6 || (!instruction->rep && !instruction->p66 && !instruction->repne))
+        return TX_FALL;
+    int source = vm;
+    if (instruction->rep) { // cvtdq2pd: low two packed s32 -> two packed f64
+        if (instruction->is_mem) {
+            g_ldr_d_ea(16, instruction, next);
+            source = 16;
+        }
+        emit32(0x0F20A400u | (source << 5) | 16);
+        emit32(0x4E61D800u | (16 << 5) | vd);
+        return TX_NEXT;
+    }
+    if (instruction->is_mem) {
+        g_ldr_q_ea(16, instruction, next);
+        source = 16;
+    }
+    int truncate = instruction->p66 != 0;
+    e_movconst(19, 0x41E0000000000000ull);
+    emit32(0x4E080C00u | (19 << 5) | 25);
+    e_movconst(19, 0xC1E0000000000000ull);
+    emit32(0x4E080C00u | (19 << 5) | 26);
+    e_movconst(19, 0x80000000ull);
+    emit32(0x0E040C00u | (19 << 5) | 27);
+    emit_pd2i32_pieces(22, 18, source, truncate, 25, 26, 28, 21);
+    emit32(0x0EA12800u | (22 << 5) | 24);
+    emit32(0x0EA12800u | (18 << 5) | 25);
+    emit32(0x2E601C00u | (24 << 16) | (27 << 5) | 25);
+    e_vmov(vd, 25);
+    return TX_NEXT;
+}
+
 static int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t op = I.op;
     if (op != 0x2E && op != 0x2F) return TX_FALL;
@@ -6430,37 +6462,8 @@ static void *translate_block(uint64_t gpc) {
                     // The helper emitted the complete widening multiply operation.
                 } else if (lower_sse_float_unpack(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted UNPCKL/HPS or UNPCKL/HPD.
-                } else if (op == 0xE6 && I.rep) { // cvtdq2pd (F3): low 2 packed s32 -> 2 packed f64
-                    int s = vm;
-                    if (I.is_mem) {
-                        g_ldr_d_ea(16, &I, next);
-                        s = 16;
-                    }
-                    emit32(0x0F20A400u | (s << 5) | 16);  // SXTL v16.2d, vs.2s  (sign-extend the 2 int32)
-                    emit32(0x4E61D800u | (16 << 5) | vd); // SCVTF vd.2d, v16.2d (int64 -> double)
-                } else if (op == 0xE6 && (I.p66 || I.repne)) {
-                    // cvttpd2dq (66, truncate) / cvtpd2dq (F2, rounds by MXCSR.RC): 2 packed f64 -> 2 packed
-                    // s32 in the low 64 bits of dst; the high 64 bits are zeroed (the Q=0 XTN does that).
-                    // Shares emit_pd2i32_pieces with the VEX form, which is the point: this arm used to emit
-                    // FCVTNS unconditionally and so ignored MXCSR.RC while VEX honoured it -- legacy and VEX
-                    // disagreeing with each other, on top of both being wrong about #I and #P.
-                    int s = vm;
-                    if (I.is_mem) {
-                        g_ldr_q_ea(16, &I, next);
-                        s = 16;
-                    }
-                    int trunc = I.p66 != 0;
-                    e_movconst(19, 0x41E0000000000000ull);
-                    emit32(0x4E080C00u | (19 << 5) | 25); // v25.2d = 2^31 (f64)
-                    e_movconst(19, 0xC1E0000000000000ull);
-                    emit32(0x4E080C00u | (19 << 5) | 26); // v26.2d = -2^31
-                    e_movconst(19, 0x80000000ull);
-                    emit32(0x0E040C00u | (19 << 5) | 27);                 // v27.2s = integer indefinite
-                    emit_pd2i32_pieces(22, 18, s, trunc, 25, 26, 28, 21); // v22 = int64 lanes, v18 = fixup mask
-                    emit32(0x0EA12800u | (22 << 5) | 24);                 // XTN v24.2s, v22.2d (result)
-                    emit32(0x0EA12800u | (18 << 5) | 25);                 // XTN v25.2s, v18.2d (mask)
-                    emit32(0x2E601C00u | (24 << 16) | (27 << 5) | 25);    // BSL v25.8b -> mask?indef:result
-                    e_vmov(vd, 25);
+                } else if (lower_sse_packed_double_integer(&I, next, vd, vm) == TX_NEXT) {
+                    // The helper emitted CVTDQ2PD, CVTTPD2DQ, or CVTPD2DQ.
                 } else if (lower_sse_unpack(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted PUNPCKL/H at MMX or XMM width.
                 } else if (lower_sse_saturating_pack(&I, next, vd, vm, mmx) == TX_NEXT) {
