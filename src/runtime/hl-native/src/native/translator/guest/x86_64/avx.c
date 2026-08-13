@@ -1811,6 +1811,42 @@ static enum avx_dispatch_result avx_dispatch_map1_move(const hl_x86_avx_state *s
             avx_get(c, rd, d);
             avx_put_rm(state, c, I, next, W, d);
         }
+    } else if (op == 0x6E) { // vmovd/q from GPR or memory, zero extending the vector destination
+        int width = I->vex_w ? 8 : 4;
+        memset(d, 0, sizeof(d));
+        if (I->is_mem) {
+            uint64_t address = avx_ea(state, c, I, next, width);
+            (void)avx_memory_read(state, address, d, (size_t)width);
+        } else {
+            memcpy(d, &c->r[I->rm_reg], (size_t)width);
+        }
+        avx_put(c, rd, d, 16);
+    } else if (op == 0x7E) { // vmovq load or vmovd/q store
+        if (pp == 2) {
+            avx_get_rm(state, c, I, next, 8, d);
+            avx_put(c, rd, d, 16);
+        } else {
+            int width = I->vex_w ? 8 : 4;
+            avx_get(c, rd, d);
+            if (I->is_mem) {
+                uint64_t address = avx_ea(state, c, I, next, width);
+                (void)avx_memory_write(state, address, d, (size_t)width);
+            } else {
+                uint64_t value = 0;
+                memcpy(&value, d, (size_t)width);
+                c->r[I->rm_reg] = value;
+            }
+        }
+    } else if (op == 0xD6) { // vmovq store
+        avx_get(c, rd, d);
+        avx_put_rm(state, c, I, next, 8, d);
+    } else if (op == 0xF0) { // vlddqu
+        avx_get_rm(state, c, I, next, W, d);
+        avx_put(c, rd, d, W);
+    } else if (op == 0x13 || op == 0x17) { // vmovlps/pd or vmovhps/pd store
+        avx_get(c, rd, d);
+        uint64_t address = avx_ea(state, c, I, next, 8);
+        (void)avx_memory_write(state, address, d + (op == 0x17 ? 8 : 0), 8);
     } else {
         return AVX_DISPATCH_UNMATCHED;
     }
@@ -2047,17 +2083,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     // ---- map 1 (0F) ----
     if (map == 1) {
         switch (op) {
-        case 0x6E: { // vmovd/vmovq gpr/mem -> xmm (zero-extend)
-            int wb = I.vex_w ? 8 : 4;
-            memset(d, 0, 64);
-            if (I.is_mem) {
-                uint64_t addr = avx_ea(state, c, &I, next, wb);
-                (void)avx_memory_read(state, addr, d, (size_t)wb);
-            } else
-                memcpy(d, &c->r[I.rm_reg], (size_t)wb);
-            avx_put(c, rd, d, 16);
-            goto done;
-        }
         case 0xC5: { // vpextrw: gpr(reg) <- zero-extended word lane imm[2:0] of xmm rm (reg-only src)
             avx_get(c, I.rm_reg, a);
             uint16_t w;
@@ -2098,29 +2123,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             avx_put(c, rd, d, W);
             goto done;
         }
-        case 0x7E: {       // F3: vmovq xmm<-xmm/mem (zext); 66: vmovd/q xmm->gpr/mem
-            if (pp == 2) { // F3 vmovq: reg <- rm (low 64), zero-extend
-                avx_get_rm(state, c, &I, next, 8, d);
-                avx_put(c, rd, d, 16);
-            } else { // 66 vmovd/q: rm <- reg low
-                int wb = I.vex_w ? 8 : 4;
-                avx_get(c, rd, d);
-                if (I.is_mem) {
-                    uint64_t addr = avx_ea(state, c, &I, next, wb);
-                    (void)avx_memory_write(state, addr, d, (size_t)wb);
-                } else {
-                    uint64_t v = 0;
-                    memcpy(&v, d, (size_t)wb);
-                    c->r[I.rm_reg] = v; // 32-bit dst zero-extends to 64
-                }
-            }
-            goto done;
-        }
-        case 0xD6: { // vmovq rm <- reg (low 64)
-            avx_get(c, rd, d);
-            avx_put_rm(state, c, &I, next, 8, d);
-            goto done;
-        }
         case 0x12: {
             // pp==0: VMOVHLPS (reg-reg) / VMOVLPS (m64); pp==1: VMOVLPD (m64). dst=reg, src1=vvvv.
             avx_get(c, vv, d);
@@ -2132,18 +2134,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d, b + 8, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0xF0: { // vlddqu (F2): unaligned load of W bytes from memory into the register
-            avx_get_rm(state, c, &I, next, W, b);
-            avx_put(c, rd, b, W);
-            goto done;
-        }
-        case 0x13:   // vmovlps/vmovlpd (store): m64 <- low 64 bits of xmm(ModRM.reg)
-        case 0x17: { // vmovhps/vmovhpd (store): m64 <- high 64 bits of xmm(ModRM.reg)
-            avx_get(c, rd, a);
-            uint64_t ea = avx_ea(state, c, &I, next, 8);
-            (void)avx_memory_write(state, ea, a + (op == 0x17 ? 8 : 0), 8);
             goto done;
         }
         case 0x16: {
