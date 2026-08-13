@@ -60,6 +60,7 @@ impl PythonProfile {
                 mac_path(arch_tool),
                 "-x86_64".into(),
                 mac_path(&interpreter),
+                "-B".into(),
                 "-c".into(),
                 program.into(),
             ])?;
@@ -71,6 +72,7 @@ impl PythonProfile {
                 "linux/amd64".into(),
                 IMAGE.into(),
                 "python3".into(),
+                "-B".into(),
                 "-c".into(),
                 program.into(),
             ])?;
@@ -85,6 +87,7 @@ impl PythonProfile {
             mac_path(arch_tool),
             "-x86_64".into(),
             mac_path(&interpreter),
+            "-B".into(),
             "-c".into(),
             "import sqlite3; print(sqlite3.sqlite_version)".into(),
         ])?;

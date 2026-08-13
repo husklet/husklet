@@ -378,6 +378,7 @@ fn campaign(
                             "plain".into(),
                             vec![
                                 linux("usr/local/bin/python3.12").display().to_string(),
+                                "-B".into(),
                                 "-c".into(),
                                 python::PLAIN_PROGRAM.into(),
                             ],
@@ -386,6 +387,7 @@ fn campaign(
                             "sqlite".into(),
                             vec![
                                 linux("usr/local/bin/python3.12").display().to_string(),
+                                "-B".into(),
                                 "-c".into(),
                                 python::SQLITE_PROGRAM.into(),
                             ],
@@ -451,7 +453,7 @@ impl RetainedProfile {
             &command,
             rootfs,
             "usr/local/bin/python3.12",
-            &["-c", python::PLAIN_PROGRAM],
+            &["-B", "-c", python::PLAIN_PROGRAM],
         )?;
         let artifact_sha256 = raw_sha256(&rootfs.join("usr/local/bin/python3.12"))?;
         let python_failure = classified_failure(python.outcome, &python.stderr, artifact_sha256)?;
@@ -697,6 +699,7 @@ impl PythonHusklet {
             "--rootfs".into(),
             rootfs.display().to_string(),
             "usr/local/bin/python3.12".into(),
+            "-B".into(),
             "-c".into(),
             python::PLAIN_PROGRAM.into(),
         ];
@@ -787,6 +790,15 @@ mod tests {
     use super::{classified_failure, frame, require_parity, stage_output, support};
     use crate::benchmark::definition::ArmSupport;
     use hl_process::Outcome;
+
+    #[test]
+    fn python_campaign_disables_bytecode_writes() {
+        // Construction is integration-heavy; keep the invariant visible at its source too.
+        let source = include_str!("stage.rs");
+        assert!(source.matches("\"-B\".into()").count() >= 3);
+        let python = include_str!("stage/python.rs");
+        assert!(python.matches("\"-B\".into()").count() >= 3);
+    }
 
     #[test]
     fn exact_output_frame_changes_only_phase_time() {
