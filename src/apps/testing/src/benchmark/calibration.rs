@@ -1,35 +1,24 @@
 use super::{definition::Campaign, evidence, evidence::Measurement, ledger::Ledger, schedule};
 use crate::suite::Error;
 use clap::Args;
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{collections::BTreeMap, fs};
 
 #[derive(Args)]
 pub(crate) struct Options {
-    #[arg(long)]
-    config: PathBuf,
-    #[arg(long)]
-    results: PathBuf,
+    #[command(flatten)]
+    measurement: super::options::MeasurementOptions,
     /// Comma-delimited subset of E,I,R to calibrate independently.
     #[arg(long, value_delimiter = ',', required = true)]
     arms: Vec<String>,
     #[arg(long, default_value_t = 12)]
     rounds: u32,
-    #[arg(long)]
-    resume: bool,
-    #[arg(long, default_value_t = 30.0)]
-    minimum_free_gib: f64,
-    #[arg(long, default_value_t = 120)]
-    quiet_seconds: u64,
-    #[arg(long, default_value_t = 900)]
-    lock_timeout: u64,
-    #[arg(long, default_value_t = 1.0)]
-    max_load: f64,
 }
 
 pub(super) fn run(options: Options) -> Result<(), Error> {
     validate(&options.arms, options.rounds)?;
+    let measurement = options.measurement;
     let workspace = crate::runtime::workspace()?;
-    let campaign = Campaign::load(&workspace.join(&options.config))?;
+    let campaign = Campaign::load(&workspace.join(&measurement.config))?;
     if options.arms.iter().any(|arm| !campaign.arms.contains_key(arm)) {
         return Err("calibration arm is absent from campaign".into());
     }
@@ -38,14 +27,18 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     if plan.is_empty() {
         return Err("calibration has no compatible measurements".into());
     }
-    let result_path = workspace.join(&options.results);
-    if options.resume && result_path.join("qualification.txt").exists() {
+    let result_path = workspace.join(&measurement.results);
+    if measurement.resume && result_path.join("qualification.txt").exists() {
         return Err("calibration result directory is already published; use a unique path for a new run".into());
     }
     let mode = format!("calibration:{}:{}", options.arms.join(","), options.rounds);
-    let mut ledger = Ledger::open_planned(&result_path, &campaign, options.resume, plan.clone(), &mode)?;
-    ledger.require_space(options.minimum_free_gib)?;
-    let _measurement = Measurement::acquire(options.quiet_seconds, options.lock_timeout, options.max_load)?;
+    let mut ledger = Ledger::open_planned(&result_path, &campaign, measurement.resume, plan.clone(), &mode)?;
+    ledger.require_space(measurement.minimum_free_gib)?;
+    let _measurement = Measurement::acquire(
+        measurement.quiet_seconds,
+        measurement.lock_timeout,
+        measurement.max_load,
+    )?;
     for step in schedule::warmups(&campaign)
         .into_iter()
         .filter(|step| options.arms.contains(&step.arm))
@@ -65,7 +58,7 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         ledger.append(&evidence::measure(&campaign, second)?)?;
     }
     campaign.verify_artifacts()?;
-    let report = report(&campaign, &options.arms, &ledger.complete()?, options.rounds)?;
+    let report = Report::evaluate(&campaign, &options.arms, &ledger.complete()?, options.rounds)?;
     fs::write(result_path.join("calibration.tsv"), &report.text)?;
     fs::write(result_path.join("qualification.txt"), format!("{}\n", report.status))?;
     print!("{}", report.text);
@@ -98,91 +91,102 @@ struct Report {
     text: String,
 }
 
-fn report(campaign: &Campaign, requested: &[String], rows: &[evidence::Row], rounds: u32) -> Result<Report, Error> {
-    for arm in requested {
-        if !rows.iter().any(|row| &row.arm == arm) {
-            return Err(format!("requested calibration arm {arm} has no measured compatible context").into());
-        }
-    }
-    let mut outputs = BTreeMap::<(&str, &str, &str), (&str, &str, Option<&str>)>::new();
-    for row in rows {
-        let observed = (
-            row.output.as_str(),
-            row.output_frame.as_str(),
-            row.diagnostic.as_deref(),
-        );
-        let expected = outputs
-            .entry((&row.arm, &row.workload, &row.layout))
-            .or_insert(observed);
-        if *expected != observed {
-            return Err("same-arm calibration exact output changed between pairs".into());
-        }
-    }
-    let mut groups = BTreeMap::<(&str, &str, &str, &str), BTreeMap<u32, [&evidence::Row; 2]>>::new();
-    for row in rows {
-        for phase in row.phases.keys() {
-            let rounds = groups.entry((&row.arm, &row.workload, &row.layout, phase)).or_default();
-            let pair = rounds.entry(row.round).or_insert([row, row]);
-            pair[row.position] = row;
-        }
-    }
-    let mut qualified = true;
-    let mut lines = vec!["arm\tworkload\tlayout\tphase\tcenter\torder_ab\torder_ba\ttemporal_early\ttemporal_late\tmax_deviation\tstatus".into()];
-    for arm in requested {
-        for (workload, definition) in &campaign.workloads {
-            for (layout, support) in &definition.arm_support {
-                if let super::definition::ArmSupport::Incompatible {
-                    status,
-                    stderr,
-                    artifact_sha256,
-                } = &support[arm]
-                {
-                    lines.push(format!(
-                        "{arm}\t{workload}\t{layout}\t-\t-\t-\t-\t-\t-\t-\tOMITTED classified-incompatible status={status} artifact={artifact_sha256} stderr={}",
-                        bounded(stderr)
-                    ));
-                }
+impl Report {
+    fn evaluate(campaign: &Campaign, requested: &[String], rows: &[evidence::Row], rounds: u32) -> Result<Self, Error> {
+        for arm in requested {
+            if !rows.iter().any(|row| &row.arm == arm) {
+                return Err(format!("requested calibration arm {arm} has no measured compatible context").into());
             }
         }
-    }
-    for ((arm, workload, layout, phase), by_round) in groups {
-        if by_round.len() != rounds as usize {
-            return Err("calibration evidence is incomplete".into());
+        let mut outputs = BTreeMap::<(&str, &str, &str), (&str, &str, Option<&str>)>::new();
+        for row in rows {
+            let observed = (
+                row.output.as_str(),
+                row.output_frame.as_str(),
+                row.diagnostic.as_deref(),
+            );
+            let expected = outputs
+                .entry((&row.arm, &row.workload, &row.layout))
+                .or_insert(observed);
+            if *expected != observed {
+                return Err("same-arm calibration exact output changed between pairs".into());
+            }
         }
-        let values = by_round
-            .values()
-            .map(|pair| pair[1].phases[phase].us as f64 / pair[0].phases[phase].us.max(1) as f64)
-            .collect::<Vec<_>>();
-        let center = median(&values);
-        let ab = median(
-            &values
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| matches!(i % 4, 0 | 3))
-                .map(|(_, v)| *v)
-                .collect::<Vec<_>>(),
-        );
-        let ba = median(
-            &values
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| matches!(i % 4, 1 | 2))
-                .map(|(_, v)| *v)
-                .collect::<Vec<_>>(),
-        );
-        let middle = values.len() / 2;
-        let early = median(&values[..middle]);
-        let late = median(&values[middle..]);
-        let maximum = values.iter().map(|value| (value - 1.0).abs()).fold(0.0_f64, f64::max);
-        let invariant = campaign.invariant_phases.iter().any(|declared| declared == phase);
-        let ok = qualifies([center, ab, ba, early, late], maximum, invariant);
-        qualified &= ok;
-        lines.push(format!("{arm}\t{workload}\t{layout}\t{phase}\t{center:.6}\t{ab:.6}\t{ba:.6}\t{early:.6}\t{late:.6}\t{maximum:.6}\t{}", if ok { "QUALIFIED" } else { "UNQUALIFIED" }));
+        let mut groups = BTreeMap::<(&str, &str, &str, &str), BTreeMap<u32, [&evidence::Row; 2]>>::new();
+        for row in rows {
+            for phase in row.phases.keys() {
+                let rounds = groups.entry((&row.arm, &row.workload, &row.layout, phase)).or_default();
+                let pair = rounds.entry(row.round).or_insert([row, row]);
+                pair[row.position] = row;
+            }
+        }
+        let mut qualified = true;
+        let mut lines = vec!["arm\tworkload\tlayout\tphase\tcenter\torder_ab\torder_ba\ttemporal_early\ttemporal_late\tmax_deviation\tstatus".into()];
+        for arm in requested {
+            append_incompatible(campaign, arm, &mut lines);
+        }
+        for ((arm, workload, layout, phase), by_round) in groups {
+            if by_round.len() != rounds as usize {
+                return Err("calibration evidence is incomplete".into());
+            }
+            let values = by_round
+                .values()
+                .map(|pair| pair[1].phases[phase].us as f64 / pair[0].phases[phase].us.max(1) as f64)
+                .collect::<Vec<_>>();
+            let center = median(&values);
+            let ab = median(
+                &values
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| matches!(i % 4, 0 | 3))
+                    .map(|(_, v)| *v)
+                    .collect::<Vec<_>>(),
+            );
+            let ba = median(
+                &values
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| matches!(i % 4, 1 | 2))
+                    .map(|(_, v)| *v)
+                    .collect::<Vec<_>>(),
+            );
+            let middle = values.len() / 2;
+            let early = median(&values[..middle]);
+            let late = median(&values[middle..]);
+            let maximum = values.iter().map(|value| (value - 1.0).abs()).fold(0.0_f64, f64::max);
+            let invariant = campaign.invariant_phases.iter().any(|declared| declared == phase);
+            let ok = qualifies([center, ab, ba, early, late], maximum, invariant);
+            qualified &= ok;
+            lines.push(format!("{arm}\t{workload}\t{layout}\t{phase}\t{center:.6}\t{ab:.6}\t{ba:.6}\t{early:.6}\t{late:.6}\t{maximum:.6}\t{}", if ok { "QUALIFIED" } else { "UNQUALIFIED" }));
+        }
+        Ok(Self {
+            status: if qualified { "QUALIFIED" } else { "UNQUALIFIED" },
+            text: lines.join("\n") + "\n",
+        })
     }
-    Ok(Report {
-        status: if qualified { "QUALIFIED" } else { "UNQUALIFIED" },
-        text: lines.join("\n") + "\n",
-    })
+}
+
+fn append_incompatible(campaign: &Campaign, arm: &str, lines: &mut Vec<String>) {
+    let incompatible = campaign.workloads.iter().flat_map(|(workload, definition)| {
+        definition
+            .arm_support
+            .iter()
+            .map(move |(layout, support)| (workload, layout, &support[arm]))
+    });
+    for (workload, layout, state) in incompatible {
+        let super::definition::ArmSupport::Incompatible {
+            status,
+            stderr,
+            artifact_sha256,
+        } = state
+        else {
+            continue;
+        };
+        lines.push(format!(
+            "{arm}\t{workload}\t{layout}\t-\t-\t-\t-\t-\t-\t-\tOMITTED classified-incompatible status={status} artifact={artifact_sha256} stderr={}",
+            bounded(stderr)
+        ));
+    }
 }
 
 fn qualifies(strata: [f64; 5], maximum: f64, invariant: bool) -> bool {
