@@ -1,5 +1,8 @@
 use super::definition::{Arm, ArmSupport, Artifact, CAMPAIGN_SCHEMA, Campaign, GuestPath, Layout as CampaignLayout, Workload, artifact_identity};
-use crate::{platform::HostProcess, suite::Error};
+use crate::{
+    platform::{HostProcess, ProcessCapture},
+    suite::Error,
+};
 use clap::Args;
 use hl_process::Outcome;
 use sha2::{Digest as _, Sha256};
@@ -220,14 +223,15 @@ fn campaign(
             (linux("usr/bin/sqlite3"), sqlite.command.clone()),
         ])
         .collect();
-    let external_artifacts = std::iter::once(("command".into(), artifact(&mac_proxy)?))
-        .chain(std::iter::once(("arch".into(), artifact(arch)?)))
-        .chain(layouts.iter().map(|layout| Ok((format!("malloc-{}", layout.name), artifact(&layout.native)?))))
-        .chain([
-            Ok(("python".into(), artifact(&python.interpreter)?)),
-            Ok(("sqlite".into(), artifact(&sqlite.command)?)),
-        ])
-        .collect::<Result<BTreeMap<_, _>, Error>>()?;
+    let mut external_artifacts = BTreeMap::from([
+        ("command".into(), artifact(&mac_proxy)?),
+        ("arch".into(), artifact(arch)?),
+        ("python".into(), artifact(&python.interpreter)?),
+        ("sqlite".into(), artifact(&sqlite.command)?),
+    ]);
+    for layout in layouts {
+        external_artifacts.insert(format!("malloc-{}", layout.name), artifact(&layout.native)?);
+    }
     let smoke_guest = host(&layouts[0].native);
     let rootfs_host = rootfs.display().to_string();
     let arms = BTreeMap::from([
@@ -551,6 +555,22 @@ fn husklet_rootfs_guest(
     Ok(captured.stdout)
 }
 
+fn capture_rootfs_guest(
+    command: &Path,
+    rootfs: &Path,
+    guest: &str,
+    guest_arguments: &[&str],
+) -> Result<ProcessCapture, Error> {
+    let mut arguments = vec![
+        mac_path(command),
+        "--rootfs".into(),
+        rootfs.display().to_string(),
+        guest.into(),
+    ];
+    arguments.extend(guest_arguments.iter().map(|argument| (*argument).to_owned()));
+    Ok(HostProcess::bounded_capture(Path::new(MAC), &arguments, PYTHON_TIMEOUT)?)
+}
+
 struct PythonHusklet {
     interpreter: PathBuf,
     rootfs: PathBuf,
@@ -581,7 +601,10 @@ impl PythonHusklet {
         require_parity("python/plain Husklet", &native_frame, &husklet_frame)?;
         fs::write(output.join("python-plain-husklet.out"), captured.stdout)?;
         fs::write(output.join("python-plain-husklet-exact-output.frame"), husklet_frame)?;
-        Ok(Self { interpreter, rootfs })
+        Ok(Self {
+            interpreter,
+            rootfs: rootfs.to_path_buf(),
+        })
     }
 }
 
