@@ -655,8 +655,9 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
         b[o++] = '0' + inc;
         b[o++] = '\n';
         if (write(2, b, o) < 0) {}
-        // Name the faulting engine function (dladdr is not strictly async-signal-safe, but we _exit right
-        // after, so a rare lock stall is acceptable -- this only runs while engine-fault diagnostics are enabled).
+        // Name the faulting engine function where the host supplies dladdr. It is not strictly
+        // async-signal-safe, but we exit immediately after this diagnostics-only path.
+#if !defined(_WIN32)
         Dl_info di;
         if (hpc && dladdr((void *)hpc, &di) && di.dli_sname) {
             char c[160];
@@ -673,6 +674,7 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
             c[p++] = '\n';
             if (write(2, c, p) < 0) {}
         }
+#endif
     }
     // no guest handler -> a fatal, unmaskable synchronous fault. Terminate the guest process through
     // hl's fatal-signal machinery so its parent's wait4 sees WIFSIGNALED/WTERMSIG=sig (a raw host raise()

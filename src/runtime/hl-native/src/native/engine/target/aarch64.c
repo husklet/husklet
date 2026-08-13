@@ -41,7 +41,9 @@
 #include "../../linux_abi/host_proc.h"
 #include "../../linux_abi/host_wait.h"
 #include <stdatomic.h>
+#if !defined(_WIN32)
 #include <dlfcn.h>
+#endif
 
 #include "hl/engine.h"
 #include "hl/linux_abi.h"
@@ -796,13 +798,15 @@ static void *exc_thread(void *arg) {
         diag_hx(b + 67, st.__pc);
         memcpy(b + 83, " x28=0x", 7);
         diag_hx(b + 90, st.__x[28]);
-        Dl_info info;
         uint64_t off = 0;
         const char *sn = "?";
+#if !defined(_WIN32)
+        Dl_info info;
         if (dladdr((void *)st.__pc, &info)) {
             off = st.__pc - (uint64_t)info.dli_fbase;
             if (info.dli_sname) sn = info.dli_sname;
         }
+#endif
         memcpy(b + 106, " off=0x", 7);
         diag_hx(b + 113, off);
         b[129] = ' ';
