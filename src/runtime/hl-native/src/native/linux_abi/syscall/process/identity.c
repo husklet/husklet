@@ -224,7 +224,8 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                     "soft_hull_direct_sampled=%llu soft_cached_hit_sampled=%llu soft_miss=%llu soft_span=%llu "
                     "soft_bounce_prepare=%llu soft_bounce_commit=%llu smc_queued=%llu smc_commit=%llu "
                     "exit_softmiss=%llu exit_softspan=%llu exit_branch=%llu exit_syscall=%llu exit_other=%llu "
-                    "ibtc_exit_miss=%llu threaded_transitions=%llu threaded_final=%d\n",
+                    "ibtc_exit_miss=%llu branch_after_translation=%llu branch_cached=%llu "
+                    "threaded_transitions=%llu threaded_final=%d\n",
                     (unsigned long long)g_prof_cross, (unsigned long long)g_prof_sys, (unsigned long long)g_prof_miss,
                     (unsigned long long)(g_prof_cross - g_prof_sys - g_prof_miss), (unsigned long long)g_prof_xlate,
                     (unsigned long long)g_lse_n, (unsigned long long)g_wx_toggles, g_dualmap, g_xlate_ns / 1e6,
@@ -241,6 +242,8 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                     (unsigned long long)g_dispatch_profile.exit_syscall,
                     (unsigned long long)g_dispatch_profile.exit_other,
                     (unsigned long long)g_dispatch_profile.ibtc_miss,
+                    (unsigned long long)g_dispatch_profile.branch_after_translation,
+                    (unsigned long long)g_dispatch_profile.branch_cached,
                     (unsigned long long)g_dispatch_profile.threaded_transitions,
                     g_dispatch_profile.threaded_final);
             if (profile_size > 0) {

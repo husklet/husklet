@@ -278,6 +278,7 @@ static void run_guest(struct cpu *c) {
         // Single-threaded skips the lock entirely (g_threaded == 0).
         if (g_threaded) pthread_mutex_lock(&g_jit_lock);
         void *code = map_host(G_PC(c));
+        int translated_now = code == NULL;
         if (!code) {
             uint64_t _t0 = g_dispatch_profile.enabled ? hl_dispatch_profile_begin(&g_dispatch_profile, now_ns()) : 0;
             // near full -> wholesale flush
@@ -415,7 +416,7 @@ static void run_guest(struct cpu *c) {
         stw_after_translated();
 #ifdef G_DISPATCH_PROFILE_EXIT
         // Target reason codes are interpreted before G_DISPATCH_REASON normalizes or services them.
-        G_DISPATCH_PROFILE_EXIT(c);
+        G_DISPATCH_PROFILE_EXIT(c, translated_now);
 #endif
         // Frontend hook: post-run_block reason handling (aarch64: R_SYSCALL service + pc+=4, else R_BRANCH;
         // x86 adds R_CPUID/x87/DIV/IDIV/99). The per-arch syscall pc-advance convention lives in the hook.
