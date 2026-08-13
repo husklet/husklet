@@ -168,6 +168,11 @@ static void svc_fs_namespace_35(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             break;
         }
         {
+            int syntax = dac_unlink_trailing_slash_at((int)a0, (const char *)a1);
+            if (syntax != 0) {
+                G_RET(c) = (uint64_t)(int64_t)syntax;
+                break;
+            }
             int authorization = dac_sticky_at((int)a0, (const char *)a1);
             if (authorization != 0) {
                 G_RET(c) = (uint64_t)(int64_t)authorization;

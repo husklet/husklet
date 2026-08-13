@@ -159,6 +159,17 @@ static int dac_sticky_at(int directory, const char *raw) {
     return status != 0 ? status : -hl_dac_authorize_sticky(&parent, &entry, &credentials);
 }
 
+static int dac_unlink_trailing_slash_at(int directory, const char *raw) {
+    size_t length = strlen(raw);
+    if (length <= 1 || raw[length - 1] != '/') return 0;
+    char trimmed[4200];
+    if (path_copy(trimmed, sizeof trimmed, raw) != 0) return -ENAMETOOLONG;
+    while (length > 1 && trimmed[length - 1] == '/') trimmed[--length] = 0;
+    hl_dac_snapshot entry;
+    int status = dac_snapshot_at(directory, trimmed, 1, &entry);
+    return status != 0 ? status : (entry.mode & S_IFMT) == S_IFDIR ? 0 : -ENOTDIR;
+}
+
 // statx(2) creation time. A plain Linux struct stat carries no birth time, so the engine must consult
 // a host statx to answer it -- AND to answer HONESTLY: a caller trusts stx_mask before reading
 // stx_btime, so STATX_BTIME must be advertised only when the backing filesystem actually reports it
