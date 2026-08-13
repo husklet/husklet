@@ -75,8 +75,30 @@ impl Rootfs {
 
 #[derive(Clone)]
 pub(super) struct OwnedWorkspace {
-    pub(super) root: Arc<PathBuf>,
+    pub(super) root: Arc<WorkspaceRoot>,
     copied: Arc<Mutex<u64>>,
+}
+
+pub(super) struct WorkspaceRoot(PathBuf);
+
+impl std::ops::Deref for WorkspaceRoot {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for WorkspaceRoot {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for WorkspaceRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 pub(super) struct PreparedRoot {
@@ -178,7 +200,7 @@ impl OwnedWorkspace {
             match fs::create_dir(&root) {
                 Ok(()) => {
                     return Ok(Self {
-                        root: Arc::new(root),
+                        root: Arc::new(WorkspaceRoot(root)),
                         copied: Arc::new(Mutex::new(0)),
                     });
                 }
@@ -442,5 +464,39 @@ mod tests {
             Err(EngineError::WorkspaceFailed)
         );
         workspace.cleanup(WorkspaceId(1)).unwrap();
+    }
+
+    #[test]
+    fn final_owner_removes_workspace_after_early_return() {
+        let workspace = OwnedWorkspace::create().unwrap();
+        let root = workspace.root.0.clone();
+        let retained = workspace.clone();
+
+        drop(workspace);
+        assert!(root.is_dir(), "a live workspace owner lost its directory");
+        drop(retained);
+        assert!(!root.exists(), "the final workspace owner leaked its directory");
+    }
+
+    #[test]
+    fn concurrent_final_owners_remove_workspace_exactly_once() {
+        let workspace = OwnedWorkspace::create().unwrap();
+        let root = workspace.root.0.clone();
+        let first = workspace.clone();
+        let second = workspace.clone();
+        drop(workspace);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let dropper = |workspace, barrier: std::sync::Arc<std::sync::Barrier>| {
+            std::thread::spawn(move || {
+                barrier.wait();
+                drop(workspace);
+            })
+        };
+        let left = dropper(first, barrier.clone());
+        let right = dropper(second, barrier.clone());
+        barrier.wait();
+        left.join().unwrap();
+        right.join().unwrap();
+        assert!(!root.exists(), "concurrent final owners leaked their workspace");
     }
 }
