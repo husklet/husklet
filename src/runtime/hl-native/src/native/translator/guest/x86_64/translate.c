@@ -5624,6 +5624,17 @@ static int lower_sse_unpack(struct insn *instruction, uint64_t next, int vd, int
     return TX_NEXT;
 }
 
+static int lower_sse_float_unpack(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
+    if (instruction->op != 0x14 && instruction->op != 0x15) return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    int high = instruction->op == 0x15;
+    int element_size = instruction->p66 ? 3 : 2;
+    uint32_t encoding = (high ? 0x4E007800u : 0x4E003800u) | ((uint32_t)element_size << 22);
+    e_v3(encoding, vd, vd, source);
+    return TX_NEXT;
+}
+
 static int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t op = I.op;
     if (op != 0x2E && op != 0x2F) return TX_FALL;
@@ -6417,13 +6428,8 @@ static void *translate_block(uint64_t gpc) {
                     // The helper emitted the complete lane-wise operation.
                 } else if (lower_sse_widening_multiply(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted the complete widening multiply operation.
-                } else if (op == 0x14 || op == 0x15) { // unpckl/hp{s,d}: interleave float lanes -> ZIP1/ZIP2
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    int hi = (op == 0x15);  // unpckh* -> ZIP2
-                    int sz = I.p66 ? 3 : 2; // 66=pd (64-bit lanes, .2d); none=ps (32-bit lanes, .4s)
-                    uint32_t b = (hi ? 0x4E007800u : 0x4E003800u) | ((uint32_t)sz << 22);
-                    e_v3(b, vd, vd, s);
+                } else if (lower_sse_float_unpack(&I, next, vd, vm, mmx) == TX_NEXT) {
+                    // The helper emitted UNPCKL/HPS or UNPCKL/HPD.
                 } else if (op == 0xE6 && I.rep) { // cvtdq2pd (F3): low 2 packed s32 -> 2 packed f64
                     int s = vm;
                     if (I.is_mem) {
