@@ -1,4 +1,4 @@
-#include "core.h"
+#include "integer.h"
 #include "arithmetic.h"
 #include "primitives.h"
 #include "trace.h"

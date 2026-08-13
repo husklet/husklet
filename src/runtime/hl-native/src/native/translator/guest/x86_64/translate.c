@@ -189,7 +189,7 @@ void hl_x86_legacy_direction_set(enum hl_x86_direction direction) { g_df = direc
 
 #include "lower/sse4x.h"
 #include "lower/branch.h"
-#include "lower/core.h"
+#include "lower/integer.h"
 
 static int fpdnan_on(void) {
     return 1;
