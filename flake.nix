@@ -801,10 +801,36 @@
             runHook preBuild
             export CC_x86_64_pc_windows_gnu=${lib.escapeShellArg compiler}
             export CARGO_TARGET_${targetKey}_LINKER=${lib.escapeShellArg compiler}
+            export HL_NATIVE_COMPILE_CHECK=1
             cargo check --locked --offline --target ${target} -p hl-native -p hl-engine 2>&1 |
               tee "$TMPDIR/windows-contract.log"
-            grep -F 'native C engine planned but not yet verified for x86_64-windows' \
-              "$TMPDIR/windows-contract.log" >/dev/null
+            dll="$(find target/${target}/debug/build -path '*/out/hl_native_engine.dll' -print -quit)"
+            import="$(find target/${target}/debug/build -path '*/out/libhl_native_engine.dll.a' -print -quit)"
+            test -n "$dll"
+            test -n "$import"
+            ${windows.stdenv.cc.targetPrefix}objdump -f "$dll" \
+              | grep -F 'file format pei-x86-64' >/dev/null
+            file "$dll" | grep -E 'PE32\+.*DLL.*x86-64'
+            file "$import" | grep -F 'current ar archive'
+            cat > expected-engine-exports <<'EOF'
+            hl_c_backend_create
+            hl_c_backend_destroy
+            hl_c_backend_executable_discard
+            hl_c_backend_executable_open
+            hl_c_backend_exit_detail
+            hl_c_backend_exit_kind
+            hl_c_backend_exit_status
+            hl_c_backend_leak_check_nonvacuity
+            hl_c_backend_request
+            hl_c_backend_run
+            hl_c_backend_translation_count
+            hl_engine_abi
+            hl_engine_version
+            EOF
+            ${windows.stdenv.cc.targetPrefix}nm -g "$import" \
+              | awk '$2 == "T" && $3 ~ /^hl_/ { print $3 }' \
+              | sort -u > actual-engine-exports
+            diff -u expected-engine-exports actual-engine-exports
             ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
               -Isrc/runtime/hl-native/src/native -Isrc/runtime/hl-native/src/native/include \
               -c src/runtime/hl-native/src/native/bridge/host.c -o host-bridge.obj
@@ -870,7 +896,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows hl-native/hl-engine Rust target compile, every Windows host-service translation unit combined into one exact x86-64 COFF object, the forced POSIX compatibility prelude/implementation, strict C/C++ public-header contracts, and ABI fixture DLL/import-library link; this is not the complete engine DLL, MSVC SDK, or runtime proof' \
+              'GNU Windows hl-native/hl-engine Rust target compile, complete engine DLL/import-library link with exact public exports, every Windows host-service translation unit, forced POSIX compatibility, and strict C/C++ public-header contracts; this is compile/link evidence, not MSVC SDK or runtime proof' \
               > "$out/evidence"
           '';
         };

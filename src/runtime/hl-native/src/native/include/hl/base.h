@@ -5,8 +5,10 @@
 #include <stdint.h>
 
 #if defined(_WIN32) && defined(HL_SHARED)
-#if defined(HL_BUILDING_ENGINE)
+#if defined(HL_BUILDING_ENGINE) && !defined(HL_EXPLICIT_EXPORTS)
 #define HL_API __declspec(dllexport)
+#elif defined(HL_BUILDING_ENGINE)
+#define HL_API
 #else
 #define HL_API __declspec(dllimport)
 #endif

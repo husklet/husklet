@@ -50,14 +50,17 @@ fn main() {
         println!("cargo:rerun-if-env-changed={input}");
     }
     println!("cargo:rerun-if-env-changed=HL_C_SANITIZER");
+    println!("cargo:rerun-if-env-changed=HL_NATIVE_COMPILE_CHECK");
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo supplies CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo supplies CARGO_CFG_TARGET_ARCH");
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").expect("Cargo supplies CARGO_CFG_TARGET_ENV");
     let Some(target) = platform::HostTarget::from_cfg(&target_os, &target_arch) else {
         println!("cargo:supported=0");
         println!("cargo:warning=native C engine unavailable for {target_arch}-{target_os}");
         return;
     };
-    if !target.supported() {
+    let compile_check = env::var_os("HL_NATIVE_COMPILE_CHECK").is_some();
+    if !target.supported() && !compile_check {
         println!("cargo:supported=0");
         println!(
             "cargo:rustc-env=HL_NATIVE_LIBRARY_NAME={}",
@@ -70,7 +73,7 @@ fn main() {
         println!("cargo:warning=native C engine planned but not yet verified for {target_arch}-{target_os}");
         return;
     }
-    println!("cargo:supported=1");
+    println!("cargo:supported={}", u8::from(target.supported()));
     println!("cargo:host_os={target_os}");
     println!("cargo:host_arch={target_arch}");
 
@@ -164,7 +167,7 @@ fn main() {
         "windows" => build_support::WINDOWS_SYSTEM_LIBRARIES,
         _ => &["atomic", "dl", "m", "pthread"][..],
     };
-    link_shared_engine(&output, &target_os, &archives, system_libraries);
+    link_shared_engine(&output, &target_os, &target_env, &archives, system_libraries);
     println!("cargo:rustc-link-search=native={}", output.display());
     println!("cargo:rustc-link-lib=dylib=hl_native_engine");
     emit_loader_paths(
@@ -283,6 +286,7 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         .std("c11")
         .define("HL_SHARED", None)
         .define("HL_BUILDING_ENGINE", None)
+        .define("HL_EXPLICIT_EXPORTS", None)
         .flag_if_supported("-fvisibility=hidden")
         .flag_if_supported("-fno-function-sections")
         .flag_if_supported("-fno-data-sections");
@@ -356,7 +360,7 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
     build.compile(name);
 }
 
-fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], libraries: &[&str]) {
+fn link_shared_engine(output: &Path, target_os: &str, target_env: &str, archives: &[&str], libraries: &[&str]) {
     let compiler = cc::Build::new().get_compiler();
     let filename = artifact::filename(target_os);
     let destination = output.join(filename);
@@ -378,15 +382,31 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
         let exported = build_support::windows_export_definition(RUST_BRIDGE_EXPORTS);
         fs::write(&definition, exported).expect("write Windows native export definition");
         command.arg("-shared");
-        command.arg(format!("-Wl,/IMPLIB:{}", output.join("hl_native_engine.lib").display()));
-        command.arg(format!("-Wl,/DEF:{}", definition.display()));
-        for archive in archives {
+        if target_env == "msvc" {
+            command.arg(format!("-Wl,/IMPLIB:{}", output.join("hl_native_engine.lib").display()));
+            command.arg(format!("-Wl,/DEF:{}", definition.display()));
+            for archive in archives {
+                command.arg(format!(
+                    "-Wl,/WHOLEARCHIVE:{}",
+                    output
+                        .join(build_support::static_archive_filename(target_os, target_env, archive))
+                        .display()
+                ));
+            }
+        } else {
             command.arg(format!(
-                "-Wl,/WHOLEARCHIVE:{}",
-                output
-                    .join(build_support::static_archive_filename(target_os, archive))
-                    .display()
+                "-Wl,--out-implib,{}",
+                output.join("libhl_native_engine.dll.a").display()
             ));
+            command.arg(&definition);
+            command.arg("-Wl,--exclude-all-symbols");
+            command.arg("-Wl,--exclude-symbols=hl_aarch64_target_syscall_trap_install");
+            command.arg("-Wl,--exclude-symbols=hl_x86_64_target_syscall_trap_install");
+            command.arg("-Wl,--whole-archive");
+            for archive in archives {
+                command.arg(output.join(build_support::static_archive_filename(target_os, target_env, archive)));
+            }
+            command.arg("-Wl,--no-whole-archive");
         }
     } else {
         let export_map = output.join("hl_native_engine.map");
@@ -408,6 +428,9 @@ fn link_shared_engine(output: &Path, target_os: &str, archives: &[&str], librari
     command.arg("-o").arg(&destination);
     for library in libraries {
         command.arg(format!("-l{library}"));
+    }
+    if target_os == "windows" && target_env != "msvc" {
+        command.arg("-latomic");
     }
     if env::var("HL_C_SANITIZER").as_deref() == Ok("leak") && target_os == "linux" {
         command.arg("-fsanitize=leak");

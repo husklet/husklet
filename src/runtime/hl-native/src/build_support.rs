@@ -59,8 +59,8 @@ pub(crate) fn source_matches(target_os: &str, source: &str) -> bool {
     !matches!(platform, "linux" | "macos" | "windows") || platform == target_os
 }
 
-pub(crate) fn static_archive_filename(target_os: &str, name: &str) -> String {
-    if target_os == "windows" {
+pub(crate) fn static_archive_filename(target_os: &str, target_env: &str, name: &str) -> String {
+    if target_os == "windows" && target_env == "msvc" {
         format!("{name}.lib")
     } else {
         format!("lib{name}.a")
@@ -179,8 +179,18 @@ mod tests {
 
     #[test]
     fn windows_link_inputs_use_target_spelling() {
-        assert_eq!(super::static_archive_filename("windows", "hl_engine"), "hl_engine.lib");
-        assert_eq!(super::static_archive_filename("linux", "hl_engine"), "libhl_engine.a");
+        assert_eq!(
+            super::static_archive_filename("windows", "msvc", "hl_engine"),
+            "hl_engine.lib"
+        );
+        assert_eq!(
+            super::static_archive_filename("windows", "gnu", "hl_engine"),
+            "libhl_engine.a"
+        );
+        assert_eq!(
+            super::static_archive_filename("linux", "gnu", "hl_engine"),
+            "libhl_engine.a"
+        );
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ws2_32"));
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ntdll"));
     }
