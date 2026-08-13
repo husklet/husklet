@@ -24,6 +24,7 @@ const RUST_BRIDGE_EXPORTS: &[&str] = &[
     "hl_c_backend_checkpoint_trigger_destroy",
     "hl_c_backend_checkpoint_adopt",
     "hl_c_backend_checkpoint_interrupt_signal",
+    "hl_c_backend_checkpoint_configure",
     "hl_c_backend_create",
     "hl_c_backend_run",
     "hl_c_backend_request",
@@ -228,6 +229,7 @@ fn discover_runtime_roots(target_os: &str, target_arch: &str) -> Vec<String> {
         "src/native/engine/lifecycle.c",
         "src/native/engine/target/aarch64.c",
         "src/native/engine/target/x86_64.c",
+        "src/native/engine/checkpoint_channel.c",
     ];
     sources
         .into_iter()

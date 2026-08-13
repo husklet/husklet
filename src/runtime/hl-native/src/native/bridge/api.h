@@ -21,8 +21,9 @@ HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t tim
 HL_API int32_t hl_c_backend_checkpoint_trigger_create(int32_t *descriptor, void **mapping);
 HL_API uint32_t hl_c_backend_checkpoint_trigger_bump(void *mapping);
 HL_API void hl_c_backend_checkpoint_trigger_destroy(void *mapping, int32_t descriptor);
-HL_API int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger);
-HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(void);
+HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32_t trigger);
+HL_API int32_t hl_c_backend_checkpoint_configure(hl_c_backend *backend, int32_t broker, int32_t trigger);
+HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa);
 /* output is required and is cleared before any other input is validated; every failure leaves it NULL. */
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host,
                                    int32_t executable_fd, const hl_c_main_image_plan *image_plan,

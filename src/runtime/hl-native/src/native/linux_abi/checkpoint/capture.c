@@ -863,6 +863,22 @@ int hl_ckpt_interrupt_signal(void) {
 }
 #endif
 
+int hl_ckpt_interrupt_executors(void) {
+    int interrupted = 0;
+    int leader_interrupted = 0;
+    pthread_mutex_lock(&g_threg_m);
+    for (int i = 0; i < THREAD_REG_MAX; ++i) {
+        if (g_threg[i].c == NULL) continue;
+        __atomic_store_n(&g_threg[i].c->irq, 1, __ATOMIC_SEQ_CST);
+        if (pthread_kill(g_threg[i].th, THREAD_INT_SIG) != 0) continue;
+        pthread_kill(g_threg[i].th, STW_SIG);
+        interrupted++;
+        if (g_threg[i].c->tid == 0) leader_interrupted = 1;
+    }
+    pthread_mutex_unlock(&g_threg_m);
+    return leader_interrupted ? interrupted : 0;
+}
+
 // Arm checkpoint/restore if HL_CHECKPOINT / HL_RESTORE is set. Called from engine_global_init (in every
 // process, so a forked child is armed too). Maps the shared trigger and records the CURRENT generation as
 // already-seen, so a stale trigger from a previous run never false-fires on a fresh launch or a restore

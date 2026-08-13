@@ -1,4 +1,5 @@
 #include "namespace.h"
+#include "../checkpoint_channel.c"
 #include "../bus.h"
 #include "../../linux_abi/dns.h"
 

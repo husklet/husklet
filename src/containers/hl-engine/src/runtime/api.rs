@@ -8,6 +8,9 @@ mod execution;
 pub(crate) use execution::{ProductionFactory, ProductionMachine};
 
 #[cfg(unix)]
+mod checkpoint;
+
+#[cfg(unix)]
 mod terminal;
 
 use crate::activation::GuestIsa;

@@ -1,9 +1,14 @@
 #![allow(unsafe_code)]
 
-use crate::composition::{CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory};
+use crate::composition::{
+    CheckpointSink, CheckpointSource, CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory,
+};
 use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
+
+#[cfg(unix)]
+use super::checkpoint::Server;
 
 #[cfg(unix)]
 use super::terminal::NativeOutputBridge;
@@ -13,6 +18,7 @@ use super::terminal::NativeTerminalBridge;
 const REQUEST_INTERRUPT: u32 = 1;
 const REQUEST_FORCE_STOP: u32 = 2;
 const REQUEST_SIGNAL: u32 = 3;
+const REQUEST_CHECKPOINT: u32 = 4;
 
 pub(crate) struct ProductionMachine {
     isa: crate::activation::GuestIsa,
@@ -21,6 +27,8 @@ pub(crate) struct ProductionMachine {
     terminal: Option<NativeTerminalBridge>,
     #[cfg(unix)]
     output: Option<NativeOutputBridge>,
+    #[cfg(unix)]
+    checkpoint: Option<CheckpointControl>,
     engine: Mutex<Option<Arc<hl_native::Engine>>>,
 }
 
@@ -48,6 +56,15 @@ impl RuntimeFactory for ProductionFactory {
         } else {
             None
         };
+        #[cfg(unix)]
+        let checkpoint = match (
+            request.services.checkpoint_sink.clone(),
+            request.services.checkpoint_source.clone(),
+        ) {
+            (Some(sink), Some(source)) => Some(CheckpointControl::start(sink, source)?),
+            (None, None) => None,
+            _ => return Err(CompositionError::RuntimeConstruction),
+        };
         Ok(ProductionMachine {
             isa: request.isa,
             plan: request.plan.clone(),
@@ -55,6 +72,8 @@ impl RuntimeFactory for ProductionFactory {
             terminal,
             #[cfg(unix)]
             output,
+            #[cfg(unix)]
+            checkpoint,
             engine: Mutex::new(None),
         })
     }
@@ -131,7 +150,14 @@ impl ProductionMachine {
             provider_fd: -1,
         };
         // SAFETY: all pointers in config remain live for this call and there is no callback state.
-        unsafe { hl_native::Engine::create(config) }.map_err(|_| EngineError::LaunchFailed)
+        let engine = unsafe { hl_native::Engine::create(config) }.map_err(|_| EngineError::LaunchFailed)?;
+        #[cfg(unix)]
+        if let Some(checkpoint) = &self.checkpoint {
+            engine
+                .configure_checkpoint(&checkpoint.transport)
+                .map_err(|_| EngineError::LaunchFailed)?;
+        }
+        Ok(engine)
     }
 
     fn current(&self) -> Result<Arc<hl_native::Engine>, EngineError> {
@@ -201,5 +227,85 @@ impl GuestMachine for ProductionMachine {
         self.current()?
             .request(kind, signal)
             .map_err(|_| EngineError::StopFailed)
+    }
+
+    fn checkpoint_supported(&self) -> Result<(), EngineError> {
+        #[cfg(unix)]
+        if self.checkpoint.is_some() {
+            return Ok(());
+        }
+        Err(EngineError::Unsupported)
+    }
+
+    fn capture_checkpoint(&self) -> Result<(), EngineError> {
+        #[cfg(unix)]
+        if let Some(checkpoint) = &self.checkpoint {
+            let engine = self.current()?;
+            return checkpoint.capture(engine.as_ref(), self.isa);
+        }
+        Err(EngineError::Unsupported)
+    }
+}
+
+#[cfg(unix)]
+struct CheckpointControl {
+    server: Arc<Server>,
+    transport: hl_native::CheckpointTransport,
+    acceptor: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl CheckpointControl {
+    fn start(sink: Arc<dyn CheckpointSink>, source: Arc<dyn CheckpointSource>) -> Result<Self, CompositionError> {
+        let (broker, transport) =
+            hl_native::CheckpointTransport::create().map_err(|_| CompositionError::RuntimeConstruction)?;
+        let server = Arc::new(Server::new(sink, source));
+        let acceptor = Server::start(&server, broker);
+        Ok(Self {
+            server,
+            transport,
+            acceptor: Some(acceptor),
+        })
+    }
+
+    fn capture(&self, engine: &hl_native::Engine, isa: crate::activation::GuestIsa) -> Result<(), EngineError> {
+        use std::time::{Duration, Instant};
+
+        self.transport.bump();
+        let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
+            crate::activation::GuestIsa::Aarch64 => 1,
+            crate::activation::GuestIsa::X86_64 => 2,
+        });
+        if signal <= 0 || engine.request(REQUEST_CHECKPOINT, 0).is_err() {
+            return Err(EngineError::StopFailed);
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut next_interrupt = Instant::now() + Duration::from_millis(100);
+        loop {
+            if self.server.committed() {
+                return Ok(());
+            }
+            if self.server.failure().is_some() {
+                return Err(EngineError::LaunchFailed);
+            }
+            if Instant::now() >= deadline {
+                return Err(EngineError::WaitFailed);
+            }
+            if Instant::now() >= next_interrupt {
+                let _ = engine.request(REQUEST_CHECKPOINT, 0);
+                next_interrupt = Instant::now() + Duration::from_millis(100);
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for CheckpointControl {
+    fn drop(&mut self) {
+        self.server.stop();
+        if let Some(acceptor) = self.acceptor.take() {
+            let _ = acceptor.join();
+        }
     }
 }

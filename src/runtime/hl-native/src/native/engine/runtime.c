@@ -2,12 +2,20 @@
 #include "hl/linux_abi.h"
 #include "backend.h"
 #include "options.h"
+#include "../host/system.h"
 
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#define HL_ENGINE_REQUEST_CHECKPOINT_PRIVATE 4u
+#include <sys/socket.h>
+#include <errno.h>
+#include <poll.h>
 
 /* One process may embed every guest translator.  Keep registration keyed by
  * guest ISA: a constructor for one backend must never overwrite another. */
@@ -47,6 +55,11 @@ struct hl_engine {
     hl_engine_main_image_plan main_image_plan;
     unsigned char *owned_executable_image;
     uint64_t translations;
+    int checkpoint_broker;
+    int checkpoint_trigger;
+    int checkpoint_control_parent;
+    int checkpoint_control_child;
+    uint32_t checkpoint_control_ready;
 };
 
 enum {
@@ -73,6 +86,22 @@ static void hl_engine_yield(hl_engine *engine) {
     (void)engine->host.clock->sleep_until(engine->host.context, HL_HOST_CLOCK_MONOTONIC, deadline);
 }
 
+static hl_status hl_engine_checkpoint_control_ready(hl_engine *engine) {
+    struct pollfd waiting;
+    unsigned char ack = 0;
+    int ready;
+    if (engine->checkpoint_control_ready) return HL_STATUS_OK;
+    if (engine->checkpoint_control_parent < 0) return HL_STATUS_NOT_SUPPORTED;
+    waiting = (struct pollfd){.fd = engine->checkpoint_control_parent, .events = POLLIN};
+    do {
+        ready = poll(&waiting, 1, 5000);
+    } while (ready < 0 && errno == EINTR);
+    if (ready <= 0 || read(waiting.fd, &ack, sizeof(ack)) != (ssize_t)sizeof(ack) || ack != 0xa5)
+        return HL_STATUS_PLATFORM_FAILURE;
+    engine->checkpoint_control_ready = 1;
+    return HL_STATUS_OK;
+}
+
 uint32_t hl_engine_abi(void) {
     return HL_ENGINE_ABI;
 }
@@ -83,6 +112,54 @@ const char *hl_engine_version(void) {
 
 uint64_t hl_engine_translation_count(const hl_engine *engine) {
     return engine == NULL ? 0 : engine->translations;
+}
+
+hl_status hl_engine_checkpoint_configure(hl_engine *engine, int broker, int trigger) {
+    int broker_copy;
+    int trigger_copy;
+    if (engine == NULL || broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
+    broker_copy = dup(broker);
+    if (broker_copy < 0) return HL_STATUS_PLATFORM_FAILURE;
+    trigger_copy = dup(trigger);
+    if (trigger_copy < 0) {
+        (void)close(broker_copy);
+        return HL_STATUS_PLATFORM_FAILURE;
+    }
+    (void)fcntl(broker_copy, F_SETFD, FD_CLOEXEC);
+    (void)fcntl(trigger_copy, F_SETFD, FD_CLOEXEC);
+    broker_copy = hl_host_process_fd_private_adopt(broker_copy);
+    trigger_copy = hl_host_process_fd_private_adopt(trigger_copy);
+    if (broker_copy < 0 || trigger_copy < 0) {
+        if (broker_copy >= 0) (void)close(broker_copy);
+        if (trigger_copy >= 0) (void)close(trigger_copy);
+        return HL_STATUS_PLATFORM_FAILURE;
+    }
+    if (engine->checkpoint_control_parent < 0) {
+        int control[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, control) != 0) {
+            (void)close(broker_copy);
+            (void)close(trigger_copy);
+            return HL_STATUS_PLATFORM_FAILURE;
+        }
+        (void)fcntl(control[0], F_SETFD, FD_CLOEXEC);
+        (void)fcntl(control[1], F_SETFD, FD_CLOEXEC);
+        engine->checkpoint_control_parent = hl_host_process_fd_private_adopt(control[0]);
+        engine->checkpoint_control_child = hl_host_process_fd_private_adopt(control[1]);
+        if (engine->checkpoint_control_parent < 0 || engine->checkpoint_control_child < 0) {
+            if (engine->checkpoint_control_parent >= 0) (void)close(engine->checkpoint_control_parent);
+            if (engine->checkpoint_control_child >= 0) (void)close(engine->checkpoint_control_child);
+            engine->checkpoint_control_parent = -1;
+            engine->checkpoint_control_child = -1;
+            (void)close(broker_copy);
+            (void)close(trigger_copy);
+            return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
+    if (engine->checkpoint_broker >= 0) (void)close(engine->checkpoint_broker);
+    if (engine->checkpoint_trigger >= 0) (void)close(engine->checkpoint_trigger);
+    engine->checkpoint_broker = broker_copy;
+    engine->checkpoint_trigger = trigger_copy;
+    return HL_STATUS_OK;
 }
 
 enum { HL_ENGINE_STRING_LIMIT = 64 * 1024 * 1024 };
@@ -502,6 +579,10 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
     if (status != HL_STATUS_OK) return status;
     engine = calloc(1, sizeof(*engine));
     if (engine == NULL) return HL_STATUS_OUT_OF_MEMORY;
+    engine->checkpoint_broker = -1;
+    engine->checkpoint_trigger = -1;
+    engine->checkpoint_control_parent = -1;
+    engine->checkpoint_control_child = -1;
     memcpy(&engine->config, config, sizeof(*config));
     if (config->main_image_plan != NULL) {
         engine->main_image_plan = *config->main_image_plan;
@@ -669,6 +750,10 @@ fail:
         free(engine->owned_working_directory);
         free(engine->owned_hostname);
         free(engine->owned_environment);
+        if (engine->checkpoint_broker >= 0) (void)close(engine->checkpoint_broker);
+        if (engine->checkpoint_trigger >= 0) (void)close(engine->checkpoint_trigger);
+        if (engine->checkpoint_control_parent >= 0) (void)close(engine->checkpoint_control_parent);
+        if (engine->checkpoint_control_child >= 0) (void)close(engine->checkpoint_control_child);
         {
             size_t index;
             for (index = 0; index < sizeof(engine->owned_box_strings) / sizeof(engine->owned_box_strings[0]); ++index)
@@ -745,7 +830,8 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     }
     status = engine->backend->start_process(
         &engine->host, engine->box_initialized ? &engine->box : NULL, &engine->options, &engine->config, (uint32_t)argc,
-        argv, engine->syscall_context, engine->syscall_dispatch, &process, &process_result);
+        argv, engine->syscall_context, engine->syscall_dispatch, engine->checkpoint_broker, engine->checkpoint_trigger,
+        engine->checkpoint_control_child, &process, &process_result);
     if (status != HL_STATUS_OK) {
         hl_engine_lock(engine);
         engine->state = HL_ENGINE_FINISHED;
@@ -758,6 +844,11 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     pending = engine->pending_termination;
     hl_engine_unlock(engine);
     if (pending != 0) engine->host.process->terminate(engine->host.context, process, pending);
+    if (engine->checkpoint_control_parent >= 0) {
+        status = hl_engine_checkpoint_control_ready(engine);
+        if (status != HL_STATUS_OK)
+            (void)engine->host.process->terminate(engine->host.context, process, HL_HOST_PROCESS_TERMINATE_FORCE);
+    }
     waited = engine->host.process->wait(engine->host.context, process, HL_HOST_DEADLINE_INFINITE);
     hl_engine_lock(engine);
     engine->process = HL_HOST_HANDLE_INVALID;
@@ -799,7 +890,30 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
     hl_host_handle process;
     hl_status status;
     if (engine == NULL || (data_size != 0 && data == NULL)) return HL_STATUS_INVALID_ARGUMENT;
-    if (request == HL_ENGINE_REQUEST_SIGNAL) {
+    if (request == HL_ENGINE_REQUEST_CHECKPOINT_PRIVATE) {
+        if (data_size != 0) return HL_STATUS_INVALID_ARGUMENT;
+        if (engine->checkpoint_control_parent < 0) return HL_STATUS_NOT_SUPPORTED;
+        status = hl_engine_checkpoint_control_ready(engine);
+        if (status != HL_STATUS_OK) return status;
+        for (;;) {
+            unsigned char command = 1;
+            ssize_t written = write(engine->checkpoint_control_parent, &command, sizeof(command));
+            if (written == (ssize_t)sizeof(command)) {
+                unsigned char interrupted = 0;
+                struct pollfd waiting = {.fd = engine->checkpoint_control_parent, .events = POLLIN};
+                int ready;
+                do {
+                    ready = poll(&waiting, 1, 5000);
+                } while (ready < 0 && errno == EINTR);
+                if (ready > 0 && read(waiting.fd, &interrupted, sizeof(interrupted)) == (ssize_t)sizeof(interrupted) &&
+                    interrupted != 0)
+                    return HL_STATUS_OK;
+                return HL_STATUS_PLATFORM_FAILURE;
+            }
+            if (written < 0 && errno == EINTR) continue;
+            return HL_STATUS_PLATFORM_FAILURE;
+        }
+    } else if (request == HL_ENGINE_REQUEST_SIGNAL) {
         uint32_t signal_number;
         if (data == NULL || data_size != sizeof(signal_number)) return HL_STATUS_INVALID_ARGUMENT;
         memcpy(&signal_number, data, sizeof(signal_number));
@@ -877,6 +991,10 @@ void hl_engine_destroy(hl_engine *engine) {
     free(engine->owned_working_directory);
     free(engine->owned_hostname);
     free(engine->owned_environment);
+    if (engine->checkpoint_broker >= 0) (void)close(engine->checkpoint_broker);
+    if (engine->checkpoint_trigger >= 0) (void)close(engine->checkpoint_trigger);
+    if (engine->checkpoint_control_parent >= 0) (void)close(engine->checkpoint_control_parent);
+    if (engine->checkpoint_control_child >= 0) (void)close(engine->checkpoint_control_child);
     {
         size_t index;
         for (index = 0; index < sizeof(engine->owned_box_strings) / sizeof(engine->owned_box_strings[0]); ++index)

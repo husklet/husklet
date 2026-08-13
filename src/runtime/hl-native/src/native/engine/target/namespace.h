@@ -29,6 +29,23 @@
 #define hl_engine_child_result_publish HL_TARGET_LOCAL(engine_child_result_publish)
 #define hl_engine_child_result_publish_signal HL_TARGET_LOCAL(engine_child_result_publish_signal)
 
+/* Each embedded translator carries checkpoint channel state consumed by its
+ * Linux-ABI unity unit. Keep adoption and execution in the same ISA namespace. */
+#define hl_ckpt_channel_adopt HL_TARGET_LOCAL(ckpt_channel_adopt)
+#define hl_ckpt_channel_acquire HL_TARGET_LOCAL(ckpt_channel_acquire)
+#define hl_ckpt_channel_call HL_TARGET_LOCAL(ckpt_channel_call)
+#define hl_ckpt_channel_broker HL_TARGET_LOCAL(ckpt_channel_broker)
+#define hl_ckpt_channel_publish HL_TARGET_LOCAL(ckpt_channel_publish)
+#define hl_ckpt_trigger_descriptor HL_TARGET_LOCAL(ckpt_trigger_descriptor)
+#define hl_ckpt_trigger_publish HL_TARGET_LOCAL(ckpt_trigger_publish)
+#define hl_ckpt_broker_pair HL_TARGET_LOCAL(ckpt_broker_pair)
+#define hl_ckpt_broker_accept HL_TARGET_LOCAL(ckpt_broker_accept)
+#define hl_ckpt_trigger_create HL_TARGET_LOCAL(ckpt_trigger_create)
+#define hl_ckpt_trigger_bump HL_TARGET_LOCAL(ckpt_trigger_bump)
+#define hl_ckpt_trigger_destroy HL_TARGET_LOCAL(ckpt_trigger_destroy)
+#define hl_ckpt_interrupt_signal HL_TARGET_LOCAL(ckpt_interrupt_signal)
+#define hl_ckpt_interrupt_executors HL_TARGET_LOCAL(ckpt_interrupt_executors)
+
 #define hl_linux_bus_active HL_TARGET_LOCAL(linux_bus_active)
 #define hl_linux_bus_fault HL_TARGET_LOCAL(linux_bus_fault)
 #define hl_linux_bus_generation HL_TARGET_LOCAL(linux_bus_generation)

@@ -75,8 +75,9 @@ unsafe extern "C" {
     pub(super) fn hl_c_backend_checkpoint_trigger_create(descriptor: *mut c_int, mapping: *mut *mut c_void) -> c_int;
     pub(super) fn hl_c_backend_checkpoint_trigger_bump(mapping: *mut c_void) -> c_uint;
     pub(super) fn hl_c_backend_checkpoint_trigger_destroy(mapping: *mut c_void, descriptor: c_int);
-    pub(super) fn hl_c_backend_checkpoint_adopt(broker: c_int, trigger: c_int) -> c_int;
-    pub(super) fn hl_c_backend_checkpoint_interrupt_signal() -> c_int;
+    pub(super) fn hl_c_backend_checkpoint_adopt(isa: c_uint, broker: c_int, trigger: c_int) -> c_int;
+    pub(super) fn hl_c_backend_checkpoint_interrupt_signal(isa: c_uint) -> c_int;
+    pub(super) fn hl_c_backend_checkpoint_configure(backend: *mut Backend, broker: c_int, trigger: c_int) -> c_int;
     pub(super) fn hl_c_backend_create(
         isa: c_uint,
         rootfs: *const c_char,

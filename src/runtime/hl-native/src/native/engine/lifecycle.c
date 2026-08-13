@@ -11,6 +11,13 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <pthread.h>
+#include <unistd.h>
+
+extern int hl_ckpt_channel_adopt(const char *broker, const char *trigger);
+extern int hl_ckpt_interrupt_executors(void);
 
 #ifndef HL_PRODUCTION_GUEST_ISA
 #error HL_PRODUCTION_GUEST_ISA is required
@@ -80,6 +87,9 @@ typedef struct hl_production_entry_context {
     hl_engine_child_result *result;
     void *syscall_context;
     hl_syscall_trap_fn syscall_dispatch;
+    int checkpoint_broker;
+    int checkpoint_trigger;
+    int checkpoint_control;
 } hl_production_entry_context;
 
 #if defined(_WIN32)
@@ -435,6 +445,21 @@ static int32_t hl_production_cold_entry(void *opaque) {
 #endif
 
 #if !defined(_WIN32)
+static void *hl_checkpoint_control_main(void *opaque) {
+    int descriptor = (int)(intptr_t)opaque;
+    unsigned char command;
+    unsigned char ready = 0xa5;
+    if (write(descriptor, &ready, sizeof(ready)) != (ssize_t)sizeof(ready)) return NULL;
+    while (read(descriptor, &command, sizeof(command)) == (ssize_t)sizeof(command)) {
+        if (command == 1) {
+            int count = hl_ckpt_interrupt_executors();
+            unsigned char interrupted = count > 255 ? 255 : (unsigned char)count;
+            if (write(descriptor, &interrupted, sizeof(interrupted)) != (ssize_t)sizeof(interrupted)) return NULL;
+        }
+    }
+    return NULL;
+}
+
 static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;
     active_result = context->result;
@@ -448,6 +473,20 @@ static int32_t hl_production_entry(void *opaque) {
         context->config->executable == NULL ? HL_HOST_HANDLE_INVALID : context->config->executable->host_handle;
     const hl_engine_executable *spec = context->config->executable;
     hl_target_syscall_trap_install(context->syscall_context, context->syscall_dispatch);
+    if (context->checkpoint_broker >= 0) {
+        char broker[32];
+        char trigger[32];
+        (void)snprintf(broker, sizeof(broker), "%d", context->checkpoint_broker);
+        (void)snprintf(trigger, sizeof(trigger), "%d", context->checkpoint_trigger);
+        if (hl_ckpt_channel_adopt(broker, trigger) != 0) return HL_STATUS_PLATFORM_FAILURE;
+        if (context->checkpoint_control >= 0) {
+            pthread_t control;
+            if (pthread_create(&control, NULL, hl_checkpoint_control_main,
+                               (void *)(intptr_t)context->checkpoint_control) != 0)
+                return HL_STATUS_PLATFORM_FAILURE;
+            if (pthread_detach(control) != 0) return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
     int32_t result =
         hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
                            spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
@@ -471,6 +510,8 @@ static void hl_production_result_release(const hl_host_services *host, hl_host_h
 static hl_status hl_production_start_process(const hl_host_services *host, hl_linux_abi *box, hl_options *options,
                                              const hl_engine_config *config, uint32_t argc, const char *const argv[],
                                              void *syscall_context, hl_syscall_trap_fn syscall_dispatch,
+                                             int checkpoint_broker, int checkpoint_trigger,
+                                             int checkpoint_control,
                                              hl_host_handle *process, hl_host_handle *result_token) {
 #if !defined(_WIN32)
     hl_production_entry_context entry = {0};
@@ -537,6 +578,9 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.result = result->record;
     entry.syscall_context = syscall_context;
     entry.syscall_dispatch = syscall_dispatch;
+    entry.checkpoint_broker = checkpoint_broker;
+    entry.checkpoint_trigger = checkpoint_trigger;
+    entry.checkpoint_control = checkpoint_control;
     if (box == NULL) {
         spawned = host->process->spawn_cloned(host->context, hl_production_entry, &entry);
     } else {

@@ -48,6 +48,16 @@ unsafe impl Send for CheckpointTransport {}
 unsafe impl Sync for CheckpointTransport {}
 
 impl CheckpointTransport {
+    pub(crate) fn configure(&self, backend: *mut crate::bindings::Backend) -> i32 {
+        // SAFETY: backend is owned by the Engine caller and both descriptors remain live.
+        unsafe {
+            bindings::hl_c_backend_checkpoint_configure(
+                backend,
+                self.broker_child.as_raw_fd(),
+                self.trigger_descriptor.as_raw_fd(),
+            )
+        }
+    }
     /// Creates a broker and trigger pair owned entirely by this package.
     pub fn create() -> std::io::Result<(CheckpointBroker, Self)> {
         let mut parent = -1;
@@ -92,10 +102,14 @@ impl CheckpointTransport {
     }
 
     /// Installs duplicates into the native engine's private descriptor table.
-    pub fn adopt(&self) -> std::io::Result<()> {
+    pub fn adopt(&self, isa: u32) -> std::io::Result<()> {
         // SAFETY: C borrows both live descriptors and relocates private duplicates.
         let status = unsafe {
-            bindings::hl_c_backend_checkpoint_adopt(self.broker_child.as_raw_fd(), self.trigger_descriptor.as_raw_fd())
+            bindings::hl_c_backend_checkpoint_adopt(
+                isa,
+                self.broker_child.as_raw_fd(),
+                self.trigger_descriptor.as_raw_fd(),
+            )
         };
         (status == STATUS_OK)
             .then_some(())
@@ -111,9 +125,9 @@ impl CheckpointTransport {
 
     /// Native signal reserved for interrupting guest checkpoint safepoints.
     #[must_use]
-    pub fn interrupt_signal() -> i32 {
+    pub fn interrupt_signal(isa: u32) -> i32 {
         // SAFETY: immutable native constant query.
-        unsafe { bindings::hl_c_backend_checkpoint_interrupt_signal() }
+        unsafe { bindings::hl_c_backend_checkpoint_interrupt_signal(isa) }
     }
 }
 
@@ -135,8 +149,8 @@ mod tests {
         let (_broker, transport) = CheckpointTransport::create().expect("checkpoint transport");
         assert_eq!(transport.bump(), 1);
         assert_eq!(transport.bump(), 2);
-        assert!(CheckpointTransport::interrupt_signal() > 0);
-        transport.adopt().expect("adopt transport descriptors");
+        assert!(CheckpointTransport::interrupt_signal(1) > 0);
+        transport.adopt(1).expect("adopt transport descriptors");
     }
 
     #[test]

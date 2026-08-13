@@ -124,7 +124,7 @@ static int checkpoint_parse_descriptor(const char *text) {
     char *end;
     if (text == NULL || text[0] == 0) return -1;
     value = strtol(text, &end, 10);
-    if (*end != 0 || value < 0 || value > 65535) return -1;
+    if (*end != 0 || value < 0 || value > INT32_MAX) return -1;
     return (int)value;
 }
 
@@ -271,8 +271,9 @@ int hl_ckpt_broker_pair(hl_activation_descriptor *out_parent, hl_activation_desc
         (void)close(pair[1]);
         return -1;
     }
-    pair[0] = checkpoint_reserve_descriptor(pair[0]);
-    pair[1] = checkpoint_reserve_descriptor(pair[1]);
+    hl_host_private_init();
+    pair[0] = hl_host_process_fd_private_adopt(pair[0]);
+    pair[1] = hl_host_process_fd_private_adopt(pair[1]);
     if (pair[0] < 0 || pair[1] < 0) {
         if (pair[0] >= 0) (void)close(pair[0]);
         if (pair[1] >= 0) (void)close(pair[1]);
@@ -337,7 +338,8 @@ int hl_ckpt_trigger_create(hl_activation_descriptor *out_descriptor, void **out_
     *out_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
     *out_mapping = NULL;
     /* An anonymous shared file: no name in any namespace the guest or the filesystem can see. */
-    descriptor = checkpoint_reserve_descriptor(checkpoint_anonymous_descriptor());
+    hl_host_private_init();
+    descriptor = hl_host_process_fd_private_adopt(checkpoint_anonymous_descriptor());
     if (descriptor < 0) return -1;
     if (ftruncate(descriptor, (off_t)sizeof(uint32_t)) != 0) {
         (void)close(descriptor);

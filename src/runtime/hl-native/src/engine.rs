@@ -57,6 +57,10 @@ unsafe impl Send for Engine {}
 unsafe impl Sync for Engine {}
 
 impl Engine {
+    pub fn configure_checkpoint(&self, transport: &crate::CheckpointTransport) -> Result<(), i32> {
+        let status = transport.configure(self.0.as_ptr());
+        (status == STATUS_OK).then_some(()).ok_or(status)
+    }
     /// Creates an engine through the stable C bridge.
     ///
     /// # Safety
