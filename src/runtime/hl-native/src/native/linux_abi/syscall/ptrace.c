@@ -22,7 +22,9 @@
 //   strace)/SINGLESTEP*/LISTEN; PEEK{TEXT,DATA,USER}/POKE{TEXT,DATA,USER}; GETREGS/SETREGS +
 //   GETREGSET/SETREGSET(NT_PRSTATUS, per-arch user_regs_struct); GETSIGINFO/SETSIGINFO; SETOPTIONS
 //   (TRACESYSGOOD/TRACEEXEC/EXITKILL...) + GETEVENTMSG; exec-stop (SIGTRAP or PTRACE_EVENT_EXEC);
-//   signal-delivery/group stops for signals a traced process raises on itself; cross-process
+//   signal-delivery/group stops for signals a traced process raises on itself; ATTACH/INTERRUPT also
+//   kick a tracee out of a blocking host syscall so it can publish the requested ptrace stop;
+//   cross-process
 //   process_vm_readv/writev against a stopped tracee.
 //
 // STAGED (returns a correct errno / documented approximation, never a lying success):
@@ -493,8 +495,7 @@ static void ptrace_service_traced(struct cpu *c) {
     } // someone else is traced, not us
     uint64_t rawnr = PT_RAWNR(c);
     // ATTACH/SEIZE/INTERRUPT initial stop: report a group-stop (SIGSTOP) at the next syscall boundary.
-    if (L->pending_attach_stop) {
-        L->pending_attach_stop = 0;
+    if (__atomic_exchange_n(&L->pending_attach_stop, 0, __ATOMIC_ACQ_REL)) {
         ptrace_publish_regs(c, L, rawnr);
         ptrace_stop(c, L, PTS_GROUP, (19 << 8) | 0x7f, 19, 0, 0);
         if (!L->attached) {
@@ -510,6 +511,14 @@ static void ptrace_service_traced(struct cpu *c) {
         ptrace_stop(c, L, PTS_SYSCALL_ENTRY, (ssig << 8) | 0x7f, ssig, 0, 0);
     }
     service_local(c);
+    // ATTACH/INTERRUPT can arrive while service_local is blocked in pause/read/poll/etc.  The
+    // tracer sends THREAD_INT_SIG to make that host syscall return EINTR.  Consume the request
+    // before returning to translated guest code: otherwise pause() can observe EINTR and run
+    // ahead of the ptrace group-stop it was interrupted to publish.
+    if (__atomic_exchange_n(&L->pending_attach_stop, 0, __ATOMIC_ACQ_REL)) {
+        ptrace_publish_regs(c, L, rawnr);
+        ptrace_stop(c, L, PTS_GROUP, (19 << 8) | 0x7f, 19, 0, 0);
+    }
     // exec-stop: a successful execve redirected into the new image -> SIGTRAP (or PTRACE_EVENT_EXEC) stop.
     if (pt_is_execve(rawnr) && c->redirect) {
         ptrace_publish_regs(c, L, rawnr);
@@ -711,8 +720,18 @@ static int svc_ptrace(struct cpu *c, uint64_t req, uint64_t pid, uint64_t addr, 
         L->seized = (req == PTRACE_SEIZE);
         if (req == PTRACE_SEIZE)
             L->options = data; // SEIZE takes options in `data`
-        else
-            L->pending_attach_stop = 1; // ATTACH stops the tracee (SIGSTOP group-stop)
+        else {
+            // Publish before the kick. THREAD_INT_SIG is an engine-only, non-restarting host
+            // signal installed on every registered guest thread; it wakes a tracee parked in a
+            // blocking host syscall without exposing the host signal to the guest.
+            __atomic_store_n(&L->pending_attach_stop, 1, __ATOMIC_RELEASE);
+            if (kill(hp, THREAD_INT_SIG) < 0 && errno == ESRCH) {
+                // The tracee can exit between the existence probe and the kick.  Do not leave a
+                // live shared-arena link for an attach that Linux would reject with ESRCH.
+                pt_free(L);
+                return -ESRCH;
+            }
+        }
         return 0;
     }
 
@@ -806,7 +825,11 @@ static int svc_ptrace(struct cpu *c, uint64_t req, uint64_t pid, uint64_t addr, 
         return 0;
     }
     case PTRACE_INTERRUPT:
-        L->pending_attach_stop = 1; // stops at the next syscall boundary
+        __atomic_store_n(&L->pending_attach_stop, 1, __ATOMIC_RELEASE);
+        if (kill(pt_hostpid(tpid), THREAD_INT_SIG) < 0 && errno == ESRCH) {
+            __atomic_store_n(&L->pending_attach_stop, 0, __ATOMIC_RELEASE);
+            return -ESRCH;
+        } // also stop a tracee blocked inside a host syscall
         if (stopped) {
             L->cmd = PTC_LISTEN;
             __atomic_add_fetch(&L->cmd_seq, 1, __ATOMIC_RELEASE);

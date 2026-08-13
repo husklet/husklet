@@ -99,6 +99,20 @@ static long ptrace_pvm(struct cpu *c, int is_write, pid_t rpid, const struct iov
                        const struct iovec *riov, unsigned long rn);
 static int ptrace_any_tracee_of_self(void);      // does the caller trace anyone? (wait4 routing)
 static int ptrace_wait_active(void);             // is ptrace in use in this session? (wait4 routing gate)
+// A control-channel interrupt is otherwise indistinguishable from a spurious host EINTR to the
+// syscall retry helpers.  Consult the shared link directly so pause/read/poll return to the ptrace
+// dispatcher instead of transparently re-blocking before it can publish the requested stop.
+static int ptrace_stop_requested(void) {
+    if (!g_pt || __atomic_load_n(&g_pt->nactive, __ATOMIC_ACQUIRE) == 0) return 0;
+    int self = container_pid();
+    for (int i = 0; i < PT_MAXLINK; i++) {
+        struct pt_link *L = &g_pt->link[i];
+        if (__atomic_load_n(&L->used, __ATOMIC_ACQUIRE) && L->tracee_pid == self &&
+            __atomic_load_n(&L->pending_attach_stop, __ATOMIC_ACQUIRE))
+            return 1;
+    }
+    return 0;
+}
 struct sigaction;                                // fwd (signal.h is included by the target before this TU)
 static int pt_wait_arm(struct sigaction *saved); // scoped SIGCHLD wake around a blocking wait4
 static void pt_wait_disarm(int armed, const struct sigaction *saved);

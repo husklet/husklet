@@ -14,6 +14,7 @@
 // awaited handler stays pending and is delivered by the dispatcher's maybe_deliver_signal once the
 // restarted syscall finally returns.
 static int syscall_should_restart(struct cpu *c) {
+    if (ptrace_stop_requested()) return 0; // ATTACH/INTERRUPT must reach the ptrace dispatcher
     if (ckpt_pending())
         return 0; // a whole-tree checkpoint was requested: return EINTR so this process reaches
                   // its dispatcher safepoint (ckpt_poll) instead of transparently re-blocking
@@ -70,6 +71,7 @@ static int syscall_should_restart(struct cpu *c) {
 // EINTR -- exactly like Linux. Returns 1 to RETRY the host call, 0 to let it return.
 static int svc_poll_retry(struct cpu *c) {
     if (errno != EINTR) return 0;                                // a genuine error -> let it propagate
+    if (ptrace_stop_requested()) return 0;                       // publish an ATTACH/INTERRUPT stop
     if (ckpt_pending()) return 0;                                // checkpoint requested: return EINTR -> safepoint
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: stop re-blocking, unwind out
     uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
@@ -342,6 +344,7 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         sigprocmask(SIG_BLOCK, &allblk, &prev); // close the check/sleep race (see case 133)
         ts_wait_enter();                        // pause -> interruptible sleep ('S') until a deliverable signal arrives
         while (!c->exited) {
+            if (ptrace_stop_requested()) break;
             uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
             int deliv = 0;
             for (int s = 1; s <= 64; s++) {

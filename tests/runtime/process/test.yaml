@@ -695,9 +695,7 @@ cases:
     expect: { exit: 0, stdout: golden/ptrace_attach.txt }
   - id: runtime/process/ptrace-attach-blocked
     targets: [arm64, amd64]
-    status: !broken
-      reason: "PTRACE_ATTACH to a tracee blocked inside a host syscall (pause) does not interrupt it, so the group-stop is never delivered; needs async cross-process signal-delivery (signal.c) wired into the attach path. WORSE than previously noted: the case also WEDGES the tracer intermittently (2 of 3 runs never terminate despite its own alarm(4) -- the post-attach PTRACE_KILL/SIGKILL/waitpid reap does not complete), so it would burn the runner's full per-case timeout. Native golden is the correct behavior"
-      evidence: "tests/runtime/process/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/ptrace_blocked.c, output: ptrace-attach-blocked, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
     artifact: { destination: /opt/husklet/ptrace-attach-blocked }
