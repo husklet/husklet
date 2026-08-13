@@ -318,6 +318,18 @@ static void poslk_after_fork(void) {
 
 static int poslk_init(void) {
     if (g_poslk) return 0;
+#if defined(__APPLE__)
+    /* Every guest process that belongs to this engine is a fork descendant, so
+       MAP_SHARED anonymous memory is the native macOS ownership model: it is
+       inherited as one physical lock domain without a filesystem object to
+       resize or lock after fork.  Independent engine instances represent
+       independent container domains and must not reinterpret one another's
+       target-ABI-dependent table. */
+    void *m = mmap(NULL, sizeof(struct poslk_shm), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+    if (m == MAP_FAILED) return -1;
+    g_poslk = (struct poslk_shm *)m;
+    return 0;
+#else
     char name[64];
     int length = snprintf(name, sizeof(name), "/husklet-poslk-v1-%lu", (unsigned long)getuid());
     if (length <= 0 || (size_t)length >= sizeof(name)) return -1;
@@ -345,6 +357,7 @@ static int poslk_init(void) {
     if (m == MAP_FAILED) return -1;
     g_poslk = (struct poslk_shm *)m;
     return 0;
+#endif
 }
 
 #ifndef HL_EMBEDDED_BUILD

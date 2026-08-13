@@ -225,4 +225,25 @@ mod tests {
             "HL_NATIVE_1 {\n  global:\n    hl_engine_abi;\n    hl_engine_version;\n  local: *;\n};\n"
         );
     }
+
+    #[test]
+    fn macos_fork_prerequisites_are_completed_in_the_parent() {
+        let lifecycle = std::fs::read_to_string("src/native/engine/lifecycle.c").unwrap();
+        let prepare = lifecycle
+            .find("hl_linux_dns_prepare();")
+            .expect("production lifecycle must prewarm the macOS resolver");
+        let spawn = lifecycle[prepare..]
+            .find("spawn_cloned")
+            .map(|offset| prepare + offset)
+            .expect("production lifecycle must spawn the guest");
+        assert!(prepare < spawn, "resolver prewarm moved behind the production fork");
+
+        let locks = std::fs::read_to_string("src/native/linux_abi/syscall/emulation_state.c").unwrap();
+        let apple = locks
+            .split("#if defined(__APPLE__)")
+            .nth(1)
+            .expect("record-lock initialization needs a macOS arm");
+        assert!(apple.contains("MAP_SHARED | MAP_ANON"));
+        assert!(locks.contains("/husklet-poslk-v1-%lu"));
+    }
 }

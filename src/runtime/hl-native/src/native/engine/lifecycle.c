@@ -3,6 +3,9 @@
 #include "result.h"
 #include "options.h"
 #include "hl/syscall_trap.h"
+#if defined(__APPLE__)
+#include "../linux_abi/dns.h"
+#endif
 
 #include <stdatomic.h>
 #include <signal.h>
@@ -491,6 +494,12 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     }
     result->record = (hl_engine_child_result *)(uintptr_t)result->mapping.address;
     memset(result->record, 0, sizeof(*result->record));
+#if defined(__APPLE__)
+    /* The production backend enters the Linux personality in a fork child.  Resolve
+     * macOS' lazy Foundation-backed resolver state in the parent: doing this from
+     * container_init is already too late for Objective-C's post-fork guard. */
+    hl_linux_dns_prepare();
+#endif
 #if defined(_WIN32)
     /*
      * A cold child takes the serialised launch and nothing else, and it takes it
