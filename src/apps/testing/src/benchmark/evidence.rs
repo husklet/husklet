@@ -100,7 +100,6 @@ fn parse_output_line(
     canonical.push(metadata);
     Ok(())
 }
-
 fn metadata_line(line: &str) -> Option<Result<String, Error>> {
     line.strip_prefix("META ")
         .map(|_| Ok(line.to_owned()))
@@ -613,8 +612,7 @@ mod ledger_tests {
         let directory = tempfile::tempdir().unwrap();
         admit_destination(directory.path(), true).unwrap();
         fs::write(directory.path().join("report.tsv"), "PASS\n").unwrap();
-        let error = admit_destination(directory.path(), true).unwrap_err();
-        assert!(error.to_string().contains("already published"), "{error}");
+        assert!(admit_destination(directory.path(), true).unwrap_err().to_string().contains("already published"));
         admit_destination(directory.path(), false).unwrap();
     }
 }

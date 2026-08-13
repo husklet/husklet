@@ -118,8 +118,7 @@ impl CheckpointTransport {
 
 impl Drop for CheckpointTransport {
     fn drop(&mut self) {
-        // Destroy owns the mapping but not Rust's descriptor owner, so pass the
-        // absent sentinel and let OwnedFd close the descriptor exactly once.
+        // SAFETY: destroy owns this live mapping; -1 leaves Rust's OwnedFd as the sole descriptor owner.
         unsafe {
             bindings::hl_c_backend_checkpoint_trigger_destroy(self.trigger_mapping.as_ptr(), -1);
         }
