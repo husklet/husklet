@@ -14,7 +14,6 @@ use std::{
     },
 };
 
-#[path = "checkpoint/protocol.rs"]
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
 use protocol::{
