@@ -1,7 +1,7 @@
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
-diagnostics-floor: [{ counter: runs, greater-than: 0 }]
+diagnostics-floor: [{ counter: crossings, greater-than: 0 }]
 oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
 build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
@@ -59,7 +59,7 @@ cases:
     expect:
       exit: 0
       stdout: golden/nonpie_ldapr.out
-      diagnostics: [{ counter: runs, greater-than: 5 }, { counter: builds, greater-than: 5 }]
+      diagnostics: [{ counter: crossings, greater-than: 5 }, { counter: translations, greater-than: 5 }]
   - id: runtime/regress/pairatomics-nonpie
     status: active
     targets: [arm64]
@@ -127,7 +127,7 @@ cases:
     expect:
       exit: 0
       stdout: golden/ldrsw_literal.out
-      diagnostics: [{ counter: builds, greater-than: 515 }]
+      diagnostics: [{ counter: translations, greater-than: 515 }]
   - id: runtime/regress/nonpie-v8blob
     status: active
     targets: [amd64]

@@ -196,7 +196,7 @@ fn floored(header: &str, expect: &str) -> Result<App, crate::suite::Error> {
 }
 
 const NATIVE: &str = "execution: { native: true, diagnostics: true }\n\
-                      diagnostics-floor: [{ counter: runs, greater-than: 0 }]";
+                      diagnostics-floor: [{ counter: crossings, greater-than: 0 }]";
 
 #[test]
 fn a_case_without_its_own_assertions_inherits_the_app_floor() {
@@ -214,14 +214,14 @@ fn an_explicit_empty_list_opts_a_case_out_of_the_floor() {
 
 #[test]
 fn a_case_list_replaces_the_floor_rather_than_adding_to_it() {
-    let app = floored(NATIVE, ", diagnostics: [{ counter: builds, greater-than: 4 }]").unwrap();
+    let app = floored(NATIVE, ", diagnostics: [{ counter: translations, greater-than: 4 }]").unwrap();
     assert_eq!(app.cases[0].diagnostics.len(), 1);
 }
 
 #[test]
 fn a_floor_on_an_app_that_never_emits_counters_is_a_load_error() {
     let error = floored(
-        "execution: {}\ndiagnostics-floor: [{ counter: runs, greater-than: 0 }]",
+        "execution: {}\ndiagnostics-floor: [{ counter: crossings, greater-than: 0 }]",
         "",
     )
     .err()

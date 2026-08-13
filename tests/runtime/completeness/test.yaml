@@ -361,7 +361,7 @@ cases:
     timeout: 120
     # The runs floor keeps this from passing as an interpreter-against-itself check: the whole
     # point is that a translated block and the interpreter answer identically.
-    expect: { exit: 0, stdout: golden/x86_64/undefined_flags.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+    expect: { exit: 0, stdout: golden/x86_64/undefined_flags.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }
   - id: runtime/completeness/amd64-shld
     targets: [amd64]
     build: { source: x86_64/shld.c, output: amd64-shld, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }

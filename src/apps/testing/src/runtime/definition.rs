@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn diagnostic_assertions_reach_the_case_and_need_an_app_that_emits_them() {
-        let row = "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/one.out, diagnostics: [{ counter: runs, greater-than: 0 }] }\n";
+        let row = "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/one.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }\n";
         let app = category_with("{ native: true, diagnostics: true }", row).unwrap();
         assert_eq!(app.cases[0].diagnostics.len(), 1);
         let Err(error) = category_with("{}", row) else {

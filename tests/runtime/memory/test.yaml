@@ -1,7 +1,7 @@
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
-diagnostics-floor: [{ counter: runs, greater-than: 0 }]
+diagnostics-floor: [{ counter: crossings, greater-than: 0 }]
 oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
 build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
@@ -335,7 +335,7 @@ cases:
     expect:
       exit: 0
       stdout: golden/aarch64_pairwriteback.out
-      diagnostics: [{ counter: builds, greater-than: 525 }]
+      diagnostics: [{ counter: translations, greater-than: 525 }]
   - id: runtime/memory/aarch64-logical-atomics
     targets: [arm64]
     status: active
@@ -364,7 +364,7 @@ cases:
     expect:
       exit: 0
       stdout: golden/aarch64_logicalops.out
-      diagnostics: [{ counter: builds, greater-than: 530 }]
+      diagnostics: [{ counter: translations, greater-than: 530 }]
   - id: runtime/memory/aarch64-smc-targeted
     targets: [arm64]
     status: active
@@ -687,7 +687,7 @@ cases:
     build: { source: source/dbt_smcrwxrewrite.c, inputs: [source/dbt.h], output: dbt-smc-rwx-rewrite, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-rwx-rewrite }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcrwxrewrite.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+    expect: { exit: 0, stdout: golden/dbt_smcrwxrewrite.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-hotpatch
     targets: [arm64, amd64]
     status: active
@@ -698,7 +698,7 @@ cases:
     # The retained-C translation total includes every rebuild after a patch and is exactly 1000
     # arm64 / 1820 amd64 in repeated runs. A >900 common floor remains below both arms while proving
     # substantially more than process startup was translated; stdout checks each patched result.
-    expect: { exit: 0, stdout: golden/dbt_smchotpatch.out, diagnostics: [{ counter: builds, greater-than: 900 }] }
+    expect: { exit: 0, stdout: golden/dbt_smchotpatch.out, diagnostics: [{ counter: translations, greater-than: 900 }] }
   - id: runtime/memory/dbt-smc-xthread
     targets: [arm64, amd64]
     status: active
@@ -711,7 +711,7 @@ cases:
     # executable token is never consulted. Observed 15431 arm64 / 16371 amd64, deterministic to
     # within one run over 20 repetitions; freezing `ExecutableVersions::token` drops it to 180/247
     # and fails the case, so 5000 separates a live oracle from one that has gone cold.
-    expect: { exit: 0, stdout: golden/dbt_smcxthread.out, diagnostics: [{ counter: runs, greater-than: 5000 }] }
+    expect: { exit: 0, stdout: golden/dbt_smcxthread.out, diagnostics: [{ counter: crossings, greater-than: 5000 }] }
   - id: runtime/memory/dbt-smc-bounce
     targets: [arm64, amd64]
     status: active
@@ -732,7 +732,7 @@ cases:
     build: { source: source/dbt_smcgrow.c, inputs: [source/dbt.h], output: dbt-smc-grow, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-grow }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcgrow.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+    expect: { exit: 0, stdout: golden/dbt_smcgrow.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-trampoline
     targets: [arm64, amd64]
     status: active
@@ -740,7 +740,7 @@ cases:
     build: { source: source/dbt_smctrampoline.c, inputs: [source/dbt.h], output: dbt-smc-trampoline, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-trampoline }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smctrampoline.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+    expect: { exit: 0, stdout: golden/dbt_smctrampoline.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-minijit
     targets: [arm64, amd64]
     status: active
@@ -748,7 +748,7 @@ cases:
     build: { source: source/dbt_smcminijit.c, inputs: [source/dbt.h], output: dbt-smc-minijit, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-minijit }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcminijit.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+    expect: { exit: 0, stdout: golden/dbt_smcminijit.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-manyslots
     targets: [arm64, amd64]
     status: active
@@ -756,7 +756,7 @@ cases:
     build: { source: source/dbt_smcmanyslots.c, inputs: [source/dbt.h], output: dbt-smc-manyslots, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-manyslots }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smcmanyslots.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+    expect: { exit: 0, stdout: golden/dbt_smcmanyslots.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }
   - id: runtime/memory/dbt-smc-crosspage
     targets: [arm64, amd64]
     status: active
@@ -764,7 +764,7 @@ cases:
     build: { source: source/dbt_smccrosspage.c, inputs: [source/dbt.h], output: dbt-smc-crosspage, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-crosspage }
     run: []
-    expect: { exit: 0, stdout: golden/dbt_smccrosspage.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+    expect: { exit: 0, stdout: golden/dbt_smccrosspage.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }
   - id: runtime/memory/dbt-conc-same
     targets: [arm64, amd64]
     status: active
@@ -826,7 +826,7 @@ cases:
     build: { source: source/nx_exec.c, output: nx-exec, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/nx-exec }
     run: []
-    expect: { exit: 0, stdout: golden/nx_exec.out, diagnostics: [{ counter: runs, greater-than: 0 }] }
+    expect: { exit: 0, stdout: golden/nx_exec.out, diagnostics: [{ counter: crossings, greater-than: 0 }] }
   - id: runtime/memory/edge-faults
     targets: [arm64, amd64]
     status: active
@@ -1107,4 +1107,4 @@ cases:
     # Keep this diagnostic non-vacuous against the active backend instead: repeated C runs produce
     # exactly 835 translations, and >800 proves this boundary-heavy body was translated rather than
     # accepting a completion-only record. The stdout remains the functional view-boundary oracle.
-    expect: { exit: 0, stdout: golden/nativeviewboundary.out, diagnostics: [{ counter: builds, greater-than: 800 }] }
+    expect: { exit: 0, stdout: golden/nativeviewboundary.out, diagnostics: [{ counter: translations, greater-than: 800 }] }

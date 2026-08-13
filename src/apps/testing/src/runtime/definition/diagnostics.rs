@@ -9,7 +9,8 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// The records that carry named counters; other `hl-native-*` lines are per-site histograms.
-const RECORDS: [&str; 5] = [
+const RECORDS: [&str; 6] = [
+    "[prof]",
     "hl-c:",
     "hl-native:",
     "hl-native-detail:",
@@ -22,8 +23,8 @@ const RECORDS: [&str; 5] = [
 /// `ibtc_auth_rejections` are constant zero, `ibtc_site_misses`/`ibtc_shared_misses` merely
 /// restate `fills`, and `a64_slim_exits` is a format-string literal with no field behind it).
 const DIGEST: [&str; 32] = [
-    "runs",
-    "builds",
+    "crossings",
+    "translations",
     "hits",
     "fallbacks",
     "sites",
@@ -79,10 +80,10 @@ pub(crate) fn digest(stderr: &[u8]) -> String {
         return String::new();
     }
     fields.extend(histograms(stderr));
-    let backend = if String::from_utf8_lossy(stderr)
-        .lines()
-        .any(|line| line.trim_start().starts_with("hl-c:"))
-    {
+    let backend = if String::from_utf8_lossy(stderr).lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("[prof]") || line.starts_with("hl-c:")
+    }) {
         "c"
     } else {
         "native"
@@ -241,14 +242,14 @@ mod tests {
         serde_yaml::from_str(yaml).unwrap()
     }
 
-    const REPORT: &[u8] = b"hl-native: runs=3 builds=7 hits=9 fallbacks=0 sites=2 services=1\n\
+    const REPORT: &[u8] = b"hl-native: crossings=3 translations=7 hits=9 fallbacks=0 sites=2 services=1\n\
                             hl-native-detail: fills=16 completed=58122035 a64_dirty_overflow=21\n";
 
     #[test]
     fn a_counter_above_its_bound_passes_and_one_at_it_fails() {
-        assert!(violation(&assertions("- { counter: runs, greater-than: 0 }"), REPORT).is_none());
+        assert!(violation(&assertions("- { counter: crossings, greater-than: 0 }"), REPORT).is_none());
         assert!(
-            violation(&assertions("- { counter: runs, greater-than: 3 }"), REPORT)
+            violation(&assertions("- { counter: crossings, greater-than: 3 }"), REPORT)
                 .unwrap()
                 .contains("is 3, expected greater than 3")
         );
@@ -262,9 +263,9 @@ mod tests {
 
     #[test]
     fn a_zero_counter_still_fails_a_greater_than_assertion() {
-        let report = b"hl-native: runs=0 builds=0 hits=0 fallbacks=0 sites=0 services=0\n";
+        let report = b"hl-native: crossings=0 translations=0 hits=0 fallbacks=0 sites=0 services=0\n";
         assert!(
-            violation(&assertions("- { counter: runs, greater-than: 0 }"), report)
+            violation(&assertions("- { counter: crossings, greater-than: 0 }"), report)
                 .unwrap()
                 .contains("is 0")
         );
@@ -272,17 +273,17 @@ mod tests {
 
     #[test]
     fn absent_diagnostics_fail_rather_than_skip() {
-        let message = violation(&assertions("- { counter: runs, greater-than: 0 }"), b"").unwrap();
+        let message = violation(&assertions("- { counter: crossings, greater-than: 0 }"), b"").unwrap();
         assert!(message.contains("never emitted"), "{message}");
         assert!(message.contains("no execution diagnostic record"), "{message}");
     }
 
     #[test]
     fn retained_c_completion_satisfies_the_execution_floor() {
-        let report = b"hl-c: runs=1\n";
-        assert!(violation(&assertions("- { counter: runs, greater-than: 0 }"), report).is_none());
-        assert_eq!(Counters::parse(report).get("runs"), Some(1));
-        assert_eq!(super::digest(report), "c runs=1");
+        let report = b"[prof] crossings=1 translations=9 syscalls=2 ibtc_miss=0\n";
+        assert!(violation(&assertions("- { counter: crossings, greater-than: 0 }"), report).is_none());
+        assert_eq!(Counters::parse(report).get("crossings"), Some(1));
+        assert_eq!(super::digest(report), "c crossings=1 translations=9");
     }
 
     #[test]
@@ -296,9 +297,9 @@ mod tests {
 
     #[test]
     fn repeated_records_are_summed_across_the_run() {
-        let report = b"hl-native: runs=1 builds=2\nhl-native: runs=4 builds=1\n";
-        assert_eq!(Counters::parse(report).get("runs"), Some(5));
-        assert_eq!(Counters::parse(report).get("builds"), Some(3));
+        let report = b"hl-native: crossings=1 translations=2\nhl-native: crossings=4 translations=1\n";
+        assert_eq!(Counters::parse(report).get("crossings"), Some(5));
+        assert_eq!(Counters::parse(report).get("translations"), Some(3));
     }
 
     #[test]
@@ -310,14 +311,14 @@ mod tests {
 
     #[test]
     fn the_digest_carries_counters_and_the_pcs_that_identify_the_translated_body() {
-        let report = b"hl-native: runs=1 builds=1 hits=2 fallbacks=3 sites=1 services=0\n\
+        let report = b"hl-native: crossings=1 translations=1 hits=2 fallbacks=3 sites=1 services=0\n\
                        hl-native-entry: probes=9 entries=1 declined_executable=0 declined_suppressed=8 declined_cold=0 declined_other=0\n\
                        hl-interp: instructions=4000 blocks=70 slices=3\n\
                        hl-native-fallback-pc: pc=0x426a1c count=12\n\
                        hl-native-suppressed-entry: pc=0x8 refused=3\n";
         let digest = super::digest(report);
         assert!(
-            digest.starts_with("native runs=1 builds=1 hits=2 fallbacks=3 sites=1 services=0"),
+            digest.starts_with("native crossings=1 translations=1 hits=2 fallbacks=3 sites=1 services=0"),
             "{digest}"
         );
         assert!(digest.contains("instructions=4000"), "{digest}");
@@ -383,15 +384,15 @@ mod tests {
 
     #[test]
     fn a_malformed_assertion_is_rejected_at_load() {
-        assert!(validate(assertions("- { counter: runs }"), true).is_err());
-        assert!(validate(assertions("- { counter: runs, equals: 1, greater-than: 0 }"), true).is_err());
+        assert!(validate(assertions("- { counter: crossings }"), true).is_err());
+        assert!(validate(assertions("- { counter: crossings, equals: 1, greater-than: 0 }"), true).is_err());
         assert!(validate(assertions("- { counter: \" \", equals: 1 }"), true).is_err());
-        assert!(validate(assertions("- { counter: runs, equals: 1 }"), true).is_ok());
+        assert!(validate(assertions("- { counter: crossings, equals: 1 }"), true).is_ok());
     }
 
     #[test]
     fn asserting_on_counters_an_app_never_asks_for_is_a_load_error() {
-        let error = validate(assertions("- { counter: runs, greater-than: 0 }"), false).unwrap_err();
+        let error = validate(assertions("- { counter: crossings, greater-than: 0 }"), false).unwrap_err();
         assert!(error.to_string().contains("diagnostics: true"), "{error}");
         assert!(validate(Vec::new(), false).is_ok());
     }
