@@ -101,7 +101,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [ ] Finish generic ET_EXEC/non-PIE address placement and translation without Go-, V8-, Node-, Python-, sqlite-, or executable-name detection.
 - [ ] Prove PIE, static PIE, non-PIE, Go, V8/Node, Python, sqlite, self-modifying code, signals, threads, writes, atomics, and both guest ISAs.
 - [ ] Diagnose and repair the deterministic displaced ET_EXEC/thread/TLS compatibility clusters on both guest ISAs.
-- [ ] Make native stdout/stderr bridge teardown bounded when a nonblocking pipe is idle, and prove real CPython startup/exit cannot hang while joining its output workers.
+- [x] Make native stdout/stderr bridge teardown bounded when a nonblocking pipe is idle, and prove real CPython startup/exit cannot hang while joining its output workers.
+  Merged commit `0d949f26e` checks the stop condition on every idle retry; its bounded idle-pipe test reddens by timeout when the check is removed. A real minimal CPython guest now exits in 1.825 seconds on ARM64 and returns the known AMD64 startup failure in about 0.4 seconds instead of hanging during output-worker teardown.
 - [ ] Run the full compatibility corpus on the final C-backed product and classify every remaining failure.
 
 ## C source structure cleanup
