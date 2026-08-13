@@ -1441,6 +1441,55 @@ static enum avx_dispatch_result avx_dispatch_map1_duplicate(const hl_x86_avx_sta
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_scalar_integer_conversion(const hl_x86_avx_state *state, struct cpu *c,
+                                                                       struct insn *instruction, uint64_t next,
+                                                                       int map, int op, int prefix, int destination,
+                                                                       int merge_register) {
+    if (map != 1 || (op != 0x2A && op != 0x2C && op != 0x2D)) return AVX_DISPATCH_UNMATCHED;
+
+    int double_precision = prefix == 3;
+    int integer_size = instruction->vex_w ? 8 : 4;
+    if (op == 0x2A) { // vcvtsi2ss/sd
+        int64_t integer;
+        if (instruction->is_mem) {
+            integer = 0;
+            uint64_t address = avx_ea(state, c, instruction, next, integer_size);
+            (void)avx_memory_read(state, address, &integer, (size_t)integer_size);
+            if (!instruction->vex_w) integer = (int32_t)integer;
+        } else {
+            integer =
+                instruction->vex_w ? (int64_t)c->r[instruction->rm_reg] : (int64_t)(int32_t)c->r[instruction->rm_reg];
+        }
+        uint8_t output[64];
+        avx_get(c, merge_register, output);
+        if (double_precision) {
+            double converted = (double)integer;
+            memcpy(output, &converted, 8);
+        } else {
+            float converted = (float)integer;
+            memcpy(output, &converted, 4);
+        }
+        avx_put(c, destination, output, 16);
+    } else { // vcvttss/sd2si or vcvtss/sd2si
+        int element_size = double_precision ? 8 : 4;
+        uint8_t input[64];
+        avx_get_rm(state, c, instruction, next, element_size, input);
+        int64_t converted;
+        if (double_precision) {
+            double value;
+            memcpy(&value, input, 8);
+            converted = cvt_x86_d2i(value, op == 0x2C, instruction->vex_w);
+        } else {
+            float value;
+            memcpy(&value, input, 4);
+            converted = cvt_x86_f2i(value, op == 0x2C, instruction->vex_w);
+        }
+        c->r[destination] = instruction->vex_w ? (uint64_t)converted : (uint32_t)converted;
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1898,6 +1947,8 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map1_unpack(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_bitwise(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED)
+        return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -2016,46 +2067,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + 8, b, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0x2A: { // vcvtsi2ss/sd: GPR/mem int -> scalar float; rest of low-128 from src1(vvvv)
-            int dbl = (pp == 3), wi = I.vex_w ? 8 : 4;
-            avx_get(c, vv, a);
-            int64_t iv;
-            if (I.is_mem) {
-                uint64_t ea = avx_ea(state, c, &I, next, wi);
-                iv = 0;
-                (void)avx_memory_read(state, ea, &iv, (size_t)wi);
-                if (!I.vex_w) iv = (int32_t)iv;
-            } else
-                iv = I.vex_w ? (int64_t)c->r[I.rm_reg] : (int64_t)(int32_t)c->r[I.rm_reg];
-            memcpy(d, a, 16);
-            if (dbl) {
-                double f = (double)iv;
-                memcpy(d, &f, 8);
-            } else {
-                float f = (float)iv;
-                memcpy(d, &f, 4);
-            }
-            avx_put(c, rd, d, 16);
-            goto done;
-        }
-        case 0x2C: // vcvttss2si/sd2si (truncate) -> GPR
-        case 0x2D: // vcvtss2si/sd2si (round)    -> GPR
-        {
-            int dbl = (pp == 3), es = dbl ? 8 : 4, trunc = (op == 0x2C), w64 = I.vex_w;
-            avx_get_rm(state, c, &I, next, es, b);
-            int64_t res;
-            if (dbl) {
-                double x;
-                memcpy(&x, b, 8);
-                res = cvt_x86_d2i(x, trunc, w64);
-            } else {
-                float x;
-                memcpy(&x, b, 4);
-                res = cvt_x86_f2i(x, trunc, w64);
-            }
-            c->r[rd] = w64 ? (uint64_t)res : (uint32_t)res; // 32-bit dst zero-extends
             goto done;
         }
         case 0x5A: {       // vcvtss2sd/sd2ss (scalar) or vcvtps2pd/pd2ps (packed) per pp
