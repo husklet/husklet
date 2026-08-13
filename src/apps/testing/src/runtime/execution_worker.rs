@@ -56,7 +56,11 @@ pub(crate) async fn execute(options: Options) -> Result<(), Error> {
             .declared_timeout()
             .saturating_add(BACKSTOP_ALLOWANCE),
     )?;
-    let result = super::run_case_inner(work.app, work.case_index, work.target)
+    let retention = super::FailureRetention::new(
+        runtime::workspace()?.join("target/testing/runtime/failures"),
+        options.token.clone(),
+    );
+    let result = super::run_case_inner(work.app, work.case_index, work.target, Some(retention))
         .await
         .map_err(|error| error.to_string());
     let text = serde_yaml::to_string(&Outcome {

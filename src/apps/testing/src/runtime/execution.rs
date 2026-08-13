@@ -11,10 +11,21 @@ use super::{
 use crate::suite::{BoundedCapture as _, Target};
 use hl_container::{Config, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path, sync::Arc, time::Duration};
+use sha2::{Digest as _, Sha256};
+use std::{
+    fs,
+    io::Write as _,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::time::Instant;
 
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+const RETAINED_UPPER_LIMIT: u64 = 256 * 1024 * 1024;
 
 pub(crate) use worker::Options as WorkerOptions;
 
@@ -53,7 +64,12 @@ pub(crate) async fn worker(options: WorkerOptions) -> Result<(), Error> {
     worker::execute(options).await
 }
 
-async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Result<Vec<CaseResult>, Error> {
+async fn run_case_inner(
+    app: Arc<App>,
+    case_index: usize,
+    target: Target,
+    retention: Option<FailureRetention>,
+) -> Result<Vec<CaseResult>, Error> {
     let execution = app.execution.container()?;
     if let Some(unwired) = app.cases[case_index].engine_options.unwired() {
         return Err(unwired.into());
@@ -82,7 +98,7 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
         .images(fixture.images())
         .build()
         .await?;
-    let results = CaseExecution::new(&app, case, target, &containers, execution)
+    let results = CaseExecution::new(&app, case, target, &containers, execution, retention.as_ref())
         .run(&mut fixture, artifact.path())
         .await;
     fixture.release()?;
@@ -240,6 +256,7 @@ struct CaseExecution<'a> {
     target: Target,
     containers: &'a Containers,
     execution: hl_container::Execution,
+    retention: Option<&'a FailureRetention>,
 }
 
 impl<'a> CaseExecution<'a> {
@@ -249,6 +266,7 @@ impl<'a> CaseExecution<'a> {
         target: Target,
         containers: &'a Containers,
         execution: hl_container::Execution,
+        retention: Option<&'a FailureRetention>,
     ) -> Self {
         if let Some(plan) = &case.soak {
             let resources = plan.resources();
@@ -269,6 +287,7 @@ impl<'a> CaseExecution<'a> {
             target,
             containers,
             execution,
+            retention,
         }
     }
 
@@ -327,10 +346,17 @@ impl<'a> CaseExecution<'a> {
         if let Err(error) = prepared {
             return CaseResult::Failed(self.case.id.clone(), attempt, error.to_string());
         }
-        self.attempt(fixture, ordinal, repetitions, timeout).await
+        self.attempt(fixture, artifact, ordinal, repetitions, timeout).await
     }
 
-    async fn attempt(&self, fixture: &TestImage, ordinal: u16, repetitions: u16, timeout: Duration) -> CaseResult {
+    async fn attempt(
+        &self,
+        fixture: &TestImage,
+        artifact: &Path,
+        ordinal: u16,
+        repetitions: u16,
+        timeout: Duration,
+    ) -> CaseResult {
         let attempt = (repetitions > 1).then_some(ordinal);
         let name = format!(
             "testing-{}-{}-{}-{ordinal}",
@@ -365,14 +391,30 @@ impl<'a> CaseExecution<'a> {
         for mount in options.mounts() {
             spec = spec.mount(mount.clone());
         }
+        let mut status = None;
         let outcome = self
-            .execute(spec, &name, timeout)
+            .execute(spec, &name, timeout, &mut status)
             .await
             .map_err(|error| error.to_string());
+        let retained = if outcome.is_err() {
+            self.retention.and_then(|retention| {
+                retention
+                    .retain(fixture, artifact, &self.case.id, self.target, ordinal, status)
+                    .map_err(|error| eprintln!("failed to retain overlay for {}: {error}", self.case.id))
+                    .ok()
+            })
+        } else {
+            None
+        };
         let cleanup = tokio::time::timeout(CLEANUP_TIMEOUT, self.containers.remove_force(&name)).await;
         match (outcome, cleanup) {
             (Ok(()), Ok(Ok(_))) => CaseResult::Passed(self.case.id.clone(), attempt),
-            (Err(error), _) => CaseResult::Failed(self.case.id.clone(), attempt, error),
+            (Err(mut error), _) => {
+                if let Some(path) = retained {
+                    error.push_str(&format!("; retained_overlay={}", path.display()));
+                }
+                CaseResult::Failed(self.case.id.clone(), attempt, error)
+            }
             (Ok(()), Ok(Err(error))) => {
                 CaseResult::Failed(self.case.id.clone(), attempt, format!("cleanup failed: {error}"))
             }
@@ -384,7 +426,13 @@ impl<'a> CaseExecution<'a> {
         }
     }
 
-    async fn execute(&self, spec: ContainerSpec, name: &str, timeout: Duration) -> Result<(), Error> {
+    async fn execute(
+        &self,
+        spec: ContainerSpec,
+        name: &str,
+        timeout: Duration,
+        observed: &mut Option<ExitStatus>,
+    ) -> Result<(), Error> {
         self.containers.create(spec).await?;
         if let Some((network, endpoint)) = self.case.engine_options.bridge()? {
             let networks = self.containers.networks();
@@ -393,6 +441,7 @@ impl<'a> CaseExecution<'a> {
         }
         self.containers.start(name).await?;
         let status = self.wait(name, timeout).await?;
+        *observed = Some(status);
         let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
         let mut profile_validation = Ok(());
@@ -426,6 +475,143 @@ impl<'a> CaseExecution<'a> {
             profile_validation,
         )
     }
+}
+
+struct FailureRetention {
+    root: PathBuf,
+    token: String,
+    retained: AtomicBool,
+}
+
+#[derive(Serialize)]
+struct RetainedFailure<'a> {
+    version: u16,
+    case: &'a str,
+    target: &'a str,
+    attempt: u16,
+    status: Option<ExitStatus>,
+    image: &'a str,
+    artifact_sha256: String,
+    upper_tar_sha256: String,
+    upper_tar_bytes: u64,
+    rootfs: &'a hl_images::rootfs::Reference,
+    lower_path: &'a Path,
+    upper_path: &'a Path,
+}
+
+impl FailureRetention {
+    pub(super) fn new(root: PathBuf, token: String) -> Self {
+        Self {
+            root,
+            token,
+            retained: AtomicBool::new(false),
+        }
+    }
+
+    fn retain(
+        &self,
+        fixture: &TestImage,
+        artifact: &Path,
+        case: &str,
+        target: Target,
+        attempt: u16,
+        status: Option<ExitStatus>,
+    ) -> Result<PathBuf, Error> {
+        let Some(lower) = fixture.lower() else {
+            return Err("failed root is not an overlay".into());
+        };
+        if self.retained.swap(true, Ordering::AcqRel) {
+            return Err("this worker already retained its first failed overlay".into());
+        }
+        fs::create_dir_all(&self.root)?;
+        let temporary = tempfile::Builder::new().prefix("retaining-").tempdir_in(&self.root)?;
+        let archive_path = temporary.path().join("upper.tar");
+        let archive = fs::File::create(&archive_path)?;
+        let mut bounded = HashedBoundedWriter::new(archive, RETAINED_UPPER_LIMIT);
+        fixture.archive_upper(&mut bounded)?;
+        bounded.flush()?;
+        let (upper_tar_bytes, upper_tar_sha256) = bounded.finish();
+        let manifest = RetainedFailure {
+            version: 1,
+            case,
+            target: target.name(),
+            attempt,
+            status,
+            image: fixture.identity(),
+            artifact_sha256: sha256_file(artifact)?,
+            upper_tar_sha256,
+            upper_tar_bytes,
+            rootfs: fixture.reference(),
+            lower_path: lower,
+            upper_path: fixture.path(),
+        };
+        let bytes = serde_json::to_vec_pretty(&manifest)?;
+        fs::write(temporary.path().join("manifest.json"), bytes)?;
+        let destination = self.root.join(&self.token);
+        let temporary = temporary.keep();
+        fs::rename(temporary, &destination)?;
+        Ok(destination)
+    }
+}
+
+struct HashedBoundedWriter<W> {
+    inner: W,
+    digest: Sha256,
+    bytes: u64,
+    limit: u64,
+}
+
+impl<W> HashedBoundedWriter<W> {
+    fn new(inner: W, limit: u64) -> Self {
+        Self {
+            inner,
+            digest: Sha256::new(),
+            bytes: 0,
+            limit,
+        }
+    }
+
+    fn finish(self) -> (u64, String) {
+        (self.bytes, hex_digest(self.digest.finalize().as_slice()))
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for HashedBoundedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if self.bytes.saturating_add(length) > self.limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "retained overlay exceeded 256 MiB",
+            ));
+        }
+        self.inner.write_all(bytes)?;
+        self.digest.update(bytes);
+        self.bytes += length;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn sha256_file(path: &Path) -> Result<String, Error> {
+    let mut file = fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = std::io::Read::read(&mut file, &mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(hex_digest(digest.finalize().as_slice()))
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn validate_outcome(
@@ -487,9 +673,13 @@ impl CaseExecution<'_> {
 
 #[cfg(test)]
 mod stderr_tests {
-    use super::{CLEANUP_TIMEOUT, cleanup_timeout_diagnostic, materialize, validate_outcome};
+    use super::{
+        CLEANUP_TIMEOUT, FailureRetention, HashedBoundedWriter, cleanup_timeout_diagnostic, materialize,
+        validate_outcome,
+    };
     use crate::{runtime::definition::App, suite::Target};
     use hl_container::{ExitStatus, Logs};
+    use std::io::Write as _;
 
     fn missing_profile() -> Result<(), super::Error> {
         Err("retained C profile omitted the crossings/translations summary".into())
@@ -547,5 +737,65 @@ mod stderr_tests {
         assert_eq!(std::fs::read_dir(fixture.path()).unwrap().count(), 0);
         assert_eq!(std::fs::read_dir(fixture.lower().unwrap()).unwrap().count(), 0);
         fixture.release().unwrap();
+    }
+
+    #[test]
+    fn retained_overlay_writer_refuses_the_first_byte_past_its_bound() {
+        let mut writer = HashedBoundedWriter::new(Vec::new(), 3);
+        writer.write_all(b"abc").unwrap();
+        let error = writer.write_all(b"d").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::FileTooLarge);
+        let (bytes, digest) = writer.finish();
+        assert_eq!(bytes, 3);
+        assert_eq!(
+            digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn failed_overlay_archive_and_signal_manifest_are_correlated_before_release() {
+        let platform = Target::Arm64.platform();
+        let fixture = super::TestImage::materialize_scratch(&platform, super::Materialization::Overlay).unwrap();
+        std::fs::write(fixture.path().join("layout-dependent.pyc"), b"failed-layout").unwrap();
+        let artifact_dir = tempfile::tempdir().unwrap();
+        let artifact = artifact_dir.path().join("python");
+        std::fs::write(&artifact, b"exact-python-binary").unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let retention = FailureRetention::new(output.path().to_owned(), "a".repeat(64));
+        let status = ExitStatus::Fault {
+            status: 11,
+            detail: 0x1234,
+            reason: hl_container::FaultCause::Memory,
+        };
+        let retained = retention
+            .retain(
+                &fixture,
+                &artifact,
+                "runtime/python/layout",
+                Target::Arm64,
+                7,
+                Some(status),
+            )
+            .unwrap();
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(retained.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["attempt"], 7);
+        assert_eq!(manifest["status"]["kind"], "fault");
+        assert_eq!(manifest["status"]["value"]["detail"], 0x1234);
+        assert_eq!(
+            manifest["artifact_sha256"],
+            "509c1bf3e9e87736aaf9c75daf41a40532c0402ec32e4de571aff181a1bfae63"
+        );
+        let archive = std::fs::File::open(retained.join("upper.tar")).unwrap();
+        let mut archive = tar::Archive::new(archive);
+        let mut entries = archive.entries().unwrap();
+        assert!(entries.any(|entry| entry.unwrap().path().unwrap().ends_with("layout-dependent.pyc")));
+        fixture.release().unwrap();
+        assert!(
+            retained.join("upper.tar").is_file(),
+            "release must not consume retained evidence"
+        );
     }
 }

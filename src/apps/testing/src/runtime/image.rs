@@ -211,6 +211,20 @@ impl TestImage {
         &self.runtime
     }
 
+    /// Immutable image identity recorded beside a retained failed overlay.
+    pub fn identity(&self) -> &str {
+        &self.identity
+    }
+
+    /// Archives the exact writable layer while its lease is still live.
+    pub fn archive_upper(&self, writer: impl std::io::Write) -> Result<(), Error> {
+        let Root::Overlay { reference, .. } = &self.root else {
+            return Err("failed-overlay retention requires an overlay root".into());
+        };
+        self.images.roots().open_overlay(reference)?.archive_upper(writer)?;
+        Ok(())
+    }
+
     /// An image-backed spec transfers ownership, so container removal may already
     /// have released this lease; that is success, not a leak.
     pub fn release(self) -> Result<(), Error> {
