@@ -380,9 +380,14 @@ impl<'a> CaseExecution<'a> {
         let status = self.wait(name, timeout).await?;
         let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
+        let mut profile_validation = Ok(());
         if self.execution.diagnostics() {
             let text = std::str::from_utf8(&logs.stderr).map_err(|_| "retained C diagnostics are not UTF-8")?;
-            output::validate_profile(text)?;
+            // Preserve a missing profile as a failure for otherwise-correct diagnostic runs, but do not let
+            // secondary telemetry loss hide the guest's exit or output failure. Abnormal engine paths can end
+            // before the retained dispatcher emits its summary, and the underlying compatibility defect is the
+            // actionable diagnostic in that case.
+            profile_validation = output::validate_profile(text);
             output::forward_profile(text, std::io::stderr().lock())?;
             logs.stderr = text
                 .lines()
@@ -413,6 +418,7 @@ impl<'a> CaseExecution<'a> {
         if let Some(violation) = output::stderr_violation(&self.case.stderr, &logs.stderr) {
             return Err(violation.into());
         }
+        profile_validation?;
         Ok(())
     }
 }
