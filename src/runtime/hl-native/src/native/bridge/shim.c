@@ -191,12 +191,9 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
 }
 
 extern int hl_aarch64_ckpt_interrupt_signal(void);
-extern int hl_x86_64_ckpt_interrupt_signal(void);
 
 HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa) {
-    if (isa == 1) return hl_aarch64_ckpt_interrupt_signal();
-    if (isa == 2) return hl_x86_64_ckpt_interrupt_signal();
-    return -1;
+    return isa == 1 || isa == 2 ? hl_aarch64_ckpt_interrupt_signal() : -1;
 }
 
 HL_API int32_t hl_c_backend_checkpoint_configure(hl_c_backend *backend, int32_t broker, int32_t trigger) {
