@@ -495,6 +495,13 @@ static void jit86_store_alias_ranges(struct cpu *cpu, uint64_t ranges[][2], uint
     if (emulated_store) jit86_store_writeback_record(cpu, ranges[0][0], ranges[0][1]);
     for (uint32_t r = 0; r < range_count; ++r) {
         uint64_t lo = ranges[r][0], hi = ranges[r][1];
+        /* Shared-file identity alone does not make an address executable.
+           Logical executable aliases were queued by
+           hl_logical_vma_visit_exec_aliases above; among direct aliases only
+           pages admitted to the SMC tracker can own translations.  Do not
+           turn every ordinary MAP_SHARED store into an SMC exit and global
+           mapping STW. */
+        if (!smc_tracked_written(lo, hi - lo)) continue;
         int merged = 0;
         for (uint64_t i = 0; i < cpu->smc_range_count; ++i) {
             if (hi < cpu->smc_ranges[i][0] || lo > cpu->smc_ranges[i][1]) continue;
@@ -586,13 +593,22 @@ static int jit86_store_alias_observation_active(void) {
 }
 
 static void jit86_smc_commit(struct cpu *cpu) {
-    stw_mapping_begin();
+    int invalidates_code = cpu->smc_range_count != 0 || cpu->smc_range_overflow;
+    if (invalidates_code) stw_mapping_begin();
     /* Writeback is driven by store_ranges, never by smc_ranges: an SMC range
        overflow means "drop every translation", but there is no matching
        conservative writeback -- flushing an unwritten range destroys data. */
     for (uint64_t index = 0; index < cpu->store_range_count; ++index)
         filemap_flush_emulated(cpu->store_ranges[index][0], cpu->store_ranges[index][1]);
     cpu->store_range_count = 0;
+
+    /* Publishing ordinary MAP_SHARED bytes does not change mapping or code
+       authority.  filemap_flush_emulated serializes the mapping registry and
+       backing write itself; stopping every translated thread here turns each
+       observed store exit into a process-wide barrier.  Mapping STW above is
+       therefore conditional on the SMC half actually mutating translation
+       ingress. */
+    if (!invalidates_code) return;
     uint32_t removed;
     if (cpu->smc_range_overflow) {
         removed = g_live_map_count;
