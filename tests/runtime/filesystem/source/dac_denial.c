@@ -24,7 +24,7 @@ struct report {
     unsigned live_uid;
     // Denials: creation under a directory this uid cannot write, and metadata changes on a file
     // owned by the other uid.
-    unsigned closed_denied, chmod_denied, chown_denied, times_denied, now_denied, high_uid_denied;
+    unsigned closed_denied, chmod_denied, chown_denied, times_denied, now_denied, mixed_denied, high_uid_denied;
     // Allowances that must survive: the open directory and this uid's own file.
     unsigned open_allowed, own_chmod, supplementary_chown, nofollow_preserved, own_file_uid;
     // Probe of the closed directory as the guest sees it, so a failure here is readable.
@@ -46,6 +46,9 @@ static void first_child(struct report *out) {
     out->open_allowed = mkdir("open/mine-dir", 0755) == 0;
     int fd = open("open/mine", O_CREAT | O_RDWR, 0644);
     if (fd >= 0) close(fd);
+    fd = open("open/world", O_CREAT | O_RDWR, 0666);
+    if (fd >= 0) close(fd);
+    (void)chmod("open/world", 0666);
     out->own_chmod = chmod("open/mine", 0600) == 0;
     out->supplementary_chown = chown("open/mine", (uid_t)-1, 4000) == 0;
     out->high_uid_denied = chown("open/mine", (uid_t)UINT32_C(0x80000000), (gid_t)-1) != 0 && errno == EPERM;
@@ -64,6 +67,9 @@ static void second_child(struct report *out) {
     // Explicit times, so Linux answers EPERM rather than the EACCES of the now-or-omit form.
     out->times_denied = utimensat(AT_FDCWD, "open/mine", times, 0) != 0 && errno == EPERM;
     out->now_denied = utimensat(AT_FDCWD, "open/mine", NULL, 0) != 0 && errno == EACCES;
+    times[0].tv_nsec = UTIME_NOW;
+    times[1].tv_nsec = UTIME_OMIT;
+    out->mixed_denied = utimensat(AT_FDCWD, "open/world", times, 0) != 0 && errno == EPERM;
     out->closed_denied = mkdir("closed/nope2", 0755) != 0 && errno == EACCES;
     out->live_uid = getuid();
 }
@@ -122,7 +128,7 @@ int main(void) {
                         && (unsigned)getuid() == 0 && first.own_file_uid == FIRST_UID;
 
     printf(
-        "dac-denial closed=%04o:%u denied=%u:%u chmod=%u chown=%u times=%u now=%u high-uid=%u "
+        "dac-denial closed=%04o:%u denied=%u:%u chmod=%u chown=%u times=%u now=%u mixed=%u high-uid=%u "
         "open=%u own-chmod=%u supplementary-chown=%u nofollow=%u "
         "distinct=%u\n",
         first.closed_mode,
@@ -133,6 +139,7 @@ int main(void) {
         second.chown_denied,
         second.times_denied,
         second.now_denied,
+        second.mixed_denied,
         first.high_uid_denied,
         first.open_allowed,
         first.own_chmod,
