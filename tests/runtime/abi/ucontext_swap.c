@@ -5,6 +5,12 @@
 #include <stdio.h>
 #include <ucontext.h>
 
+#if defined(__x86_64__)
+#define CALLEE_SAVED_REGISTER "r15"
+#else
+#define CALLEE_SAVED_REGISTER "x24"
+#endif
+
 static ucontext_t uc_main, uc_co;
 static volatile int flag;
 
@@ -22,13 +28,7 @@ static int co_arg_seen;
 static void coroutine(int a, int b, int c) {
     co_arg_seen = (a == 11 && b == 22 && c == 33);
     for (int i = 0; i < 5; i++) {
-        register long cs asm(
-#if defined(__x86_64__)
-            "r15"
-#else
-            "x24"
-#endif
-        ) = 0xc0ffee + i;
+        register long cs asm(CALLEE_SAVED_REGISTER) = 0xc0ffee + i;
         co_counter++;
         swapcontext(&uc_co, &uc_main); // yield to main
         // after resume, the callee-saved reg must still hold our value
