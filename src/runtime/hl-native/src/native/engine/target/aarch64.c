@@ -1173,9 +1173,9 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         if (realpath(prog_host, g_authorized_executable_path) == NULL)
             snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", prog_host);
     }
-    // when the persistent cache is on, map the image + interp at FIXED VAs so the translated arena
-    // (block-map keys + baked guest addresses) is byte-identical across runs -> reusable from the cache.
-    if (g_pcache) g_force_base = PC_IMG_BASE;
+    // Persistent translations and checkpoint images both record guest addresses.  Give both modes the
+    // deterministic layout already used by the x86 target so a capture can be restored in a fresh process.
+    if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_IMG_BASE;
     struct main_placement main_placement;
     const struct main_placement *placement = NULL;
     if (image_plan != NULL) {
@@ -1200,7 +1200,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         static char ib[4200];
         // follow+confine ld.so symlink (through the overlay)
         interp_host = xresolve_overlay(interp, ib, sizeof ib);
-        if (g_pcache) g_force_base = PC_INTERP_BASE;
+        if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
         load_elf(interp_host, li, NULL);
         *jump = li->entry;
         *at_base = li->base;

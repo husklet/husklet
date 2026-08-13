@@ -245,8 +245,8 @@ static void run_guest(struct cpu *c) {
         if (g_threaded) stw_dispatch_safepoint();
 #ifdef G_CKPT_POLL
         // Checkpoint safepoint: all guest architectural state is spilled into `c` here, so a pending
-        // control-triggered checkpoint (SIGUSR1) writes a coherent snapshot and _exit()s. Defined only by
-        // the aarch64 target; the x86 TU never defines it, so its dispatcher compiles byte-identically.
+        // control-triggered checkpoint writes a coherent snapshot and _exit()s. Both guest targets define
+        // the hook; keeping the poll in this shared loop prevents target-specific safepoint drift.
         G_CKPT_POLL(c);
 #endif
         if (G_PC(c) == SIGRETURN_PC) {

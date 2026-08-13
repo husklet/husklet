@@ -1158,7 +1158,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
             snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", prog_host);
     }
     // opt8: load the guest image + interp at FIXED VAs so the translated arena is byte-identical across
-    // runs (one-shot g_force_base, cleared inside load_elf). Only when the persistent cache is enabled.
+    // runs (one-shot g_force_base, cleared inside load_elf). Checkpoints need the same deterministic layout.
     if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_IMG_BASE;
     struct main_placement main_placement;
     const struct main_placement *placement = NULL;

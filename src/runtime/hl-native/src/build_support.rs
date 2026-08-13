@@ -178,6 +178,20 @@ mod tests {
     }
 
     #[test]
+    fn target_checkpoint_layout_is_deterministic_on_both_isas() {
+        let placement = "g_pcache || hl_option_get(\"HL_CHECKPOINT\")";
+        for target in ["aarch64", "x86_64"] {
+            let path = format!("src/native/engine/target/{target}.c");
+            let source = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+            assert_eq!(
+                source.matches(placement).count(),
+                2,
+                "{path} must select deterministic main and interpreter placement for checkpoint capture"
+            );
+        }
+    }
+
+    #[test]
     fn windows_link_inputs_use_target_spelling() {
         assert_eq!(
             super::static_archive_filename("windows", "msvc", "hl_engine"),
