@@ -17,6 +17,11 @@ impl Layout {
         let mut native_arguments = vec![
             "/mnt/mac/usr/bin/clang".into(),
             "-O3".into(),
+            "-Wall".into(),
+            "-Wextra".into(),
+            "-Werror".into(),
+            "-Wconversion".into(),
+            "-Wshadow".into(),
             "-arch".into(),
             "x86_64".into(),
         ];
@@ -43,7 +48,7 @@ pub(super) fn build_linux(layout: &Layout, source: &Path, rootfs: &Path, docker:
         ""
     };
     let command = format!(
-        "apk add --no-cache build-base sqlite-dev sqlite-static >/dev/null && cc -O3 -static /source.c -o /out/{}{}",
+        "apk add --no-cache build-base sqlite-dev sqlite-static >/dev/null && cc -O3 -Wall -Wextra -Werror -Wconversion -Wshadow -static /source.c -o /out/{}{}",
         layout
             .linux
             .file_name()
@@ -121,5 +126,14 @@ mod tests {
                     .any(|argument| argument.ends_with("/malloc.c"))
             );
         }
+    }
+
+    #[test]
+    fn fixture_publishes_one_complete_checked_frame() {
+        let source = include_str!("../../../tests/fixtures/guest/malloc.c");
+        assert_eq!(source.matches("write(STDOUT_FILENO").count(), 1);
+        assert!(source.contains("snprintf(frame, sizeof(frame)"));
+        assert!(source.contains("write_all(frame, (size_t)length)"));
+        assert!(!source.contains("\nprintf("));
     }
 }

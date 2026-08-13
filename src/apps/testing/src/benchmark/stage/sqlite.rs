@@ -203,6 +203,11 @@ mod tests {
         assert!(source.contains("checksum != INT64_C(200010000)"));
         assert!(source.contains("square_checksum != INT64_C(2666866670000)"));
         assert!(source.contains("write <= 1 || read <= 1"));
+        assert_eq!(source.matches("write(STDOUT_FILENO").count(), 1);
+        assert!(source.contains("snprintf(frame, sizeof(frame)"));
+        assert!(source.contains("write_all(frame, (size_t)length)"));
+        assert!(!source.contains("\nprintf("));
+        assert!(!source.contains("\nputs("));
     }
 
     #[test]

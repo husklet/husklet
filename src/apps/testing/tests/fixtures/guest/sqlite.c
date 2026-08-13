@@ -1,9 +1,11 @@
 #include <sqlite3.h>
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
 
 enum { ROWS = 20000, READ_SCANS = 50 };
 
@@ -31,6 +33,21 @@ static void execute(sqlite3 *database, const char *sql) {
         sqlite3_free(message);
         exit(2);
     }
+}
+
+static int write_all(const char *buffer, size_t length) {
+    while (length != 0) {
+        ssize_t written = write(STDOUT_FILENO, buffer, length);
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        if (written <= 0) {
+            return -1;
+        }
+        buffer += (size_t)written;
+        length -= (size_t)written;
+    }
+    return 0;
 }
 
 int main(void) {
@@ -78,10 +95,16 @@ int main(void) {
         fputs("measured duration was not greater than one microsecond\n", stderr);
         return 3;
     }
-    puts("META workload=sqlite layout=sqlite version=1");
-    printf("PHASE sqlite-write us=%llu ok=%lld\n", (unsigned long long)write, (long long)count);
-    printf("PHASE sqlite-read us=%llu ok=%lld:%lld:%lld\n", (unsigned long long)read, (long long)count,
-           (long long)checksum, (long long)square_checksum);
+    char frame[256];
+    int length = snprintf(frame, sizeof(frame),
+                          "META workload=sqlite layout=sqlite version=1\n"
+                          "PHASE sqlite-write us=%llu ok=%lld\n"
+                          "PHASE sqlite-read us=%llu ok=%lld:%lld:%lld\n",
+                          (unsigned long long)write, (long long)count, (unsigned long long)read, (long long)count,
+                          (long long)checksum, (long long)square_checksum);
+    if (length < 0 || (size_t)length >= sizeof(frame) || write_all(frame, (size_t)length) != 0) {
+        return 4;
+    }
     require_sqlite(sqlite3_close(database), database, "sqlite3_close");
     return 0;
 }
