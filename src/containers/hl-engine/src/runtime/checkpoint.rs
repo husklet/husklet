@@ -15,6 +15,7 @@ use std::{
 };
 
 #[path = "checkpoint/protocol.rs"]
+#[path = "checkpoint_protocol.rs"]
 mod protocol;
 use protocol::{
     CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, OBJECT_ABORT,
