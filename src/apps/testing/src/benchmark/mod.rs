@@ -51,7 +51,8 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     let workspace = crate::runtime::workspace()?;
     let measurement = options.measurement;
     let config_path = workspace.join(&measurement.config);
-    let campaign = Campaign::load(&config_path)?;
+    let mut campaign = Campaign::load(&config_path)?;
+    campaign.samples_per_row = measurement.samples_per_row;
     campaign.verify_artifacts()?;
     let result_path = workspace.join(&measurement.results);
     let mut ledger = Ledger::open(&result_path, &campaign, measurement.resume)?;

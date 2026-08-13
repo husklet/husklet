@@ -212,7 +212,7 @@ fn bounded_output(command: &mut Command, timeout: Duration) -> Result<std::proce
 pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
     let mut readings = Vec::new();
     let mut host_load = Vec::new();
-    for _ in 0..campaign.samples_per_row {
+    for _ in sample_ordinals(campaign.samples_per_row) {
         let before = load()?;
         readings.push(sample(campaign, step)?);
         host_load.push(HostLoad { before, after: load()? });
@@ -253,6 +253,10 @@ pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
         phases,
         host_load,
     })
+}
+
+fn sample_ordinals(samples_per_row: u32) -> std::ops::Range<u32> {
+    0..samples_per_row
 }
 
 fn load() -> Result<f64, Error> {
@@ -578,5 +582,11 @@ mod tests {
         assert_eq!(super::box_lock_holder_count(&path).unwrap(), 1);
         drop(held);
         assert_eq!(super::box_lock_holder_count(&path).unwrap(), 0);
+    }
+
+    #[test]
+    fn configured_sample_count_controls_exact_measurement_attempts() {
+        assert_eq!(super::sample_ordinals(3).count(), 3);
+        assert_eq!(super::sample_ordinals(5).count(), 5);
     }
 }

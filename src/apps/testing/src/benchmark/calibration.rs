@@ -21,7 +21,8 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     validate(&options.arms, options.rounds)?;
     let measurement = options.measurement;
     let workspace = crate::runtime::workspace()?;
-    let campaign = Campaign::load(&workspace.join(&measurement.config))?;
+    let mut campaign = Campaign::load(&workspace.join(&measurement.config))?;
+    campaign.samples_per_row = measurement.samples_per_row;
     if options.arms.iter().any(|arm| !campaign.arms.contains_key(arm)) {
         return Err("calibration arm is absent from campaign".into());
     }
