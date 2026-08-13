@@ -103,6 +103,7 @@ impl CheckpointTransport {
     }
 
     /// Advances the capture generation observed at guest safepoints.
+    #[must_use]
     pub fn bump(&self) -> u32 {
         // SAFETY: the mapping is live until this owner is dropped.
         unsafe { bindings::hl_c_backend_checkpoint_trigger_bump(self.trigger_mapping.as_ptr()) }
