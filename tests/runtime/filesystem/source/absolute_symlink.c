@@ -14,6 +14,12 @@ static int write_file(const char *path) {
     return ok ? 0 : -1;
 }
 
+static int setup_failed(const char *operation, const char *path) {
+    int error = errno;
+    fprintf(stderr, "absolute-symlink setup %s %s: errno=%d (%s)\n", operation, path, error, strerror(error));
+    return 1;
+}
+
 int main(void) {
     char base[128], run[160], file[192], absolute[192], relative[192], chain[192], loop_a[192], loop_b[192];
     snprintf(base, sizeof base, "/tmp/hl-absolute-link-%d", getpid());
@@ -24,7 +30,9 @@ int main(void) {
     snprintf(chain, sizeof chain, "%s/chain", base);
     snprintf(loop_a, sizeof loop_a, "%s/loop-a", base);
     snprintf(loop_b, sizeof loop_b, "%s/loop-b", base);
-    if (mkdir(base, 0755) || mkdir(run, 0755) || write_file(file)) return 1;
+    if (mkdir(base, 0755) != 0) return setup_failed("mkdir", base);
+    if (mkdir(run, 0755) != 0) return setup_failed("mkdir", run);
+    if (write_file(file) != 0) return setup_failed("write", file);
     if (symlink(run, absolute) || symlink("run", relative) || symlink(absolute, chain)) return 2;
     if (symlink("loop-b", loop_a) || symlink("loop-a", loop_b)) return 3;
 
