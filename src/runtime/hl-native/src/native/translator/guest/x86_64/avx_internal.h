@@ -1,0 +1,53 @@
+#ifndef HL_TRANSLATOR_GUEST_X86_64_AVX_INTERNAL_H
+#define HL_TRANSLATOR_GUEST_X86_64_AVX_INTERNAL_H
+
+#include "avx.h"
+#include "cpu.h"
+#include "decoder.h"
+
+#include <stddef.h>
+#include <stdint.h>
+
+#define SSE_XI 0x01u
+#define SSE_XD 0x02u
+#define SSE_XZ 0x04u
+#define SSE_XO 0x08u
+#define SSE_XU 0x10u
+#define SSE_XP 0x20u
+
+enum avx_dispatch_result {
+    AVX_DISPATCH_UNIMPLEMENTED = -1,
+    AVX_DISPATCH_UNMATCHED = 0,
+    AVX_DISPATCH_HANDLED = 1,
+};
+
+void xs_note(int vex, int map, int op, uint64_t rip);
+uint64_t avx_ea(const hl_x86_avx_state *state, struct cpu *cpu, struct insn *instruction, uint64_t next, int width);
+int avx_memory_read(const hl_x86_avx_state *state, uint64_t guest, void *destination, size_t length);
+int avx_memory_write(const hl_x86_avx_state *state, uint64_t guest, const void *source, size_t length);
+void avx_get_rm(const hl_x86_avx_state *state, struct cpu *cpu, struct insn *instruction, uint64_t next, int width,
+                uint8_t output[64]);
+float avx_dnan_f32(float result, float left, float right);
+double avx_dnan_f64(double result, double left, double right);
+unsigned cvt_fp_flags(void);
+void cvt_fp_flags_set(unsigned keep);
+void hl_x86_sse_raise(unsigned mxcsr_bits);
+int sse_daz_active(void);
+int sse_is_denorm_f32(uint32_t bits);
+int sse_is_denorm_f64(uint64_t bits);
+float avx_fp_arith_f32(int op, float left, float right);
+double avx_fp_arith_f64(int op, double left, double right);
+uint64_t simd_element_negate(uint64_t value, int size);
+int simd_element_negative(uint64_t value, int size);
+int sse_host_rounding_control(void);
+double sse_round_d(double value, int immediate);
+float sse_round_f(float value, int immediate);
+void aes_subbytes(uint8_t state[16], const uint8_t box[256]);
+void aes_shiftrows(const uint8_t input[16], uint8_t output[16], int inverse);
+void aes_mixcolumns(uint8_t state[16], int inverse);
+int sat_s16(int value);
+extern const uint8_t k_aes_sbox[256];
+extern const uint8_t k_aes_isbox[256];
+void hl_x86_sse_execute(const hl_x86_avx_state *state, struct cpu *cpu);
+
+#endif
