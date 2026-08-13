@@ -57,8 +57,6 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     if String::from_utf8(inspect)?.trim() != IMAGE_ID {
         return Err("pinned Docker image identity mismatch".into());
     }
-    let mut identities = String::from("artifact\tidentity\n");
-    for path in [&rootfs, &arch, &docker] {
     let python_inspect = mac(&[
         mac_path(&docker),
         "image".into(),
@@ -94,7 +92,7 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         ])?;
         let native_frame = frame(&native_output)?;
         let docker_frame = frame(&docker_output)?;
-        require_parity(&native_frame, &docker_frame)?;
+        require_parity(&format!("malloc/{}", layout.name), &native_frame, &docker_frame)?;
         fs::write(output.join(format!("native-{}.out", layout.name)), native_output)?;
         fs::write(output.join(format!("docker-{}.out", layout.name)), docker_output)?;
         fs::write(
