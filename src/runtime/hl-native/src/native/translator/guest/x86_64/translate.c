@@ -6224,6 +6224,63 @@ static int lower_direct_jump(struct insn *instruction, uint64_t *guest_pc, uint6
     return TX_BREAK;
 }
 
+static int lower_one_byte_family(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
+                                 hl_x86_trace_state *trace_state, hl_x86_crypto_state *crypto_state,
+                                 hl_x86_jcc_region *branch_region) {
+    uint64_t current = *guest_pc;
+    int result = lower_primary_fast(instruction, current, next, trace_state);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_group3_unary(instruction, next);
+    if (result == TX_NEXT) goto advance;
+    result = lower_group3_narrow_muldiv(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    result = lower_group3_wide_muldiv(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    if (instruction->op == 0xF6 || instruction->op == 0xF7) {
+        report_unimpl(current, instruction);
+        return TX_BREAK;
+    }
+    result = lower_group45(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_exchange(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    result = lower_stack_control(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_immediate_multiply(instruction, current, next, trace_state);
+    if (result == TX_NEXT) goto advance;
+    result = lower_primary_string(instruction, next, crypto_state);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_direct_jump(instruction, guest_pc, next, trace_state, branch_region);
+    if (result != TX_FALL) return result;
+    result = lower_direct_call_loop(instruction, current, next, trace_state);
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_short_conditional_branch(instruction, guest_pc, next, trace_state, branch_region);
+    if (result != TX_FALL) return result;
+    result = lower_flag_register_transfer(instruction);
+    if (result == TX_NEXT) goto advance;
+    result = lower_flag_stack_control(instruction, current);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_x87_family(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_accumulator_legacy(instruction, instruction->opsize == 8);
+    if (result == TX_NEXT) goto advance;
+    result = lower_one_byte_signal_and_lookup(instruction, next);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    return TX_FALL;
+
+advance:
+    *guest_pc = next;
+    return TX_NEXT;
+}
+
 static int lower_sse_family(struct insn *instruction, uint64_t guest_pc, uint64_t next,
                             hl_x86_crypto_state *crypto_state) {
     int vd = instruction->reg;
@@ -6273,6 +6330,67 @@ static int lower_sse_family(struct insn *instruction, uint64_t guest_pc, uint64_
     SSE_TRY(lower_sse_nontemporal_store(instruction, guest_pc, next, vd, vm));
 #undef SSE_TRY
     return TX_FALL;
+}
+
+static int lower_two_byte_family(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
+                                 hl_x86_trace_state *trace_state, hl_x86_crypto_state *crypto_state,
+                                 hl_x86_jcc_region *branch_region) {
+    uint64_t current = *guest_pc;
+    int sf = instruction->opsize == 8;
+    int result = lower_two_byte_boundary(instruction, current, next);
+    if (result == TX_BREAK) return TX_BREAK;
+    mark_vdirty();
+    result = lower_sse_family(instruction, current, next, crypto_state);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_system_query(instruction, next);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_scalar_two_byte(instruction, current, next, sf, trace_state);
+    if (result == TX_NEXT) goto advance;
+    result = lower_wide_compare_exchange(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_multibyte_hint(instruction);
+    if (result == TX_NEXT) goto advance;
+    result = lower_double_shift(instruction, next);
+    if (result == TX_NEXT) goto advance;
+    result = lower_extended_state(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_bit_scan(instruction, next, sf);
+    if (result == TX_NEXT) goto advance;
+    result = lower_population_count(instruction, next, sf);
+    if (result == TX_NEXT) goto advance;
+    result = lower_bit_test_modify(instruction, current, next, sf);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    result = lower_compare_exchange(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    result = lower_exchange_add(instruction, current, next);
+    if (result == TX_NEXT) goto advance;
+    if ((instruction->op & 0xF0) == 0x80) {
+        struct near_branch_context near_context = {
+            .trace = trace_state,
+            .seen = branch_region->seen,
+            .seen_count = branch_region->seen_count,
+            .block_count = branch_region->trace_blocks,
+            .condition_count = branch_region->conditional_stitches,
+            .stitch_ok = branch_region->stitch_allowed,
+            .start = branch_region->start,
+            .body = branch_region->body,
+        };
+        result = lower_near_conditional_branch(instruction, guest_pc, next, &near_context);
+        if (result != TX_FALL) return result;
+    }
+    result = lower_conditional_data_move(instruction, current, next, sf);
+    if (result == TX_NEXT) goto advance;
+    if (result == TX_BREAK) return TX_BREAK;
+    return TX_FALL;
+
+advance:
+    *guest_pc = next;
+    return TX_NEXT;
 }
 
 // Translate the basic block at guest address gpc; returns host entry pointer.
@@ -6357,7 +6475,6 @@ static void *translate_block(uint64_t gpc) {
         prov_guest = gpc;
         prov_mem = I.is_mem; // a memory operand -> this insn can raise a synchronous guest fault
         uint8_t op = I.op;
-        int sf = I.opsize == 8;
         int vector_result = lower_vector_family(&I, gpc, next, &crypto_state);
         if (vector_result == TX_NEXT) {
             gpc = next;
@@ -6377,189 +6494,15 @@ static void *translate_block(uint64_t gpc) {
         if (hl_x86_x87_known() && !(!I.two && op >= 0xD8 && op <= 0xDF)) hl_x86_x87_drop();
 
         if (!I.two) {
-            int primary_result = lower_primary_fast(&I, gpc, next, &trace_state);
-            if (primary_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (primary_result == TX_BREAK) break;
-            int unary_result = lower_group3_unary(&I, next);
-            if (unary_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int narrow_result = lower_group3_narrow_muldiv(&I, gpc, next);
-            if (narrow_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int wide_result = lower_group3_wide_muldiv(&I, gpc, next);
-            if (wide_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (wide_result == TX_BREAK) break;
-            if (op == 0xF6 || op == 0xF7) {
-                report_unimpl(gpc, &I);
-                break;
-            }
-            int group45_result = lower_group45(&I, gpc, next);
-            if (group45_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (group45_result == TX_BREAK) break;
-            int exchange_result = lower_exchange(&I, gpc, next);
-            if (exchange_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int stack_result = lower_stack_control(&I, gpc, next);
-            if (stack_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (stack_result == TX_BREAK) break;
-            int multiply_result = lower_immediate_multiply(&I, gpc, next, &trace_state);
-            if (multiply_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int string_result = lower_primary_string(&I, next, &crypto_state);
-            if (string_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (string_result == TX_BREAK) break;
             hl_x86_jcc_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK};
-            int jump_result = lower_direct_jump(&I, &gpc, next, &trace_state, &branch_region);
-            if (jump_result == TX_NEXT) continue;
-            if (jump_result == TX_BREAK) break;
-            int direct_loop_result = lower_direct_call_loop(&I, gpc, next, &trace_state);
-            if (direct_loop_result == TX_BREAK) break;
-            int jcc_result = lower_short_conditional_branch(&I, &gpc, next, &trace_state, &branch_region);
-            if (jcc_result == TX_NEXT) continue;
-            if (jcc_result == TX_BREAK) break;
-            int flag_register_result = lower_flag_register_transfer(&I);
-            if (flag_register_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int flag_stack_result = lower_flag_stack_control(&I, gpc);
-            if (flag_stack_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (flag_stack_result == TX_BREAK) break;
-            int x87_result = lower_x87_family(&I, gpc, next);
-            if (x87_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (x87_result == TX_BREAK) break;
-            int accumulator_result = lower_accumulator_legacy(&I, sf);
-            if (accumulator_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int one_byte_boundary_result = lower_one_byte_signal_and_lookup(&I, next);
-            if (one_byte_boundary_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (one_byte_boundary_result == TX_BREAK) break;
+            int one_byte_result = lower_one_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
+            if (one_byte_result == TX_NEXT) continue;
+            if (one_byte_result == TX_BREAK) break;
         } else {
-            // ===== two-byte (0F xx) =====
-            int two_byte_boundary_result = lower_two_byte_boundary(&I, gpc, next);
-            if (two_byte_boundary_result == TX_BREAK) break;
-            mark_vdirty();
-            int sse_result = lower_sse_family(&I, gpc, next, &crypto_state);
-            if (sse_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (sse_result == TX_BREAK) break;
-            int system_query_result = lower_system_query(&I, next);
-            if (system_query_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (system_query_result == TX_BREAK) break;
-            int scalar_two_byte_result = lower_scalar_two_byte(&I, gpc, next, sf, &trace_state);
-            if (scalar_two_byte_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int wide_compare_result = lower_wide_compare_exchange(&I, gpc, next);
-            if (wide_compare_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (wide_compare_result == TX_BREAK) break;
-            int hint_result = lower_multibyte_hint(&I);
-            if (hint_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int double_shift_result = lower_double_shift(&I, next);
-            if (double_shift_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            // 0F AE: fences (lfence/mfence/sfence -> dmb), ldmxcsr/stmxcsr, fxsave/fxrstor (xmm area)
-            int extended_state_result = lower_extended_state(&I, gpc, next);
-            if (extended_state_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (extended_state_result == TX_BREAK) break;
-            int bit_scan_result = lower_bit_scan(&I, next, sf);
-            if (bit_scan_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int population_result = lower_population_count(&I, next, sf);
-            if (population_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int bit_modify_result = lower_bit_test_modify(&I, gpc, next, sf);
-            if (bit_modify_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (bit_modify_result == TX_BREAK) break;
-            int compare_exchange_result = lower_compare_exchange(&I, gpc, next);
-            if (compare_exchange_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            int exchange_add_result = lower_exchange_add(&I, gpc, next);
-            if (exchange_add_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if ((op & 0xF0) == 0x80) {
-                struct near_branch_context near_context = {
-                    .trace = &trace_state,
-                    .seen = seen,
-                    .seen_count = &nseen,
-                    .block_count = &trace_blk,
-                    .condition_count = &ncond,
-                    .stitch_ok = STITCH_OK,
-                    .start = start,
-                    .body = body,
-                };
-                int near_branch_result = lower_near_conditional_branch(&I, &gpc, next, &near_context);
-                if (near_branch_result == TX_NEXT) continue;
-                if (near_branch_result == TX_BREAK) break;
-            }
-            int conditional_move_result = lower_conditional_data_move(&I, gpc, next, sf);
-            if (conditional_move_result == TX_NEXT) {
-                gpc = next;
-                continue;
-            }
-            if (conditional_move_result == TX_BREAK) break;
+            hl_x86_jcc_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK};
+            int two_byte_result = lower_two_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
+            if (two_byte_result == TX_NEXT) continue;
+            if (two_byte_result == TX_BREAK) break;
         }
         report_unimpl(gpc, &I);
         break;
