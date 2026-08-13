@@ -332,6 +332,8 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
         return -1;
     }
     if (!guest_count) {
+        if (positional && offset == (off_t)-1 && flags == 0)
+            return output ? readv(fd, NULL, 0) : writev(fd, NULL, 0);
 #if defined(__linux__)
         if (positional && flags)
             return output ? preadv2(fd, NULL, 0, offset, flags) : pwritev2(fd, NULL, 0, offset, flags);
@@ -384,13 +386,7 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
         host_count = 1;
     }
 
-    ssize_t result;
-#if defined(__linux__)
-    if (positional && flags)
-        result = output ? preadv2(fd, host_iov, (int)host_count, offset, flags)
-                        : pwritev2(fd, host_iov, (int)host_count, offset, flags);
-    else
-#else
+#if !defined(__linux__)
     if (flags) {
         for (size_t index = 0; index < host_count; ++index)
             hl_logical_vma_unpin(&pins[index]);
@@ -398,6 +394,15 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
         return -1;
     }
 #endif
+    ssize_t result;
+    if (positional && offset == (off_t)-1 && flags == 0)
+        result = output ? readv(fd, host_iov, (int)host_count) : writev(fd, host_iov, (int)host_count);
+#if defined(__linux__)
+    else if (positional && flags)
+        result = output ? preadv2(fd, host_iov, (int)host_count, offset, flags)
+                        : pwritev2(fd, host_iov, (int)host_count, offset, flags);
+#endif
+    else
         result = positional ? (output ? preadv(fd, host_iov, (int)host_count, offset)
                                       : pwritev(fd, host_iov, (int)host_count, offset))
                             : (output ? readv(fd, host_iov, (int)host_count) : writev(fd, host_iov, (int)host_count));
