@@ -2141,6 +2141,47 @@ static enum avx_dispatch_result avx_dispatch_map1_scalar_shift(const hl_x86_avx_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_immediate_shift(struct cpu *c, struct insn *instruction,
+                                                                  uint64_t next, int map, int width) {
+    int op = instruction->op;
+    if (map != 1 || (op != 0x71 && op != 0x72 && op != 0x73)) return AVX_DISPATCH_UNMATCHED;
+    int extension = instruction->reg;
+    int immediate = (uint8_t)instruction->imm;
+    int element = op == 0x71 ? 2 : op == 0x72 ? 4 : 8;
+    uint8_t source[64], result[64];
+    avx_get(c, instruction->rm_reg, source);
+    if (op == 0x73 && (extension == 3 || extension == 7)) {
+        for (int lane = 0; lane < width; lane += 16)
+            for (int offset = 0; offset < 16; offset++) {
+                if (extension == 3)
+                    result[lane + offset] = offset + immediate < 16 ? source[lane + offset + immediate] : 0;
+                else
+                    result[lane + offset] = offset - immediate >= 0 ? source[lane + offset - immediate] : 0;
+            }
+    } else {
+        int left = extension == 6;
+        int arithmetic = extension == 4;
+        int bits = element * 8;
+        for (int offset = 0; offset < width; offset += element) {
+            uint64_t value = 0, shifted;
+            memcpy(&value, source + offset, (size_t)element);
+            if (left) {
+                shifted = immediate >= bits ? 0 : value << immediate;
+            } else if (arithmetic) {
+                int sign_shift = 64 - bits;
+                int64_t signed_value = ((int64_t)value << sign_shift) >> sign_shift;
+                shifted = (uint64_t)(signed_value >> (immediate >= bits ? bits - 1 : immediate));
+            } else {
+                shifted = immediate >= bits ? 0 : value >> immediate;
+            }
+            memcpy(result + offset, &shifted, (size_t)element);
+        }
+    }
+    avx_put(c, instruction->vvvv, result, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2193,6 +2234,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map1_bitwise(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_horizontal_floating(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_scalar_shift(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map1_immediate_shift(c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
@@ -2290,40 +2332,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 }
             }
             avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x71: // shift-by-imm8 group: dst=vvvv, src=rm(reg), ModRM.reg=opcode extension.
-        case 0x72: // 0x71 word /2 psrlw /4 psraw /6 psllw; 0x72 dword /2 psrld /4 psrad /6 pslld;
-        case 0x73: // 0x73 qword /2 psrlq /6 psllq; /3 psrldq /7 pslldq (per-128-lane byte shift).
-        {
-            int ext = rd, imm = (uint8_t)I.imm;
-            int es = (op == 0x71) ? 2 : (op == 0x72) ? 4 : 8;
-            avx_get(c, I.rm_reg, a); // source
-            if (op == 0x73 && (ext == 3 || ext == 7)) {
-                for (int lane = 0; lane < W; lane += 16)
-                    for (int i = 0; i < 16; i++) {
-                        if (ext == 3) // psrldq
-                            d[lane + i] = (i + imm < 16) ? a[lane + i + imm] : 0;
-                        else // pslldq
-                            d[lane + i] = (i - imm >= 0) ? a[lane + i - imm] : 0;
-                    }
-            } else {
-                int left = (ext == 6), arith = (ext == 4), bits = es * 8;
-                for (int i = 0; i < W; i += es) {
-                    uint64_t v = 0, z;
-                    memcpy(&v, a + i, (size_t)es);
-                    if (left)
-                        z = (imm >= bits) ? 0 : (v << imm);
-                    else if (arith) {
-                        int sh = 64 - bits;
-                        int64_t sv = ((int64_t)v << sh) >> sh;
-                        z = (uint64_t)(sv >> (imm >= bits ? bits - 1 : imm));
-                    } else
-                        z = (imm >= bits) ? 0 : (v >> imm);
-                    memcpy(d + i, &z, (size_t)es);
-                }
-            }
-            avx_put(c, vv, d, W); // dst = VEX.vvvv
             goto done;
         }
         case 0xC2: { // vcmpps/pd/ss/sd: per-lane predicate compare -> all-ones/zero mask
