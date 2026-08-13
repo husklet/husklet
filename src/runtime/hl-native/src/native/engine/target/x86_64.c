@@ -1226,11 +1226,17 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     // remain available through the canonical [prof] report emitted by the exit path; normal launches
     // must not synthesize a guest stderr line merely because an inline clock call happened.
     if (g_prof) {
-        fprintf(stderr, "[prof] dispatcher crossings=%llu translations=%llu\n",
-                (unsigned long long)g_dispatch_profile.crossings,
-                (unsigned long long)g_dispatch_profile.translations);
-        fprintf(stderr, "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
-                (unsigned long long)g_disp_n, (unsigned long long)g_ibtc_fill, g_noibtc ? "OFF" : "ON");
+        char profile[256];
+        int profile_size = snprintf(profile, sizeof profile,
+                                    "[prof] dispatcher crossings=%llu translations=%llu\n"
+                                    "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
+                                    (unsigned long long)g_dispatch_profile.crossings,
+                                    (unsigned long long)g_dispatch_profile.translations, (unsigned long long)g_disp_n,
+                                    (unsigned long long)g_ibtc_fill, g_noibtc ? "OFF" : "ON");
+        if (profile_size > 0) {
+            size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1u;
+            (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
+        }
     }
     return c.exit_code;
 }

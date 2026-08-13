@@ -1237,10 +1237,16 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     run_guest(&c);
     c.exit_code = thread_process_owner_wait(&c, c.exit_code);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
-    if (g_prof)
-        fprintf(stderr, "[prof] dispatcher crossings=%llu translations=%llu\n",
-                (unsigned long long)g_dispatch_profile.crossings,
-                (unsigned long long)g_dispatch_profile.translations);
+    if (g_prof) {
+        char profile[160];
+        int profile_size = snprintf(profile, sizeof profile, "[prof] dispatcher crossings=%llu translations=%llu\n",
+                                    (unsigned long long)g_dispatch_profile.crossings,
+                                    (unsigned long long)g_dispatch_profile.translations);
+        if (profile_size > 0) {
+            size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1u;
+            (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
+        }
+    }
     return c.exit_code;
 }
 

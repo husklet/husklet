@@ -6,8 +6,8 @@ use crate::composition::{
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 pub(super) struct NativeOutputBridge {
@@ -15,6 +15,7 @@ pub(super) struct NativeOutputBridge {
     stdout: Option<OwnedFd>,
     stderr: Option<OwnedFd>,
     stop: Arc<AtomicBool>,
+    in_flight: Arc<Mutex<usize>>,
     port: Arc<dyn StandardStreamPort>,
     workers: Vec<JoinHandle<()>>,
 }
@@ -25,15 +26,18 @@ impl NativeOutputBridge {
         let (stdout_reader, stdout) = open_pipe()?;
         let (stderr_reader, stderr) = open_pipe()?;
         let stop = Arc::new(AtomicBool::new(false));
+        let in_flight = Arc::new(Mutex::new(0));
         let stdout_worker = spawn_stream_reader(
             Arc::clone(&port),
             Arc::clone(&stop),
+            Arc::clone(&in_flight),
             stdout_reader,
             StandardStream::Stdout,
         )?;
         let stderr_worker = match spawn_stream_reader(
             Arc::clone(&port),
             Arc::clone(&stop),
+            Arc::clone(&in_flight),
             stderr_reader,
             StandardStream::Stderr,
         ) {
@@ -50,6 +54,7 @@ impl NativeOutputBridge {
             stdout: Some(stdout),
             stderr: Some(stderr),
             stop,
+            in_flight,
             port,
             workers: vec![stdout_worker, stderr_worker],
         })
@@ -65,12 +70,11 @@ impl NativeOutputBridge {
 
     pub(super) fn flush(&self) {
         for _ in 0..200 {
-            if self.pending_bytes() == 0 {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                if self.pending_bytes() == 0 {
-                    return;
-                }
+            let in_flight = self.in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *in_flight == 0 && self.pending_bytes() == 0 {
+                return;
             }
+            drop(in_flight);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
@@ -150,6 +154,7 @@ fn set_file_nonblocking(descriptor: &File) -> Result<(), CompositionError> {
 fn spawn_stream_reader(
     port: Arc<dyn StandardStreamPort>,
     stop: Arc<AtomicBool>,
+    in_flight: Arc<Mutex<usize>>,
     mut reader: File,
     stream: StandardStream,
 ) -> Result<JoinHandle<()>, CompositionError> {
@@ -161,10 +166,14 @@ fn spawn_stream_reader(
         .spawn(move || {
             let mut bytes = [0_u8; 8192];
             while !stop.load(Ordering::Acquire) {
-                let Some(count) = read_stream(&mut reader, &mut bytes, &stop) else {
+                let Some(count) = read_stream(&mut reader, &mut bytes, &stop, &in_flight) else {
                     break;
                 };
-                if !write_stream(port.as_ref(), stream, &bytes[..count]) {
+                let written = write_stream(port.as_ref(), stream, &bytes[..count]);
+                let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                *active -= 1;
+                drop(active);
+                if !written {
                     return;
                 }
             }
@@ -172,15 +181,20 @@ fn spawn_stream_reader(
         .map_err(|_| CompositionError::RuntimeConstruction)
 }
 
-fn read_stream(reader: &mut File, bytes: &mut [u8], stop: &AtomicBool) -> Option<usize> {
+fn read_stream(reader: &mut File, bytes: &mut [u8], stop: &AtomicBool, in_flight: &Mutex<usize>) -> Option<usize> {
     while !stop.load(Ordering::Acquire) {
+        let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match reader.read(bytes) {
             Ok(0) => return None,
-            Ok(count) => return Some(count),
+            Ok(count) => {
+                *active += 1;
+                return Some(count);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                drop(active);
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => drop(active),
             Err(_) => return None,
         }
     }
@@ -481,6 +495,67 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("idle output bridge did not reap its readers");
         assert!(port.0.load(Ordering::Acquire));
+    }
+
+    #[derive(Default)]
+    struct BlockingOutputPort {
+        state: Mutex<(bool, bool, Vec<u8>)>,
+        changed: Condvar,
+    }
+
+    impl StandardStreamPort for BlockingOutputPort {
+        fn write(&self, _stream: StandardStream, input: &[u8]) -> std::io::Result<usize> {
+            let mut state = self.state.lock().unwrap();
+            state.0 = true;
+            self.changed.notify_all();
+            while !state.1 {
+                state = self.changed.wait(state).unwrap();
+            }
+            state.2.extend_from_slice(input);
+            Ok(input.len())
+        }
+
+        fn close(&self) {
+            let mut state = self.state.lock().unwrap();
+            state.1 = true;
+            self.changed.notify_all();
+        }
+    }
+
+    #[test]
+    fn output_flush_waits_for_bytes_removed_from_the_pipe() {
+        let port = Arc::new(BlockingOutputPort::default());
+        let bridge = NativeOutputBridge::attach(port.clone()).unwrap();
+        let descriptor = bridge.standard_fds()[2];
+        // SAFETY: dup returns a fresh descriptor and the result is checked.
+        let copy = unsafe { libc::dup(descriptor) };
+        assert!(copy >= 0);
+        // SAFETY: successful dup transferred a uniquely owned descriptor.
+        let mut writer = unsafe { std::fs::File::from_raw_fd(copy) };
+        writer.write_all(b"profile-record").unwrap();
+
+        let mut state = port.state.lock().unwrap();
+        while !state.0 {
+            state = port.changed.wait(state).unwrap();
+        }
+        drop(state);
+
+        let (finished, completed) = mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                bridge.flush();
+                finished.send(()).unwrap();
+            });
+            assert!(completed.recv_timeout(Duration::from_millis(50)).is_err());
+            let mut state = port.state.lock().unwrap();
+            state.1 = true;
+            port.changed.notify_all();
+            drop(state);
+            completed
+                .recv_timeout(Duration::from_secs(1))
+                .expect("output flush returned before the port accepted its bytes");
+        });
+        assert_eq!(port.state.lock().unwrap().2, b"profile-record");
     }
 
     #[test]

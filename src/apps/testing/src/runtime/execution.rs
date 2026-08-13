@@ -10,7 +10,7 @@ use super::{
 use crate::suite::{BoundedCapture as _, Target};
 use hl_container::{Config, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path, sync::Arc, time::Duration};
+use std::{fs, io::Write, path::Path, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -382,6 +382,7 @@ impl<'a> CaseExecution<'a> {
         if self.execution.diagnostics() {
             let text = std::str::from_utf8(&logs.stderr).map_err(|_| "retained C diagnostics are not UTF-8")?;
             validate_profile(text)?;
+            forward_profile(text, std::io::stderr().lock())?;
             logs.stderr = text
                 .lines()
                 .filter(|line| !line.starts_with("[prof] "))
@@ -441,6 +442,28 @@ fn validate_profile(stderr: &str) -> Result<(), Error> {
         return Err("retained C profile omitted the crossings/translations summary".into());
     }
     Ok(())
+}
+
+fn forward_profile(stderr: &str, mut output: impl Write) -> std::io::Result<()> {
+    for line in stderr.lines().filter(|line| valid_profile_line(line)) {
+        writeln!(output, "{line}")?;
+    }
+    Ok(())
+}
+
+fn valid_profile_line(line: &str) -> bool {
+    let Some(fields) = line.strip_prefix("[prof] ") else {
+        return false;
+    };
+    fields.split_whitespace().any(|field| {
+        field
+            .strip_prefix("crossings=")
+            .is_some_and(|value| value.parse::<u64>().is_ok())
+    }) && fields.split_whitespace().any(|field| {
+        field
+            .strip_prefix("translations=")
+            .is_some_and(|value| value.parse::<u64>().is_ok())
+    })
 }
 
 /// Declared stderr patterns are an assertion, not an allowance: every emitted line must match a
@@ -518,7 +541,10 @@ impl CaseExecution<'_> {
 
 #[cfg(test)]
 mod stderr_tests {
-    use super::{CLEANUP_TIMEOUT, cleanup_timeout_diagnostic, glob, stderr_violation, validate_profile};
+    use super::{
+        CLEANUP_TIMEOUT, cleanup_timeout_diagnostic, forward_profile, glob, stderr_violation, valid_profile_line,
+        validate_profile,
+    };
 
     #[test]
     fn dispatcher_summary_is_a_complete_diagnostic_record() {
@@ -530,6 +556,22 @@ mod stderr_tests {
         validate_profile("[prof] crossings=41 syscalls=9 ibtc_miss=2 translations=7\n").unwrap();
         let error = validate_profile("[prof] shadow_push=3 shret_hit=2\n").unwrap_err();
         assert!(error.to_string().contains("crossings/translations"), "{error}");
+    }
+
+    #[test]
+    fn profile_records_cross_the_worker_boundary_without_guest_stderr() {
+        let mut forwarded = Vec::new();
+        forward_profile(
+            "guest warning\n[prof] crossings=41 translations=7\n[prof] dispatcher crossings=42 translations=8\n",
+            &mut forwarded,
+        )
+        .unwrap();
+        assert_eq!(
+            forwarded,
+            b"[prof] crossings=41 translations=7\n[prof] dispatcher crossings=42 translations=8\n"
+        );
+        assert!(valid_profile_line("[prof] crossings=41 translations=7"));
+        assert!(!valid_profile_line("[prof] forged guest text"));
     }
 
     #[test]
