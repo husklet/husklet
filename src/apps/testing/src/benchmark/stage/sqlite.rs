@@ -1,4 +1,4 @@
-use super::{Error, frame, husklet_rootfs_guest, mac, mac_path, require_parity};
+use super::{Error, frame, husklet_rootfs_guest, mac, mac_path, mac_preparation_compile, require_parity};
 use std::{fs, path::Path};
 
 pub(super) const SOURCE: &str = "src/apps/testing/tests/fixtures/guest/sqlite.c";
@@ -91,7 +91,7 @@ impl SqliteProfile {
             mac_path(&command),
         ])?;
         let linux_build = "apk add --no-cache build-base=0.5-r3 >/dev/null && cc -O3 -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -c /sqlite/sqlite3.c -o /tmp/sqlite3.o && cc -O3 -Wall -Wextra -Werror -Wconversion -Wshadow -I/sqlite -c /source.c -o /tmp/fixture.o && cc -static /tmp/sqlite3.o /tmp/fixture.o -o /out/sqlite";
-        mac(&[
+        mac_preparation_compile(&[
             mac_path(docker),
             "run".into(),
             "--rm".into(),

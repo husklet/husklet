@@ -31,6 +31,7 @@ const IMAGE_ID: &str = "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f
 const MAC: &str = "/usr/local/bin/mac";
 const TIMEOUT: Duration = Duration::from_secs(30);
 const PYTHON_TIMEOUT: Duration = Duration::from_secs(90);
+const PREPARATION_COMPILE_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -609,6 +610,32 @@ fn checked(program: &Path, arguments: &[String]) -> Result<Vec<u8>, Error> {
 
 fn mac(arguments: &[String]) -> Result<Vec<u8>, Error> {
     checked(Path::new(MAC), arguments)
+}
+
+pub(super) fn mac_preparation_compile(arguments: &[String]) -> Result<Vec<u8>, Error> {
+    let captured = HostProcess::bounded_capture(Path::new(MAC), arguments, PREPARATION_COMPILE_TIMEOUT)?;
+    if captured.outcome != Outcome::Exited(Some(0)) {
+        return Err(format!(
+            "stage preparation compile failed with {:?}: {}",
+            captured.outcome,
+            String::from_utf8_lossy(&captured.stderr)
+        )
+        .into());
+    }
+    Ok(captured.stdout)
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::{PREPARATION_COMPILE_TIMEOUT, PYTHON_TIMEOUT, TIMEOUT};
+    use std::time::Duration;
+
+    #[test]
+    fn long_timeout_is_scoped_to_preparation_compilation() {
+        assert_eq!(TIMEOUT, Duration::from_secs(30));
+        assert_eq!(PYTHON_TIMEOUT, Duration::from_secs(90));
+        assert_eq!(PREPARATION_COMPILE_TIMEOUT, Duration::from_secs(180));
+    }
 }
 
 fn husklet_rootfs_guest(
