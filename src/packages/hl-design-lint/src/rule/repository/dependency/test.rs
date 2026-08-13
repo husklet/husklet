@@ -107,6 +107,23 @@ fn rejects_duplicate_package_names() {
 }
 
 #[test]
+fn rejects_package_manifest_without_string_name() {
+    let root = fixture();
+    let directory = root.join("src/services/unnamed");
+    fs::create_dir_all(directory.join("src")).unwrap();
+    fs::write(
+        directory.join("Cargo.toml"),
+        "[package]\nname = 42\nversion = \"0.0.0\"\n",
+    )
+    .unwrap();
+    fs::write(directory.join("src/lib.rs"), "").unwrap();
+    let workspace = Workspace::load([root.join("src")]).unwrap();
+    let error = Direction::new(policy()).check(&workspace).unwrap_err();
+    assert!(error.to_string().contains("no string package.name"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn accepts_dependency_permitted_by_layer_policy() {
     let root = fixture();
     package(&root, "foundation", "clock", "");

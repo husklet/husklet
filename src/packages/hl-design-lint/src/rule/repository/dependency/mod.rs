@@ -128,6 +128,12 @@ impl Graph {
                 .and_then(|package| package.get("name"))
                 .and_then(toml::Value::as_str)
             else {
+                if document.get("package").is_some() {
+                    return Err(LintError::configuration(format!(
+                        "{} has no string package.name",
+                        manifest.display()
+                    )));
+                }
                 continue;
             };
             if policy.ignored_packages.iter().any(|ignored| ignored == name) {
