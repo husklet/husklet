@@ -68,6 +68,9 @@ int main(void) {
         }
     }
     uint64_t malloc_time = micros() - started;
+    if (compute_proof != UINT64_C(9686655140321103872) || malloc_proof != UINT64_C(10725705084448409897)) {
+        return 5;
+    }
 
     char frame[256];
     int length = snprintf(frame, sizeof(frame),
