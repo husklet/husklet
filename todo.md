@@ -108,6 +108,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Make native stdout/stderr bridge teardown bounded when a nonblocking pipe is idle, and prove real CPython startup/exit cannot hang while joining its output workers.
   Merged commit `0d949f26e` checks the stop condition on every idle retry; its bounded idle-pipe test reddens by timeout when the check is removed. A real minimal CPython guest now exits in 1.825 seconds on ARM64 and returns the known AMD64 startup failure in about 0.4 seconds instead of hanging during output-worker teardown.
 - [ ] Run the full compatibility corpus on the final C-backed product and classify every remaining failure.
+  The immutable exact-tip `64606792f` baseline executed 3,247 of 3,279 rows: 3,105 passed, 142 failed, and 32 were explicitly `NOT_RUN` (ledger `64606792f-20260813T120100Z-immutable-j8.tsv`, SHA-256 `9b49a23bf30b24183e57d83f39a75b9f7571fc1bf3e2470024307e0ae2088a49`). The copied runner and shared library retained their pre-run hashes after the run, and the failure extract is preserved at `/var/tmp/husklet-corpus-64606792f-immutable-j8/failures.tsv`. This is a classified baseline, not final-tip closure.
+  Since that baseline, merged commit `54b5a23f4` fixed and activated `runtime/process/ptrace-attach-blocked` on both ISAs. Merged commits `18e90b9e1`, `39c70af13`, and `e27906445` repair the two-ISA `sticky-dir`, `unlink-errno`, and launch-user capability rows. These six filesystem rows and two formerly `NOT_RUN` ptrace rows need inclusion in the next immutable full-tip corpus before updating the aggregate totals.
 
 ## C source structure cleanup
 
