@@ -56,6 +56,7 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
 fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str) -> Option<tree_sitter::Node<'tree>> {
     if node.is_error() || node.is_missing() {
         if macro_continuation(node, source)
+            || line_macro_invocation(node, source)
             || annotation_prefix(node, source)
             || builtin_offsetof_type_argument(node, source)
             || enclosing_macro_invocation(node, source)
@@ -84,6 +85,13 @@ fn builtin_offsetof_type_argument(mut node: tree_sitter::Node<'_>, source: &str)
         };
         node = parent;
     }
+}
+
+fn line_macro_invocation(node: tree_sitter::Node<'_>, source: &str) -> bool {
+    let lines = source.lines().collect::<Vec<_>>();
+    let row = node.start_position().row;
+    (row.saturating_sub(1)..=row.saturating_add(1).min(lines.len().saturating_sub(1)))
+        .any(|row| defined_macro_invocation(lines[row].trim(), source))
 }
 
 fn annotation_prefix(node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -142,7 +150,11 @@ fn enclosing_macro_invocation(mut node: tree_sitter::Node<'_>, source: &str) -> 
 }
 
 fn recoverable_macro_invocation(node: tree_sitter::Node<'_>, source: &str) -> bool {
-    if node.parent().is_none_or(|parent| parent.kind() != "translation_unit") {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    let context = parent.kind();
+    if context != "translation_unit" && !(context == "compound_statement" && node.kind() == "expression_statement") {
         return false;
     }
     let Ok(text) = node.utf8_text(source.as_bytes()) else {
@@ -293,6 +305,22 @@ mod test {
     #[test]
     fn parser_rejects_undeclared_top_level_recovery() {
         assert!(parse(Path::new("invalid.c"), "UNKNOWN(identity, int, )\n").is_err());
+    }
+
+    #[test]
+    fn parser_accepts_declared_function_scope_macro_invocation() {
+        let source = "#define EACH_FIELD(X) X(first) X(second)\n\
+                      int valid(int first, int second) {\n\
+                          EACH_FIELD(VALIDATE)\n\
+                          return 1;\n\
+                      }\n";
+        assert!(parse(Path::new("function-macro.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_undeclared_function_scope_recovery() {
+        let source = "int invalid(void) {\n UNKNOWN_MACRO(value)\n return 0;\n}\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
