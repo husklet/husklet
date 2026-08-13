@@ -16,6 +16,8 @@ hl-native = { path = "../../runtime/hl-native" }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[dev-dependencies]
+tempfile.workspace = true
 
 [lib]
 name = "hl_engine"

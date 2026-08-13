@@ -1145,6 +1145,7 @@ dependencies = [
  "hl-log",
  "hl-native",
  "libc",
+ "tempfile",
 ]
 
 [[package]]

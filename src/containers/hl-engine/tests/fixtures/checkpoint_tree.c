@@ -1,3 +1,4 @@
+/* End-to-end fixture for hl-engine's checkpoint composition API. */
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
