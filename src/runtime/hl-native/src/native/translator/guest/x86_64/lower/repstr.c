@@ -118,6 +118,15 @@ int hl_x86_lower_repstr(struct insn *I, uint64_t next, hl_x86_repstr_state *stat
         else                                                                                                           \
             e_addi((reg), (reg), (unsigned)w, 1);                                                                      \
     } while (0)
+#define REP_RELOAD_DYNAMIC_STRIDE()                                                                                    \
+    do {                                                                                                               \
+        if (dyn) {                                                                                                     \
+            e_movconst(17, (uint64_t)w);                                                                               \
+            e_ldr(16, 28, OFF_DF);                                                                                     \
+            emit32(0xB4000000u | (2 << 5) | 16);                                                                       \
+            e_rrr(A_SUB, 17, 31, 17, 1, 0);                                                                            \
+        }                                                                                                              \
+    } while (0)
         uint32_t *cbz = NULL, *top = NULL;
         if (I->rep) {
             top = hl_x86_emit_cursor();
@@ -145,6 +154,11 @@ int hl_x86_lower_repstr(struct insn *I, uint64_t next, hl_x86_repstr_state *stat
                 e_load(w, 16, RSI);
                 e_store(w, 16, RDI);
             }
+            /* The soft-memory guards use x17 for each effective address.  At a
+             * dynamic-DF block entry that destroys the stride prepared above;
+             * reconstruct it after the final access, immediately before the
+             * architectural pointer updates. */
+            REP_RELOAD_DYNAMIC_STRIDE();
             REP_STEP(RSI);
             REP_STEP(RDI);
         } else if (lods) {
@@ -154,6 +168,7 @@ int hl_x86_lower_repstr(struct insn *I, uint64_t next, hl_x86_repstr_state *stat
                 e_load(w, RAX, 17);
             } else
                 e_load(w, RAX, RSI);
+            REP_RELOAD_DYNAMIC_STRIDE();
             REP_STEP(RSI);
         } else {
             if (emit_soft_memory_active()) {
@@ -163,8 +178,10 @@ int hl_x86_lower_repstr(struct insn *I, uint64_t next, hl_x86_repstr_state *stat
                 emit_soft_store_observe((uint64_t)w);
             } else
                 e_store(w, RAX, RDI);
+            REP_RELOAD_DYNAMIC_STRIDE();
             REP_STEP(RDI);
         } // stos
+#undef REP_RELOAD_DYNAMIC_STRIDE
 #undef REP_STEP
         if (I->rep) {
             e_subi(RCX, RCX, 1, 1);
