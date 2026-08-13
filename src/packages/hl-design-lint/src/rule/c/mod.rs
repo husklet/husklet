@@ -28,11 +28,11 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
-    let normalized = normalize_named_registers(&normalize_va_arg_types(&normalize_offsetof_designators(&normalize_computed_goto(
+    let normalized = normalize_declared_macro_lines(source, &normalize_named_registers(&normalize_va_arg_types(&normalize_offsetof_designators(&normalize_computed_goto(
         &normalize_gnu_attributes(&normalize_atomic_specifiers(&normalize_function_pointer_annotations(
             &normalize_complex_macro(&source.replace("_Thread_local", "             ")),
         ))),
-    ))));
+    )))));
     let tree = parser
         .parse(&normalized, None)
         .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
@@ -55,6 +55,22 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+fn normalize_declared_macro_lines(original: &str, source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut offset = 0;
+    for line in original.split_inclusive('\n') {
+        let text = line.trim();
+        if defined_macro_invocation(text, original) {
+            let start = offset + line.len() - line.trim_start().len();
+            let end = offset + line.trim_end_matches(['\r', '\n']).len();
+            normalized[start..end].fill(b' ');
+            normalized[start] = b';';
+        }
+        offset += line.len();
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
 }
 
 fn normalize_named_registers(source: &str) -> String {
@@ -744,6 +760,15 @@ mod test {
                                                void (*)(void)),\n\
                                      \"signature changed\");\n";
         assert!(parse(Path::new("signature.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_consecutive_declared_function_macros() {
+        let source = "#define FUNCTION(name) static void name(void) {}\n\
+                      FUNCTION(first)\n\
+                      FUNCTION(second)\n\
+                      int main(void) { first(); second(); return 0; }\n";
+        assert!(parse(Path::new("functions.c"), source).is_ok());
     }
 
     #[test]
