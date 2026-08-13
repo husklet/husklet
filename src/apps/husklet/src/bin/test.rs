@@ -1,7 +1,8 @@
 use super::screens::workspace::overview::{
     filter_workspace_procs, ContainerSummary, ImageSummary, NetworkSummary, VolumesResponse,
 };
-use hl::config::{TerminalPreferences, WorkspaceConfig};
+use super::remove_workspace;
+use hl::config::{TerminalPreferences, WorkspaceConfig, WorkspaceStore};
 use hl_ws::Arch;
 use hl_ws_term::CursorShape;
 
