@@ -371,7 +371,9 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
 #endif
     }
     memset(&config, 0, sizeof(config));
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
     hl_aarch64_target_register_backend();
+#endif
     hl_x86_64_target_register_backend();
     config.abi = HL_ENGINE_ABI;
     config.size = sizeof(config);

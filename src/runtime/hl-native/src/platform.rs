@@ -70,7 +70,11 @@ impl HostTarget {
     /// supported until its complete Cargo/DLL build and runtime gate pass.
     #[must_use]
     pub const fn planned(self) -> bool {
-        self.supported() || matches!((self.os, self.arch), (HostOs::Windows, HostArch::X86_64))
+        self.supported()
+            || matches!(
+                (self.os, self.arch),
+                (HostOs::Macos | HostOs::Windows, HostArch::X86_64)
+            )
     }
 }
 
@@ -87,7 +91,7 @@ mod tests {
                     parsed.is_some(),
                     matches!(
                         (os, arch),
-                        ("linux", "aarch64" | "x86_64") | ("macos", "aarch64") | ("windows", "x86_64")
+                        ("linux" | "macos", "aarch64" | "x86_64") | ("windows", "x86_64")
                     ),
                     "{arch}-{os}"
                 );
@@ -97,7 +101,9 @@ mod tests {
 
     #[test]
     fn unsupported_pair_is_not_constructed() {
-        assert_eq!(HostTarget::from_cfg("macos", "x86_64"), None);
+        let macos = HostTarget::from_cfg("macos", "x86_64").unwrap();
+        assert!(macos.planned());
+        assert!(!macos.supported());
         assert!(
             !HostTarget {
                 os: HostOs::Windows,

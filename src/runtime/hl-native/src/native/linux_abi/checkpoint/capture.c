@@ -857,7 +857,7 @@ static void ckpt_poll(struct cpu *c) {
 // Export the exact host control signal selected by this unity translation unit. Embedders must not
 // reconstruct it from libc's SIGRTMIN: host_signal.h owns a separate Linux signal namespace, and
 // repeating the arithmetic outside this translation unit can turn a safepoint kick into termination.
-#if G_CKPT_ARCH == 2
+#if G_CKPT_ARCH == 2 || defined(HL_CKPT_INTERRUPT_EXPORT)
 int hl_ckpt_interrupt_signal(void) {
     return THREAD_INT_SIG;
 }

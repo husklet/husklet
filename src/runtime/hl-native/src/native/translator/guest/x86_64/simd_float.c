@@ -412,7 +412,7 @@ static uint16_t avx_f32_to_f16_software(float f, unsigned mode, unsigned *flags)
 
 #if defined(HL_HOST_CPU_X86_64)
 // Live MXCSR.RC in the ROUND*-immediate encoding; defined with sse_round_d.
-static int sse_host_rounding_control(void);
+int sse_host_rounding_control(void);
 #endif
 
 // The two host paths reach the same exception set from opposite directions: the aarch64 FCVT raises #I/#U/

@@ -86,6 +86,12 @@ fn main() {
     } else {
         "_GNU_SOURCE"
     };
+    let x86_only = target_os == "macos" && target_arch == "x86_64";
+    let shim_definitions = if x86_only {
+        vec![platform_definition, "HL_BUILD_TARGET_X86_64_ONLY=1"]
+    } else {
+        vec![platform_definition]
+    };
     compile(
         "hl_c_backend_shim",
         &[
@@ -94,51 +100,59 @@ fn main() {
             "src/native/bridge/executable_authority.c",
             "src/native/bridge/address_projection.c",
         ],
-        &[platform_definition],
+        &shim_definitions,
         false,
     );
     compile("hl_c_backend_runtime", &runtime_source_refs, COMMON_DEFINITIONS, true);
-    compile(
-        "hl_c_backend_target_aarch64",
-        &["src/native/engine/target/aarch64.c"],
-        &[
-            "HL_ENABLE_LOGGING=0",
-            "HL_TRANSLIT_DEFAULT=0",
-            "_GNU_SOURCE",
-            "HL_EMBEDDED_BUILD=1",
-            "HL_ENGINE_NO_MAIN=1",
-            "HL_ENGINE_NO_STANDALONE=1",
-            "HL_TARGET_NAMESPACE=aarch64",
-        ],
-        false,
-    );
+    if !x86_only {
+        compile(
+            "hl_c_backend_target_aarch64",
+            &["src/native/engine/target/aarch64.c"],
+            &[
+                "HL_ENABLE_LOGGING=0",
+                "HL_TRANSLIT_DEFAULT=0",
+                "_GNU_SOURCE",
+                "HL_EMBEDDED_BUILD=1",
+                "HL_ENGINE_NO_MAIN=1",
+                "HL_ENGINE_NO_STANDALONE=1",
+                "HL_TARGET_NAMESPACE=aarch64",
+            ],
+            false,
+        );
+    }
+    let mut x86_target_definitions = vec![
+        "HL_ENABLE_LOGGING=0",
+        "HL_TRANSLIT_DEFAULT=0",
+        "_GNU_SOURCE",
+        "HL_EMBEDDED_BUILD=1",
+        "HL_ENGINE_NO_MAIN=1",
+        "HL_ENGINE_NO_STANDALONE=1",
+        "HL_TARGET_NAMESPACE=x86_64",
+    ];
+    if x86_only {
+        x86_target_definitions.push("HL_CKPT_INTERRUPT_EXPORT=1");
+    }
     compile(
         "hl_c_backend_target_x86_64",
         &["src/native/engine/target/x86_64.c"],
-        &[
-            "HL_ENABLE_LOGGING=0",
-            "HL_TRANSLIT_DEFAULT=0",
-            "_GNU_SOURCE",
-            "HL_EMBEDDED_BUILD=1",
-            "HL_ENGINE_NO_MAIN=1",
-            "HL_ENGINE_NO_STANDALONE=1",
-            "HL_TARGET_NAMESPACE=x86_64",
-        ],
+        &x86_target_definitions,
         false,
     );
-    compile(
-        "hl_c_backend_lifecycle_aarch64",
-        &["src/native/engine/lifecycle.c"],
-        &[
-            "HL_ENABLE_LOGGING=0",
-            "HL_TRANSLIT_DEFAULT=0",
-            "_GNU_SOURCE",
-            "HL_EMBEDDED_BUILD=1",
-            "HL_TARGET_NAMESPACE=aarch64",
-            "HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_AARCH64",
-        ],
-        false,
-    );
+    if !x86_only {
+        compile(
+            "hl_c_backend_lifecycle_aarch64",
+            &["src/native/engine/lifecycle.c"],
+            &[
+                "HL_ENABLE_LOGGING=0",
+                "HL_TRANSLIT_DEFAULT=0",
+                "_GNU_SOURCE",
+                "HL_EMBEDDED_BUILD=1",
+                "HL_TARGET_NAMESPACE=aarch64",
+                "HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_AARCH64",
+            ],
+            false,
+        );
+    }
     compile(
         "hl_c_backend_lifecycle_x86_64",
         &["src/native/engine/lifecycle.c"],
@@ -154,14 +168,15 @@ fn main() {
     );
 
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
-    let archives = [
-        "hl_c_backend_shim",
-        "hl_c_backend_target_aarch64",
+    let mut archives = vec!["hl_c_backend_shim"];
+    if !x86_only {
+        archives.extend(["hl_c_backend_target_aarch64", "hl_c_backend_lifecycle_aarch64"]);
+    }
+    archives.extend([
         "hl_c_backend_target_x86_64",
-        "hl_c_backend_lifecycle_aarch64",
         "hl_c_backend_lifecycle_x86_64",
         "hl_c_backend_runtime",
-    ];
+    ]);
     let system_libraries = match target_os.as_str() {
         "macos" => &["m", "pthread"][..],
         "windows" => build_support::WINDOWS_SYSTEM_LIBRARIES,
@@ -296,7 +311,9 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
         // The development shell's AR names a Linux guest cross-archiver, so do
         // not let that guest-build setting escape into this host artifact.
         build.archiver("/usr/bin/ar");
-        build.ar_flag("--format=darwin");
+        if !env::var("HOST").is_ok_and(|host| host.ends_with("-apple-darwin")) {
+            build.ar_flag("--format=darwin");
+        }
     }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         build.include("src/native/toolchain/msvc-posix/include");
