@@ -440,6 +440,36 @@ static void svc_fs_access_437(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t 
     }
 }
 
+static int open_synthetic_cpu_path(struct cpu *c, const char *path, int flags, int is_opath) {
+    if (strncmp(path, "/sys/devices/system/cpu/", 24) == 0) {
+        const char *leaf = path + 24;
+        if (!strcmp(leaf, "online") || !strcmp(leaf, "possible") || !strcmp(leaf, "present")) {
+            char range[32];
+            cpu_range_str(range, sizeof range);
+            int descriptor = synth_str_fd(range);
+            G_RET(c) = descriptor < 0 ? (uint64_t)(-errno) : (uint64_t)descriptor;
+            return 1;
+        }
+        char content[96];
+        int length = syscpu_topology_content(path, content, sizeof content);
+        if (length >= 0) {
+            int descriptor = synth_str_fd(content);
+            G_RET(c) = descriptor < 0 ? (uint64_t)(-errno) : (uint64_t)descriptor;
+            return 1;
+        }
+    }
+    if (strncmp(path, "/sys/devices/system/cpu", 23) == 0) {
+        int descriptor = syscpu_dir_open(path);
+        if (descriptor != -2) {
+            if (descriptor >= 0 && (flags & 0x80000)) fcntl(descriptor, F_SETFD, FD_CLOEXEC);
+            if (descriptor >= 0 && descriptor < HL_NFD) g_opath[descriptor] = is_opath;
+            G_RET(c) = descriptor < 0 ? (uint64_t)(-errno) : (uint64_t)descriptor;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, int mf, int is_opath) {
     // synthesize /proc/* (macOS has no /proc)
     const char *rp = (const char *)a1;
@@ -629,38 +659,11 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
     }
     // CPU topology sysfs: glibc __get_nprocs and tcmalloc NumPossibleCPUs read these to size
     // their per-CPU structures; an empty/missing file makes mongod abort.
-    if (rp && !strncmp(rp, "/sys/devices/system/cpu/", 24)) {
-        const char *leaf = rp + 24;
-        if (!strcmp(leaf, "online") || !strcmp(leaf, "possible") || !strcmp(leaf, "present")) {
-            char rng[32];
-            cpu_range_str(rng, sizeof rng);
-            int d = synth_str_fd(rng);
-            G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-            return 1;
-        }
-        // cpuN/topology/<core_id|physical_package_id|thread_siblings[_list]|...>: lscpu/util-linux
-        // reconstruct sockets/cores/threads from these; an ENOENT makes lscpu mis-count (engine-specific).
-        char tb[96];
-        int tn = syscpu_topology_content(rp, tb, sizeof tb);
-        if (tn >= 0) {
-            int d = synth_str_fd(tb);
-            G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-            return 1;
-        }
-    }
     // the CPU-topology sysfs DIRECTORY itself (and each cpuN subdir). htop opendirs
     // /sys/devices/system/cpu and counts cpuN subdirs to size its CPU meters; finding none it keeps
     // its default of 1. macOS has no /sys, so materialize the directory tree for getdents. Matches the
     // base dir "/sys/devices/system/cpu" (no trailing slash) and any "/sys/devices/system/cpu/cpuN".
-    if (rp && !strncmp(rp, "/sys/devices/system/cpu", 23)) {
-        int d = syscpu_dir_open(rp);
-        if (d != -2) {
-            if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
-            if (d >= 0 && d < HL_NFD) g_opath[d] = is_opath;             // O_PATH fd -> I/O EBADF
-            G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-            return 1;
-        }
-    }
+    if (rp && open_synthetic_cpu_path(c, rp, lf, is_opath)) return 1;
     // Other synthesized /sys/kernel attribute files (e.g. /sys/kernel/mm/transparent_hugepage/enabled):
     // served by proc_open's constant table, same as their stat() (synth_stat_raw). proc_open returns
     // -2 for anything it doesn't recognize, so a genuine rootfs /sys path or ENOENT falls through
@@ -900,6 +903,45 @@ static uint64_t open_anonymous_tmpfile(uint64_t a0, uint64_t a1, uint64_t a3) {
     return fd < 0 ? (uint64_t)(-(int64_t)error) : (uint64_t)fd;
 }
 
+static int open_descriptor_link(struct cpu *c, uint64_t directory, uint64_t path, int flags, int native_flags,
+                                uint64_t mode) {
+    char special_path[4200];
+    const char *special = guest_symlink_target((const char *)path, special_path, sizeof special_path);
+    int source = procfd_num_at((int)directory, (const char *)path);
+    if (source < 0) source = procfd_num(special);
+    if (source < 0) source = dev_std_fd(special);
+    if (source < 0) return 0;
+
+    hl_linux_fd_snapshot typed;
+    int is_typed = !bound_source_is_native() && g_linux_box != NULL &&
+                   hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)source, &typed) == HL_STATUS_OK;
+    if (!is_typed && fcntl(source, F_GETFD) < 0) {
+        G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
+        return 1;
+    }
+    if (is_typed) {
+        G_RET(c) = (uint64_t)bound_dup_at_least((hl_linux_fd)source, 0, flags & 0x80000 ? 1u : 0u);
+        return 1;
+    }
+
+    memf_materialize(source);
+    char native_path[4200];
+    int descriptor = -1;
+    struct stat status;
+    int can_reopen = fstat(source, &status) == 0 && (S_ISREG(status.st_mode) || S_ISDIR(status.st_mode));
+    if (can_reopen && hl_native_fd_path(source, native_path, sizeof native_path) == 0 && native_path[0])
+        descriptor = open(native_path, native_flags & ~(O_EXCL | O_CREAT), (mode_t)mode);
+    if (descriptor < 0) descriptor = dup(source);
+    if (descriptor >= 0) {
+        fd_reset_emul(descriptor);
+        char reopened_path[4200];
+        if (hl_native_fd_path(descriptor, reopened_path, sizeof reopened_path) == 0)
+            hl_fdcache_fd_setpath(descriptor, reopened_path);
+    }
+    G_RET(c) = descriptor < 0 ? (uint64_t)(-errno) : (uint64_t)descriptor;
+    return 1;
+}
+
 static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                              uint64_t a4, uint64_t a5) {
     switch (nr) {
@@ -982,58 +1024,9 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         // set AND a cred drop makes the stamp differ from the default; the pre-existence probe (so we
         // never re-own a file merely OPENED with O_CREAT) then runs only in that rare dropped case.
         int nf_want = (lf & 0x40) && newfile_stamp_wanted();
-        {
-            // /proc/self/fd/N -> reopen what host fd N points at. Linux reopen gives a FRESH file
-            // description (offset 0, access narrowed to the requested mode), so prefer reopening by the
-            // F_GETPATH path with the guest's flags; for fds with no path (pipe/socket/anon) fall back to
-            // dup(N), which at least hands back a working, equivalent fd. /dev/std{in,out,err} map to
-            // fd 0/1/2 here (open-only; their readlink stays the on-disk symlink so `ls -l /dev` works).
-            char special_path[4200];
-            const char *special = guest_symlink_target((const char *)a1, special_path, sizeof special_path);
-            // Detect /proc/self/fd/N (and /dev/fd/N) from the GUEST path first: guest_symlink_target follows
-            // the host's real /proc/self/fd/N symlink to the backing file, which for an O_TMPFILE/memf-backed
-            // fd resolves to the unlinked "(deleted)" scratch inode -- losing the fd number, so the reopen
-            // fell through to a plain open of an empty/absent file and the RAM-cached writes vanished (freopen
-            // read back nothing). Recovering the fd here lets the reopen alias the descriptor (memf flushed),
-            // so the reopened stream sees the written data.
-            int pfn = procfd_num_at((int)a0, (const char *)a1);
-            if (pfn < 0) pfn = procfd_num(special);
-            if (pfn < 0) pfn = dev_std_fd(special);
-            // /proc/self/fd/N only EXISTS while N is open: opening the name of a closed descriptor is
-            // -ENOENT on Linux (the magic symlink is simply absent). procfd_num() only parses the number,
-            // so the engine fell through to dup(N) and surfaced the dup's -EBADF instead.
-            hl_linux_fd_snapshot procfd_typed;
-            int procfd_is_typed = pfn >= 0 && !bound_source_is_native() && g_linux_box != NULL &&
-                                  hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)pfn, &procfd_typed) ==
-                                      HL_STATUS_OK;
-            if (pfn >= 0 && !procfd_is_typed && fcntl(pfn, F_GETFD) < 0) {
-                G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
-                break;
-            }
-            if (pfn >= 0) {
-                if (procfd_is_typed) {
-                    int64_t duplicated = bound_dup_at_least((hl_linux_fd)pfn, 0, lf & 0x80000 ? 1u : 0u);
-                    G_RET(c) = (uint64_t)duplicated;
-                    break;
-                }
-                memf_materialize(pfn); // reopen-by-fd would expose the real file -> flush RAM cache first
-                char gp[4200];
-                int r = -1;
-                struct stat descriptor_status;
-                int path_reopen = fstat(pfn, &descriptor_status) == 0 &&
-                                  (S_ISREG(descriptor_status.st_mode) || S_ISDIR(descriptor_status.st_mode));
-                if (path_reopen && hl_native_fd_path(pfn, gp, sizeof gp) == 0 && gp[0])
-                    r = open(gp, mf & ~(O_EXCL | O_CREAT), (mode_t)a3);
-                if (r < 0) r = dup(pfn); // anonymous/pipe/socket fd -> share the description
-                if (r >= 0) {
-                    fd_reset_emul(r);
-                    char tp[4200];
-                    if (hl_native_fd_path(r, tp, sizeof tp) == 0) hl_fdcache_fd_setpath(r, tp);
-                }
-                G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
-                break;
-            }
-        }
+        // Descriptor links get a fresh file description when they name a file, or duplicate an anonymous
+        // descriptor. /dev/std{in,out,err} follows the same path while its on-disk link remains intact.
+        if (open_descriptor_link(c, a0, a1, lf, mf, a3)) break;
         {
             // POSIX shm: glibc shm_open opens /dev/shm/<name>; the rootfs has no tmpfs, so back it with a
             // real host file (MAP_SHARED + fork share it). Flatten any subdirs into the single filename.

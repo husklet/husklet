@@ -22,6 +22,7 @@ mod fingerprint;
 pub(crate) mod image;
 mod ledger;
 pub(crate) mod load;
+mod outcome;
 mod output;
 pub(crate) mod profile;
 pub(crate) mod scheduler;
