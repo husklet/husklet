@@ -210,6 +210,7 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
             || annotation_prefix(node, source)
             || builtin_offsetof_type_argument(node, source)
             || va_arg_type_argument(node, source)
+            || declared_identifier_macro(node, source)
             || enclosing_macro_invocation(node, source)
         {
             return None;
@@ -219,6 +220,25 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .find_map(|child| first_unrecoverable_error(child, source))
+}
+
+fn declared_identifier_macro(node: tree_sitter::Node<'_>, source: &str) -> bool {
+    if node.kind() != "ERROR" {
+        return false;
+    }
+    let Ok(name) = node.utf8_text(source.as_bytes()) else {
+        return false;
+    };
+    identifier(name)
+        && source.lines().any(|line| {
+            line.trim_start()
+                .strip_prefix("#define")
+                .and_then(|definition| definition.split_whitespace().next())
+                == Some(name)
+        })
+        && node.parent().is_some_and(|parent| {
+            matches!(parent.kind(), "asm_statement" | "gnu_asm_expression" | "argument_list")
+        })
 }
 
 fn conditional_statement_directive(node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -701,6 +721,19 @@ mod test {
                                                void (*)(void)),\n\
                                      \"signature changed\");\n";
         assert!(parse(Path::new("signature.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_declared_macro_in_inline_assembly_operands() {
+        let source = "#define CLOBBERS \"memory\", \"cc\"\n\
+                      void barrier(void) { __asm__ volatile(\"\" : : : CLOBBERS); }\n";
+        assert!(parse(Path::new("assembly.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_undeclared_macro_in_inline_assembly_operands() {
+        let source = "void barrier(void) { __asm__ volatile(\"\" : : : CLOBBERS); }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
