@@ -16,6 +16,118 @@ static int guest_fill_linux_stat(uint64_t destination, const struct stat *status
     return guest_copy_to(destination, encoded, sizeof encoded) == sizeof encoded ? 0 : -EFAULT;
 }
 
+static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_snapshot *snapshot) {
+    char guest[4200], host[4300], path[4200];
+    const char *resolved;
+    if (g_rootfs) {
+        abs_guest(directory, raw, guest, sizeof guest);
+        if (!overlay_resolve(guest, host, sizeof host, nofollow)) return -ENOENT;
+        resolved = host;
+    } else {
+        resolved = atpath(directory, raw, path, sizeof path, nofollow);
+        if (resolved != NULL && resolved[0] != '/' && ATFD(directory) != AT_FDCWD) {
+            char base[4200];
+            if (hl_native_fd_path(ATFD(directory), base, sizeof base) != 0 ||
+                path_join(host, sizeof host, base, resolved) != 0)
+                return -EBADF;
+            resolved = host;
+        }
+    }
+    return dac_snapshot_path(resolved, nofollow, snapshot);
+}
+
+static int dac_snapshot_parent_at(int directory, const char *raw, hl_dac_snapshot *snapshot) {
+    char guest[4200], host[4300], path[4200];
+    const char *resolved;
+    if (g_rootfs) {
+        abs_guest(directory, raw, guest, sizeof guest);
+        char *leaf = strrchr(guest, '/');
+        if (leaf == guest)
+            guest[1] = '\0';
+        else if (leaf != NULL)
+            *leaf = '\0';
+        if (!overlay_resolve(guest, host, sizeof host, 0)) return -ENOENT;
+        resolved = host;
+    } else {
+        resolved = atpath(directory, raw, path, sizeof path, 1);
+        if (resolved != NULL && resolved[0] != '/' && ATFD(directory) != AT_FDCWD) {
+            char base[4200];
+            if (hl_native_fd_path(ATFD(directory), base, sizeof base) != 0 ||
+                path_join(host, sizeof host, base, resolved) != 0)
+                return -EBADF;
+            resolved = host;
+        }
+        if (resolved != path) {
+            if (path_copy(path, sizeof path, resolved) != 0) return -ENAMETOOLONG;
+            resolved = path;
+        }
+        char *leaf = strrchr((char *)resolved, '/');
+        if (leaf == resolved)
+            leaf[1] = '\0';
+        else if (leaf != NULL)
+            *leaf = '\0';
+        else
+            resolved = ".";
+    }
+    return dac_snapshot_path(resolved, 0, snapshot);
+}
+
+static int dac_chmod_at(int directory, const char *raw, int nofollow) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_chmod(&snapshot, &credentials);
+}
+
+static int dac_chmod_fd(int descriptor) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_fd(descriptor, &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_chmod(&snapshot, &credentials);
+}
+
+static int dac_chown_at(int directory, const char *raw, int nofollow, int64_t uid, int64_t gid) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_chown(&snapshot, &credentials, uid, gid);
+}
+
+static int dac_chown_fd(int descriptor, int64_t uid, int64_t gid) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_fd(descriptor, &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_chown(&snapshot, &credentials, uid, gid);
+}
+
+static int dac_explicit_times_at(int directory, const char *raw, int nofollow) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_explicit_times(&snapshot, &credentials);
+}
+
+static int dac_explicit_times_fd(int descriptor) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_fd(descriptor, &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_explicit_times(&snapshot, &credentials);
+}
+
+static int dac_create_at(int directory, const char *raw) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_parent_at(directory, raw, &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_create(&snapshot, &credentials);
+}
+
 // statx(2) creation time. A plain Linux struct stat carries no birth time, so the engine must consult
 // a host statx to answer it -- AND to answer HONESTLY: a caller trusts stx_mask before reading
 // stx_btime, so STATX_BTIME must be advertised only when the backing filesystem actually reports it

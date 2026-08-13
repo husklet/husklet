@@ -103,6 +103,11 @@ static void svc_fs_access_52(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                              uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 52: {
+        int authorization = dac_chmod_fd((int)a0);
+        if (authorization != 0) {
+            G_RET(c) = (uint64_t)(int64_t)authorization;
+            break;
+        }
         struct stat status;
         mode_t host_mode = (mode_t)a1 & 0777;
         if (cred_euid() == 0 && fstat((int)a0, &status) == 0) host_mode |= S_ISDIR(status.st_mode) ? 0700 : 0600;
@@ -145,6 +150,11 @@ static void svc_fs_access_53(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         // `cp -p` of lower-image configuration files.  Keep it on the same virtual-mode transaction
         // as fchmod so overlay copy-up, guest permission bits, and the host inode stay coherent.
         if (nr == 452 && ((const char *)a1)[0] == '\0' && (a3 & 0x1000)) {
+            int authorization = dac_chmod_fd((int)a0);
+            if (authorization != 0) {
+                G_RET(c) = (uint64_t)(int64_t)authorization;
+                break;
+            }
             struct stat status;
             mode_t host_mode = (mode_t)a2 & 0777;
             if (cred_euid() == 0 && fstat((int)a0, &status) == 0) host_mode |= S_ISDIR(status.st_mode) ? 0700 : 0600;
@@ -172,6 +182,13 @@ static void svc_fs_access_53(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         if (jail_ro_at((int)a0, (const char *)a1)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
+        }
+        {
+            int authorization = dac_chmod_at((int)a0, (const char *)a1, 0);
+            if (authorization != 0) {
+                G_RET(c) = (uint64_t)(int64_t)authorization;
+                break;
+            }
         }
         if (jail_routed_at((int)a0, (const char *)a1)) {
             overlay_copyup_at((int)a0, (const char *)a1); // bring a lower-only target up so jail_at finds it
@@ -240,6 +257,16 @@ static void svc_fs_access_54(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
         }
+        {
+            int nofollow = (a4 & 0x100) ? 1 : 0;
+            int64_t uid = (int32_t)(uint32_t)a2;
+            int64_t gid = (int32_t)(uint32_t)a3;
+            int authorization = dac_chown_at((int)a0, (const char *)a1, nofollow, uid, gid);
+            if (authorization != 0) {
+                G_RET(c) = (uint64_t)(int64_t)authorization;
+                break;
+            }
+        }
         if (jail_routed_at((int)a0, (const char *)a1)) {
             overlay_copyup_at((int)a0, (const char *)a1); // bring a lower-only target up so jail_at finds it
             char fin[512];
@@ -292,6 +319,13 @@ static void svc_fs_access_55(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                              uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 55: {
+        int64_t uid = (int32_t)(uint32_t)a1;
+        int64_t gid = (int32_t)(uint32_t)a2;
+        int authorization = dac_chown_fd((int)a0, uid, gid);
+        if (authorization != 0) {
+            G_RET(c) = (uint64_t)(int64_t)authorization;
+            break;
+        }
         // A genuinely invalid descriptor must fail like Linux instead of poisoning virtual metadata.
         struct stat target;
         if (fstat((int)a0, &target) < 0) {

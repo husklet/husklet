@@ -79,8 +79,19 @@ static void svc_fs_namespace_34(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                     G_RET(c) = (uint64_t)(int64_t)pc;
                     break;
                 }
+                int authorization = dac_create_at((int)a0, (const char *)a1);
+                if (authorization != 0) {
+                    G_RET(c) = (uint64_t)(int64_t)authorization;
+                    break;
+                }
                 overlay_clear_whiteout(gpm);
                 had_lower_dir = overlay_lower_has_dir(gpm);
+            } else {
+                int authorization = dac_create_at((int)a0, (const char *)a1);
+                if (authorization != 0) {
+                    G_RET(c) = (uint64_t)(int64_t)authorization;
+                    break;
+                }
             }
             char fin[512];
             int pfd = jail_at((int)a0, (const char *)a1, fin, sizeof fin, 1);
@@ -102,6 +113,13 @@ static void svc_fs_namespace_34(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             if (r >= 0 && had_lower_dir) overlay_set_opaque(gpm);
             G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : 0;
             break;
+        }
+        {
+            int authorization = dac_create_at((int)a0, (const char *)a1);
+            if (authorization != 0) {
+                G_RET(c) = (uint64_t)(int64_t)authorization;
+                break;
+            }
         }
         char pb[4200];
         const char *p = atpath((int)a0, (const char *)a1, pb, sizeof pb, 0);

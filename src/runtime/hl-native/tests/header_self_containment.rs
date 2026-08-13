@@ -16,6 +16,65 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
     }
 }
 
+#[test]
+fn virtual_dac_policy_uses_guest_identity_mode_groups_and_capabilities() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-dac-policy-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create DAC policy probe directory");
+    let source = scratch.join("dac_policy.c");
+    let executable = scratch.join("dac_policy");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/container/dac_policy.h"
+
+int main(void) {
+    const uint32_t groups[] = {30, 40};
+    const hl_dac_snapshot owned = {2000, 20, 0640};
+    const hl_dac_snapshot foreign = {2000, 30, 0770};
+    const hl_dac_snapshot closed = {0, 0, 0755};
+    hl_dac_credentials user = {2000, 20, groups, 2, 0};
+    hl_dac_credentials other = {3000, 50, groups, 0, 0};
+    hl_dac_credentials privileged = other;
+
+    if (hl_dac_authorize_chmod(&owned, &user) != 0) return 1;
+    if (hl_dac_authorize_chmod(&owned, &other) != EPERM) return 2;
+    privileged.capabilities = UINT64_C(1) << HL_DAC_CAP_FOWNER;
+    if (hl_dac_authorize_chmod(&owned, &privileged) != 0) return 3;
+    if (hl_dac_authorize_explicit_times(&owned, &other) != EPERM) return 4;
+
+    if (hl_dac_authorize_chown(&owned, &user, 2000, 30) != 0) return 5;
+    if (hl_dac_authorize_chown(&owned, &user, 3000, 30) != EPERM) return 6;
+    if (hl_dac_authorize_chown(&owned, &other, 3000, 50) != EPERM) return 7;
+    privileged.capabilities = UINT64_C(1) << HL_DAC_CAP_CHOWN;
+    if (hl_dac_authorize_chown(&owned, &privileged, 3000, 50) != 0) return 8;
+
+    user.fsuid = 3000;
+    user.fsgid = 50;
+    if (hl_dac_authorize_create(&foreign, &user) != 0) return 9;
+    if (hl_dac_authorize_create(&closed, &user) != EACCES) return 10;
+    user.capabilities = UINT64_C(1) << HL_DAC_CAP_DAC_OVERRIDE;
+    if (hl_dac_authorize_create(&closed, &user) != 0) return 11;
+    return 0;
+}
+"#,
+    )
+    .expect("write DAC policy probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("DAC policy probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("DAC policy probe execution");
+    assert!(run.success(), "DAC policy probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove DAC policy probe directory");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn guest_path_composition_rejects_truncation() {

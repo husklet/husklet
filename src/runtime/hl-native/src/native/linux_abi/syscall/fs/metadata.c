@@ -323,7 +323,22 @@ static void svc_fs_metadata_88(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
             }
             ts = lts;
         }
+        int valid_times = ts == NULL ||
+                          ((ts[0].tv_nsec == UTIME_NOW || ts[0].tv_nsec == UTIME_OMIT ||
+                            (ts[0].tv_nsec >= 0 && ts[0].tv_nsec < 1000000000L)) &&
+                           (ts[1].tv_nsec == UTIME_NOW || ts[1].tv_nsec == UTIME_OMIT ||
+                            (ts[1].tv_nsec >= 0 && ts[1].tv_nsec < 1000000000L)));
+        int explicit_times = valid_times && ts != NULL &&
+                             ((ts[0].tv_nsec != UTIME_NOW && ts[0].tv_nsec != UTIME_OMIT) ||
+                              (ts[1].tv_nsec != UTIME_NOW && ts[1].tv_nsec != UTIME_OMIT));
         if (!a1) {
+            if (explicit_times) {
+                int authorization = dac_explicit_times_fd((int)a0);
+                if (authorization != 0) {
+                    G_RET(c) = (uint64_t)(int64_t)authorization;
+                    break;
+                }
+            }
             G_RET(c) = futimens((int)a0, ts) < 0 ? (uint64_t)(-errno) : 0;
             break;
             // path NULL -> futimens(fd)
@@ -331,6 +346,13 @@ static void svc_fs_metadata_88(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
         if (jail_ro_at((int)a0, (const char *)a1)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
+        }
+        if (explicit_times) {
+            int authorization = dac_explicit_times_at((int)a0, (const char *)a1, (a3 & 0x100) ? 1 : 0);
+            if (authorization != 0) {
+                G_RET(c) = (uint64_t)(int64_t)authorization;
+                break;
+            }
         }
         if (jail_routed_at((int)a0, (const char *)a1)) {
             overlay_copyup_at((int)a0, (const char *)a1); // bring a lower-only target up so jail_at finds it

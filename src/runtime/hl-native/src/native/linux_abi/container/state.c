@@ -379,6 +379,7 @@ static int cgid(void) {
 
 #include "../host_fs.h"
 #include "owner.h"
+#include "dac_policy.h"
 #define HL_MODE_XATTR "user.hl.mode"
 
 static int mode_xattr_set_path(const char *hostpath, mode_t mode) {
@@ -664,6 +665,39 @@ static int groups_status_str(char *b, size_t n) {
     if (o < 0) o = 0;
     b[(size_t)o < n ? (size_t)o : n - 1] = 0;
     return o;
+}
+
+static hl_dac_credentials dac_credentials_current(uint32_t groups[HL_NGROUPS_MAX]) {
+    hl_dac_credentials credentials;
+    credentials.fsuid = (uint32_t)(g_fsuid_ovr >= 0 ? g_fsuid_ovr : cred_euid());
+    credentials.fsgid = (uint32_t)(g_fsgid_ovr >= 0 ? g_fsgid_ovr : cred_egid());
+    credentials.group_count = (size_t)g_ngroups;
+    for (int index = 0; index < g_ngroups; ++index) groups[index] = (uint32_t)g_groups[index];
+    credentials.groups = groups;
+    credentials.capabilities = g_cap_eff;
+    return credentials;
+}
+
+static int dac_snapshot_path(const char *path, int nofollow, hl_dac_snapshot *snapshot) {
+    struct stat status;
+    uint32_t uid, gid;
+    if ((nofollow ? lstat(path, &status) : stat(path, &status)) != 0) return -errno;
+    stat_virt_ids(&status, path, -1, &uid, &gid);
+    snapshot->uid = uid;
+    snapshot->gid = gid;
+    snapshot->mode = (uint32_t)stat_virt_mode(&status, path, -1);
+    return 0;
+}
+
+static int dac_snapshot_fd(int descriptor, hl_dac_snapshot *snapshot) {
+    struct stat status;
+    uint32_t uid, gid;
+    if (fstat(descriptor, &status) != 0) return -errno;
+    stat_virt_ids(&status, NULL, descriptor, &uid, &gid);
+    snapshot->uid = uid;
+    snapshot->gid = gid;
+    snapshot->mode = (uint32_t)stat_virt_mode(&status, NULL, descriptor);
+    return 0;
 }
 
 // --: new-file ownership stamp (runtime setuid/setgid drop) ----------------------------
