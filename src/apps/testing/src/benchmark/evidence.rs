@@ -12,7 +12,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<String, Phase>, String, String), Error> {
+pub(super) fn sample(
+    campaign: &Campaign,
+    step: &Step,
+) -> Result<(BTreeMap<String, Phase>, String, String, Option<String>), Error> {
     let arm = &campaign.arms[&step.arm];
     let workload = &campaign.workloads[&step.workload];
     let guest = &workload.commands[&step.layout];
@@ -26,7 +29,8 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     let started = Instant::now();
     let output = bounded_output(&mut command, Duration::from_secs(workload.timeout_seconds))?;
     let wall_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX).max(1);
-    if !output.status.success() || !output.stderr.is_empty() {
+    let diagnostic = accepted_diagnostic(&output.stderr);
+    if !output.status.success() || (!output.stderr.is_empty() && diagnostic.is_none()) {
         return Err(format!(
             "benchmark {}/{}/{} failed: status={} stderr={}",
             step.workload,
@@ -60,7 +64,12 @@ pub(super) fn sample(campaign: &Campaign, step: &Step) -> Result<(BTreeMap<Strin
     }
     let frame = canonical.join("\n");
     let identity = FramedIdentity::of(frame.as_bytes());
-    Ok((phases, identity, frame))
+    Ok((phases, identity, frame, diagnostic))
+}
+
+fn accepted_diagnostic(stderr: &[u8]) -> Option<String> {
+    (stderr == b"hl-test-displaced-et-exec: displaced\n")
+        .then(|| "hl-test-displaced-et-exec: displaced".to_owned())
 }
 
 fn require_line_framing(text: &str) -> Result<(), Error> {
@@ -178,21 +187,22 @@ pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
     }
     let output = readings[0].1.clone();
     let output_frame = readings[0].2.clone();
+    let diagnostic = readings[0].3.clone();
     if readings
         .iter()
-        .any(|(_, identity, frame)| *identity != output || *frame != output_frame)
+        .any(|(_, identity, frame, observed)| *identity != output || *frame != output_frame || *observed != diagnostic)
     {
         return Err("repeated sample exact-output mismatch".into());
     }
     let mut phases = BTreeMap::new();
     for name in readings[0].0.keys() {
         let ok = readings[0].0[name].ok.clone();
-        if readings.iter().any(|(sample, _, _)| sample[name].ok != ok) {
+        if readings.iter().any(|(sample, _, _, _)| sample[name].ok != ok) {
             return Err(format!("repeated checksum mismatch for {name}").into());
         }
         let us = readings
             .iter()
-            .map(|(sample, _, _)| sample[name].us)
+            .map(|(sample, _, _, _)| sample[name].us)
             .min()
             .ok_or("sample set is empty")?;
         phases.insert(name.clone(), Phase { us, ok });
@@ -207,6 +217,7 @@ pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
         arm: step.arm.clone(),
         output,
         output_frame,
+        diagnostic,
         phases,
         host_load,
     })
@@ -391,7 +402,10 @@ fn box_lock_holder_count(_path: &Path) -> Result<u64, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Measurement, counter_metadata, metadata_line, phase_fields, require_line_framing, require_metadata};
+    use super::{
+        Measurement, accepted_diagnostic, counter_metadata, metadata_line, phase_fields, require_line_framing,
+        require_metadata,
+    };
     use std::{
         cell::Cell,
         fs::OpenOptions,
@@ -402,6 +416,16 @@ mod tests {
     fn exact_output_requires_identity_metadata() {
         require_metadata(true).unwrap();
         assert!(require_metadata(false).is_err());
+    }
+
+    #[test]
+    fn only_the_exact_displaced_diagnostic_is_accepted() {
+        assert_eq!(
+            accepted_diagnostic(b"hl-test-displaced-et-exec: displaced\n").as_deref(),
+            Some("hl-test-displaced-et-exec: displaced")
+        );
+        assert!(accepted_diagnostic(b"hl-test-displaced-et-exec: displaced").is_none());
+        assert!(accepted_diagnostic(b"other\n").is_none());
     }
 
     #[test]

@@ -200,6 +200,7 @@ mod tests {
             arm: step.arm.clone(),
             output: "same".into(),
             output_frame: "frame".into(),
+            diagnostic: None,
             phases: [(
                 "malloc".into(),
                 Phase {

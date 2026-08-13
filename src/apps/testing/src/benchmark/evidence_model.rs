@@ -24,6 +24,8 @@ pub(in crate::benchmark) struct Row {
     pub arm: String,
     pub output: String,
     pub output_frame: String,
+    #[serde(default)]
+    pub diagnostic: Option<String>,
     pub phases: BTreeMap<String, Phase>,
     pub host_load: Vec<HostLoad>,
 }

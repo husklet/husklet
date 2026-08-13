@@ -69,6 +69,12 @@ impl Report {
         for row in rows {
             lines.extend(row.host_load_rows());
         }
+        lines.push("sample\tarm\tdiagnostic".to_owned());
+        for row in rows {
+            if let Some(diagnostic) = &row.diagnostic {
+                lines.push(format!("{}\t{}\t{}", row.key, row.arm, diagnostic));
+            }
+        }
         Ok(Self {
             verdict,
             text: lines.join("\n") + "\n",
@@ -542,6 +548,7 @@ mod tests {
             arm: arm.into(),
             output: "same".into(),
             output_frame: "frame".into(),
+            diagnostic: None,
             phases: [("malloc".into(), super::super::evidence::Phase { us, ok: "same".into() })].into(),
             host_load: vec![HostLoad {
                 before: 0.1,
