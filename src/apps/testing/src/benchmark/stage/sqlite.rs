@@ -83,48 +83,20 @@ impl SqliteProfile {
 
     pub(super) fn stage_husklet(
         output: &Path,
-        docker: &Path,
+        rootfs: &Path,
         command: &Path,
         expected: &Path,
     ) -> Result<SqliteHusklet, Error> {
-        let rootfs = output.join("sqlite-rootfs");
-        let archive = output.join("sqlite-rootfs.tar");
-        fs::create_dir(&rootfs)?;
-        let created = mac(&[
-            mac_path(docker),
-            "create".into(),
-            "--platform".into(),
-            "linux/amd64".into(),
-            super::IMAGE.into(),
-            "sh".into(),
-            "-c".into(),
-            format!("apk add --no-cache {PACKAGE} >/dev/null"),
-        ])?;
-        let container = String::from_utf8(created)?.trim().to_owned();
-        mac(&[mac_path(docker), "start".into(), "--attach".into(), container.clone()])?;
-        mac(&[
-            mac_path(docker),
-            "export".into(),
-            "--output".into(),
-            mac_path(&archive),
-            container.clone(),
-        ])?;
-        mac(&[mac_path(docker), "rm".into(), container])?;
-        mac(&[
-            "/mnt/mac/usr/bin/tar".into(),
-            "-xf".into(),
-            mac_path(&archive),
-            "-C".into(),
-            mac_path(&rootfs),
-        ])?;
-        fs::remove_file(&archive)?;
         let interpreter = rootfs.join("usr/bin/sqlite3");
-        let captured = husklet_rootfs_guest(command, &rootfs, "usr/bin/sqlite3", &[":memory:", PROGRAM])?;
+        let captured = husklet_rootfs_guest(command, rootfs, "usr/bin/sqlite3", &[":memory:", PROGRAM])?;
         let actual = frame(&captured)?;
         require_parity("sqlite/sqlite Husklet", &fs::read(expected)?, &actual)?;
         fs::write(output.join("sqlite-husklet.out"), captured)?;
         fs::write(output.join("sqlite-husklet-exact-output.frame"), actual)?;
-        Ok(SqliteHusklet { rootfs, interpreter })
+        Ok(SqliteHusklet {
+            rootfs: rootfs.to_path_buf(),
+            interpreter,
+        })
     }
 }
 
