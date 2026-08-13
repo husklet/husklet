@@ -713,7 +713,7 @@ impl PythonHusklet {
             .into());
         }
         let native_frame = fs::read(output.join("python-plain-exact-output.frame"))?;
-        let husklet_frame = frame(&captured.stdout)?;
+        let husklet_frame = python::profile_frame("plain", &captured.stdout)?;
         require_parity("python/plain Husklet", &native_frame, &husklet_frame)?;
         fs::write(output.join("python-plain-husklet.out"), captured.stdout)?;
         fs::write(output.join("python-plain-husklet-exact-output.frame"), husklet_frame)?;
