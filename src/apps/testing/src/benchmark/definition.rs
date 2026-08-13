@@ -162,7 +162,7 @@ impl Campaign {
             if !executable.is_absolute()
                 || !executable.is_file()
                 || !smoke_binds_profile(&arm.command, &arm.smoke)
-                || !arm.artifacts.values().any(|artifact| artifact.path == executable)
+                || !command_is_hashed(executable, arm.artifacts.values())
             {
                 return Err(format!("arm {label} command is not bound to a hashed artifact").into());
             }
@@ -184,6 +184,15 @@ impl Campaign {
             GuestPath::RootfsAbsolute => Ok(Path::new("/").join(guest.strip_prefix(&self.rootfs.path)?)),
         }
     }
+}
+
+fn command_is_hashed<'a>(executable: &Path, artifacts: impl IntoIterator<Item = &'a Artifact>) -> bool {
+    let Ok(executable) = fs::canonicalize(executable) else {
+        return false;
+    };
+    artifacts
+        .into_iter()
+        .any(|artifact| fs::canonicalize(&artifact.path).is_ok_and(|path| path == executable))
 }
 
 fn smoke_binds_profile(command: &[String], smoke: &[String]) -> bool {
@@ -500,6 +509,27 @@ mod tests {
             ]
         ));
         assert!(!smoke_binds_profile(&command, &command));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_symlink_is_bound_to_its_hashed_regular_target() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("mac-real");
+        let command = temporary.path().join("mac");
+        fs::write(&target, b"proxy").unwrap();
+        symlink(&target, &command).unwrap();
+        let artifact = Artifact {
+            path: target,
+            sha256: String::new(),
+        };
+        assert!(super::command_is_hashed(&command, [&artifact]));
+        fs::write(temporary.path().join("other"), b"other").unwrap();
+        fs::remove_file(&command).unwrap();
+        symlink(temporary.path().join("other"), &command).unwrap();
+        assert!(!super::command_is_hashed(&command, [&artifact]));
     }
 
     #[test]
