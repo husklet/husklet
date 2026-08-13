@@ -96,7 +96,6 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         &output.join("sqlite-exact-output.frame"),
     )?;
     merge_rootfs(&python_husklet.rootfs, &rootfs)?;
-    merge_rootfs(&sqlite_husklet.rootfs, &rootfs)?;
     let retained = RetainedProfile::stage(&options.retained, &output, &rootfs, &layouts)?;
     let mut identities = String::from("artifact\tidentity\n");
     for path in [
