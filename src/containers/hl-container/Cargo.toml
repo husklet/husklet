@@ -16,7 +16,7 @@ hl-engine = { path = "../hl-engine", default-features = false }
 hl-fs = { path = "../../packages/hl-fs" }
 hl-images = { version = "0.1.0", path = "../hl-images" }
 hl-log = { path = "../../packages/hl-log" }
-nix = { version = "0.30", features = ["fs", "signal"] }
+nix = { version = "0.30", features = ["dir", "fs", "signal"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tar.workspace = true
