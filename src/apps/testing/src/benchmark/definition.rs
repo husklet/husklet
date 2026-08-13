@@ -234,8 +234,8 @@ fn tree_hash(root: &Path) -> Result<String, Error> {
     fn permissions(metadata: &fs::Metadata, identity: &mut FramedIdentity) -> Result<(), Error> {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt as _;
-            identity.field(&(metadata.permissions().mode() & 0o7777).to_le_bytes())?;
+            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+            unix_attributes(metadata.permissions().mode(), metadata.uid(), metadata.gid(), identity)?;
         }
         #[cfg(not(unix))]
         identity.field(&[u8::from(metadata.permissions().readonly())])?;
@@ -270,6 +270,14 @@ fn tree_hash(root: &Path) -> Result<String, Error> {
     permissions(&fs::symlink_metadata(root)?, &mut identity)?;
     walk(root, root, &mut identity)?;
     Ok(identity.finish())
+}
+
+#[cfg(unix)]
+fn unix_attributes(mode: u32, uid: u32, gid: u32, identity: &mut FramedIdentity) -> Result<(), Error> {
+    identity.field(&(mode & 0o7777).to_le_bytes())?;
+    identity.field(&uid.to_le_bytes())?;
+    identity.field(&gid.to_le_bytes())?;
+    Ok(())
 }
 
 pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
@@ -375,6 +383,18 @@ mod tests {
         fs::set_permissions(&guest, fs::Permissions::from_mode(0o755)).unwrap();
         let after = super::tree_hash(directory.path()).unwrap();
         assert_ne!(before, after, "chmod must change the rootfs artifact identity");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rootfs_identity_includes_ownership() {
+        let attributes = |uid, gid| {
+            let mut identity = FramedIdentity::new(b"ownership-test").unwrap();
+            super::unix_attributes(0o755, uid, gid, &mut identity).unwrap();
+            identity.finish()
+        };
+        assert_ne!(attributes(1000, 1000), attributes(1001, 1000));
+        assert_ne!(attributes(1000, 1000), attributes(1000, 1001));
     }
 
     #[cfg(unix)]
