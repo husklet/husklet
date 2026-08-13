@@ -57,6 +57,7 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
     if node.is_error() || node.is_missing() {
         if macro_continuation(node, source)
             || line_macro_invocation(node, source)
+            || conditional_statement_directive(node, source)
             || annotation_prefix(node, source)
             || builtin_offsetof_type_argument(node, source)
             || enclosing_macro_invocation(node, source)
@@ -68,6 +69,64 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .find_map(|child| first_unrecoverable_error(child, source))
+}
+
+fn conditional_statement_directive(node: tree_sitter::Node<'_>, source: &str) -> bool {
+    let row = node.start_position().row;
+    let lines = source.lines().collect::<Vec<_>>();
+    let window = &lines[row.saturating_sub(16)..row.min(lines.len())];
+    if window.iter().any(|line| line.trim_start().starts_with("#endif"))
+        && window.iter().any(|line| line.trim_start().starts_with("#else"))
+        && window
+            .iter()
+            .any(|line| matches!(line.trim_start(), line if line.starts_with("#if ") || line.starts_with("#ifdef ") || line.starts_with("#ifndef ")))
+        && window.iter().any(|line| line.trim_start().starts_with("if ("))
+    {
+        return true;
+    }
+    if node.is_error() && row > 0 && lines[row].trim_start().starts_with("else ") {
+        return lines[..row]
+            .iter()
+            .rev()
+            .take_while(|line| !line.trim_start().starts_with("if ("))
+            .any(|line| line.trim_start().starts_with("#endif"));
+    }
+    if node.kind() != ";" || !node.is_missing() {
+        return false;
+    }
+    if row == 0 || row > lines.len() {
+        return false;
+    }
+    let directive_row = if row < lines.len() && lines[row].trim_start().starts_with('#') {
+        row
+    } else if row + 1 < lines.len() && lines[row + 1].trim_start().starts_with('#') {
+        row + 1
+    } else {
+        return false;
+    };
+    let previous = lines[directive_row - 1].trim_end();
+    if !previous.ends_with(')') || !previous.trim_start().starts_with("if (") {
+        return false;
+    }
+    let mut depth = 0usize;
+    let mut branch_statement = false;
+    for line in &lines[directive_row..] {
+        let line = line.trim();
+        if line.starts_with("#if ") || line.starts_with("#ifdef ") || line.starts_with("#ifndef ") {
+            depth += 1;
+        } else if line.starts_with("#endif") {
+            let Some(next) = depth.checked_sub(1) else {
+                return false;
+            };
+            depth = next;
+            if depth == 0 {
+                return branch_statement;
+            }
+        } else if depth == 1 && !line.is_empty() && !line.starts_with('#') {
+            branch_statement = line.ends_with(';') || line.starts_with('{');
+        }
+    }
+    false
 }
 
 fn builtin_offsetof_type_argument(mut node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -357,6 +416,31 @@ mod test {
     #[test]
     fn parser_rejects_arbitrary_tokens_before_a_function() {
         let source = "not_an_annotation int answer(void) { return 42; }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
+    }
+
+    #[test]
+    fn parser_accepts_conditional_single_statement_after_if() {
+        let source = "int open_file(int access) {\n\
+                          int flags;\n\
+                          if (access)\n\
+                      #ifdef FEATURE_FLAG\n\
+                              flags = 1;\n\
+                      #else\n\
+                              flags = 2;\n\
+                      #endif\n\
+                          return flags;\n\
+                      }\n";
+        assert!(parse(Path::new("conditional.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_unclosed_conditional_after_if() {
+        let source = "int invalid(int access) {\n\
+                          if (access)\n\
+                      #ifdef FEATURE_FLAG\n\
+                              return 1;\n\
+                      }\n";
         assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 }
