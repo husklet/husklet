@@ -258,7 +258,7 @@ static void e_subi_sh(int rd, int rn, unsigned imm12, int sf, int sh) {
     emit32((sf ? 0xD1000000u : 0x51000000u) | ((unsigned)(sh & 1) << 22) | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd);
 }
 
-static void e_addi_s(int rd, int rn, unsigned imm12, int sf) { // adds rd, rn, #imm (sets flags)
+void e_addi_s(int rd, int rn, unsigned imm12, int sf) { // adds rd, rn, #imm (sets flags)
     emit32((sf ? 0xB1000000u : 0x31000000u) | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd);
 }
 
@@ -288,7 +288,7 @@ void e_nzcv_save(void) {
     e_str(20, 28, OFF_NZCV);
 } // mrs x20,nzcv; str
 
-static void e_nzcv_load(void) {
+void e_nzcv_load(void) {
     e_ldr(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20);
 } // ldr x20; msr nzcv,x20
@@ -296,7 +296,7 @@ static void e_nzcv_load(void) {
 // Carry convention: cpu->nzcv stores the ARM *borrow* C (= NOT x86 CF), which ARM SUBS/
 // SBCS produce naturally and the jcc table assumes. ARM ADDS/ADCS produce C = x86 CF
 // (the opposite), so flags coming from an x86 add/adc must have C flipped to match.
-static void e_nzcv_save_ci(void) {  // save flags, inverting C (scratch x22: x21 may hold a result)
+void e_nzcv_save_ci(void) {  // save flags, inverting C (scratch x22: x21 may hold a result)
     emit32(0xD53B4200u | 20);       // mrs x20, nzcv
     e_movconst(22, 1u << 29);       // C is bit 29 of nzcv
     e_rrr(A_EOR, 20, 20, 22, 1, 0); // eor x20, x20, #(1<<29)
@@ -329,7 +329,7 @@ static void e_nzcv_save_c1(void) { // logical ops: x86 CF=0,OF=0; ARM ANDS/TST l
 // one of them, unconditionally. e_nzcv_save_c1 alone was not enough: it leaves N as whatever the
 // preceding ANDS computed (the SOURCE's sign bit, so SF leaked through) and never touches the PF
 // lane, so a `setnp`/`jp` right after a popcnt read a stale parity.
-static void e_nzcv_save_popcnt(void) {
+void e_nzcv_save_popcnt(void) {
     emit32(0xD53B4200u | 20); // mrs x20, nzcv  (Z valid from the source ANDS)
     e_movconst(22, (1u << 31) | (1u << 28));
     e_rrr(A_BIC, 20, 20, 22, 1, 0); // N = 0 (SF), V = 0 (OF)
@@ -380,7 +380,7 @@ void e_nzcv_save_setcf(int cfreg) { // save N/Z (from ARM nzcv), set stored C = 
 // (= NOT x86 CF), so set x86 CF=1 -> clear bit29, CF=0 -> set bit29, CF^=1 -> toggle bit29. `op` is
 // A_BIC (stc), A_ORR (clc) or A_EOR (cmc). The pending lazy producer (if any) was already materialized
 // by the top-of-loop classifier, so cpu->nzcv is current here.
-static void e_nzcv_setcf_op(uint32_t op) {
+void e_nzcv_setcf_op(uint32_t op) {
     e_ldr(20, 28, OFF_NZCV);
     e_movconst(22, 1u << 29);    // C is bit 29 of nzcv
     e_rrr(op, 20, 20, 22, 1, 0); // clear / set / toggle bit29
@@ -388,7 +388,7 @@ static void e_nzcv_setcf_op(uint32_t op) {
     emit32(0xD51B4200u | 20); // sync live ARM nzcv
 }
 
-static void e_nzcv_save_keepC(void) { // inc/dec: take new N/Z/V, KEEP stored C (x86 inc/dec don't touch CF)
+void e_nzcv_save_keepC(void) { // inc/dec: take new N/Z/V, KEEP stored C (x86 inc/dec don't touch CF)
     emit32(0xD53B4200u | 20);         // mrs x20, nzcv (new N,Z,V; C junk) -- scratch x24/x25 (x21 may hold a result)
     e_ldr(24, 28, OFF_NZCV);          // x24 = old stored flags (has the C to keep)
     e_movconst(25, 1u << 29);
@@ -431,7 +431,7 @@ void hl_x86_emit_flags_save_fcompare(void) {
 }
 
 // x86 PF consumer: rd = x86 PF (even parity of the low byte of cpu->pf) in {0,1}. Scratch x16.
-static void e_pf_compute(int rd) {
+void e_pf_compute(int rd) {
     e_ldr(rd, 28, OFF_PF);
     e_movconst(16, 0xff);
     e_rrr(A_AND, rd, rd, 16, 0, 0); // rd = low byte
@@ -520,7 +520,7 @@ void e_mul(int rd, int rn, int rm, int sf) {
     emit32((sf ? 0x9B007C00u : 0x1B007C00u) | (rm << 16) | (rn << 5) | rd);
 }
 
-static void e_umulh(int rd, int rn, int rm) {
+void e_umulh(int rd, int rn, int rm) {
     emit32(0x9BC07C00u | (rm << 16) | (rn << 5) | rd);
 }
 
@@ -528,15 +528,15 @@ void e_smulh(int rd, int rn, int rm) {
     emit32(0x9B407C00u | (rm << 16) | (rn << 5) | rd);
 }
 
-static void e_udiv(int rd, int rn, int rm, int sf) {
+void e_udiv(int rd, int rn, int rm, int sf) {
     emit32((sf ? 0x9AC00800u : 0x1AC00800u) | (rm << 16) | (rn << 5) | rd);
 }
 
-static void e_sdiv(int rd, int rn, int rm, int sf) {
+void e_sdiv(int rd, int rn, int rm, int sf) {
     emit32((sf ? 0x9AC00C00u : 0x1AC00C00u) | (rm << 16) | (rn << 5) | rd);
 }
 
-static void e_msub(int rd, int rn, int rm, int ra, int sf) {
+void e_msub(int rd, int rn, int rm, int ra, int sf) {
     emit32((sf ? 0x9B008000u : 0x1B008000u) | (rm << 16) | (ra << 10) | (rn << 5) | rd);
 }
 
@@ -552,11 +552,11 @@ void e_tst(int rn, int sf) {
     emit32((sf ? 0xEA00001Fu : 0x6A00001Fu) | (rn << 16) | (rn << 5));
 } // ands xzr,rn,rn
 
-static void e_rbit(int rd, int rn, int sf) {
+void e_rbit(int rd, int rn, int sf) {
     emit32((sf ? 0xDAC00000u : 0x5AC00000u) | (rn << 5) | rd);
 }
 
-static void e_clz(int rd, int rn, int sf) {
+void e_clz(int rd, int rn, int sf) {
     emit32((sf ? 0xDAC01000u : 0x5AC01000u) | (rn << 5) | rd);
 }
 
@@ -666,7 +666,7 @@ void e_fmov_to_d(int vd, int xn) {
     emit32(0x9E670000u | (xn << 5) | vd);
 } // fmov d[vd], x[xn] (zeroes hi)
 
-static void e_fmov_to_s(int vd, int wn) {
+void e_fmov_to_s(int vd, int wn) {
     emit32(0x1E270000u | (wn << 5) | vd);
 } // fmov s[vd], w[wn]
 
@@ -674,7 +674,7 @@ void e_fmov_from_d(int xd, int vn) {
     emit32(0x9E660000u | (vn << 5) | xd);
 } // fmov x[xd], d[vn]
 
-static void e_fmov_from_s(int wd, int vn) {
+void e_fmov_from_s(int wd, int vn) {
     emit32(0x1E260000u | (vn << 5) | wd);
 } // fmov w[wd], s[vn]
 
@@ -824,21 +824,15 @@ void hl_x86_emit_vector3(uint32_t base, int destination, int left, int right) {
 }
 
 // LSE atomics (AL ordering). sz: 1/2/4/8 bytes.
-static void e_lse(uint32_t base, int sz, int rs, int rt, int rn) {
+void e_lse(uint32_t base, int sz, int rs, int rt, int rn) {
     uint32_t szb = sz == 8 ? 0xC0000000u : sz == 4 ? 0x80000000u : sz == 2 ? 0x40000000u : 0;
     emit32((base & 0x3FFFFFFFu) | szb | (rs << 16) | (rn << 5) | rt);
 }
 
-static void e_cas(int sz, int rs, int rt, int rn) { // casal Rs(old/cmp), Rt(new), [Rn]
+void e_cas(int sz, int rs, int rt, int rn) { // casal Rs(old/cmp), Rt(new), [Rn]
     uint32_t b = sz == 8 ? 0xC8E0FC00u : sz == 4 ? 0x88E0FC00u : sz == 2 ? 0x48E0FC00u : 0x08E0FC00u;
     emit32(b | (rs << 16) | (rn << 5) | rt);
 }
-
-#define LSE_LDADD 0xB8E00000u // ldaddal  ([m] += rs)
-#define LSE_LDCLR 0xB8E01000u // ldclral  ([m] &= ~rs)
-#define LSE_LDEOR 0xB8E02000u // ldeoral  ([m] ^= rs)
-#define LSE_LDSET 0xB8E03000u // ldsetal  ([m] |= rs)
-#define LSE_SWP 0xB8E08000u   // swpal    (x = [m]; [m] = rs)
 
 static int64_t sext(uint64_t v, int bits) {
     uint64_t m = 1ull << (bits - 1);
@@ -1568,7 +1562,7 @@ static void emit_fast_syscall(uint64_t next) {
 // IRQSLIM: a FORWARD direct edge (target past the branch's own rip, g_emit_gpc) enters at body+8,
 // past the fixed 2-insn poll header -- every in-cache cycle still polls via its backward or
 // indirect edge (see the g_fwdskip invariant note in engine/cache.c).
-static void emit_chain_exit(uint64_t target) {
+void emit_chain_exit(uint64_t target) {
     if (g_trace || g_nochain || g_threaded) {
         emit_exit_const(target, R_BRANCH);
         return;
@@ -1590,7 +1584,7 @@ static void emit_chain_exit(uint64_t target) {
 // live, no spill/dispatch); MISS -> spill and flag the dispatcher to fill the cache.
 // Scratch x16/x17/x19/x20/x21 are not guest registers here, and `sub` (not `subs`)
 // keeps nzcv live, so the cached body is entered exactly like a chained block.
-static void emit_ibranch(void) {
+void emit_ibranch(void) {
     if (g_trace || g_nochain || g_noibtc) { // debug: always dispatch (exact rip)
         e_str(16, 28, OFF_RIP);
         emit_spill();

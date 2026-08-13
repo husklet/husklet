@@ -25,6 +25,49 @@ enum hl_x86_translate_result {
     TX_BREAK = 2,
 };
 
+#define LSE_LDADD 0xB8E00000u
+#define LSE_LDCLR 0xB8E01000u
+#define LSE_LDEOR 0xB8E02000u
+#define LSE_LDSET 0xB8E03000u
+#define LSE_SWP 0xB8E08000u
+
+void hl_x86_legacy_image(uint64_t *, uint64_t *, uint64_t *);
+int hl_x86_legacy_pfaf_dead(void);
+int hl_x86_legacy_flags_pending(void);
+void hl_x86_legacy_flags_pending_clear(void);
+
+uint64_t call_return_pc(uint64_t pc);
+void report_unimpl(uint64_t pc, struct insn *instruction);
+void flags_materialize(void);
+void emit_chain_exit(uint64_t target);
+void emit_ibranch(void);
+void emit_ldmxcsr(struct insn *, uint64_t);
+void emit_stmxcsr(struct insn *, uint64_t);
+void emit_div_zero_check(int, uint64_t, int);
+void emit_div_ovf_check(int, int, int, int, uint64_t, int);
+void emit_div64_fast(uint64_t, uint64_t, int, int);
+void emit_restore_rflags(int);
+void e_bit_move(int, int, int, int, int);
+void e_af_save(int);
+void e_af_addsub(int, int, int, int);
+void e_udiv(int, int, int, int);
+void e_sdiv(int, int, int, int);
+void e_msub(int, int, int, int, int);
+void e_umulh(int, int, int);
+void e_lse(uint32_t, int, int, int, int);
+void e_addi_s(int, int, unsigned, int);
+void e_nzcv_save_keepC(void);
+void e_nzcv_load(void);
+void e_nzcv_save_ci(void);
+void e_nzcv_save_popcnt(void);
+void e_nzcv_setcf_op(uint32_t);
+void e_pf_compute(int);
+void e_rbit(int, int, int);
+void e_clz(int, int, int);
+void e_fmov_to_s(int, int);
+void e_fmov_from_s(int, int);
+void e_cas(int, int, int, int);
+
 int alu_kind_primary(uint8_t op);
 int byte_val(struct insn *insn, int register_number, int scratch);
 void byte_wb(struct insn *insn, int register_number, int value);
