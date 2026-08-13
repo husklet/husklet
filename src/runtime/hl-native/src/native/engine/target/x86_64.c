@@ -900,14 +900,14 @@ static void ckpt_poll(struct cpu *c);
     } while (0)
 static int container_init(const char *rootfs);
 static int engine_global_init(void);
-#define G_DISPATCH_PROFILE_EXIT(c, translated)                                                                         \
+#define G_DISPATCH_PROFILE_EXIT(c)                                                                                     \
     hl_dispatch_profile_exit(&g_dispatch_profile,                                                                      \
                              (c)->reason == R_SOFTMISS   ? HL_DISPATCH_EXIT_SOFTMISS                                    \
                              : (c)->reason == R_SOFTSPAN ? HL_DISPATCH_EXIT_SOFTSPAN                                    \
                              : (c)->reason == R_BRANCH   ? HL_DISPATCH_EXIT_BRANCH                                      \
                              : (c)->reason == R_SYSCALL  ? HL_DISPATCH_EXIT_SYSCALL                                     \
                                                         : HL_DISPATCH_EXIT_OTHER,                                      \
-                             (c)->ic_miss != 0, translated)
+                             (c)->ic_miss != 0)
 #define G_DISPATCH_PROFILE_THREADED() hl_dispatch_profile_threaded(&g_dispatch_profile, g_threaded)
 #include "../dispatch.c" // SHARED engine: run_guest loop (x86 drives it via dispatch.h;
 // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
@@ -1240,8 +1240,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
         int profile_size = snprintf(profile, sizeof profile,
                                     "[prof] dispatcher crossings=%llu translations=%llu exit_softmiss=%llu "
                                     "exit_softspan=%llu exit_branch=%llu exit_syscall=%llu exit_other=%llu "
-                                    "ibtc_miss=%llu ibtc_fill=%llu branch_after_translation=%llu branch_cached=%llu "
-                                    "threaded_transitions=%llu threaded_final=%d\n"
+                                    "ibtc_miss=%llu ibtc_fill=%llu threaded_transitions=%llu threaded_final=%d\n"
                                     "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
                                     (unsigned long long)g_dispatch_profile.crossings,
                                     (unsigned long long)g_dispatch_profile.translations,
@@ -1252,8 +1251,6 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
                                     (unsigned long long)g_dispatch_profile.exit_other,
                                     (unsigned long long)g_dispatch_profile.ibtc_miss,
                                     (unsigned long long)g_ibtc_fill,
-                                    (unsigned long long)g_dispatch_profile.branch_after_translation,
-                                    (unsigned long long)g_dispatch_profile.branch_cached,
                                     (unsigned long long)g_dispatch_profile.threaded_transitions,
                                     g_dispatch_profile.threaded_final, (unsigned long long)g_disp_n,
                                     (unsigned long long)g_ibtc_fill, g_noibtc ? "OFF" : "ON");

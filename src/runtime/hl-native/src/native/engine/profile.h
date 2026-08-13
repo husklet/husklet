@@ -15,8 +15,6 @@ typedef struct hl_dispatch_profile {
     uint64_t exit_syscall;
     uint64_t exit_other;
     uint64_t ibtc_miss;
-    uint64_t branch_after_translation;
-    uint64_t branch_cached;
     uint64_t threaded_transitions;
     int threaded_final;
 } hl_dispatch_profile;
@@ -55,7 +53,7 @@ static inline void hl_dispatch_profile_crossing(hl_dispatch_profile *profile) {
 }
 
 static inline void hl_dispatch_profile_exit(hl_dispatch_profile *profile, hl_dispatch_exit_category category,
-                                            int ibtc_miss, int translated) {
+                                            int ibtc_miss) {
     if (!profile->enabled) return;
     switch (category) {
         case HL_DISPATCH_EXIT_SOFTMISS: profile->exit_softmiss++; break;
@@ -65,12 +63,6 @@ static inline void hl_dispatch_profile_exit(hl_dispatch_profile *profile, hl_dis
         case HL_DISPATCH_EXIT_OTHER: profile->exit_other++; break;
     }
     if (ibtc_miss) profile->ibtc_miss++;
-    if (category == HL_DISPATCH_EXIT_BRANCH && !ibtc_miss) {
-        if (translated)
-            profile->branch_after_translation++;
-        else
-            profile->branch_cached++;
-    }
 }
 
 static inline void hl_dispatch_profile_report(const hl_dispatch_profile *profile, void *context,
