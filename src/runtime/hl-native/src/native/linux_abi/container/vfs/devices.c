@@ -144,6 +144,14 @@ static int devpts_slave_stat(int n, struct stat *s) {
     if (t < 0) return 0;
     int ok = fstat(t, s) == 0;
     close(t);
+    if (ok) {
+        // The backing host devpts instance belongs to the host login user/group.  A private container
+        // devpts mount instead creates slaves with uid 0, gid=5 and mode=620 (the options published in
+        // mountinfo).  Keep the real device identity used by ttyname(3), but project container ownership.
+        s->st_uid = 0;
+        s->st_gid = 5;
+        s->st_mode = S_IFCHR | 0620;
+    }
     return ok && S_ISCHR(s->st_mode);
 }
 
@@ -156,6 +164,8 @@ static const char *dev_node_hostpath(const char *gp) {
            : !strcmp(gp, "/dev/urandom") ? "/dev/urandom"
            : !strcmp(gp, "/dev/tty")     ? "/dev/tty"
            : !strcmp(gp, "/dev/console") ? "/dev/null" // no host console in the jail -> back it with /dev/null
+           : !strcmp(gp, "/dev/ptmx") || !strcmp(gp, "/dev/pts/ptmx")
+               ? "/dev/ptmx" // both Linux spellings name the same devpts multiplexer
                                          : NULL;
 }
 
@@ -177,14 +187,16 @@ static void container_populate_dev(void) {
 #define DEVP2(d, leaf) (snprintf(base + bl, sizeof base - bl, "/%s/%s", (d), (leaf)), base)
     // /dev/fd + the std stream aliases: the standard Linux symlinks into /proc/self/fd (which the engine
     // already synthesizes). readlink/ls see the symlink; open("/dev/fd/N") is caught by procfd_num().
-    if (symlink_idempotent("/proc/self/fd", DEVP("fd")) != 0 ||
-        symlink_idempotent("/proc/self/fd/0", DEVP("stdin")) != 0 ||
-        symlink_idempotent("/proc/self/fd/1", DEVP("stdout")) != 0 ||
-        symlink_idempotent("/proc/self/fd/2", DEVP("stderr")) != 0)
-        return;
+    // These are independent namespace entries.  An image is allowed to ship one of them already (and a
+    // malformed image can even ship the wrong node type); failure to create that one must not suppress the
+    // devpts mount below.  In particular dpkg requires /dev/pts even though it never uses /dev/fd.
+    (void)symlink_idempotent("/proc/self/fd", DEVP("fd"));
+    (void)symlink_idempotent("/proc/self/fd/0", DEVP("stdin"));
+    (void)symlink_idempotent("/proc/self/fd/1", DEVP("stdout"));
+    (void)symlink_idempotent("/proc/self/fd/2", DEVP("stderr"));
     // char-device placeholders so they list in /dev; open()/stat() are intercepted by the fs.c synth
     // (dev_node_hostpath), so the empty file is never actually read/written.
-    static const char *const chr[] = {"null", "zero", "full", "random", "urandom", "tty", "console", "ptmx"};
+    static const char *const chr[] = {"null", "zero", "full", "random", "urandom", "tty", "console"};
     for (size_t i = 0; i < sizeof chr / sizeof *chr; i++) {
         int fd = open(DEVP(chr[i]), O_CREAT | O_WRONLY, 0666);
         if (fd >= 0) close(fd);
@@ -194,15 +206,24 @@ static void container_populate_dev(void) {
     // lists it, and open("/dev/pts/ptmx") is intercepted like /dev/ptmx in fs.c.
     {
         int fd = open(DEVP("pts/ptmx"), O_CREAT | O_WRONLY, 0666);
-        if (fd >= 0) close(fd);
+        if (fd >= 0) {
+            (void)fchmod(fd, 0666); // host umask must not alter devpts' ptmxmode=0666 contract
+            close(fd);
+        }
     }
+    // Linux exposes /dev/ptmx as the devpts multiplexer.  Use the conventional relative link so path
+    // inspection and open through either spelling agree; images that already provide it are left intact.
+    (void)symlink_idempotent("pts/ptmx", DEVP("ptmx"));
     // When the container was handed a controlling terminal (docker run -t: the daemon's login_tty made fd
     // 0/1/2 the pty slave), Linux/devpts names it /dev/pts/0. Materialize that entry so `ls /dev/pts` lists
     // it; stat()/open()/readlink of /dev/pts/0 are intercepted (synth_stat_raw + fs.c) and routed to the
     // real controlling tty, so ttyname(3)/`tty`/`ps` resolve it instead of leaking the host pty device name.
     if (isatty(0) || isatty(1) || isatty(2)) {
         int fd = open(DEVP("pts/0"), O_CREAT | O_WRONLY, 0620);
-        if (fd >= 0) close(fd);
+        if (fd >= 0) {
+            (void)fchmod(fd, 0620); // devpts mode=620, independent of the engine process's umask
+            close(fd);
+        }
     }
     hl_compat_mkdir(DEVP("shm"), 01777); // POSIX shm dir (shm_open names get redirected to a host tmp file in fs.c)
     hl_compat_mkdir(DEVP("mqueue"), 01777);
@@ -410,7 +431,12 @@ static int synth_device_stat(const char *gp, struct stat *s) {
     // /dev/pts/0 instead of "not a tty".
     if (gp && !strcmp(gp, "/dev/pts/0")) {
         int a = ctty_anchor();
-        if (a >= 0 && fstat(a, s) == 0) return 1;
+        if (a >= 0 && fstat(a, s) == 0) {
+            s->st_uid = 0;
+            s->st_gid = 5;
+            s->st_mode = S_IFCHR | 0620;
+            return 1;
+        }
         // no ctty: /dev/pts/0 may instead be a guest-allocated slave -> handled by the devpts case below
     }
     // A guest-created pty slave /dev/pts/N (openpty/posix_openpt): fstat the real host slave so it reports
@@ -432,12 +458,15 @@ static int synth_device_stat(const char *gp, struct stat *s) {
     } devices[] = {{"/dev/null", 1, 3, 0666},    {"/dev/zero", 1, 5, 0666},
                    {"/dev/full", 1, 7, 0666},    {"/dev/random", 1, 8, 0666},
                    {"/dev/urandom", 1, 9, 0666}, {"/dev/tty", 5, 0, 0666},
-                   {"/dev/console", 5, 1, 0600}, {0, 0, 0, 0}};
+                   {"/dev/console", 5, 1, 0600}, {"/dev/ptmx", 5, 2, 0666},
+                   {"/dev/pts/ptmx", 5, 2, 0666}, {0, 0, 0, 0}};
 
     for (int i = 0; devices[i].p; i++)
         if (!strcmp(gp, devices[i].p)) {
             s->st_rdev = (dev_t)(((uint64_t)devices[i].maj << 8) | (unsigned)devices[i].min);
             s->st_mode = S_IFCHR | devices[i].mode;
+            s->st_uid = 0;
+            s->st_gid = 0;
             break;
         }
     return 1;

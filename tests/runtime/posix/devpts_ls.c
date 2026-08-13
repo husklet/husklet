@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -49,7 +50,15 @@ int main(void) {
         if (!strcmp(names[i], "ptmx")) ptmx = 1;
         free(names[i]);
     }
-    printf("ls live=%d ptmx=%d\n", live, ptmx);
+    struct stat slave_st = {0}, ptmx_st = {0};
+    int slave_meta = stat(path, &slave_st) == 0 && S_ISCHR(slave_st.st_mode) && (slave_st.st_mode & 07777) == 0620 &&
+                     slave_st.st_uid == 0 && slave_st.st_gid == 5;
+    int ptmx_meta = stat("/dev/pts/ptmx", &ptmx_st) == 0 && S_ISCHR(ptmx_st.st_mode) &&
+                    (ptmx_st.st_mode & 07777) == 0666 && ptmx_st.st_uid == 0 && ptmx_st.st_gid == 0;
+    struct stat alias_st = {0};
+    int alias = stat("/dev/ptmx", &alias_st) == 0 && S_ISCHR(alias_st.st_mode) &&
+                alias_st.st_rdev == ptmx_st.st_rdev;
+    printf("ls live=%d ptmx=%d slave_meta=%d ptmx_meta=%d alias=%d\n", live, ptmx, slave_meta, ptmx_meta, alias);
     if (s >= 0) close(s);
     close(m);
     return 0;

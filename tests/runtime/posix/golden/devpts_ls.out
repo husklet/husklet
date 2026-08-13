@@ -1,1 +1,1 @@
-ls live=1 ptmx=1
+ls live=1 ptmx=1 slave_meta=1 ptmx_meta=1 alias=1
