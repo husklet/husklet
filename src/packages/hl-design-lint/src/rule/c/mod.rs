@@ -129,6 +129,28 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
 fn conditional_statement_directive(node: tree_sitter::Node<'_>, source: &str) -> bool {
     let row = node.start_position().row;
     let lines = source.lines().collect::<Vec<_>>();
+    if node.kind() == ";"
+        && node.is_missing()
+        && lines.get(row).is_some_and(|line| line.trim_start().starts_with("else"))
+        && row > 0
+        && lines[row - 1].trim_start().starts_with("#endif")
+    {
+        let branch = lines[..row - 1]
+            .iter()
+            .rev()
+            .take_while(|line| {
+                let line = line.trim_start();
+                !matches!(line, line if line.starts_with("#if ") || line.starts_with("#ifdef ") || line.starts_with("#ifndef "))
+            })
+            .any(|line| line.trim_start().starts_with("else if ("));
+        let directive = lines[..row - 1].iter().rev().find(|line| {
+            let line = line.trim_start();
+            line.starts_with("#if ") || line.starts_with("#ifdef ") || line.starts_with("#ifndef ")
+        });
+        if branch && directive.is_some() {
+            return true;
+        }
+    }
     let window = &lines[row.saturating_sub(16)..row.min(lines.len())];
     if window.iter().any(|line| line.trim_start().starts_with("#endif"))
         && window.iter().any(|line| line.trim_start().starts_with("#else"))
@@ -547,6 +569,29 @@ mod test {
                           return flags;\n\
                       }\n";
         assert!(parse(Path::new("conditional.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_preprocessor_selected_else_if_arm() {
+        let source = "int inspect(int status) {\n\
+                          if (status == 1) { return 1; }\n\
+                      #ifdef FEATURE_FLAG\n\
+                          else if (status == 2) { return 2; }\n\
+                      #endif\n\
+                          else { return 0; }\n\
+                      }\n";
+        assert!(parse(Path::new("conditional.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_unmatched_else_after_directive() {
+        let source = "int inspect(int status) {\n\
+                      #ifdef FEATURE_FLAG\n\
+                          return status;\n\
+                      #endif\n\
+                          else { return 0; }\n\
+                      }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
