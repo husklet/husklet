@@ -2315,6 +2315,68 @@ static enum avx_dispatch_result avx_dispatch_map2_horizontal_integer(const hl_x8
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_minimum_maximum(const hl_x86_avx_state *state, struct cpu *c,
+                                                                  struct insn *instruction, uint64_t next, int map,
+                                                                  int op, int width) {
+    if (map != 2 || op < 0x38 || op > 0x3F) return AVX_DISPATCH_UNMATCHED;
+    uint8_t left[64], right[64], output[64];
+    avx_get(c, instruction->vvvv, left);
+    avx_get_rm(state, c, instruction, next, width, right);
+    int maximum = op >= 0x3C;
+    if (op == 0x38 || op == 0x3C) {
+        for (int offset = 0; offset < width; offset++) {
+            int8_t x = (int8_t)left[offset], y = (int8_t)right[offset];
+            output[offset] = (uint8_t)(maximum ? (x > y ? x : y) : (x < y ? x : y));
+        }
+    } else if (op == 0x3A || op == 0x3E) {
+        for (int offset = 0; offset < width; offset += 2) {
+            uint16_t x, y;
+            memcpy(&x, left + offset, 2);
+            memcpy(&y, right + offset, 2);
+            uint16_t result = maximum ? (x > y ? x : y) : (x < y ? x : y);
+            memcpy(output + offset, &result, 2);
+        }
+    } else if (op == 0x39 || op == 0x3D) {
+        for (int offset = 0; offset < width; offset += 4) {
+            int32_t x, y;
+            memcpy(&x, left + offset, 4);
+            memcpy(&y, right + offset, 4);
+            int32_t result = maximum ? (x > y ? x : y) : (x < y ? x : y);
+            memcpy(output + offset, &result, 4);
+        }
+    } else {
+        for (int offset = 0; offset < width; offset += 4) {
+            uint32_t x, y;
+            memcpy(&x, left + offset, 4);
+            memcpy(&y, right + offset, 4);
+            uint32_t result = maximum ? (x > y ? x : y) : (x < y ? x : y);
+            memcpy(output + offset, &result, 4);
+        }
+    }
+    avx_put(c, instruction->reg, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
+static enum avx_dispatch_result avx_dispatch_map2_minimum_position(const hl_x86_avx_state *state, struct cpu *c,
+                                                                   struct insn *instruction, uint64_t next, int map,
+                                                                   int op) {
+    if (map != 2 || op != 0x41) return AVX_DISPATCH_UNMATCHED;
+    uint16_t words[32];
+    avx_get_rm(state, c, instruction, next, 16, (uint8_t *)words);
+    uint16_t best = words[0];
+    int index = 0;
+    for (int candidate = 1; candidate < 8; candidate++)
+        if (words[candidate] < best) {
+            best = words[candidate];
+            index = candidate;
+        }
+    uint16_t output[32] = {best, (uint16_t)index};
+    avx_put(c, instruction->reg, (uint8_t *)output, 16);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2352,6 +2414,8 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map2_variable_permutation(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_variable_shift(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_test(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map2_minimum_maximum(state, c, &I, next, map, op, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map2_minimum_position(state, c, &I, next, map, op) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_fp16_conversion(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_immediate_blend(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_immediate_permutation(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
@@ -2555,67 +2619,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
         case 0x2A: { // vmovntdqa: streaming aligned load m128/m256 -> reg
             avx_get_rm(state, c, &I, next, W, b);
             avx_put(c, rd, b, W);
-            goto done;
-        }
-        case 0x38: // vpminsb/vpmaxsb (byte), vpminsd/vpmaxsd (dword),
-        case 0x39: // vpminuw/vpmaxuw (word), vpminud/vpmaxud (dword) -- src1=vvvv, src2=rm
-        case 0x3A:
-        case 0x3B:
-        case 0x3C:
-        case 0x3D:
-        case 0x3E:
-        case 0x3F: {
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            int is_max = (op >= 0x3C);
-            if (op == 0x38 || op == 0x3C) { // signed byte
-                for (int i = 0; i < W; i++) {
-                    int8_t x = (int8_t)a[i], y = (int8_t)b[i];
-                    d[i] = (uint8_t)(is_max ? (x > y ? x : y) : (x < y ? x : y));
-                }
-            } else if (op == 0x3A || op == 0x3E) { // unsigned word
-                for (int i = 0; i < W; i += 2) {
-                    uint16_t x, y;
-                    memcpy(&x, a + i, 2);
-                    memcpy(&y, b + i, 2);
-                    uint16_t o = is_max ? (x > y ? x : y) : (x < y ? x : y);
-                    memcpy(d + i, &o, 2);
-                }
-            } else if (op == 0x39 || op == 0x3D) { // signed dword
-                for (int i = 0; i < W; i += 4) {
-                    int32_t x, y;
-                    memcpy(&x, a + i, 4);
-                    memcpy(&y, b + i, 4);
-                    int32_t o = is_max ? (x > y ? x : y) : (x < y ? x : y);
-                    memcpy(d + i, &o, 4);
-                }
-            } else { // 0x3B/0x3F unsigned dword
-                for (int i = 0; i < W; i += 4) {
-                    uint32_t x, y;
-                    memcpy(&x, a + i, 4);
-                    memcpy(&y, b + i, 4);
-                    uint32_t o = is_max ? (x > y ? x : y) : (x < y ? x : y);
-                    memcpy(d + i, &o, 4);
-                }
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x41: { // vphminposuw: 128-bit only; word0=min unsigned word of rm, word1=its index, rest 0
-            avx_get_rm(state, c, &I, next, 16, b);
-            uint16_t w[8];
-            memcpy(w, b, 16);
-            uint16_t best = w[0];
-            int idx = 0;
-            for (int i = 1; i < 8; i++)
-                if (w[i] < best) {
-                    best = w[i];
-                    idx = i;
-                }
-            // Sized to 64 bytes (avx_put's declared parameter width) though only the low 16 are used, so
-            // the compiler sees a source object large enough for the in[64] contract (-Wstringop-overread).
-            uint16_t o[32] = {best, (uint16_t)idx};
-            avx_put(c, rd, (uint8_t *)o, 16);
             goto done;
         }
         case 0x90:   // vpgatherd{d,q}: 32-bit (dword) indices
