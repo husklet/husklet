@@ -2482,6 +2482,43 @@ static enum avx_dispatch_result avx_dispatch_map2_gather(const hl_x86_avx_state 
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map3_byte_immediate(const hl_x86_avx_state *state, struct cpu *c,
+                                                                 struct insn *instruction, uint64_t next, int map,
+                                                                 int width) {
+    if (map != 3 || (instruction->op != 0x0F && instruction->op != 0x42)) return AVX_DISPATCH_UNMATCHED;
+    uint8_t left[64], right[64], output[64];
+    avx_get(c, instruction->vvvv, left);
+    avx_get_rm(state, c, instruction, next, width, right);
+    for (int lane = 0; lane < width; lane += 16) {
+        if (instruction->op == 0x0F) {
+            uint8_t concatenated[32];
+            memcpy(concatenated, right + lane, 16);
+            memcpy(concatenated + 16, left + lane, 16);
+            int shift = (uint8_t)instruction->imm;
+            for (int byte = 0; byte < 16; byte++)
+                output[lane + byte] = shift < 32 - byte ? concatenated[shift + byte] : 0;
+        } else {
+            int control = (instruction->imm >> ((lane / 16) * 3)) & 7;
+            int right_offset = (control & 3) * 4;
+            int left_offset = ((control >> 2) & 1) * 4;
+            uint16_t sums[8];
+            for (int byte = 0; byte < 8; byte++) {
+                int sum = 0;
+                for (int component = 0; component < 4; component++) {
+                    int difference =
+                        (int)left[lane + left_offset + byte + component] - (int)right[lane + right_offset + component];
+                    sum += difference < 0 ? -difference : difference;
+                }
+                sums[byte] = (uint16_t)sum;
+            }
+            memcpy(output + lane, sums, 16);
+        }
+    }
+    avx_put(c, instruction->reg, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2515,6 +2552,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     enum avx_dispatch_result gather = avx_dispatch_map2_gather(state, c, &I, next, map, op, W);
     if (gather == AVX_DISPATCH_HANDLED) return;
     if (gather == AVX_DISPATCH_UNIMPLEMENTED) goto avx_unimpl;
+    if (avx_dispatch_map3_byte_immediate(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_fma(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_crypto(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_memory(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
@@ -2679,45 +2717,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
         if (avx_dispatch_lane_transfer(state, c, &I, next) == AVX_DISPATCH_HANDLED) goto done;
         if (avx_dispatch_lane_permutation(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
         if (avx_dispatch_immediate_floating(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
-        switch (op) {
-        case 0x0F: { // vpalignr imm8: per-128-lane byte concat(src1:src2) >> imm
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            int sh = (uint8_t)I.imm;
-            for (int lane = 0; lane < W; lane += 16) {
-                uint8_t t[32];
-                memcpy(t, b + lane, 16);
-                memcpy(t + 16, a + lane, 16);
-                for (int i = 0; i < 16; i++)
-                    d[lane + i] = sh < 32 - i ? t[sh + i] : 0;
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x42: { // vmpsadbw imm8: per-128-lane SAD windows; src1=vvvv, src2=rm.
-            // Low lane uses imm[2:0] (imm[1:0]=src2 block, imm[2]=src1 block); the high 128-bit
-            // lane (256-bit form) uses imm[5:3] the same way.
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16) {
-                int ctl = (I.imm >> ((lane / 16) * 3)) & 7;
-                int boff = (ctl & 3) * 4;
-                int aoff = ((ctl >> 2) & 1) * 4;
-                uint16_t o[8];
-                for (int i = 0; i < 8; i++) {
-                    int sum = 0;
-                    for (int k = 0; k < 4; k++) {
-                        int diff = (int)a[lane + aoff + i + k] - (int)b[lane + boff + k];
-                        sum += diff < 0 ? -diff : diff;
-                    }
-                    o[i] = (uint16_t)sum;
-                }
-                memcpy(d + lane, o, 16);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        }
     }
 
     // ---- unimplemented: report precisely + exit 70 so coverage is grown test-driven ----
