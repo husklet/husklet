@@ -123,17 +123,19 @@ fn parse_output_line(
     if let Some(rest) = line.strip_prefix("PHASE ") {
         return parse_phase(campaign, step, wall_us, rest, phases, canonical);
     }
-    let metadata = line
-        .strip_prefix("META ")
-        .map(|_| Ok(line.to_owned()))
-        .or_else(|| counter_metadata(line))
-        .ok_or_else(|| format!("unaccounted benchmark output {line:?}"))??;
+    let metadata = metadata_line(line).ok_or_else(|| format!("unaccounted benchmark output {line:?}"))??;
     if *metadata_seen {
         return Err("duplicate benchmark metadata".into());
     }
     *metadata_seen = true;
     canonical.push(metadata);
     Ok(())
+}
+
+fn metadata_line(line: &str) -> Option<Result<String, Error>> {
+    line.strip_prefix("META ")
+        .map(|_| Ok(line.to_owned()))
+        .or_else(|| counter_metadata(line).map(|result| result.map(|()| line.to_owned())))
 }
 
 fn parse_phase(
@@ -177,7 +179,7 @@ fn phase_fields(rest: &str) -> Result<(&str, u64, &str), Error> {
     Ok((name, micros, ok))
 }
 
-fn counter_metadata(line: &str) -> Option<Result<String, Error>> {
+fn counter_metadata(line: &str) -> Option<Result<(), Error>> {
     let rest = line.strip_prefix("cntfrq=")?;
     let Some((frequency, divisor)) = rest.split_once(" divisor=") else {
         return Some(Err("malformed counter-frequency metadata".into()));
@@ -185,11 +187,7 @@ fn counter_metadata(line: &str) -> Option<Result<String, Error>> {
     Some(
         frequency
             .parse::<u64>()
-            .and_then(|_| {
-                divisor
-                    .parse::<u32>()
-                    .map(|_| format!("META cntfrq={frequency} divisor={divisor}"))
-            })
+            .and_then(|_| divisor.parse::<u32>().map(|_| ()))
             .map_err(|_| "malformed counter-frequency metadata".into()),
     )
 }
@@ -655,7 +653,7 @@ mod ledger_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{Measurement, phase_fields, require_line_framing, require_metadata};
+    use super::{Measurement, counter_metadata, metadata_line, phase_fields, require_line_framing, require_metadata};
     use std::{
         cell::Cell,
         fs::OpenOptions,
@@ -686,6 +684,17 @@ mod tests {
         ] {
             assert!(phase_fields(invalid).is_err(), "accepted {invalid:?}");
         }
+    }
+
+    #[test]
+    fn legacy_metadata_is_validated_without_rewriting_its_bytes() {
+        assert!(counter_metadata("cntfrq=1000000 divisor=20").unwrap().is_ok());
+        assert!(counter_metadata("cntfrq=bad divisor=20").unwrap().is_err());
+
+        assert_ne!(
+            metadata_line("cntfrq=1000000 divisor=20").unwrap().unwrap(),
+            metadata_line("META cntfrq=1000000 divisor=20").unwrap().unwrap()
+        );
     }
 
     #[test]
