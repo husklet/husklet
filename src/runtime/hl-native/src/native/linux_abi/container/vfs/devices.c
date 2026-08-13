@@ -155,6 +155,10 @@ static int devpts_slave_stat(int n, struct stat *s) {
     return ok && S_ISCHR(s->st_mode);
 }
 
+static int dev_node_is_ptmx(const char *gp) {
+    return gp && (!strcmp(gp, "/dev/ptmx") || !strcmp(gp, "/dev/pts/ptmx"));
+}
+
 static const char *dev_node_hostpath(const char *gp) {
     if (!gp) return NULL;
     return !strcmp(gp, "/dev/null")      ? "/dev/null"
@@ -164,8 +168,7 @@ static const char *dev_node_hostpath(const char *gp) {
            : !strcmp(gp, "/dev/urandom") ? "/dev/urandom"
            : !strcmp(gp, "/dev/tty")     ? "/dev/tty"
            : !strcmp(gp, "/dev/console") ? "/dev/null" // no host console in the jail -> back it with /dev/null
-           : !strcmp(gp, "/dev/ptmx") || !strcmp(gp, "/dev/pts/ptmx")
-               ? "/dev/ptmx" // both Linux spellings name the same devpts multiplexer
+           : dev_node_is_ptmx(gp) ? "/dev/ptmx" // both Linux spellings name the same devpts multiplexer
                                          : NULL;
 }
 

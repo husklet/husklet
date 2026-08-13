@@ -678,6 +678,54 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
     }
     // device nodes -> host devices (rootfs has no real /dev)
     if (rp && !strncmp(rp, "/dev/", 5)) {
+        // Opening the multiplexer creates a new pseudoterminal pair.  Do this before the generic device
+        // path below: merely opening the host /dev/ptmx without registering its master leaves TIOCGPTN
+        // able to return an index that a later guest /dev/pts/N open cannot resolve.
+        if (dev_node_is_ptmx(rp) && !is_opath) {
+            int flags = O_RDWR | O_NOCTTY;
+            if (lf & 0x800) flags |= O_NONBLOCK;
+            if (lf & 0x80000) flags |= O_CLOEXEC;
+            int master = nofile_gate(posix_openpt(flags));
+            if (master >= 0 && (grantpt(master) != 0 || unlockpt(master) != 0 || pts_alloc(master) < 0)) {
+                int saved_errno = errno ? errno : ENOSPC;
+                close(master);
+                master = -1;
+                errno = saved_errno;
+            }
+            G_RET(c) = master < 0 ? (uint64_t)(-errno) : (uint64_t)master;
+            return 1;
+        }
+        if (!strncmp(rp, "/dev/pts/", 9) && rp[9] >= '0' && rp[9] <= '9' && !is_opath) {
+            char *end = NULL;
+            long parsed = strtol(rp + 9, &end, 10);
+            if (parsed < 0 || parsed >= DEVPTS_MAX || end == rp + 9 || *end != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
+                return 1;
+            }
+            int index = (int)parsed;
+            int master = pts_master_fd(index);
+            int anchor = index == 0 && master < 0 ? ctty_anchor() : -1;
+            const char *slave = master >= 0 ? ptsname(master) : pts_slave_name(index);
+            char anchor_path[4200];
+            int duplicate_anchor = 0;
+            if (!slave && anchor >= 0 && hl_native_fd_path(anchor, anchor_path, sizeof anchor_path) == 0)
+                slave = anchor_path;
+            else if (!slave && anchor >= 0)
+                duplicate_anchor = 1;
+            if (!slave && !duplicate_anchor) {
+                G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
+                return 1;
+            }
+            int flags = mf;
+            if (lf & 0x800) flags |= O_NONBLOCK;
+            if (lf & 0x80000) flags |= O_CLOEXEC;
+            int descriptor = nofile_gate(duplicate_anchor ? dup(anchor) : open(slave, flags, 0));
+            if (descriptor >= 0 && master >= 0) ptm_apply_to_slave(master, descriptor);
+            if (descriptor >= 0 && master >= 0) pts_note_slave(descriptor, index);
+            G_RET(c) = descriptor < 0 ? (uint64_t)(int64_t)(master < 0 && anchor < 0 ? -ENOENT : -errno)
+                                      : (uint64_t)descriptor;
+            return 1;
+        }
         const char *hd = dev_node_hostpath(rp);
         if (hd) {
             // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap, exactly
@@ -1035,61 +1083,6 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             if (sp) {
                 int d = open(sp, mf, (mode_t)a3);
                 G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-                break;
-            }
-        }
-        {
-            // pty: /dev/ptmx -> posix_openpt; /dev/pts/N -> slave
-            const char *rp = (const char *)a1;
-            if (rp && (!strcmp(rp, "/dev/ptmx") || !strcmp(rp, "/dev/pts/ptmx"))) {
-                int m = posix_openpt(O_RDWR | O_NOCTTY);
-                if (m >= 0) {
-                    grantpt(m);
-                    unlockpt(m);
-                    pts_alloc(m); // assign this master a Linux devpts index N (TIOCGPTN / /dev/pts/N use it)
-                    if (lf & 0x80000) fcntl(m, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC on the master
-                }
-                G_RET(c) = m < 0 ? (uint64_t)(-errno) : (uint64_t)m;
-                break;
-            }
-            // /dev/pts/0 is the container's controlling terminal (not a guest-created master's slave): a
-            // program that does open(ttyname(0)) must get a fresh fd to the SAME pty. Reopen the anchor's
-            // host device (F_GETPATH) or dup it. Guest-opened ptys use /dev/pts/N with N == their master fd
-            // (>=3), so this never shadows them.
-            if (rp && !strcmp(rp, "/dev/pts/0")) {
-                int a = ctty_anchor();
-                if (a >= 0) {
-                    char hp[4200];
-                    int s = (hl_native_fd_path(a, hp, sizeof hp) == 0) ? open(hp, mf, (mode_t)a3) : dup(a);
-                    G_RET(c) = s < 0 ? (uint64_t)(-errno) : (uint64_t)s;
-                    break;
-                }
-            }
-            // a guest-created pty slave /dev/pts/N. Intercepted HERE, ahead of the overlay resolver, so
-            // the freshly-allocated slave (which has no rootfs backing file) is never an ENOENT miss. N is the
-            // devpts index hl assigned the master (pts_alloc); ptsname(master) yields the host slave device.
-            if (rp && !strncmp(rp, "/dev/pts/", 9) && rp[9] >= '0' && rp[9] <= '9') {
-                int n = atoi(rp + 9);
-                int mfd = pts_master_fd(n);
-                // when this process no longer holds the master (apt's SetupSlavePtyMagic closes it in
-                // the forked child), fall back to the host slave path cached at pts_alloc -- the pty is still
-                // alive if the PARENT holds the master, so this open succeeds; it fails once the pty is truly
-                // gone. Without this the child's open ENOENTed -> apt "Can not write log (Is /dev/pts mounted?)".
-                const char *sn = (mfd >= 0) ? ptsname(mfd) : pts_slave_name(n);
-                if (!sn) {
-                    G_RET(c) = (uint64_t)(int64_t)(-2); // ENOENT: no such pts index (matches Linux)
-                    break;
-                }
-                int s = open(sn, mf, (mode_t)a3);
-                if (s >= 0) {
-                    if (mfd >= 0) ptm_apply_to_slave(mfd, s); // slave inherits the master's cached termios/winsize
-                    pts_note_slave(s, n);                     // stamp /dev/pts/N onto the slave fd + publish the node
-                    G_RET(c) = (uint64_t)s;
-                } else {
-                    // A cached-name open that fails means the pty is gone -> Linux reports ENOENT for the index,
-                    // not the host's device errno; a live-master open reports its real errno faithfully.
-                    G_RET(c) = (mfd < 0) ? (uint64_t)(int64_t)(-2) : (uint64_t)(-errno);
-                }
                 break;
             }
         }
