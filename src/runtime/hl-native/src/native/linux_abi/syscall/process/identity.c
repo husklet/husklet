@@ -215,8 +215,9 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
         vfork_publish_exit();
         HL_LOGF(&g_jit_log, HL_LOG_TAG_NETWORK, "exit_group pid=%d code=%d", (int)getpid(), (int)a0);
         hl_dispatch_profile_report(&g_dispatch_profile, &g_jit_log, translation_log_summary);
-        if (g_prof)
-            fprintf(stderr,
+        if (g_prof) {
+            char profile[1024];
+            int profile_size = snprintf(profile, sizeof profile,
                     "[prof] crossings=%llu syscalls=%llu ibtc_miss=%llu branch_cross=%llu translations=%llu lse=%llu "
                     "wx_toggles=%llu dualmap=%d xlate_ms=%.3f service_ms=%.3f mtibtc=%d mtfill=%llu "
                     "fwake_fast=%llu fwake_slow=%llu fwait=%llu soft_sample_shift=6 soft_sampled_sites=%llu "
@@ -232,6 +233,11 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                     (unsigned long long)g_prof_soft_span, (unsigned long long)g_prof_soft_bounce_prepare,
                     (unsigned long long)g_prof_soft_bounce_commit, (unsigned long long)g_prof_smc_queued,
                     (unsigned long long)g_prof_smc_commit);
+            if (profile_size > 0) {
+                size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1;
+                (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
+            }
+        }
         // A3: §B shadow-return coverage. hit-rate = shret_hit / (shret_hit + shret_fb). bl_shadow /
         // bl_leaf show how the depth-gate split call sites at translate time. PROF-only (keep dark).
         if (0) {
