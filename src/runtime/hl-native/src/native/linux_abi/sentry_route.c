@@ -712,6 +712,10 @@ static int sentry_import_misc(struct sentry_marshal *M) {
     struct sentry_ring *R = M->R;
     uint64_t nr = M->nr;
     switch (nr) {
+#define SENTRY_SCALAR_CASE(number) case number:
+        HL_LINUX_SENTRY_SCALAR(SENTRY_SCALAR_CASE)
+#undef SENTRY_SCALAR_CASE
+        break;
     // ---- multiplexing over sentry-owned fds (item 3) ----
     case 73: { // ppoll(fds, nfds, timeout_ts, sigmask, sigsetsz)
         uint32_t nfds = (uint32_t)G_A1(c);

@@ -55,4 +55,23 @@
     X(436)                                                                                                             \
     X(439)
 
+/* Forwarded calls whose complete request is the six scalar argument words.  These still need an
+ * explicit transport shape: an importer returning zero means "not admitted", not "no bytes to copy".
+ * Keep this list separate from HL_LINUX_SENTRY_FORWARDED so adding a pointer-bearing syscall cannot
+ * accidentally cross the authority boundary without a marshal implementation. */
+#define HL_LINUX_SENTRY_SCALAR(X)                                                                                      \
+    X(19)                                                                                                              \
+    X(20)                                                                                                              \
+    X(23)                                                                                                              \
+    X(24)                                                                                                              \
+    X(46)                                                                                                              \
+    X(47)                                                                                                              \
+    X(50)                                                                                                              \
+    X(57)                                                                                                              \
+    X(62)                                                                                                              \
+    X(198)                                                                                                             \
+    X(201)                                                                                                             \
+    X(210)                                                                                                             \
+    X(436)
+
 #endif

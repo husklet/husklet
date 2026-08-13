@@ -7,6 +7,7 @@
 // the forwarded result must equal the trusted one byte-for-byte. Deterministic -> golden-checked.
 #define _GNU_SOURCE
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +27,18 @@ int main(void) {
     // getsockname: learn the bound port (out-sockaddr + in/out socklen copied back from the ring).
     socklen_t al = sizeof a;
     if (getsockname(s, (struct sockaddr *)&a, &al) != 0) { perror("getsockname"); return 1; }
+
+    // The sentry must validate pointer-bearing requests independently of scalar admission. A malformed
+    // source is rejected rather than interpreted as a scalar-only request or dereferenced by the helper.
+    errno = 0;
+    if (sendto(s, (const void *)1, 1, 0, (struct sockaddr *)&a, sizeof a) != -1 || errno != EFAULT) {
+        fprintf(stderr, "sendto(bad source): result/errno mismatch (%d)\n", errno);
+        return 1;
+    }
+
+    // Exercise an input sockaddr through connect as well as bind/sendto. UDP remains permitted to sendto
+    // the same peer after connect, retaining the destination-address marshal check below.
+    if (connect(s, (struct sockaddr *)&a, sizeof a) != 0) { perror("connect"); return 1; }
 
     // sendto OUR OWN address (in-data + in-destaddr marshaled to the ring); loopback queues it locally.
     const char *msg = "datagram-echo-42";

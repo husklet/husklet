@@ -36,6 +36,11 @@ static void proc_init_table(struct sentry_proc *p) {
     for (int i = 0; i < 3; i++) {
         p->real[i] = i;
         p->borrowed[i] = 1;
+        /* Standard streams can be provider handles rather than host descriptor numbers.  Preserve
+         * that authority kind when seeding the sentry table so write/read dispatch through the same
+         * typed provider inherited by the helper instead of treating the handle as a POSIX fd. */
+        hl_linux_fd_snapshot snapshot;
+        p->typed[i] = bound_snapshot((uint64_t)(uint32_t)i, &snapshot) != 0;
     }
 }
 
