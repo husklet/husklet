@@ -5654,6 +5654,43 @@ static int lower_sse_two_source_shuffle(struct insn *instruction, uint64_t next,
     return TX_NEXT;
 }
 
+static int lower_sse_move_lane(struct insn *instruction, uint64_t next, int vd, int vm) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0x12 && opcode != 0x13 && opcode != 0x16 && opcode != 0x17) return TX_FALL;
+    if ((opcode == 0x12 || opcode == 0x16) && instruction->rep) {
+        int source = vm;
+        if (instruction->is_mem) {
+            g_ldr_q_ea(16, instruction, next);
+            source = 16;
+        }
+        e_v3(opcode == 0x12 ? 0x4E802800u : 0x4E806800u, vd, source, source);
+        return TX_NEXT;
+    }
+    if (opcode == 0x12 && instruction->repne) {
+        int source = vm;
+        if (instruction->is_mem) {
+            g_ldr_d_ea(16, instruction, next);
+            source = 16;
+        }
+        emit32(0x4E080400u | (source << 5) | vd);
+        return TX_NEXT;
+    }
+    if (opcode == 0x12 || opcode == 0x16) {
+        int lane = opcode == 0x16 ? 1 : 0;
+        if (instruction->is_mem) {
+            g_ldr_d_ea(16, instruction, next);
+            e_ins_d(vd, lane, 16, 0);
+        } else {
+            e_ins_d(vd, lane, vm, opcode == 0x12 ? 1 : 0);
+        }
+        return TX_NEXT;
+    }
+    int lane = opcode == 0x17 ? 1 : 0;
+    e_ins_d(16, 0, vd, lane);
+    g_str_d_ea(16, instruction, next);
+    return TX_NEXT;
+}
+
 static int lower_sse_packed_double_integer(struct insn *instruction, uint64_t next, int vd, int vm) {
     if (instruction->op != 0xE6 || (!instruction->rep && !instruction->p66 && !instruction->repne))
         return TX_FALL;
@@ -6414,36 +6451,8 @@ static void *translate_block(uint64_t gpc) {
                     gpc = next;
                     continue;
                 }
-                if ((op == 0x12 || op == 0x16) && I.rep) { // SSE3 movsldup/movshdup
-                    int s = vm;
-                    if (I.is_mem) {
-                        g_ldr_q_ea(16, &I, next);
-                        s = 16;
-                    }
-                    if (op == 0x12)
-                        e_v3(0x4E802800u, vd, s, s); // movsldup: TRN1 vd.4s, s, s = [s0,s0,s2,s2]
-                    else
-                        e_v3(0x4E806800u, vd, s, s); // movshdup: TRN2 vd.4s, s, s = [s1,s1,s3,s3]
-                } else if (op == 0x12 && I.repne) {  // movddup: dst[0]=dst[1]=src low 64-bit double
-                    int s = vm;
-                    if (I.is_mem) {
-                        g_ldr_d_ea(16, &I, next); // low 64-bit -> v16.d[0]
-                        s = 16;
-                    }
-                    emit32(0x4E080400u | (s << 5) | vd); // dup vd.2d, vs.d[0]  (broadcast low lane)
-                } else if (op == 0x12 || op == 0x16) {   // movlps/movhps (load) or movhlps/movlhps (reg)
-                    int lane = (op == 0x16) ? 1 : 0;     // 12->low lane(d[0]), 16->high lane(d[1])
-                    if (I.is_mem) {
-                        g_ldr_d_ea(16, &I, next);
-                        e_ins_d(vd, lane, 16, 0);
-                    } else {
-                        int srclane = (op == 0x12) ? 1 : 0; // movhlps: d[0]<-src d[1]; movlhps: d[1]<-src d[0]
-                        e_ins_d(vd, lane, vm, srclane);
-                    }
-                } else if (op == 0x13 || op == 0x17) { // movlps/movhps store
-                    int lane = (op == 0x17) ? 1 : 0;
-                    e_ins_d(16, 0, vd, lane);
-                    g_str_d_ea(16, &I, next);
+                if (lower_sse_move_lane(&I, next, vd, vm) == TX_NEXT) {
+                    // The helper emitted duplicate or low/high lane move forms.
                 } else if (op == 0x54 || op == 0x55 || op == 0x56 ||
                            op == 0x57) { // andps/andnps/orps/xorps (FP bitwise)
                     int s = I.is_mem ? 16 : vm;
