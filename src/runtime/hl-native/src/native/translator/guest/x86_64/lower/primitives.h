@@ -35,6 +35,7 @@ void hl_x86_legacy_image(uint64_t *, uint64_t *, uint64_t *);
 int hl_x86_legacy_pfaf_dead(void);
 int hl_x86_legacy_flags_pending(void);
 void hl_x86_legacy_flags_pending_clear(void);
+void hl_x86_legacy_jcc_spill(int kind);
 
 uint64_t call_return_pc(uint64_t pc);
 void report_unimpl(uint64_t pc, struct insn *instruction);

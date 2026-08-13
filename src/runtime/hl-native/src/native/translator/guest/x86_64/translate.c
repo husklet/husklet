@@ -389,6 +389,12 @@ enum hl_x86_direction hl_x86_legacy_direction(void) { return g_df; }
 void hl_x86_legacy_direction_set(enum hl_x86_direction direction) { g_df = direction; }
 int hl_x86_legacy_flags_pending(void) { return g_fl_pending; }
 void hl_x86_legacy_flags_pending_clear(void) { g_fl_pending = FL_NONE; }
+void hl_x86_legacy_jcc_spill(int kind) {
+    if (kind == HL_X86_JCC_SPILL_LOGIC)
+        e_nzcv_save_c1();
+    else if (kind != HL_X86_JCC_SPILL_NONE)
+        e_nzcv_save();
+}
 
 static int lazyflags_on(void) {
     return 1;
@@ -816,32 +822,8 @@ int lock_rmw(int k, int w, int rs) {
     return 1;
 }
 
-// x86 condition (opcode low nibble) -> ARM cond, or -1 if unsupported (parity).
-static int x86cc_to_arm(int cc) {
-    // Parity (idx 10/11, jp/jnp/setp/.../cmovp/...) is NOT routed here -- it reads the real PF lane
-    // (cpu->pf) via e_pf_compute, so its slots below (mapping onto ARM V) are dead. Everything else is
-    // a direct NZCV condition.
-    static const int t[16] = {6, 7, 3, 2, 0, 1, 9, 8, 4, 5, 6, 7, 11, 10, 13, 12};
-    return t[cc & 0xF];
-}
-
-// jp/jnp (parity jcc): spill any deferred flags to membank (this is a block boundary for the
-// successor blocks), then compute the real x86 PF lane into the live ARM Z flag and return the ARM
-// condition the branch machinery should test. Mirrors setp/setnp + cmovp/cmovnp, which already read
-// cpu->pf instead of the stale ARM V flag. `lo` is the opcode low nibble (0xA=jp, 0xB=jnp).
-// NOTE (parity-edge fix): the SUBS below CLOBBERS the live ARM NZCV with parity scratch. The jcc
-// handlers MUST restore the canonical flags (e_nzcv_load from the just-materialized membank) on
-// EVERY outgoing edge after the b.cond -- otherwise the edge's exit spill (emit_spill ->
-// e_nzcv_save) persists the scratch NZCV over cpu->nzcv and the successor blocks read corrupted
-// CF/ZF/SF/OF (caught by the comp-x86-misc/parity-edge differential: cmp; jp; jb diverged).
-static int emit_parity_jcc_cond(int lo) {
-    if (g_fl_pending) flags_materialize(); // spill the deferred producer to membank (boundary)
-    e_pf_compute(19);                      // x19 = x86 PF in {0,1} (scratch x16; x17/EA preserved)
-    e_rrr(A_SUBS, 31, 19, 31, 0, 0);       // live ARM Z = (PF == 0)
-    return (lo == 0xA) ? 1 /*NE: PF==1*/ : 0 /*EQ: PF==0*/;
-}
-
 #include "lower/sse4x.h"
+#include "lower/branch.h"
 
 // Gather the 16 byte-MSBs of vm into the low 16 bits of GPR `dst` (the proven sse2neon
 // _mm_movemask_epi8 cascade). Scratch: host v17 and GPR x16 -- so `dst` must not be 16 and the
@@ -2865,16 +2847,6 @@ static int avx_lower(struct insn *I, uint64_t next) {
     return result == AVX_LOWER_UNMATCHED ? AVX_LOWER_DECLINED : result;
 }
 
-// Emit the per-edge deferred-flag spill hl_x86_trace_jcc_flags requested for one Jcc edge stub:
-// SUB -> e_nzcv_save (live NZCV already borrow-canonical); LOGIC -> e_nzcv_save_c1 (recompute x86
-// CF=0/OF=0 from the live N/Z before the store); NONE -> nothing (successor overwrites first).
-static void emit_jcc_edge_spill(int kind) {
-    if (kind == HL_X86_JCC_SPILL_LOGIC)
-        e_nzcv_save_c1();
-    else if (kind != HL_X86_JCC_SPILL_NONE)
-        e_nzcv_save();
-}
-
 // Handles vector encodings before the legacy flag pipeline. TX_FALL means the
 // instruction is not a vector-family encoding; TX_NEXT advances the decode
 // loop; TX_BREAK ends the translated block after emitting its exit.
@@ -3359,153 +3331,6 @@ static int lower_double_shift(struct insn *instruction, uint64_t next) {
     emit32(0xD51B4200u | 20); // sync live ARM NZCV to the stored value
     rm_store(instruction, w, 16);
     return TX_NEXT;
-}
-
-struct near_branch_context {
-    hl_x86_trace_state *trace;
-    uint64_t *seen;
-    int *seen_count;
-    int *block_count;
-    int *condition_count;
-    int stitch_ok;
-    uint64_t start;
-    void *body;
-};
-
-static int lower_near_conditional_branch(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
-                                         struct near_branch_context *context) {
-    uint8_t opcode = instruction->op;
-    if ((opcode & 0xF0) != 0x80) return TX_FALL;
-    int low = opcode & 0xF;
-    int parity = low == 0xA || low == 0xB;
-    int condition;
-    if (parity) {
-        condition = emit_parity_jcc_cond(low);
-    } else {
-        condition = x86cc_to_arm(low);
-        if (condition < 0) {
-            if (g_fl_pending) flags_materialize();
-            report_unimpl(*guest_pc, instruction);
-            return TX_BREAK;
-        }
-    }
-    uint64_t taken = next + (uint64_t)instruction->imm;
-    if (!parity && taken == context->start && !notier2x() &&
-        !hl_x86_trace_loop_hazard((uint64_t)context->body, (uint64_t)g_cp)) {
-        int slot = g_tier2_build ? 0 : t2_slot(context->start);
-        if (g_tier2_build || slot >= 0) {
-            hl_x86_trace_self_loop(context->trace, condition, context->start, next, context->body, slot);
-            return TX_BREAK;
-        }
-    }
-    uint64_t fall = next;
-    int stitch_fall = context->stitch_ok && fall != context->start &&
-                      !hl_x86_trace_seen(context->seen, *context->seen_count, fall) && !map_body(fall) &&
-                      !hl_x86_trace_trap_head(fall);
-    int save_taken = 0;
-    int save_fall = 0;
-    if (!parity)
-        hl_x86_trace_jcc_flags(context->trace, taken, fall, *guest_pc, stitch_fall, condition, &save_taken,
-                               &save_fall);
-    if (stitch_fall) {
-        int inverse = (condition ^ 1) & 0xF;
-        uint32_t *patch = (uint32_t *)g_cp;
-        emit32(0);
-        if (parity) e_nzcv_load();
-        emit_jcc_edge_spill(save_taken);
-        emit_chain_exit(taken);
-        int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-        *patch = 0x54000000u | (((uint32_t)distance & 0x7FFFF) << 5) | (uint32_t)inverse;
-        if (parity) e_nzcv_load();
-        context->seen[(*context->seen_count)++] = fall;
-        (*context->block_count)++;
-        (*context->condition_count)++;
-        *guest_pc = fall;
-        return TX_NEXT;
-    }
-    uint32_t *patch = (uint32_t *)g_cp;
-    emit32(0);
-    if (parity) e_nzcv_load();
-    emit_jcc_edge_spill(save_fall);
-    emit_chain_exit(next);
-    int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-    *patch = 0x54000000u | (((uint32_t)distance & 0x7FFFF) << 5) | (condition & 0xF);
-    if (parity) e_nzcv_load();
-    emit_jcc_edge_spill(save_taken);
-    emit_chain_exit(taken);
-    return TX_BREAK;
-}
-
-static int lower_conditional_data_move(struct insn *instruction, uint64_t guest_pc, uint64_t next, int sf) {
-    uint8_t opcode = instruction->op;
-    // setcc (0F 90-9F) -> r/m8 (byte: preserve upper bits / hi-lo byte regs)
-    if ((opcode & 0xF0) == 0x90) {
-        int lo = opcode & 0xF;
-        if (lo == 0xA || lo == 0xB) { // setp/setnp: real PF lane (integer parity or comisd unordered)
-            if (instruction->is_mem) emit_ea(instruction, next);
-            e_pf_compute(19); // x19 = x86 PF (uses x16 as scratch; x17/EA preserved)
-            if (lo == 0xB) {
-                e_movconst(16, 1);
-                e_rrr(A_EOR, 19, 19, 16, 0, 0); // setnp = NOT PF
-            }
-            if (instruction->is_mem)
-                e_store(1, 19, 17);
-            else
-                byte_wb(instruction, instruction->rm_reg, 19);
-            return TX_NEXT;
-        }
-        int cc = x86cc_to_arm(opcode & 0xF);
-        if (cc < 0) {
-            report_unimpl(guest_pc, instruction);
-            return TX_BREAK;
-        }
-        if (instruction->is_mem) {
-            emit_ea(instruction, next); // EA -> x17 FIRST (emit_ea may clobber x16)
-            e_nzcv_load();
-            e_cset(16, cc, 0);
-            e_store(1, 16, 17);
-        } else {
-            e_nzcv_load();
-            e_cset(16, cc, 0);
-            byte_wb(instruction, instruction->rm_reg, 16);
-        }
-        return TX_NEXT;
-    }
-    // cmovcc (0F 40-4F), reg or mem source
-    if ((opcode & 0xF0) == 0x40) {
-        int lo = opcode & 0xF;
-        if (lo == 0xA || lo == 0xB) { // cmovp / cmovnp: real PF lane
-            e_pf_compute(19);         // x19 = x86 PF (before rm_load, which reuses x16/x17)
-            int mem;
-            int rmv = rm_load(instruction, next, instruction->opsize, &mem);
-            e_rrr(A_SUBS, 31, 19, 31, 0, 0); // Z = (PF == 0)
-            if (instruction->opsize == 2) {             // 16-bit cmov writes only bits 15:0
-                e_csel(21, rmv, instruction->reg, (lo == 0xA) ? 1 : 0, 0);
-                e_bfi(instruction->reg, 21, 0, 16, 1);
-            } else
-                e_csel(instruction->reg, rmv, instruction->reg, (lo == 0xA) ? 1 : 0, sf); // cmovp: NE; cmovnp: EQ
-            // parity-edge fix: the SUBS above clobbered the live ARM NZCV; restore the
-            // canonical flags (membank is current: the top-of-loop materialized any pending
-            // producer before this consumer) so a following block exit spills true flags.
-            e_nzcv_load();
-            return TX_NEXT;
-        }
-        int cc = x86cc_to_arm(opcode & 0xF);
-        if (cc < 0) {
-            report_unimpl(guest_pc, instruction);
-            return TX_BREAK;
-        }
-        int mem;
-        int rmv = rm_load(instruction, next, instruction->opsize, &mem);
-        e_nzcv_load();
-        if (instruction->opsize == 2) { // CMOVcc r16: bits 63:16 of the destination are PRESERVED
-            e_csel(21, rmv, instruction->reg, cc, 0);
-            e_bfi(instruction->reg, 21, 0, 16, 1);
-        } else
-            e_csel(instruction->reg, rmv, instruction->reg, cc, sf);
-        return TX_NEXT;
-    }
-    return TX_FALL;
 }
 
 static int lower_scalar_two_byte(struct insn *instruction, uint64_t guest_pc, uint64_t next, int sf,
@@ -4445,94 +4270,9 @@ static int lower_sse_float_arithmetic(struct insn I, uint64_t guest_pc, uint64_t
     return TX_NEXT;
 }
 
-typedef struct {
-    uint64_t start;
-    void *body;
-    uint64_t *seen;
-    int *seen_count;
-    int *trace_blocks;
-    int *conditional_stitches;
-    int stitch_allowed;
-} hl_x86_jcc_region;
-
-static int lower_short_conditional_branch(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
-                                          const hl_x86_trace_state *trace_state, hl_x86_jcc_region *region) {
-    if (instruction->op < 0x70 || instruction->op > 0x7F) return TX_FALL;
-    int condition = instruction->op & 0xF;
-    int parity = condition == 0xA || condition == 0xB;
-    int arm_condition = parity ? emit_parity_jcc_cond(condition) : x86cc_to_arm(condition);
-    if (arm_condition < 0) {
-        if (g_fl_pending) flags_materialize();
-        report_unimpl(*guest_pc, instruction);
-        return TX_BREAK;
-    }
-    uint64_t taken = next + (uint64_t)instruction->imm;
-    if (!parity && taken == region->start && !notier2x() &&
-        !hl_x86_trace_loop_hazard((uint64_t)region->body, (uint64_t)g_cp)) {
-        int slot = g_tier2_build ? 0 : t2_slot(region->start);
-        if (g_tier2_build || slot >= 0) {
-            hl_x86_trace_self_loop(trace_state, arm_condition, region->start, next, region->body, slot);
-            return TX_BREAK;
-        }
-    }
-    uint64_t fall = next;
-    int stitch_fall = region->stitch_allowed && fall != region->start &&
-                      !hl_x86_trace_seen(region->seen, *region->seen_count, fall) && !map_body(fall) &&
-                      !hl_x86_trace_trap_head(fall);
-    int save_taken = 0;
-    int save_fall = 0;
-    if (!parity)
-        hl_x86_trace_jcc_flags(trace_state, taken, fall, *guest_pc, stitch_fall, arm_condition, &save_taken,
-                               &save_fall);
-    if (stitch_fall) {
-        int inverse = (arm_condition ^ 1) & 0xF;
-        uint32_t *patch = (uint32_t *)g_cp;
-        emit32(0);
-        if (parity) e_nzcv_load();
-        emit_jcc_edge_spill(save_taken);
-        emit_chain_exit(taken);
-        int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-        *patch = 0x54000000u | (((uint32_t)distance & 0x7FFFF) << 5) | (uint32_t)inverse;
-        if (parity) e_nzcv_load();
-        region->seen[(*region->seen_count)++] = fall;
-        (*region->trace_blocks)++;
-        (*region->conditional_stitches)++;
-        *guest_pc = fall;
-        return TX_NEXT;
-    }
-    uint32_t *patch = (uint32_t *)g_cp;
-    emit32(0);
-    if (parity) e_nzcv_load();
-    emit_jcc_edge_spill(save_fall);
-    emit_chain_exit(next);
-    int64_t distance = ((uint8_t *)g_cp - (uint8_t *)patch) / 4;
-    *patch = 0x54000000u | (((uint32_t)distance & 0x7FFFF) << 5) | (arm_condition & 0xF);
-    if (parity) e_nzcv_load();
-    emit_jcc_edge_spill(save_taken);
-    emit_chain_exit(taken);
-    return TX_BREAK;
-}
-
-static int lower_direct_jump(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
-                             const hl_x86_trace_state *trace_state, hl_x86_jcc_region *region) {
-    if (instruction->op != 0xE9 && instruction->op != 0xEB) return TX_FALL;
-    uint64_t target = next + (uint64_t)instruction->imm;
-    if (region->stitch_allowed && target != region->start &&
-        !hl_x86_trace_seen(region->seen, *region->seen_count, target) && !map_body(target) &&
-        !hl_x86_trace_trap_head(target)) {
-        region->seen[(*region->seen_count)++] = target;
-        (*region->trace_blocks)++;
-        *guest_pc = target;
-        return TX_NEXT;
-    }
-    hl_x86_trace_flags_edge(trace_state, target, *guest_pc);
-    emit_chain_exit(target);
-    return TX_BREAK;
-}
-
 static int lower_one_byte_family(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
                                  hl_x86_trace_state *trace_state, hl_x86_crypto_state *crypto_state,
-                                 hl_x86_jcc_region *branch_region) {
+                                 hl_x86_branch_region *branch_region) {
     uint64_t current = *guest_pc;
     int result = lower_primary_fast(instruction, current, next, trace_state);
     if (result == TX_NEXT) goto advance;
@@ -4561,11 +4301,11 @@ static int lower_one_byte_family(struct insn *instruction, uint64_t *guest_pc, u
     result = lower_primary_string(instruction, next, crypto_state);
     if (result == TX_NEXT) goto advance;
     if (result == TX_BREAK) return TX_BREAK;
-    result = lower_direct_jump(instruction, guest_pc, next, trace_state, branch_region);
+    result = hl_x86_lower_direct_jump(instruction, guest_pc, next, trace_state, branch_region);
     if (result != TX_FALL) return result;
     result = lower_direct_call_loop(instruction, current, next, trace_state);
     if (result == TX_BREAK) return TX_BREAK;
-    result = lower_short_conditional_branch(instruction, guest_pc, next, trace_state, branch_region);
+    result = hl_x86_lower_short_branch(instruction, guest_pc, next, trace_state, branch_region);
     if (result != TX_FALL) return result;
     result = lower_flag_register_transfer(instruction);
     if (result == TX_NEXT) goto advance;
@@ -4641,7 +4381,7 @@ static int lower_sse_family(struct insn *instruction, uint64_t guest_pc, uint64_
 
 static int lower_two_byte_family(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
                                  hl_x86_trace_state *trace_state, hl_x86_crypto_state *crypto_state,
-                                 hl_x86_jcc_region *branch_region) {
+                                 hl_x86_branch_region *branch_region) {
     uint64_t current = *guest_pc;
     int sf = instruction->opsize == 8;
     int result = lower_two_byte_boundary(instruction, current, next);
@@ -4676,21 +4416,9 @@ static int lower_two_byte_family(struct insn *instruction, uint64_t *guest_pc, u
     if (result == TX_NEXT) goto advance;
     result = lower_exchange_add(instruction, current, next);
     if (result == TX_NEXT) goto advance;
-    if ((instruction->op & 0xF0) == 0x80) {
-        struct near_branch_context near_context = {
-            .trace = trace_state,
-            .seen = branch_region->seen,
-            .seen_count = branch_region->seen_count,
-            .block_count = branch_region->trace_blocks,
-            .condition_count = branch_region->conditional_stitches,
-            .stitch_ok = branch_region->stitch_allowed,
-            .start = branch_region->start,
-            .body = branch_region->body,
-        };
-        result = lower_near_conditional_branch(instruction, guest_pc, next, &near_context);
-        if (result != TX_FALL) return result;
-    }
-    result = lower_conditional_data_move(instruction, current, next, sf);
+    result = hl_x86_lower_near_branch(instruction, guest_pc, next, trace_state, branch_region);
+    if (result != TX_FALL) return result;
+    result = hl_x86_lower_conditional_move(instruction, current, next, sf);
     if (result == TX_NEXT) goto advance;
     if (result == TX_BREAK) return TX_BREAK;
     return TX_FALL;
@@ -4801,12 +4529,14 @@ static void *translate_block(uint64_t gpc) {
         if (hl_x86_x87_known() && !(!I.two && op >= 0xD8 && op <= 0xDF)) hl_x86_x87_drop();
 
         if (!I.two) {
-            hl_x86_jcc_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK};
+            hl_x86_branch_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK,
+                                                  g_tier2_build, notier2x, t2_slot, map_body};
             int one_byte_result = lower_one_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
             if (one_byte_result == TX_NEXT) continue;
             if (one_byte_result == TX_BREAK) break;
         } else {
-            hl_x86_jcc_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK};
+            hl_x86_branch_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK,
+                                                  g_tier2_build, notier2x, t2_slot, map_body};
             int two_byte_result = lower_two_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
             if (two_byte_result == TX_NEXT) continue;
             if (two_byte_result == TX_BREAK) break;
