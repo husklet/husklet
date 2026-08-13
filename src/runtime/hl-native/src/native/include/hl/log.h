@@ -29,7 +29,6 @@ HL_API hl_status hl_log_context_init(hl_log_context *context, const hl_host_serv
 HL_API int hl_log_enabled(const hl_log_context *context, uint32_t tag);
 HL_API void hl_log_message(const hl_log_context *context, uint32_t tag, const char *message, size_t message_size);
 HL_API void hl_log_format(const hl_log_context *context, uint32_t tag, const char *format, ...);
-HL_API void hl_log_guest_fatal(const hl_log_context *context, uint32_t signal, uint64_t pc, uint64_t sp, uint64_t lr);
 HL_API const char *hl_log_tag_name(uint32_t tag);
 
 #if defined(HL_ENABLE_LOGGING) && HL_ENABLE_LOGGING

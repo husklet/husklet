@@ -1,3 +1,5 @@
+#include "../engine/fatal_diagnostic.h"
+
 // translator -- the code cache, the gpc->host block map, and lazy inter-block chaining.
 // One W^X MAP_JIT arena; blocks appended + chained (b/bl backpatch). Host-ISA engine state.
 
@@ -98,6 +100,7 @@ static int code_mapping_reserve(hl_host_code_mapping *mapping, int dual_alias) {
         HL_STATUS_OK)
         return -1;
     if (g_jit_log.host == NULL) (void)hl_log_context_init(&g_jit_log, &g_jit_services, hl_option_get("HL_LOG"));
+    hl_fatal_diagnostic_init(&g_jit_services, hl_option_get("HL_FATAL_DIAGNOSTICS"));
     /* Must start on a host page boundary: reserve_code rejects anything smaller, and the dual-alias path
        maps the object twice at that granularity so RW and RX differ by whole pages (making g_rw2rx a constant
        delta).  16384 is the fallback for a host that cannot answer. */

@@ -72,7 +72,7 @@ fn fatal_guest_signal_diagnostic_is_exact_and_selector_gated() {
     fs::write(
         &source,
         r#"
-#include "hl/log.h"
+#include "engine/fatal_diagnostic.h"
 #include <string.h>
 
 static char captured[256];
@@ -95,14 +95,12 @@ int main(void) {
     host.size = sizeof(host);
     host.capabilities = HL_HOST_CAP_LOG;
     host.log = &logs;
-    hl_log_context disabled;
-    if (hl_log_context_init(&disabled, &host, "") != HL_STATUS_OK) return 1;
-    hl_log_guest_fatal(&disabled, 11, 0x1234, 0x5678, 0x9abc);
+    hl_fatal_diagnostic_init(&host, "0");
+    hl_fatal_diagnostic_publish(11, 0x1234, 0x5678, 0x9abc);
     if (calls != 0 || captured_size != 0) return 2;
-    hl_log_context enabled;
-    if (hl_log_context_init(&enabled, &host, "signal") != HL_STATUS_OK) return 3;
-    hl_log_guest_fatal(&enabled, 11, 0x1234, 0x5678, 0x9abc);
-    const char expected[] = "[hl:signal] fatal-guest-signal signal=11 pc=0x1234 sp=0x5678 lr=0x9abc\n";
+    hl_fatal_diagnostic_init(&host, "1");
+    hl_fatal_diagnostic_publish(11, 0x1234, 0x5678, 0x9abc);
+    const char expected[] = "fatal-guest-signal signal=11 pc=0x1234 sp=0x5678 lr=0x9abc\n";
     if (calls != 1 || captured_size != sizeof expected - 1 || strcmp(captured, expected) != 0) return 4;
     return 0;
 }
@@ -110,10 +108,11 @@ int main(void) {
     )
     .expect("write fatal log probe source");
     let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
-        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-DHL_ENABLE_LOGGING=1"])
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
         .arg(format!("-I{}", native.join("include").display()))
         .arg(&source)
-        .arg(native.join("engine/log.c"))
+        .arg(native.join("engine/fatal_diagnostic.c"))
         .arg("-o")
         .arg(&executable)
         .output()
@@ -126,9 +125,13 @@ int main(void) {
 
 #[test]
 fn fatal_guest_signal_path_excludes_printf_family_formatting() {
-    let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/engine/log.c"))
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/engine/fatal_diagnostic.c"),
+    )
         .expect("read native logging source");
-    let start = source.find("void hl_log_guest_fatal(").expect("fatal diagnostic helper");
+    let start = source
+        .find("void hl_fatal_diagnostic_publish(")
+        .expect("fatal diagnostic helper");
     let body = &source[start..];
     for forbidden in ["printf(", "snprintf(", "sprintf(", "hl_log_format(", "hl_log_message("] {
         assert!(!body.contains(forbidden), "fatal signal path uses non-signal-safe {forbidden}");

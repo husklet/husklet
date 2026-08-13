@@ -1,3 +1,5 @@
+#include "../engine/fatal_diagnostic.h"
+
 // hl/linux_abi -- signal delivery (Linux<->macOS signal-number translation; sigframe build).
 #include "../host/native_context.h"
 #include "memory_arena.h"
@@ -1088,7 +1090,7 @@ static void sig_diag_raise_default(struct cpu *c, int sig) {
 #else
     uint64_t link = 0;
 #endif
-    hl_log_guest_fatal(&g_jit_log, (uint32_t)sig, c ? G_PC(c) : 0, c ? G_SP(c) : 0, link);
+    hl_fatal_diagnostic_publish((uint32_t)sig, c ? G_PC(c) : 0, c ? G_SP(c) : 0, link);
 }
 
 // a GENUINE synchronous CPU fault (SIGSEGV/SIGBUS/...) taken in translated code for which the guest
