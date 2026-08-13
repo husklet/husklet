@@ -1145,7 +1145,6 @@ dependencies = [
  "hl-log",
  "hl-native",
  "libc",
- "ring",
 ]
 
 [[package]]
