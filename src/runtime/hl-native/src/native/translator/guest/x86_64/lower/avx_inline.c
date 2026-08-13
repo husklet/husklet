@@ -6,6 +6,18 @@
 #include "../encoding.h"
 #include "../glue.h"
 
+static uint32_t avx_vd(int register_index) {
+    return (uint32_t)register_index;
+}
+
+static uint32_t avx_vn(int register_index) {
+    return (uint32_t)register_index << 5;
+}
+
+static uint32_t avx_vm(int register_index) {
+    return (uint32_t)register_index << 16;
+}
+
 // ---- AVX/AVX2 VEX.128/.256 inline lowering (perf: avoid the per-insn do_avx round-trip) ----
 // Guest ymm N (N<16): low 128 = host v[N] (== xmm; spilled by mark_vdirty at block exit); high 128 =
 // cpu->vhi[2N] (memory); bits[511:256] = cpu->vz[4N] (memory). VEX zeroes every bit above the operation
@@ -55,29 +67,29 @@ static void emit_avx_varshift_lane(int out, int val, int cnt, int op, int es) {
     uint32_t NEG = 0x6E20B800u | (sz << 22);
     if (op == 0x46) { // arithmetic right (dword only)
         e_movconst(16, 31);
-        emit32(0x4E040C00u | (16 << 5) | 24);                 // dup v24.4s, w16 (=31)
-        emit32((0x6EA06C00u) | (24 << 16) | (cnt << 5) | 24); // umin v24.4s, cnt, 31
-        emit32(NEG | (24 << 5) | 24);                         // neg v24 -> -min(cnt,31)
-        emit32(SSHL | (24 << 16) | (val << 5) | out);         // sshl out, val, v24 (sign fill)
+        emit32(0x4E040C00u | (16 << 5) | 24);                        // dup v24.4s, w16 (=31)
+        emit32(0x6EA06C00u | avx_vm(24) | avx_vn(cnt) | avx_vd(24)); // umin v24.4s, cnt, 31
+        emit32(NEG | (24 << 5) | 24);                                // neg v24 -> -min(cnt,31)
+        emit32(SSHL | avx_vm(24) | avx_vn(val) | avx_vd(out));       // sshl out, val, v24 (sign fill)
         return;
     }
     if (es == 4) { // logical dword: clamp via UMIN.4s
         e_movconst(16, 32);
-        emit32(0x4E040C00u | (16 << 5) | 24);                 // dup v24.4s, w16 (=32)
-        emit32((0x6EA06C00u) | (24 << 16) | (cnt << 5) | 24); // umin v24.4s = min(cnt,32)
-        if (op == 0x45) emit32(NEG | (24 << 5) | 24);         // right shift -> negate amount
-        emit32(USHL | (24 << 16) | (val << 5) | out);         // ushl out, val, v24
+        emit32(0x4E040C00u | (16 << 5) | 24);                        // dup v24.4s, w16 (=32)
+        emit32(0x6EA06C00u | avx_vm(24) | avx_vn(cnt) | avx_vd(24)); // umin v24.4s = min(cnt,32)
+        if (op == 0x45) emit32(NEG | (24 << 5) | 24);                // right shift -> negate amount
+        emit32(USHL | avx_vm(24) | avx_vn(val) | avx_vd(out));       // ushl out, val, v24
         return;
     }
     // logical qword: mask lanes with count >= 64 to 0 (build mask first so out may alias cnt).
     e_movconst(16, 64);
-    emit32(0x4E080C00u | (16 << 5) | 24);                 // dup v24.2d, x16 (=64)
-    emit32((0x6EE03C00u) | (24 << 16) | (cnt << 5) | 25); // cmhs v25.2d = (cnt u>= 64)
-    if (op == 0x45) {                                     // logical right
-        emit32(NEG | (cnt << 5) | 24);                    // v24 = -cnt
-        emit32(USHL | (24 << 16) | (val << 5) | out);
+    emit32(0x4E080C00u | (16 << 5) | 24);                        // dup v24.2d, x16 (=64)
+    emit32(0x6EE03C00u | avx_vm(24) | avx_vn(cnt) | avx_vd(25)); // cmhs v25.2d = (cnt u>= 64)
+    if (op == 0x45) {                                            // logical right
+        emit32(NEG | avx_vn(cnt) | avx_vd(24));                  // v24 = -cnt
+        emit32(USHL | avx_vm(24) | avx_vn(val) | avx_vd(out));
     } else { // logical left
-        emit32(USHL | (cnt << 16) | (val << 5) | out);
+        emit32(USHL | avx_vm(cnt) | avx_vn(val) | avx_vd(out));
     }
     e_v3(0x4E601C00u, out, out, 25); // bic out, out, mask
 }
@@ -102,19 +114,19 @@ static void emit_vcmp_lane(int out, int a, int b, int p, int dbl) {
         e_v3(FCMEQ, 26, a, a);
         e_v3(FCMEQ, 27, b, b);
         e_v3(AND, out, 26, 27);
-        emit32(MVN | (out << 5) | out);
+        emit32(MVN | avx_vn(out) | avx_vd(out));
         break;
     case 0x4:
         e_v3(FCMEQ, out, a, b);
-        emit32(MVN | (out << 5) | out);
+        emit32(MVN | avx_vn(out) | avx_vd(out));
         break; // NEQ_UQ: !(a==b) (true on NaN)
     case 0x5:
         e_v3(FCMGT, out, b, a);
-        emit32(MVN | (out << 5) | out);
+        emit32(MVN | avx_vn(out) | avx_vd(out));
         break; // NLT_US: !(a<b)  (true on NaN)
     case 0x6:
         e_v3(FCMGE, out, b, a);
-        emit32(MVN | (out << 5) | out);
+        emit32(MVN | avx_vn(out) | avx_vd(out));
         break; // NLE_US: !(a<=b) (true on NaN)
     case 0x7:  // ORD_Q: neither NaN
         e_v3(FCMEQ, 26, a, a);
@@ -131,11 +143,11 @@ static void emit_vcmp_lane(int out, int a, int b, int p, int dbl) {
         break;
     case 0x9:
         e_v3(FCMGE, out, a, b);
-        emit32(MVN | (out << 5) | out);
+        emit32(MVN | avx_vn(out) | avx_vd(out));
         break; // NGE_US: !(a>=b) (true on NaN)
     case 0xA:
         e_v3(FCMGT, out, a, b);
-        emit32(MVN | (out << 5) | out);
+        emit32(MVN | avx_vn(out) | avx_vd(out));
         break;                             // NGT_US: !(a>b)  (true on NaN)
     case 0xB: e_v3(EOR, out, a, a); break; // FALSE_OQ: all zero
     case 0xC:                              // NEQ_OQ: a!=b AND ordered
@@ -150,8 +162,8 @@ static void emit_vcmp_lane(int out, int a, int b, int p, int dbl) {
     case 0xE: e_v3(FCMGT, out, a, b); break; // GT_OS
     case 0xF:
         e_v3(EOR, out, a, a);
-        emit32(MVN | (out << 5) | out);
-        break; // TRUE_UQ: all ones
+        emit32(MVN | avx_vn(out) | avx_vd(out));
+        break;                        // TRUE_UQ: all ones
     default: __builtin_unreachable(); // p is masked to four bits above
     }
 }
@@ -169,16 +181,16 @@ static void emit_vcmp_lane(int out, int a, int b, int p, int dbl) {
 // f32 below 2^31 can round up to it -- so here the X form is exactly x86 and needs no suppression.
 void emit_ps2dq_128(int out, int sf, int trunc, int c2p31, int cindef, int t1, int t2) {
     if (trunc) {
-        emit32(0x4EA1B800u | (sf << 5) | out); // FCVTZS.4s out, sf   (round toward zero)
+        emit32(0x4EA1B800u | avx_vn(sf) | avx_vd(out)); // FCVTZS.4s out, sf   (round toward zero)
     } else {
-        emit32(0x6E219800u | (sf << 5) | out);  // FRINTX.4s out, sf  (round to integral, current mode)
-        emit32(0x4EA1B800u | (out << 5) | out); // FCVTZS.4s out, out (integral value -> exact)
+        emit32(0x6E219800u | avx_vn(sf) | avx_vd(out));  // FRINTX.4s out, sf  (round to integral, current mode)
+        emit32(0x4EA1B800u | avx_vn(out) | avx_vd(out)); // FCVTZS.4s out, out (integral value -> exact)
     }
-    emit32(0x6E20E400u | (c2p31 << 16) | (sf << 5) | t1); // FCMGE.4s t1, sf, 2^31   (all-ones where f>=2^31)
-    emit32(0x4E20E400u | (sf << 16) | (sf << 5) | t2);    // FCMEQ.4s t2, sf, sf      (all-ones where NOT NaN)
-    emit32(0x6E205800u | (t2 << 5) | t2);                 // MVN t2                   (all-ones where NaN)
-    e_v3(0x4EA01C00u, t1, t1, t2);                        // ORR t1 = fixup mask (>=2^31 OR NaN)
-    e_v3(0x6E601C00u, t1, cindef, out);                   // BSL t1 = mask ? 0x80000000 : out
+    emit32(0x6E20E400u | avx_vm(c2p31) | avx_vn(sf) | avx_vd(t1)); // FCMGE.4s t1, sf, 2^31
+    emit32(0x4E20E400u | avx_vm(sf) | avx_vn(sf) | avx_vd(t2));    // FCMEQ.4s t2, sf, sf
+    emit32(0x6E205800u | avx_vn(t2) | avx_vd(t2));                 // MVN t2 (all-ones where NaN)
+    e_v3(0x4EA01C00u, t1, t1, t2);                                 // ORR t1 = fixup mask (>=2^31 OR NaN)
+    e_v3(0x6E601C00u, t1, cindef, out);                            // BSL t1 = mask ? 0x80000000 : out
     e_vmov(out, t1);
 }
 
@@ -201,19 +213,19 @@ void emit_ps2dq_128(int out, int sf, int trunc, int c2p31, int cindef, int t1, i
 // scalar pair, and take #P from an FRINTX over the source with the out-of-range lanes replaced by +0.0
 // (exact, and it reports nothing). The result path itself is then flag-free.
 void emit_pd2i32_pieces(int r, int m, int sd, int trunc, int c2p31d, int cneg2p31d, int t1, int t2) {
-    emit32((trunc ? 0x4EE19800u : 0x6EE19800u) | (sd << 5) | t2); // FRINTZ/FRINTI.2d t2, sd (no exception)
-    emit32(0x6E60E400u | (c2p31d << 16) | (t2 << 5) | m);         // FCMGE.2d m, t2, 2^31    (rounded >= 2^31)
-    emit32(0x6EE0E400u | (t2 << 16) | (cneg2p31d << 5) | t1);     // FCMGT.2d t1, -2^31, t2  (-2^31 > rounded)
-    e_v3(0x4EA01C00u, m, m, t1);                                  // ORR m |= (rounded < -2^31)
-    emit32(0x4E60E400u | (t2 << 16) | (t2 << 5) | t1);            // FCMEQ.2d t1, t2, t2     (NOT NaN)
-    emit32(0x6E205800u | (t1 << 5) | t1);                         // MVN t1                  (NaN)
-    e_v3(0x4EA01C00u, m, m, t1);                                  // ORR m |= NaN
-    emit32(0x1E780000u | (t2 << 5) | 16);                         // FCVTZS w16, d(t2)  lane 0 -> #I only
-    emit32(0x5E180400u | (t2 << 5) | t1);                         // DUP    d(t1), t2.d[1]
-    emit32(0x1E780000u | (t1 << 5) | 16);                         // FCVTZS w16, d(t1)  lane 1 -> #I only
-    e_v3(0x4E601C00u, t1, sd, m);                                 // BIC t1 = sd & ~m   (out-of-range -> +0.0)
-    emit32(0x6E619800u | (t1 << 5) | t1);                         // FRINTX.2d t1, t1   -> #P only
-    emit32(0x4EE1B800u | (t2 << 5) | r);                          // FCVTZS.2d r, t2    (integral -> exact)
+    emit32((trunc ? 0x4EE19800u : 0x6EE19800u) | avx_vn(sd) | avx_vd(t2)); // FRINTZ/FRINTI.2d
+    emit32(0x6E60E400u | avx_vm(c2p31d) | avx_vn(t2) | avx_vd(m));         // FCMGE.2d
+    emit32(0x6EE0E400u | avx_vm(t2) | avx_vn(cneg2p31d) | avx_vd(t1));     // FCMGT.2d
+    e_v3(0x4EA01C00u, m, m, t1);                                           // ORR m |= (rounded < -2^31)
+    emit32(0x4E60E400u | avx_vm(t2) | avx_vn(t2) | avx_vd(t1));            // FCMEQ.2d t1, t2, t2
+    emit32(0x6E205800u | avx_vn(t1) | avx_vd(t1));                         // MVN t1 (NaN)
+    e_v3(0x4EA01C00u, m, m, t1);                                           // ORR m |= NaN
+    emit32(0x1E780000u | avx_vn(t2) | 16u);                                // FCVTZS w16, d(t2) lane 0 -> #I only
+    emit32(0x5E180400u | avx_vn(t2) | avx_vd(t1));                         // DUP d(t1), t2.d[1]
+    emit32(0x1E780000u | avx_vn(t1) | 16u);                                // FCVTZS w16, d(t1) lane 1 -> #I only
+    e_v3(0x4E601C00u, t1, sd, m);                                          // BIC t1 = sd & ~m   (out-of-range -> +0.0)
+    emit32(0x6E619800u | avx_vn(t1) | avx_vd(t1));                         // FRINTX.2d t1, t1 -> #P only
+    emit32(0x4EE1B800u | avx_vn(t2) | avx_vd(r));                          // FCVTZS.2d r, t2 (integral -> exact)
 }
 
 // Returns 1 if the VEX insn was lowered inline (caller does gpc = next; continue), else 0 (fall through
@@ -276,13 +288,13 @@ static int avx_lower_control_and_moves(struct insn *I, uint64_t next) {
     // run it twice, folding the high 16 bytes (cpu->vhi[s2r]) into result bits[31:16]. Result is 16 bits
     // (L=0) or 32 bits (L=1) in the dest GPR, upper bits zeroed by the W-form (32-bit) ORR/UMOV. ----
     if (map == 1 && op == 0xD7 && pp == 1 && !I->is_mem) {
-        e_vshr_imm(17, s2r, 8, 7, 0);                        // ushr v17.16b, src.16b, #7
-        emit32(0x6F001400u | (25u << 16) | (17 << 5) | 17);  // usra v17.8h, v17.8h, #7
-        emit32(0x6F001400u | (50u << 16) | (17 << 5) | 17);  // usra v17.4s, v17.4s, #14
-        emit32(0x6F001400u | (100u << 16) | (17 << 5) | 17); // usra v17.2d, v17.2d, #28
-        emit32(0x0E003C00u | (1u << 16) | (17 << 5) | 16);   // umov w16, v17.b[0]  (bytes 0..7)
-        emit32(0x0E003C00u | (17u << 16) | (17 << 5) | d);   // umov wD,  v17.b[8]  (bytes 8..15)
-        e_rrr(A_ORR, d, 16, d, 0, 8);                        // wD = w16 | (wD<<8)  -> bits[15:0]
+        e_vshr_imm(17, s2r, 8, 7, 0);                               // ushr v17.16b, src.16b, #7
+        emit32(0x6F001400u | (25u << 16) | (17 << 5) | 17);         // usra v17.8h, v17.8h, #7
+        emit32(0x6F001400u | (50u << 16) | (17 << 5) | 17);         // usra v17.4s, v17.4s, #14
+        emit32(0x6F001400u | (100u << 16) | (17 << 5) | 17);        // usra v17.2d, v17.2d, #28
+        emit32(0x0E003C00u | (1u << 16) | (17 << 5) | 16);          // umov w16, v17.b[0]  (bytes 0..7)
+        emit32(0x0E003C00u | (17u << 16) | (17u << 5) | avx_vd(d)); // umov wD, v17.b[8]
+        e_rrr(A_ORR, d, 16, d, 0, 8);                               // wD = w16 | (wD<<8)  -> bits[15:0]
         if (l256) {
             avx_cpu_ldr_q(20, OFF_VHI + 16 * s2r); // v20 = src.hi (bytes 16..31)
             e_vshr_imm(18, 20, 8, 7, 0);           // ushr v18.16b, v20.16b, #7
@@ -474,10 +486,10 @@ static int avx_lower_fused_arithmetic(struct insn *I, uint64_t next) {
             // float kernels, so the fast path carries the hot traffic. Predicate: v24 = AND over all
             // inputs of FCMEQ(x,x) (all-ones per non-NaN lane); any zero bit => some NaN => exit.
             uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u;
-            emit32(EQ | (d << 16) | (d << 5) | 24); // v24 = (d==d)
-            emit32(EQ | (s1 << 16) | (s1 << 5) | 25);
+            emit32(EQ | avx_vm(d) | avx_vn(d) | 24u); // v24 = (d==d)
+            emit32(EQ | avx_vm(s1) | avx_vn(s1) | 25u);
             e_v3(0x4E201C00u, 24, 24, 25); // &= (s1==s1)
-            emit32(EQ | (s2 << 16) | (s2 << 5) | 25);
+            emit32(EQ | avx_vm(s2) | avx_vn(s2) | 25u);
             e_v3(0x4E201C00u, 24, 24, 25); // &= (op3==op3)
             if (l256) {
                 emit32(EQ | (18 << 16) | (18 << 5) | 25);
@@ -517,7 +529,7 @@ static int avx_lower_fused_arithmetic(struct insn *I, uint64_t next) {
                 rC = d;
             }
             hl_x86_emit_fma_group(rA, rB, rC, 23, 24, 25, neg, fmls, dbl); // low 128 -> v23
-            if (l256) {                                             // high 128 (highs already in v18/19/20)
+            if (l256) {                                                    // high 128 (highs already in v18/19/20)
                 int hA, hB, hC;
                 if (role == 132) {
                     hA = 18;
@@ -571,8 +583,8 @@ static int avx_lower_fused_arithmetic(struct insn *I, uint64_t next) {
         // some NaN input => exit to do_avx (correctness-first; == prior behavior). Real float kernels have no
         // NaN inputs, so the hot path is unaffected. Inputs are src1(s1)/src2(s2) only -- dest(d) is write-only.
         uint32_t EQ = dbl ? 0x4E60E400u : 0x4E20E400u;
-        emit32(EQ | (s1 << 16) | (s1 << 5) | 24); // v24 = (s1==s1)
-        emit32(EQ | (s2 << 16) | (s2 << 5) | 25);
+        emit32(EQ | avx_vm(s1) | avx_vn(s1) | 24u); // v24 = (s1==s1)
+        emit32(EQ | avx_vm(s2) | avx_vn(s2) | 25u);
         e_v3(0x4E201C00u, 24, 24, 25); // &= (s2==s2)
         if (l256) {
             emit32(EQ | (20 << 16) | (20 << 5) | 25);
@@ -673,8 +685,8 @@ static int avx_lower_blend_and_compare(struct insn *I, uint64_t next) {
         e_vmov(23, s1); // low  = src1
         for (int i = 0; i < 8; i++)
             if (imm & (1 << i))
-                emit32(0x6E000400u | ((unsigned)(((i << 2) | 2)) << 16) | ((unsigned)(i << 1) << 11) | (s2 << 5) |
-                       23); // INS v23.h[i], src2.h[i]
+                emit32(0x6E000400u | ((unsigned)(((i << 2) | 2)) << 16) | ((unsigned)(i << 1) << 11) | avx_vn(s2) |
+                       23u); // INS v23.h[i], src2.h[i]
         if (l256) {
             e_vmov(24, 21); // high = src1.hi
             for (int i = 0; i < 8; i++)
@@ -731,10 +743,10 @@ static int avx_lower_blend_and_compare(struct insn *I, uint64_t next) {
         hl_x86_emit_vector_dirty();
         if (I->is_mem) {
             emit_ea(I, next);
-            e_load(es, 16, 17);                                 // x16 = zero-extended es-byte scalar
-            emit32(0x4E000C00u | (imm5 << 16) | (16 << 5) | d); // dup d.T, w16/x16
+            e_load(es, 16, 17);                                          // x16 = zero-extended es-byte scalar
+            emit32(0x4E000C00u | avx_vm(imm5) | (16u << 5) | avx_vd(d)); // dup d.T, w16/x16
         } else {
-            emit32(0x4E000400u | (imm5 << 16) | (s2r << 5) | d); // dup d.T, src.T[0]
+            emit32(0x4E000400u | avx_vm(imm5) | avx_vn(s2r) | avx_vd(d)); // dup d.T, src.T[0]
         }
         if (l256) avx_cpu_str_q(d, OFF_VHI + 16 * d); // high lane == low lane
         avx_zero_upper(d, l256);
@@ -937,8 +949,8 @@ static int avx_lower_permute_and_convert(struct insn *I, uint64_t next) {
             else
                 avx_cpu_ldr_q(21, OFF_VHI + 16 * s2r); // src2.hi
         }
-        emit32(0x2E612800u | (s1 << 5) | 23); // sqxtun  v23.4h, src1.4s  (low 4 words = sat(src1))
-        emit32(0x6E612800u | (s2 << 5) | 23); // sqxtun2 v23.8h, src2.4s  (high 4 words = sat(src2))
+        emit32(0x2E612800u | avx_vn(s1) | 23u); // sqxtun v23.4h, src1.4s
+        emit32(0x6E612800u | avx_vn(s2) | 23u); // sqxtun2 v23.8h, src2.4s
         if (l256) {
             emit32(0x2E612800u | (20 << 5) | 24);
             emit32(0x6E612800u | (21 << 5) | 24);
@@ -971,9 +983,9 @@ static int avx_lower_permute_and_convert(struct insn *I, uint64_t next) {
             else
                 avx_cpu_ldr_q(21, OFF_VHI + 16 * s2r); // idx.hi
         }
-        emit32(0x4F04E5E0u | 25);                          // movi v25.16b, #0x8f
-        e_v3(0x4E201C00u, 18, s2, 25);                     // v18 = idx & 0x8f
-        emit32(0x4E000000u | (18 << 16) | (s1 << 5) | 23); // tbl v23.16b, {data.16b}, v18
+        emit32(0x4F04E5E0u | 25);                             // movi v25.16b, #0x8f
+        e_v3(0x4E201C00u, 18, s2, 25);                        // v18 = idx & 0x8f
+        emit32(0x4E000000u | (18u << 16) | avx_vn(s1) | 23u); // tbl v23.16b, {data.16b}, v18
         if (l256) {
             e_v3(0x4E201C00u, 18, 21, 25);                     // v18 = idx.hi & 0x8f
             emit32(0x4E000000u | (18 << 16) | (20 << 5) | 24); // tbl v24.16b, {data.hi.16b}, v18
@@ -1006,10 +1018,10 @@ static int avx_lower_permute_and_convert(struct insn *I, uint64_t next) {
             else
                 avx_cpu_ldr_q(21, OFF_VHI + 16 * s2r); // src2.hi
         }
-        emit32(0x6E207400u | (s2 << 16) | (s1 << 5) | 23); // uabd   v23.16b, src1.16b, src2.16b
-        emit32(0x6E202800u | (23 << 5) | 23);              // uaddlp v23.8h, v23.16b
-        emit32(0x6E602800u | (23 << 5) | 23);              // uaddlp v23.4s, v23.8h
-        emit32(0x6EA02800u | (23 << 5) | 23);              // uaddlp v23.2d, v23.4s
+        emit32(0x6E207400u | avx_vm(s2) | avx_vn(s1) | 23u); // uabd v23.16b, src1.16b, src2.16b
+        emit32(0x6E202800u | (23 << 5) | 23);                // uaddlp v23.8h, v23.16b
+        emit32(0x6E602800u | (23 << 5) | 23);                // uaddlp v23.4s, v23.8h
+        emit32(0x6EA02800u | (23 << 5) | 23);                // uaddlp v23.2d, v23.4s
         if (l256) {
             emit32(0x6E207400u | (21 << 16) | (20 << 5) | 24);
             emit32(0x6E202800u | (24 << 5) | 24);
@@ -1043,10 +1055,10 @@ static int avx_lower_permute_and_convert(struct insn *I, uint64_t next) {
             else
                 avx_cpu_ldr_q(20, OFF_VHI + 16 * s2r);
         }
-        if (pp == 0) {                                        // cvtdq2ps
-            emit32(0x4E21D800u | (src << 5) | 23);            // SCVTF.4s v23, src
-            if (l256) emit32(0x4E21D800u | (srch << 5) | 24); // SCVTF.4s v24, src.hi
-        } else {                                              // cvtps2dq(pp==1 round) / cvttps2dq(pp==2 trunc)
+        if (pp == 0) {                                          // cvtdq2ps
+            emit32(0x4E21D800u | avx_vn(src) | 23u);            // SCVTF.4s v23, src
+            if (l256) emit32(0x4E21D800u | avx_vn(srch) | 24u); // SCVTF.4s v24, src.hi
+        } else {                                                // cvtps2dq(pp==1 round) / cvttps2dq(pp==2 trunc)
             int trunc = (pp == 2);
             e_movconst(16, 0x4F000000u);
             emit32(0x4E040C00u | (16 << 5) | 25); // v25.4s = 2^31 (f32)
@@ -1073,13 +1085,13 @@ static int avx_lower_permute_and_convert(struct insn *I, uint64_t next) {
             g_ldr_q(16, 17, 0);
             src = 16;
         }
-        if (pp == 0) {                             // ps->pd: low 2 floats (and, for 256, high 2) widen to doubles
-            emit32(0x0E617800u | (src << 5) | 23); // FCVTL.2d  v23, src.2s
-            if (l256) emit32(0x4E617800u | (src << 5) | 24); // FCVTL2.2d v24, src.4s
+        if (pp == 0) {                               // ps->pd: low 2 floats (and, for 256, high 2) widen to doubles
+            emit32(0x0E617800u | avx_vn(src) | 23u); // FCVTL.2d v23, src.2s
+            if (l256) emit32(0x4E617800u | avx_vn(src) | 24u); // FCVTL2.2d v24, src.4s
             e_vmov(d, 23);
             if (l256) avx_cpu_str_q(24, OFF_VHI + 16 * d);
         } else { // pd->ps: 2 (or 4 for 256) doubles narrow to floats, all landing in the low 128
-            emit32(0x0E616800u | (src << 5) | 23); // FCVTN.2s v23, src.2d  (low 2 floats)
+            emit32(0x0E616800u | avx_vn(src) | 23u); // FCVTN.2s v23, src.2d (low 2 floats)
             if (l256) {
                 if (I->is_mem)
                     g_ldr_q(20, 17, 16);
@@ -1112,12 +1124,12 @@ static int avx_lower_conversion_edges(struct insn *I, uint64_t next) {
             g_ldr_q(16, 17, 0);
             src = 16;
         }
-        if (pp == 2) {                             // cvtdq2pd: int32 -> double (exact widen)
-            emit32(0x0F20A400u | (src << 5) | 23); // SXTL.2d  v23, src.2s
-            emit32(0x4E61D800u | (23 << 5) | 23);  // SCVTF.2d v23, v23
+        if (pp == 2) {                               // cvtdq2pd: int32 -> double (exact widen)
+            emit32(0x0F20A400u | avx_vn(src) | 23u); // SXTL.2d v23, src.2s
+            emit32(0x4E61D800u | (23 << 5) | 23);    // SCVTF.2d v23, v23
             if (l256) {
-                emit32(0x4F20A400u | (src << 5) | 24); // SXTL2.2d v24, src.4s (high 2 int32)
-                emit32(0x4E61D800u | (24 << 5) | 24);  // SCVTF.2d v24, v24
+                emit32(0x4F20A400u | avx_vn(src) | 24u); // SXTL2.2d v24, src.4s
+                emit32(0x4E61D800u | (24 << 5) | 24);    // SCVTF.2d v24, v24
             }
             e_vmov(d, 23);
             if (l256) avx_cpu_str_q(24, OFF_VHI + 16 * d);
@@ -1227,12 +1239,12 @@ static int avx_lower_conversion_edges(struct insn *I, uint64_t next) {
         e_movconst(16, 0x01010101);
         emit32(0x4E040C00u | (16 << 5) | 26); // v26.4s = 0x01010101
         e_movconst(16, 0x03020100);
-        emit32(0x4E040C00u | (16 << 5) | 27);              // v27.4s = 0x03020100
-        e_v3(0x4E201C00u, 28, ctl, 25);                    // sel = ctrl & 3
-        e_vshl_imm(28, 28, 32, 2);                         // base = sel*4
-        e_v3(0x4EA09C00u, 28, 28, 26);                     // rep  = base*0x01010101
-        e_v3(0x4E208400u, 28, 28, 27);                     // idx  = rep + {0,1,2,3}
-        emit32(0x4E000000u | (28 << 16) | (s1 << 5) | 23); // TBL v23.16b, {data.lo}, idx
+        emit32(0x4E040C00u | (16 << 5) | 27);                 // v27.4s = 0x03020100
+        e_v3(0x4E201C00u, 28, ctl, 25);                       // sel = ctrl & 3
+        e_vshl_imm(28, 28, 32, 2);                            // base = sel*4
+        e_v3(0x4EA09C00u, 28, 28, 26);                        // rep  = base*0x01010101
+        e_v3(0x4E208400u, 28, 28, 27);                        // idx  = rep + {0,1,2,3}
+        emit32(0x4E000000u | (28u << 16) | avx_vn(s1) | 23u); // TBL v23.16b, {data.lo}, idx
         if (l256) {
             if (I->is_mem)
                 g_ldr_q(20, 17, 16);
@@ -1264,11 +1276,11 @@ static int avx_lower_conversion_edges(struct insn *I, uint64_t next) {
             g_ldr_q(16, 17, 0);
             ctl = 16;
         }
-        emit32(0x4E080400u | (s1 << 5) | 25); // DUP v25.2d, data.d[0]  (A = both lanes = q0)
-        emit32(0x4E180400u | (s1 << 5) | 26); // DUP v26.2d, data.d[1]  (B = both lanes = q1)
-        e_vshl_imm(28, ctl, 64, 62);          // bring ctrl bit1 to bit63 of each qword
-        e_vshr_imm(28, 28, 64, 63, 1);        // SSHR -> all-ones where bit1 set
-        e_v3(0x6E601C00u, 28, 26, 25);        // BSL v28 = mask ? B(q1) : A(q0)
+        emit32(0x4E080400u | avx_vn(s1) | 25u); // DUP v25.2d, data.d[0]
+        emit32(0x4E180400u | avx_vn(s1) | 26u); // DUP v26.2d, data.d[1]
+        e_vshl_imm(28, ctl, 64, 62);            // bring ctrl bit1 to bit63 of each qword
+        e_vshr_imm(28, 28, 64, 63, 1);          // SSHR -> all-ones where bit1 set
+        e_v3(0x6E601C00u, 28, 26, 25);          // BSL v28 = mask ? B(q1) : A(q0)
         e_vmov(23, 28);
         if (l256) {
             if (I->is_mem)
