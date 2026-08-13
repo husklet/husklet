@@ -24,12 +24,54 @@ static int exec_resolve_proc_path(uint64_t *path) {
     return 0;
 }
 
+static int exec_writable_fd_matches(int fd, const struct stat *image) {
+    if (exec_fd_is_engine(fd)) return 0;
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || (flags & O_ACCMODE) == O_RDONLY) return 0;
+    struct stat open_file;
+    return fstat(fd, &open_file) == 0 && open_file.st_dev == image->st_dev && open_file.st_ino == image->st_ino;
+}
+
+static int exec_image_is_write_open_scan(const struct stat *image, int limit) {
+    if (limit < 0 || limit > (1 << 20)) limit = 4096;
+    for (int fd = 0; fd < limit; fd++)
+        if (exec_writable_fd_matches(fd, image)) return 1;
+    return 0;
+}
+
+// A real kernel pins an executable against writable opens while committing exec. This engine reloads the image
+// in-process instead, so reproduce the pre-commit ETXTBSY check against every live guest open description. Match
+// by inode rather than tracked pathname: dup aliases, renamed files, unlinked files, and overlay-resolved names must
+// all retain the same text-busy identity. This check intentionally precedes thread_exec_owner_handoff; a failed exec
+// must not retire sibling guest threads. Guest descriptor operations have no process-wide table lock today, so this
+// is the same live-table snapshot used by the CLOEXEC sweep below rather than a claim of atomic host exec exclusion.
+static int exec_image_is_write_open(const struct stat *image) {
+    size_t need = 0;
+    if (!hl_host_process_fds(getpid(), NULL, 0, &need)) return exec_image_is_write_open_scan(image, getdtablesize());
+    size_t capacity = need <= SIZE_MAX - 32 ? need + 32 : need;
+    hl_host_process_fd *fds = capacity != 0 ? malloc(capacity * sizeof *fds) : NULL;
+    if (!fds) return exec_image_is_write_open_scan(image, getdtablesize());
+    size_t count = 0;
+    if (!hl_host_process_fds(getpid(), fds, capacity, &count) || count > capacity) {
+        free(fds);
+        return exec_image_is_write_open_scan(image, getdtablesize());
+    }
+    int busy = 0;
+    for (size_t index = 0; index < count && !busy; index++) {
+        if ((fds[index].flags & HL_HOST_PROCESS_FD_ENGINE_PRIVATE) != 0) continue;
+        busy = exec_writable_fd_matches(fds[index].descriptor, image);
+    }
+    free(fds);
+    return busy;
+}
+
 static int exec_validate_image(const char *path, int *script_image) {
     struct stat status;
     *script_image = 0;
     if (stat(path, &status) == 0) {
         if (S_ISDIR(status.st_mode)) return -EACCES;
         if (S_ISREG(status.st_mode)) {
+            if (exec_image_is_write_open(&status)) return -ETXTBSY;
             FILE *image = fopen(path, "rb");
             if (image) {
                 unsigned char header[20] = {0};
