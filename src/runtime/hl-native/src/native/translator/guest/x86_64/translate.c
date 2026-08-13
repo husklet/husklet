@@ -5664,6 +5664,61 @@ static int lower_sse_compare(struct insn I, uint64_t guest_pc, uint64_t next, in
     return TX_NEXT;
 }
 
+static int lower_sse_scalar_to_integer(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vm) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0x2C && opcode != 0x2D) return TX_FALL;
+    int source = vm;
+    if (instruction->is_mem) {
+        emit_ea(instruction, next);
+        if (emit_soft_memory_active())
+            emit_memory_guard(17, instruction->repne ? 8u : 4u, guest_pc, X86_SOFT_READ);
+        if (instruction->repne)
+            g_ldr_d(16, 17);
+        else
+            g_ldr_s(16, 17);
+        source = 16;
+    }
+    int original_source = source;
+    if (opcode == 0x2D) {
+        uint32_t round_integral = instruction->repne ? 0x1E67C000u : 0x1E27C000u;
+        emit32(round_integral | (source << 5) | 18);
+        source = 18;
+    }
+    emit32(0x1E380000u | (instruction->rexW ? 0x80000000u : 0) |
+           (instruction->repne ? 0x00400000u : 0) | (source << 5) | instruction->reg);
+
+    // x86 returns integer-indefinite for positive overflow and NaN while ARM saturates.
+    int sf = instruction->rexW ? 1 : 0;
+    uint64_t threshold = instruction->repne
+                             ? (sf ? 0x43E0000000000000ull : 0x41E0000000000000ull)
+                             : (sf ? 0x5F000000ull : 0x4F000000ull);
+    e_movconst(20, threshold);
+    if (instruction->repne)
+        e_fmov_to_d(19, 20);
+    else
+        e_fmov_to_s(19, 20);
+    uint32_t compare = instruction->repne ? 0x1E602000u : 0x1E202000u;
+    emit32(0xD53B4200u | 21);
+    emit32(compare | (19 << 16) | (source << 5));
+    if (opcode == 0x2D) {
+        // Raise precision only for in-range inexact rounding. Mask both overflow directions
+        // before FRINTX so out-of-range inputs retain x86's invalid-only exception behavior.
+        emit32(0xDA9F33E0u | 22);
+        emit32((instruction->repne ? 0x1E614000u : 0x1E214000u) | (19 << 5) | 20);
+        emit32(compare | (20 << 16) | (source << 5));
+        emit32(0xDA9F53E0u | 23);
+        e_rrr(A_ORR, 22, 22, 23, 1, 0);
+        e_fmov_to_d(20, 22);
+        e_v3(0x0E601C00u, 20, original_source, 20);
+        emit32((instruction->repne ? 0x1E674000u : 0x1E274000u) | (20 << 5) | 20);
+        emit32(compare | (19 << 16) | (source << 5));
+    }
+    e_movconst(20, sf ? 0x8000000000000000ull : 0x80000000ull);
+    e_csel(instruction->reg, 20, instruction->reg, 2, sf);
+    emit32(0xD51B4200u | 21);
+    return TX_NEXT;
+}
+
 static int lower_sse_minmax(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t opcode = instruction->op;
     if (opcode != 0x5D && opcode != 0x5F) return TX_FALL;
@@ -6399,74 +6454,8 @@ static void *translate_block(uint64_t gpc) {
                         e_ins_d(vd, 0, 18, 0);
                     else
                         e_ins_s(vd, 0, 18, 0);
-                } else if (op == 0x2C || op == 0x2D) { // cvttsd2si(2C trunc)/cvtsd2si(2D round): xmm/m -> GPR
-                    int s = vm;
-                    if (I.is_mem) {
-                        emit_ea(&I, next);
-                        if (emit_soft_memory_active()) emit_memory_guard(17, I.repne ? 8u : 4u, gpc, X86_SOFT_READ);
-                        if (I.repne)
-                            g_ldr_d(16, 17);
-                        else
-                            g_ldr_s(16, 17);
-                        s = 16;
-                    }
-                    int s0 = s;       // the source, before 0x2D rounds it (the #P probe below needs it)
-                    if (op == 0x2D) { // cvtsd2si: honor MXCSR.RC -> round to integral (FRINTI uses FPCR.RMode)...
-                        uint32_t frinti = I.repne ? 0x1E67C000u : 0x1E27C000u; // double : single
-                        emit32(frinti | (s << 5) | 18);                        // frinti d18, ds
-                        s = 18; // ...then FCVTZS the integral value (exact)
-                    }
-                    // FCVTZS (toward zero): exact truncation for 0x2C; for 0x2D the FRINTI value is already integral.
-                    emit32(0x1E380000u | (I.rexW ? 0x80000000u : 0) | (I.repne ? 0x00400000u : 0) | (s << 5) | I.reg);
-                    // H13: x86 float->int yields the "integer indefinite" (INT_MIN bit pattern) on any
-                    // out-of-range or NaN input, whereas ARM FCVTZS saturates (positive overflow -> INT_MAX,
-                    // NaN -> 0). Negative overflow already agrees (both give INT_MIN). Detect the divergent
-                    // cases -- (s >= 2^(destbits-1)) OR unordered(NaN) -- with an FCMP against the threshold
-                    // and substitute INT_MIN. FCMP sets ARM C on "greater-than-or-equal-or-unordered", so the
-                    // CS condition (C==1) is exactly true iff s>=threshold or s is NaN. (Guest x86 flags are
-                    // safely in cpu->nzcv here -- g_fl_pending was flushed at top-of-loop -- so the live ARM
-                    // NZCV is free scratch, same as the ucomisd path.)
-                    {
-                        int sf = I.rexW ? 1 : 0; // dest is 64-bit signed int
-                        uint64_t thr = I.repne ? (sf ? 0x43E0000000000000ull : 0x41E0000000000000ull) // dbl 2^63/2^31
-                                               : (sf ? 0x5F000000ull : 0x4F000000ull);                // sgl 2^63/2^31
-                        e_movconst(20, thr);
-                        if (I.repne)
-                            e_fmov_to_d(19, 20);
-                        else
-                            e_fmov_to_s(19, 20); // v19 = threshold
-                        // CVTTSD2SI is not an x86 flag producer, but this FCMP writes the ARM NZCV
-                        // -- which may still hold a deferred x86 flag producer's result. Save and
-                        // restore it, so a later jcc/setcc/cmov/adc sees the integer flags it must.
-                        // (The old comment claimed the top-of-loop had already flushed g_fl_pending
-                        // here; a `cmp`; `cvttsd2si`; `js` sequence shows that it had not.)
-                        uint32_t fcmp = I.repne ? 0x1E602000u : 0x1E202000u;
-                        emit32(0xD53B4200u | 21);             // mrs x21, nzcv
-                        emit32(fcmp | (19 << 16) | (s << 5)); // FCMP s, v19
-                        if (op == 0x2D) {
-                            // #P. FCVTZS above reports it for 0x2C (an in-range inexact truncation) but not
-                            // for 0x2D, whose FRINTI value is already integral -- and FRINTI itself reports
-                            // nothing. FRINTX would, but it also reports #P for an OUT-OF-RANGE inexact
-                            // source, where x86 raises #I alone; f64 -> int32 is the one width pair where
-                            // such a value exists, and 2147483648.25 is the case that proves it. So run
-                            // FRINTX over the source with the out-of-range case replaced by +0.0, which is
-                            // exact. Out of range is CS from the FCMP above (>= +thr, or NaN) or MI against
-                            // -thr; the result path only needs the former, because negative overflow lands
-                            // on FCVTZS's INT_MIN == the indefinite, but #P must be suppressed for both.
-                            emit32(0xDA9F33E0u | 22);                                       // csetm x22, cs
-                            emit32((I.repne ? 0x1E614000u : 0x1E214000u) | (19 << 5) | 20); // FNEG v20, v19 (-thr)
-                            emit32(fcmp | (20 << 16) | (s << 5));                           // FCMP s, -thr
-                            emit32(0xDA9F53E0u | 23);                                       // csetm x23, mi
-                            e_rrr(A_ORR, 22, 22, 23, 1, 0);                                 // x22 = out-of-range mask
-                            e_fmov_to_d(20, 22);
-                            e_v3(0x0E601C00u, 20, s0, 20);                                  // BIC v20 = src & ~mask
-                            emit32((I.repne ? 0x1E674000u : 0x1E274000u) | (20 << 5) | 20); // FRINTX v20 -> #P only
-                            emit32(fcmp | (19 << 16) | (s << 5)); // redo FCMP: the CSEL below reads its NZCV
-                        }
-                        e_movconst(20, sf ? 0x8000000000000000ull : 0x80000000ull); // integer indefinite
-                        e_csel(I.reg, 20, I.reg, 2 /*CS: s>=thr or NaN*/, sf);
-                        emit32(0xD51B4200u | 21); // msr nzcv, x21
-                    }
+                } else if (lower_sse_scalar_to_integer(&I, gpc, next, vm) == TX_NEXT) {
+                    // The helper emitted scalar float-to-integer conversion and exception semantics.
                 } else if (lower_sse_minmax(&I, gpc, next, vd, vm) == TX_NEXT) {
                     // The helper emitted packed or scalar MIN/MAX with x86 NaN and signed-zero semantics.
                 } else if (lower_sse_float_arithmetic(I, gpc, next, vd, vm) == TX_NEXT) {
