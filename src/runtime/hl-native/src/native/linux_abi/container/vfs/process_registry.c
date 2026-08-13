@@ -694,22 +694,17 @@ static int hl_get_procinfo(int pid, struct hl_procinfo *pi) {
 
 // Rebase a host vnode path into the container's guest namespace (strip the rootfs prefix), in place.
 static int proc_fd_rebase(char *tgt, size_t capacity) {
-    int mapped = g_rootfs_canon_len != 0 && !strncmp(tgt, g_rootfs_canon, g_rootfs_canon_len) &&
-                 (tgt[g_rootfs_canon_len] == '/' || tgt[g_rootfs_canon_len] == 0);
-    for (int index = 0; !mapped && index < g_nvols; ++index)
-        if (!g_vols[index].dead && !strncmp(tgt, g_vols[index].hcanon, g_vols[index].hlen) &&
-            (tgt[g_vols[index].hlen] == '/' || tgt[g_vols[index].hlen] == 0))
-            mapped = 1;
-    if (mapped) {
-        char guest[4200];
-        int status = guest_from_host(tgt, guest, sizeof guest);
-        if (status <= 0 || path_copy(tgt, capacity, guest) != 0) {
-            if (capacity != 0) tgt[0] = 0;
-            return status < 0 ? status : -ENAMETOOLONG;
-        }
-        return 1;
+    char guest[4200];
+    /* guest_from_host is the single longest-prefix authority for the writable root, every read-only
+     * image layer, and nested volumes.  Repeating only the root/volume subset here made descriptors
+     * opened directly from a lower layer (for example /tmp) look external to the container. */
+    int status = guest_from_host(tgt, guest, sizeof guest);
+    if (status > 0) {
+        if (path_copy(tgt, capacity, guest) == 0) return 1;
+        if (capacity != 0) tgt[0] = 0;
+        return -ENAMETOOLONG;
     }
-    return 0;
+    return status;
 }
 
 static int proc_fdvis_resolve_host(int host, int guest_fd) {

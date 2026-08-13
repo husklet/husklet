@@ -521,7 +521,11 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
         // /proc/<pid>, /proc/<pid>/task, /proc/<pid>/task/<tid> as DIRECTORIES: materialize a temp
         // dir so opendir/getdents work and htop can descend (it opens each pid as an O_DIRECTORY fd
         // and reads task/<tid>/stat). Per-pid FILES return -2 -> served by proc_open below.
-        int pd = proc_dir_try_open(rp);
+        /* /proc/self/fd/N is a magic descriptor link, not a materialized proc directory.  Let the
+         * reopen-by-descriptor path below handle it; proc_dir_try_open otherwise answers ENOENT first. */
+        const char *descriptor_leaf = proc_self_leaf(rp);
+        int descriptor_link = descriptor_leaf && !strncmp(descriptor_leaf, "fd/", 3) && descriptor_leaf[3];
+        int pd = descriptor_link ? -2 : proc_dir_try_open(rp);
         if (pd != -2) {
             if (pd >= 0 && (lf & 0x80000)) fcntl(pd, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
             G_RET(c) = pd < 0 ? (uint64_t)(-errno) : (uint64_t)pd;
@@ -956,7 +960,10 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             break;
         }
         if (open_synthetic_path(c, a0, a1, lf, mf, is_opath)) break;
-        if (jail_routed_at((int)a0, (const char *)a1)) {
+        /* Descriptor magic links are reopened from the descriptor authority below.  Routing their
+         * synthetic pathname through the provider first resolves a nonexistent literal /proc entry. */
+        int descriptor_reopen = procfd_num_at((int)a0, (const char *)a1) >= 0;
+        if (!descriptor_reopen && jail_routed_at((int)a0, (const char *)a1)) {
             int dac_status = dac_open_at((int)a0, (const char *)a1, lf, is_opath);
             if (dac_status != 0) {
                 G_RET(c) = (uint64_t)(int64_t)dac_status;
@@ -995,14 +1002,16 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             // /proc/self/fd/N only EXISTS while N is open: opening the name of a closed descriptor is
             // -ENOENT on Linux (the magic symlink is simply absent). procfd_num() only parses the number,
             // so the engine fell through to dup(N) and surfaced the dup's -EBADF instead.
-            if (pfn >= 0 && fcntl(pfn, F_GETFD) < 0) {
+            hl_linux_fd_snapshot procfd_typed;
+            int procfd_is_typed = pfn >= 0 && !bound_source_is_native() && g_linux_box != NULL &&
+                                  hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)pfn, &procfd_typed) ==
+                                      HL_STATUS_OK;
+            if (pfn >= 0 && !procfd_is_typed && fcntl(pfn, F_GETFD) < 0) {
                 G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
                 break;
             }
             if (pfn >= 0) {
-                hl_linux_fd_snapshot typed;
-                if (!bound_source_is_native() && g_linux_box != NULL &&
-                    hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)pfn, &typed) == HL_STATUS_OK) {
+                if (procfd_is_typed) {
                     int64_t duplicated = bound_dup_at_least((hl_linux_fd)pfn, 0, lf & 0x80000 ? 1u : 0u);
                     G_RET(c) = (uint64_t)duplicated;
                     break;

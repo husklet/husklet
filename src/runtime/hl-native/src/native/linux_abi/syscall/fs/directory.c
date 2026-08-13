@@ -556,6 +556,17 @@ static void svc_fs_directory_78(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;
         }
+        /* Linux ignores dirfd for absolute operands, but a relative readlinkat must reject a descriptor
+         * outside the guest table before lexical projection can fall back to cwd.  Without this check an
+         * invalid positive fd was silently converted into a cwd-relative lookup and returned ENOENT. */
+        if (path && path[0] && path[0] != '/' && (int)a0 != AT_FDCWD &&
+            ((int)a0 < 0 || (int)a0 >= HL_NFD || !g_fdpath[(int)a0][0])) {
+            int error = bound_handle_dirfd_error((int)a0);
+            if (error != -EACCES) {
+                G_RET(c) = (uint64_t)(int64_t)error;
+                break;
+            }
+        }
         if (size > sizeof result) size = sizeof result;
         char absolute[4200];
         const char *guest_path = path;
