@@ -14,12 +14,22 @@
 __attribute__((noinline)) static void rep_movsb(void *dst_last, const void *src_last, size_t n) {
     asm volatile("rep movsb" : "+D"(dst_last), "+S"(src_last), "+c"(n) : : "memory", "cc");
 }
+
 __attribute__((noinline)) static void rep_stosb(void *dst_last, int val, size_t n) {
     unsigned long a = (unsigned char)val;
     asm volatile("rep stosb" : "+D"(dst_last), "+c"(n) : "a"(a) : "memory", "cc");
 }
-__attribute__((noinline)) static void plain_movsb(void *destination, const void *source) {
-    asm volatile("movsb" : "+D"(destination), "+S"(source) : : "memory", "cc");
+
+struct plain_movsb_state {
+    unsigned char *destination;
+    const unsigned char *source;
+    size_t count;
+};
+
+__attribute__((noinline)) static struct plain_movsb_state plain_movsb(unsigned char *destination,
+                                                                      const unsigned char *source, size_t count) {
+    asm volatile("movsb" : "+D"(destination), "+S"(source), "+c"(count) : : "memory", "cc");
+    return (struct plain_movsb_state){destination, source, count};
 }
 static void set_df(void) { asm volatile("std" : : : "memory", "cc"); }
 static void clr_df(void) { asm volatile("cld" : : : "memory", "cc"); }
@@ -88,11 +98,16 @@ int main(void) {
     {
         unsigned char src[2] = {0x31, 0x42};
         unsigned char dst[2] = {0, 0};
+        const size_t count = 37;
         clr_df();
-        plain_movsb(dst, src);
+        struct plain_movsb_state forward = plain_movsb(dst, src, count);
+        if (dst[0] != src[0] || forward.destination != dst + 1 || forward.source != src + 1 || forward.count != count)
+            return 6;
         set_df();
-        plain_movsb(dst + 1, src + 1);
+        struct plain_movsb_state backward = plain_movsb(dst + 1, src + 1, count);
         clr_df();
+        if (dst[1] != src[1] || backward.destination != dst || backward.source != src || backward.count != count)
+            return 7;
         dump("movsb-one ", dst, 2);
     }
     return 0;
