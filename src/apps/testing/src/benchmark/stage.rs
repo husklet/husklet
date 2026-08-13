@@ -377,15 +377,17 @@ impl RetainedProfile {
         fs::create_dir(command.parent().ok_or("retained command has no parent")?)?;
         fs::copy(source, &command)?;
         let smoke = husklet_rootfs_guest(&command, rootfs, "benchmark/malloc-plain", &[])?;
-        require_parity("malloc/plain retained", &fs::read(output.join("exact-output-plain.frame"))?, &frame(&smoke)?)?;
+        let plain_native = mac(&[mac_path(&layouts[0].native)])?;
+        require_parity("malloc/plain retained", &frame(&plain_native)?, &frame(&smoke)?)?;
         let python = capture_rootfs_guest(&command, rootfs, "usr/local/bin/python3.12", &["-c", python::PLAIN_PROGRAM])?;
         let artifact_sha256 = raw_sha256(&rootfs.join("usr/local/bin/python3.12"))?;
         let python_failure = classified_failure(python.outcome, &python.stderr, artifact_sha256)?;
         for layout in layouts {
             let output_bytes = husklet_rootfs_guest(&command, rootfs, &format!("benchmark/malloc-{}", layout.name), &[])?;
+            let native = mac(&[mac_path(&layout.native)])?;
             require_parity(
                 &format!("malloc/{} retained", layout.name),
-                &fs::read(output.join(format!("exact-output-{}.frame", layout.name)))?,
+                &frame(&native)?,
                 &frame(&output_bytes)?,
             )?;
         }
