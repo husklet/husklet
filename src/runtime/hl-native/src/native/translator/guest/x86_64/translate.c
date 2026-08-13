@@ -5604,6 +5604,26 @@ static int lower_sse_saturating_pack(struct insn *instruction, uint64_t next, in
     return TX_NEXT;
 }
 
+static int lower_sse_unpack(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0x60 && opcode != 0x61 && opcode != 0x62 && opcode != 0x6C && opcode != 0x68 &&
+        opcode != 0x69 && opcode != 0x6A && opcode != 0x6D)
+        return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    int high = opcode == 0x68 || opcode == 0x69 || opcode == 0x6A || opcode == 0x6D;
+    int element_size = (opcode == 0x60 || opcode == 0x68)   ? 0
+                       : (opcode == 0x61 || opcode == 0x69) ? 1
+                       : (opcode == 0x62 || opcode == 0x6A) ? 2
+                                                            : 3;
+    if (mmx && element_size == 3) return TX_FALL; // 0F 6C/6D have no MMX form.
+    uint32_t encoding = (high ? 0x4E007800u : 0x4E003800u) | ((uint32_t)element_size << 22);
+    // MMX operates on 64-bit halves, so Q=0 selects the architectural lanes for both ZIP variants.
+    if (mmx) encoding &= ~0x40000000u;
+    e_v3(encoding, vd, vd, source);
+    return TX_NEXT;
+}
+
 static int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t op = I.op;
     if (op != 0x2E && op != 0x2F) return TX_FALL;
@@ -6435,24 +6455,8 @@ static void *translate_block(uint64_t gpc) {
                     emit32(0x0EA12800u | (18 << 5) | 25);                 // XTN v25.2s, v18.2d (mask)
                     emit32(0x2E601C00u | (24 << 16) | (27 << 5) | 25);    // BSL v25.8b -> mask?indef:result
                     e_vmov(vd, 25);
-                } else if (op == 0x60 || op == 0x61 || op == 0x62 || op == 0x6C || op == 0x68 || op == 0x69 ||
-                           op == 0x6A || op == 0x6D) { // punpck l/h bw/wd/dq/qdq -> ZIP1/ZIP2
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    int hi = (op == 0x68 || op == 0x69 || op == 0x6A || op == 0x6D); // punpckh*; 0x6C(lqdq) is LOW
-                    int sz = (op == 0x60 || op == 0x68)   ? 0
-                             : (op == 0x61 || op == 0x69) ? 1
-                             : (op == 0x62 || op == 0x6A) ? 2
-                                                          : 3;
-                    if (mmx && sz == 3) { // 0F 6C/6D have no MMX form; #UD, and .1D would be a reserved ZIP
-                        report_unimpl(gpc, &I);
-                        break;
-                    }
-                    uint32_t b = (hi ? 0x4E007800u : 0x4E003800u) | ((uint32_t)sz << 22);
-                    // Q=0 is the whole MMX fix: ZIP1/ZIP2 .8B/.4H/.2S interleave the halves of a 64-bit
-                    // operand, which is exactly punpckl/h at MMX width (Q=1 ZIP2 reads bytes 8..15 instead).
-                    if (mmx) b &= ~0x40000000u;
-                    e_v3(b, vd, vd, s);
+                } else if (lower_sse_unpack(&I, next, vd, vm, mmx) == TX_NEXT) {
+                    // The helper emitted PUNPCKL/H at MMX or XMM width.
                 } else if (lower_sse_saturating_pack(&I, next, vd, vm, mmx) == TX_NEXT) {
                     // The helper emitted PACKUSWB, PACKSSWB, or PACKSSDW.
                 } else if (op == 0xD7) {
