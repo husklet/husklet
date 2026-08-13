@@ -403,6 +403,9 @@ static void run_guest(struct cpu *c) {
         G_TRACE_DUMP(c);
         c->reason = 0;
         hl_dispatch_profile_crossing(&g_dispatch_profile);
+#ifdef G_DISPATCH_PROFILE_THREADED
+        G_DISPATCH_PROFILE_THREADED();
+#endif
         if (!stw_before_translated(selected_bus_epoch)) continue;
         // map_host()/translate_block() return RW-alias addresses; execute via the RX alias.
         run_block(c, rxcode);
@@ -410,6 +413,10 @@ static void run_guest(struct cpu *c) {
         // clone and mapping syscalls may themselves initiate a stop-the-world operation and must not wait on
         // their own caller. Checkpoint capture still occurs at the next loop-top dispatcher safepoint.
         stw_after_translated();
+#ifdef G_DISPATCH_PROFILE_EXIT
+        // Target reason codes are interpreted before G_DISPATCH_REASON normalizes or services them.
+        G_DISPATCH_PROFILE_EXIT(c);
+#endif
         // Frontend hook: post-run_block reason handling (aarch64: R_SYSCALL service + pc+=4, else R_BRANCH;
         // x86 adds R_CPUID/x87/DIV/IDIV/99). The per-arch syscall pc-advance convention lives in the hook.
         G_DISPATCH_REASON(c);
