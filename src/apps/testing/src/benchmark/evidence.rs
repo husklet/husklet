@@ -1,17 +1,13 @@
-use super::{
-    definition::Campaign,
-    schedule::{self, Step},
-};
+use super::{definition::Campaign, schedule::Step};
 use crate::{platform::HostProcess, record::FramedIdentity, suite::Error};
 use fs2::FileExt as _;
 #[path = "evidence_model.rs"]
 mod model;
-pub(in crate::benchmark) use model::{Phase, Row};
+pub(in crate::benchmark) use model::{HostLoad, Phase, Row};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{BufRead as _, BufReader, BufWriter, Write as _},
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
@@ -77,7 +73,8 @@ fn require_line_framing(text: &str) -> Result<(), Error> {
     Ok(())
 }
 fn require_metadata(seen: bool) -> Result<(), Error> {
-    seen.then_some(()).ok_or_else(|| "benchmark output omitted metadata".into())
+    seen.then_some(())
+        .ok_or_else(|| "benchmark output omitted metadata".into())
 }
 
 fn parse_output_line(
@@ -179,8 +176,11 @@ fn bounded_output(command: &mut Command, timeout: Duration) -> Result<std::proce
 
 pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
     let mut readings = Vec::new();
+    let mut host_load = Vec::new();
     for _ in 0..campaign.samples_per_row {
+        let before = load()?;
         readings.push(sample(campaign, step)?);
+        host_load.push(HostLoad { before, after: load()? });
     }
     let output = readings[0].1.clone();
     let output_frame = readings[0].2.clone();
@@ -214,15 +214,21 @@ pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
         output,
         output_frame,
         phases,
-        host_load: load(),
+        host_load,
     })
 }
 
-fn load() -> String {
-    fs::read_to_string("/proc/loadavg")
-        .ok()
-        .and_then(|value| value.split_ascii_whitespace().next().map(str::to_owned))
-        .unwrap_or_else(|| "unavailable".into())
+fn load() -> Result<f64, Error> {
+    let value = fs::read_to_string("/proc/loadavg")?;
+    let load = value
+        .split_ascii_whitespace()
+        .next()
+        .ok_or("host load record is empty")?
+        .parse::<f64>()?;
+    if !load.is_finite() || load < 0.0 {
+        return Err("host load record is invalid".into());
+    }
+    Ok(load)
 }
 
 pub(super) struct Measurement {
@@ -387,234 +393,6 @@ fn descriptor_matches_lock(descriptor: std::io::Result<fs::DirEntry>, target: &f
 #[cfg(not(target_os = "linux"))]
 fn box_lock_holder_count(_path: &Path) -> Result<u64, Error> {
     Err("box-lock holder counting requires Linux procfs".into())
-}
-
-pub(super) struct Ledger {
-    directory: PathBuf,
-    writer: BufWriter<File>,
-    rows: BTreeMap<String, Row>,
-    planned: BTreeMap<String, Step>,
-}
-
-fn follows_schedule(row: &Row, step: &Step) -> bool {
-    row.key == step.key()
-        && row.workload == step.workload
-        && row.layout == step.layout
-        && row.cell == step.cell
-        && row.round == step.round
-        && row.position == step.position
-        && row.arm == step.arm
-}
-
-impl Ledger {
-    pub fn open(directory: &Path, campaign: &Campaign, resume: bool) -> Result<Self, Error> {
-        admit_destination(directory, resume)?;
-        let manifest = directory.join("manifest.json");
-        let raw = directory.join("raw.jsonl");
-        let identity = campaign.identity()?;
-        if resume {
-            let recorded: serde_json::Value = serde_json::from_slice(&fs::read(&manifest)?)?;
-            if recorded["identity"] != identity {
-                return Err("resume campaign identity differs".into());
-            }
-        } else {
-            fs::create_dir(directory).map_err(|error| format!("result directory must be new: {error}"))?;
-            fs::write(
-                &manifest,
-                serde_json::to_vec_pretty(&serde_json::json!({"identity": identity, "campaign": campaign}))?,
-            )?;
-        }
-        let planned: BTreeMap<String, Step> = schedule::measurements(campaign)
-            .into_iter()
-            .map(|step| (step.key(), step))
-            .collect();
-        let mut rows = BTreeMap::new();
-        if raw.exists() {
-            for line in BufReader::new(File::open(&raw)?).lines() {
-                let row: Row = serde_json::from_str(&line?)?;
-                let Some(step) = planned.get(&row.key) else {
-                    return Err("ledger has a foreign row".into());
-                };
-                if !follows_schedule(&row, step) {
-                    return Err("ledger row violates the benchmark schedule".into());
-                }
-                if rows.insert(row.key.clone(), row).is_some() {
-                    return Err("ledger has a duplicate row".into());
-                }
-            }
-        }
-        let writer = BufWriter::new(OpenOptions::new().create(true).append(true).open(raw)?);
-        Ok(Self {
-            directory: directory.into(),
-            writer,
-            rows,
-            planned,
-        })
-    }
-    pub fn contains(&self, key: &str) -> bool {
-        self.rows.contains_key(key)
-    }
-    pub fn append(&mut self, row: &Row) -> Result<(), Error> {
-        let Some(step) = self.planned.get(&row.key) else {
-            return Err("benchmark ledger rejected a foreign row".into());
-        };
-        if !follows_schedule(row, step) {
-            return Err("benchmark ledger rejected a row that violates the schedule".into());
-        }
-        if self.rows.contains_key(&row.key) {
-            return Err("benchmark ledger rejected a duplicate row".into());
-        }
-        serde_json::to_writer(&mut self.writer, row)?;
-        self.writer.write_all(b"\n")?;
-        self.writer.flush()?;
-        self.writer.get_ref().sync_data()?;
-        self.rows.insert(row.key.clone(), row.clone());
-        Ok(())
-    }
-    pub fn complete(&self) -> Result<Vec<Row>, Error> {
-        if self.rows.keys().collect::<BTreeSet<_>>() != self.planned.keys().collect() {
-            return Err(format!(
-                "benchmark ledger incomplete: {}/{} rows",
-                self.rows.len(),
-                self.planned.len()
-            )
-            .into());
-        }
-        Ok(self.rows.values().cloned().collect())
-    }
-    pub fn require_space(&self, gib: f64) -> Result<(), Error> {
-        let free = fs2::available_space(&self.directory)? as f64 / 1024_f64.powi(3);
-        if free < gib {
-            return Err(format!("free disk {free:.1} GiB is below {gib:.1} GiB").into());
-        }
-        Ok(())
-    }
-    pub fn publish(&self, report: &super::verdict::Report) -> Result<(), Error> {
-        fs::write(self.directory.join("report.tsv"), &report.text)?;
-        fs::write(self.directory.join("verdict.txt"), format!("{}\n", report.verdict))?;
-        Ok(())
-    }
-}
-
-fn admit_destination(directory: &Path, resume: bool) -> Result<(), Error> {
-    if resume
-        && ["report.tsv", "verdict.txt"]
-            .iter()
-            .any(|name| directory.join(name).exists())
-    {
-        return Err("benchmark result directory is already published; use a unique path for a new run".into());
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod ledger_tests {
-    use super::{Ledger, Phase, Row, Step, admit_destination};
-    use std::{
-        collections::BTreeMap,
-        fs::{self, File},
-        io::BufWriter,
-    };
-
-    fn step() -> Step {
-        Step {
-            workload: "malloc".into(),
-            layout: "plain".into(),
-            cell: "EE".into(),
-            round: 0,
-            position: 0,
-            arm: "E".into(),
-        }
-    }
-
-    fn row(key: &str) -> Row {
-        Row {
-            key: key.into(),
-            workload: "malloc".into(),
-            layout: "plain".into(),
-            cell: "EE".into(),
-            round: 0,
-            position: 0,
-            arm: "E".into(),
-            output: "same".into(),
-            output_frame: "frame".into(),
-            phases: [(
-                "malloc".into(),
-                Phase {
-                    us: 1,
-                    ok: "same".into(),
-                },
-            )]
-            .into(),
-            host_load: "0.1".into(),
-        }
-    }
-
-    #[test]
-    fn append_rejects_duplicate_and_foreign_rows_before_durable_write() {
-        let directory = tempfile::tempdir().unwrap();
-        let raw = directory.path().join("raw.jsonl");
-        let expected = step();
-        let key = expected.key();
-        let mut ledger = Ledger {
-            directory: directory.path().into(),
-            writer: BufWriter::new(File::create(&raw).unwrap()),
-            rows: BTreeMap::new(),
-            planned: BTreeMap::from([(key.clone(), expected)]),
-        };
-        ledger.append(&row(&key)).unwrap();
-        let durable = fs::metadata(&raw).unwrap().len();
-        assert!(ledger.append(&row(&key)).is_err());
-        assert!(ledger.append(&row("foreign")).is_err());
-        assert_eq!(fs::metadata(&raw).unwrap().len(), durable);
-        assert_eq!(ledger.rows.keys().map(String::as_str).collect::<Vec<_>>(), [key]);
-    }
-
-    #[test]
-    fn append_rejects_valid_key_with_out_of_schedule_provenance() {
-        let directory = tempfile::tempdir().unwrap();
-        let raw = directory.path().join("raw.jsonl");
-        let expected = step();
-        let key = expected.key();
-        let mut ledger = Ledger {
-            directory: directory.path().into(),
-            writer: BufWriter::new(File::create(&raw).unwrap()),
-            rows: BTreeMap::new(),
-            planned: BTreeMap::from([(key.clone(), expected)]),
-        };
-        let mut forged = row(&key);
-        forged.arm = "I".into();
-        let error = ledger.append(&forged).unwrap_err();
-        assert!(error.to_string().contains("violates the schedule"), "{error}");
-        assert_eq!(fs::metadata(raw).unwrap().len(), 0);
-        assert!(ledger.rows.is_empty());
-    }
-
-    #[test]
-    fn complete_rejects_an_incomplete_rust_ledger() {
-        let directory = tempfile::tempdir().unwrap();
-        let raw = directory.path().join("raw.jsonl");
-        let expected = step();
-        let ledger = Ledger {
-            directory: directory.path().into(),
-            writer: BufWriter::new(File::create(raw).unwrap()),
-            rows: BTreeMap::new(),
-            planned: BTreeMap::from([(expected.key(), expected)]),
-        };
-        let Err(error) = ledger.complete() else {
-            panic!("incomplete ledger was accepted");
-        };
-        assert!(error.to_string().contains("incomplete"));
-    }
-
-    #[test]
-    fn completed_result_directory_cannot_be_replayed_as_resume() {
-        let directory = tempfile::tempdir().unwrap();
-        admit_destination(directory.path(), true).unwrap();
-        fs::write(directory.path().join("report.tsv"), "PASS\n").unwrap();
-        assert!(admit_destination(directory.path(), true).unwrap_err().to_string().contains("already published"));
-        admit_destination(directory.path(), false).unwrap();
-    }
 }
 
 #[cfg(test)]

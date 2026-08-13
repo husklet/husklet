@@ -21,6 +21,18 @@ impl Step {
             self.workload, self.layout, self.cell, self.round, self.position
         )
     }
+
+    pub fn paired_key(&self) -> Option<String> {
+        let position = match self.position {
+            0 => 1,
+            1 => 0,
+            _ => return None,
+        };
+        Some(format!(
+            "{}|{}|{}|{}|{}",
+            self.workload, self.layout, self.cell, self.round, position
+        ))
+    }
 }
 
 pub(super) fn warmups(campaign: &Campaign) -> Vec<Step> {
@@ -66,11 +78,28 @@ fn cell_steps(workload: &str, layout: &str, (left, right): (&str, &str), rounds:
 
 #[cfg(test)]
 mod tests {
-    use super::ORDER;
+    use super::{ORDER, Step};
 
     #[test]
     fn crossed_order_balances_position_and_temporal_strata() {
         assert_eq!(ORDER, [[0, 1], [1, 0], [1, 0], [0, 1]]);
         assert_eq!(ORDER.iter().filter(|pair| pair[0] == 0).count(), 2);
+    }
+
+    #[test]
+    fn pair_identity_exchanges_only_the_two_scheduled_positions() {
+        let mut step = Step {
+            workload: "malloc".into(),
+            layout: "plain".into(),
+            cell: "EI".into(),
+            round: 2,
+            position: 0,
+            arm: "E".into(),
+        };
+        assert_eq!(step.paired_key().as_deref(), Some("malloc|plain|EI|2|1"));
+        step.position = 1;
+        assert_eq!(step.paired_key().as_deref(), Some("malloc|plain|EI|2|0"));
+        step.position = 2;
+        assert!(step.paired_key().is_none());
     }
 }

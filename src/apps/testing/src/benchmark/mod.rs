@@ -2,6 +2,7 @@
 
 mod definition;
 mod evidence;
+mod ledger;
 mod schedule;
 mod stage;
 mod verdict;
@@ -9,7 +10,8 @@ mod verdict;
 use crate::suite::Error;
 use clap::Args;
 use definition::Campaign;
-use evidence::{Ledger, Measurement};
+use evidence::Measurement;
+use ledger::Ledger;
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -71,12 +73,20 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     for step in schedule::warmups(&campaign) {
         evidence::sample(&campaign, &step)?;
     }
-    for step in schedule::measurements(&campaign) {
-        if ledger.contains(&step.key()) {
+    let measurements = schedule::measurements(&campaign);
+    for pair in measurements.chunks_exact(2) {
+        let [first, second] = pair else {
+            unreachable!("benchmark schedule is made of pairs")
+        };
+        let present = [ledger.contains(&first.key()), ledger.contains(&second.key())];
+        if present == [true, true] {
             continue;
         }
-        let row = evidence::measure(&campaign, &step)?;
-        ledger.append(&row)?;
+        if present != [false, false] {
+            return Err("benchmark ledger contains an incomplete measurement pair".into());
+        }
+        ledger.append(&evidence::measure(&campaign, first)?)?;
+        ledger.append(&evidence::measure(&campaign, second)?)?;
     }
     // A writable guest or replaced binary invalidates the whole campaign, even if its output
     // happened to remain stable. Re-hash after the last sample as well as before the first.

@@ -47,9 +47,9 @@ impl Report {
             }
         }
         lines.push(format!("rootfs\t{}", campaign.rootfs.sha256));
-        lines.push("sample\thost_load".to_owned());
+        lines.push("sample\trepetition\thost_load_before\thost_load_after".to_owned());
         for row in rows {
-            lines.push(format!("{}\t{}", row.key, row.host_load));
+            lines.extend(row.host_load_rows());
         }
         Ok(Self {
             verdict,
@@ -174,7 +174,7 @@ fn verify_plan(campaign: &Campaign, expected: &[Step], rows: &[Row]) -> Result<(
         verify_row_provenance(step, row)?;
         verify_phase_coverage(row, phases(campaign, &step.workload, &step.layout))?;
         verify_phase_frame(row)?;
-        verify_host_load(row)?;
+        verify_host_load(row, campaign.samples_per_row)?;
     }
     Ok(())
 }
@@ -200,12 +200,8 @@ fn verify_phase_frame(row: &Row) -> Result<(), Error> {
     Ok(())
 }
 
-fn verify_host_load(row: &Row) -> Result<(), Error> {
-    let load = row
-        .host_load
-        .parse::<f64>()
-        .map_err(|_| format!("benchmark evidence has invalid host load for {}", row.key))?;
-    if !load.is_finite() || load < 0.0 {
+fn verify_host_load(row: &Row, samples: u32) -> Result<(), Error> {
+    if !row.host_load_valid(samples) {
         return Err(format!("benchmark evidence has invalid host load for {}", row.key).into());
     }
     Ok(())
@@ -505,6 +501,7 @@ fn median(values: &mut [f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{BTreeMap, Row, Step};
+    use crate::benchmark::evidence::HostLoad;
 
     fn row(key: &str, arm: &str, us: u64) -> Row {
         Row {
@@ -518,7 +515,10 @@ mod tests {
             output: "same".into(),
             output_frame: "frame".into(),
             phases: [("malloc".into(), super::super::evidence::Phase { us, ok: "same".into() })].into(),
-            host_load: "0.1".into(),
+            host_load: vec![HostLoad {
+                before: 0.1,
+                after: 0.2,
+            }],
         }
     }
 
@@ -624,12 +624,15 @@ mod tests {
     #[test]
     fn host_load_must_be_finite_numeric_evidence() {
         let mut evidence = row("malloc|plain|EE|0|0", "E", 1);
-        for invalid in ["unavailable", "NaN", "inf", "-0.1", ""] {
-            evidence.host_load = invalid.into();
-            assert!(super::verify_host_load(&evidence).is_err(), "accepted {invalid:?}");
+        super::verify_host_load(&evidence, 1).unwrap();
+        evidence.host_load[0].after = f64::NAN;
+        assert!(super::verify_host_load(&evidence, 1).is_err());
+        evidence.host_load[0].after = -0.1;
+        assert!(super::verify_host_load(&evidence, 1).is_err());
+        evidence.host_load[0].after = 0.2;
+        for invalid_count in [0, 2] {
+            assert!(super::verify_host_load(&evidence, invalid_count).is_err());
         }
-        evidence.host_load = "0.25".into();
-        super::verify_host_load(&evidence).unwrap();
     }
 
     #[test]
