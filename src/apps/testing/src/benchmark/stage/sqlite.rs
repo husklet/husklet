@@ -5,6 +5,7 @@ pub(super) const SOURCE: &str = "src/apps/testing/tests/fixtures/guest/sqlite.c"
 const AMALGAMATION_SHA256: &str = "41716b44ac8777188c4c3f1f370f01c9cb9e3b6428eb5c981d086c35de2d9d3f";
 const SQLITE_C_SHA256: &str = "292cdfac26469d65501e4058c7a55ae0f811da78b2ae1e5c25db2ea44ae988f9";
 const SQLITE_H_SHA256: &str = "cef9adf8b309ab3e903f1da5cda9f208cf5b901aa21e944df2dc04d9cd0ccee7";
+const MINIMUM_PHASE_MICROSECONDS: u64 = 5_000;
 
 pub(super) struct SqliteProfile {
     pub command: std::path::PathBuf,
@@ -181,8 +182,11 @@ pub(super) fn profile_frame(output: &[u8]) -> Result<Vec<u8>, Error> {
             .next()
             .ok_or("sqlite phase omitted its duration")?
             .parse::<u64>()?;
-        if elapsed <= 1 {
-            return Err(format!("sqlite {phase} duration was not greater than one microsecond").into());
+        if elapsed < MINIMUM_PHASE_MICROSECONDS {
+            return Err(format!(
+                "sqlite {phase} duration was below the {MINIMUM_PHASE_MICROSECONDS} microsecond smoke floor"
+            )
+            .into());
         }
     }
     frame(output)
@@ -200,6 +204,7 @@ mod tests {
         assert!(source.contains("PHASE sqlite-write us=%llu ok=%lld"));
         assert!(source.contains("PHASE sqlite-read us=%llu ok=%lld"));
         assert!(source.contains("READ_SCANS = 50"));
+        assert!(source.contains("WRITE_BATCHES = 10"));
         assert!(source.contains("checksum != INT64_C(200010000)"));
         assert!(source.contains("square_checksum != INT64_C(2666866670000)"));
         assert!(source.contains("write <= 1 || read <= 1"));
@@ -211,12 +216,12 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_frame_rejects_constant_or_zero_duration() {
-        let valid = b"META workload=sqlite layout=sqlite version=1\nPHASE sqlite-write us=2 ok=20000\nPHASE sqlite-read us=3 ok=20000:200010000:2666866670000\n";
+    fn sqlite_frame_enforces_real_smoke_duration() {
+        let valid = b"META workload=sqlite layout=sqlite version=1\nPHASE sqlite-write us=5000 ok=200000\nPHASE sqlite-read us=5000 ok=20000:200010000:2666866670000\n";
         assert!(profile_frame(valid).is_ok());
         for invalid in [
-            b"META workload=sqlite layout=sqlite version=1\nPHASE sqlite-write us=1 ok=20000\nPHASE sqlite-read us=3 ok=proof\n".as_slice(),
-            b"META workload=sqlite layout=sqlite version=1\nPHASE sqlite-write us=2 ok=20000\nPHASE sqlite-read us=0 ok=proof\n".as_slice(),
+            b"META workload=sqlite layout=sqlite version=1\nPHASE sqlite-write us=4999 ok=200000\nPHASE sqlite-read us=5000 ok=proof\n".as_slice(),
+            b"META workload=sqlite layout=sqlite version=1\nPHASE sqlite-write us=5000 ok=200000\nPHASE sqlite-read us=4999 ok=proof\n".as_slice(),
         ] {
             assert!(profile_frame(invalid).is_err());
         }

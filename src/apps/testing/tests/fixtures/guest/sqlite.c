@@ -7,7 +7,7 @@
 #include <time.h>
 #include <unistd.h>
 
-enum { ROWS = 20000, READ_SCANS = 50 };
+enum { ROWS = 20000, WRITE_BATCHES = 10, READ_SCANS = 50 };
 
 static uint64_t monotonic_microseconds(void) {
     struct timespec time;
@@ -55,17 +55,22 @@ int main(void) {
     require_sqlite(sqlite3_open(":memory:", &database), database, "sqlite3_open");
 
     uint64_t write_started = monotonic_microseconds();
-    execute(database, "CREATE TABLE values_(value INTEGER NOT NULL); BEGIN;");
+    execute(database, "CREATE TABLE values_(value INTEGER NOT NULL);");
     sqlite3_stmt *insert = NULL;
     require_sqlite(sqlite3_prepare_v2(database, "INSERT INTO values_ VALUES (?1)", -1, &insert, NULL), database,
                    "prepare insert");
-    for (int value = 1; value <= ROWS; ++value) {
-        require_sqlite(sqlite3_bind_int(insert, 1, value), database, "bind insert");
-        require_sqlite(sqlite3_step(insert), database, "step insert");
-        require_sqlite(sqlite3_reset(insert), database, "reset insert");
+    sqlite3_int64 written = 0;
+    for (int batch = 0; batch < WRITE_BATCHES; ++batch) {
+        execute(database, "BEGIN; DELETE FROM values_;");
+        for (int value = 1; value <= ROWS; ++value) {
+            require_sqlite(sqlite3_bind_int(insert, 1, value), database, "bind insert");
+            require_sqlite(sqlite3_step(insert), database, "step insert");
+            require_sqlite(sqlite3_reset(insert), database, "reset insert");
+            ++written;
+        }
+        execute(database, "COMMIT;");
     }
     require_sqlite(sqlite3_finalize(insert), database, "finalize insert");
-    execute(database, "COMMIT;");
     uint64_t write = monotonic_microseconds() - write_started;
 
     uint64_t read_started = monotonic_microseconds();
@@ -100,7 +105,7 @@ int main(void) {
                           "META workload=sqlite layout=sqlite version=1\n"
                           "PHASE sqlite-write us=%llu ok=%lld\n"
                           "PHASE sqlite-read us=%llu ok=%lld:%lld:%lld\n",
-                          (unsigned long long)write, (long long)count, (unsigned long long)read, (long long)count,
+                          (unsigned long long)write, (long long)written, (unsigned long long)read, (long long)count,
                           (long long)checksum, (long long)square_checksum);
     if (length < 0 || (size_t)length >= sizeof(frame) || write_all(frame, (size_t)length) != 0) {
         return 4;
