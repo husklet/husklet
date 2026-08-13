@@ -1122,9 +1122,15 @@ void jit86_faulth(int sig, siginfo_t *si, void *uc) {
     extern uint64_t g_prevpc, g_curpc;
     int diagnostic = open("/tmp/hl-engine-fault.log", O_WRONLY | O_CREAT | O_APPEND, 0600);
     if (diagnostic >= 0) {
-        dprintf(diagnostic, "pid=%d sig=%d addr=%p rip=%#llx curpc=%#llx prevpc=%#llx\n", (int)getpid(), sig,
-                si ? si->si_addr : 0, (unsigned long long)(c ? c->rip : 0), (unsigned long long)g_curpc,
-                (unsigned long long)g_prevpc);
+        char line[256];
+        int length = snprintf(line, sizeof line, "pid=%d sig=%d addr=%p rip=%#llx curpc=%#llx prevpc=%#llx\n",
+                              (int)getpid(), sig, si ? si->si_addr : 0,
+                              (unsigned long long)(c ? c->rip : 0), (unsigned long long)g_curpc,
+                              (unsigned long long)g_prevpc);
+        if (length > 0) {
+            size_t bytes = (size_t)length < sizeof line ? (size_t)length : sizeof line - 1;
+            if (write(diagnostic, line, bytes) < 0) {}
+        }
         close(diagnostic);
     }
     static const char *nm[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
