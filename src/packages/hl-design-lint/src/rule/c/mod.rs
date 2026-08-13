@@ -479,7 +479,10 @@ fn terminal_macro_before_declaration(node: tree_sitter::Node<'_>, source: &str) 
     }
     let lines = source.lines().collect::<Vec<_>>();
     let row = node.start_position().row;
-    if !lines.get(row).is_some_and(|line| line.contains('(') && line.contains('{')) {
+    if !lines.get(row).is_some_and(|line| {
+        let line = line.trim_start();
+        (line.contains('(') && line.contains('{')) || line.starts_with("/*") || line.starts_with("//")
+    }) {
         return false;
     }
     let Some(mut row) = lines[..row].iter().rposition(|line| !line.trim().is_empty()) else {
@@ -705,6 +708,14 @@ mod test {
     fn parser_accepts_function_after_uncontinued_macro_body() {
         let source = "#define BODY(value) do { \\\n+                          value++; \\\n+                      } while (0)\n\n\
                       int main(void) { return 0; }\n";
+        assert!(parse(Path::new("macro.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_comment_after_uncontinued_macro_body() {
+        let source = "#define BODY(value) do { \\\n+                          value++; \\\n+                      } while (0)\n\n\
+                      /* next macro */\n\
+                      #define NEXT 1\n";
         assert!(parse(Path::new("macro.c"), source).is_ok());
     }
 
