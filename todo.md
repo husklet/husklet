@@ -37,14 +37,15 @@ This is the authoritative checklist for the C-primary production migration. Chec
   fails closed, and strict C/C++ consumers compile, link, and execute against it.
 - [ ] Prove authoritative packaging/install behavior on Windows AMD64 artifacts.
   Local Nix checks fully compile/link Linux ARM64 and AMD64. They also compile the
-  Windows GNU Rust surface and host bridge and link a PE/COFF ABI fixture DLL plus
-  import library. This is not MSVC ABI, Windows SDK, complete engine-DLL, loader,
-  or runtime evidence. Darwin cross-compilation remains unavailable on Linux until
+  Windows GNU Rust surface and complete C engine into an x86-64 PE/COFF DLL plus
+  import library, with the exact thirteen-symbol public export set. This is not
+  MSVC ABI, Windows SDK, loader, packaging, or runtime evidence. Darwin
+  cross-compilation remains unavailable on Linux until
   an Apple SDK/framework-stub closure can be packaged lawfully and reproducibly;
   native macOS ARM64 CI is authoritative meanwhile.
   Native Windows CI additionally compiles the public API as strict C and C++ and
-  pins Win64 layouts, function signatures, and C linkage. Its executed DLL is a
-  fixture only; it does not claim that the complete engine DLL links or runs.
+  pins Win64 layouts, function signatures, and C linkage. It does not yet load or
+  execute the complete engine DLL.
   Linux cross checks also link strict C and C++ LP64 consumers against each
   target's actual shared engine without executing foreign binaries. Native
   macOS CI links and runs the same consumers against its Cargo-built dylib;
@@ -54,10 +55,11 @@ This is the authoritative checklist for the C-primary production migration. Chec
   claiming that a foreign-target library was executed.
   The Windows GNU cross-check pins the host bridge and both public-header
   consumers to x86-64 COFF, so a 32-bit object cannot satisfy the AMD64 lane;
-  it also compiles every Windows host-service translation unit and combines
-  them into one exact x86-64 COFF object, and compiles the POSIX compatibility
-  implementation with the same forced prelude the Cargo build uses. It remains
-  compile/link evidence rather than a complete engine DLL or Windows runtime evidence.
+  it also compiles every Windows host-service translation unit, compiles the
+  POSIX compatibility implementation with the same forced prelude the Cargo
+  build uses, and links those archives into the complete GNU Windows engine DLL.
+  It remains compile/link evidence rather than Windows loader, packaging, or
+  runtime evidence.
   That lane cross-checks both `hl-native` and its `hl-engine` Rust consumer so
   Windows-only type or composition drift cannot hide behind a leaf-crate build.
   Native macOS CI requires the installed dylib and all three launchers to be
