@@ -174,10 +174,8 @@ fn report(campaign: &Campaign, requested: &[String], rows: &[evidence::Row], rou
         let early = median(&values[..middle]);
         let late = median(&values[middle..]);
         let maximum = values.iter().map(|value| (value - 1.0).abs()).fold(0.0_f64, f64::max);
-        let ok = [center, ab, ba, early, late]
-            .into_iter()
-            .all(|value| (value - 1.0).abs() <= 0.01)
-            && maximum <= 0.05;
+        let invariant = campaign.invariant_phases.iter().any(|declared| declared == phase);
+        let ok = qualifies([center, ab, ba, early, late], maximum, invariant);
         qualified &= ok;
         lines.push(format!("{arm}\t{workload}\t{layout}\t{phase}\t{center:.6}\t{ab:.6}\t{ba:.6}\t{early:.6}\t{late:.6}\t{maximum:.6}\t{}", if ok { "QUALIFIED" } else { "UNQUALIFIED" }));
     }
@@ -185,6 +183,12 @@ fn report(campaign: &Campaign, requested: &[String], rows: &[evidence::Row], rou
         status: if qualified { "QUALIFIED" } else { "UNQUALIFIED" },
         text: lines.join("\n") + "\n",
     })
+}
+
+fn qualifies(strata: [f64; 5], maximum: f64, invariant: bool) -> bool {
+    strata.into_iter().all(|value| (value - 1.0).abs() <= 0.01)
+        && maximum <= 0.05
+        && maximum <= if invariant { 0.015 } else { 0.03 }
 }
 
 fn bounded(value: &str) -> String {
@@ -250,5 +254,13 @@ mod tests {
         assert!(!value.contains('\n'));
         assert!(value.ends_with(" [truncated]"));
         assert!(value.len() <= 172);
+    }
+
+    #[test]
+    fn qualification_uses_acceptance_null_floors() {
+        assert!(super::qualifies([1.0; 5], 0.015, true));
+        assert!(!super::qualifies([1.0; 5], 0.015_1, true));
+        assert!(super::qualifies([1.0; 5], 0.03, false));
+        assert!(!super::qualifies([1.0; 5], 0.030_1, false));
     }
 }

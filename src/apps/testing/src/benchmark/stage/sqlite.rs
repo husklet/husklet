@@ -206,11 +206,9 @@ mod tests {
         assert!(source.contains("clock_gettime(CLOCK_MONOTONIC"));
         assert!(source.contains("PHASE sqlite-write us=%llu ok=%lld"));
         assert!(source.contains("PHASE sqlite-read us=%llu ok=%lld"));
-        assert!(source.contains("READ_SCANS = 50"));
-        assert!(source.contains("WRITE_BATCHES = 10"));
-        assert!(source.contains("written != (sqlite3_int64)ROWS * WRITE_BATCHES"));
-        assert!(source.contains("checksum != INT64_C(200010000)"));
-        assert!(source.contains("square_checksum != INT64_C(2666866670000)"));
+        assert!(source.contains("static const struct work_factor FACTORS[]"));
+        assert!(source.contains("written != write_factor->expected_written"));
+        assert!(source.contains("scanned != read_factor->expected_scanned"));
         assert!(source.contains("write <= 1 || read <= 1"));
         assert_eq!(source.matches("write(STDOUT_FILENO").count(), 1);
         assert!(source.contains("snprintf(frame, sizeof(frame)"));

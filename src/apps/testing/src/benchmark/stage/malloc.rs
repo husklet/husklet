@@ -135,7 +135,8 @@ mod tests {
         assert!(source.contains("snprintf(frame, sizeof(frame)"));
         assert!(source.contains("write_all(frame, (size_t)length)"));
         assert!(!source.contains("\nprintf("));
-        assert!(source.contains("compute_proof != UINT64_C(9686655140321103872)"));
-        assert!(source.contains("malloc_proof != UINT64_C(10725705084448409897)"));
+        assert!(source.contains("static const struct work_factor FACTORS[]"));
+        assert!(source.contains("compute_proof != compute_factor->compute_proof"));
+        assert!(source.contains("malloc_proof != malloc_factor->malloc_proof"));
     }
 }

@@ -938,9 +938,9 @@ mod tests {
     fn python_campaign_disables_bytecode_writes() {
         // Construction is integration-heavy; keep the invariant visible at its source too.
         let source = include_str!("stage.rs");
-        assert!(source.matches("\"-B\".into()").count() >= 3);
+        assert!(source.matches("\"-B\"").count() >= 4);
         let python = include_str!("stage/python.rs");
-        assert!(python.matches("\"-B\".into()").count() >= 3);
+        assert!(python.matches("\"-B\"").count() >= 2);
     }
 
     #[test]
