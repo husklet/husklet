@@ -1054,11 +1054,10 @@ static enum avx_dispatch_result avx_dispatch_map2_widen(const hl_x86_avx_state *
 }
 
 static enum avx_dispatch_result avx_dispatch_map2_variable_permutation(const hl_x86_avx_state *state, struct cpu *c,
-                                                                      struct insn *instruction, uint64_t next,
-                                                                      int map, int op, int destination,
-                                                                      int data_register, int width) {
-    if (map != 2 || (op != 0x0C && op != 0x0D && op != 0x16 && op != 0x36))
-        return AVX_DISPATCH_UNMATCHED;
+                                                                       struct insn *instruction, uint64_t next, int map,
+                                                                       int op, int destination, int data_register,
+                                                                       int width) {
+    if (map != 2 || (op != 0x0C && op != 0x0D && op != 0x16 && op != 0x36)) return AVX_DISPATCH_UNMATCHED;
 
     uint8_t data[64], control[64], output[64];
     avx_get(c, data_register, data);
@@ -1090,9 +1089,9 @@ static enum avx_dispatch_result avx_dispatch_map2_variable_permutation(const hl_
 }
 
 static enum avx_dispatch_result avx_dispatch_map2_variable_shift(const hl_x86_avx_state *state, struct cpu *c,
-                                                                struct insn *instruction, uint64_t next, int map,
-                                                                int op, int destination, int value_register,
-                                                                int width) {
+                                                                 struct insn *instruction, uint64_t next, int map,
+                                                                 int op, int destination, int value_register,
+                                                                 int width) {
     if (map != 2 || (op != 0x45 && op != 0x46 && op != 0x47)) return AVX_DISPATCH_UNMATCHED;
 
     int element_size = instruction->vex_w ? 8 : 4;
@@ -1158,8 +1157,8 @@ static enum avx_dispatch_result avx_dispatch_map2_test(const hl_x86_avx_state *s
 }
 
 static enum avx_dispatch_result avx_dispatch_fp16_conversion(const hl_x86_avx_state *state, struct cpu *c,
-                                                             struct insn *instruction, uint64_t next, int map,
-                                                             int op, int destination, int width) {
+                                                             struct insn *instruction, uint64_t next, int map, int op,
+                                                             int destination, int width) {
     uint8_t input[64], output[64];
     int count = width / 4;
     if (map == 2 && op == 0x13) { // vcvtph2ps
@@ -1232,9 +1231,9 @@ static enum avx_dispatch_result avx_dispatch_immediate_permutation(const hl_x86_
 }
 
 static enum avx_dispatch_result avx_dispatch_map2_qword_comparison(const hl_x86_avx_state *state, struct cpu *c,
-                                                                  struct insn *instruction, uint64_t next, int map,
-                                                                  int op, int destination, int first_register,
-                                                                  int width) {
+                                                                   struct insn *instruction, uint64_t next, int map,
+                                                                   int op, int destination, int first_register,
+                                                                   int width) {
     if (map != 2 || (op != 0x29 && op != 0x37)) return AVX_DISPATCH_UNMATCHED;
 
     uint8_t first[64], second[64], output[64];
@@ -1353,8 +1352,8 @@ static enum avx_dispatch_result avx_dispatch_packed_low_multiply(const hl_x86_av
 }
 
 static enum avx_dispatch_result avx_dispatch_map1_sign_mask(const hl_x86_avx_state *state, struct cpu *c,
-                                                           struct insn *instruction, uint64_t next, int map, int op,
-                                                           int prefix, int destination, int width) {
+                                                            struct insn *instruction, uint64_t next, int map, int op,
+                                                            int prefix, int destination, int width) {
     if (map != 1 || (op != 0x50 && op != 0xD7)) return AVX_DISPATCH_UNMATCHED;
 
     uint8_t input[64];
@@ -1375,8 +1374,8 @@ static enum avx_dispatch_result avx_dispatch_map1_sign_mask(const hl_x86_avx_sta
 }
 
 static enum avx_dispatch_result avx_dispatch_map1_unpack(const hl_x86_avx_state *state, struct cpu *c,
-                                                        struct insn *instruction, uint64_t next, int map, int op,
-                                                        int prefix, int destination, int first_register, int width) {
+                                                         struct insn *instruction, uint64_t next, int map, int op,
+                                                         int prefix, int destination, int first_register, int width) {
     int floating = op == 0x14 || op == 0x15;
     int integer =
         op == 0x60 || op == 0x61 || op == 0x62 || op == 0x6C || op == 0x68 || op == 0x69 || op == 0x6A || op == 0x6D;
@@ -1412,8 +1411,8 @@ static enum avx_dispatch_result avx_dispatch_map1_unpack(const hl_x86_avx_state 
 }
 
 static enum avx_dispatch_result avx_dispatch_map1_bitwise(const hl_x86_avx_state *state, struct cpu *c,
-                                                         struct insn *instruction, uint64_t next, int map, int op,
-                                                         int destination, int first_register, int width) {
+                                                          struct insn *instruction, uint64_t next, int map, int op,
+                                                          int destination, int first_register, int width) {
     int exclusive_or = op == 0xEF || op == 0x57;
     int inclusive_or = op == 0xEB || op == 0x56;
     int and = op == 0xDB || op == 0x54;
@@ -1474,8 +1473,8 @@ static enum avx_dispatch_result avx_dispatch_map1_duplicate(const hl_x86_avx_sta
 }
 
 static enum avx_dispatch_result avx_dispatch_scalar_integer_conversion(const hl_x86_avx_state *state, struct cpu *c,
-                                                                       struct insn *instruction, uint64_t next,
-                                                                       int map, int op, int prefix, int destination,
+                                                                       struct insn *instruction, uint64_t next, int map,
+                                                                       int op, int prefix, int destination,
                                                                        int merge_register) {
     if (map != 1 || (op != 0x2A && op != 0x2C && op != 0x2D)) return AVX_DISPATCH_UNMATCHED;
 
@@ -1523,9 +1522,9 @@ static enum avx_dispatch_result avx_dispatch_scalar_integer_conversion(const hl_
 }
 
 static enum avx_dispatch_result avx_dispatch_precision_conversion(const hl_x86_avx_state *state, struct cpu *c,
-                                                                 struct insn *instruction, uint64_t next, int map,
-                                                                 int op, int prefix, int destination,
-                                                                 int merge_register, int width) {
+                                                                  struct insn *instruction, uint64_t next, int map,
+                                                                  int op, int prefix, int destination,
+                                                                  int merge_register, int width) {
     if (map != 1 || op != 0x5A) return AVX_DISPATCH_UNMATCHED;
 
     uint8_t input[64], output[64];
@@ -1747,12 +1746,14 @@ static enum avx_dispatch_result avx_dispatch_immediate_floating(const hl_x86_avx
         if (op == 0x08) {
             float input[16], output[16];
             memcpy(input, right, (size_t)width);
-            for (int lane = 0; lane < width / 4; lane++) output[lane] = sse_round_f(input[lane], immediate);
+            for (int lane = 0; lane < width / 4; lane++)
+                output[lane] = sse_round_f(input[lane], immediate);
             memcpy(result, output, (size_t)width);
         } else {
             double input[8], output[8];
             memcpy(input, right, (size_t)width);
-            for (int lane = 0; lane < width / 8; lane++) output[lane] = sse_round_d(input[lane], immediate);
+            for (int lane = 0; lane < width / 8; lane++)
+                output[lane] = sse_round_d(input[lane], immediate);
             memcpy(result, output, (size_t)width);
         }
     } else if (op == 0x0A || op == 0x0B) { // vroundss/vroundsd
@@ -1890,8 +1891,7 @@ static enum avx_dispatch_result avx_dispatch_map1_floating_arithmetic(const hl_x
                                                                       struct insn *instruction, uint64_t next,
                                                                       int width) {
     int op = instruction->op;
-    if (op != 0x58 && op != 0x59 && op != 0x5C && op != 0x5D && op != 0x5E && op != 0x5F)
-        return AVX_DISPATCH_UNMATCHED;
+    if (op != 0x58 && op != 0x59 && op != 0x5C && op != 0x5D && op != 0x5E && op != 0x5F) return AVX_DISPATCH_UNMATCHED;
     int dbl = instruction->vex_pp == 1 || instruction->vex_pp == 3;
     int scalar = instruction->vex_pp == 2 || instruction->vex_pp == 3;
     int element = dbl ? 8 : 4;
@@ -2182,6 +2182,51 @@ static enum avx_dispatch_result avx_dispatch_map1_immediate_shift(struct cpu *c,
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_packed_numeric_conversion(const hl_x86_avx_state *state, struct cpu *c,
+                                                                       struct insn *instruction, uint64_t next, int map,
+                                                                       int op, int destination, int width) {
+    if (map != 1 || (op != 0x5B && op != 0xE6)) return AVX_DISPATCH_UNMATCHED;
+    int prefix = instruction->vex_pp;
+    uint8_t source[64], output[64];
+    if (op == 0x5B) {
+        avx_get_rm(state, c, instruction, next, width, source);
+        for (int offset = 0; offset < width; offset += 4) {
+            if (prefix == 0) {
+                int32_t value;
+                memcpy(&value, source + offset, 4);
+                float converted = (float)value;
+                memcpy(output + offset, &converted, 4);
+            } else {
+                float value;
+                memcpy(&value, source + offset, 4);
+                int32_t converted = (int32_t)cvt_x86_f2i(value, prefix == 2, 0);
+                memcpy(output + offset, &converted, 4);
+            }
+        }
+        avx_put(c, destination, output, width);
+    } else if (prefix == 2) {
+        avx_get_rm(state, c, instruction, next, width / 2, source);
+        for (int index = 0; index < width / 8; index++) {
+            int32_t value;
+            memcpy(&value, source + 4 * index, 4);
+            double converted = (double)value;
+            memcpy(output + 8 * index, &converted, 8);
+        }
+        avx_put(c, destination, output, width);
+    } else {
+        avx_get_rm(state, c, instruction, next, width, source);
+        for (int index = 0; index < width / 8; index++) {
+            double value;
+            memcpy(&value, source + 8 * index, 8);
+            int32_t converted = (int32_t)cvt_x86_d2i(value, prefix == 1, 0);
+            memcpy(output + 4 * index, &converted, 4);
+        }
+        avx_put(c, destination, output, width / 2);
+    }
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2216,17 +2261,14 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_crypto(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_memory(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_widen(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
-    if (avx_dispatch_map2_variable_permutation(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
-        return;
+    if (avx_dispatch_map2_variable_permutation(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_variable_shift(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_test(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_fp16_conversion(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_immediate_blend(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_immediate_permutation(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
-    if (avx_dispatch_map2_qword_comparison(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
-        return;
-    if (avx_dispatch_map1_integer_comparison(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED)
-        return;
+    if (avx_dispatch_map2_qword_comparison(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map1_integer_comparison(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_saturating_pack(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_packed_low_multiply(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_sign_mask(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
@@ -2235,6 +2277,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map1_horizontal_floating(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_scalar_shift(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_immediate_shift(c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_packed_numeric_conversion(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
@@ -2358,48 +2401,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + i, &m, (size_t)es);
             }
             avx_put(c, rd, d, scalar ? 16 : W);
-            goto done;
-        }
-        case 0x5B: { // vcvtdq2ps(NP) / vcvtps2dq(66) / vcvttps2dq(F3): packed 32-bit int<->float
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += 4) {
-                if (pp == 0) { // cvtdq2ps: int32 -> float32
-                    int32_t v;
-                    memcpy(&v, b + i, 4);
-                    float f = (float)v;
-                    memcpy(d + i, &f, 4);
-                } else { // cvtps2dq(66, round)/cvttps2dq(F3, truncate) -> int32
-                    float f;
-                    memcpy(&f, b + i, 4);
-                    int32_t r = (int32_t)cvt_x86_f2i(f, pp == 2, 0); // F3(pp==2)=truncate, 66(pp==1)=round
-                    memcpy(d + i, &r, 4);
-                }
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0xE6: {       // vcvttpd2dq(66)/vcvtdq2pd(F3)/vcvtpd2dq(F2): packed double<->int32
-            if (pp == 2) { // F3 cvtdq2pd: W/2 bytes int32 -> W bytes double
-                avx_get_rm(state, c, &I, next, W / 2, b);
-                int n = W / 8;
-                for (int i = 0; i < n; i++) {
-                    int32_t v;
-                    memcpy(&v, b + 4 * i, 4);
-                    double y = (double)v;
-                    memcpy(d + 8 * i, &y, 8);
-                }
-                avx_put(c, rd, d, W);
-            } else { // 66 cvttpd2dq(truncate) / F2 cvtpd2dq(round): W bytes double -> W/2 bytes int32
-                avx_get_rm(state, c, &I, next, W, b);
-                int n = W / 8;
-                for (int i = 0; i < n; i++) {
-                    double f;
-                    memcpy(&f, b + 8 * i, 8);
-                    int32_t r = (int32_t)cvt_x86_d2i(f, pp == 1, 0); // 66(pp==1)=truncate, F2(pp==3)=round
-                    memcpy(d + 4 * i, &r, 4);
-                }
-                avx_put(c, rd, d, W / 2);
-            }
             goto done;
         }
         case 0x77: { // vzeroupper (L=0): zero bits[128:256) of ymm0..15. vzeroall (L=1): zero all of 0..15.
@@ -3636,8 +3637,7 @@ static void sse_sha1_rounds4(uint8_t imm, const uint8_t state_bytes[16], const u
     memcpy(result, output, 16);
 }
 
-static enum avx_dispatch_result sse_dispatch_immediate_arithmetic(int op, uint8_t imm,
-                                                                  const uint8_t destination[16],
+static enum avx_dispatch_result sse_dispatch_immediate_arithmetic(int op, uint8_t imm, const uint8_t destination[16],
                                                                   const uint8_t source[16], uint8_t result[16]) {
     switch (op) {
     case 0x08:
@@ -3647,12 +3647,14 @@ static enum avx_dispatch_result sse_dispatch_immediate_arithmetic(int op, uint8_
         if (op == 0x08) { // roundps
             float input[4], output[4];
             memcpy(input, source, 16);
-            for (int i = 0; i < 4; i++) output[i] = sse_round_f(input[i], imm);
+            for (int i = 0; i < 4; i++)
+                output[i] = sse_round_f(input[i], imm);
             memcpy(result, output, 16);
         } else if (op == 0x09) { // roundpd
             double input[2], output[2];
             memcpy(input, source, 16);
-            for (int i = 0; i < 2; i++) output[i] = sse_round_d(input[i], imm);
+            for (int i = 0; i < 2; i++)
+                output[i] = sse_round_d(input[i], imm);
             memcpy(result, output, 16);
         } else if (op == 0x0A) { // roundss: low lane from src, rest from dst
             float input;
@@ -3671,7 +3673,8 @@ static enum avx_dispatch_result sse_dispatch_immediate_arithmetic(int op, uint8_
         uint8_t combined[32];
         memcpy(combined, source, 16);
         memcpy(combined + 16, destination, 16);
-        for (int i = 0; i < 16; i++) result[i] = imm < (unsigned)(32 - i) ? combined[imm + (unsigned)i] : 0;
+        for (int i = 0; i < 16; i++)
+            result[i] = imm < (unsigned)(32 - i) ? combined[imm + (unsigned)i] : 0;
         return AVX_DISPATCH_HANDLED;
     }
     case 0x40: { // dpps: packed-single dot product
@@ -3682,7 +3685,8 @@ static enum avx_dispatch_result sse_dispatch_immediate_arithmetic(int op, uint8_
         for (int i = 0; i < 4; i++)
             if (imm & (0x10 << i)) sum += left[i] * right[i];
         float output[4];
-        for (int i = 0; i < 4; i++) output[i] = (imm & (1 << i)) ? sum : 0.0f;
+        for (int i = 0; i < 4; i++)
+            output[i] = (imm & (1 << i)) ? sum : 0.0f;
         memcpy(result, output, 16);
         return AVX_DISPATCH_HANDLED;
     }
@@ -3694,7 +3698,8 @@ static enum avx_dispatch_result sse_dispatch_immediate_arithmetic(int op, uint8_
         for (int i = 0; i < 2; i++)
             if (imm & (0x10 << i)) sum += left[i] * right[i];
         double output[2];
-        for (int i = 0; i < 2; i++) output[i] = (imm & (1 << i)) ? sum : 0.0;
+        for (int i = 0; i < 2; i++)
+            output[i] = (imm & (1 << i)) ? sum : 0.0;
         memcpy(result, output, 16);
         return AVX_DISPATCH_HANDLED;
     }
@@ -3705,8 +3710,7 @@ static enum avx_dispatch_result sse_dispatch_immediate_arithmetic(int op, uint8_
         for (int i = 0; i < 8; i++) {
             int sum = 0;
             for (int k = 0; k < 4; k++) {
-                int difference =
-                    (int)destination[destination_offset + i + k] - (int)source[source_offset + k];
+                int difference = (int)destination[destination_offset + i + k] - (int)source[source_offset + k];
                 sum += difference < 0 ? -difference : difference;
             }
             output[i] = (uint16_t)sum;
