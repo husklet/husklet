@@ -626,7 +626,11 @@ static void maybe_deliver_signal(struct cpu *c) {
     // registers directly). Detect that by the guest SP unwinding back ABOVE a recorded frame: pop those levels
     // so their deferred signals are released and the defer stack cannot leak. (The guest stack grows down, so a
     // live handler's SP is <= its frame base; a longjmp back to an outer context raises SP above it.)
-    while (c->sig_depth > 0 && G_SP(c) > c->sig_frame_sp[c->sig_depth - 1]) {
+    // A normal x86 RET has already advanced SP past the frame's pushed
+    // return address when it reaches the synthetic sigreturn PC.  That is not
+    // a siglongjmp unwind: the dispatcher's sigreturn arm still has to restore
+    // this frame before releasing its deferred pending set.
+    while (G_PC(c) != SIGRETURN_PC && c->sig_depth > 0 && G_SP(c) > c->sig_frame_sp[c->sig_depth - 1]) {
         c->sig_depth--;
         c->sig_defer = c->sig_depth > 0 ? c->sig_defer_stack[c->sig_depth] : 0;
     }
