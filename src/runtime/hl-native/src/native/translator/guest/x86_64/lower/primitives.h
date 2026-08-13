@@ -60,6 +60,8 @@ void e_addi_s(int, int, unsigned, int);
 void e_nzcv_save_keepC(void);
 void e_nzcv_load(void);
 void e_nzcv_save_ci(void);
+void e_nzcv_load_ci(void);
+void e_nzcv_save_c1(void);
 void e_nzcv_save_popcnt(void);
 void e_nzcv_setcf_op(uint32_t);
 void e_pf_compute(int);

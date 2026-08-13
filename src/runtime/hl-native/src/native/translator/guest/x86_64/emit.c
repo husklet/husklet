@@ -308,14 +308,14 @@ void hl_x86_emit_flags_load(void) {
     e_nzcv_load();
 }
 
-static void e_nzcv_load_ci(void) { // load flags into live nzcv, inverting C
+void e_nzcv_load_ci(void) { // load flags into live nzcv, inverting C
     e_ldr(20, 28, OFF_NZCV);
     e_movconst(22, 1u << 29);
     e_rrr(A_EOR, 20, 20, 22, 1, 0);
     emit32(0xD51B4200u | 20); // msr nzcv, x20
 }
 
-static void e_nzcv_save_c1(void) { // logical ops: x86 CF=0,OF=0; ARM ANDS/TST leave C,V stale
+void e_nzcv_save_c1(void) { // logical ops: x86 CF=0,OF=0; ARM ANDS/TST leave C,V stale
     emit32(0xD53B4200u | 20);      // mrs x20, nzcv
     e_movconst(22, 1u << 28);
     e_rrr(A_BIC, 20, 20, 22, 1, 0); // clear V (bit 28) -> OF=0  (jg/jle test SF==OF)
