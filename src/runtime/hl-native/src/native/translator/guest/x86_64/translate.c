@@ -5584,6 +5584,26 @@ static int lower_sse_widening_integer(struct insn *instruction, uint64_t next, i
     return TX_NEXT;
 }
 
+static int lower_sse_saturating_pack(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
+    uint8_t opcode = instruction->op;
+    if (opcode != 0x67 && opcode != 0x63 && opcode != 0x6B) return TX_FALL;
+    int source = instruction->is_mem ? 16 : vm;
+    if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
+    uint32_t element_size = opcode == 0x6B ? 1u : 0u;
+    uint32_t narrow_low = opcode == 0x67 ? 0x2E212800u : 0x0E214800u;
+    uint32_t narrow_high = opcode == 0x67 ? 0x6E212800u : 0x4E214800u;
+    if (mmx) {
+        // Concatenate both 64-bit operands before narrowing; MMX has no architectural high lanes.
+        emit32(0x4EC03800u | (source << 16) | (vd << 5) | 17);
+        emit32(narrow_low | (element_size << 22) | (17 << 5) | vd);
+    } else {
+        emit32(narrow_low | (element_size << 22) | (vd << 5) | 17);
+        emit32(narrow_high | (element_size << 22) | (source << 5) | 17);
+        e_vmov(vd, 17);
+    }
+    return TX_NEXT;
+}
+
 static int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t op = I.op;
     if (op != 0x2E && op != 0x2F) return TX_FALL;
@@ -6433,27 +6453,8 @@ static void *translate_block(uint64_t gpc) {
                     // operand, which is exactly punpckl/h at MMX width (Q=1 ZIP2 reads bytes 8..15 instead).
                     if (mmx) b &= ~0x40000000u;
                     e_v3(b, vd, vd, s);
-                } else if (op == 0x67 || op == 0x63 || op == 0x6B) {
-                    // pack with saturation: 0x67 PACKUSWB (16->u8), 0x63 PACKSSWB (16->s8),
-                    // 0x6B PACKSSDW (32->s16). dst.low half from dst's lanes, dst.high half from src's.
-                    int s = I.is_mem ? 16 : vm;
-                    if (I.is_mem) { g_ldr_vec_ea(16, &I, next, mmx); }
-                    uint32_t sz = (op == 0x6B) ? 1u : 0u;     // source element: 0x6B = 16-bit, else 8-bit dest
-                    uint32_t lo = (op == 0x67) ? 0x2E212800u  // SQXTUN  (signed->unsigned narrow)
-                                               : 0x0E214800u; // SQXTN   (signed->signed narrow)
-                    uint32_t hi = (op == 0x67) ? 0x6E212800u : 0x4E214800u; // ...2 (Q=1, high half)
-                    if (mmx) {
-                        // MMX packs 4+4 source lanes into 8 bytes, so both operands' lanes must first sit
-                        // in ONE 128-bit register: ZIP1 .2D concatenates the two 64-bit halves, then a
-                        // single Q=0 narrow yields all 8 result bytes. (The Q=1 pair above narrows 8 of
-                        // dst's lanes and 8 of src's -- at MMX width those upper lanes do not exist.)
-                        emit32(0x4EC03800u | (s << 16) | (vd << 5) | 17); // zip1 v17.2d, vd.2d, s.2d
-                        emit32(lo | (sz << 22) | (17 << 5) | vd);
-                    } else {
-                        emit32(lo | (sz << 22) | (vd << 5) | 17); // narrow dst's lanes -> v17 low
-                        emit32(hi | (sz << 22) | (s << 5) | 17);  // narrow src's lanes -> v17 high
-                        e_vmov(vd, 17);
-                    }
+                } else if (lower_sse_saturating_pack(&I, next, vd, vm, mmx) == TX_NEXT) {
+                    // The helper emitted PACKUSWB, PACKSSWB, or PACKSSDW.
                 } else if (op == 0xD7) {
                     mmx_wb = -1;
                     (void)lower_sse_sign_mask(&I, vm, mmx);
