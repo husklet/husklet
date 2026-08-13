@@ -312,6 +312,24 @@ static inline uint64_t robust_guest_to_host(uint64_t address) {
     return nonpie_fold(address);
 }
 
+static int robust_user_pointer(uint64_t address) {
+    return address != 0 && address <= (uint64_t)INTPTR_MAX;
+}
+
+static int robust_futex_address(uint64_t entry, long offset, uint64_t *address) {
+    uint64_t result;
+    if (offset >= 0) {
+        if (__builtin_add_overflow(entry, (uint64_t)offset, &result)) return 0;
+    } else {
+        uint64_t magnitude = (uint64_t)(-(offset + 1)) + 1;
+        if (entry < magnitude) return 0;
+        result = entry - magnitude;
+    }
+    if (!robust_user_pointer(result) || result > (uint64_t)INTPTR_MAX - sizeof(uint32_t)) return 0;
+    *address = result;
+    return 1;
+}
+
 static int robust_pin(uint64_t address, size_t length, uint32_t protection, hl_logical_vma_pin *pin, void **host) {
     memset(pin, 0, sizeof(*pin));
     int logical = hl_logical_vma_pin_data(address, length, protection, pin);
@@ -383,13 +401,18 @@ static void futex_robust_exit(struct cpu *c) {
     uint64_t entry = robust_guest_to_host(raw_first & ~1ULL);
     for (int limit = 0; limit < HL_ROBUST_LIST_LIMIT; limit++) {
         if (entry == head) break; // wrapped back to &head->list -> done
+        if (!robust_user_pointer(entry)) break;
         uint64_t raw_next;
         if (!robust_copy_from(&raw_next, entry, sizeof(raw_next))) break;
         uint64_t next = robust_guest_to_host(raw_next & ~1ULL); // entry->next
-        if (entry != pending) robust_handle_death(entry + (uint64_t)futex_offset, mytid);
+        uint64_t futex_address;
+        if (entry != pending && robust_futex_address(entry, futex_offset, &futex_address))
+            robust_handle_death(futex_address, mytid);
         entry = next;
     }
-    if (pending && pending != head) robust_handle_death(pending + (uint64_t)futex_offset, mytid);
+    uint64_t pending_futex;
+    if (pending != head && robust_user_pointer(pending) && robust_futex_address(pending, futex_offset, &pending_futex))
+        robust_handle_death(pending_futex, mytid);
 }
 
 static void *thread_trampoline(void *p) {

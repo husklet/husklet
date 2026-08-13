@@ -1,2 +1,3 @@
 pi_mutex sum=8000
 robust eownerdead=1
+robust malformed_exit=1

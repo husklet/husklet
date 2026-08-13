@@ -12,7 +12,12 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #define NTHREAD 4
 #define NITER 2000 // 4*2000 = 8000; enough contention to catch a double-owner, light enough for the x86 DBT
@@ -51,6 +56,28 @@ static void *rob_owner(void *a) {
     return NULL;
 }
 
+struct malformed_robust_head {
+    uintptr_t next;
+    long offset;
+    uintptr_t pending;
+};
+
+static int malformed_robust_exit(void) {
+    pid_t child = fork();
+    if (child == 0) {
+        struct malformed_robust_head head = {
+            .next = UINT64_C(0xf9758390f9357b90),
+            .offset = (long)UINT64_C(0x3600037036003370),
+            .pending = UINT64_C(0xf9757b9137080170),
+        };
+        if (syscall(SYS_set_robust_list, &head, sizeof head) != 0) _exit(2);
+        syscall(SYS_exit_group, 0);
+        _exit(3);
+    }
+    int status = 0;
+    return child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
 int main(void) {
     // --- PI mutex under contention ---
     pthread_mutexattr_t pa;
@@ -75,5 +102,6 @@ int main(void) {
     if (eod) pthread_mutex_consistent(&rbm);
     pthread_mutex_unlock(&rbm);
     printf("robust eownerdead=%d\n", eod);
+    printf("robust malformed_exit=%d\n", malformed_robust_exit());
     return pi_error ? 4 : 0;
 }
