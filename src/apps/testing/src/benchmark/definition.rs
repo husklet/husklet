@@ -344,7 +344,7 @@ pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
 
 fn file_hash(path: &Path) -> Result<String, Error> {
     let metadata = fs::symlink_metadata(path)?;
-    let mut identity = FramedIdentity::new(b"husklet-benchmark-file-v1")?;
+    let mut identity = FramedIdentity::new(b"husklet-benchmark-file-v2")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -357,6 +357,7 @@ fn file_hash(path: &Path) -> Result<String, Error> {
     }
     #[cfg(not(unix))]
     identity.field(&[u8::from(metadata.permissions().readonly())])?;
+    attributes(path, &mut identity)?;
     identity.field(&fs::read(path)?)?;
     Ok(identity.finish())
 }
@@ -393,6 +394,17 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         let before = super::file_hash(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_ne!(before, super::file_hash(&path).unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn executable_artifact_identity_includes_extended_attributes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("engine");
+        fs::write(&path, b"same engine bytes").unwrap();
+        let before = super::file_hash(&path).unwrap();
+        xattr::set(&path, "user.husklet-benchmark", b"changed capability").unwrap();
         assert_ne!(before, super::file_hash(&path).unwrap());
     }
 
