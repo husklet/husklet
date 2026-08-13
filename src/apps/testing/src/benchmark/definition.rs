@@ -8,7 +8,10 @@ use std::{
 };
 
 const SCHEMA: &str = "husklet-benchmark-v1";
-const SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
+// A smoke executes the campaign's actual factor-bound command. Large calibrated factors can take
+// longer than the former ten-second startup allowance on a DBT arm, even though they remain well
+// inside the workload timeout declared by the campaign.
+const SMOKE_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
