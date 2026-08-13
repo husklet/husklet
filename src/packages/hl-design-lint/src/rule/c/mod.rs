@@ -28,10 +28,10 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
-    let normalized = normalize_computed_goto(&normalize_gnu_attributes(&normalize_atomic_specifiers(
-        &normalize_function_pointer_annotations(&normalize_complex_macro(
+    let normalized = normalize_offsetof_designators(&normalize_computed_goto(&normalize_gnu_attributes(
+        &normalize_atomic_specifiers(&normalize_function_pointer_annotations(&normalize_complex_macro(
             &source.replace("_Thread_local", "             "),
-        )),
+        ))),
     )));
     let tree = parser
         .parse(&normalized, None)
@@ -55,6 +55,21 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+fn normalize_offsetof_designators(source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut offset = 0;
+    while let Some(relative) = source[offset..].find("offsetof(") {
+        let start = offset + relative + "offsetof(".len();
+        let Some(comma) = source[start..].find(',').map(|comma| start + comma) else { break };
+        let Some(close) = source[comma..].find(')').map(|close| comma + close) else { break };
+        for byte in &mut normalized[comma + 1..close] {
+            if *byte == b'.' { *byte = b'_'; }
+        }
+        offset = close + 1;
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
 }
 
 fn normalize_computed_goto(source: &str) -> String {
@@ -664,6 +679,19 @@ mod test {
         let source = "struct cpu { unsigned long sigmask; };\n\
                       int offset(void) { return (int)__builtin_offsetof(struct cpu, sigmask); }\n";
         assert!(parse(Path::new("offset.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_offsetof_nested_member_designator() {
+        let source = "struct pair { int high; }; union value { struct pair parts; };\n\
+                      int offset(void) { return (int)offsetof(union value, parts.high); }\n";
+        assert!(parse(Path::new("offset.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_unclosed_offsetof_nested_member_designator() {
+        let source = "int offset(void) { return (int)offsetof(union value, parts.high; }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
