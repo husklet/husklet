@@ -104,6 +104,9 @@ fi
 log "relocating dylibs (dylibbundler)"
 XARGS=( -x "$MACOS/husklet" -x "$RES/dockerd" )
 for so in "${LOADER_SOS[@]}"; do XARGS+=( -x "$so" ); done
+while IFS= read -r -d '' native_dylib; do
+  XARGS+=( -s "$(dirname "$native_dylib")" )
+done < <(find "$BUILD_TARGET/release/build" -type f -name 'libhl_native_engine.dylib' -print0)
 dylibbundler -of -cd -b -d "$FW" -p '@executable_path/../Frameworks' "${XARGS[@]}" >/dev/null
 [ -f "$FW/libhl_native_engine.dylib" ] \
   || die "Cargo-built native engine dylib was not relocated into the application bundle"
