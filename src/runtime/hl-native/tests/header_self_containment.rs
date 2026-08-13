@@ -33,6 +33,7 @@ int main(void) {
     const uint32_t groups[] = {30, 40};
     const hl_dac_snapshot owned = {2000, 20, 0640};
     const hl_dac_snapshot foreign = {2000, 30, 0770};
+    const hl_dac_snapshot world_writable = {2000, 30, 0002};
     const hl_dac_snapshot closed = {0, 0, 0755};
     hl_dac_credentials user = {2000, 20, groups, 2, 0};
     hl_dac_credentials other = {3000, 50, groups, 0, 0};
@@ -43,9 +44,12 @@ int main(void) {
     privileged.capabilities = UINT64_C(1) << HL_DAC_CAP_FOWNER;
     if (hl_dac_authorize_chmod(&owned, &privileged) != 0) return 3;
     if (hl_dac_authorize_explicit_times(&owned, &other) != EPERM) return 4;
+    if (hl_dac_authorize_now_times(&owned, &other) != EACCES) return 12;
+    if (hl_dac_authorize_now_times(&world_writable, &other) != 0) return 13;
 
     if (hl_dac_authorize_chown(&owned, &user, 2000, 30) != 0) return 5;
     if (hl_dac_authorize_chown(&owned, &user, 3000, 30) != EPERM) return 6;
+    if (hl_dac_authorize_chown(&owned, &user, UINT32_C(0x80000000), 30) != EPERM) return 14;
     if (hl_dac_authorize_chown(&owned, &other, 3000, 50) != EPERM) return 7;
     privileged.capabilities = UINT64_C(1) << HL_DAC_CAP_CHOWN;
     if (hl_dac_authorize_chown(&owned, &privileged, 3000, 50) != 0) return 8;

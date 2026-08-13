@@ -184,10 +184,21 @@ static void svc_fs_access_53(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             break;
         }
         {
-            int authorization = dac_chmod_at((int)a0, (const char *)a1, 0);
+            int authorization = dac_chmod_at((int)a0, (const char *)a1, nr == 452 && (a3 & 0x100));
             if (authorization != 0) {
                 G_RET(c) = (uint64_t)(int64_t)authorization;
                 break;
+            }
+            if (nr == 452 && (a3 & 0x100)) {
+                int symlink = dac_symlink_at((int)a0, (const char *)a1);
+                if (symlink < 0) {
+                    G_RET(c) = (uint64_t)(int64_t)symlink;
+                    break;
+                }
+                if (symlink) {
+                    G_RET(c) = (uint64_t)(int64_t)-EOPNOTSUPP;
+                    break;
+                }
             }
         }
         if (jail_routed_at((int)a0, (const char *)a1)) {
@@ -259,8 +270,8 @@ static void svc_fs_access_54(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         }
         {
             int nofollow = (a4 & 0x100) ? 1 : 0;
-            int64_t uid = (int32_t)(uint32_t)a2;
-            int64_t gid = (int32_t)(uint32_t)a3;
+            int64_t uid = dac_requested_id(a2);
+            int64_t gid = dac_requested_id(a3);
             int authorization = dac_chown_at((int)a0, (const char *)a1, nofollow, uid, gid);
             if (authorization != 0) {
                 G_RET(c) = (uint64_t)(int64_t)authorization;
@@ -289,7 +300,7 @@ static void svc_fs_access_54(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             if (hl_native_fd_path(pfd, dp, sizeof dp) == 0) {
                 char hp[4400];
                 if (path_join(hp, sizeof hp, dp, fin) == 0)
-                    hl_owner_set_path(hp, (int)(int32_t)(uint32_t)a2, (int)(int32_t)(uint32_t)a3, nofollow);
+                    hl_owner_set_path(hp, dac_requested_id(a2), dac_requested_id(a3), nofollow);
             }
             close(pfd);
             G_RET(c) = 0;
@@ -307,7 +318,7 @@ static void svc_fs_access_54(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = (uint64_t)(int64_t)(-errno);
             break;
         }
-        hl_owner_set_path(p, (int)(int32_t)(uint32_t)a2, (int)(int32_t)(uint32_t)a3, nofollow);
+        hl_owner_set_path(p, dac_requested_id(a2), dac_requested_id(a3), nofollow);
         G_RET(c) = 0;
         break;
     }
@@ -319,8 +330,8 @@ static void svc_fs_access_55(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                              uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 55: {
-        int64_t uid = (int32_t)(uint32_t)a1;
-        int64_t gid = (int32_t)(uint32_t)a2;
+        int64_t uid = dac_requested_id(a1);
+        int64_t gid = dac_requested_id(a2);
         int authorization = dac_chown_fd((int)a0, uid, gid);
         if (authorization != 0) {
             G_RET(c) = (uint64_t)(int64_t)authorization;
@@ -332,7 +343,7 @@ static void svc_fs_access_55(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = (uint64_t)(int64_t)(-errno);
             break;
         }
-        hl_owner_set_fd((int)a0, (int)(int32_t)(uint32_t)a1, (int)(int32_t)(uint32_t)a2);
+        hl_owner_set_fd((int)a0, dac_requested_id(a1), dac_requested_id(a2));
         // the guest-owner xattr just changed -> drop this path's cached stat so a later stat reports it
         if ((int)a0 >= 0 && (int)a0 < 1024 && g_fdpath[(int)a0][0]) hl_fdcache_evict_path(g_fdpath[(int)a0]);
         G_RET(c) = 0;

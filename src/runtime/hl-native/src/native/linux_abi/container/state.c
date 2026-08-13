@@ -492,7 +492,7 @@ static mode_t stat_virt_mode(const struct stat *status, const char *hostpath, in
 static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, uint32_t *out_uid, uint32_t *out_gid) {
     uint32_t uid = (s->st_uid == (uid_t)getuid()) ? (uint32_t)cuid() : (uint32_t)s->st_uid;
     uint32_t gid = (s->st_gid == (gid_t)getgid()) ? (uint32_t)cgid() : (uint32_t)s->st_gid;
-    int xu, xg;
+    int64_t xu, xg;
     if (hl_owner_get(hostpath, fd, s, hostpath != NULL && S_ISLNK(s->st_mode), &xu, &xg)) {
         if (xu >= 0) uid = (uint32_t)xu;
         if (xg >= 0) gid = (uint32_t)xg;
@@ -676,6 +676,11 @@ static hl_dac_credentials dac_credentials_current(uint32_t groups[HL_NGROUPS_MAX
     credentials.groups = groups;
     credentials.capabilities = g_cap_eff;
     return credentials;
+}
+
+static int64_t dac_requested_id(uint64_t raw) {
+    uint32_t value = (uint32_t)raw;
+    return value == UINT32_MAX ? -1 : (int64_t)value;
 }
 
 static int dac_snapshot_path(const char *path, int nofollow, hl_dac_snapshot *snapshot) {

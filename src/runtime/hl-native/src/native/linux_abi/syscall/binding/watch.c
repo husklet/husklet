@@ -516,7 +516,7 @@ static void bound_virtualize_owner(const hl_linux_fd_snapshot *file, hl_linux_fi
     hl_host_result named = g_host_services->file->path(g_host_services->context, file->host_handle,
                                                        (hl_host_bytes){path, HL_LINUX_PATH_MAX});
     if (named.status == HL_STATUS_OK && named.value <= HL_LINUX_PATH_MAX) {
-        int uid, gid;
+        int64_t uid, gid;
         path[named.value] = 0;
         struct stat native_status;
         if (lstat(path, &native_status) == 0 &&

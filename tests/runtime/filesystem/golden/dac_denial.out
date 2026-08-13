@@ -1,1 +1,1 @@
-dac-denial closed=0755:0 denied=1:1 chmod=1 chown=1 times=1 open=1 own-chmod=1 distinct=1
+dac-denial closed=0755:0 denied=1:1 chmod=1 chown=1 times=1 now=1 high-uid=1 open=1 own-chmod=1 supplementary-chown=1 nofollow=1 distinct=1

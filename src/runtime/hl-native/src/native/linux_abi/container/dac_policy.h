@@ -56,6 +56,15 @@ static inline int hl_dac_authorize_explicit_times(const hl_dac_snapshot *inode,
     return credentials->fsuid == inode->uid || hl_dac_has_capability(credentials, HL_DAC_CAP_FOWNER) ? 0 : EPERM;
 }
 
+static inline int hl_dac_authorize_now_times(const hl_dac_snapshot *inode,
+                                              const hl_dac_credentials *credentials) {
+    if (credentials->fsuid == inode->uid || hl_dac_has_capability(credentials, HL_DAC_CAP_FOWNER) ||
+        hl_dac_has_capability(credentials, HL_DAC_CAP_DAC_OVERRIDE))
+        return 0;
+    unsigned shift = hl_dac_in_group(credentials, inode->gid) ? 3 : 0;
+    return ((inode->mode >> shift) & 2u) != 0 ? 0 : EACCES;
+}
+
 static inline int hl_dac_authorize_create(const hl_dac_snapshot *parent, const hl_dac_credentials *credentials) {
     if (hl_dac_has_capability(credentials, HL_DAC_CAP_DAC_OVERRIDE)) return 0;
     unsigned shift = credentials->fsuid == parent->uid ? 6 : hl_dac_in_group(credentials, parent->gid) ? 3 : 0;

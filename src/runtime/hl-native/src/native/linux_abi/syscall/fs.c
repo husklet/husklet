@@ -80,6 +80,12 @@ static int dac_chmod_at(int directory, const char *raw, int nofollow) {
     return status != 0 ? status : -hl_dac_authorize_chmod(&snapshot, &credentials);
 }
 
+static int dac_symlink_at(int directory, const char *raw) {
+    hl_dac_snapshot snapshot;
+    int status = dac_snapshot_at(directory, raw, 1, &snapshot);
+    return status != 0 ? status : (snapshot.mode & S_IFMT) == S_IFLNK;
+}
+
 static int dac_chmod_fd(int descriptor) {
     hl_dac_snapshot snapshot;
     uint32_t groups[HL_NGROUPS_MAX];
@@ -118,6 +124,22 @@ static int dac_explicit_times_fd(int descriptor) {
     hl_dac_credentials credentials = dac_credentials_current(groups);
     int status = dac_snapshot_fd(descriptor, &snapshot);
     return status != 0 ? status : -hl_dac_authorize_explicit_times(&snapshot, &credentials);
+}
+
+static int dac_now_times_at(int directory, const char *raw, int nofollow) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_now_times(&snapshot, &credentials);
+}
+
+static int dac_now_times_fd(int descriptor) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_fd(descriptor, &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_now_times(&snapshot, &credentials);
 }
 
 static int dac_create_at(int directory, const char *raw) {
