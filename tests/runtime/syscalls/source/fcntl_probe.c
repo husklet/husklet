@@ -90,6 +90,10 @@ int main(void) {
     int go = fcntl(fd, F_GETOWN);
     printf("setown.ok=%d\n", so == 0);
     printf("getown.roundtrip=%d\n", go == getpid());
+    errno = 0;
+    int unknown_owner = fcntl(fd, F_SETOWN, 2147483646);
+    printf("setown.unknown.esrch=%d\n", unknown_owner == -1 && errno == ESRCH);
+    fcntl(fd, F_SETOWN, getpid());
 
     // ---- F_SETSIG / F_GETSIG ----
     printf("getsig.default=%d\n", fcntl(fd, F_GETSIG) == 0);

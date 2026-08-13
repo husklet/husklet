@@ -19,6 +19,7 @@ dupfd.shared_offset=1
 dupfd.neg.einval=1
 setown.ok=1
 getown.roundtrip=1
+setown.unknown.esrch=1
 getsig.default=1
 setsig.roundtrip=1
 async.sigio.delivered=1

@@ -466,6 +466,68 @@ static int svc_fcntl_extended(struct cpu *c, int descriptor, int lcmd, uint64_t 
     return 1;
 }
 
+static int fcntl_owner_guest_to_host(int owner) {
+    if (owner == container_pid()) return (int)getpid();
+    if (owner == 1 && g_init_hostpid) return g_init_hostpid;
+    int host = hl_linux_pidmap_host(&g_pidmap, owner);
+    // In container mode a raw, unmapped guest PID must never become authority
+    // over an unrelated host process.  The process registry is the same strict
+    // membership boundary used by kill/pidfd; report ESRCH for non-members.
+    return g_init_hostpid && !container_host_member(host) ? -1 : host;
+}
+
+static int fcntl_owner_host_to_guest(int owner) {
+    if (owner == (int)getpid()) return container_pid();
+    if (g_init_hostpid && owner == g_init_hostpid) return 1;
+    return hl_linux_pidmap_guest(&g_pidmap, owner);
+}
+
+// Linux libc implements F_GETOWN through F_GETOWN_EX so a negative process-group
+// owner cannot be mistaken for a negated errno.  The kernel writes a host PID into
+// the struct, so translate the payload itself at this guest-memory boundary.
+static int svc_fcntl_owner_extended(struct cpu *c, int descriptor, int command, uint64_t address) {
+    if (command != 15 && command != 16) return 0;
+    struct {
+        int type;
+        int pid;
+    } owner;
+    if (!address || (command == 15 && guest_copy_from(&owner, address, sizeof owner) != (ssize_t)sizeof owner) ||
+        (command == 16 && guest_accessible_prefix(address, sizeof owner, HL_LOGICAL_VMA_WRITE) != sizeof owner)) {
+        G_RET(c) = (uint64_t)(int64_t)-EFAULT;
+        return 1;
+    }
+#if defined(__linux__)
+    if (command == 15) {
+        if (owner.type < 0 || owner.type > 2 || owner.pid <= 0) {
+            G_RET(c) = (uint64_t)(int64_t)-EINVAL;
+            return 1;
+        }
+        owner.pid = fcntl_owner_guest_to_host(owner.pid);
+        if (owner.pid < 0) {
+            G_RET(c) = (uint64_t)(int64_t)-ESRCH;
+            return 1;
+        }
+    }
+    int result = fcntl(descriptor, command, &owner);
+    if (result < 0) {
+        G_RET(c) = (uint64_t)(int64_t)-errno;
+        return 1;
+    }
+    if (command == 16) {
+        owner.pid = fcntl_owner_host_to_guest(owner.pid);
+        if (guest_copy_to(address, &owner, sizeof owner) != (ssize_t)sizeof owner) {
+            G_RET(c) = (uint64_t)(int64_t)-EFAULT;
+            return 1;
+        }
+    }
+    G_RET(c) = 0;
+#else
+    (void)descriptor;
+    G_RET(c) = (uint64_t)(int64_t)-EINVAL;
+#endif
+    return 1;
+}
+
 static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                      uint64_t a4, uint64_t a5) {
     (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
@@ -573,6 +635,7 @@ static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         // (ext4/overlay) answers EINVAL -- exactly like native. The old unconditional EINVAL shadowed that,
         // returning EINVAL where native tmpfs returns the real seal set. macOS keeps EINVAL (no host seals).
         if (svc_fcntl_extended(c, (int)a0, lcmd, a2)) break;
+        if (svc_fcntl_owner_extended(c, (int)a0, lcmd, a2)) break;
         // A command this kernel does not recognize is EINVAL (Linux do_fcntl default), NOT forwarded to
         // macOS -- whose fcntl cmd numbering DIVERGES, so a stray Linux cmd# would mean a different op there.
         // Everything valid was handled above or is one of these benign pass-throughs; reject the rest. (LTP
@@ -604,7 +667,25 @@ static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = (uint64_t)(-EMFILE);
             goto fcntl_done;
         }
-        int r = fcntl((int)a0, mcmd, a2);
+        uint64_t host_argument = a2;
+        if (lcmd == 8) {
+            int owner = (int)a2;
+            int group = owner < 0;
+            int identity = group ? -owner : owner;
+            identity = fcntl_owner_guest_to_host(identity);
+            if (identity < 0) {
+                G_RET(c) = (uint64_t)(int64_t)-ESRCH;
+                goto fcntl_done;
+            }
+            host_argument = (uint64_t)(int64_t)(group ? -identity : identity);
+        }
+        int r = fcntl((int)a0, mcmd, host_argument);
+        if (r >= 0 && lcmd == 9) {
+            int group = r < 0;
+            int identity = group ? -r : r;
+            identity = fcntl_owner_host_to_guest(identity);
+            r = group ? -identity : identity;
+        }
         if (lcmd == 0 || lcmd == 1030) r = nofile_gate(r); // F_DUPFD(_CLOEXEC): EMFILE past the guest fd cap
         if (r < 0 && (lcmd == 0 || lcmd == 1030)) proc_fdvis_reservation_cancel(&fdvis);
         if (r >= 0 && (lcmd == 0 || lcmd == 1030) && r < HL_NFD && (int)a0 >= 0 && (int)a0 < HL_NFD) {
