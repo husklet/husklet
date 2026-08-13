@@ -103,11 +103,30 @@ mod ffi {
         fn start_session(&mut self) {
             use std::os::unix::process::CommandExt;
 
+            #[cfg(target_os = "linux")]
+            // Capture before fork so the child can close the race between prctl and an owner
+            // that exits immediately after spawning it.
+            let owner = unsafe { libc::getpid() };
+
             // SAFETY: the hook runs in the child after `fork` and before `exec`. It invokes only
-            // async-signal-safe `setsid`, retains no Rust storage, acquires no lock, allocates
-            // nothing, invokes no destructor, and cannot unwind across the ABI.
+            // value-only libc syscalls, retains no Rust storage, acquires no lock, allocates
+            // nothing, invokes no destructor, and cannot unwind across the ABI. Linux prctl
+            // binds the private engine session to its launcher so a killed launcher cannot leave
+            // a detached engine holding its bootstrap descriptors indefinitely.
             unsafe {
-                self.pre_exec(|| {
+                self.pre_exec(move || {
+                    #[cfg(target_os = "linux")]
+                    {
+                        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) < 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        if libc::getppid() != owner {
+                            return Err(io::Error::new(
+                                io::ErrorKind::BrokenPipe,
+                                "engine launcher exited during spawn",
+                            ));
+                        }
+                    }
                     if libc::setsid() < 0 {
                         Err(io::Error::last_os_error())
                     } else {
