@@ -121,6 +121,11 @@ This is the authoritative checklist for the C-primary production migration. Chec
   The exhaustive classification is preserved at `/var/tmp/failure-clusters.tsv`.
   Merged commit `49acf42ef` also activates five isolated scratch-rootfs rows;
   all five pass the integrated engine and QEMU oracle with non-vacuity evidence.
+  Merged commits `8842362c6` and `7741fc3bd` close both-ISA signalfd
+  copyout-edge failures and the AMD64 real-time signal ordering failure: a
+  failed signalfd destination no longer drains its queued signal, and a normal
+  handler return is no longer mistaken for siglongjmp before sigreturn restores
+  deferred delivery state. Exact focused runs pass both ISAs.
 
 ## C source structure cleanup
 
@@ -210,6 +215,19 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [ ] Meet the final requirement: Husklet no more than 10% slower than the faster C baseline.
 - [ ] Profile only after compatibility/build stability; validate profile hypotheses with mutations, not self-time alone.
 - [ ] Preserve lifecycle/engine observability without hot-path logging overhead.
+- [x] Make packaged interactive workspace terminals remain inside the Linux
+  guest, default to an explicit administrative identity while no user selector
+  exists, own a real controlling terminal/foreground process group, and retain
+  launch failures visibly. Merged commits `cb7220abf`, `93216995a`, and
+  `5754ba898` remove the host-shell escape, select guest root/Bash, establish
+  the native child session and `TIOCSCTTY` relationship, and prove an
+  interactive Alpine shell has job control.
+- [x] Preserve complete lower-directory metadata during overlay copy-up.
+  Merged commit `accaab27e` fixes the generic mkdir/umask loss of special mode
+  bits, timestamps, and xattrs; its exact regression proves `/tmp` remains
+  `01777`, permits unprivileged creation, and enforces sticky deletion rules.
+  This repairs the root cause of Ubuntu apt signature/temp-file failures rather
+  than adding image-specific behavior.
 - [ ] Verify no dependency on `../engine` or `../engine_rust` at build or runtime.
 - [ ] Run final disk/artifact cleanup while preserving `../engine_rust` recovery evidence.
 - [ ] Complete a requirement-by-requirement production audit and mark the migration complete only when every item above has authoritative evidence.
