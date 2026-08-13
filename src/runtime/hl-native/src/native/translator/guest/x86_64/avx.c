@@ -2066,6 +2066,49 @@ static enum avx_dispatch_result avx_dispatch_map1_horizontal_floating(const hl_x
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_scalar_shift(const hl_x86_avx_state *state, struct cpu *c,
+                                                               struct insn *instruction, uint64_t next, int map,
+                                                               int width) {
+    int op = instruction->op;
+    int supported =
+        op == 0xD1 || op == 0xD2 || op == 0xD3 || op == 0xE1 || op == 0xE2 || op == 0xF1 || op == 0xF2 || op == 0xF3;
+    if (map != 1 || !supported) return AVX_DISPATCH_UNMATCHED;
+    int element = (op == 0xD1 || op == 0xE1 || op == 0xF1) ? 2 : (op == 0xD2 || op == 0xE2 || op == 0xF2) ? 4 : 8;
+    int arithmetic = op == 0xE1 || op == 0xE2;
+    int left = op == 0xF1 || op == 0xF2 || op == 0xF3;
+    uint8_t source[64], count_source[64], result[64];
+    avx_get(c, instruction->vvvv, source);
+    avx_get_rm(state, c, instruction, next, 16, count_source);
+    uint64_t count;
+    memcpy(&count, count_source, 8);
+    int bits = element * 8;
+    for (int offset = 0; offset < width; offset += element) {
+        uint64_t value = 0;
+        memcpy(&value, source + offset, (size_t)element);
+        uint64_t shifted;
+        if (count >= (uint64_t)bits) {
+            if (arithmetic) {
+                int64_t sign_shift = 64 - bits;
+                shifted = (uint64_t)(((int64_t)(value << sign_shift) >> sign_shift) < 0 ? ~0ull : 0ull);
+            } else {
+                shifted = 0;
+            }
+        } else if (left) {
+            shifted = value << count;
+        } else if (arithmetic) {
+            int64_t sign_shift = 64 - bits;
+            int64_t signed_value = ((int64_t)(value << sign_shift)) >> sign_shift;
+            shifted = (uint64_t)(signed_value >> count);
+        } else {
+            shifted = value >> count;
+        }
+        memcpy(result + offset, &shifted, (size_t)element);
+    }
+    avx_put(c, instruction->reg, result, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2115,6 +2158,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map1_unpack(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_bitwise(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_horizontal_floating(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map1_scalar_shift(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
@@ -2191,47 +2235,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                 memcpy(d + 8, b, 8);
             }
             avx_put(c, rd, d, 16);
-            goto done;
-        }
-        // variable (scalar-count) shifts: count = low 64 bits of rm applied to every element.
-        case 0xD1:
-        case 0xD2:
-        case 0xD3: // vpsrlw/d/q (logical right)
-        case 0xE1:
-        case 0xE2: // vpsraw/d (arithmetic right)
-        case 0xF1:
-        case 0xF2:
-        case 0xF3: { // vpsllw/d/q (logical left)
-            int es = (op == 0xD1 || op == 0xE1 || op == 0xF1) ? 2 : (op == 0xD2 || op == 0xE2 || op == 0xF2) ? 4 : 8;
-            int arith = (op == 0xE1 || op == 0xE2);
-            int left = (op == 0xF1 || op == 0xF2 || op == 0xF3);
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, 16, b); // count is the low 64 bits of the r/m 128-bit operand
-            uint64_t cnt;
-            memcpy(&cnt, b, 8);
-            int bits = es * 8;
-            for (int i = 0; i < W; i += es) {
-                uint64_t x = 0;
-                memcpy(&x, a + i, (size_t)es);
-                uint64_t o;
-                if (cnt >= (uint64_t)bits) {
-                    if (arith) {
-                        int64_t sh = 64 - bits;
-                        o = (uint64_t)(((int64_t)(x << sh) >> sh) < 0 ? ~0ull : 0ull);
-                    } else
-                        o = 0;
-                } else if (left) {
-                    o = x << cnt;
-                } else if (arith) {
-                    int64_t sh = 64 - bits;
-                    int64_t sx = ((int64_t)(x << sh)) >> sh;
-                    o = (uint64_t)(sx >> cnt);
-                } else {
-                    o = x >> cnt;
-                }
-                memcpy(d + i, &o, (size_t)es);
-            }
-            avx_put(c, rd, d, W);
             goto done;
         }
         // compare-equal / greater (signed) by element width -> all-ones/zero mask
