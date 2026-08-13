@@ -28,7 +28,9 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
-    let normalized = normalize_function_pointer_annotations(&source.replace("_Thread_local", "             "));
+    let normalized = normalize_atomic_specifiers(&normalize_function_pointer_annotations(
+        &source.replace("_Thread_local", "             "),
+    ));
     let tree = parser
         .parse(&normalized, None)
         .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
@@ -51,6 +53,31 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+fn normalize_atomic_specifiers(source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut offset = 0;
+    while let Some(relative) = source[offset..].find("_Atomic(") {
+        let open = offset + relative + "_Atomic".len();
+        let mut depth = 1usize;
+        let mut cursor = open + 1;
+        while cursor < source.len() && depth != 0 {
+            match source.as_bytes()[cursor] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            cursor += 1;
+        }
+        if depth != 0 {
+            break;
+        }
+        normalized[open] = b' ';
+        normalized[cursor - 1] = b' ';
+        offset = cursor;
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
 }
 
 fn normalize_function_pointer_annotations(source: &str) -> String {
@@ -456,6 +483,18 @@ mod test {
     fn parser_accepts_c11_thread_local_storage() {
         let source = "typedef struct Options Options;\nstatic _Thread_local Options *current;\n";
         assert!(parse(Path::new("storage.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_parenthesized_c11_atomic_type() {
+        let source = "typedef struct Host Host;\nstatic _Atomic(const Host *) current;\n";
+        assert!(parse(Path::new("atomic.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_unclosed_parenthesized_c11_atomic_type() {
+        let source = "typedef struct Host Host;\nstatic _Atomic(const Host * current;\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
