@@ -38,12 +38,10 @@ impl Launch<'_> {
     fn watch_child(&self, child: i32) {
         let window = self.window.clone();
         let terminal = self.terminal.clone();
-        let born = std::time::Instant::now();
         glib::child_watch_add_local(glib::Pid(child), move |_pid, status| {
             let status = ChildStatus::from_wait(status);
-            if !status.succeeded() && born.elapsed() < std::time::Duration::from_millis(2500) {
-                terminal
-                    .feed(format!("\r\n\x1b[31mworkspace session ended immediately ({status})\x1b[0m\r\n").as_bytes());
+            if !status.succeeded() {
+                terminal.feed(format!("\r\n\x1b[31mworkspace session ended ({status})\x1b[0m\r\n").as_bytes());
                 return;
             }
             PaneView::new(&window, &terminal).close();
@@ -134,10 +132,9 @@ pub(crate) fn make_terminal_ex(
         .push(PaneRegistration::new(&term, slot.to_owned()));
     let application = application_path().to_string_lossy().into_owned();
     let workspace_key = tw.ws.key();
-    // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs hl). The debug-log path is
-    // passed to the worker explicitly: redirecting its standard streams would change the PTY contract being
-    // diagnosed.
-    let testcmd = AppConfig::get().command.as_ref();
+    // The terminal always enters the workspace worker. A host-shell override here can make a workspace
+    // look healthy while silently escaping the guest (for example, macOS `/bin/sh` reports `sh-3.2`).
+    // Keep diagnostics explicit without changing the PTY contract.
     let dbg = AppConfig::get().debug_log.as_ref();
     let cwd_arg = cwd.filter(|c| c.starts_with('/'));
     let directory = cwd_arg.as_deref().unwrap_or("");
@@ -150,11 +147,6 @@ pub(crate) fn make_terminal_ex(
         dbg.map_or("", String::as_str),
         directory,
     ];
-    let argv: Vec<&str> = if let Some(c) = &testcmd {
-        vec!["/bin/sh", "-c", c.as_str()]
-    } else {
-        launch_args
-    };
     // A CLEAN minimal env — NOT the full parent env. Husklet runs under the nix devshell, whose
     // DYLD_*/GTK/GI library-path vars would poison `hl`'s dynamic loader (and its forked engine),
     // crashing it at startup (SIGSEGV). Pass only what a shell needs.
@@ -175,7 +167,7 @@ pub(crate) fn make_terminal_ex(
     // NOTE: we deliberately do NOT use VTE's spawn_async — on macOS it fork()s inside the multithreaded
     // GTK process and does non-async-signal-safe work before exec, which crashes the child before it
     // runs (every command "exits 11"). Instead spawn via posix_spawn (async-safe) onto a PTY we own.
-    match PtyProcess::spawn(&term, &argv, &envv) {
+    match PtyProcess::spawn(&term, &launch_args, &envv) {
         Ok((child, pty)) => Launch {
             window: tw,
             terminal: &term,

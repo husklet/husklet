@@ -85,13 +85,18 @@ pub fn launch(
         .build()?;
     let socket = crate::runtime::domain::Domain::new(workspace).ensure(workspace)?;
     let client = hl_client::Client::unix(socket).map_err(LauncherError::io)?;
-    let session = runtime
+    let _workspace_session = runtime
         .block_on(WorkspaceContainer::ready(&client))
         .map_err(LauncherError::io)?;
+    // Workspaces currently expose no user-selection control. Match the root identity used to create the
+    // workspace container instead of inheriting an OCI image's advisory USER for interactive panes.
+    // Otherwise Ubuntu images open as the unprivileged `ubuntu` account and cannot administer their own
+    // package database. When user selection becomes public, it must flow through one explicit policy here.
+    let (terminal_user, terminal_home) = terminal_identity();
     let start_dir = cwd
         .map(str::trim)
         .filter(|value| value.starts_with('/') && !value.is_empty())
-        .unwrap_or_else(|| session.home());
+        .unwrap_or(terminal_home);
     let base = workspace
         .shell
         .as_deref()
@@ -113,7 +118,7 @@ pub fn launch(
         tty: true,
         env: Some(
             [
-                Some(format!("HOME={}", session.home())),
+                Some(format!("HOME={terminal_home}")),
                 slot.map(|slot| format!("{PANE_SLOT}={slot}")),
             ]
             .into_iter()
@@ -121,7 +126,7 @@ pub fn launch(
             .collect(),
         ),
         command: vec!["/bin/sh".into(), "-c".into(), command],
-        user: session.user().into(),
+        user: terminal_user.into(),
         working_dir: start_dir.into(),
         ..ExecConfig::default()
     };
@@ -219,6 +224,10 @@ pub fn launch(
     }))
 }
 
+fn terminal_identity() -> (&'static str, &'static str) {
+    ("0:0", "/root")
+}
+
 struct WorkspaceContainer;
 
 impl WorkspaceContainer {
@@ -259,9 +268,14 @@ impl WorkspaceContainer {
 
 #[cfg(test)]
 mod pane_execution_tests {
-    use super::PaneExecution;
+    use super::{PaneExecution, terminal_identity};
     use crate::config::WorkspaceConfig;
     use hl_ws::Arch;
+
+    #[test]
+    fn terminal_defaults_to_the_administrative_workspace_identity() {
+        assert_eq!(terminal_identity(), ("0:0", "/root"));
+    }
 
     #[test]
     fn pane_execution_identity_survives_reopen_and_is_cleared_by_its_owner_only() {

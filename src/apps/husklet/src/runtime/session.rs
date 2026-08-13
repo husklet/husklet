@@ -132,14 +132,6 @@ impl Session {
         })
     }
 
-    pub(super) fn user(&self) -> &str {
-        &self.user
-    }
-
-    pub(super) fn home(&self) -> &str {
-        &self.home
-    }
-
     pub(super) fn label(&self, spec: hl_container::ContainerSpec) -> hl_container::ContainerSpec {
         spec.label(USER_LABEL, &self.user).label(HOME_LABEL, &self.home)
     }
@@ -269,8 +261,8 @@ mod tests {
 
         let session = Session::from_root("", root.path()).unwrap();
 
-        assert_eq!(session.user(), "1001:1001");
-        assert_eq!(session.home(), "/home/husklet");
+        assert_eq!(session.user, "1001:1001");
+        assert_eq!(session.home, "/home/husklet");
         let provision = session.provision.unwrap();
         assert!(provision.passwd.contains("husklet:x:1001:1001:"));
         assert!(provision.group.contains("husklet:x:1001:"));
@@ -290,8 +282,8 @@ mod tests {
 
         let session = Session::from_root("ubuntu", root.path()).unwrap();
 
-        assert_eq!(session.user(), "1000:1002");
-        assert_eq!(session.home(), "/home/ubuntu");
+        assert_eq!(session.user, "1000:1002");
+        assert_eq!(session.home, "/home/ubuntu");
         assert!(session.provision.is_none());
     }
 
@@ -301,7 +293,7 @@ mod tests {
 
         let session = Session::from_root("", root.path()).unwrap();
 
-        assert_eq!(session.user(), "1000:1000");
+        assert_eq!(session.user, "1000:1000");
         assert!(session.provision.unwrap().passwd.starts_with("husklet:x:1000:1000:"));
     }
 }
