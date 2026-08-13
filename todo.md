@@ -25,7 +25,8 @@ This is the authoritative checklist for the C-primary production migration. Chec
 - [x] Keep all C and headers inside `hl-native/src/native`; keep Rust bindings/wrapper under `hl-native/src`.
 - [x] Expose a slim opaque Rust API around the C engine and isolate/document every unsafe ABI boundary.
 - [x] Route `hl-engine` lifecycle through `hl-native` and remove dependencies on deleted Rust runtime packages.
-- [ ] Make `hl-engine` own and service `hl-native`'s checkpoint broker/trigger transport for every checkpoint-enabled production machine; prove an actual guest checkpoint reaches the configured sink instead of exiting for a missing broker descriptor.
+- [x] Make `hl-engine` own and service `hl-native`'s checkpoint broker/trigger transport for every checkpoint-enabled production machine; prove an actual guest checkpoint reaches the configured sink instead of exiting for a missing broker descriptor.
+  Merged commit `f5c825c25` keeps broker, trigger, and control descriptors engine-private, delivers checkpoint requests to registered executor threads, and commits real capture data to the Rust sink. The three-process capture/restore test passed both guest ISAs in five consecutive clean runs; merged-tip native tests pass 43 active tests with two intentional external-gate ignores.
 - [x] Give `hl-native` a configured zero-local-dependency budget in `lint.toml`.
 - [x] Install the Cargo-built private shared library beside packaged products with relocatable Linux/macOS loader paths and portable artifact naming.
 - [x] Prove installed-product execution on Linux from a fresh copied prefix, including sibling-library selection, relocatable RUNPATH, backend receipts, and artifact hashes.
