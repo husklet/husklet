@@ -28,9 +28,9 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
-    let normalized = normalize_offsetof_designators(&normalize_computed_goto(&normalize_gnu_attributes(
-        &normalize_atomic_specifiers(&normalize_function_pointer_annotations(&normalize_complex_macro(
-            &source.replace("_Thread_local", "             "),
+    let normalized = normalize_va_arg_types(&normalize_offsetof_designators(&normalize_computed_goto(
+        &normalize_gnu_attributes(&normalize_atomic_specifiers(&normalize_function_pointer_annotations(
+            &normalize_complex_macro(&source.replace("_Thread_local", "             ")),
         ))),
     )));
     let tree = parser
@@ -55,6 +55,21 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+fn normalize_va_arg_types(source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut offset = 0;
+    while let Some(relative) = source[offset..].find("va_arg(") {
+        let start = offset + relative + "va_arg(".len();
+        let Some(comma) = source[start..].find(',').map(|comma| start + comma) else { break };
+        let Some(close) = source[comma..].find(')').map(|close| comma + close) else { break };
+        for byte in &mut normalized[comma + 1..close] {
+            if *byte == b'*' { *byte = b' '; }
+        }
+        offset = close + 1;
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
 }
 
 fn normalize_offsetof_designators(source: &str) -> String {
@@ -193,6 +208,7 @@ fn first_unrecoverable_error<'tree>(node: tree_sitter::Node<'tree>, source: &str
             || conditional_statement_directive(node, source)
             || annotation_prefix(node, source)
             || builtin_offsetof_type_argument(node, source)
+            || va_arg_type_argument(node, source)
             || enclosing_macro_invocation(node, source)
         {
             return None;
@@ -291,6 +307,27 @@ fn builtin_offsetof_type_argument(mut node: tree_sitter::Node<'_>, source: &str)
                 .child_by_field_name("function")
                 .and_then(|function| function.utf8_text(source.as_bytes()).ok())
                 == Some("__builtin_offsetof")
+        {
+            return true;
+        }
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        node = parent;
+    }
+}
+
+fn va_arg_type_argument(mut node: tree_sitter::Node<'_>, source: &str) -> bool {
+    loop {
+        if node.kind() == "call_expression"
+            && node
+                .child_by_field_name("function")
+                .and_then(|function| function.utf8_text(source.as_bytes()).ok())
+                == Some("va_arg")
+            && node
+                .utf8_text(source.as_bytes())
+                .ok()
+                .is_some_and(balanced_parentheses)
         {
             return true;
         }
@@ -679,6 +716,18 @@ mod test {
         let source = "struct cpu { unsigned long sigmask; };\n\
                       int offset(void) { return (int)__builtin_offsetof(struct cpu, sigmask); }\n";
         assert!(parse(Path::new("offset.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_va_arg_with_pointer_type() {
+        let source = "#include <stdarg.h>\nvoid *next(va_list args) { return va_arg(args, void **); }\n";
+        assert!(parse(Path::new("varargs.c"), source).is_ok());
+    }
+
+    #[test]
+    fn parser_rejects_unclosed_va_arg_with_pointer_type() {
+        let source = "#include <stdarg.h>\nvoid *next(va_list args) { return va_arg(args, void **; }\n";
+        assert!(parse(Path::new("invalid.c"), source).is_err());
     }
 
     #[test]
