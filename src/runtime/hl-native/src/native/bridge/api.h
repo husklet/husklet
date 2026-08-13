@@ -13,6 +13,16 @@ typedef struct hl_c_backend hl_c_backend;
 HL_EXTERN_C_BEGIN
 
 HL_API int32_t hl_c_backend_leak_check_nonvacuity(void);
+/* Checkpoint transport descriptors are owned by the caller. Adoption borrows
+ * and duplicates both inputs before moving the duplicates into private space. */
+HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *child);
+HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t timeout_ms,
+                                                     uint64_t *host_pid);
+HL_API int32_t hl_c_backend_checkpoint_trigger_create(int32_t *descriptor, void **mapping);
+HL_API uint32_t hl_c_backend_checkpoint_trigger_bump(void *mapping);
+HL_API void hl_c_backend_checkpoint_trigger_destroy(void *mapping, int32_t descriptor);
+HL_API int32_t hl_c_backend_checkpoint_adopt(int32_t broker, int32_t trigger);
+HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(void);
 /* output is required and is cleared before any other input is validated; every failure leaves it NULL. */
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host,
                                    int32_t executable_fd, const hl_c_main_image_plan *image_plan,

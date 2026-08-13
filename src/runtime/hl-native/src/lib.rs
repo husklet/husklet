@@ -7,12 +7,16 @@
 mod bindings;
 #[cfg(test)]
 mod build_support;
+#[cfg(unix)]
+mod checkpoint;
 mod engine;
 mod provider;
 
 #[cfg(test)]
 mod artifact;
 
+#[cfg(unix)]
+pub use checkpoint::{CheckpointBroker, CheckpointTransport};
 pub use engine::{Engine, EngineConfig, Exit};
 pub use provider::leak_check_nonvacuity;
 
