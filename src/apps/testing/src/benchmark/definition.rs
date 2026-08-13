@@ -344,7 +344,7 @@ pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
 
 fn file_hash(path: &Path) -> Result<String, Error> {
     let metadata = fs::symlink_metadata(path)?;
-    let mut identity = FramedIdentity::new(b"husklet-benchmark-file-v2")?;
+    let mut identity = FramedIdentity::new(b"husklet-benchmark-file-v3")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -354,6 +354,7 @@ fn file_hash(path: &Path) -> Result<String, Error> {
             metadata.gid(),
             &mut identity,
         )?;
+        identity.field(&metadata.nlink().to_le_bytes())?;
     }
     #[cfg(not(unix))]
     identity.field(&[u8::from(metadata.permissions().readonly())])?;
@@ -406,6 +407,18 @@ mod tests {
         let before = super::file_hash(&path).unwrap();
         xattr::set(&path, "user.husklet-benchmark", b"changed capability").unwrap();
         assert_ne!(before, super::file_hash(&path).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_artifact_identity_includes_hardlink_aliases() {
+        let temporary = tempfile::tempdir().unwrap();
+        let executable = temporary.path().join("engine");
+        fs::write(&executable, b"engine").unwrap();
+        let before = super::file_hash(&executable).unwrap();
+        fs::hard_link(&executable, temporary.path().join("engine-alias")).unwrap();
+        let after = super::file_hash(&executable).unwrap();
+        assert_ne!(before, after, "a hard-link alias must change executable identity");
     }
 
     #[test]
