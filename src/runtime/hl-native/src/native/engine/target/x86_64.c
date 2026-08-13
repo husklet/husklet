@@ -368,13 +368,11 @@ static void address_load(void *context, int width, int rt, int rn) {
 
 static void address_record_guest(void *context, int reg, int rip_relative) {
     (void)context;
-    if (rip_relative) {
-        e_movconst(16, g_nonpie_bias);
-        e_rrr(A_SUB, 16, reg, 16, 1, 0);
-        e_str(16, 28, OFF_SOFT_GUEST_EA);
-    } else {
-        e_str(reg, 28, OFF_SOFT_GUEST_EA);
-    }
+    (void)rip_relative;
+    // Effective addresses are architectural guest coordinates. Displaced ET_EXEC PCs are now
+    // canonical throughout x86 lowering, so a RIP-relative address is already LOW; subtracting the
+    // storage bias here wrapped it into 0xffff... and exposed that engine-private value as si_addr.
+    e_str(reg, 28, OFF_SOFT_GUEST_EA);
     g_address_recorded = 1;
 }
 
