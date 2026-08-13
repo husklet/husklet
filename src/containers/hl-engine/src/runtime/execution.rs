@@ -150,7 +150,7 @@ impl ProductionMachine {
             provider_fd: -1,
         };
         // SAFETY: all pointers in config remain live for this call and there is no callback state.
-        let engine = unsafe { hl_native::Engine::create(config) }.map_err(|_| EngineError::LaunchFailed)?;
+        let engine = unsafe { hl_native::Engine::create(config) }.map_err(EngineError::NativeCreateFailed)?;
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             engine
@@ -205,7 +205,7 @@ impl GuestMachine for ProductionMachine {
             .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
             .collect::<Result<Vec<_>, _>>()?;
         let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
-        engine.run(&pointers).map_err(|_| EngineError::LaunchFailed)?;
+        engine.run(&pointers).map_err(native_run_failure)?;
         #[cfg(unix)]
         if let Some(output) = &self.output {
             output.flush();
@@ -244,6 +244,20 @@ impl GuestMachine for ProductionMachine {
             return checkpoint.capture(engine.as_ref(), self.isa);
         }
         Err(EngineError::Unsupported)
+    }
+}
+
+fn native_run_failure(status: i32) -> EngineError {
+    EngineError::NativeRunFailed(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_run_status_survives_the_engine_boundary() {
+        assert_eq!(native_run_failure(13), EngineError::NativeRunFailed(13));
     }
 }
 
