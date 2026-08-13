@@ -357,6 +357,13 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             free(xargv[i]);                                // leaked xargv[255..ac-1] on every argc>255 execve
         G_RESET_REGS(c);
         c->nzcv = 0;
+        // Linux disables the calling thread's alternate signal stack on a
+        // successful exec. The guest exec is an in-process image reload, so
+        // reset the emulated state explicitly rather than inheriting storage
+        // that belonged to the unmapped predecessor image.
+        c->alt_sp = 0;
+        c->alt_size = 0;
+        c->alt_flags = 2; // SS_DISABLE
         G_TLS(c) = 0;
         G_SP(c) = sp;
         G_PC(c) = jump;
