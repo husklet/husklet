@@ -3,6 +3,7 @@
 mod definition;
 mod evidence;
 mod schedule;
+mod stage;
 mod verdict;
 
 use crate::suite::Error;
@@ -45,9 +46,15 @@ pub(crate) struct HashOptions {
     path: PathBuf,
 }
 
+pub(crate) use stage::Options as StageOptions;
+
 pub(crate) fn hash(options: HashOptions) -> Result<(), Error> {
     println!("{}", definition::artifact_identity(&options.path)?);
     Ok(())
+}
+
+pub(crate) fn stage(options: StageOptions) -> Result<(), Error> {
+    stage::run(options)
 }
 
 pub(crate) fn run(options: Options) -> Result<(), Error> {

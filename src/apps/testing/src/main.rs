@@ -40,6 +40,8 @@ enum Command {
     Benchmark(benchmark::Options),
     /// Print the exact artifact identity accepted by a benchmark campaign.
     BenchmarkHash(benchmark::HashOptions),
+    /// Stage content-bound artifacts for a real three-arm benchmark campaign.
+    BenchmarkStage(benchmark::StageOptions),
     /// Run self-contained runtime compatibility cases.
     Runtime(runtime::Options),
     #[command(hide = true)]
@@ -86,6 +88,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     match Cli::parse().command {
         Command::Benchmark(options) => benchmark::run(options),
         Command::BenchmarkHash(options) => benchmark::hash(options),
+        Command::BenchmarkStage(options) => benchmark::stage(options),
         Command::Runtime(options) => runtime::run(options).await,
         Command::RuntimeWorker(options) => runtime::worker(options).await,
         Command::Oracle(options) => runtime::oracle(options),
@@ -114,6 +117,7 @@ mod cli_tests {
         for command in [
             "benchmark",
             "benchmark-hash",
+            "benchmark-stage",
             "runtime",
             "oracle",
             "scenarios",
