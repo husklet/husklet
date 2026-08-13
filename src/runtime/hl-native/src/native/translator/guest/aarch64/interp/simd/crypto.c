@@ -1,3 +1,5 @@
+#include "../crypto/primitives.h"
+
 static int interp_simd_crypto(struct cpu *cpu, uint32_t insn, uint32_t decode, unsigned scalar, unsigned q,
                               unsigned u) {
     uint64_t gpc = cpu->pc;
