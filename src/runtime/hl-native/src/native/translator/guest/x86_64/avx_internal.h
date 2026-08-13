@@ -27,6 +27,11 @@ int avx_memory_read(const hl_x86_avx_state *state, uint64_t guest, void *destina
 int avx_memory_write(const hl_x86_avx_state *state, uint64_t guest, const void *source, size_t length);
 void avx_get_rm(const hl_x86_avx_state *state, struct cpu *cpu, struct insn *instruction, uint64_t next, int width,
                 uint8_t output[64]);
+void avx_get(struct cpu *cpu, int register_index, uint8_t output[64]);
+void avx_put(struct cpu *cpu, int register_index, const uint8_t input[64], int width);
+void avx_undefined(void);
+int avx_try_read(const hl_x86_avx_state *state, uint64_t guest, void *destination, size_t length);
+void avx_abandon(uint64_t guest, uint64_t length, uint32_t required);
 float avx_dnan_f32(float result, float left, float right);
 double avx_dnan_f64(double result, double left, double right);
 unsigned cvt_fp_flags(void);
@@ -56,5 +61,10 @@ int sat_s16(int value);
 extern const uint8_t k_aes_sbox[256];
 extern const uint8_t k_aes_isbox[256];
 void hl_x86_sse_execute(const hl_x86_avx_state *state, struct cpu *cpu);
+enum avx_dispatch_result avx_dispatch_vector(const hl_x86_avx_state *state, struct cpu *cpu, struct insn *instruction,
+                                             uint64_t next, int map, int op, int width);
+enum avx_dispatch_result avx_dispatch_special(const hl_x86_avx_state *state, struct cpu *cpu, struct insn *instruction,
+                                              uint64_t next, int map, int op, int prefix, int destination,
+                                              int first_register, int width);
 
 #endif
