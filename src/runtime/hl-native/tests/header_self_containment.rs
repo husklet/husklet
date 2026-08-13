@@ -125,6 +125,17 @@ int main(void) {
 }
 
 #[test]
+fn fatal_guest_signal_path_excludes_printf_family_formatting() {
+    let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/engine/log.c"))
+        .expect("read native logging source");
+    let start = source.find("void hl_log_guest_fatal(").expect("fatal diagnostic helper");
+    let body = &source[start..];
+    for forbidden in ["printf(", "snprintf(", "sprintf(", "hl_log_format(", "hl_log_message("] {
+        assert!(!body.contains(forbidden), "fatal signal path uses non-signal-safe {forbidden}");
+    }
+}
+
+#[test]
 fn owned_native_headers_are_self_contained() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");

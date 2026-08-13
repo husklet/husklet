@@ -112,9 +112,47 @@ void hl_log_format(const hl_log_context *context, uint32_t tag, const char *form
 
 void hl_log_guest_fatal(const hl_log_context *context, uint32_t signal, uint64_t pc, uint64_t sp, uint64_t lr) {
 #if defined(HL_ENABLE_LOGGING) && HL_ENABLE_LOGGING
+    static const char prefix[] = "[hl:signal] fatal-guest-signal signal=";
+    static const char pc_label[] = " pc=0x";
+    static const char sp_label[] = " sp=0x";
+    static const char lr_label[] = " lr=0x";
+    static const char digits[] = "0123456789abcdef";
+    char output[160];
+    char reverse[20];
+    size_t size = 0;
+    size_t index;
+    uint64_t value;
     if (!hl_log_enabled(context, HL_LOG_TAG_SIGNAL)) return;
-    hl_log_format(context, HL_LOG_TAG_SIGNAL, "fatal-guest-signal signal=%u pc=%#llx sp=%#llx lr=%#llx", signal,
-                  (unsigned long long)pc, (unsigned long long)sp, (unsigned long long)lr);
+    for (index = 0; index < sizeof(prefix) - 1u; ++index) output[size++] = prefix[index];
+    value = signal;
+    index = 0;
+    do {
+        reverse[index++] = (char)('0' + value % 10u);
+        value /= 10u;
+    } while (value != 0);
+    while (index != 0) output[size++] = reverse[--index];
+#define HL_FATAL_HEX(label, number)                                                                                  \
+    do {                                                                                                             \
+        size_t label_index;                                                                                          \
+        size_t shift = 60u;                                                                                          \
+        int emitted = 0;                                                                                             \
+        for (label_index = 0; label_index < sizeof(label) - 1u; ++label_index) output[size++] = (label)[label_index]; \
+        do {                                                                                                         \
+            unsigned nibble = (unsigned)(((number) >> shift) & 0xfu);                                                \
+            if (nibble != 0 || emitted || shift == 0) {                                                              \
+                output[size++] = digits[nibble];                                                                     \
+                emitted = 1;                                                                                         \
+            }                                                                                                        \
+            if (shift == 0) break;                                                                                   \
+            shift -= 4u;                                                                                             \
+        } while (1);                                                                                                 \
+    } while (0)
+    HL_FATAL_HEX(pc_label, pc);
+    HL_FATAL_HEX(sp_label, sp);
+    HL_FATAL_HEX(lr_label, lr);
+#undef HL_FATAL_HEX
+    output[size++] = '\n';
+    context->host->log->emit(context->host->context, HL_LOG_TAG_SIGNAL, output, size);
 #else
     (void)context;
     (void)signal;
