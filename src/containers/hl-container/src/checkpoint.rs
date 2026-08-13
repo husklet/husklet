@@ -1,4 +1,5 @@
 use std::fmt;
+use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -91,7 +92,8 @@ impl CheckpointImages for DirectoryImages {
         let root = self.root.join(namespace);
         std::fs::create_dir_all(&root)
             .map_err(|error| CheckpointError::new(format!("create checkpoint image: {error}")))?;
-        let current = match std::fs::read(root.join("current")) {
+        let current_pointer = std::fs::read(root.join("current"));
+        let (current, base) = match current_pointer {
             Ok(bytes) => {
                 let generation = std::str::from_utf8(&bytes)
                     .map_err(|_| CheckpointError::new("checkpoint current generation is not UTF-8"))?;
@@ -102,10 +104,10 @@ impl CheckpointImages for DirectoryImages {
                 if !path.is_dir() || !path.join("MANIFEST").is_file() {
                     return Err(CheckpointError::new("checkpoint current generation is incomplete"));
                 }
-                Some(path)
+                (Some(path), Some(bytes))
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                root.join("MANIFEST").is_file().then_some(root.clone())
+                (root.join("MANIFEST").is_file().then_some(root.clone()), None)
             }
             Err(error) => {
                 return Err(CheckpointError::new(format!(
@@ -118,6 +120,7 @@ impl CheckpointImages for DirectoryImages {
             root: root.clone(),
             state: Mutex::new(DirectoryImageState {
                 current,
+                base,
                 staging: root.join(&generation),
                 generation,
             }),
@@ -132,6 +135,7 @@ struct DirectoryImage {
 
 struct DirectoryImageState {
     current: Option<PathBuf>,
+    base: Option<Vec<u8>>,
     staging: PathBuf,
     generation: String,
 }
@@ -299,8 +303,32 @@ impl CheckpointImage for DirectoryImage {
                 .and_then(|root| root.sync_all())
                 .map_err(|error| CheckpointError::new(format!("sync checkpoint namespace: {error}")))?;
         }
-        Self::replace(&self.root.join("current"), state.generation.as_bytes())?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(self.root.join(".publication.lock"))
+            .map_err(|error| CheckpointError::new(format!("open checkpoint publication lock: {error}")))?;
+        fs2::FileExt::lock_exclusive(&lock)
+            .map_err(|error| CheckpointError::new(format!("lock checkpoint publication: {error}")))?;
+        let published = match std::fs::read(self.root.join("current")) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(CheckpointError::new(format!(
+                    "read checkpoint current generation: {error}"
+                )));
+            }
+        };
+        if published != state.base {
+            return Err(CheckpointError::new(
+                "checkpoint generation changed while capture was in progress",
+            ));
+        }
+        let generation = state.generation.as_bytes().to_vec();
+        Self::replace(&self.root.join("current"), &generation)?;
         state.current = Some(state.staging.clone());
+        state.base = Some(generation);
         state.generation = Self::generation();
         state.staging = self.root.join(&state.generation);
         Ok(())
@@ -326,6 +354,26 @@ mod tests {
         assert_eq!(restored.get("proc.1/pages").unwrap(), b"first");
         assert_eq!(restored.get("MANIFEST").unwrap(), b"manifest-one");
         assert_eq!(restored.list().unwrap(), ["MANIFEST", "proc.1/pages"]);
+    }
+
+    #[test]
+    fn stale_capture_cannot_replace_a_newer_committed_generation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("checkpoints");
+        let first_process = DirectoryImages::open(root.clone()).unwrap();
+        let second_process = DirectoryImages::open(root).unwrap();
+
+        let older = first_process.open("container").unwrap();
+        let newer = second_process.open("container").unwrap();
+        older.put("state", b"older").unwrap();
+        newer.put("state", b"newer").unwrap();
+
+        newer.commit(b"newer-manifest").unwrap();
+        assert!(older.commit(b"older-manifest").is_err());
+
+        let restored = first_process.open("container").unwrap();
+        assert_eq!(restored.get("state").unwrap(), b"newer");
+        assert_eq!(restored.get("MANIFEST").unwrap(), b"newer-manifest");
     }
 
     #[test]

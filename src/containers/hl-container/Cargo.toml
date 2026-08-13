@@ -11,6 +11,7 @@ readme = "../../../README.md"
 
 [dependencies]
 async-trait.workspace = true
+fs2.workspace = true
 hl-engine = { path = "../hl-engine", default-features = false }
 hl-fs = { path = "../../packages/hl-fs" }
 hl-images = { version = "0.1.0", path = "../hl-images" }
