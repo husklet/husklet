@@ -13,6 +13,7 @@ pub(crate) use environment::EnvironmentEntry;
 pub(crate) use host::EngineHost;
 use host::HostExclusion;
 use input::ManifestPath;
+pub(crate) use manifest::Rootfs;
 use manifest::{CompatClass, Oracle, RuntimeManifest, Status};
 pub(crate) use manifest::{GuestElf, GuestFile, GuestLibrary};
 use std::{
@@ -53,6 +54,7 @@ pub struct Workload {
     pub(in crate::runtime) inputs: Vec<ManifestPath>,
     status: Status,
     pub(crate) compat: CompatClass,
+    pub(crate) rootfs: Rootfs,
     pub soak: Option<scheduler::Plan>,
     pub targets: BTreeSet<Target>,
 }
@@ -201,6 +203,7 @@ impl App {
                     inputs,
                     status: case.status,
                     compat: case.compat.class,
+                    rootfs: case.rootfs,
                     soak: case.soak,
                     targets,
                 })

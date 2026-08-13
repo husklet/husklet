@@ -71,10 +71,9 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
     } else {
         Materialization::from_environment()
     };
-    let mut fixture = TestImage::materialize_with(&app.image, &target.platform(), mode)
-        .await
-        .map_err(|error| format!("materialize image {} for {}: {error}", app.image, target.name()))?;
+    let mut fixture = materialize(&app, case, target, mode).await?;
     let state = tempfile::tempdir().map_err(|error| format!("create container state directory: {error}"))?;
+
     let mut config = Config::new(state.path());
     if let Some(cache) = case.engine_options.translation_cache() {
         config = config.translation_cache(cache);
@@ -88,6 +87,22 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
         .await;
     fixture.release()?;
     Ok(results)
+}
+
+async fn materialize(
+    app: &App,
+    case: &super::definition::Workload,
+    target: Target,
+    mode: Materialization,
+) -> Result<TestImage, Error> {
+    let fixture = match case.rootfs {
+        super::definition::Rootfs::Image => TestImage::materialize_with(&app.image, &target.platform(), mode)
+            .await
+            .map_err(|error| format!("materialize image {} for {}: {error}", app.image, target.name()))?,
+        super::definition::Rootfs::Scratch => TestImage::materialize_scratch(&target.platform(), mode)
+            .map_err(|error| format!("materialize scratch root for {}: {error}", target.name()))?,
+    };
+    Ok(fixture)
 }
 
 async fn stage(
@@ -472,7 +487,8 @@ impl CaseExecution<'_> {
 
 #[cfg(test)]
 mod stderr_tests {
-    use super::{CLEANUP_TIMEOUT, cleanup_timeout_diagnostic, validate_outcome};
+    use super::{CLEANUP_TIMEOUT, cleanup_timeout_diagnostic, materialize, validate_outcome};
+    use crate::{runtime::definition::App, suite::Target};
     use hl_container::{ExitStatus, Logs};
 
     fn missing_profile() -> Result<(), super::Error> {
@@ -509,5 +525,27 @@ mod stderr_tests {
         let error =
             validate_outcome(ExitStatus::Code(0), 0, &Logs::default(), b"", &[], missing_profile()).unwrap_err();
         assert!(error.to_string().contains("crossings/translations"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn scratch_declaration_bypasses_the_document_image_and_yields_an_empty_root() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("probe.c"), "probe").unwrap();
+        std::fs::create_dir(directory.path().join("golden")).unwrap();
+        std::fs::write(directory.path().join("golden/probe.out"), []).unwrap();
+        let definition = directory.path().join("test.yaml");
+        std::fs::write(
+            &definition,
+            "targets: [arm64]\nimage: ':not-an-image'\nexecution: {}\nbuild:\n  compiler: { arm64: cc, amd64: cc }\n  flags: []\ncases:\n  - id: runtime/scratch-dispatch\n    status: active\n    compat: { class: compatibility }\n    rootfs: scratch\n    build: { source: probe.c, output: probe, flags: [] }\n    artifact: { destination: /probe }\n    run: []\n    expect: { exit: 0, stdout: golden/probe.out }\n",
+        )
+        .unwrap();
+        let app = App::load(directory.path(), &definition).unwrap();
+
+        let fixture = materialize(&app, &app.cases[0], Target::Arm64, super::Materialization::Overlay)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_dir(fixture.path()).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(fixture.lower().unwrap()).unwrap().count(), 0);
+        fixture.release().unwrap();
     }
 }

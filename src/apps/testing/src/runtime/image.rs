@@ -54,6 +54,8 @@ pub struct TestImage {
     unpacked: Option<UnpackedImage>,
     root: Root,
     runtime: RuntimeConfig,
+    /// A scratch case owns its isolated image catalog for the full container lifetime.
+    _scratch_store: Option<tempfile::TempDir>,
 }
 
 impl TestImage {
@@ -104,7 +106,33 @@ impl TestImage {
             unpacked: matches!(mode, Materialization::Overlay).then_some(unpacked),
             root,
             runtime,
+            _scratch_store: None,
         })
+    }
+
+    /// Creates a private OCI image whose single layer contains no entries.
+    ///
+    /// The catalog is per case, so neither image layers nor concurrent scratch cases can leak into
+    /// this root. The regular materialization path still supplies durable reference ownership and
+    /// exercises the same copy/overlay container launch contract as a registry image.
+    pub fn materialize_scratch(platform: &Platform, mode: Materialization) -> Result<Self, Error> {
+        let store = tempfile::tempdir().map_err(|error| format!("create scratch image store: {error}"))?;
+        let images = Images::open(store.path())?;
+        let mut archive = tar::Builder::new(Vec::new());
+        archive.finish()?;
+        let layer = archive.into_inner()?;
+        let runtime = RuntimeConfig {
+            entrypoint: Vec::new(),
+            command: Vec::new(),
+            environment: std::collections::BTreeMap::new(),
+            working_directory: "/".into(),
+            user: String::new(),
+        };
+        let name: Reference = "husklet.invalid/testing-scratch:empty".parse()?;
+        let image = images.commit(&layer, &runtime, platform, &name)?;
+        let mut fixture = Self::from_image(images, &image, platform, mode)?;
+        fixture._scratch_store = Some(store);
+        Ok(fixture)
     }
 
     fn open_root(images: &Images, reference: RootReference, mode: Materialization) -> Result<Root, Error> {
@@ -385,7 +413,7 @@ impl FailureText for str {
 
 #[cfg(test)]
 mod tests {
-    use super::{FailureText as _, ImageCache};
+    use super::{FailureText as _, ImageCache, Materialization, TestImage};
 
     #[test]
     fn only_shared_store_races_are_retried() {
@@ -426,6 +454,18 @@ mod tests {
         }
         for error in ["unauthorized", "manifest unknown", "invalid digest"] {
             assert!(!error.transient_registry_fault(), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn scratch_materialization_has_no_image_entries_in_either_shape() {
+        for mode in [Materialization::Copy, Materialization::Overlay] {
+            let fixture = TestImage::materialize_scratch(&Platform::linux_arm64(), mode).unwrap();
+            assert_eq!(std::fs::read_dir(fixture.path()).unwrap().count(), 0);
+            if let Some(lower) = fixture.lower() {
+                assert_eq!(std::fs::read_dir(lower).unwrap().count(), 0);
+            }
+            fixture.release().unwrap();
         }
     }
 

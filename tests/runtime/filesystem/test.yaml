@@ -124,9 +124,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/statfs_type.out }
   - id: runtime/filesystem/missing-root-stat
-    status: !unsupported
-      reason: "The canonical runtime runner does not yet provide this case’s isolated scratch-rootfs staging contract"
-      evidence: "tests/runtime/filesystem/ORACLE.md"
+    status: active
+    rootfs: scratch
     compat: { class: compatibility }
     build: { source: source/missing_stat.c, output: missing-root-stat, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/filesystem-missing-root-stat }
@@ -354,18 +353,16 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/sentry_fs.out, stderr: ["guest-sentry-stderr"] }
   - id: runtime/filesystem/scratch-exec
-    status: !unsupported
-      reason: "The canonical runtime runner does not yet provide this case’s isolated scratch-rootfs staging contract"
-      evidence: "tests/runtime/filesystem/ORACLE.md"
+    status: active
+    rootfs: scratch
     compat: { class: compatibility }
     build: { source: source/scratch_exec.c, output: scratch-exec, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/filesystem-scratch-exec }
     run: []
     expect: { exit: 0, stdout: golden/scratch_exec.out }
   - id: runtime/filesystem/x86-rootfs-smoke
-    status: !unsupported
-      reason: "The canonical runtime runner does not yet provide this case’s isolated scratch-rootfs staging contract"
-      evidence: "tests/runtime/filesystem/ORACLE.md"
+    status: active
+    rootfs: scratch
     targets: [amd64]
     compat: { class: compatibility }
     build: { source: source/rootfs_smoke.c, output: x86-rootfs-smoke, flags: [-static-pie, -O2] }

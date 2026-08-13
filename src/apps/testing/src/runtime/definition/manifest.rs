@@ -87,6 +87,8 @@ pub(super) struct RuntimeSpecification {
     pub(super) targets: BTreeSet<Target>,
     pub(super) status: Status,
     pub(super) compat: Compat,
+    #[serde(default)]
+    pub(super) rootfs: Rootfs,
     pub(super) soak: Option<scheduler::Plan>,
     pub(super) run: Vec<String>,
     #[serde(default)]
@@ -97,6 +99,16 @@ pub(super) struct RuntimeSpecification {
     #[serde(default)]
     pub(super) guest: Guest,
     pub(super) expect: Expectation,
+}
+
+/// Root filesystem supplied to one runtime case.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Rootfs {
+    #[default]
+    Image,
+    /// A private empty OCI root with only case-declared artifacts staged into it.
+    Scratch,
 }
 
 /// Guest-side state a case needs before its binary runs, which the image alone does not supply.
