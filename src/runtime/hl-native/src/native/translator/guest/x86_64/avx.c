@@ -2377,6 +2377,61 @@ static enum avx_dispatch_result avx_dispatch_map2_minimum_position(const hl_x86_
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map2_ssse3_arithmetic(const hl_x86_avx_state *state, struct cpu *c,
+                                                                   struct insn *instruction, uint64_t next, int map,
+                                                                   int width) {
+    int op = instruction->op;
+    int supported = op == 0x04 || (op >= 0x08 && op <= 0x0B) || (op >= 0x1C && op <= 0x1E);
+    if (map != 2 || !supported) return AVX_DISPATCH_UNMATCHED;
+    uint8_t left[64], right[64], result[64];
+    if (op >= 0x1C) {
+        avx_get_rm(state, c, instruction, next, width, right);
+        int element = op == 0x1C ? 1 : op == 0x1D ? 2 : 4;
+        for (int offset = 0; offset < width; offset += element) {
+            uint64_t value = 0;
+            memcpy(&value, right + offset, (size_t)element);
+            uint64_t output = simd_element_negative(value, element) ? simd_element_negate(value, element) : value;
+            memcpy(result + offset, &output, (size_t)element);
+        }
+    } else {
+        avx_get(c, instruction->vvvv, left);
+        avx_get_rm(state, c, instruction, next, width, right);
+        if (op == 0x04) {
+            for (int lane = 0; lane < width; lane += 16) {
+                int16_t output[8];
+                for (int pair = 0; pair < 8; pair++) {
+                    int product = (int)(uint8_t)left[lane + 2 * pair] * (int)(int8_t)right[lane + 2 * pair] +
+                                  (int)(uint8_t)left[lane + 2 * pair + 1] * (int)(int8_t)right[lane + 2 * pair + 1];
+                    output[pair] = (int16_t)sat_s16(product);
+                }
+                memcpy(result + lane, output, 16);
+            }
+        } else if (op <= 0x0A) {
+            int element = op == 0x08 ? 1 : op == 0x09 ? 2 : 4;
+            for (int offset = 0; offset < width; offset += element) {
+                uint64_t value = 0, sign = 0;
+                memcpy(&value, left + offset, (size_t)element);
+                memcpy(&sign, right + offset, (size_t)element);
+                uint64_t output = simd_element_negative(sign, element) ? simd_element_negate(value, element)
+                                  : sign == 0                          ? 0
+                                                                       : value;
+                memcpy(result + offset, &output, (size_t)element);
+            }
+        } else {
+            for (int offset = 0; offset < width; offset += 2) {
+                int16_t x, y;
+                memcpy(&x, left + offset, 2);
+                memcpy(&y, right + offset, 2);
+                int16_t output = (int16_t)((((x * y) >> 14) + 1) >> 1);
+                memcpy(result + offset, &output, 2);
+            }
+        }
+    }
+    avx_put(c, instruction->reg, result, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 // Arm the abandon pad, then emulate. A rejected guest access longjmps back here with *c already carrying
 // R_SOFTMISS (or R_TRAP for #UD) and cpu->rip left on the instruction.
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *c) {
@@ -2432,6 +2487,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_packed_numeric_conversion(state, c, &I, next, map, op, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_immediate_shuffle(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map2_horizontal_integer(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map2_ssse3_arithmetic(state, c, &I, next, map, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_scalar_integer_conversion(state, c, &I, next, map, op, pp, rd, vv) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_precision_conversion(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
@@ -2540,64 +2596,6 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
                     uint8_t ctl = b[lane + i];
                     d[lane + i] = (ctl & 0x80) ? 0 : a[lane + (ctl & 0x0F)];
                 }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x04: { // vpmaddubsw: word = sat16(uD[2k]*sB[2k] + uD[2k+1]*sB[2k+1]); src1 unsigned, src2 signed
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int lane = 0; lane < W; lane += 16) {
-                int16_t o[8];
-                for (int k = 0; k < 8; k++) {
-                    int p = (int)(uint8_t)a[lane + 2 * k] * (int)(int8_t)b[lane + 2 * k] +
-                            (int)(uint8_t)a[lane + 2 * k + 1] * (int)(int8_t)b[lane + 2 * k + 1];
-                    o[k] = (int16_t)sat_s16(p);
-                }
-                memcpy(d + lane, o, 16);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x08:   // vpsignb: dst = (src2<0)?-src1 : (src2==0)?0 : src1  (per element width)
-        case 0x09:   // vpsignw
-        case 0x0A: { // vpsignd
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            int es = (op == 0x08) ? 1 : (op == 0x09) ? 2 : 4;
-            for (int i = 0; i < W; i += es) {
-                uint64_t x = 0, y = 0;
-                memcpy(&x, a + i, (size_t)es);
-                memcpy(&y, b + i, (size_t)es);
-                uint64_t o = simd_element_negative(y, es) ? simd_element_negate(x, es) : y == 0 ? 0 : x;
-                memcpy(d + i, &o, (size_t)es);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x0B: { // vpmulhrsw: o = (((a*b)>>14)+1)>>1 signed words; src1=vvvv, src2=rm
-            avx_get(c, vv, a);
-            avx_get_rm(state, c, &I, next, W, b);
-            for (int i = 0; i < W; i += 2) {
-                int16_t x, y;
-                memcpy(&x, a + i, 2);
-                memcpy(&y, b + i, 2);
-                int16_t o = (int16_t)((((x * y) >> 14) + 1) >> 1);
-                memcpy(d + i, &o, 2);
-            }
-            avx_put(c, rd, d, W);
-            goto done;
-        }
-        case 0x1C:   // vpabsb: dst = |src| (single source r/m), per element width
-        case 0x1D:   // vpabsw
-        case 0x1E: { // vpabsd
-            avx_get_rm(state, c, &I, next, W, b);
-            int es = (op == 0x1C) ? 1 : (op == 0x1D) ? 2 : 4;
-            for (int i = 0; i < W; i += es) {
-                uint64_t x = 0;
-                memcpy(&x, b + i, (size_t)es);
-                uint64_t o = simd_element_negative(x, es) ? simd_element_negate(x, es) : x;
-                memcpy(d + i, &o, (size_t)es);
-            }
             avx_put(c, rd, d, W);
             goto done;
         }
