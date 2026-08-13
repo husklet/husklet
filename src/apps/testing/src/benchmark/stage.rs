@@ -79,7 +79,7 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     let python = python::PythonProfile::stage(&output, &docker, &arch)?;
     let sqlite = sqlite::SqliteProfile::stage(&output, &docker, &arch)?;
     let husklet = HuskletProfile::stage(&workspace, &output, &options.mac_cargo)?;
-    let python_husklet = stage_python_rootfs(&output, &docker, &husklet.command)?;
+    let python_husklet = PythonHusklet::stage(&output, &docker, &husklet.command)?;
     let sqlite_husklet = sqlite::SqliteProfile::stage_husklet(
         &output,
         &docker,
@@ -329,61 +329,63 @@ struct PythonHusklet {
     interpreter: PathBuf,
 }
 
-fn stage_python_rootfs(output: &Path, docker: &Path, command: &Path) -> Result<PythonHusklet, Error> {
-    let rootfs = output.join("python-rootfs");
-    let archive = output.join("python-rootfs.tar");
-    fs::create_dir(&rootfs)?;
-    let created = mac(&[
-        mac_path(docker),
-        "create".into(),
-        "--platform".into(),
-        "linux/amd64".into(),
-        python::IMAGE.into(),
-        "python3".into(),
-        "-c".into(),
-        "print(1)".into(),
-    ])?;
-    let container = String::from_utf8(created)?.trim().to_owned();
-    mac(&[
-        mac_path(docker),
-        "export".into(),
-        "--output".into(),
-        mac_path(&archive),
-        container.clone(),
-    ])?;
-    mac(&[mac_path(docker), "rm".into(), container])?;
-    mac(&[
-        "/mnt/mac/usr/bin/tar".into(),
-        "-xf".into(),
-        mac_path(&archive),
-        "-C".into(),
-        mac_path(&rootfs),
-    ])?;
-    fs::remove_file(&archive)?;
-    let interpreter = rootfs.join("usr/local/bin/python3.12");
-    let arguments = [
-        mac_path(command),
-        "--rootfs".into(),
-        rootfs.display().to_string(),
-        "usr/local/bin/python3.12".into(),
-        "-c".into(),
-        python::PLAIN_PROGRAM.into(),
-    ];
-    let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, PYTHON_TIMEOUT)?;
-    if captured.outcome != Outcome::Exited(Some(0)) || !captured.stderr.is_empty() {
-        return Err(format!(
-            "native-arm64 Husklet x86 Python failed with {:?}: {}",
-            captured.outcome,
-            String::from_utf8_lossy(&captured.stderr)
-        )
-        .into());
+impl PythonHusklet {
+    fn stage(output: &Path, docker: &Path, command: &Path) -> Result<Self, Error> {
+        let rootfs = output.join("python-rootfs");
+        let archive = output.join("python-rootfs.tar");
+        fs::create_dir(&rootfs)?;
+        let created = mac(&[
+            mac_path(docker),
+            "create".into(),
+            "--platform".into(),
+            "linux/amd64".into(),
+            python::IMAGE.into(),
+            "python3".into(),
+            "-c".into(),
+            "print(1)".into(),
+        ])?;
+        let container = String::from_utf8(created)?.trim().to_owned();
+        mac(&[
+            mac_path(docker),
+            "export".into(),
+            "--output".into(),
+            mac_path(&archive),
+            container.clone(),
+        ])?;
+        mac(&[mac_path(docker), "rm".into(), container])?;
+        mac(&[
+            "/mnt/mac/usr/bin/tar".into(),
+            "-xf".into(),
+            mac_path(&archive),
+            "-C".into(),
+            mac_path(&rootfs),
+        ])?;
+        fs::remove_file(&archive)?;
+        let interpreter = rootfs.join("usr/local/bin/python3.12");
+        let arguments = [
+            mac_path(command),
+            "--rootfs".into(),
+            rootfs.display().to_string(),
+            "usr/local/bin/python3.12".into(),
+            "-c".into(),
+            python::PLAIN_PROGRAM.into(),
+        ];
+        let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, PYTHON_TIMEOUT)?;
+        if captured.outcome != Outcome::Exited(Some(0)) || !captured.stderr.is_empty() {
+            return Err(format!(
+                "native-arm64 Husklet x86 Python failed with {:?}: {}",
+                captured.outcome,
+                String::from_utf8_lossy(&captured.stderr)
+            )
+            .into());
+        }
+        let native_frame = fs::read(output.join("python-plain-exact-output.frame"))?;
+        let husklet_frame = frame(&captured.stdout)?;
+        require_parity("python/plain Husklet", &native_frame, &husklet_frame)?;
+        fs::write(output.join("python-plain-husklet.out"), captured.stdout)?;
+        fs::write(output.join("python-plain-husklet-exact-output.frame"), husklet_frame)?;
+        Ok(Self { interpreter })
     }
-    let native_frame = fs::read(output.join("python-plain-exact-output.frame"))?;
-    let husklet_frame = frame(&captured.stdout)?;
-    require_parity("python/plain Husklet", &native_frame, &husklet_frame)?;
-    fs::write(output.join("python-plain-husklet.out"), captured.stdout)?;
-    fs::write(output.join("python-plain-husklet-exact-output.frame"), husklet_frame)?;
-    Ok(PythonHusklet { interpreter })
 }
 
 fn mac_path(path: &Path) -> String {
