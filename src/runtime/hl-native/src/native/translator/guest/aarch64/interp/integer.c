@@ -1007,6 +1007,69 @@ static int interp_exec_dp_register(struct cpu *cpu, uint32_t insn) {
     return interp_undefined(cpu, insn, "data-processing register -- unallocated encoding");
 }
 
+// MRS/MSR project architectural registers onto the engine's CPU model and per-thread state.
+static int interp_exec_system_register(struct cpu *cpu, uint32_t insn, uint64_t gpc) {
+    int rt = (int)(insn & 31);
+    uint32_t reg = insn & 0xFFFFFFE0u;
+    int is_read = (insn & 0x00200000u) != 0; // bit 21 is L: 1 = MRS, 0 = MSR
+
+    // HWCAP_CPUID is clear, so an EL1 ID-register access is architecturally undefined at EL0.
+    if (is_read && (insn & 0xFFFF0000u) == 0xD5380000u && !g_aarch64_cpu_model.user_id_registers) {
+        cpu->pc = gpc;
+        interp_raise_sync_signal(cpu, 4 /* SIGILL */, 1 /* ILL_ILLOPC */, pcrel_base(gpc));
+        return INTERP_END;
+    }
+    switch (reg) {
+    case 0xD53B0020u: // MRS CTR_EL0
+        interp_set_gpr(cpu, rt, g_aarch64_cpu_model.ctr_el0);
+        break;
+    case 0xD53B00E0u: // MRS DCZID_EL0
+        interp_set_gpr(cpu, rt, g_aarch64_cpu_model.dczid_el0);
+        break;
+    case 0xD53BD040u: // MRS TPIDR_EL0
+    case 0xD53BD060u: // MRS TPIDRRO_EL0
+        interp_set_gpr(cpu, rt, cpu->tls);
+        break;
+    case 0xD51BD040u: // MSR TPIDR_EL0
+        cpu->tls = interp_gpr(cpu, rt);
+        break;
+    case 0xD53B4200u: // MRS NZCV
+        interp_set_gpr(cpu, rt, cpu->nzcv & (INTERP_NZCV_N | INTERP_NZCV_Z | INTERP_NZCV_C | INTERP_NZCV_V));
+        break;
+    case 0xD51B4200u: // MSR NZCV
+        cpu->nzcv = interp_gpr(cpu, rt) & (INTERP_NZCV_N | INTERP_NZCV_Z | INTERP_NZCV_C | INTERP_NZCV_V);
+        break;
+    case 0xD53B4220u: // MRS DAIF
+        interp_set_gpr(cpu, rt, 0);
+        break;
+    case 0xD51B4220u: // MSR DAIF
+        break;
+    case 0xD53B4400u: // MRS FPCR
+        interp_set_gpr(cpu, rt, g_interp_fpcr);
+        break;
+    case 0xD51B4400u: // MSR FPCR
+        g_interp_fpcr = interp_gpr(cpu, rt) & INTERP_FPCR_WRITABLE;
+        break;
+    case 0xD53B4420u: // MRS FPSR
+        interp_set_gpr(cpu, rt, g_interp_fpsr);
+        break;
+    case 0xD51B4420u: // MSR FPSR
+        g_interp_fpsr = interp_gpr(cpu, rt) & INTERP_FPSR_WRITABLE;
+        break;
+    case 0xD53BE000u: // MRS CNTFRQ_EL0
+        interp_set_gpr(cpu, rt, UINT64_C(1000000000));
+        break;
+    case 0xD53BE020u: // MRS CNTPCT_EL0
+    case 0xD53BE040u: // MRS CNTVCT_EL0
+    case 0xD53BE0C0u: // MRS CNTVCTSS_EL0
+        interp_set_gpr(cpu, rt, now_ns());
+        break;
+    default: return interp_undefined(cpu, insn, "system -- unmodelled system register (MRS/MSR)");
+    }
+    cpu->pc = gpc + 4;
+    return INTERP_NEXT;
+}
+
 // Branches, exception generating and system instructions. Every form here ends the block.
 static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
     uint64_t gpc = cpu->pc;
@@ -1159,79 +1222,8 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
         return INTERP_NEXT;
     }
 
-    // MRS / MSR. Every value comes from g_aarch64_cpu_model (cpu.h) or emulated state, never the host.
-    if ((insn & 0xFFD00000u) == 0xD5100000u) {
-        int rt = (int)(insn & 31);
-        uint32_t reg = insn & 0xFFFFFFE0u;
-        int is_read = (insn & 0x00200000u) != 0; // bit 21 is L: 1 = MRS, 0 = MSR
-
-        // EL1 ID-register space. HWCAP_CPUID is clear, so EL0 has no ID-register emulation and the access is
-        // architecturally UNDEFINED -- a GUEST SIGILL, not an engine gap. translate.c emits a UDF word for the
-        // same mask, which faults into the same guest signal; answering 0 here made the two backends disagree
-        // and told a guest that had just been denied CPUID that its probe succeeded.
-        if (is_read && (insn & 0xFFFF0000u) == 0xD5380000u && !g_aarch64_cpu_model.user_id_registers) {
-            cpu->pc = gpc;
-            interp_raise_sync_signal(cpu, 4 /* SIGILL */, 1 /* ILL_ILLOPC */, pcrel_base(gpc));
-            return INTERP_END;
-        }
-        switch (reg) {
-        case 0xD53B0020u: // MRS CTR_EL0. IDC=1/DIC=0: no clean needed before re-reading guest writes, but
-                          // `ic ivau` must keep coming -- the engine's SMC interception point.
-            interp_set_gpr(cpu, rt, g_aarch64_cpu_model.ctr_el0);
-            break;
-        case 0xD53B00E0u: // MRS DCZID_EL0 -- the DC ZVA block size
-            interp_set_gpr(cpu, rt, g_aarch64_cpu_model.dczid_el0);
-            break;
-        case 0xD53BD040u: // MRS TPIDR_EL0 -- the thread pointer, emulated in cpu->tls
-            interp_set_gpr(cpu, rt, cpu->tls);
-            break;
-        case 0xD51BD040u: // MSR TPIDR_EL0
-            cpu->tls = interp_gpr(cpu, rt);
-            break;
-        case 0xD53BD060u: // MRS TPIDRRO_EL0 -- read-only alias
-            interp_set_gpr(cpu, rt, cpu->tls);
-            break;
-        case 0xD53B4200u: // MRS NZCV
-            interp_set_gpr(cpu, rt, cpu->nzcv & (INTERP_NZCV_N | INTERP_NZCV_Z | INTERP_NZCV_C | INTERP_NZCV_V));
-            break;
-        case 0xD51B4200u: // MSR NZCV -- only the four condition flags are writable
-            cpu->nzcv = interp_gpr(cpu, rt) & (INTERP_NZCV_N | INTERP_NZCV_Z | INTERP_NZCV_C | INTERP_NZCV_V);
-            break;
-        case 0xD53B4220u: // MRS DAIF -- nothing is masked at an emulated EL0
-            interp_set_gpr(cpu, rt, 0);
-            break;
-        case 0xD51B4220u: // MSR DAIF
-            break;
-        case 0xD53B4400u: // MRS FPCR
-            interp_set_gpr(cpu, rt, g_interp_fpcr);
-            break;
-        case 0xD51B4400u: // MSR FPCR
-            // The six trap-enable bits mask out and read back zero -- "no trapped FP exceptions", which
-            // is what glibc's feenableexcept() probes for.
-            g_interp_fpcr = interp_gpr(cpu, rt) & INTERP_FPCR_WRITABLE;
-            break;
-        case 0xD53B4420u: // MRS FPSR
-            interp_set_gpr(cpu, rt, g_interp_fpsr);
-            break;
-        case 0xD51B4420u: // MSR FPSR. Only the six IEEE sticky bits and QC are writable; the rest are RES0.
-            g_interp_fpsr = interp_gpr(cpu, rt) & INTERP_FPSR_WRITABLE;
-            break;
-        case 0xD53BE000u: // MRS CNTFRQ_EL0 -- 1 GHz, so the counter below IS a nanosecond count
-            interp_set_gpr(cpu, rt, UINT64_C(1000000000));
-            break;
-        case 0xD53BE020u: // MRS CNTPCT_EL0 (physical counter)
-        case 0xD53BE040u: // MRS CNTVCT_EL0 (virtual counter)
-        case 0xD53BE0C0u: // MRS CNTVCTSS_EL0 (self-synchronising virtual counter)
-            // The host monotonic clock clock_gettime is answered from: the two can never disagree.
-            interp_set_gpr(cpu, rt, now_ns());
-            break;
-        default:
-            // Unmodelled: report the encoding rather than answer 0 and fail far from the cause.
-            return interp_undefined(cpu, insn, "system -- unmodelled system register (MRS/MSR)");
-        }
-        cpu->pc = gpc + 4;
-        return INTERP_NEXT;
-    }
+    // Every value comes from the CPU model or emulated per-thread state, never the host.
+    if ((insn & 0xFFD00000u) == 0xD5100000u) return interp_exec_system_register(cpu, insn, gpc);
 
     if ((insn & 0xFFC00000u) == 0xD5000000u)
         return interp_undefined(cpu, insn, "system -- SYS/SYSL maintenance operation");
