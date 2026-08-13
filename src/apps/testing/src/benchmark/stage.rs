@@ -24,6 +24,9 @@ pub(crate) struct Options {
     /// New machine-local artifact directory beneath the repository workspace.
     #[arg(long)]
     output: PathBuf,
+    /// Cargo executable available on the macOS host.
+    #[arg(long, default_value = "cargo")]
+    mac_cargo: PathBuf,
 }
 
 pub(super) fn run(options: Options) -> Result<(), Error> {
@@ -71,8 +74,17 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     }
     let python = python::stage(&output, &docker, &arch)?;
     let sqlite = sqlite::stage(&output, &docker, &arch)?;
+    let husklet = stage_husklet_profile(&workspace, &output, &options.mac_cargo)?;
     let mut identities = String::from("artifact\tidentity\n");
-    for path in [&rootfs, &arch, &docker, &python.interpreter, &sqlite.command] {
+    for path in [
+        &rootfs,
+        &arch,
+        &docker,
+        &python.interpreter,
+        &sqlite.command,
+        &husklet.command,
+        &husklet.library,
+    ] {
         identities.push_str(&format!("{}\t{}\n", path.display(), artifact_identity(path)?));
     }
     identities.push_str(&format!("python-sqlite\t{}\n", python.sqlite_identity));
@@ -110,12 +122,88 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     identities.push_str(&format!("docker-image\t{IMAGE_ID}\n"));
     identities.push_str(&format!("python-docker-image\t{}\n", python::IMAGE_ID));
     fs::write(output.join("artifacts.tsv"), identities)?;
+    fs::write(
+        output.join("husklet-command.tsv"),
+        format!(
+            "command\t{}\narchitecture\tx86_64-apple-darwin\nsmoke\t--backend-receipt\nreceipt\t{}\n",
+            husklet.command.display(), husklet.receipt
+        ),
+    )?;
     fs::write(output.join("BLOCKERS.txt"), blockers())?;
     println!(
-        "READY malloc/plain malloc/sqlite python/plain python/sqlite sqlite/sqlite\nBLOCKED campaign: see {}/BLOCKERS.txt",
+        "READY malloc/plain malloc/sqlite python/plain python/sqlite sqlite/sqlite husklet/x86_64-macos\nBLOCKED campaign: see {}/BLOCKERS.txt",
         output.display()
     );
     Ok(())
+}
+
+struct HuskletProfile {
+    command: PathBuf,
+    library: PathBuf,
+    receipt: String,
+}
+
+fn stage_husklet_profile(workspace: &Path, output: &Path, cargo: &Path) -> Result<HuskletProfile, Error> {
+    let build = output.join("husklet-build");
+    mac(&[
+        "env".into(),
+        "HL_NATIVE_COMPILE_CHECK=1".into(),
+        "RUSTFLAGS=-C link-arg=-Wl,-rpath,@executable_path".into(),
+        format!("CARGO_TARGET_DIR={}", mac_path(&build)),
+        cargo.display().to_string(),
+        "build".into(),
+        "--manifest-path".into(),
+        mac_path(&workspace.join("Cargo.toml")),
+        "--package".into(),
+        "engine".into(),
+        "--bin".into(),
+        "hl-x86_64".into(),
+        "--release".into(),
+        "--target".into(),
+        "x86_64-apple-darwin".into(),
+    ])?;
+
+    let built_command = build.join("x86_64-apple-darwin/release/hl-x86_64");
+    let built_library = native_library(&build)?;
+    let profile = output.join("husklet-x86_64-macos");
+    fs::create_dir(&profile)?;
+    let command = profile.join("hl-x86_64");
+    let library = profile.join("libhl_native_engine.dylib");
+    // Publication is deliberately separate from the completed Cargo invocation.
+    fs::copy(&built_command, &command)?;
+    fs::copy(&built_library, &library)?;
+    let smoke = mac(&[
+        "arch".into(),
+        "-x86_64".into(),
+        mac_path(&command),
+        "--backend-receipt".into(),
+    ])?;
+    let receipt = String::from_utf8(smoke)?.trim().to_owned();
+    if !receipt.starts_with(
+        "{\"schema\":\"husklet-engine-backend-v1\",\"backend\":\"retained-c\",\"engine_sha256\":\"",
+    ) || !receipt.ends_with("\"}")
+    {
+        return Err("Husklet x86 Rosetta smoke emitted an invalid backend receipt".into());
+    }
+    Ok(HuskletProfile {
+        command,
+        library,
+        receipt,
+    })
+}
+
+fn native_library(build: &Path) -> Result<PathBuf, Error> {
+    let directory = build.join("x86_64-apple-darwin/release/build");
+    let libraries = fs::read_dir(&directory)?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|entry| entry.path().join("out/libhl_native_engine.dylib"))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    let [library] = libraries.as_slice() else {
+        return Err("x86 macOS build did not produce exactly one native engine library".into());
+    };
+    Ok(library.clone())
 }
 
 fn checked(program: &Path, arguments: &[String]) -> Result<Vec<u8>, Error> {
@@ -191,7 +279,7 @@ fn require_parity(workload: &str, native: &[u8], docker: &[u8]) -> Result<(), Er
 }
 
 fn blockers() -> &'static str {
-    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nMissing: selected, built Husklet x86 command profile and its smoke proof.\nMissing: balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
+    "Campaign not emitted: the staged workloads are compatibility inputs, not timing evidence.\nAvailable and exact-output matched: malloc/plain, malloc/sqlite, python/plain, python/sqlite, and sqlite/sqlite on Linux x86_64 and x86_64 Mach-O.\nAvailable: a built, hashed Husklet x86_64 macOS command and private library with a Rosetta backend-receipt smoke.\nBlocked: actual Linux guest execution under the Rosetta Husklet command does not complete.\nMissing: balanced-order campaign execution with a unique ledger, null/control arms, sustained quiet, binary hashes, and host-load evidence.\nPinned Docker images: alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce and python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df.\n"
 }
 
 fn stage_output(workspace: &Path, requested: &Path) -> Result<PathBuf, Error> {
@@ -228,9 +316,10 @@ mod tests {
     fn incomplete_stage_refuses_to_claim_a_campaign() {
         let text = blockers();
         assert!(text.starts_with("Campaign not emitted"));
-        for missing in ["balanced-order", "unique ledger", "Husklet x86"] {
+        for missing in ["balanced-order", "unique ledger", "Linux guest execution"] {
             assert!(text.contains(missing));
         }
+        assert!(text.contains("Husklet x86_64 macOS"));
     }
 
     #[test]
