@@ -252,7 +252,6 @@ static int smc_tracked_written(uint64_t address, uint64_t size) {
 // service pc-advance -- the per-arch syscall tail convention lives here; aarch64 does pc += 4 instead).
 // Each non-syscall case `continue`s the shared while-loop (so the shared `if (reason==R_TIER2) ...`
 // tail line never re-fires for x86). Verbatim from frontend/x86_64/dispatch.c. `break` exits the loop.
-#if defined(__APPLE__)
 #define G_DISPATCH_SOFTSPAN(c)                                                                                         \
     if ((c)->reason == R_SOFTSPAN) {                                                                                   \
         (c)->soft_snapshot = 0;                                                                                        \
@@ -260,9 +259,6 @@ static int smc_tracked_written(uint64_t address, uint64_t size) {
         (c)->reason = R_BRANCH;                                                                                        \
         continue;                                                                                                      \
     }
-#else
-#define G_DISPATCH_SOFTSPAN(c)
-#endif
 
 #define G_DISPATCH_REASON(c)                                                                                           \
     /* The C instruction emulators come FIRST and do not `continue` unconditionally: they run outside                  \
