@@ -72,6 +72,10 @@ int main(void) {
     }
     require_sqlite(sqlite3_finalize(insert), database, "finalize insert");
     uint64_t write = monotonic_microseconds() - write_started;
+    if (written != (sqlite3_int64)ROWS * WRITE_BATCHES) {
+        fputs("write proof changed\n", stderr);
+        return 3;
+    }
 
     uint64_t read_started = monotonic_microseconds();
     sqlite3_stmt *query = NULL;
