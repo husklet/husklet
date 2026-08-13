@@ -218,7 +218,7 @@ fn verify_artifact(label: &str, artifact: &Artifact, directory: bool) -> Result<
     let observed = if directory {
         tree_hash(&artifact.path)?
     } else {
-        FramedIdentity::of(&fs::read(&artifact.path)?)
+        file_hash(&artifact.path)?
     };
     if observed != artifact.sha256 {
         return Err(format!(
@@ -285,10 +285,29 @@ pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
     if metadata.is_dir() {
         tree_hash(path)
     } else if metadata.is_file() {
-        Ok(FramedIdentity::of(&fs::read(path)?))
+        file_hash(path)
     } else {
         Err("benchmark artifact is neither a regular file nor a directory".into())
     }
+}
+
+fn file_hash(path: &Path) -> Result<String, Error> {
+    let metadata = fs::symlink_metadata(path)?;
+    let mut identity = FramedIdentity::new(b"husklet-benchmark-file-v1")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        unix_attributes(
+            metadata.permissions().mode(),
+            metadata.uid(),
+            metadata.gid(),
+            &mut identity,
+        )?;
+    }
+    #[cfg(not(unix))]
+    identity.field(&[u8::from(metadata.permissions().readonly())])?;
+    identity.field(&fs::read(path)?)?;
+    Ok(identity.finish())
 }
 
 #[cfg(test)]
@@ -306,10 +325,24 @@ mod tests {
         let path = directory.path().join("engine");
         fs::write(&path, b"engine").unwrap();
         let artifact = Artifact {
+            sha256: super::file_hash(&path).unwrap(),
             path,
-            sha256: FramedIdentity::of(b"engine"),
         };
         verify_artifact("engine", &artifact, false).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_artifact_identity_includes_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("engine");
+        fs::write(&path, b"same engine bytes").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let before = super::file_hash(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_ne!(before, super::file_hash(&path).unwrap());
     }
 
     #[test]
@@ -365,7 +398,7 @@ mod tests {
         symlink(&target, &path).unwrap();
         let artifact = Artifact {
             path,
-            sha256: FramedIdentity::of(b"engine"),
+            sha256: super::file_hash(&target).unwrap(),
         };
         assert!(verify_artifact("engine", &artifact, false).is_err());
     }
