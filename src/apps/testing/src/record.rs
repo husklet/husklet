@@ -24,43 +24,11 @@ impl Cache {
         })
     }
 
-    /// Selects a typed receipt namespace without accepting a caller-provided path.
-    pub(crate) fn receipts(&self, namespace: ReceiptNamespace) -> Receipts {
-        let relative = match namespace {
-            ReceiptNamespace::Nested => PathBuf::from("nested"),
-            ReceiptNamespace::Provider(provider) => PathBuf::from("providers").join(provider.name()),
-        };
+    /// Selects the nested-build receipt namespace without accepting a caller-provided path.
+    pub(crate) fn receipts(&self) -> Receipts {
         Receipts {
-            root: self.root.join(relative),
+            root: self.root.join("nested"),
             store: self.root.join("store"),
-        }
-    }
-}
-
-/// Owners whose receipts have distinct provenance and reuse policy.
-#[derive(Clone, Copy)]
-pub(crate) enum ReceiptNamespace {
-    Nested,
-    #[allow(dead_code, reason = "provider receipts precede the provider pipeline stages")]
-    Provider(Provider),
-}
-
-#[allow(dead_code, reason = "provider receipts precede the provider pipeline stages")]
-#[derive(Clone, Copy)]
-pub(crate) enum Provider {
-    Engine,
-    Docker,
-    Qemu,
-    Host,
-}
-
-impl Provider {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Engine => "engine",
-            Self::Docker => "docker",
-            Self::Qemu => "qemu",
-            Self::Host => "host",
         }
     }
 }
@@ -273,7 +241,7 @@ mod tests {
     fn cache_rejects_paths_that_can_escape_the_testing_root() {
         assert!(Cache::new(Path::new("relative")).is_err());
         let cache = Cache::new(Path::new("/workspace")).unwrap();
-        let receipts = cache.receipts(ReceiptNamespace::Nested);
+        let receipts = cache.receipts();
         assert!(receipts.artifact(&key(b"recipe"), "hl-engine").is_ok());
         assert!(receipts.artifact("not-a-digest", "hl-engine").is_err());
         assert!(receipts.artifact(&key(b"recipe"), "../engine").is_err());
@@ -294,7 +262,7 @@ mod tests {
     fn publication_is_verified_and_repairable_under_the_key_lock() {
         let workspace = tempfile::tempdir().unwrap();
         let cache = Cache::new(workspace.path()).unwrap();
-        let receipts = cache.receipts(ReceiptNamespace::Nested);
+        let receipts = cache.receipts();
         let identity = key(b"recipe");
         let record = receipts.artifact(&identity, "hl-engine").unwrap();
         let _lock = receipts.lock(&identity).unwrap();
@@ -320,7 +288,7 @@ mod tests {
     fn corrupt_content_object_is_not_reused() {
         let workspace = tempfile::tempdir().unwrap();
         let cache = Cache::new(workspace.path()).unwrap();
-        let receipts = cache.receipts(ReceiptNamespace::Nested);
+        let receipts = cache.receipts();
         let identity = key(b"recipe");
         let record = receipts.artifact(&identity, "program").unwrap();
         let _lock = receipts.lock(&identity).unwrap();
@@ -338,21 +306,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_namespaces_do_not_share_receipts() {
-        let workspace = tempfile::tempdir().unwrap();
-        let cache = Cache::new(workspace.path()).unwrap();
-        let identity = key(b"same recipe");
-        let docker = cache.receipts(ReceiptNamespace::Provider(Provider::Docker));
-        let qemu = cache.receipts(ReceiptNamespace::Provider(Provider::Qemu));
-        let docker_record = docker.artifact(&identity, "program").unwrap();
-        let qemu_record = qemu.artifact(&identity, "program").unwrap();
-        let _lock = docker.lock(&identity).unwrap();
-        docker_record.publish(b"docker", false).unwrap();
-        assert!(docker_record.verify().unwrap());
-        assert!(!qemu_record.verify().unwrap());
-    }
-
-    #[test]
     fn concurrent_writers_publish_one_complete_idempotent_record() {
         let workspace = tempfile::tempdir().unwrap();
         let root = workspace.path().to_path_buf();
@@ -363,7 +316,7 @@ mod tests {
                 let identity = identity.clone();
                 std::thread::spawn(move || {
                     let cache = Cache::new(&root).unwrap();
-                    let receipts = cache.receipts(ReceiptNamespace::Nested);
+                    let receipts = cache.receipts();
                     let record = receipts.artifact(&identity, "program").unwrap();
                     let _lock = receipts.lock(&identity).unwrap();
                     record.publish(b"complete", true).unwrap();
@@ -375,48 +328,9 @@ mod tests {
             writer.join().unwrap();
         }
         let cache = Cache::new(&root).unwrap();
-        let receipts = cache.receipts(ReceiptNamespace::Nested);
+        let receipts = cache.receipts();
         let record = receipts.artifact(&identity, "program").unwrap();
         assert!(record.verify().unwrap());
         assert_eq!(fs::read(record.artifact()).unwrap(), b"complete");
-    }
-
-    #[test]
-    fn all_provider_receipt_namespaces_are_distinct() {
-        let cache = Cache::new(Path::new("/workspace")).unwrap();
-        let identity = key(b"recipe");
-        let paths = [Provider::Engine, Provider::Docker, Provider::Qemu, Provider::Host].map(|provider| {
-            cache
-                .receipts(ReceiptNamespace::Provider(provider))
-                .artifact(&identity, "program")
-                .unwrap()
-                .artifact
-        });
-        assert_eq!(
-            paths.iter().collect::<std::collections::BTreeSet<_>>().len(),
-            paths.len()
-        );
-    }
-
-    #[test]
-    fn receipt_modes_are_independent_for_identical_content() {
-        let workspace = tempfile::tempdir().unwrap();
-        let cache = Cache::new(workspace.path()).unwrap();
-        let identity = key(b"same recipe");
-        let engine = cache.receipts(ReceiptNamespace::Provider(Provider::Engine));
-        let host = cache.receipts(ReceiptNamespace::Provider(Provider::Host));
-        let executable = engine.artifact(&identity, "program").unwrap();
-        let data = host.artifact(&identity, "program").unwrap();
-        let _engine_lock = engine.lock(&identity).unwrap();
-        executable.publish(b"identical", true).unwrap();
-        let _host_lock = host.lock(&identity).unwrap();
-        data.publish(b"identical", false).unwrap();
-        assert_ne!(
-            fs::metadata(executable.artifact()).unwrap().permissions().mode() & 0o111,
-            0
-        );
-        assert_eq!(fs::metadata(data.artifact()).unwrap().permissions().mode() & 0o111, 0);
-        let store = workspace.path().join(".cache/testing/store/artifacts/sha256");
-        assert_eq!(fs::read_dir(store).unwrap().count(), 1);
     }
 }

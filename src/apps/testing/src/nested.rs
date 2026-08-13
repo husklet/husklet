@@ -361,7 +361,7 @@ impl Workspace {
         let identity = self.build_identity(build)?;
         let key = &identity.key;
         let cache = crate::record::Cache::new(&self.root)?;
-        let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
+        let receipts = cache.receipts();
         let record = receipts.artifact(key, &build.binary)?;
         let _lock = receipts.lock(key)?;
         if record.verify()? {
@@ -671,7 +671,7 @@ expect: { exit: 42, stdout: hello.txt }
     fn cache_receipt_rejects_changed_artifact() {
         let directory = tempfile::tempdir().unwrap();
         let cache = crate::record::Cache::new(directory.path()).unwrap();
-        let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
+        let receipts = cache.receipts();
         let key = "a".repeat(64);
         let record = receipts.artifact(&key, "hl-engine").unwrap();
         let _lock = receipts.lock(&key).unwrap();
@@ -686,12 +686,12 @@ expect: { exit: 42, stdout: hello.txt }
     fn concurrent_preparation_is_serialized_by_key() {
         let root = tempfile::tempdir().unwrap();
         let cache = crate::record::Cache::new(root.path()).unwrap();
-        let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
+        let receipts = cache.receipts();
         let key = "a".repeat(64);
         let first = receipts.lock(&key).unwrap();
         let thread = std::thread::spawn(move || {
             let cache = crate::record::Cache::new(root.path()).unwrap();
-            let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
+            let receipts = cache.receipts();
             receipts.lock(&key).unwrap()
         });
         drop(first);
