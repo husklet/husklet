@@ -488,8 +488,17 @@ fn qualify_null(values: &[f64], invariant: bool) -> Result<f64, Error> {
     }
     let mut all = values.to_vec();
     let center = median(&mut all);
-    let mut even = values.iter().step_by(2).copied().collect::<Vec<_>>();
-    let mut odd = values.iter().skip(1).step_by(2).copied().collect::<Vec<_>>();
+    // ORDER is AB, BA, BA, AB. Compare like-order rounds rather than parity:
+    // parity would mix one AB and one BA round into each purported order stratum.
+    let mut forward = Vec::new();
+    let mut reverse = Vec::new();
+    for (round, value) in values.iter().copied().enumerate() {
+        if round % 4 == 0 || round % 4 == 3 {
+            forward.push(value);
+        } else {
+            reverse.push(value);
+        }
+    }
     let middle = values.len() / 2;
     let mut early = values[..middle].to_vec();
     let mut late = values[middle..].to_vec();
@@ -497,7 +506,7 @@ fn qualify_null(values: &[f64], invariant: bool) -> Result<f64, Error> {
     if (center - 1.0).abs() > 0.01 {
         return Err("unqualified null: center".into());
     }
-    if [median(&mut even), median(&mut odd)]
+    if [median(&mut forward), median(&mut reverse)]
         .into_iter()
         .any(|value| (value - 1.0).abs() > 0.01)
     {
@@ -560,6 +569,9 @@ mod tests {
     #[test]
     fn null_qualification_is_fail_closed() {
         assert!((super::qualify_null(&[1.004, 0.997, 1.003, 0.998], false).unwrap() - 0.004).abs() < 1e-9);
+        // AB,BA,BA,AB has balanced order and temporal strata here. Grouping by
+        // round parity would incorrectly compare [1.02, 1.02] with [0.98, 0.98].
+        assert!((super::qualify_null(&[1.02, 0.98, 1.02, 0.98], false).unwrap() - 0.02).abs() < 1e-9);
         assert!(super::qualify_null(&[1.02; 4], false).is_err());
         assert!(super::qualify_null(&[1.051, 0.983, 0.983, 0.983], false).is_err());
     }
