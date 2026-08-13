@@ -20,7 +20,6 @@ hl-log = { path = "../../packages/hl-log" }
 hl-native = { path = "../../runtime/hl-native" }
 hl-process = { path = "../../packages/hl-process" }
 hl-engine = { path = "../../containers/hl-engine" }
-libc = "0.2"
 reflink-copy.workspace = true
 ring = "0.17.14"
 sha2.workspace = true
