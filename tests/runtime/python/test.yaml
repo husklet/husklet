@@ -9,7 +9,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-minimal, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-minimal, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-minimal }
     run: [-I, -u, -S, -c, "open('/tmp/husklet-cpython-proof', 'w').write('1\\n')"]
     expect: { exit: 0, stdout: golden/cpython_minimal.out }
@@ -17,7 +17,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-bigint, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-bigint, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-bigint }
     run: [-I, -u, -S, -c, "open('/tmp/husklet-cpython-proof', 'w').write(str((1 << 130) + 12345) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_bigint.out }
@@ -25,7 +25,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-hashlib, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-hashlib, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-hashlib }
     run: [-I, -u, -S, -c, "import hashlib; open('/tmp/husklet-cpython-proof', 'w').write(hashlib.sha256(b'husklet').hexdigest() + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_hashlib.out }
@@ -33,7 +33,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-json, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-json, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-json }
     run: [-X, faulthandler, -I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w', encoding='utf-8').write(json.dumps({'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_json.out }
@@ -41,7 +41,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-json-import, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-json-import, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-json-import }
     run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w').write('1\\n')"]
     expect: { exit: 0, stdout: golden/cpython_minimal.out }
@@ -49,7 +49,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-json-ascii, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-json-ascii, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-json-ascii }
     run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w').write(json.dumps({'value': 7}, sort_keys=True) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_json_ascii.out }
@@ -57,7 +57,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-json-unicode-escaped, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-json-unicode-escaped, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-json-unicode-escaped }
     run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w').write(json.dumps({'unicode': '\u03bb'}, sort_keys=True) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_json_unicode_escaped.out }
@@ -65,7 +65,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-json-ensure-ascii-false, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-json-ensure-ascii-false, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-json-ensure-ascii-false }
     run: [-I, -u, -S, -c, "import json; open('/tmp/husklet-cpython-proof', 'w').write(json.dumps({'value': 'x'}, sort_keys=True, ensure_ascii=False) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_json_ascii_text.out }
@@ -73,7 +73,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-json-pure-unicode, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-json-pure-unicode, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-json-pure-unicode }
     run: [-I, -u, -S, -c, "import json, json.encoder; json.encoder.c_make_encoder=None; open('/tmp/husklet-cpython-proof', 'w', encoding='utf-8').write(json.dumps({'unicode': '\u03bb'}, sort_keys=True, ensure_ascii=False) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_json.out }
@@ -81,7 +81,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-unicode, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-unicode, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-unicode }
     run: [-I, -u, -S, -c, "open('/tmp/husklet-cpython-proof', 'w', encoding='utf-8').write('\u03bb\\n')"]
     expect: { exit: 0, stdout: golden/cpython_unicode.out }
@@ -89,7 +89,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-generator, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-generator, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-generator }
     run: [-I, -u, -S, -c, "open('/tmp/husklet-cpython-proof', 'w').write(str(sum(i*i for i in range(1000))) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_generator.out }
@@ -97,7 +97,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python-thread, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python-thread, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python-thread }
     run: [-I, -u, -S, -c, "import threading; values=[]; t=threading.Thread(target=lambda: values.append(7)); t.start(); t.join(); open('/tmp/husklet-cpython-proof', 'w').write(str(values[0]) + '\\n')"]
     expect: { exit: 0, stdout: golden/cpython_thread.out }
@@ -105,7 +105,7 @@ cases:
     status: active
     compat: { class: compatibility }
     timeout: 120
-    build: { source: exec_python.c, output: exec-python, flags: [-static-pie, -O2] }
+    build: { source: exec.c, output: exec-python, flags: [-static-pie, -O2] }
     artifact: { destination: /opt/husklet/python/exec-python }
     run:
       - -I
