@@ -1406,6 +1406,41 @@ static enum avx_dispatch_result avx_dispatch_map1_bitwise(const hl_x86_avx_state
     return AVX_DISPATCH_HANDLED;
 }
 
+static enum avx_dispatch_result avx_dispatch_map1_duplicate(const hl_x86_avx_state *state, struct cpu *c,
+                                                            struct insn *instruction, uint64_t next, int map, int op,
+                                                            int prefix, int destination, int width) {
+    int double_duplicate = op == 0x12 && prefix == 3;
+    int low_single_duplicate = op == 0x12 && prefix == 2;
+    int high_single_duplicate = op == 0x16 && prefix == 2;
+    if (map != 1 || (!double_duplicate && !low_single_duplicate && !high_single_duplicate))
+        return AVX_DISPATCH_UNMATCHED;
+
+    uint8_t input[64], output[64];
+    if (double_duplicate && instruction->is_mem) {
+        int read_size = width == 16 ? 8 : width;
+        uint64_t address = avx_ea(state, c, instruction, next, read_size);
+        (void)avx_memory_read(state, address, input, (size_t)read_size);
+    } else {
+        avx_get_rm(state, c, instruction, next, width, input);
+    }
+    for (int lane = 0; lane < width; lane += 16) {
+        if (double_duplicate) {
+            int source = instruction->is_mem && width == 16 ? 0 : lane;
+            memcpy(output + lane, input + source, 8);
+            memcpy(output + lane + 8, input + source, 8);
+        } else {
+            int source = lane + (high_single_duplicate ? 4 : 0);
+            memcpy(output + lane, input + source, 4);
+            memcpy(output + lane + 4, input + source, 4);
+            memcpy(output + lane + 8, input + source + 8, 4);
+            memcpy(output + lane + 12, input + source + 8, 4);
+        }
+    }
+    avx_put(c, destination, output, width);
+    c->rip = next;
+    return AVX_DISPATCH_HANDLED;
+}
+
 static enum avx_dispatch_result avx_dispatch_lane_transfer(const hl_x86_avx_state *state, struct cpu *c,
                                                            struct insn *instruction, uint64_t next) {
     int op = instruction->op;
@@ -1862,6 +1897,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
     if (avx_dispatch_map1_sign_mask(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_unpack(state, c, &I, next, map, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (avx_dispatch_map1_bitwise(state, c, &I, next, map, op, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
+    if (avx_dispatch_map1_duplicate(state, c, &I, next, map, op, pp, rd, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_move(state, c, &I, next, op, pp, rd, vv, W) == AVX_DISPATCH_HANDLED) return;
     if (map == 1 && avx_dispatch_map1_floating_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED) goto done;
     if (map == 1 && avx_dispatch_map1_packed_integer_arithmetic(state, c, &I, next, W) == AVX_DISPATCH_HANDLED)
@@ -1944,30 +1980,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             avx_put_rm(state, c, &I, next, 8, d);
             goto done;
         }
-        case 0x12: {             // F2: vmovddup (dup low 64 per 128-lane); F3: vmovsldup (dup even dwords)
-            if (pp == 3) {       // vmovddup
-                uint8_t src[64]; // 128-bit reads m64; 256-bit reads m256
-                if (I.is_mem) {
-                    uint64_t ea = avx_ea(state, c, &I, next, L == 0 ? 8 : W);
-                    (void)avx_memory_read(state, ea, src, L == 0 ? 8u : (size_t)W);
-                } else
-                    avx_get(c, I.rm_reg, src);
-                for (int lane = 0; lane < W; lane += 16) {
-                    int so = (I.is_mem && L == 0) ? 0 : lane; // 128-bit mem source is a single m64
-                    memcpy(d + lane, src + so, 8);
-                    memcpy(d + lane + 8, src + so, 8);
-                }
-                avx_put(c, rd, d, W);
-                goto done;
-            } else if (pp == 2) { // vmovsldup
-                avx_get_rm(state, c, &I, next, W, b);
-                for (int i = 0; i < W; i += 8) {
-                    memcpy(d + i, b + i, 4);
-                    memcpy(d + i + 4, b + i, 4);
-                }
-                avx_put(c, rd, d, W);
-                goto done;
-            }
+        case 0x12: {
             // pp==0: VMOVHLPS (reg-reg) / VMOVLPS (m64); pp==1: VMOVLPD (m64). dst=reg, src1=vvvv.
             avx_get(c, vv, d);
             if (I.is_mem) { // VMOVLPS/VMOVLPD: dst.q0 = m64, dst.q1 = src1.q1
@@ -1992,16 +2005,7 @@ static void do_avx(const hl_x86_avx_state *state, struct cpu *c) {
             (void)avx_memory_write(state, ea, a + (op == 0x17 ? 8 : 0), 8);
             goto done;
         }
-        case 0x16: { // F3: vmovshdup (dup odd dwords)
-            if (pp == 2) {
-                avx_get_rm(state, c, &I, next, W, b);
-                for (int i = 0; i < W; i += 8) {
-                    memcpy(d + i, b + i + 4, 4);
-                    memcpy(d + i + 4, b + i + 4, 4);
-                }
-                avx_put(c, rd, d, W);
-                goto done;
-            }
+        case 0x16: {
             // pp==0: VMOVLHPS (reg-reg) / VMOVHPS (m64); pp==1: VMOVHPD (m64). dst=reg, src1=vvvv.
             avx_get(c, vv, d);
             if (I.is_mem) { // VMOVHPS/VMOVHPD: dst.q1 = m64, dst.q0 = src1.q0
