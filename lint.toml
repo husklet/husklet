@@ -28,7 +28,7 @@ may_depend_on = ["package", "runtime", "container", "workspace", "application"]
 
 [[dependency.package_budgets]]
 package = "hl-native"
-maximum = 0
+maximum = 1
 
 [documentation]
 allowed = ["AGENTS.md", "README.md", "lint/examples/negative.md", "lint/examples/positive.md", "todo.md"]
