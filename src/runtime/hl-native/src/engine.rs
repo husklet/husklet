@@ -459,6 +459,7 @@ fn layered_entry(parts: &[std::ffi::OsString], roots: &[File]) -> std::io::Resul
 fn open_components(root: &File, parts: &[std::ffi::OsString], directory: bool) -> std::io::Result<File> {
     use std::os::fd::{AsRawFd as _, FromRawFd as _};
     use std::os::unix::ffi::OsStrExt as _;
+    // SAFETY: root is a live owned descriptor and fcntl receives no pointer arguments.
     let duplicate = unsafe { libc::fcntl(root.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
     if duplicate < 0 {
         return Err(std::io::Error::last_os_error());
@@ -473,6 +474,7 @@ fn open_components(root: &File, parts: &[std::ffi::OsString], directory: bool) -
             | libc::O_NOFOLLOW
             | libc::O_CLOEXEC
             | if !final_part || directory { libc::O_DIRECTORY } else { 0 };
+        // SAFETY: current is live and name is a NUL-terminated buffer that outlives this call.
         let descriptor = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
         if descriptor < 0 {
             return Err(std::io::Error::last_os_error());
@@ -489,6 +491,7 @@ fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<Optio
     let name =
         std::ffi::CString::new(name.as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let mut metadata = MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: directory and name stay live, and metadata points to writable storage for one stat.
     let status = unsafe {
         libc::fstatat(
             directory.as_raw_fd(),
@@ -498,6 +501,7 @@ fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<Optio
         )
     };
     if status == 0 {
+        // SAFETY: successful fstatat initialized the entire stat value.
         return Ok(Some(unsafe { metadata.assume_init().st_mode }));
     }
     let error = std::io::Error::last_os_error();
@@ -517,6 +521,7 @@ fn read_link(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<std::p
     let name =
         std::ffi::CString::new(name.as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let mut bytes = vec![0_u8; 4096];
+    // SAFETY: directory and name stay live, and bytes exposes its initialized writable capacity.
     let count = unsafe {
         libc::readlinkat(
             directory.as_raw_fd(),
@@ -1286,6 +1291,7 @@ int main(int argc, char **argv) {
             std::thread::scope(|scope| {
                 let request = scope.spawn(|| engine.request(4, 0));
                 let deadline = Instant::now() + Duration::from_secs(5);
+                // SAFETY: the test barrier owns its process-global state and takes no pointers.
                 while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 2 {
                     assert!(
                         Instant::now() < deadline,
@@ -1294,6 +1300,7 @@ int main(int argc, char **argv) {
                     std::thread::yield_now();
                 }
                 let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                // SAFETY: the test barrier owns its process-global state and takes no pointers.
                 while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 3 {
                     assert!(
                         Instant::now() < deadline,
@@ -1311,8 +1318,10 @@ int main(int argc, char **argv) {
                     Err(12),
                     "ISA {isa} zero-executor acknowledgement changed"
                 );
+                // SAFETY: the test barrier owns its process-global state and takes no pointers.
                 assert_eq!(unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() }, 6);
                 let deadline = Instant::now() + Duration::from_secs(5);
+                // SAFETY: the test barrier owns its process-global state and takes no pointers.
                 while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 7 {
                     assert!(
                         Instant::now() < deadline,
