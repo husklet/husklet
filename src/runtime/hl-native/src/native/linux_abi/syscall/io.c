@@ -1,6 +1,7 @@
 #ifndef G_IS_DUP2_COMPAT
 #define G_IS_DUP2_COMPAT() 0 /* aarch64 guests have no legacy dup2; every case 24 is a real dup3 */
 #endif
+#include "binding/vector_validation.h"
 // Extracted from service(): I/O — fd read/write/seek + plain fd ops
 // (dup/dup3/fcntl/pipe2/sendfile/splice/tee/copy_file_range/fsync/etc). Returns 1 if nr was handled, 0 otherwise.
 // Included by service.c after service/helpers.c, before service() — same TU scope (globals + helpers).
@@ -522,15 +523,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
          */
         uint64_t total = 0;
         for (int i = 0; i < (int)a2; i++) {
-            uint64_t len = (uint64_t)imported[i].iov_len;
-            if (len > (uint64_t)SSIZE_MAX - total) {
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                return svc_done(c);
-            }
-            total += len;
-            uintptr_t base = (uintptr_t)imported[i].iov_base;
-            if (base + len < base || base + len > UINT64_C(0x0001000000000000)) {
-                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+            int validated = hl_guest_iov_validate((uint64_t)(uintptr_t)imported[i].iov_base,
+                                                  (uint64_t)imported[i].iov_len, &total);
+            if (validated != 0) {
+                G_RET(c) = (uint64_t)(int64_t)validated;
                 return svc_done(c);
             }
         }
@@ -649,15 +645,15 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 return svc_done(c);
             }
             break;
-        case 66:   // writev / pwritev: same as write/pwrite but the source is a scatter list. Linux copies
-        case 70: { // from each segment and reports EFAULT for the whole call if any segment straddles a guest
-                   // PROT_NONE page (copy_from_user faults); the host writev cannot see it because hl force-maps
-                   // the guest page host-readable, so reject here to match Linux. iovcnt is already bounded to
-                   // [1,1024] and the array validated above, so this only inspects real segments.
+        case 66:   // writev / pwritev: Linux can publish the readable prefix of one segment that straddles an
+        case 70: { // inaccessible page. A later segment whose byte zero faults instead fails the entire call.
+                   // Reject only wholly inaccessible segments here; guest_iov_range clamps a partial segment
+                   // before the host sees the force-mapped tail. The array is already validated and bounded.
             if (a1 && a2 && a2 <= 1024) {
                 const struct iovec *iov = (const struct iovec *)a1;
                 for (int i = 0; i < (int)a2; i++)
-                    if (iov[i].iov_len && gna_hit((uint64_t)(uintptr_t)iov[i].iov_base, iov[i].iov_len)) {
+                    if (iov[i].iov_len && guest_accessible_prefix((uint64_t)(uintptr_t)iov[i].iov_base,
+                                                                  iov[i].iov_len, HL_LOGICAL_VMA_READ) == 0) {
                         G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                         return svc_done(c);
                     }

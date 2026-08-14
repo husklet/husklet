@@ -7,6 +7,10 @@
 #define O_APPEND 0x400L
 #define SEEK_SET 0L
 #define SEEK_CUR 1L
+#define PROT_READ 1L
+#define PROT_WRITE 2L
+#define MAP_PRIVATE 2L
+#define MAP_ANONYMOUS 0x20L
 
 #if defined(__x86_64__)
 #define SYS_EXIT 60
@@ -21,6 +25,8 @@
 #define SYS_WRITE 1
 #define SYS_OPENAT 257
 #define SYS_UNLINKAT 263
+#define SYS_MMAP 9
+#define SYS_MUNMAP 11
 static long call6(long n, long a, long b, long c, long d, long e, long f) {
     register long r10 __asm__("r10") = d;
     register long r8 __asm__("r8") = e;
@@ -44,6 +50,8 @@ static long call6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_WRITE 64
 #define SYS_OPENAT 56
 #define SYS_UNLINKAT 35
+#define SYS_MMAP 222
+#define SYS_MUNMAP 215
 static long call6(long n, long a, long b, long c, long d, long e, long f) {
     register long x0 __asm__("x0") = a; register long x1 __asm__("x1") = b;
     register long x2 __asm__("x2") = c; register long x3 __asm__("x3") = d;
@@ -142,6 +150,22 @@ void _start(void) {
     if (call6(SYS_LSEEK, fd, 0, SEEK_SET, 0, 0, 0) != 0) finish(16);
     if (call6(SYS_READ, fd, (long)bytes, 7, 0, 0, 0) != 7
         || !same(bytes, "a1234fZ", 7)) finish(17);
+    long crossing_address = call6(SYS_MMAP, 0, 8192, PROT_READ | PROT_WRITE,
+                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (crossing_address < 0) finish(40);
+    for (int i = 0; i < 4096; ++i) ((unsigned char *)crossing_address)[i] = 'R';
+    if (call6(SYS_MUNMAP, crossing_address + 4096, 4096, 0, 0, 0, 0) != 0) finish(41);
+    volatile struct vector crossing = {(void *)crossing_address, 8192};
+    if (call6(SYS_PWRITEV, -1, (long)&crossing, 1, 8192, 0, 0) != -9) finish(42);
+    if (call6(SYS_PWRITEV, fd, (long)&crossing, 1, 8192, 0, 0) != 4096) finish(43);
+    long read_crossing_address = call6(SYS_MMAP, 0, 8192, PROT_READ | PROT_WRITE,
+                                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (read_crossing_address < 0) finish(44);
+    if (call6(SYS_MUNMAP, read_crossing_address + 4096, 4096, 0, 0, 0, 0) != 0) finish(45);
+    volatile struct vector read_crossing = {(void *)read_crossing_address, 8192};
+    if (call6(SYS_PREADV, fd, (long)&read_crossing, 1, 8192, 0, 0) != 4096
+        || ((unsigned char *)read_crossing_address)[0] != 'R'
+        || ((unsigned char *)read_crossing_address)[4095] != 'R') finish(46);
     if (call6(SYS_CLOSE, appender, 0, 0, 0, 0, 0) != 0) finish(18);
     if (call6(SYS_CLOSE, alias, 0, 0, 0, 0, 0) != 0) finish(19);
     if (call6(SYS_CLOSE, fd, 0, 0, 0, 0, 0) != 0) finish(20);
