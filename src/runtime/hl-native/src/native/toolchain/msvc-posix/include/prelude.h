@@ -105,6 +105,16 @@ void hl_windows_arc4random_buf(void *buffer, size_t size);
  * counterpart -- strtok_s, _stricmp, _strnicmp -- so compatibility.c forwards rather
  * than reimplementing. */
 char *strtok_r(char *string, const char *delimiters, char **save);
+/* mingw-w64 exposes these POSIX spellings as macros to the UCRT names.  This
+ * layer provides real POSIX symbols, so keep both the declarations and their
+ * compatibility.c definitions from being macro-renamed into recursive UCRT
+ * replacements. */
+#ifdef strcasecmp
+#undef strcasecmp
+#endif
+#ifdef strncasecmp
+#undef strncasecmp
+#endif
 int strcasecmp(const char *left, const char *right);
 int strncasecmp(const char *left, const char *right, size_t length);
 
