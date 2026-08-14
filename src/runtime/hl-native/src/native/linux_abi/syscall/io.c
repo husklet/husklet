@@ -649,6 +649,10 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         case 70: { // inaccessible page. A later segment whose byte zero faults instead fails the entire call.
                    // Reject only wholly inaccessible segments here; guest_iov_range clamps a partial segment
                    // before the host sees the force-mapped tail. The array is already validated and bounded.
+            if (guest_fd_rejects((int)a0, 0)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+                return svc_done(c);
+            }
             if (a1 && a2 && a2 <= 1024) {
                 const struct iovec *iov = (const struct iovec *)a1;
                 for (int i = 0; i < (int)a2; i++)
