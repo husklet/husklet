@@ -146,6 +146,44 @@ impl Clipboard {
 }
 
 impl Window {
+    /// Every tab, as its name, its widget, and the pane slots inside it.
+    ///
+    /// The terminal window is the only thing that knows this, and an extension
+    /// asking what it may split has to be told from here rather than from a
+    /// second registry that could disagree with the widgets.
+    pub(crate) fn tabs(window: &Rc<TermWin>) -> Vec<(String, gtk::Widget, Vec<String>)> {
+        let names: Vec<String> = window.entries.borrow().iter().map(|entry| entry.name.clone()).collect();
+        names
+            .into_iter()
+            .filter_map(|name| window.stack.child_by_name(&name).map(|widget| (name, widget)))
+            .map(|(name, widget)| {
+                let slots = Self::slots(window, &widget);
+                (name, widget, slots)
+            })
+            .collect()
+    }
+
+    /// The layout slots of every pane under one tab's widget.
+    pub(crate) fn slots(window: &Rc<TermWin>, widget: &gtk::Widget) -> Vec<String> {
+        let mut terminals = Vec::new();
+        PaneView::collect(widget, &mut terminals);
+        terminals
+            .iter()
+            .filter_map(|terminal| Slots::new(window).of(terminal))
+            .collect()
+    }
+
+    /// The pane registered under one slot, if it is still open.
+    pub(crate) fn pane(window: &Rc<TermWin>, slot: &str) -> Option<vte4::Terminal> {
+        let mut terminals = Vec::new();
+        for (_, widget, _) in Self::tabs(window) {
+            PaneView::collect(&widget, &mut terminals);
+        }
+        terminals
+            .into_iter()
+            .find(|terminal| Slots::new(window).of(terminal).as_deref() == Some(slot))
+    }
+
     pub(crate) fn open(app: &gtk::Application, ws: &WorkspaceConfig) {
         Self::open_page(app, ws, None);
     }
@@ -266,7 +304,7 @@ impl Window {
         // single fresh shell. The debug hooks below still layer on top.
         match Session::open(&tw.ws.storage_dir(&Home::current().root())) {
             Ok(saved) if !saved.tabs.is_empty() => WindowSession::new(&tw).restore(&saved),
-            Ok(_) => Tabs::new(&tw).terminal(),
+            Ok(_) => drop(Tabs::new(&tw).terminal()),
             Err(error) => {
                 hl_log::hl_error!(
                     hl_log::tag::RUNTIME,

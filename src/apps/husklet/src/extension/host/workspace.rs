@@ -9,31 +9,78 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hl_extension::port::{Division, HostError, TabSummary, TerminalSurface};
-use hl_extension::{ExtensionName, Manifest, Record, Services, WorkspaceInfo};
+use hl_extension::{ExtensionName, Record, Services, WorkspaceInfo};
 
 use super::super::conversation::Conversation;
+use super::super::roster::described;
 use super::super::sidecar::{Image, Sidecar, SidecarSpec};
 use super::super::{Bridge, Extensions, Records};
 use super::{Plan, Supply};
 use crate::config::WorkspaceConfig;
 
+impl super::Host {
+    /// Starts hosting one named extension of one workspace.
+    ///
+    /// The terminal surface is the window's, because the terminal is widgets
+    /// and this host runs off the main loop; a host given none tells an
+    /// extension that asks so plainly.
+    #[must_use]
+    pub fn extension(
+        workspace: &WorkspaceConfig,
+        name: &ExtensionName,
+        terminal: Arc<dyn TerminalSurface + Send + Sync>,
+        audience: super::Audience,
+    ) -> Self {
+        Self::open(Workspace::extension(workspace, name).through(terminal), audience)
+    }
+}
+
 /// The real supply: one workspace, its records, and its container daemon.
 pub struct Workspace {
-    workspace: WorkspaceConfig,
+    config: WorkspaceConfig,
+    /// Which extension this supply serves. `None` means whichever one is
+    /// enabled, which is what a workspace with a single extension wants.
+    wanted: Option<ExtensionName>,
+    /// Where terminal calls are sent. `None` when no window offered one, in
+    /// which case an extension asking is told so plainly.
+    terminal: Option<Arc<dyn TerminalSurface + Send + Sync>>,
 }
 
 impl Workspace {
-    /// Binds a supply to one workspace.
+    /// Binds a supply to whichever extension of one workspace is enabled.
     #[must_use]
     pub fn new(workspace: &WorkspaceConfig) -> Self {
         Self {
-            workspace: workspace.clone(),
+            config: workspace.clone(),
+            wanted: None,
+            terminal: None,
         }
+    }
+
+    /// Binds a supply to one named extension of one workspace.
+    ///
+    /// Named rather than "whichever is enabled" because a workspace has a list
+    /// of extensions and each one is drawn on a page of its own, so each needs
+    /// a host that serves exactly its own record.
+    #[must_use]
+    pub fn extension(workspace: &WorkspaceConfig, name: &ExtensionName) -> Self {
+        Self {
+            config: workspace.clone(),
+            wanted: Some(name.clone()),
+            terminal: None,
+        }
+    }
+
+    /// Points the supply's terminal calls at a surface the window owns.
+    #[must_use]
+    pub fn through(mut self, terminal: Arc<dyn TerminalSurface + Send + Sync>) -> Self {
+        self.terminal = Some(terminal);
+        self
     }
 
     /// Where this workspace keeps its extension state and sockets.
     fn root(&self) -> PathBuf {
-        self.workspace.storage_dir(&crate::paths::hl_root())
+        self.config.storage_dir(&crate::paths::hl_root())
     }
 
     /// The socket one extension is given, in a directory of its own so
@@ -42,18 +89,25 @@ impl Workspace {
         self.root().join("extensions").join(format!("{name}.sock"))
     }
 
-    /// The record of the one extension that should be running, if there is one.
+    /// The record of the extension that should be running, if there is one.
+    ///
+    /// A named supply serves only its own record and only while it is enabled,
+    /// so disabling an extension takes its host down rather than leaving a
+    /// sidecar running behind a page that no longer offers it.
     fn record(&self) -> Result<Option<Record>, String> {
         let storage = hl_ws::storage::Directory::open(self.root()).map_err(|error| error.to_string())?;
         let records = Records::open(storage).map_err(|fault| fault.to_string())?;
         let all = records.all().map_err(|fault| fault.to_string())?;
-        Ok(all.into_iter().find(|record| record.enabled))
+        let wanted = self.wanted.as_ref();
+        Ok(all
+            .into_iter()
+            .find(|record| record.enabled && wanted.is_none_or(|name| *name == record.name)))
     }
 
     /// The workspace's own container daemon, started if it is not up.
     fn bridge(&self) -> Result<Arc<Bridge>, String> {
-        let domain = crate::runtime::domain::Domain::new(&self.workspace);
-        let socket = domain.ensure(&self.workspace).map_err(|error| error.to_string())?;
+        let domain = crate::runtime::domain::Domain::new(&self.config);
+        let socket = domain.ensure(&self.config).map_err(|error| error.to_string())?;
         Bridge::new(socket).map(Arc::new).map_err(|error| error.to_string())
     }
 
@@ -69,9 +123,9 @@ impl Workspace {
     /// What this workspace tells an extension about itself.
     fn describe(&self) -> WorkspaceInfo {
         WorkspaceInfo {
-            name: self.workspace.name.clone(),
-            architecture: self.workspace.arch.as_str().to_owned(),
-            image: self.workspace.image.clone(),
+            name: self.config.name.clone(),
+            architecture: self.config.arch.as_str().to_owned(),
+            image: self.config.image.clone(),
         }
     }
 }
@@ -93,7 +147,7 @@ impl Supply for Workspace {
             record,
             manifest,
             spec,
-            workspace: self.workspace.name.clone(),
+            workspace: self.config.name.clone(),
         }))
     }
 
@@ -110,14 +164,15 @@ impl Supply for Workspace {
     /// Returns why the conversation ended early, including the failure to bind
     /// the ports it is served against.
     fn attend(&self, _plan: &Plan, conversation: &mut Conversation) -> Result<(), String> {
-        let extensions = Extensions::open(&self.workspace).map_err(|error| error.to_string())?;
+        let extensions = Extensions::open(&self.config).map_err(|error| error.to_string())?;
         let console = Console;
+        let terminal: &dyn TerminalSurface = self.terminal.as_deref().unwrap_or(&console);
         let services = Services {
             workspace: self.describe(),
             containers: extensions.containers(),
             control: extensions.control(),
             images: extensions.images(),
-            terminal: &console,
+            terminal,
             files: extensions.files(),
         };
         conversation.serve(&services).map_err(|fault| fault.to_string())
@@ -133,32 +188,12 @@ impl Supply for Workspace {
     }
 }
 
-/// The manifest a record stands for.
-///
-/// A record is written down; a manifest is what an image declares. Until the
-/// two are stored together, the container is described from the record alone,
-/// which is the conservative direction: it grants exactly what was consented
-/// to and asks the image for its own entrypoint and user.
-fn described(record: &Record) -> Manifest {
-    Manifest {
-        name: record.name.clone(),
-        display_name: record.name.to_string(),
-        version: String::new(),
-        protocol: hl_extension::PROTOCOL,
-        capabilities: record.granted.clone(),
-        entrypoint: None,
-        activation: hl_extension::Activation::default(),
-        interface: None,
-        resources: hl_extension::Resources::default(),
-        filesystem_roots: Vec::new(),
-    }
-}
-
-/// The terminal an extension reaches from this host: none.
+/// The terminal an extension reaches when no window offered one.
 ///
 /// The terminal port belongs to the window that owns the surface, and this host
-/// runs off the main loop. An extension asking for it is told plainly rather
-/// than given an empty answer it would read as an empty workspace.
+/// runs off the main loop. A host started with no window behind it tells an
+/// extension so plainly rather than giving an empty answer it would read as an
+/// empty workspace.
 struct Console;
 
 impl TerminalSurface for Console {

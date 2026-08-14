@@ -10,8 +10,8 @@
 //! back narrow, because the only thing this module does is serialize and
 //! deserialize.
 
-use hl_ws::storage::{Key, Storage};
 use hl_extension::{ExtensionName, Record};
+use hl_ws::storage::{Key, Storage};
 
 /// Storage prefix every extension record lives below.
 pub const PREFIX: &str = "state/extensions";
@@ -135,8 +135,8 @@ fn parse(key: &Key, bytes: &[u8]) -> Result<Record, Fault> {
 #[cfg(test)]
 mod tests {
     use super::{Fault, Records, PREFIX};
-    use hl_ws::storage::{Directory, Key, Storage as _};
     use hl_extension::{Capability, ExtensionName, Grant, Installation, Manifest, Record};
+    use hl_ws::storage::{Directory, Key, Storage as _};
 
     fn manifest(capabilities: &[Capability]) -> Manifest {
         Manifest {

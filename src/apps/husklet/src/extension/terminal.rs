@@ -1,0 +1,238 @@
+//! The one host service that lives on the window's thread rather than the host's.
+//!
+//! Every other port reaches a daemon and can be called from wherever the
+//! extension is served. The terminal is widgets, and widgets may only be
+//! touched from the main loop, so this is a relay instead of an
+//! implementation: the port hands an [`Errand`] to whoever is drawing and waits
+//! for that thread to answer.
+//!
+//! A relay rather than a channel of one-way requests, because the protocol's
+//! terminal calls return values an extension acts on — the tab it just opened,
+//! the pane a split produced — and a call that answered before the work
+//! happened would hand back an identity nothing has yet.
+
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
+use std::time::Duration;
+
+use hl_extension::port::{Division, HostError, TabSummary, TerminalSurface};
+
+/// How long a relayed call waits for the window to answer.
+///
+/// The window answers on its own tick, so this is many ticks of slack. It
+/// exists so an extension is refused rather than held forever when the window
+/// it was talking to has gone away mid-call.
+pub const PATIENCE: Duration = Duration::from_secs(5);
+
+/// How many errands may wait before the extension's thread blocks.
+///
+/// One in flight is the normal case, because each call blocks its own
+/// conversation until it is answered; the slack is for several extensions
+/// asking at once.
+pub const CAPACITY: usize = 16;
+
+/// What an extension asked the terminal for.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Request {
+    /// Every tab and the panes in it.
+    Tabs,
+    /// A new tab under this title.
+    OpenTab(String),
+    /// A pane split off the named slot.
+    Split {
+        /// The pane being divided.
+        slot: String,
+        /// Which way it is divided.
+        division: Division,
+    },
+    /// A command run in the named slot.
+    Spawn {
+        /// The pane the command is typed into.
+        slot: String,
+        /// The command and its arguments.
+        command: Vec<String>,
+    },
+}
+
+/// What the window answered.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Answer {
+    /// The tabs, for [`Request::Tabs`].
+    Tabs(Vec<TabSummary>),
+    /// The identity of what was opened or split.
+    Slot(String),
+    /// The work was done and names nothing.
+    Done,
+}
+
+impl Answer {
+    /// The failure an answer of the wrong shape is.
+    ///
+    /// The window's mistake rather than the extension's, so it is reported as a
+    /// failure rather than as a refusal of what was asked for.
+    fn mismatch(&self) -> HostError {
+        HostError::Failed(format!("the terminal answered with {self:?}, which was not asked for"))
+    }
+}
+
+/// One request and the line it is answered on.
+pub struct Errand {
+    request: Request,
+    reply: SyncSender<Result<Answer, HostError>>,
+}
+
+impl Errand {
+    /// What was asked for.
+    #[must_use]
+    pub const fn request(&self) -> &Request {
+        &self.request
+    }
+
+    /// Answers it. An errand nobody is waiting for any more is not a failure:
+    /// the caller timed out or its conversation ended.
+    pub fn answer(self, answer: Result<Answer, HostError>) {
+        let _ = self.reply.try_send(answer);
+    }
+}
+
+impl std::fmt::Debug for Errand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Errand")
+            .field("request", &self.request)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The end the window drains, on its own tick.
+pub type Errands = Receiver<Errand>;
+
+/// The terminal port as an extension holds it: a sender and a wait.
+pub struct Relay {
+    errands: SyncSender<Errand>,
+}
+
+impl Relay {
+    /// Creates the port and the end the window drains.
+    #[must_use]
+    pub fn open() -> (Self, Errands) {
+        let (errands, drained) = std::sync::mpsc::sync_channel(CAPACITY);
+        (Self { errands }, drained)
+    }
+
+    /// Sends one request and waits out [`PATIENCE`] for the answer.
+    fn ask(&self, request: Request) -> Result<Answer, HostError> {
+        let (reply, answered) = std::sync::mpsc::sync_channel(1);
+        let errand = Errand { request, reply };
+        self.errands.try_send(errand).map_err(|_| unreachable())?;
+        match answered.recv_timeout(PATIENCE) {
+            Ok(answer) => answer,
+            Err(RecvTimeoutError::Timeout) => Err(HostError::Failed(
+                "the terminal did not answer within the time allowed".to_owned(),
+            )),
+            Err(RecvTimeoutError::Disconnected) => Err(unreachable()),
+        }
+    }
+
+    /// The identity an opening or a split produced.
+    fn slot(&self, request: Request) -> Result<String, HostError> {
+        match self.ask(request)? {
+            Answer::Slot(slot) => Ok(slot),
+            other => Err(other.mismatch()),
+        }
+    }
+}
+
+impl TerminalSurface for Relay {
+    /// # Errors
+    /// Returns a host failure when no window is drawing this workspace.
+    fn tabs(&self) -> Result<Vec<TabSummary>, HostError> {
+        match self.ask(Request::Tabs)? {
+            Answer::Tabs(tabs) => Ok(tabs),
+            other => Err(other.mismatch()),
+        }
+    }
+
+    /// # Errors
+    /// Returns a host failure when no window is drawing this workspace.
+    fn open_tab(&self, title: &str) -> Result<String, HostError> {
+        self.slot(Request::OpenTab(title.to_owned()))
+    }
+
+    /// # Errors
+    /// Returns a host failure when no window is drawing this workspace.
+    fn split(&self, slot: &str, division: Division) -> Result<String, HostError> {
+        self.slot(Request::Split {
+            slot: slot.to_owned(),
+            division,
+        })
+    }
+
+    /// # Errors
+    /// Returns a host failure when no window is drawing this workspace.
+    fn spawn(&self, slot: &str, command: &[String]) -> Result<(), HostError> {
+        match self.ask(Request::Spawn {
+            slot: slot.to_owned(),
+            command: command.to_vec(),
+        })? {
+            Answer::Done => Ok(()),
+            other => Err(other.mismatch()),
+        }
+    }
+}
+
+/// Said the same way whenever there is no window left to ask, so an extension
+/// can recognize it rather than reading a different sentence per call.
+fn unreachable() -> HostError {
+    HostError::Failed("no window is drawing this workspace, so the terminal cannot be reached".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Answer, Relay, Request};
+    use hl_extension::port::{Division, TerminalSurface as _};
+
+    #[test]
+    fn a_call_carries_its_request_and_takes_back_what_the_window_answered() {
+        let (relay, errands) = Relay::open();
+        let window = std::thread::spawn(move || {
+            let errand = errands.recv().expect("an errand");
+            assert_eq!(
+                errand.request(),
+                &Request::Split {
+                    slot: "shell-1".to_owned(),
+                    division: Division::Below,
+                }
+            );
+            errand.answer(Ok(Answer::Slot("shell-2".to_owned())));
+        });
+
+        let produced = relay.split("shell-1", Division::Below).expect("a pane");
+
+        assert_eq!(produced, "shell-2");
+        window.join().expect("the window thread");
+    }
+
+    #[test]
+    fn a_closed_window_refuses_rather_than_holding_the_extension() {
+        let (relay, errands) = Relay::open();
+        drop(errands);
+
+        let refused = relay.open_tab("Logs").expect_err("no window");
+
+        assert!(refused.to_string().contains("no window"), "got {refused}");
+    }
+
+    #[test]
+    fn an_answer_of_the_wrong_shape_is_the_windows_mistake() {
+        let (relay, errands) = Relay::open();
+        let window = std::thread::spawn(move || {
+            let errand = errands.recv().expect("an errand");
+            errand.answer(Ok(Answer::Done));
+        });
+
+        let refused = relay.open_tab("Logs").expect_err("the wrong answer");
+
+        assert!(refused.to_string().contains("not asked for"), "got {refused}");
+        window.join().expect("the window thread");
+    }
+}

@@ -21,8 +21,11 @@ mod host;
 mod image;
 mod inventory;
 mod listener;
+mod registration;
+mod roster;
 mod sidecar;
 mod state;
+mod terminal;
 
 use std::io;
 use std::path::PathBuf;
@@ -37,8 +40,11 @@ pub use host::{Audience, Host, Order, Overrun, Plan, Report, Standing, Supply};
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
 pub use listener::Listener;
+pub use registration::Candidate;
+pub use roster::{described, Entry, Refusal, Roster};
 pub use sidecar::{Image, Outcome, Sidecar, SidecarSpec};
 pub use state::{Fault, Records};
+pub use terminal::{Answer, Errand, Errands, Relay, Request};
 
 use crate::config::WorkspaceConfig;
 

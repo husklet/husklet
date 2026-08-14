@@ -138,11 +138,15 @@ impl<'a> Tabs<'a> {
 
     pub(crate) fn overview(&self) {
         let tw = self.window;
-        let dash = Overview::new(&tw.ws, tw.overview_page).view();
+        let dash = Overview::new(&tw.ws, tw.overview_page).within(tw).view();
         self.add(&tw.ws.name, Some("◧"), &dash, false);
     }
 
-    pub(crate) fn terminal(&self) {
+    /// Opens a shell tab and hands back its identity.
+    ///
+    /// The identity is returned rather than dropped because an extension that
+    /// asked for a tab has to be told which one it got.
+    pub(crate) fn terminal(&self) -> String {
         let tw = self.window;
         let n = tw.shell_no.get() + 1;
         tw.shell_no.set(n);
@@ -159,8 +163,9 @@ impl<'a> Tabs<'a> {
         let (term, pid) = make_terminal_ex(tw, cwd, None, &Slots::new(tw).allocate());
         paneroot.append(&term);
         let name = self.add(&format!("shell {n}"), None, &paneroot, true);
-        tw.pids.borrow_mut().entry(name).or_default().push(pid);
+        tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         term.grab_focus();
+        name
     }
 }
 
