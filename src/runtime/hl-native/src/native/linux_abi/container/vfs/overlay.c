@@ -50,6 +50,62 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_namespace_root(hl_vfs_cursor *outp
     return hl_vfs_cursor_root(g_root_fd, lowers, (size_t)g_nlower, output);
 }
 
+static hl_vfs_cursor *g_vfs_cwd_cursor;
+
+static int hl_vfs_cwd_cursor_set(const hl_vfs_cursor *cursor) {
+    hl_vfs_cursor *copy = calloc(1, sizeof *copy);
+    if (copy == NULL) return -ENOMEM;
+    int error = hl_vfs_cursor_clone(cursor, copy);
+    if (error != 0) {
+        free(copy);
+        return error;
+    }
+    if (g_vfs_cwd_cursor != NULL) {
+        hl_vfs_cursor_release(g_vfs_cwd_cursor);
+        free(g_vfs_cwd_cursor);
+    }
+    g_vfs_cwd_cursor = copy;
+    return 0;
+}
+
+static int hl_vfs_cwd_cursor_require(void) {
+    if (g_vfs_cwd_cursor != NULL) return 0;
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    if (!strcmp(g_cwd, "/")) {
+        error = hl_vfs_cwd_cursor_set(&root);
+    } else {
+        hl_vfs_cursor_entry entry;
+        error = hl_vfs_cursor_walk(&root, &root, g_cwd, 0, &entry);
+        if (error == 0) {
+            error = entry.kind == HL_VFS_CURSOR_DIRECTORY ? hl_vfs_cwd_cursor_set(&entry.directory) : -ENOTDIR;
+            hl_vfs_cursor_entry_release(&entry);
+        }
+    }
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_resolve_at(int dirfd, const char *path, int nofollow_final, hl_vfs_cursor_entry *output) {
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, output);
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
 static void wh_hostpath(const char *jcanon, size_t jclen, const char *guest, char *out,
                         // host path of the .wh.NAME marker
                         size_t n) {

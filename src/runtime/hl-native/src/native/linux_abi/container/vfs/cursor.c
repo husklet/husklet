@@ -1,5 +1,7 @@
 #define HL_VFS_CURSOR_LAYERS (HL_LINUX_VFS_LOWER_CAPACITY + 1)
+#define HL_VFS_MOUNT_NOEXEC (1u << 0)
 #include <stdatomic.h>
+#include <stdint.h>
 #if defined(__GNUC__) || defined(__clang__)
 #define HL_VFS_CURSOR_UNUSED __attribute__((unused))
 #else
@@ -12,6 +14,7 @@ typedef struct hl_vfs_cursor {
     int descriptors[HL_VFS_CURSOR_LAYERS];
     size_t count;
     int opaque_cut;
+    uint32_t mount_flags;
     char guest[4200];
     hl_vfs_cursor_parent *parent;
 } hl_vfs_cursor;
@@ -32,6 +35,7 @@ typedef struct hl_vfs_cursor_entry {
     hl_vfs_cursor_kind kind;
     int descriptor;
     struct stat status;
+    uint32_t mount_flags;
     hl_vfs_cursor directory;
     char symlink[4096];
 } hl_vfs_cursor_entry;
@@ -64,6 +68,7 @@ static int hl_vfs_cursor_clone(const hl_vfs_cursor *source, hl_vfs_cursor *outpu
     for (size_t index = 0; index < HL_VFS_CURSOR_LAYERS; index++)
         output->descriptors[index] = -1;
     output->opaque_cut = source->opaque_cut;
+    output->mount_flags = source->mount_flags;
     output->parent = source->parent;
     hl_vfs_cursor_parent_retain(output->parent);
     snprintf(output->guest, sizeof output->guest, "%s", source->guest);
@@ -161,6 +166,7 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
     }
     if (selected == cursor->count) return -ENOENT;
     output->status = selected_status;
+    output->mount_flags = cursor->mount_flags;
     if (S_ISLNK(selected_status.st_mode)) {
         ssize_t length =
             readlinkat(cursor->descriptors[selected], component, output->symlink, sizeof output->symlink - 1);
@@ -181,6 +187,7 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
     if (selected_directory < 0) return -errno;
     output->directory.descriptors[output->directory.count++] = selected_directory;
     output->directory.opaque_cut = hl_vfs_cursor_opaque(selected_directory);
+    output->directory.mount_flags = cursor->mount_flags;
     if (!output->directory.opaque_cut)
         for (size_t index = selected + 1; index < cursor->count; index++) {
             struct stat status;

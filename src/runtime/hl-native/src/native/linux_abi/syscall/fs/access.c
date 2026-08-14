@@ -30,6 +30,19 @@ static void svc_fs_access_49(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                 G_RET(c) = 0;
                 break;
             }
+            hl_vfs_cursor_entry destination;
+            int resolved = hl_vfs_cursor_resolve_at(-100, raw, 0, &destination);
+            if (resolved != 0 || destination.kind != HL_VFS_CURSOR_DIRECTORY) {
+                if (resolved == 0) hl_vfs_cursor_entry_release(&destination);
+                G_RET(c) = (uint64_t)(int64_t)(resolved != 0 ? resolved : -ENOTDIR);
+                break;
+            }
+            int changed = fchdir(destination.directory.descriptors[0]) == 0 ? 0 : -errno;
+            if (changed == 0) changed = hl_vfs_cwd_cursor_set(&destination.directory);
+            if (changed == 0) (void)path_copy(g_cwd, sizeof g_cwd, destination.directory.guest);
+            hl_vfs_cursor_entry_release(&destination);
+            G_RET(c) = (uint64_t)(int64_t)changed;
+            break;
         }
         // chdir (confined; tracks guest cwd)
         const char *p = atpath(-100, (const char *)a0, pb, sizeof pb, 0);
@@ -66,6 +79,17 @@ static void svc_fs_access_50(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
     case 50: {
         if (!g_untrusted && g_fdvis_control != NULL && !proc_fdvis_lookup((int)getpid(), (int)a0, NULL, NULL, NULL)) {
             G_RET(c) = (uint64_t)(int64_t)(-EBADF);
+            break;
+        }
+        if (g_rootfs) {
+            const hl_vfs_cursor *destination = hl_vfs_fd_cursor_get((int)a0);
+            if (destination == NULL) {
+                G_RET(c) = (uint64_t)(int64_t)-EBADF;
+                break;
+            }
+            int changed = fchdir((int)a0) == 0 ? hl_vfs_cwd_cursor_set(destination) : -errno;
+            if (changed == 0) (void)path_copy(g_cwd, sizeof g_cwd, destination->guest);
+            G_RET(c) = (uint64_t)(int64_t)changed;
             break;
         }
         int changed;
@@ -873,6 +897,30 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         if (r < 0 && errno == EMFILE) e = EMFILE;
         if (r >= 0 && nf_new) newfile_stamp_fd(r);
         if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
+        if (r >= 0) {
+            if ((lf & G_O_DIRECTORY) && r < HL_NFD) {
+                hl_vfs_cursor_entry authority;
+                memset(&authority, 0, sizeof authority);
+                authority.descriptor = -1;
+                for (size_t index = 0; index < HL_VFS_CURSOR_LAYERS; index++)
+                    authority.directory.descriptors[index] = -1;
+                int authority_error = hl_vfs_cursor_resolve_at((int)a0, (const char *)a1, nf_want, &authority);
+                struct stat opened_status, authority_status;
+                if (authority_error == 0 && authority.kind != HL_VFS_CURSOR_DIRECTORY) authority_error = -ENOTDIR;
+                if (authority_error == 0 &&
+                    (fstat(r, &opened_status) != 0 || fstat(authority.directory.descriptors[0], &authority_status) != 0 ||
+                     opened_status.st_dev != authority_status.st_dev || opened_status.st_ino != authority_status.st_ino))
+                    authority_error = -EAGAIN;
+                if (authority_error == 0) authority_error = hl_vfs_fd_cursor_publish(r, &authority.directory);
+                hl_vfs_cursor_entry_release(&authority);
+                if (authority_error != 0) {
+                    fd_reset_emul(r);
+                    close(r);
+                    r = -1;
+                    e = -authority_error;
+                }
+            }
+        }
         if (r >= 0) {
             char gp[4200];
             // canonical host path for tracking
