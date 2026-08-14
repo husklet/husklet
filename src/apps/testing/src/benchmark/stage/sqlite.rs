@@ -1,7 +1,7 @@
 use super::{Error, frame, husklet_rootfs_guest, mac, mac_path, mac_preparation_compile, require_parity};
 use std::{fs, path::Path};
 
-pub(super) const SOURCE: &str = "src/apps/testing/tests/fixtures/guest/sqlite.c";
+pub(super) const SOURCE: &str = "src/apps/testing/src/benchmark/stage/source/sqlite.c";
 const AMALGAMATION_SHA256: &str = "41716b44ac8777188c4c3f1f370f01c9cb9e3b6428eb5c981d086c35de2d9d3f";
 const SQLITE_C_SHA256: &str = "292cdfac26469d65501e4058c7a55ae0f811da78b2ae1e5c25db2ea44ae988f9";
 const SQLITE_H_SHA256: &str = "cef9adf8b309ab3e903f1da5cda9f208cf5b901aa21e944df2dc04d9cd0ccee7";
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn sqlite_fixture_measures_write_and_read_with_stable_proofs() {
-        let source = include_str!("../../../tests/fixtures/guest/sqlite.c");
+        let source = include_str!("source/sqlite.c");
         assert!(SOURCE.ends_with("/sqlite.c"));
         assert!(source.contains("clock_gettime(CLOCK_MONOTONIC"));
         assert!(source.contains("PHASE sqlite-write us=%llu ok=%lld"));
