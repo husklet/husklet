@@ -1,0 +1,24 @@
+cases:
+- id: terminal-search-cancel/ctrl-g-aborts-search
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      steps:
+      - write: { text: "n=0\r" }
+      - write: { text: "n=$((n+1)); printf '<OLD-%s>\\n' \"$n\"\r" }
+      - await_output: { contains: "<OLD-1>", timeout_ms: 5000 }
+      - write: { text: "\u0012" }
+      - write: { text: "n=$((n+1))" }
+      - await_output: { contains: reverse-i-search, timeout_ms: 5000 }
+      - write: { text: "\u0007" }
+      - write: { text: "printf '<FRESH-%s>\\n' \"$n\"\r" }
+      - await_output: { contains: "<FRESH-1>", timeout_ms: 5000 }
+      - reject_output: { text: "<FRESH-2>" }
+      - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/search_cancelled.txt, golden/shell_ok.txt]
