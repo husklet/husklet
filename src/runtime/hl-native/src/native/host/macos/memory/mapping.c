@@ -113,6 +113,11 @@ static hl_host_result hl_macos_protect(void *context, hl_host_handle handle, uin
     return result == 0 ? hl_macos_result(HL_STATUS_OK, 0, 0) : hl_macos_errno();
 }
 
+static int hl_macos_mapping_unmap(void *context, void *address, size_t size) {
+    (void)context;
+    return munmap(address, size);
+}
+
 static hl_host_result hl_macos_release(void *context, hl_host_handle handle) {
     hl_host_macos *host = context;
     hl_macos_mapping *mapping;
@@ -123,22 +128,11 @@ static hl_host_result hl_macos_release(void *context, hl_host_handle handle) {
         pthread_mutex_unlock(&host->lock);
         return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     }
-    /* Unmap what the handle still holds, not the frame. A partial unmap can have given a subrange
-     * back, and the address space is free to have handed that subrange to someone else since. With
-     * no holes this is the one whole-frame munmap it has always been. */
-    {
-        uint64_t held_offset;
-        uint64_t held_size;
-        uint32_t part = 0;
-        result = 0;
-        while (result == 0 &&
-               hl_host_hole_set_held_range(&mapping->retired, mapping->size, part, &held_offset, &held_size)) {
-            result = munmap((char *)mapping->writable + held_offset, (size_t)held_size);
-            ++part;
-        }
-    }
-    if (mapping->executable != NULL && mapping->executable != mapping->writable)
-        (void)munmap(mapping->executable, (size_t)mapping->size);
+    /* Each accepted native unmap is committed to the handle before another is attempted. A failed
+     * release therefore remains retryable and never forgets a live alias or claims one already
+     * returned to the address space. */
+    result = hl_host_mapping_release(&mapping->writable, &mapping->executable, mapping->size, &mapping->retired,
+                                     hl_macos_mapping_unmap, NULL);
     if (result == 0) hl_macos_retire_mapping_locked(mapping);
     pthread_mutex_unlock(&host->lock);
     return result == 0 ? hl_macos_result(HL_STATUS_OK, 0, 0) : hl_macos_errno();

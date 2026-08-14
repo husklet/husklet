@@ -63,6 +63,8 @@ typedef struct hl_host_hole_set {
     uint32_t capacity;
 } hl_host_hole_set;
 
+typedef int (*hl_host_range_unmap)(void *context, void *address, size_t size);
+
 static inline void hl_host_hole_set_release(hl_host_hole_set *set) {
     if (set == NULL) return;
     free(set->entries);
@@ -158,6 +160,60 @@ static inline int hl_host_hole_set_held_range(const hl_host_hole_set *set, uint6
         *size = span - cursor;
         return 1;
     }
+    return 0;
+}
+
+/* Record the successful release of one currently-held range without allocating. The released
+ * range is necessarily bordered by an existing hole unless it is the whole frame; joining those
+ * neighbors can only preserve or reduce the entry count. This is the bookkeeping primitive a
+ * retryable whole-mapping teardown needs after the native VM has already accepted the unmap. */
+static inline void hl_host_hole_set_release_held(hl_host_hole_set *set, uint64_t offset, uint64_t size) {
+    uint64_t high = offset + size;
+    uint32_t before = UINT32_MAX;
+    uint32_t after = UINT32_MAX;
+    uint32_t index;
+    for (index = 0; index < set->count; ++index) {
+        uint64_t hole_high = set->entries[index].offset + set->entries[index].size;
+        if (hole_high == offset) before = index;
+        if (set->entries[index].offset == high) after = index;
+    }
+    if (before != UINT32_MAX && after != UINT32_MAX) {
+        set->entries[before].size = set->entries[after].offset + set->entries[after].size - set->entries[before].offset;
+        for (index = after + 1u; index < set->count; ++index)
+            set->entries[index - 1u] = set->entries[index];
+        --set->count;
+    } else if (before != UINT32_MAX) {
+        set->entries[before].size += size;
+    } else if (after != UINT32_MAX) {
+        set->entries[after].offset = offset;
+        set->entries[after].size += size;
+    }
+}
+
+/* Release both aliases and every still-owned writable range while keeping failures retryable.
+ * The executable alias goes first: if it fails, writable ownership is untouched. Every successful
+ * writable unmap is recorded before the next native call, so a later failure leaves the handle
+ * describing exactly the ranges that remain. */
+static inline int hl_host_mapping_release(void **writable, void **executable, uint64_t span, hl_host_hole_set *retired,
+                                          hl_host_range_unmap unmap, void *unmap_context) {
+    uint64_t offset;
+    uint64_t size;
+    int dual = *executable != NULL && *executable != *writable;
+    int single_alias = *executable != NULL && *executable == *writable;
+    if (dual) {
+        if (unmap(unmap_context, *executable, (size_t)span) != 0) return -1;
+        *executable = NULL;
+    }
+    while (hl_host_hole_set_held_range(retired, span, 0, &offset, &size)) {
+        if (unmap(unmap_context, (char *)*writable + offset, (size_t)size) != 0) return -1;
+        if (retired->count == 0) {
+            *writable = NULL;
+            break;
+        }
+        hl_host_hole_set_release_held(retired, offset, size);
+    }
+    if (!hl_host_hole_set_holds(retired, 0, span)) *writable = NULL;
+    if (single_alias) *executable = *writable;
     return 0;
 }
 
