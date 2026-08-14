@@ -24,21 +24,28 @@ impl Descendants {
         let mut seen = BTreeSet::from([root]);
         let mut descendants = Vec::new();
         while let Some(parent) = pending.pop_front() {
-            for process in children(parent)? {
-                if !seen.insert(process) {
-                    continue;
-                }
-                let Some(identity) = identity(process)? else {
-                    continue;
-                };
-                identity.signal(libc::SIGSTOP)?;
-                if identity.exists() {
-                    descendants.push(identity);
-                    pending.push_back(process);
-                }
+            for process in children(parent)?.into_iter().filter(|process| seen.insert(*process)) {
+                Self::freeze_process(process, &mut descendants, &mut pending)?;
             }
         }
         Ok(Self(descendants))
+    }
+
+    fn freeze_process(
+        process: i32,
+        descendants: &mut Vec<Identity>,
+        pending: &mut VecDeque<i32>,
+    ) -> std::io::Result<()> {
+        let Some(identity) = Identity::read(process)? else {
+            return Ok(());
+        };
+        identity.signal(libc::SIGSTOP)?;
+        if !identity.exists() {
+            return Ok(());
+        }
+        descendants.push(identity);
+        pending.push_back(process);
+        Ok(())
     }
 
     pub(super) fn signal(&self, signal: i32) -> std::io::Result<()> {
@@ -65,6 +72,25 @@ impl Descendants {
 }
 
 impl Identity {
+    fn read(process: i32) -> std::io::Result<Option<Self>> {
+        let Some(stat) = stat(process)? else {
+            return Ok(None);
+        };
+        let Some((_, fields)) = stat.rsplit_once(") ") else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid process stat record",
+            ));
+        };
+        let started = fields
+            .split_ascii_whitespace()
+            .nth(19)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "process stat omitted start time"))?
+            .parse()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid process start time"))?;
+        Ok(Some(Self { process, started }))
+    }
+
     fn signal(self, signal: i32) -> std::io::Result<()> {
         if !self.exists() {
             return Ok(());
@@ -83,7 +109,7 @@ impl Identity {
     }
 
     fn exists(self) -> bool {
-        matches!(identity(self.process), Ok(Some(current)) if current == self && !zombie(self.process))
+        matches!(Self::read(self.process), Ok(Some(current)) if current == self && !zombie(self.process))
     }
 }
 
@@ -110,25 +136,6 @@ fn children(process: i32) -> std::io::Result<Vec<i32>> {
         }
     }
     Ok(children.into_iter().collect())
-}
-
-fn identity(process: i32) -> std::io::Result<Option<Identity>> {
-    let Some(stat) = stat(process)? else {
-        return Ok(None);
-    };
-    let Some((_, fields)) = stat.rsplit_once(") ") else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "invalid process stat record",
-        ));
-    };
-    let started = fields
-        .split_ascii_whitespace()
-        .nth(19)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "process stat omitted start time"))?
-        .parse()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid process start time"))?;
-    Ok(Some(Identity { process, started }))
 }
 
 fn zombie(process: i32) -> bool {
