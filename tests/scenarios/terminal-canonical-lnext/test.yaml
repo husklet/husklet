@@ -1,0 +1,26 @@
+cases:
+- id: terminal-canonical-lnext/quoted-eof-byte
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; echo LNEXT-${x}READY; od -An -tu1; stty echo; echo LNEXT-${x}DONE\r" }
+      - await_output: { contains: LNEXT-READY, timeout_ms: 5000 }
+      - write: { text: "\u0016\u0004\r" }
+      - write: { text: "\u0004" }
+      - await_output: { contains: "4  10", timeout_ms: 5000 }
+      - await_output: { contains: LNEXT-DONE, timeout_ms: 5000 }
+      - write: { text: "printf \"SHELL-${x}OK\\n\"; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/bytes.txt
+    - golden/lnext_done.txt
+    - golden/shell_ok.txt
