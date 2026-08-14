@@ -1,0 +1,25 @@
+cases:
+- id: terminal-meta-delete/delete-next-word
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo\r" }
+      - write: { text: "DELETE stty echo; printf \"META-${x}DELETE-OK\\n\"" }
+      - write: { text: "\u0001" }
+      - write: { text: "\u001bd" }
+      - write: { text: "\r" }
+      - await_output: { contains: META-DELETE-OK, timeout_ms: 5000 }
+      - write: { text: "printf \"SHELL-${x}OK\\n\"; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/edited.txt
+    - golden/shell_ok.txt
