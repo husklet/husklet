@@ -393,9 +393,219 @@ static int svc_read_inotify(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
     return 1;
 }
 
-static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+// tee(2) pushback: bytes a prior tee() peeked out of this pipe are re-served here first, in order.
+static int svc_read_pushback(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
+    if (rfd < 0 || rfd >= HL_NFD || !g_fd_pb_len[rfd]) return 0;
+    size_t want = (size_t)a2;
+    size_t accessible = guest_accessible_prefix(a1, want, HL_LOGICAL_VMA_WRITE);
+    if (want != 0 && accessible == 0) {
+        G_RET(c) = (uint64_t)(-EFAULT);
+        return 1;
+    }
+    void *buffer = malloc(accessible == 0 ? 1 : accessible);
+    if (buffer == NULL) {
+        G_RET(c) = (uint64_t)(-ENOMEM);
+        return 1;
+    }
+    want = accessible;
+    size_t taken = pipe_pushback_take(rfd, buffer, want);
+    ssize_t copied = guest_copy_to(a1, buffer, taken);
+    free(buffer);
+    G_RET(c) = copied == (ssize_t)taken ? taken : copied > 0 ? (uint64_t)copied : (uint64_t)(-EFAULT);
+    return 1;
+}
+
+// AF_NETLINK socket read: busybox `ip` receives its RTNETLINK dump with read(2)/recvmsg;
+// drain our queued reply with the Linux MSG_PEEK/MSG_TRUNC semantics (see netns.c nl_recv).
+static int svc_read_netlink(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
+    if (!nl_is(rfd)) return 0;
+    size_t accessible = guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE);
+    if (a2 && !accessible) {
+        G_RET(c) = (uint64_t)(-EFAULT);
+        return 1;
+    }
+    uint8_t *buffer = malloc(accessible ? accessible : 1);
+    if (!buffer) {
+        G_RET(c) = (uint64_t)(-ENOMEM);
+        return 1;
+    }
+    struct iovec iov = {buffer, accessible};
+    int64_t result = nl_recv(rfd, &iov, 1, 0, NULL);
+    if (result > 0) {
+        size_t produced = (uint64_t)result < accessible ? (size_t)result : accessible;
+        ssize_t copied = guest_copy_to(a1, buffer, produced);
+        if (copied != (ssize_t)produced) result = copied > 0 ? copied : -EFAULT;
+    }
+    free(buffer);
+    G_RET(c) = (uint64_t)result;
+    return 1;
+}
+
+// RAM-backed scratch file: serve the read from memory. Unlike a host-fd read (whose kernel copyout
+// faults a bad buffer to EFAULT), this copies straight into the guest buffer, so a bad/unmapped
+// pointer must be validated here or the engine memcpy faults (access_ok).
+static int svc_read_memory_file(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
+    if (!memf_get(rfd)) return 0;
+    size_t accessible = guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE);
+    if (a2 != 0 && accessible == 0) {
+        G_RET(c) = (uint64_t)(-EFAULT);
+        return 1;
+    }
+    void *buffer = malloc(accessible == 0 ? 1 : accessible);
+    if (buffer == NULL) {
+        G_RET(c) = (uint64_t)(-ENOMEM);
+        return 1;
+    }
+    ssize_t r = memf_read_pos(g_memf[rfd], buffer, accessible);
+    if (r > 0) {
+        ssize_t copied = guest_copy_to(a1, buffer, (size_t)r);
+        if (copied != r) r = copied > 0 ? copied : -EFAULT;
+    }
+    free(buffer);
+    G_RET(c) = (uint64_t)r;
+    return 1;
+}
+
+// /proc/<pid>/pagemap is backed by an empty seekable fd; synthesize PRESENT entries while tracking offset.
+static int svc_read_pagemap(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
+    if (rfd < 0 || rfd >= HL_NFD || !g_pagemap_fd[rfd]) return 0;
+    size_t want = (size_t)a2 & ~(size_t)7;
+    if (want == 0) {
+        G_RET(c) = 0;
+        return 1;
+    }
+    if (guest_accessible_prefix(a1, want, HL_LOGICAL_VMA_WRITE) != want) {
+        G_RET(c) = (uint64_t)(-EFAULT);
+        return 1;
+    }
+    uint64_t entries[512];
+    size_t done = 0;
+    for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); ++i)
+        entries[i] = UINT64_C(1) << 63;
+    while (done < want) {
+        size_t chunk = want - done < sizeof(entries) ? want - done : sizeof(entries);
+        if (guest_copy_to(a1 + done, entries, chunk) != (ssize_t)chunk) {
+            G_RET(c) = done != 0 ? done : (uint64_t)(-EFAULT);
+            return 1;
+        }
+        done += chunk;
+    }
+    lseek(rfd, (off_t)want, SEEK_CUR);
+    G_RET(c) = (uint64_t)want;
+    return 1;
+}
+
+// signalfd read -> struct signalfd_siginfo. Each signalfd OFD has its own self-pipe.
+static int svc_read_signalfd(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
+    if (rfd < 0 || rfd >= HL_NFD || !g_sigfd_slot[rfd]) return 0;
+    if (a2 < 128) {
+        G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+        return 1;
+    }
+    if (guest_accessible_prefix(a1, 128, HL_LOGICAL_VMA_WRITE) != 128) {
+        G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
+        return 1;
+    }
+    int sslot = g_sigfd_slot[rfd] - 1;
+    uint64_t omask = g_sfd[sslot].mask;
+    struct sigq_ent ent;
+signalfd_retry:;
+    int sig = 0, popped = 0;
+    int popped_targeted = 0;
+    int targeted_remaining = 0;
+    for (int s = 1; s <= 64; s++)
+        if ((omask & (UINT64_C(1) << (s - 1))) && sigq_pop_for(s, c, &ent, &popped_targeted, &targeted_remaining)) {
+            sig = s;
+            popped = 1;
+            break;
+        }
+    if (!popped) {
+        for (int s = 1; s <= 64; ++s) {
+            if ((omask & (UINT64_C(1) << (s - 1))) && process_pending_test(s)) {
+                sig = s;
+                process_pending_clear(s);
+                break;
+            }
+        }
+        if (!sig) {
+            int status = fcntl(rfd, F_GETFL);
+            if (status < 0 || (status & O_NONBLOCK)) {
+                G_RET(c) = (uint64_t)(int64_t)(status < 0 ? -errno : -EAGAIN);
+                return 1;
+            }
+            struct pollfd waiter = {.fd = rfd, .events = POLLIN};
+            ts_wait_enter();
+            int waited = poll(&waiter, 1, 1);
+            ts_wait_leave();
+            if (waited < 0 && errno != EINTR) {
+                G_RET(c) = (uint64_t)(int64_t)(-errno);
+                return 1;
+            }
+            if (waited < 0 && !svc_poll_retry(c)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINTR);
+                return 1;
+            }
+            goto signalfd_retry;
+        }
+    }
+    uint8_t info[128] = {0};
+    uint32_t signo = (uint32_t)sig, pid = (uint32_t)(popped ? ent.pid : g_sigpid[sig]);
+    uint32_t uid = (uint32_t)(popped ? ent.uid : g_siguid[sig]);
+    int32_t error = popped ? ent.error : g_sigerror[sig];
+    int32_t code = popped ? ent.code : g_sigcode[sig];
+    memcpy(info, &signo, sizeof(signo));
+    memcpy(info + 4, &error, sizeof(error));
+    memcpy(info + 8, &code, sizeof(code));
+    memcpy(info + 12, &pid, sizeof(pid));
+    memcpy(info + 16, &uid, sizeof(uid));
+    uint64_t val = popped ? ent.value : g_sigval[sig];
+    int32_t integer = (int32_t)val;
+    memcpy(info + 44, &integer, sizeof(integer));
+    memcpy(info + 48, &val, sizeof(val));
+    if (guest_copy_to(a1, info, sizeof(info)) != (ssize_t)sizeof(info)) {
+        G_RET(c) = (uint64_t)(-EFAULT);
+        return 1;
+    }
+    if (!popped) {
+        g_sigerror[sig] = 0;
+        g_sigcode[sig] = 0;
+        g_sigval[sig] = 0;
+        g_sigpid[sig] = 0;
+        g_siguid[sig] = 0;
+    }
+    G_RET(c) = 128;
+    return 1;
+}
+
+static void svc_read_host(struct cpu *c, int rfd, uint64_t a1, uint64_t a2) {
+    // SA_RESTART: a blocking read interrupted by a signal whose guest handler asked for restart is resumed.
+    ssize_t r;
+    ts_wait_enter(); // 'S' while a read may block (pipe/socket/tty; a ready/regular fd returns at once)
+    do {
+        r = guest_fd_read(rfd, a1, (size_t)a2, 0, 0);
+    } while (r < 0 && SVC_EINTR_RESTART(c));
+    ts_wait_leave();
+    // A nonblocking controlling terminal reports emptiness as EAGAIN, not EOF.
+    if (r == 0 && a2 > 0 && rfd >= 0 && rfd < HL_NFD && g_devtty[rfd]) {
+        int fl = fcntl(rfd, F_GETFL);
+        if (fl >= 0 && (fl & O_NONBLOCK)) {
+            r = -1;
+            errno = EAGAIN;
+        }
+    }
+    // The DGRAM backing of an emulated SEQPACKET/O_DIRECT pipe reports peer-closed EOF as ECONNRESET.
+    if (r < 0 && errno == ECONNRESET && seq_is(rfd)) r = 0;
+    G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+}
+
+static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                    uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 63: {
         int rfd = (int)a0;
@@ -403,236 +613,22 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-EBADF);
             break;
         }
-        // tee(2) pushback: bytes a prior tee() peeked out of this pipe are re-served here first, in order.
-        if (rfd >= 0 && rfd < HL_NFD && g_fd_pb_len[rfd]) {
-            size_t want = (size_t)a2;
-            size_t accessible = guest_accessible_prefix(a1, want, HL_LOGICAL_VMA_WRITE);
-            if (want != 0 && accessible == 0) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            want = accessible;
-            void *buffer = malloc(want == 0 ? 1 : want);
-            if (buffer == NULL) {
-                G_RET(c) = (uint64_t)(-ENOMEM);
-                break;
-            }
-            size_t taken = pipe_pushback_take(rfd, buffer, want);
-            ssize_t copied = guest_copy_to(a1, buffer, taken);
-            free(buffer);
-            G_RET(c) = copied == (ssize_t)taken ? taken : copied > 0 ? (uint64_t)copied : (uint64_t)(-EFAULT);
-            break;
-        }
-        // AF_NETLINK socket read: busybox `ip` receives its RTNETLINK dump with read(2)/recvmsg;
-        // drain our queued reply with the Linux MSG_PEEK/MSG_TRUNC semantics (see netns.c nl_recv).
-        if (nl_is(rfd)) {
-            size_t accessible = guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE);
-            if (a2 && !accessible) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            uint8_t *buffer = malloc(accessible ? accessible : 1);
-            if (!buffer) {
-                G_RET(c) = (uint64_t)(-ENOMEM);
-                break;
-            }
-            struct iovec iov = {buffer, accessible};
-            int64_t result = nl_recv(rfd, &iov, 1, 0, NULL);
-            if (result > 0) {
-                size_t produced = (uint64_t)result < accessible ? (size_t)result : accessible;
-                ssize_t copied = guest_copy_to(a1, buffer, produced);
-                if (copied != (ssize_t)produced) result = copied > 0 ? copied : -EFAULT;
-            }
-            free(buffer);
-            G_RET(c) = (uint64_t)result;
-            break;
-        }
-        // RAM-backed scratch file: serve the read from memory. Unlike a host-fd read (whose kernel copyout
-        // faults a bad buffer to EFAULT), this copies straight into the guest buffer, so a bad/unmapped
-        // pointer must be validated here or the engine memcpy faults (access_ok).
-        if (memf_get(rfd)) {
-            size_t accessible = guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_WRITE);
-            if (a2 != 0 && accessible == 0) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            void *buffer = malloc(accessible == 0 ? 1 : accessible);
-            if (buffer == NULL) {
-                G_RET(c) = (uint64_t)(-ENOMEM);
-                break;
-            }
-            ssize_t r = memf_read_pos(g_memf[rfd], buffer, accessible);
-            if (r > 0) {
-                ssize_t copied = guest_copy_to(a1, buffer, (size_t)r);
-                if (copied != r) r = copied > 0 ? copied : -EFAULT;
-            }
-            free(buffer);
-            G_RET(c) = (uint64_t)r;
-            break;
-        }
-        // signalfd read -> struct signalfd_siginfo. Each signalfd OFD has its own self-pipe; the fd number
-        // (original OR a dup, both mapped by g_sigfd_slot) is the read end, so read straight from rfd.
-        if (rfd >= 0 && rfd < HL_NFD && g_sigfd_slot[rfd]) {
-            // Linux needs room for at least one struct signalfd_siginfo (128 bytes); a shorter buffer is
-            // EINVAL and must NOT consume a pending signal (checked before draining the wake byte).
-            if (a2 < 128) {
-                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                break;
-            }
-            // Linux validates the destination before dequeuing the signal.  A
-            // failed copyout must leave both the pending instance and the
-            // signalfd readability intact so the caller can retry with a valid
-            // buffer.
-            if (guest_accessible_prefix(a1, 128, HL_LOGICAL_VMA_WRITE) != 128) {
-                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                break;
-            }
-            // The self-pipe only preserves INSERTION order, but signalfd drains in priority order (lowest
-            // signo first, FIFO within a signo) carrying the queued siginfo (ssi_int / ssi_pid / ssi_code).
-            // So ignore the byte's signo for SELECTION: scan this OFD's mask ascending for the lowest signo
-            // with a queued instance and pop it. Only if nothing is queued (a host async-path wake that set
-            // the bit with an empty queue) do we fall back to the byte's signo and the single-slot g_sig*.
-            int sslot = g_sigfd_slot[rfd] - 1;
-            uint64_t omask = g_sfd[sslot].mask;
-            struct sigq_ent ent;
-        signalfd_retry:;
-            int sig = 0, popped = 0;
-            int popped_targeted = 0;
-            int targeted_remaining = 0;
-            for (int s = 1; s <= 64; s++)
-                if ((omask & (UINT64_C(1) << (s - 1))) &&
-                    sigq_pop_for(s, c, &ent, &popped_targeted, &targeted_remaining)) {
-                    sig = s;
-                    popped = 1;
-                    break;
-                }
-            if (!popped) {
-                for (int s = 1; s <= 64; ++s) {
-                    if ((omask & (UINT64_C(1) << (s - 1))) && process_pending_test(s)) {
-                        sig = s;
-                        process_pending_clear(s);
-                        break;
-                    }
-                }
-                // Pipe bytes are wake hints only. They can outlive an OFD mask
-                // update and therefore may never manufacture a siginfo record.
-                if (!sig) {
-                    int status = fcntl(rfd, F_GETFL);
-                    if (status < 0 || (status & O_NONBLOCK)) {
-                        G_RET(c) = (uint64_t)(int64_t)(status < 0 ? -errno : -EAGAIN);
-                        break;
-                    }
-                    // Host pipe bytes are process-wide wake hints, while a
-                    // thread-directed record is readable only by its owner.
-                    // Sample in bounded sleeps until this CPU has an eligible
-                    // queue entry; never consume another thread's token.
-                    struct pollfd waiter = {.fd = rfd, .events = POLLIN};
-                    ts_wait_enter();
-                    int waited = poll(&waiter, 1, 1);
-                    ts_wait_leave();
-                    if (waited < 0 && errno != EINTR) {
-                        G_RET(c) = (uint64_t)(int64_t)(-errno);
-                        break;
-                    }
-                    if (waited < 0 && !svc_poll_retry(c)) {
-                        G_RET(c) = (uint64_t)(int64_t)(-EINTR);
-                        break;
-                    }
-                    goto signalfd_retry;
-                }
-            }
-            if (a2 >= 128) {
-                // a1 is a raw guest buffer we write directly -> EFAULT a bad pointer instead of faulting the engine
-                uint8_t info[128] = {0};
-                uint32_t signo = (uint32_t)sig, pid = (uint32_t)(popped ? ent.pid : g_sigpid[sig]);
-                uint32_t uid = (uint32_t)(popped ? ent.uid : g_siguid[sig]);
-                int32_t error = popped ? ent.error : g_sigerror[sig];
-                int32_t code = popped ? ent.code : g_sigcode[sig];
-                memcpy(info, &signo, sizeof(signo));
-                memcpy(info + 4, &error, sizeof(error));
-                memcpy(info + 8, &code, sizeof(code));
-                memcpy(info + 12, &pid, sizeof(pid));
-                memcpy(info + 16, &uid, sizeof(uid));
-                uint64_t val = popped ? ent.value : g_sigval[sig];
-                int32_t integer = (int32_t)val;
-                memcpy(info + 44, &integer, sizeof(integer));
-                memcpy(info + 48, &val, sizeof(val));
-                if (guest_copy_to(a1, info, sizeof(info)) != (ssize_t)sizeof(info)) {
-                    G_RET(c) = (uint64_t)(-EFAULT);
-                    break;
-                }
-                if (!popped) {
-                    g_sigerror[sig] = 0;
-                    g_sigcode[sig] = 0;
-                    g_sigval[sig] = 0;
-                    g_sigpid[sig] = 0;
-                    g_siguid[sig] = 0;
-                }
-            }
-            G_RET(c) = 128;
-            break;
-        }
+        if (svc_read_pushback(c, rfd, a1, a2)) break;
+        if (svc_read_netlink(c, rfd, a1, a2)) break;
+        if (svc_read_memory_file(c, rfd, a1, a2)) break;
+        if (svc_read_signalfd(c, rfd, a1, a2)) break;
         // inotify read -> struct inotify_event[]
         if (svc_read_inotify(c, rfd, a1, a2)) break;
         // timerfd read -> drain timer, return count
         if (svc_read_timer(c, rfd, a1, a2)) break;
         // eventfd read: return the accumulated counter, reset it, drain the readiness pipe
         if (svc_read_eventfd(c, rfd, a1, a2)) break;
-        // /proc/<pid>/pagemap (vfs.c backs it with an empty seekable fd; g_pagemap_fd marks it): synthesize
-        // one 64-bit entry per page with the PRESENT bit (63) set. The guest lseek'd to vaddr/pagesize*8 and
-        // reads sequentially; advance the real fd offset so its position tracks what we "read" (LTP mmap12).
-        if (rfd >= 0 && rfd < HL_NFD && g_pagemap_fd[rfd]) {
-            size_t want = (size_t)a2 & ~(size_t)7; // whole 8-byte pagemap entries only
-            if (want == 0) {
-                G_RET(c) = 0;
-                break;
-            }
-            if (guest_accessible_prefix(a1, want, HL_LOGICAL_VMA_WRITE) != want) {
-                G_RET(c) = (uint64_t)(-EFAULT);
-                break;
-            }
-            uint64_t entries[512];
-            size_t done = 0;
-            for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); ++i)
-                entries[i] = UINT64_C(1) << 63;
-            while (done < want) {
-                size_t chunk = want - done < sizeof(entries) ? want - done : sizeof(entries);
-                if (guest_copy_to(a1 + done, entries, chunk) != (ssize_t)chunk) {
-                    G_RET(c) = done != 0 ? done : (uint64_t)(-EFAULT);
-                    goto pagemap_done;
-                }
-                done += chunk;
-            }
-            lseek(rfd, (off_t)want, SEEK_CUR);
-            G_RET(c) = (uint64_t)want;
-        pagemap_done:
-            break;
-        }
+        if (svc_read_pagemap(c, rfd, a1, a2)) break;
         // SA_RESTART: a blocking read interrupted by a signal whose guest handler asked for restart is
         // resumed in place (the dispatcher runs the handler after the read finally returns); a handler
         // WITHOUT SA_RESTART lets EINTR through. (Well-behaved programs block in poll/select/epoll -- which
         // always return EINTR -- and only read when ready, so this never defers a needed handler.)
-        ssize_t r;
-        ts_wait_enter(); // 'S' while a read may block (pipe/socket/tty; a ready/regular fd returns at once)
-        do {
-            r = guest_fd_read(rfd, a1, (size_t)a2, 0, 0);
-        } while (r < 0 && SVC_EINTR_RESTART(c));
-        ts_wait_leave();
-        // /dev/tty (or /dev/console) tty semantics: a controlling terminal has no EOF-from-emptiness, so a
-        // NONBLOCKING read that came back with 0 bytes ("no input") must be EAGAIN, never EOF -- otherwise
-        // readline/TUI/event-loop code reads the 0 as terminal closure and tears the terminal down. hl may
-        // back /dev/tty with a host device (or /dev/null for console) that returns 0 when empty; remap it.
-        if (r == 0 && a2 > 0 && rfd >= 0 && rfd < HL_NFD && g_devtty[rfd]) {
-            int fl = fcntl(rfd, F_GETFL);
-            if (fl >= 0 && (fl & O_NONBLOCK)) {
-                r = -1;
-                errno = EAGAIN;
-            }
-        }
-        // SEQPACKET/O_DIRECT-pipe EOF over a DGRAM backing: a peer-closed read reports ECONNRESET, but the
-        // emulated endpoint must return 0 (EOF) like the Linux original. (See netns.c / case 199 / pipe2.)
-        if (r < 0 && errno == ECONNRESET && seq_is(rfd)) r = 0;
-        G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
+        svc_read_host(c, rfd, a1, a2);
         break;
     }
     default: return 0;

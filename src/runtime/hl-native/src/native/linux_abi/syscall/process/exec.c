@@ -500,10 +500,6 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
 
     struct loaded main_loaded;
     hl_identity_digest interpreter_identity = {0};
-    char pc_interpreter_path[4200];
-    const char *pc_interp_host = NULL;
-    (void)pc_interpreter_path;
-    (void)pc_interp_host;
 #ifdef PCACHE_EXEC_HOOKS
     pcache_exec_force_main();
 #endif
@@ -512,8 +508,6 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
     if (prepared->has_program_interpreter) {
         const char *interpreter_host = prepared->program_interpreter.path;
 #ifdef PCACHE_EXEC_HOOKS
-        snprintf(pc_interpreter_path, sizeof pc_interpreter_path, "%s", interpreter_host);
-        pc_interp_host = pc_interpreter_path;
         pcache_exec_force_interp();
 #endif
         struct loaded interpreter_loaded;
