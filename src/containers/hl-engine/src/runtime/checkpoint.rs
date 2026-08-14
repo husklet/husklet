@@ -177,10 +177,20 @@ impl Server {
     pub(crate) fn abort_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
         let mut capture = self.capture_lock()?;
         match capture.phase {
-            CapturePhase::Recovery { id: active, .. } if active == id && capture.mutations == 0 => {
-                capture.phase = CapturePhase::Idle;
+            CapturePhase::Recovery { id: active, .. } if active == id => {
+                let result = if capture.mutations == 0 {
+                    capture.phase = CapturePhase::Idle;
+                    Ok(())
+                } else {
+                    capture.phase = CapturePhase::Poisoned;
+                    Err(CaptureFailure::Failed)
+                };
                 self.capture_changed.notify_all();
-                Ok(())
+                drop(capture);
+                if result.is_err() {
+                    self.interrupt_channels();
+                }
+                result
             }
             CapturePhase::Idle => Ok(()),
             CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),

@@ -374,8 +374,9 @@ struct RecoveryAdmission<'a> {
 #[cfg(unix)]
 impl RecoveryAdmission<'_> {
     fn finish(mut self) -> Result<(), EngineError> {
-        self.finished = true;
-        self.server.abort_recovery(self.id).map_err(capture_failure)
+        let result = self.server.abort_recovery(self.id).map_err(capture_failure);
+        self.finished = result.is_ok();
+        result
     }
 }
 
