@@ -503,6 +503,8 @@ static struct {
 } g_gna[GNA_MAX];
 
 static int g_ngna;
+static _Atomic uint64_t g_gna_filter_first = UINT64_MAX;
+static _Atomic uint64_t g_gna_filter_last;
 static void gna_clear(uint64_t lo, uint64_t hi);
 static void gna_clear_raw(uint64_t lo, uint64_t hi);
 #define GNA_NEGATIVE_N 1024u

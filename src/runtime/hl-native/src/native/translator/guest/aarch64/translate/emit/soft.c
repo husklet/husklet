@@ -245,8 +245,7 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
         }
         int32_t narrow_delta = (int32_t)miss_delta;
         memcpy(guard->metadata + 8, &narrow_delta, sizeof narrow_delta);
-        for (unsigned i = 0; i < guard->ndirect; ++i)
-            *guard->direct[i] = a64_tbz_x(guard->tmp2, 0, (guard->native - (uint8_t *)guard->direct[i]) / 4);
+        for (unsigned i = 0; i < guard->ndirect; ++i) *guard->direct[i] = 0xD503201Fu;
         return;
     }
     uint32_t *skip = (uint32_t *)g_cp;
@@ -263,9 +262,7 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
                 a64_tbz_x(guard->miss_reg[i], (unsigned)guard->miss_bit[i], (miss - (uint8_t *)guard->miss[i]) / 4);
     }
     // Profiling must not insert register-using code into this live-EA path.
-    uint8_t *direct = guard->native;
-    for (unsigned i = 0; i < guard->ndirect; ++i)
-        *guard->direct[i] = a64_tbz_x(guard->tmp2, 0, (direct - (uint8_t *)guard->direct[i]) / 4);
+    for (unsigned i = 0; i < guard->ndirect; ++i) *guard->direct[i] = 0xD503201Fu;
 }
 
 static void aarch64_soft_filter_refresh(struct cpu *c) {
@@ -276,6 +273,7 @@ static void aarch64_soft_filter_refresh(struct cpu *c) {
         first = snapshot->views[0].guest_first;
         last = snapshot->views[snapshot->count - 1].guest_last;
     }
+    gna_filter(&first, &last);
     c->soft_filter_first = first;
     c->soft_filter_last = last;
 }

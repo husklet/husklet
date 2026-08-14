@@ -29,6 +29,7 @@ void hl_gmap_remove(uint64_t address);
 uint64_t hl_gmap_find_length(uint64_t address);
 uint64_t hl_gmap_find_guest_length(uint64_t address);
 int hl_gmap_contains(uint64_t address, uint64_t length);
+int hl_gmap_guest_contains(uint64_t address, uint64_t length);
 void hl_gmap_unmap_range(uint64_t start, uint64_t end);
 /* Split the registry around a MAP_FIXED that replaced the range, without releasing any host mapping. */
 void hl_gmap_supersede_range(uint64_t start, uint64_t end);

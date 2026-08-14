@@ -228,6 +228,24 @@ int hl_gmap_contains(uint64_t address, uint64_t length) {
     return at >= end;
 }
 
+int hl_gmap_guest_contains(uint64_t address, uint64_t length) {
+    uint64_t end = address + length, at = address;
+    if (end < address) return 0;
+    for (int extended = 1; at < end && extended;) {
+        extended = 0;
+        for (size_t index = 0; index < g_gmap.mapping_count; ++index) {
+            const hl_gmap_entry *entry = &g_gmap.mappings[index];
+            uint64_t guest_end = entry->address + entry->guest_length;
+            if (entry->address <= at && at < guest_end) {
+                at = guest_end;
+                extended = 1;
+                break;
+            }
+        }
+    }
+    return at >= end;
+}
+
 /* MAP_FIXED replaces whatever the range held, so the registry entries it overlapped must be split the way
    the kernel splits the VMAs -- otherwise the superseded reservation stays whole and /proc/[pid]/maps emits
    overlapping rows (ld.so's whole-span reservation plus every segment it MAP_FIXED inside it), violating the

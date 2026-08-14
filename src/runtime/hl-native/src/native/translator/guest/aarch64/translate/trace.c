@@ -56,6 +56,11 @@ static void aarch64_smc_copyout(uint64_t first, uint64_t last) {
 
 /* Return 1 to retry the instruction, 0 for a guest protection fault. */
 static int aarch64_soft_tlb_miss(struct cpu *c) {
+    // On a host whose VM granule is wider than Linux's 4 KB page, munmap may
+    // leave the containing host page physically present to preserve an adjacent live guest page.
+    // gna is the architectural accessibility ledger; consult it before the identity fallback so
+    // that retained physical backing never makes a logical hole readable.
+    if (gna_hit(c->soft_ea, c->soft_bytes ? c->soft_bytes : 1)) return 0;
     void *host = NULL;
     size_t contiguous = 0;
     uint32_t protection = HL_LOGICAL_VMA_READ | HL_LOGICAL_VMA_WRITE | HL_LOGICAL_VMA_EXEC;

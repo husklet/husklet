@@ -303,9 +303,20 @@ static void gna_add(uint64_t lo, uint64_t hi) {
         __atomic_store_n(&g_gna[count].lo, lo, __ATOMIC_RELAXED);
         __atomic_store_n(&g_gna[count].hi, hi, __ATOMIC_RELAXED);
         __atomic_store_n(&g_ngna, count + 1, __ATOMIC_RELEASE);
+        uint64_t first = atomic_load_explicit(&g_gna_filter_first, memory_order_relaxed);
+        uint64_t last = atomic_load_explicit(&g_gna_filter_last, memory_order_relaxed);
+        if (lo < first) atomic_store_explicit(&g_gna_filter_first, lo, memory_order_relaxed);
+        if (hi > last) atomic_store_explicit(&g_gna_filter_last, hi, memory_order_relaxed);
     }
     atomic_fetch_add_explicit(&g_gna_generation, 1, memory_order_release);
     gna_writer_unlock();
+}
+
+static void gna_filter(uint64_t *first, uint64_t *last) {
+    uint64_t low = atomic_load_explicit(&g_gna_filter_first, memory_order_acquire);
+    uint64_t high = atomic_load_explicit(&g_gna_filter_last, memory_order_acquire);
+    if (low < *first) *first = low;
+    if (high > *last) *last = high;
 }
 
 // Remove [lo,hi) from the set (access granted, or the range unmapped/re-mapped), splitting any interval
@@ -603,6 +614,8 @@ static void gna_reset(void) {
     gna_writer_lock();
     atomic_fetch_add_explicit(&g_gna_generation, 1, memory_order_acq_rel);
     __atomic_store_n(&g_ngna, 0, __ATOMIC_RELEASE);
+    atomic_store_explicit(&g_gna_filter_first, UINT64_MAX, memory_order_relaxed);
+    atomic_store_explicit(&g_gna_filter_last, 0, memory_order_relaxed);
     atomic_fetch_add_explicit(&g_gna_generation, 1, memory_order_release);
     gna_writer_unlock();
     __atomic_store_n(&g_ngro, 0, __ATOMIC_RELEASE);
