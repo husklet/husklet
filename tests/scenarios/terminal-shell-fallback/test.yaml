@@ -1,0 +1,26 @@
+cases:
+- id: terminal-shell-fallback/direct-text-script
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "printf \"PARENT_TOKEN=child\\nprintf 'FALLBACK-BODY\\n'\\nexit 37\\n\" > /tmp/husklet-text-script; chmod 0755 /tmp/husklet-text-script; PARENT_TOKEN=parent; stty -echo; PS1='FALLBACK# '; printf 'FALLBACK-READY\\n'\r" }
+      - await_output: { contains: FALLBACK-READY, timeout_ms: 5000 }
+      - write: { text: "/tmp/husklet-text-script\r" }
+      - await_output: { contains: FALLBACK-BODY, timeout_ms: 5000 }
+      - write: { text: "status=$?; test \"$status\" = 37 && test \"$PARENT_TOKEN\" = parent && printf 'FALLBACK-STATUS-37-PARENT-PRESERVED\\n'\r" }
+      - await_output: { contains: FALLBACK-STATUS-37-PARENT-PRESERVED, timeout_ms: 5000 }
+      - write: { text: "printf 'FALLBACK-SHELL-USABLE\\n'; stty echo; exit\r" }
+      - await_output: { contains: FALLBACK-SHELL-USABLE, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/body.txt
+    - golden/status_parent.txt
+    - golden/shell_usable.txt
