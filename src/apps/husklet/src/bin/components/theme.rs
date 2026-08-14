@@ -8,6 +8,8 @@ const TXT: &str = "#e7e9ee";
 const DIM: &str = "#878e9c";
 const FAINT: &str = "#818896";
 pub(crate) const ACCENT: &str = "#2f80ff";
+const ACCENT_FILL: &str = "#2a6eca";
+const ACCENT_FILL_HOVER: &str = "#3275d4";
 
 pub(crate) fn css() -> String {
     format!(
@@ -63,7 +65,7 @@ spinbutton {{ background-color:{BG2}; border:1px solid {LINE}; border-radius:7px
 spinbutton entry {{ border:none; background:transparent; }}
 .seg {{ background-color:{BG2}; border:1px solid {LINE}; border-radius:7px; padding:2px; }}
 .seg button {{ font-family:'SF Mono',ui-monospace,monospace; font-size:11.5px; color:{DIM}; background:transparent; border:none; border-radius:5px; padding:4px 12px; min-height:0; box-shadow:none; }}
-.seg button:checked {{ background-color:{ACCENT}; color:#fff; font-weight:600; }}
+	.seg button:checked {{ background-color:{ACCENT_FILL}; color:#fff; font-weight:600; }}
 .xbtn {{ color:{DIM}; background:transparent; border:1px solid transparent; border-radius:7px; min-height:0; min-width:32px; padding:5px; }}
 .xbtn:hover {{ color:#ff6b6b; background-color:rgba(255,90,90,.12); }}
 .xbtn image {{ -gtk-icon-size:15px; }}
@@ -74,8 +76,8 @@ spinbutton entry {{ border:none; background:transparent; }}
 entry.err {{ border-color:#ff6b6b; box-shadow:0 0 0 2px rgba(255,90,90,.22); }}
 .addrow {{ font-size:11.5px; color:{ACCENT}; font-weight:600; background:transparent; border:none; box-shadow:none; padding:2px 0; min-height:0; }}
 .footer {{ background-color:{BG1}; box-shadow: inset 0 1px 0 0 {LINE_S}; padding:10px 14px 16px; }}
-.btn.primary {{ background-color:{ACCENT}; border-color:{ACCENT}; color:#fff; }}
-.btn.primary:hover {{ background-color:#3a9bff; }}
+	.btn.primary {{ background-color:{ACCENT_FILL}; border-color:{ACCENT_FILL}; color:#fff; }}
+	.btn.primary:hover {{ background-color:{ACCENT_FILL_HOVER}; }}
 .dockrow {{ background-color:{BG2}; border:1px solid {LINE}; border-radius:8px; padding:10px 12px; }}
 .dockrow .tt {{ font-size:12.5px; font-weight:600; }}
 .dockrow .td {{ font-size:11px; color:{DIM}; }}
@@ -148,7 +150,7 @@ vte-terminal.copymode, terminal.copymode {{ box-shadow: inset 0 0 0 1px {ACCENT}
 
 #[cfg(test)]
 mod tests {
-    use super::{BG0, BG1, BG2, FAINT, css};
+    use super::{ACCENT_FILL, ACCENT_FILL_HOVER, BG0, BG1, BG2, FAINT, css};
 
     fn channel(value: u8) -> f64 {
         let value = f64::from(value) / 255.0;
@@ -184,6 +186,13 @@ mod tests {
     fn faint_normal_text_meets_contrast_on_application_surfaces() {
         for background in [BG0, BG1, BG2] {
             assert!(contrast(FAINT, background) >= 4.5);
+        }
+    }
+
+    #[test]
+    fn white_control_text_meets_contrast_in_normal_and_hover_states() {
+        for background in [ACCENT_FILL, ACCENT_FILL_HOVER] {
+            assert!(contrast("#ffffff", background) >= 4.5);
         }
     }
 }
