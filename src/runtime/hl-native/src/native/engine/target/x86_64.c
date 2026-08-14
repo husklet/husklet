@@ -953,6 +953,7 @@ static int engine_global_init(void);
 // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
 static const void *g_initial_executable_image;
 static size_t g_initial_executable_size;
+static uint64_t g_loaded_image_identity;
 static const void *g_authorized_executable_image;
 static size_t g_authorized_executable_size;
 #include "../../linux_abi/x86.c" // Linux x86-64 ELF loader + stack + fault handlers
@@ -1226,6 +1227,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     *at_base = 0;
     *have_interp = 0;
     const char *interp_host = NULL;
+    uint64_t interpreter_identity = 0xABCDEFull;
     char interp[256];
     int has_interp = elf_interp(prog_host, interp, sizeof interp, NULL) == 0;
     g_initial_executable_image = NULL;

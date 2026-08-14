@@ -444,6 +444,7 @@ static void sigframe_resume_dispatch(struct cpu *c, void *native_context) {
 
 static const void *g_initial_executable_image;
 static size_t g_initial_executable_size;
+static uint64_t g_loaded_image_identity;
 static const void *g_authorized_executable_image;
 static size_t g_authorized_executable_size;
 static char g_authorized_executable_path[4200];
@@ -1205,6 +1206,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     *at_base = 0;
     *have_interp = 0;
     const char *interp_host = NULL;
+    uint64_t interpreter_identity = 0xABCDEFull;
     char interp[256];
     int has_interp = elf_interp(prog_host, interp, sizeof interp, NULL) == 0;
     g_initial_executable_image = NULL;

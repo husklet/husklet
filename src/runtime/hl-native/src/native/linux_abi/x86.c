@@ -127,6 +127,7 @@ static int elf_interp(const char *path, char *out, size_t n, const hl_linux_imag
         return -1;
     }
     uint8_t *f = image.bytes;
+    g_loaded_image_identity = g_pcache ? hl_digest_bytes(HL_DIGEST_SEED, image.bytes, image.size) : 0;
     int r = -1;
     uint64_t phoff = layout.program_offset;
     int phnum = layout.program_count, phent = layout.program_size;
