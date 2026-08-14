@@ -9,9 +9,12 @@ pub fn leak_check_nonvacuity() -> i32 {
 }
 
 /// Creates, runs, observes, and destroys one engine from a minimal static image after relocation.
+///
+/// `scratch` must name an existing private directory owned by the caller. The
+/// smoke creates its temporary guest image there and removes it before return.
 #[cfg(unix)]
 #[doc(hidden)]
-pub fn artifact_lifecycle_smoke() -> Result<(), String> {
+pub fn artifact_lifecycle_smoke(scratch: &std::path::Path) -> Result<(), String> {
     use std::{
         io::Write as _,
         os::{fd::AsRawFd as _, unix::ffi::OsStrExt as _},
@@ -21,7 +24,7 @@ pub fn artifact_lifecycle_smoke() -> Result<(), String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let mut image = None;
     for attempt in 0..16 {
-        let path = std::env::temp_dir().join(format!(
+        let path = scratch.join(format!(
             "hl-native-artifact-smoke-{}-{}-{attempt}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
