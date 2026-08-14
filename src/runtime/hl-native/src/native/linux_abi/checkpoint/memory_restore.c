@@ -606,8 +606,10 @@ static int ckpt_restore_epoll_watches(const char *procdir, const struct ckpt_fd 
     char path[1400];
     snprintf(path, sizeof path, "%s/%s", procdir, record->path);
     int64_t stored = ckpt_source_object_size(path);
-    if (stored < (int64_t)sizeof(struct ckpt_epoll_header)) return -1;
-    size_t size = (size_t)stored;
+    size_t size;
+    const size_t maximum = sizeof(struct ckpt_epoll_header) +
+                           (size_t)CKPT_EPOLL_WATCH_LIMIT * sizeof(struct ckpt_epoll_watch);
+    if (ckpt_bounded_object_size(stored, sizeof(struct ckpt_epoll_header), maximum, &size) != 0) return -1;
     unsigned char *image = malloc(size);
     if (image == NULL || ckpt_source_load(path, image, size) != 0) {
         free(image);
@@ -615,8 +617,9 @@ static int ckpt_restore_epoll_watches(const char *procdir, const struct ckpt_fd 
     }
     struct ckpt_epoll_header header;
     memcpy(&header, image, sizeof header);
-    if (header.magic != CKPT_EPOLL_MAGIC || header.count > (size - sizeof header) / sizeof(struct ckpt_epoll_watch) ||
-        sizeof header + (size_t)header.count * sizeof(struct ckpt_epoll_watch) != size) {
+    if (header.magic != CKPT_EPOLL_MAGIC ||
+        ckpt_counted_object_size(size, sizeof header, header.count, sizeof(struct ckpt_epoll_watch),
+                                 CKPT_EPOLL_WATCH_LIMIT) != 0) {
         free(image);
         return -1;
     }

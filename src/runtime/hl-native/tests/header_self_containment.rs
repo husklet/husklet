@@ -75,6 +75,7 @@ int main(void) {
     if (hl_linux_elf64_validate(&image, 0x3e, &layout) != 0) return 8;
     return 0;
 }
+
 "#,
     )
     .expect("write ELF parser probe source");
@@ -995,4 +996,48 @@ fn cpp_bridge_declarations_retain_c_linkage() {
         "{symbols}"
     );
     fs::remove_dir_all(scratch).expect("remove C++ linkage probe directory");
+}
+
+#[test]
+fn checkpoint_object_bounds_reject_oversize_and_inconsistent_counts() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-checkpoint-bounds-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create checkpoint bounds probe directory");
+    let source = scratch.join("checkpoint_bounds.c");
+    let executable = scratch.join("checkpoint_bounds");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/checkpoint/object_bounds.h"
+#include <stdint.h>
+
+int main(void) {
+    size_t size = 0;
+    if (ckpt_bounded_object_size(128, 16, 128, &size) != 0 || size != 128) return 1;
+    if (ckpt_bounded_object_size(INT64_MAX, 16, 4096, &size) == 0) return 2;
+    if (ckpt_bounded_object_size(15, 16, 4096, &size) == 0) return 3;
+    if (ckpt_bounded_object_size(16, 16, 4096, 0) == 0) return 4;
+    if (ckpt_counted_object_size(48, 16, 2, 16, 2) != 0) return 5;
+    if (ckpt_counted_object_size(49, 16, 2, 16, 2) == 0) return 6;
+    if (ckpt_counted_object_size(48, 16, 3, 16, 2) == 0) return 7;
+    if (ckpt_counted_object_size(SIZE_MAX, 16, UINT64_MAX, 16, UINT64_MAX) == 0) return 8;
+    if (ckpt_counted_object_size(16, 16, 0, 0, 0) == 0) return 9;
+    return 0;
+}
+"#,
+    )
+    .expect("write checkpoint bounds probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("checkpoint bounds probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("checkpoint bounds probe execution");
+    assert!(run.success(), "checkpoint bounds probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove checkpoint bounds probe directory");
 }

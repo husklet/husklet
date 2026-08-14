@@ -269,11 +269,15 @@ static int ckpt_restore_epoll_watches(const char *directory, const struct ckpt_f
 static int ckpt_rd_all(FILE *f, void *buf, size_t n);
 static int ckpt_restore_epoll_marker(const struct ckpt_fd *record, uint32_t ordinal);
 
+#include "object_bounds.h"
+
+#define CKPT_EPOLL_WATCH_LIMIT (HL_NFD + EP_PROVIDER_WATCH_LIMIT + EP_OBJECT_WATCH_LIMIT)
+
 static int ckpt_restore_epoll_marker(const struct ckpt_fd *record, uint32_t ordinal) {
     FILE *image_file = ckpt_source_fopen(record->path);
     struct ckpt_epoll_header header;
     if (image_file == NULL || ckpt_rd_all(image_file, &header, sizeof header) != 0 ||
-        header.magic != CKPT_EPOLL_MAGIC || header.count > HL_NFD + EP_PROVIDER_WATCH_LIMIT + EP_OBJECT_WATCH_LIMIT) {
+        header.magic != CKPT_EPOLL_MAGIC || header.count > CKPT_EPOLL_WATCH_LIMIT) {
         if (image_file != NULL) ckpt_source_fclose(image_file);
         return -1;
     }
