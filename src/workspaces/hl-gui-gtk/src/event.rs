@@ -112,7 +112,8 @@ fn connect(widget: &gtk::Widget, node: NodeId, trigger: Trigger, slot: &Slot, re
         Trigger::Invoke | Trigger::Activate => invoke(widget, node, slot, reports),
         Trigger::Change | Trigger::Submit => change(widget, node, slot, reports),
         Trigger::Toggle => toggle(widget, node, slot, reports),
-        Trigger::Select | Trigger::Expand | Trigger::Scroll | Trigger::Close | Trigger::Context => {}
+        Trigger::Expand => expand(widget, node, slot, reports),
+        Trigger::Select | Trigger::Scroll | Trigger::Close | Trigger::Context => {}
     }
 }
 
@@ -129,25 +130,97 @@ fn invoke(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
     });
 }
 
+/// Connects whichever way this widget holds a value.
+///
+/// The measured ones first, and only one connection is made: a counter is an
+/// editable too, and connecting both would report the same keystroke twice —
+/// once as the number it now stands at and once as the text showing it.
 fn change(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    if counter(widget, node, slot, reports) || chosen(widget, node, slot, reports) {
+        return;
+    }
     entry(widget, node, slot, reports);
     scale(widget, node, slot, reports);
 }
 
+/// Text entry of every shape.
+///
+/// The editable interface rather than `gtk::Entry`: a search field, a password
+/// field and a spin button are all edited the same way and none of them is an
+/// entry in GTK4, so asking for the class would report from one field in four.
 fn entry(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
-    let Some(entry) = widget.downcast_ref::<gtk::Entry>() else {
+    let Some(editable) = widget.dynamic_cast_ref::<gtk::Editable>() else {
         return;
     };
     let reports = reports.clone();
     let slot = slot.clone();
-    entry.connect_changed(move |entry| {
+    editable.connect_changed(move |editable| {
         let Some(id) = slot.id() else {
             return;
         };
         reports.push(Event::Change {
             node,
             id,
-            value: PropValue::text(entry.text().as_str()),
+            value: PropValue::text(editable.text().as_str()),
+        });
+    });
+}
+
+/// A counter reports the number it stands at, not the text showing it.
+fn counter(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) -> bool {
+    let Some(spin) = widget.downcast_ref::<gtk::SpinButton>() else {
+        return false;
+    };
+    let reports = reports.clone();
+    let slot = slot.clone();
+    spin.connect_value_changed(move |spin| {
+        let Some(id) = slot.id() else {
+            return;
+        };
+        reports.push(Event::Change {
+            node,
+            id,
+            value: PropValue::Number(spin.value()),
+        });
+    });
+    true
+}
+
+/// A drop-down reports which option was picked, by its position among them.
+fn chosen(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) -> bool {
+    let Some(drop) = widget.downcast_ref::<gtk::DropDown>() else {
+        return false;
+    };
+    let reports = reports.clone();
+    let slot = slot.clone();
+    drop.connect_selected_notify(move |drop| {
+        let Some(id) = slot.id() else {
+            return;
+        };
+        reports.push(Event::Change {
+            node,
+            id,
+            value: PropValue::Integer(i64::from(drop.selected())),
+        });
+    });
+    true
+}
+
+/// A disclosure reports whether it is now open.
+fn expand(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let Some(expander) = widget.downcast_ref::<gtk::Expander>() else {
+        return;
+    };
+    let reports = reports.clone();
+    let slot = slot.clone();
+    expander.connect_expanded_notify(move |expander| {
+        let Some(id) = slot.id() else {
+            return;
+        };
+        reports.push(Event::Change {
+            node,
+            id,
+            value: PropValue::Flag(expander.is_expanded()),
         });
     });
 }
@@ -172,7 +245,28 @@ fn scale(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
 
 fn toggle(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
     check(widget, node, slot, reports);
+    pressed(widget, node, slot, reports);
     switch(widget, node, slot, reports);
+}
+
+/// A toggle button is a button that stays down, and GTK4 keeps it in the button
+/// hierarchy rather than the check one, so it needs its own connection.
+fn pressed(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    let Some(toggle) = widget.downcast_ref::<gtk::ToggleButton>() else {
+        return;
+    };
+    let reports = reports.clone();
+    let slot = slot.clone();
+    toggle.connect_toggled(move |toggle| {
+        let Some(id) = slot.id() else {
+            return;
+        };
+        reports.push(Event::Change {
+            node,
+            id,
+            value: PropValue::Flag(toggle.is_active()),
+        });
+    });
 }
 
 fn check(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {

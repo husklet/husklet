@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const catalogue = JSON.parse(fs.readFileSync(path.resolve(here, '../catalogue.json'), 'utf8'));
+const declarations = fs.readFileSync(path.resolve(here, '../src/index.d.ts'), 'utf8');
+
+/** The body of one component's interface, as generated. */
+function shape(name) {
+  const start = declarations.indexOf(`export interface ${name}Props extends NodeProps {`);
+  assert.notEqual(start, -1, `<${name}> has no props interface`);
+  return declarations.slice(start, declarations.indexOf('\n}', start));
+}
+
+test('every component in the catalogue has a props interface', () => {
+  for (const tag of catalogue.tags) {
+    assert.match(shape(tag.name), /\{/);
+    assert.ok(
+      declarations.includes(`export const ${tag.name}: ComponentType<${tag.name}Props>;`),
+      `<${tag.name}> is declared as no component at all`,
+    );
+  }
+});
+
+test('a component offers what it declares and nothing else', () => {
+  const button = shape('Button');
+  assert.match(button, /tone\?: /, 'a button is toned');
+  assert.match(button, /label\?: string;/);
+  assert.doesNotMatch(button, /schema\?/, 'a button holds no rows');
+  assert.doesNotMatch(shape('Text'), /checked\?/, 'a label holds no state');
+  assert.match(shape('DataTable'), /schema\?: ColumnSpec\[\];/);
+});
+
+test('a handler is offered only where the component reports that interaction', () => {
+  for (const tag of catalogue.tags) {
+    const written = shape(tag.name);
+    for (const trigger of ['Invoke', 'Change', 'Toggle', 'Expand']) {
+      const declared = tag.triggers.includes(trigger);
+      assert.equal(
+        written.includes(`on${trigger}?:`),
+        declared,
+        `<${tag.name}> ${declared ? 'declares' : 'does not declare'} ${trigger}`,
+      );
+    }
+  }
+});
+
+test('the declarations were generated from this catalogue', () => {
+  const enums = catalogue.enums.Tone.map((member) => JSON.stringify(member.style));
+  for (const spelling of enums) {
+    assert.ok(declarations.includes(spelling), `a tone is missing the spelling ${spelling}`);
+  }
+});

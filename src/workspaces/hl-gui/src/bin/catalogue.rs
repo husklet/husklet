@@ -42,19 +42,34 @@ fn catalogue() -> String {
 
 /// One entry per component, in catalogue order — the order a sidebar should
 /// list them in, since it is the order the library declares them in.
+///
+/// Each carries the contract the library declares for it: the properties that
+/// component means something by, and the interactions it can report. An editor
+/// reading this offers a component what it takes and nothing else.
 fn tags() -> Vec<String> {
     Tag::ALL
         .iter()
         .map(|tag| {
             format!(
-                "{{\"name\": {}, \"family\": {}, \"acceptsChildren\": {}, \"detached\": {}}}",
+                "{{\"name\": {}, \"family\": {}, \"acceptsChildren\": {}, \"detached\": {}, \"props\": {}, \"triggers\": {}}}",
                 text(tag.as_str()),
                 text(family(*tag)),
                 tag.accepts_children(),
-                tag.is_detached()
+                tag.is_detached(),
+                inline(&spelled(tag.props())),
+                inline(&spelled(tag.triggers()))
             )
         })
         .collect()
+}
+
+/// The wire spelling of each member of a closed vocabulary.
+///
+/// Read back from `Debug`, which is the derived variant name and therefore
+/// exactly what `serde` writes under the `wire` feature, so no name is
+/// transcribed here and none can be transcribed wrongly.
+fn spelled<T: std::fmt::Debug>(values: &[T]) -> Vec<String> {
+    values.iter().map(|value| format!("{value:?}")).collect()
 }
 
 /// The families a sidebar groups by, in the order the catalogue declares them.
@@ -144,14 +159,6 @@ fn lengths() -> Vec<String> {
 /// guesses is worse than one that offers everything.
 fn notes() -> Vec<String> {
     vec![
-        format!(
-            "\"propsPerTag\": {}",
-            text(
-                "The library holds no per-tag property list: an adapter applies every property to \
-             every tag and ignores what a widget cannot express. Every property is therefore \
-             offered for every component, and this catalogue does not claim which are meaningful."
-            )
-        ),
         format!(
             "\"values\": {}",
             text(
@@ -852,6 +859,20 @@ mod tests {
         for tag in Tag::ALL {
             let entry = format!("\"name\": \"{}\", \"family\"", tag.as_str());
             assert!(json.contains(&entry), "missing {tag:?}");
+        }
+    }
+
+    /// A component declaring a property this document does not describe would
+    /// leave an editor with a name and no way to edit it.
+    #[test]
+    fn every_declared_property_is_described_in_the_property_table() {
+        for tag in Tag::ALL {
+            for prop in tag.props() {
+                assert!(
+                    PROPS.iter().any(|entry| entry.prop == *prop),
+                    "{tag:?} declares {prop:?}, which the property table does not describe"
+                );
+            }
         }
     }
 

@@ -79,17 +79,6 @@ fn offspring(widget: &gtk::Widget) -> Vec<gtk::Widget> {
     children
 }
 
-/// One property, the tag expected to honour it, and the observation proving it
-/// arrived. The verdict reads the toolkit back — a real GTK property where the
-/// adapter sets one, and the style class where the property is only expressible
-/// as appearance.
-struct Probe {
-    prop: Prop,
-    tag: Tag,
-    value: PropValue,
-    verdict: fn(&gtk::Widget) -> bool,
-}
-
 /// Every scenario runs inside one test.
 ///
 /// GTK may only be initialized from a single thread, and the libtest harness
@@ -105,7 +94,7 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     }
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
-    every_property_changes_the_widget_it_is_applied_to();
+    every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_part_lands_in_the_slot_its_parent_keeps();
 }
@@ -161,295 +150,300 @@ fn every_container_keeps_the_child_it_is_given() {
     }
 }
 
-/// A property applied to a widget that ignores it is the defect this catches:
-/// the patch is accepted, and nothing on screen changes.
-fn every_property_changes_the_widget_it_is_applied_to() {
-    for probe in probes() {
-        let mut session = Session::new();
-        let node = session.producer.create(probe.tag);
-        session.producer.append(NodeId::ROOT, node);
-        session.producer.set(node, probe.prop, probe.value.clone());
+/// A component that declares a property the adapter ignores is the defect this
+/// catches, and it is checked for every component and every property it
+/// declares rather than for a chosen sample.
+///
+/// The observation is the whole rendered widget tree, read back from the
+/// toolkit: every readable GTK property of every widget the component built,
+/// its style classes, the text its buffers hold, the adjustment behind a
+/// control and the grid cell it occupies. A described component is rendered
+/// twice — once plain, once carrying the property — and the property is only
+/// honoured if the toolkit reports something different. Nothing is asserted
+/// about *which* difference, because that is what the scenario below this one
+/// is for; what is asserted here is that accepting the property was not a
+/// silent no-op.
+fn every_declared_property_changes_the_component_that_declares_it() {
+    let ignored: Vec<String> = Tag::ALL.iter().flat_map(|tag| unhonoured(*tag)).collect();
+    assert!(
+        ignored.is_empty(),
+        "the adapter accepts declared properties and changes nothing:\n{}",
+        ignored.join("\n")
+    );
+}
 
-        let outcome = session.flush();
+/// Everything one component declares and the adapter does not do.
+///
+/// The whole list rather than the first: a contract is fixed by reading every
+/// gap at once, not by discovering them one test run at a time.
+fn unhonoured(tag: Tag) -> Vec<String> {
+    let mut ignored = Vec::new();
+    assert_eq!(
+        portrait(tag, Prop::Label, None),
+        portrait(tag, Prop::Label, None),
+        "{} renders differently from one description, so nothing read back from it means anything",
+        tag.as_str()
+    );
+    for prop in tag.props() {
+        if unobservable(tag, *prop) {
+            continue;
+        }
+        let plain = portrait(tag, *prop, None);
+        let honoured = offers(*prop)
+            .iter()
+            .any(|value| portrait(tag, *prop, Some(value)) != plain);
+        if !honoured {
+            ignored.push(format!("  {} declares {prop:?}", tag.as_str()));
+        }
+    }
+    ignored
+}
 
-        assert!(outcome.is_ok(), "{:?} failed to render: {outcome:?}", probe.prop);
-        let widget = session
-            .tagged(probe.tag)
-            .unwrap_or_else(|| panic!("{} built no widget for {:?}", probe.tag.as_str(), probe.prop));
-        assert!(
-            (probe.verdict)(&widget),
-            "{:?} on {} left the widget unchanged",
-            probe.prop,
-            probe.tag.as_str()
-        );
+/// The one pairing the toolkit will not let this scenario observe.
+///
+/// A popover is hidden until it is popped up, so being told to hide leaves it
+/// exactly where it was, and telling it to show pops a surface up against a
+/// window that does not exist in a test — which GTK does not survive. The
+/// adapter does apply the property; there is no reading it back here, and
+/// pretending otherwise by weakening the observation would hide real gaps in
+/// every other component.
+fn unobservable(tag: Tag, prop: Prop) -> bool {
+    prop == Prop::Visible && (tag == Tag::Popover || tag == Tag::ContextMenu)
+}
+
+/// One component, rendered with the property and without it, described down to
+/// the last toolkit property.
+fn portrait(tag: Tag, prop: Prop, value: Option<&PropValue>) -> String {
+    let mut session = Session::new();
+    let host = seat(&mut session, prop);
+    let node = session.producer.create(tag);
+    session.producer.append(host, node);
+    fill(&mut session, node, tag);
+    if let Some(value) = value {
+        session.producer.set(node, prop, value.clone());
+    }
+    session.flush().expect("a declared property must render");
+    session.widgets().iter().map(traced).collect::<Vec<String>>().join("\n")
+}
+
+/// Where the probed component is placed.
+///
+/// A cell is decided by the grid holding the child, so the two placement
+/// properties are the only ones that need a grid to mean anything at all.
+fn seat(session: &mut Session, prop: Prop) -> NodeId {
+    if prop != Prop::Span && prop != Prop::RowSpan {
+        return NodeId::ROOT;
+    }
+    let grid = session.producer.create(Tag::Grid);
+    session.producer.append(NodeId::ROOT, grid);
+    // A grid one column wide has no room to span: a child asking for two
+    // columns is given the one that exists, whatever it described.
+    session.producer.set(grid, Prop::Columns, PropValue::Integer(3));
+    grid
+}
+
+/// Gives a container something to arrange, since a gap, a column count and a
+/// wrapping axis are all invisible in an empty one.
+fn fill(session: &mut Session, node: NodeId, tag: Tag) {
+    if !tag.accepts_children() {
+        return;
+    }
+    for _ in 0..2 {
+        let child = session.producer.text(OFFSPRING);
+        session.producer.append(node, child);
     }
 }
 
-/// The representative property list, each paired with a tag whose contract
-/// says it honours that property.
-fn probes() -> Vec<Probe> {
-    let mut listed = content();
-    listed.extend(state());
-    listed.extend(appearance());
-    listed.extend(measure());
-    listed.extend(range());
-    listed
+/// One widget as the toolkit reports it.
+fn traced(widget: &gtk::Widget) -> String {
+    let mut written = vec![widget.type_().to_string(), widget.css_classes().join(".")];
+    for spec in widget.list_properties() {
+        if !spec.flags().contains(gtk::glib::ParamFlags::READABLE) || delegated(widget, spec.name()) {
+            continue;
+        }
+        written.push(format!(
+            "{}={}",
+            spec.name(),
+            shown(&widget.property_value(spec.name()))
+        ));
+    }
+    written.push(held(widget));
+    written.push(celled(widget));
+    written.join(" ")
 }
 
-fn content() -> Vec<Probe> {
-    vec![
-        Probe {
-            prop: Prop::Label,
-            tag: Tag::Text,
-            value: PropValue::text("Ready"),
-            verdict: |widget| text_of(widget) == "Ready",
-        },
-        Probe {
-            prop: Prop::Value,
-            tag: Tag::Entry,
-            value: PropValue::text("nginx"),
-            verdict: |widget| entry(widget).text() == "nginx",
-        },
-        Probe {
-            prop: Prop::Placeholder,
-            tag: Tag::Entry,
-            value: PropValue::text("filter…"),
-            verdict: |widget| entry(widget).placeholder_text().is_some_and(|held| held == "filter…"),
-        },
-        Probe {
-            prop: Prop::Icon,
-            tag: Tag::Icon,
-            value: PropValue::text("dialog-information-symbolic"),
-            verdict: |widget| {
-                widget
-                    .downcast_ref::<gtk::Image>()
-                    .and_then(gtk::Image::icon_name)
-                    .is_some_and(|name| name == "dialog-information-symbolic")
-            },
-        },
-        Probe {
-            prop: Prop::Tooltip,
-            tag: Tag::Button,
-            value: PropValue::text("Restart the container"),
-            verdict: |widget| {
-                widget
-                    .tooltip_text()
-                    .is_some_and(|held| held == "Restart the container")
-            },
-        },
-        Probe {
-            prop: Prop::Choices,
-            tag: Tag::Select,
-            value: PropValue::Choices(vec![Choice::new("all", "All"), Choice::new("running", "Running")]),
-            verdict: |widget| {
-                widget
-                    .downcast_ref::<gtk::DropDown>()
-                    .and_then(gtk::DropDown::model)
-                    .is_some_and(|model| model.n_items() == 2)
-            },
-        },
-    ]
+/// Whether a property is one a box only answers through the box layout it
+/// happens to be running.
+///
+/// A wrapping container runs a layout of its own, and GTK answers these from
+/// the box layout it no longer has — loudly, and with nothing. The layout
+/// manager itself is in the description, so the swap is still visible.
+fn delegated(widget: &gtk::Widget, name: &str) -> bool {
+    const DEFERRED: [&str; 5] = [
+        "orientation",
+        "spacing",
+        "homogeneous",
+        "baseline-child",
+        "baseline-position",
+    ];
+    let Some(manager) = widget.layout_manager() else {
+        return false;
+    };
+    widget.is::<gtk::Box>() && !manager.is::<gtk::BoxLayout>() && DEFERRED.contains(&name)
 }
 
-fn state() -> Vec<Probe> {
-    vec![
-        Probe {
-            prop: Prop::Enabled,
-            tag: Tag::Button,
-            value: PropValue::Flag(false),
-            verdict: |widget| !widget.is_sensitive(),
-        },
-        Probe {
-            prop: Prop::Visible,
-            tag: Tag::Text,
-            value: PropValue::Flag(false),
-            verdict: |widget| !widget.get_visible(),
-        },
-        Probe {
-            prop: Prop::Checked,
-            tag: Tag::Checkbox,
-            value: PropValue::Flag(true),
-            verdict: |widget| {
-                widget
-                    .downcast_ref::<gtk::CheckButton>()
-                    .is_some_and(gtk::CheckButton::is_active)
-            },
-        },
-        Probe {
-            prop: Prop::Expanded,
-            tag: Tag::Expander,
-            value: PropValue::Flag(true),
-            verdict: |widget| {
-                widget
-                    .downcast_ref::<gtk::Expander>()
-                    .is_some_and(gtk::Expander::is_expanded)
-            },
-        },
-        Probe {
-            prop: Prop::Busy,
-            tag: Tag::Spinner,
-            value: PropValue::Flag(false),
-            verdict: |widget| !widget.property::<bool>("spinning"),
-        },
-        Probe {
-            prop: Prop::Wrap,
-            tag: Tag::Text,
-            value: PropValue::Flag(true),
-            verdict: |widget| widget.property::<bool>("wrap"),
-        },
-        Probe {
-            prop: Prop::Ellipsize,
-            tag: Tag::Text,
-            value: PropValue::Flag(true),
-            verdict: |widget| {
-                widget
-                    .downcast_ref::<gtk::Label>()
-                    .is_some_and(|label| label.ellipsize() == gtk::pango::EllipsizeMode::End)
-            },
-        },
-    ]
+/// One property value as text.
+///
+/// An object is described by what it is and how much it holds, never by where
+/// it lives: two renderings of the same description allocate different objects,
+/// so an address would report every component as changed by everything.
+fn shown(value: &gtk::glib::Value) -> String {
+    let Ok(object) = value.get::<Option<gtk::glib::Object>>() else {
+        let written = format!("{value:?}");
+        // A boxed value — a rectangle, a colour — is printed by address too,
+        // and there is no reading it back generically, so it is described by
+        // its type and left out of the comparison.
+        if written.contains("0x") {
+            return value.type_().to_string();
+        }
+        return written;
+    };
+    let Some(object) = object else {
+        return "none".to_owned();
+    };
+    match object.dynamic_cast_ref::<gtk::gio::ListModel>() {
+        Some(model) => format!("{} of {}", object.type_(), model.n_items()),
+        None => object.type_().to_string(),
+    }
 }
 
-/// Appearance is class-based by design, so the observation is the class the
-/// generated sheet targets rather than a widget property.
-fn appearance() -> Vec<Probe> {
-    vec![
-        Probe {
-            prop: Prop::Variant,
-            tag: Tag::Button,
-            value: PropValue::Variant(Variant::Filled),
-            verdict: |widget| widget.has_css_class("variant-filled"),
-        },
-        Probe {
-            prop: Prop::Tone,
-            tag: Tag::Badge,
-            value: PropValue::Tone(Tone::Danger),
-            verdict: |widget| widget.has_css_class("tone-danger"),
-        },
-        Probe {
-            prop: Prop::Scale,
-            tag: Tag::Heading,
-            value: PropValue::Scale(Scale::Title),
-            verdict: |widget| widget.has_css_class("scale-title"),
-        },
-    ]
+/// The state a widget keeps in an object beside itself rather than in a
+/// property of its own: what a view's buffer holds, and where a control's
+/// adjustment stands.
+fn held(widget: &gtk::Widget) -> String {
+    if let Some(view) = widget.downcast_ref::<gtk::TextView>() {
+        let buffer = view.buffer();
+        return format!(
+            "buffer {}",
+            buffer.text(&buffer.start_iter(), &buffer.end_iter(), false)
+        );
+    }
+    let Some(adjustment) = adjusted(widget) else {
+        return String::new();
+    };
+    format!(
+        "range {} {} {} {}",
+        adjustment.lower(),
+        adjustment.upper(),
+        adjustment.value(),
+        adjustment.step_increment()
+    )
 }
 
-fn measure() -> Vec<Probe> {
-    vec![
-        Probe {
-            prop: Prop::Gap,
-            tag: Tag::Row,
-            value: PropValue::Length(Length::Step(3)),
-            verdict: |widget| container(widget).spacing() == 12,
-        },
-        Probe {
-            prop: Prop::Pad,
-            tag: Tag::Column,
-            value: PropValue::Length(Length::Step(2)),
-            verdict: |widget| widget.margin_top() == 8 && widget.margin_start() == 8,
-        },
-        Probe {
-            prop: Prop::Grow,
-            tag: Tag::Column,
-            value: PropValue::Number(1.0),
-            verdict: gtk::prelude::WidgetExt::hexpands,
-        },
-        Probe {
-            prop: Prop::Width,
-            tag: Tag::Entry,
-            value: PropValue::Length(Length::Chars(12)),
-            verdict: |widget| entry(widget).width_chars() == 12,
-        },
-        Probe {
-            prop: Prop::Height,
-            tag: Tag::Column,
-            value: PropValue::Length(Length::Step(4)),
-            verdict: |widget| widget.size_request().1 == 16,
-        },
-        // Alignment names the container's axes, not the screen's: these probes
-        // hang their node from the root, which stacks its children downwards,
-        // so the main axis here is the vertical one.
-        Probe {
-            prop: Prop::Align,
-            tag: Tag::Text,
-            value: PropValue::Align(Align::End),
-            verdict: |widget| widget.valign() == gtk::Align::End,
-        },
-        Probe {
-            prop: Prop::Justify,
-            tag: Tag::Text,
-            value: PropValue::Align(Align::Center),
-            verdict: |widget| widget.halign() == gtk::Align::Center,
-        },
-        Probe {
-            prop: Prop::Orientation,
-            tag: Tag::Row,
-            value: PropValue::Orientation(Orientation::Vertical),
-            verdict: |widget| container(widget).orientation() == gtk::Orientation::Vertical,
-        },
-    ]
+fn adjusted(widget: &gtk::Widget) -> Option<gtk::Adjustment> {
+    if let Some(range) = widget.downcast_ref::<gtk::Range>() {
+        return Some(range.adjustment());
+    }
+    widget
+        .downcast_ref::<gtk::SpinButton>()
+        .map(gtk::SpinButton::adjustment)
 }
 
-fn range() -> Vec<Probe> {
-    vec![
-        Probe {
-            prop: Prop::Minimum,
-            tag: Tag::Slider,
-            value: PropValue::Number(5.0),
-            verdict: |widget| near(scale(widget).adjustment().lower(), 5.0),
-        },
-        Probe {
-            prop: Prop::Maximum,
-            tag: Tag::Slider,
-            value: PropValue::Number(50.0),
-            verdict: |widget| near(scale(widget).adjustment().upper(), 50.0),
-        },
-        Probe {
-            prop: Prop::Fraction,
-            tag: Tag::Progress,
-            value: PropValue::Number(0.5),
-            verdict: |widget| {
-                widget
-                    .downcast_ref::<gtk::ProgressBar>()
-                    .is_some_and(|progress| near(progress.fraction(), 0.5))
-            },
-        },
-    ]
+/// The cell a grid gives a child, which is kept by the grid rather than by the
+/// child and so appears in no property of it.
+fn celled(widget: &gtk::Widget) -> String {
+    let Some(grid) = widget.parent().and_then(|parent| parent.downcast::<gtk::Grid>().ok()) else {
+        return String::new();
+    };
+    let (column, row, width, height) = grid.query_child(widget);
+    format!("cell {column},{row},{width},{height}")
+}
+
+/// The values one property is probed with.
+///
+/// More than one where a component may already be in the state the first would
+/// put it in: a spinner is spinning before anything is described, and a notice
+/// is revealed. Honouring the property is changing the widget for at least one
+/// of them, never for a value the widget already stands at.
+fn offers(prop: Prop) -> Vec<PropValue> {
+    match prop {
+        Prop::Label | Prop::Detail | Prop::Placeholder | Prop::Help | Prop::Tooltip => {
+            vec![PropValue::text(TITLE)]
+        }
+        // A value is whatever the component holds, and a date and a time are
+        // spelled the one way that is not this library's invention.
+        Prop::Value => vec![
+            PropValue::text(CONTENT),
+            PropValue::Number(3.0),
+            PropValue::text("2024-03-05"),
+            PropValue::text("14:30"),
+        ],
+        Prop::Icon => vec![PropValue::text(EMBLEM)],
+        Prop::Uri => vec![PropValue::text(REFERENCE)],
+        Prop::Enabled | Prop::Visible => vec![PropValue::Flag(false)],
+        Prop::Selected | Prop::Checked => vec![PropValue::Flag(true)],
+        Prop::Expanded | Prop::Busy | Prop::Secret | Prop::Monospace | Prop::Wrap | Prop::Ellipsize => {
+            vec![PropValue::Flag(true), PropValue::Flag(false)]
+        }
+        _ => shaped(prop),
+    }
+}
+
+/// The values of the properties whose shape is not text, a flag or a name.
+fn shaped(prop: Prop) -> Vec<PropValue> {
+    match prop {
+        Prop::Variant => vec![PropValue::Variant(Variant::Filled)],
+        Prop::Tone => vec![PropValue::Tone(Tone::Danger)],
+        Prop::Scale => vec![PropValue::Scale(Scale::Title)],
+        Prop::Color => vec![PropValue::Token(hl_gui::Token::Accent)],
+        Prop::Gap | Prop::Pad => vec![PropValue::Length(Length::Step(3)), PropValue::Length(Length::Step(5))],
+        Prop::Grow => vec![PropValue::Number(1.0), PropValue::Number(0.0)],
+        Prop::Width | Prop::Height => vec![
+            PropValue::Length(Length::Step(4)),
+            PropValue::Length(Length::Step(7)),
+            PropValue::Length(Length::Chars(12)),
+        ],
+        Prop::Align | Prop::Justify => vec![
+            PropValue::Align(Align::End),
+            PropValue::Align(Align::Center),
+            PropValue::Align(Align::Start),
+        ],
+        Prop::Orientation => vec![
+            PropValue::Orientation(Orientation::Vertical),
+            PropValue::Orientation(Orientation::Horizontal),
+        ],
+        _ => numbered(prop),
+    }
+}
+
+/// The values of the properties measured in numbers, rows or columns.
+fn numbered(prop: Prop) -> Vec<PropValue> {
+    match prop {
+        Prop::Columns | Prop::Span | Prop::RowSpan => vec![PropValue::Integer(2), PropValue::Integer(3)],
+        Prop::Position => vec![PropValue::Number(120.0)],
+        Prop::Minimum => vec![PropValue::Number(5.0)],
+        Prop::Maximum => vec![PropValue::Number(50.0)],
+        Prop::Step => vec![PropValue::Number(2.0)],
+        Prop::Fraction => vec![PropValue::Number(0.5)],
+        Prop::Choices => vec![PropValue::Choices(vec![
+            Choice::new("all", "All"),
+            Choice::new("running", "Running"),
+        ])],
+        Prop::Schema => vec![PropValue::Schema(vec![
+            hl_gui::Column::new("name", "Name"),
+            hl_gui::Column::new("state", "State"),
+        ])],
+        Prop::Source => vec![PropValue::Source(hl_gui::SourceId::new(1))],
+        // RowHeight is the one property no component declares, so no value is
+        // ever asked for here.
+        _ => vec![PropValue::Integer(2)],
+    }
 }
 
 /// Numbers cross the toolkit boundary as doubles, so a described value is
 /// compared within the width of that round trip rather than bit for bit.
 fn near(measured: f64, described: f64) -> bool {
     (measured - described).abs() < f64::EPSILON
-}
-
-fn text_of(widget: &gtk::Widget) -> String {
-    widget
-        .downcast_ref::<gtk::Label>()
-        .map(|label| label.text().to_string())
-        .unwrap_or_default()
-}
-
-fn entry(widget: &gtk::Widget) -> gtk::Entry {
-    widget
-        .clone()
-        .downcast::<gtk::Entry>()
-        .expect("an entry tag builds an entry")
-}
-
-fn container(widget: &gtk::Widget) -> gtk::Box {
-    widget
-        .clone()
-        .downcast::<gtk::Box>()
-        .expect("a layout tag builds a box")
-}
-
-fn scale(widget: &gtk::Widget) -> gtk::Scale {
-    widget
-        .clone()
-        .downcast::<gtk::Scale>()
-        .expect("a slider tag builds a scale")
 }
 
 /// What a component is *for*: the one property it would be dishonest to accept

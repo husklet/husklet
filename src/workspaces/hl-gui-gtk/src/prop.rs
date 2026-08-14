@@ -137,6 +137,12 @@ fn columns(widget: &gtk::Widget, value: &PropValue) {
         build::layout::columns(widget, value);
         return;
     }
+    // A gallery lays its pictures out in lines of its own, so its column count
+    // is how many it puts on one line before wrapping.
+    if let Some(gallery) = widget.downcast_ref::<gtk::FlowBox>() {
+        gallery.set_max_children_per_line(u32::from(value.as_count().unwrap_or(1)));
+        return;
+    }
     crate::collection::configure(widget, Prop::Columns, value);
 }
 
@@ -154,6 +160,13 @@ fn ellipsize(widget: &gtk::Widget, value: &PropValue) {
 
 fn gap(widget: &gtk::Widget, value: &PropValue) {
     let pixels = i32::from(value.as_length().and_then(Length::pixels).unwrap_or(0));
+    // A revealed surface holds its children in the column it reveals, so the
+    // space between them is that column's, not the revealer's.
+    let revealed = widget
+        .downcast_ref::<gtk::Revealer>()
+        .and_then(gtk::Revealer::child)
+        .filter(gtk::prelude::ObjectExt::is::<gtk::Box>);
+    let widget = revealed.as_ref().unwrap_or(widget);
     // A wrapping container runs its own layout, and asking the box for its
     // spacing would configure the layout it no longer uses.
     if build::layout::gap(widget, pixels) {
@@ -167,6 +180,14 @@ fn gap(widget: &gtk::Widget, value: &PropValue) {
         let spacing = u32::try_from(pixels).unwrap_or(0);
         grid.set_row_spacing(spacing);
         grid.set_column_spacing(spacing);
+        return;
+    }
+    // A gallery wraps its own children, and the space between them is the same
+    // property a row means by it.
+    if let Some(gallery) = widget.downcast_ref::<gtk::FlowBox>() {
+        let spacing = u32::try_from(pixels).unwrap_or(0);
+        gallery.set_row_spacing(spacing);
+        gallery.set_column_spacing(spacing);
     }
 }
 

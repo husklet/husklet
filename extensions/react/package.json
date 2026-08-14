@@ -9,9 +9,11 @@
     ".": "./src/index.js",
     "./catalogue": "./src/catalogue.json"
   },
-  "files": ["src", "README.md"],
+  "files": ["src", "catalogue.json", "README.md"],
   "scripts": {
-    "test": "node --test 'test/*.test.js'"
+    "test": "node --test 'test/*.test.js'",
+    "catalogue": "cargo run -q --manifest-path ../../Cargo.toml -p hl-gui --bin catalogue > catalogue.json",
+    "types": "npm run catalogue && node tools/types.js"
   },
   "dependencies": {
     "react": "^18.3.1",

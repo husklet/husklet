@@ -16,7 +16,12 @@ const CELL_MARGIN: i32 = 8;
 pub(crate) fn configure(widget: &gtk::Widget, prop: Prop, value: &PropValue) {
     match (prop, value) {
         (Prop::Schema, PropValue::Schema(columns)) => schema(widget, columns),
-        (Prop::RowHeight, _) => {}
+        // Binding a table to a source is what gives it its model: waiting for
+        // the first window instead would leave a bound table showing the rows
+        // of whatever source it was bound to before.
+        (Prop::Source, PropValue::Source(source)) => {
+            model(widget, *source);
+        }
         _ => {}
     }
 }
