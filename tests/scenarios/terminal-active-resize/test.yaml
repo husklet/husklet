@@ -1,0 +1,25 @@
+cases:
+- id: terminal-active-resize/readline-shrink-redraw
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - write: { text: "printf '<%s>\\n' \"$X-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789-RESIZED\"" }
+      - resize: { rows: 8, columns: 20 }
+      - write: { text: "\u0001" }
+      - write: { text: "X=LEFT; " }
+      - write: { text: "\u0005" }
+      - write: { text: "; printf '<RESIZE-END>\\n'\r" }
+      - await_output: { contains: "<LEFT-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789-RESIZED>", timeout_ms: 5000 }
+      - await_output: { contains: "<RESIZE-END>", timeout_ms: 5000 }
+      - write: { text: "stty size; printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: "8 20", timeout_ms: 5000 }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/payload.txt, golden/dimensions.txt, golden/shell_ok.txt]
