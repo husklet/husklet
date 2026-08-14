@@ -184,7 +184,7 @@ pub(super) fn engine_metadata_is_valid() -> bool {
 }
 
 #[cfg(unix)]
-pub(super) fn engine_library_path() -> Option<std::path::PathBuf> {
+fn symbol_library_path(address: *const c_void) -> Option<std::path::PathBuf> {
     use std::os::unix::ffi::OsStrExt as _;
 
     let mut information = DynamicSymbol {
@@ -195,13 +195,27 @@ pub(super) fn engine_library_path() -> Option<std::path::PathBuf> {
     };
     // SAFETY: `hl_engine_abi` is a linked function address and `information` is a live writable
     // `Dl_info`-compatible record. `dladdr` owns no returned storage; copy the filename now.
-    let found = unsafe { dladdr(hl_engine_abi as *const () as *const c_void, &raw mut information) };
+    let found = unsafe { dladdr(address, &raw mut information) };
     if found == 0 || information.filename.is_null() {
         return None;
     }
     // SAFETY: successful `dladdr` returns a process-lifetime NUL-terminated filename.
     let bytes = unsafe { std::ffi::CStr::from_ptr(information.filename) }.to_bytes();
     Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+#[cfg(unix)]
+pub(super) fn engine_library_paths() -> Option<Vec<std::path::PathBuf>> {
+    [
+        hl_engine_abi as *const () as *const c_void,
+        hl_engine_version as *const () as *const c_void,
+        hl_c_backend_create as *const () as *const c_void,
+        hl_c_backend_run as *const () as *const c_void,
+        hl_c_backend_destroy as *const () as *const c_void,
+    ]
+    .into_iter()
+    .map(symbol_library_path)
+    .collect()
 }
 
 #[cfg(test)]

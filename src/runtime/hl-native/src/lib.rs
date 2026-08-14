@@ -29,12 +29,12 @@ pub fn artifact_smoke() -> bool {
     bindings::engine_metadata_is_valid()
 }
 
-/// Resolves the shared object that supplied the linked engine ABI symbol.
+/// Resolves the shared objects that supplied the linked engine lifecycle symbols.
 #[cfg(unix)]
 #[doc(hidden)]
 #[must_use]
-pub fn artifact_path() -> Option<std::path::PathBuf> {
-    bindings::engine_library_path()
+pub fn artifact_paths() -> Option<Vec<std::path::PathBuf>> {
+    bindings::engine_library_paths()
 }
 
 #[cfg(feature = "native-test-hooks")]

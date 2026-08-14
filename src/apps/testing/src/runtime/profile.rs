@@ -181,8 +181,7 @@ mod tests {
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>()
         };
-        std::fs::write(
-            directory.path().join("receipt.yaml"),
+        let receipt = |commit: &str, smoke: &str| {
             format!(
                 "schema: husklet-runtime-corpus-artifacts-v1\ncommit: 0123456789abcdef0123456789abcdef01234567\nprofile: release\nrunner:\n  path: bin/testing\n  sha256: {}\n  bytes: {}\nlibrary:\n  path: {}\n  sha256: {}\n  bytes: {}\nsmoke: hl-native-artifact-smoke-v1\n",
                 hash(runner_bytes),
@@ -190,10 +189,44 @@ mod tests {
                 super::native_library_path(),
                 hash(library_bytes),
                 library_bytes.len()
+            )
+            .replace("0123456789abcdef0123456789abcdef01234567", commit)
+            .replace("hl-native-artifact-smoke-v1", smoke)
+        };
+        let receipt_path = directory.path().join("receipt.yaml");
+        std::fs::write(
+            &receipt_path,
+            receipt(
+                "0123456789abcdef0123456789abcdef01234567",
+                "hl-native-artifact-smoke-v1",
             ),
         )
         .unwrap();
-        assert!(release_identity(&runner, runner_bytes).is_ok());
+        let identity = release_identity(&runner, runner_bytes).unwrap();
+
+        std::fs::write(
+            &receipt_path,
+            receipt(
+                "fedcba9876543210fedcba9876543210fedcba98",
+                "hl-native-artifact-smoke-v1",
+            ),
+        )
+        .unwrap();
+        assert_ne!(release_identity(&runner, runner_bytes).unwrap(), identity);
+        std::fs::write(
+            &receipt_path,
+            receipt("0123456789abcdef0123456789abcdef01234567", "foreign-smoke"),
+        )
+        .unwrap();
+        assert!(release_identity(&runner, runner_bytes).is_err());
+        std::fs::write(
+            &receipt_path,
+            receipt(
+                "0123456789abcdef0123456789abcdef01234567",
+                "hl-native-artifact-smoke-v1",
+            ),
+        )
+        .unwrap();
 
         std::fs::write(&library, b"wrong-native-library").unwrap();
         assert!(release_identity(&runner, runner_bytes).is_err());

@@ -2674,6 +2674,7 @@ dependencies = [
  "hl-process",
  "reflink-copy",
  "ring",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml",
