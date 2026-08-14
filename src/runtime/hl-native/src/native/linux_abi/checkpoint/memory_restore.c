@@ -249,7 +249,7 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
     for (uint64_t i = 0; i < m->n_regions; i++) {
         struct ckpt_region reg;
         if (ckpt_read_region(f, &reg) != 0) { goto fail; }
-        if (reg.format_version != CKPT_REGION_VERSION || reg.logical > 1) {
+        if (!ckpt_region_valid(&reg)) {
             fprintf(stderr, "[restore] invalid region format=%u logical=%u\n", reg.format_version, reg.logical);
             goto fail;
         }

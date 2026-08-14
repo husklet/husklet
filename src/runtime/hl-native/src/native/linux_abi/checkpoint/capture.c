@@ -1,6 +1,7 @@
 // hl/linux_abi -- native checkpoint/restore ("CRIU-equivalent"), MULTI-PROCESS.
 #include "../host_errno.h"
 #include "../pipe.h"
+#include "region.h"
 //
 // Freezes a running guest -- a WHOLE process tree (multiple shells, background jobs, their children) -- to an
 // on-disk directory (RAM + CPU + fds, per process), so every host engine process can exit and free its
@@ -161,21 +162,6 @@ struct ckpt_meta {
     // replayed on restore (ckpt_reinstall_sigacts) so async signals route back through the engine handler.
     uint64_t sig_handler[65], sig_flags[65], sig_mask[65];
 };
-
-struct ckpt_region {
-    uint64_t addr, len, glen;
-    int32_t prot;   // guest-intent protection (from the anon registry; PROT_READ|WRITE default)
-    int32_t is_gna; // 1 if this region is guest-PROT_NONE (rebuild the g_gna EFAULT registry on restore)
-    uint64_t npages;
-    uint64_t backing_object;
-    uint64_t backing_offset;
-    uint32_t backing_shared;
-    uint32_t backing_emulated;
-    uint32_t format_version;
-    uint32_t logical;
-};
-
-#define CKPT_REGION_VERSION 1
 
 static int ckpt_rd_all(FILE *f, void *buf, size_t n);
 

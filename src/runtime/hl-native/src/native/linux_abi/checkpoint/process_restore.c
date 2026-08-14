@@ -939,8 +939,7 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
         struct ckpt_region region;
         if (ckpt_read_region(pages, &region) != 0 || region.addr == 0 || region.len == 0 ||
             region.addr > UINT64_MAX - region.len || region.glen > region.len ||
-            region.npages > (region.len - 1) / meta->pagesz + 1 || region.format_version != CKPT_REGION_VERSION ||
-            region.logical > 1 ||
+            region.npages > (region.len - 1) / meta->pagesz + 1 || !ckpt_region_valid(&region) ||
             (region.backing_object != 0 && (region.backing_offset > UINT64_MAX - region.glen ||
                                             region.backing_offset + region.glen > (uint64_t)INT64_MAX)) ||
             (region.logical && (region.backing_object == 0 || !region.backing_shared || region.backing_emulated ||

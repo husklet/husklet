@@ -1557,6 +1557,7 @@ int main(void) {
     if (ckpt_fixed_payload_object_size(48, 16, 2, 16, 2, 0) == 0) return 38;
     return 0;
 }
+
 "#,
     )
     .expect("write checkpoint bounds probe source");
@@ -1574,4 +1575,53 @@ int main(void) {
         .expect("checkpoint bounds probe execution");
     assert!(run.success(), "checkpoint bounds probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove checkpoint bounds probe directory");
+}
+
+#[test]
+fn checkpoint_region_validation_rejects_non_boolean_fields() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-checkpoint-region-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create checkpoint region probe directory");
+    let source = scratch.join("checkpoint_region.c");
+    let executable = scratch.join("checkpoint_region");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/checkpoint/region.h"
+
+int main(void) {
+    struct ckpt_region region = {.format_version = CKPT_REGION_VERSION};
+    if (!ckpt_region_valid(&region)) return 1;
+    region.logical = 2;
+    if (ckpt_region_valid(&region)) return 2;
+    region.logical = 0;
+    region.backing_shared = 2;
+    if (ckpt_region_valid(&region)) return 3;
+    region.backing_shared = 0;
+    region.backing_emulated = 2;
+    if (ckpt_region_valid(&region)) return 4;
+    region.backing_emulated = 0;
+    region.format_version = CKPT_REGION_VERSION + 1;
+    if (ckpt_region_valid(&region)) return 5;
+    if (ckpt_region_valid(0)) return 6;
+    return 0;
+}
+"#,
+    )
+    .expect("write checkpoint region probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("checkpoint region probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("checkpoint region probe execution");
+    assert!(run.success(), "checkpoint region probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove checkpoint region probe directory");
 }
