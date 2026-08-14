@@ -21,6 +21,20 @@ fn signatures_are_unambiguous_and_ignore_terminal_presentation() {
 }
 
 #[test]
+fn terminal_capability_defaults_remain_workspace_overridable() {
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu:latest", Arch::Arm64);
+    let defaults = Configuration::new(&workspace).environment();
+    assert_eq!(defaults.get("TERM").map(String::as_str), Some("xterm-256color"));
+    assert_eq!(defaults.get("COLORTERM").map(String::as_str), Some("truecolor"));
+
+    workspace.env.push(("TERM".into(), "screen".into()));
+    workspace.env.push(("COLORTERM".into(), "24bit".into()));
+    let overridden = Configuration::new(&workspace).environment();
+    assert_eq!(overridden.get("TERM").map(String::as_str), Some("screen"));
+    assert_eq!(overridden.get("COLORTERM").map(String::as_str), Some("24bit"));
+}
+
+#[test]
 fn workspace_domain_uses_workspace_storage() {
     let root = tempfile::tempdir().unwrap();
     let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);

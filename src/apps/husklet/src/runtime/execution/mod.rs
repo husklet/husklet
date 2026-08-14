@@ -250,6 +250,20 @@ mod terminal_start_tests {
         assert_eq!(working_dir, "/root");
         assert_eq!(command, "cd '/tmp/deleted' 2>/dev/null || cd '/root'; exec bash -il");
     }
+
+    #[test]
+    fn inherited_directory_is_shell_quoted_and_relative_values_are_ignored() {
+        let (working_dir, command) =
+            terminal_start(Some("/tmp/a'b; echo unsafe"), "/root", "exec bash -il");
+        assert_eq!(working_dir, "/root");
+        assert_eq!(
+            command,
+            "cd '/tmp/a'\\''b; echo unsafe' 2>/dev/null || cd '/root'; exec bash -il"
+        );
+
+        let (_, command) = terminal_start(Some("tmp/relative"), "/root", "exec bash -il");
+        assert_eq!(command, "cd '/root' 2>/dev/null || cd '/root'; exec bash -il");
+    }
 }
 
 struct WorkspaceContainer;
