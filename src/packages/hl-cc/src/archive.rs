@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::BuildEnvironment;
+use crate::{BuildEnvironment, Error, Result, Toolchain};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Definition {
@@ -83,6 +83,22 @@ pub enum Warning {
     MissingPrototypes,
     ImplicitFunctionDeclarationError,
     ImplicitIntError,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Archive {
+    path: PathBuf,
+}
+
+impl Archive {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
 }
 
 impl Warning {
@@ -220,86 +236,192 @@ impl ArchiveSpec {
 #[must_use]
 pub struct CCompiler<'a> {
     environment: &'a BuildEnvironment,
+    toolchain: &'a Toolchain,
     flavor: CompilerFlavor,
 }
 
 impl<'a> CCompiler<'a> {
-    pub const fn new(environment: &'a BuildEnvironment, flavor: CompilerFlavor) -> Self {
-        Self { environment, flavor }
+    pub const fn new(environment: &'a BuildEnvironment, toolchain: &'a Toolchain, flavor: CompilerFlavor) -> Self {
+        Self {
+            environment,
+            toolchain,
+            flavor,
+        }
     }
-    pub fn archive(&self, spec: &ArchiveSpec) {
-        let mut build = cc::Build::new();
-        if let Some(value) = spec.cargo_metadata {
-            build.cargo_metadata(value);
-        }
-        if let Some(level) = spec.optimization {
-            build.opt_level(level);
-        }
-        if let Some(debug) = spec.debug {
-            build.debug(debug);
-        }
-        if let Some(pic) = spec.pic {
-            build.pic(pic);
-        }
-        if let Some(enabled) = spec.warnings_enabled {
-            build.warnings(enabled);
-        }
-        if let Some(LanguageStandard::C11) = spec.language {
-            build.std("c11");
-        }
-        for include in &spec.includes {
-            build.include(include);
-        }
-        if spec.archive_format == ArchiveFormat::Darwin {
-            build.archiver("/usr/bin/ar");
-            if !self.environment.host.as_str().ends_with("-apple-darwin") {
-                build.ar_flag("--format=darwin");
-            }
-        }
-        if let Some(prelude) = &spec.forced_include {
+    pub fn archive(&self, spec: &ArchiveSpec) -> Result<Archive> {
+        let mut objects = Vec::with_capacity(spec.sources.len());
+        for (index, source) in spec.sources.iter().enumerate() {
+            let extension = if self.flavor == CompilerFlavor::Msvc {
+                "obj"
+            } else {
+                "o"
+            };
+            let object = self
+                .environment
+                .output
+                .join(format!("{}-{index}.{extension}", spec.name));
+            let mut command = self.toolchain.compiler_command();
+            configure_compiler(&mut command, self.flavor, spec);
             match self.flavor {
-                CompilerFlavor::Msvc => {
-                    build.flag(format!("/FI{}", prelude.display()));
-                }
                 CompilerFlavor::GnuLike => {
-                    build.flag("-include").flag(prelude);
+                    command.arg("-c").arg(source).arg("-o").arg(&object);
+                }
+                CompilerFlavor::Msvc => {
+                    command.arg("/c").arg(source).arg(format!("/Fo{}", object.display()));
                 }
             }
+            run(&mut command, "compile C source", source)?;
+            objects.push(object);
         }
-        if let Some(visibility) = spec.visibility {
-            build.flag_if_supported(match visibility {
-                Visibility::Default => "-fvisibility=default",
-                Visibility::Hidden => "-fvisibility=hidden",
+        let filename = format!("lib{}.a", spec.name);
+        let path = self.environment.output.join(filename);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|source| Error::io("remove stale C archive", &path, source))?;
+        }
+        match self.flavor {
+            CompilerFlavor::GnuLike => {
+                self.assemble_gnu(spec, &path, &objects)?;
+            }
+            CompilerFlavor::Msvc => {
+                let mut command = self.toolchain.archiver_command();
+                command.arg(format!("/OUT:{}", path.display())).args(&objects);
+                run(&mut command, "assemble C archive", &path)?;
+            }
+        }
+        if !path.is_file() {
+            return Err(Error::MissingArtifact {
+                operation: "assemble C archive",
+                path,
             });
         }
-        if spec.function_sections == Some(false) {
-            build.flag_if_supported("-fno-function-sections");
+        if spec.cargo_metadata == Some(true) {
+            println!("cargo:rustc-link-search=native={}", self.environment.output.display());
+            println!("cargo:rustc-link-lib=static={}", spec.name);
         }
-        if spec.data_sections == Some(false) {
-            build.flag_if_supported("-fno-data-sections");
+        Ok(Archive::new(path))
+    }
+
+    fn assemble_gnu(&self, spec: &ArchiveSpec, path: &std::path::Path, objects: &[PathBuf]) -> Result<()> {
+        let mut command = self.gnu_archiver(spec);
+        command.arg("crsD").arg(path).args(objects);
+        let status = command
+            .status()
+            .map_err(|source| Error::io("assemble deterministic C archive", path, source))?;
+        if status.success() {
+            return Ok(());
         }
-        match spec.sanitizer {
-            Some(Sanitizer::Leak) => {
-                build.flag("-fsanitize=leak");
-            }
-            Some(Sanitizer::Address) => {
-                build.flag("-fsanitize=address");
-            }
-            None => {}
+        let _ = std::fs::remove_file(path);
+        let mut fallback = self.gnu_archiver(spec);
+        fallback.env("ZERO_AR_DATE", "1").arg("crs").arg(path).args(objects);
+        run(&mut fallback, "assemble C archive", path)
+    }
+
+    fn gnu_archiver(&self, spec: &ArchiveSpec) -> std::process::Command {
+        let mut command = self.toolchain.archiver_command();
+        if spec.archive_format == ArchiveFormat::Darwin && !self.environment.host.as_str().ends_with("-apple-darwin") {
+            command.arg("--format=darwin");
         }
-        if spec.omit_frame_pointer == Some(false) {
-            build.flag("-fno-omit-frame-pointer");
-        }
+        command
+    }
+}
+
+fn configure_compiler(command: &mut std::process::Command, flavor: CompilerFlavor, spec: &ArchiveSpec) {
+    match flavor {
+        CompilerFlavor::GnuLike => configure_gnu(command, spec),
+        CompilerFlavor::Msvc => configure_msvc(command, spec),
+    }
+}
+
+fn configure_gnu(command: &mut std::process::Command, spec: &ArchiveSpec) {
+    if let Some(level) = spec.optimization {
+        command.arg(format!("-O{level}"));
+    }
+    if spec.debug == Some(true) {
+        command.arg("-g");
+    }
+    if spec.pic == Some(true) {
+        command.arg("-fPIC");
+    }
+    if spec.language == Some(LanguageStandard::C11) {
+        command.arg("-std=c11");
+    }
+    for include in &spec.includes {
+        command.arg("-I").arg(include);
+    }
+    for definition in &spec.definitions {
+        command.arg(define_argument("-D", definition));
+    }
+    if let Some(prelude) = &spec.forced_include {
+        command.arg("-include").arg(prelude);
+    }
+    if let Some(visibility) = spec.visibility {
+        command.arg(match visibility {
+            Visibility::Default => "-fvisibility=default",
+            Visibility::Hidden => "-fvisibility=hidden",
+        });
+    }
+    if spec.function_sections == Some(false) {
+        command.arg("-fno-function-sections");
+    }
+    if spec.data_sections == Some(false) {
+        command.arg("-fno-data-sections");
+    }
+    if let Some(sanitizer) = spec.sanitizer {
+        command.arg(match sanitizer {
+            Sanitizer::Leak => "-fsanitize=leak",
+            Sanitizer::Address => "-fsanitize=address",
+        });
+    }
+    if spec.omit_frame_pointer == Some(false) {
+        command.arg("-fno-omit-frame-pointer");
+    }
+    if spec.warnings_enabled != Some(false) {
         for warning in &spec.warnings {
-            build.flag_if_supported(warning.flag());
+            command.arg(warning.flag());
         }
-        for definition in &spec.definitions {
-            build.define(definition.name(), definition.replacement());
-        }
-        for source in &spec.sources {
-            build.file(source);
-        }
-        build.compile(&spec.name);
+    }
+}
+
+fn configure_msvc(command: &mut std::process::Command, spec: &ArchiveSpec) {
+    if let Some(level) = spec.optimization {
+        command.arg(if level == 0 { "/Od" } else { "/O2" });
+    }
+    if spec.debug == Some(true) {
+        command.arg("/Zi");
+    }
+    if spec.language == Some(LanguageStandard::C11) {
+        command.arg("/std:c11");
+    }
+    for include in &spec.includes {
+        command.arg(format!("/I{}", include.display()));
+    }
+    for definition in &spec.definitions {
+        command.arg(define_argument("/D", definition));
+    }
+    if let Some(prelude) = &spec.forced_include {
+        command.arg(format!("/FI{}", prelude.display()));
+    }
+}
+
+fn define_argument(prefix: &str, definition: &Definition) -> String {
+    let mut argument = format!("{prefix}{}", definition.name());
+    if let Some(value) = definition.replacement() {
+        argument.push('=');
+        argument.push_str(value);
+    }
+    argument
+}
+
+fn run(command: &mut std::process::Command, operation: &'static str, path: &std::path::Path) -> Result<()> {
+    let status = command.status().map_err(|source| Error::io(operation, path, source))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::ToolFailed {
+            operation,
+            path: path.to_owned(),
+            status,
+        })
     }
 }
 
