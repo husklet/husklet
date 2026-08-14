@@ -197,6 +197,7 @@ fn encode_environment_record(encoded: &mut Vec<u8>, record: &[u8]) {
 
 impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
+        let engine = Arc::new(self.create()?);
         #[cfg(unix)]
         let recovery = if self.plan.options.get_bytes("HL_RESTORE").is_some() {
             let checkpoint = self.checkpoint.as_ref().ok_or(EngineError::LaunchFailed)?;
@@ -207,7 +208,6 @@ impl GuestMachine for ProductionMachine {
         } else {
             None
         };
-        let engine = Arc::new(self.create()?);
         *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
         let arguments = self
             .plan
