@@ -135,6 +135,10 @@ pub(super) struct TerminalSession<'a> {
     stdin_open: bool,
 }
 
+// Keep a productive child from monopolising the relay loop. Each pass must return to
+// input, resize, and exit handling even when more output is immediately available.
+const OUTPUT_DRAIN_BUDGET: usize = 256 * 1024;
+
 impl<'a> TerminalSession<'a> {
     pub(super) fn run(pty: &'a mut dyn hl_ws_term::PtyBackend) -> i32 {
         Self::new(pty).drive()
@@ -230,6 +234,7 @@ impl<'a> TerminalSession<'a> {
 
     fn drain_output(&mut self) -> std::io::Result<()> {
         let mut wrote = false;
+        let mut drained = 0;
         loop {
             let count = self.pty.read(&mut self.buffer)?;
             if count == 0 {
@@ -237,6 +242,10 @@ impl<'a> TerminalSession<'a> {
             }
             self.output.write_all(&self.buffer[..count])?;
             wrote = true;
+            drained += count;
+            if drained >= OUTPUT_DRAIN_BUDGET {
+                break;
+            }
         }
         if wrote {
             self.output.flush()?;
@@ -332,6 +341,43 @@ mod open_files_tests {
         let error = terminal.drain_output().unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+    }
+
+    #[test]
+    fn productive_output_yields_to_the_relay_loop() {
+        let mut backend = ProductiveBackend { reads: 0 };
+        let mut terminal = TerminalSession::new(&mut backend);
+
+        terminal.drain_output().unwrap();
+        drop(terminal);
+
+        assert_eq!(backend.reads, super::OUTPUT_DRAIN_BUDGET / 8192);
+    }
+
+    struct ProductiveBackend {
+        reads: usize,
+    }
+
+    impl PtyBackend for ProductiveBackend {
+        fn write(&mut self, _bytes: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            buffer.fill(b'x');
+            self.reads += 1;
+            Ok(buffer.len())
+        }
+
+        fn resize(&mut self, _columns: u16, _rows: u16) {}
+
+        fn master_fd(&self) -> Option<RawFd> {
+            None
+        }
+
+        fn try_wait(&mut self) -> Option<i32> {
+            None
+        }
     }
 
     struct FailingBackend;
