@@ -81,6 +81,10 @@ struct cpu {
     // Thread-DIRECTED pending signals (1<<signo) -- the per-thread analogue of g_pending. A tkill/tgkill to
     // THIS thread sets a bit here so only this thread delivers it. Drained by maybe_deliver_signal.
     volatile uint64_t tpending;
+    // Signal 64 cannot use the established 1<<signo encoding above. Keep its
+    // single pending bit in the serialized CPU state so checkpoint/restore does
+    // not lose thread-directed SIGRTMAX ownership.
+    volatile uint64_t tpending_hi;
     int sync_signal;
     int sync_code;
     uint64_t sync_address;
@@ -91,6 +95,8 @@ struct cpu {
     // sig_defer is the innermost level's deferred set; sig_defer_stack saves the enclosing levels.
     uint64_t sig_defer;
     uint64_t sig_defer_stack[32];
+    uint64_t sig_defer_hi;
+    uint64_t sig_defer_hi_stack[32];
     uint64_t sig_frame_sp[32]; // guest SP of each active handler frame (to detect siglongjmp unwinds)
     int sig_depth;
     // x86 RFLAGS.ID (bit 21) substrate. There is no ARM-NZCV equivalent, so popfq(9D) stashes the popped

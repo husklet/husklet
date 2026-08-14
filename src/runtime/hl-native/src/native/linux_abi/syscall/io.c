@@ -299,7 +299,7 @@ static void *dn_loop(void *arg) {
         if (!mask) continue; // raced a removal
         if (sig >= 1 && sig <= 64) {
             g_sigcode[sig] = 0x80; // SI_KERNEL (generic async source; dnotify carries no user siginfo)
-            __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
+            process_pending_set(sig);
             sfd_deliver(sig); // wake every signalfd whose per-OFD mask matches (ofd pool)
         }
     }

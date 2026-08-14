@@ -156,7 +156,7 @@ static int smc_tracked_written(uint64_t address, uint64_t size) {
 // shared dispatcher while-loop -- the original broke the loop immediately, not just the macro.
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
-        if (g_pending) { maybe_deliver_signal(c); /* async signal pending -> redirect to guest handler */ }            \
+        if (signal_deliverable_for_cpu(c)) { maybe_deliver_signal(c); /* deliverable signal -> handler */ }           \
         g_prevpc = g_curpc;                                                                                            \
         g_curpc = (c)->rip;                                                                                            \
         g_disp_n++;                                                                                                    \

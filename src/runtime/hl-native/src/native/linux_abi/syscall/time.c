@@ -231,7 +231,9 @@ static void *gtimer_loop(void *arg) {
             // one-shot expiry (flaky timerthread oneshot=0 on x86_64). thread_target_signal sets the target
             // thread's tpending (which rt_sigtimedwait also scans) and wakes it. Fall back to the
             // process-directed path if the tid is unknown/dead so no expiry is silently lost.
-            if (notify == 4 && target_tid > 0 && thread_target_signal(target_tid, signo)) continue;
+            if (notify == 4 && target_tid > 0 &&
+                thread_target_signal_info(target_tid, signo, id + 1, 0, HL_SI_TIMER, sv, 0, 0, 0) > 0)
+                continue;
             // Queue ONE instance per timer id rather than OR-ing a bare pending bit: a bit cannot tell two
             // distinct timers sharing a signo apart, so the second expiry used to be swallowed (and its
             // sigval clobbered the first's) whenever the guest had not consumed the first yet -- a race the
@@ -239,8 +241,7 @@ static void *gtimer_loop(void *arg) {
             // repeat expirations of the SAME timer folded into timer_getoverrun (which is derived from the
             // first_ns anchor above, independent of this queue).
             if (sigq_tag_queued(signo, id + 1)) continue;
-            if (sigq_push(signo, id + 1, 0, HL_SI_TIMER, sv, 0, 0, 0))
-                sfd_deliver(signo); // wake signalfd/epoll (per-OFD mask)
+            (void)sigq_push_signalfd(signo, id + 1, 0, HL_SI_TIMER, sv, 0, 0, 0);
         }
     }
     return NULL;

@@ -27,6 +27,77 @@ static struct {
 
 // bitmask of pending signals (1<<signo)
 static volatile uint64_t g_pending;
+static volatile uint64_t g_pending_hi;
+
+static uint64_t signal_pending_bit(int signal) {
+    return signal == 64 ? UINT64_C(1) : UINT64_C(1) << signal;
+}
+
+// The low pending word is part of struct cpu's established internal ABI and uses bit
+// `signo`. Signal 64 therefore cannot fit in it. Its per-thread bit lives in the live
+// thread registry side table; these lock-free helpers are defined with that registry.
+static uint64_t thread_pending_hi_load(const struct cpu *cpu) {
+    return __atomic_load_n(&cpu->tpending_hi, __ATOMIC_SEQ_CST);
+}
+static void thread_pending_hi_set(struct cpu *cpu) {
+    __atomic_store_n(&cpu->tpending_hi, UINT64_C(1), __ATOMIC_SEQ_CST);
+}
+static void thread_pending_hi_clear(struct cpu *cpu) {
+    __atomic_store_n(&cpu->tpending_hi, 0, __ATOMIC_SEQ_CST);
+}
+static int thread_defer_hi_test(const struct cpu *cpu) {
+    return cpu->sig_defer_hi != 0;
+}
+static void thread_defer_hi_restore(struct cpu *cpu, int depth) {
+    cpu->sig_defer_hi = depth > 0 ? cpu->sig_defer_hi_stack[depth] : 0;
+}
+static void thread_defer_hi_push(struct cpu *cpu, int depth, int pending) {
+    if (depth < 0 || depth >= (int)(sizeof cpu->sig_defer_hi_stack / sizeof cpu->sig_defer_hi_stack[0])) return;
+    cpu->sig_defer_hi_stack[depth] = cpu->sig_defer_hi;
+    if (pending) cpu->sig_defer_hi = 1;
+}
+static int cpu_tid(const struct cpu *cpu);
+static int sfd_any_ready_for_cpu(struct cpu *cpu);
+
+static int process_pending_test(int signal) {
+    if (signal < 1 || signal > 64) return 0;
+    volatile uint64_t *word = signal == 64 ? &g_pending_hi : &g_pending;
+    return (__atomic_load_n(word, __ATOMIC_SEQ_CST) & signal_pending_bit(signal)) != 0;
+}
+
+static void process_pending_set(int signal) {
+    if (signal < 1 || signal > 64) return;
+    volatile uint64_t *word = signal == 64 ? &g_pending_hi : &g_pending;
+    __atomic_or_fetch(word, signal_pending_bit(signal), __ATOMIC_SEQ_CST);
+}
+
+static void process_pending_clear(int signal) {
+    if (signal < 1 || signal > 64) return;
+    volatile uint64_t *word = signal == 64 ? &g_pending_hi : &g_pending;
+    __atomic_and_fetch(word, ~signal_pending_bit(signal), __ATOMIC_SEQ_CST);
+}
+
+static int thread_pending_test(const struct cpu *cpu, int signal) {
+    if (signal < 1 || signal > 64) return 0;
+    if (signal == 64) return (thread_pending_hi_load(cpu) & UINT64_C(1)) != 0;
+    return (__atomic_load_n(&cpu->tpending, __ATOMIC_SEQ_CST) & signal_pending_bit(signal)) != 0;
+}
+
+static void thread_pending_set(struct cpu *cpu, int signal) {
+    if (signal < 1 || signal > 64) return;
+    if (signal == 64)
+        thread_pending_hi_set(cpu);
+    else
+        __atomic_or_fetch(&cpu->tpending, signal_pending_bit(signal), __ATOMIC_SEQ_CST);
+}
+
+static void thread_pending_clear(struct cpu *cpu, int signal) {
+    if (signal < 1 || signal > 64) return;
+    if (signal == 64)
+        thread_pending_hi_clear(cpu);
+    else
+        __atomic_and_fetch(&cpu->tpending, ~signal_pending_bit(signal), __ATOMIC_SEQ_CST);
+}
 // Per-thread "this guest thread is currently inside a host syscall on the guest's behalf" flag, set
 // around service() (os/linux/syscall/dispatch.c). It is the reliable discriminator, when a fault-class
 // signal (SIGSEGV/BUS/ILL/TRAP/FPE) arrives via a POSIX handler with the host PC NOT in translated code,
@@ -67,7 +138,7 @@ static char g_fault_cmdline[512];
 // wrote. Delivery pops one queued instance into the g_sig* slots the per-arch frame builder reads.
 // All queue operations run in guest-thread / dispatcher context (never a host signal handler), so a plain
 // mutex is safe; host_sig* handlers deliberately never touch the ring.
-#define SIGQ_DEPTH 64
+#define SIGQ_DEPTH 128
 
 struct sigq_ent {
     int error;      // si_errno (seccomp trap data)
@@ -77,6 +148,8 @@ struct sigq_ent {
     int uid;        // si_uid
     uint64_t addr;  // si_addr
     int tag;        // source id (POSIX timer id + 1); 0 = untagged. Never reaches the guest siginfo.
+    int target_tid; // 0 = process-directed; otherwise only this guest thread may consume it
+    uint64_t signalfd_slots;
 };
 
 static struct {
@@ -90,19 +163,30 @@ static int sig_is_rt(int s) {
     return s >= 32 && s <= 64;
 }
 
+static uint64_t sfd_subscribers(int signal);
+static void sfd_deliver_slots(uint64_t slots, int signal);
+static void sfd_consume_slots(uint64_t slots);
+
 // Enqueue one pending instance of Linux signal `sig`. Standard signals coalesce (keep the first queued
 // siginfo, drop extras -- matching Linux non-RT coalescing); realtime signals queue FIFO up to
 // SIGQ_DEPTH. Always sets the g_pending bit so every existing pending scan sees the signal.
 // Returns 1 iff a new instance was actually enqueued -- the signalfd wake byte must be written ONLY then,
 // or a coalesced-away duplicate leaves a spare byte in the self-pipe and signalfd reports one siginfo
 // record too many (a second read that Linux answers with EAGAIN).
-static int sigq_push(int sig, int tag, int error, int code, uint64_t value, int pid, int uid, uint64_t addr) {
+static int sigq_push_target_locked(int sig, int target_tid, int wake_signalfd, int tag, int error, int code,
+                                   uint64_t value, int pid, int uid, uint64_t addr) {
     if (sig < 1 || sig > 64) return 0;
     int queued = 0;
-    pthread_mutex_lock(&g_sigq_lk);
-    int cap = sig_is_rt(sig) ? SIGQ_DEPTH : 1;
-    if (g_sigq[sig].count < cap) {
+    int duplicate = 0;
+    if (!sig_is_rt(sig))
+        for (int i = 0; i < g_sigq[sig].count; ++i)
+            if (g_sigq[sig].e[(g_sigq[sig].head + i) % SIGQ_DEPTH].target_tid == target_tid) {
+                duplicate = 1;
+                break;
+            }
+    if (!duplicate && g_sigq[sig].count < SIGQ_DEPTH) {
         int t = (g_sigq[sig].head + g_sigq[sig].count) % SIGQ_DEPTH;
+        uint64_t slots = wake_signalfd ? sfd_subscribers(sig) : 0;
         g_sigq[sig].e[t] = (struct sigq_ent){
             .error = error,
             .code = code,
@@ -111,12 +195,31 @@ static int sigq_push(int sig, int tag, int error, int code, uint64_t value, int 
             .uid = uid,
             .addr = addr,
             .tag = tag,
+            .target_tid = target_tid,
+            .signalfd_slots = slots,
         };
         g_sigq[sig].count++;
         queued = 1;
+        if (slots) sfd_deliver_slots(slots, sig);
+    } else if (!duplicate) {
+        return -1;
     }
+    if (target_tid == 0) process_pending_set(sig);
+    return queued;
+}
+
+static int sigq_push(int sig, int tag, int error, int code, uint64_t value, int pid, int uid, uint64_t addr) {
+    pthread_mutex_lock(&g_sigq_lk);
+    int queued = sigq_push_target_locked(sig, 0, 0, tag, error, code, value, pid, uid, addr);
     pthread_mutex_unlock(&g_sigq_lk);
-    __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
+    return queued;
+}
+
+static int sigq_push_signalfd(int sig, int tag, int error, int code, uint64_t value, int pid, int uid,
+                              uint64_t addr) {
+    pthread_mutex_lock(&g_sigq_lk);
+    int queued = sigq_push_target_locked(sig, 0, 1, tag, error, code, value, pid, uid, addr);
+    pthread_mutex_unlock(&g_sigq_lk);
     return queued;
 }
 
@@ -155,22 +258,44 @@ static void sigq_drop_tag(int sig, int tag) {
     pthread_mutex_unlock(&g_sigq_lk);
     // Only when this call emptied the queue: an untouched empty queue may still have a bit set by the host
     // async path, which carries its siginfo in the single-slot g_sig* arrays.
-    if (dropped > 0 && kept == 0) __atomic_and_fetch(&g_pending, ~(1ull << sig), __ATOMIC_SEQ_CST);
+    if (dropped > 0 && kept == 0) process_pending_clear(sig);
 }
 
 // Pop the oldest queued instance of `sig` into *out. Returns 1 iff one was dequeued; clears the g_pending
 // bit when the queue drains so a realtime signal keeps its bit set while further instances remain.
-static int sigq_pop(int sig, struct sigq_ent *out) {
+static int sigq_pop_for(int sig, struct cpu *cpu, struct sigq_ent *out, int *popped_targeted,
+                        int *targeted_remaining) {
     if (sig < 1 || sig > 64) return 0;
     int got = 0;
+    int got_index = -1;
+    int process_remaining = 0;
+    *popped_targeted = 0;
+    *targeted_remaining = 0;
+    int tid = cpu_tid(cpu);
     pthread_mutex_lock(&g_sigq_lk);
-    if (g_sigq[sig].count > 0) {
-        *out = g_sigq[sig].e[g_sigq[sig].head];
-        g_sigq[sig].head = (g_sigq[sig].head + 1) % SIGQ_DEPTH;
-        g_sigq[sig].count--;
-        got = 1;
-        if (g_sigq[sig].count == 0) __atomic_and_fetch(&g_pending, ~(1ull << sig), __ATOMIC_SEQ_CST);
+    struct sigq_ent copy[SIGQ_DEPTH];
+    int kept = 0;
+    for (int i = 0; i < g_sigq[sig].count; ++i) {
+        struct sigq_ent entry = g_sigq[sig].e[(g_sigq[sig].head + i) % SIGQ_DEPTH];
+        if (got_index < 0 && (entry.target_tid == 0 || entry.target_tid == tid)) {
+            *out = entry;
+            *popped_targeted = entry.target_tid != 0;
+            got_index = i;
+            got = 1;
+            continue;
+        }
+        copy[kept++] = entry;
+        if (entry.target_tid == 0) process_remaining = 1;
+        if (entry.target_tid == tid) *targeted_remaining = 1;
     }
+    for (int i = 0; i < kept; ++i) g_sigq[sig].e[i] = copy[i];
+    g_sigq[sig].head = 0;
+    g_sigq[sig].count = kept;
+    if (got && !*popped_targeted && !process_remaining)
+        process_pending_clear(sig);
+    if (*popped_targeted && !*targeted_remaining)
+        thread_pending_clear(cpu, sig);
+    if (got) sfd_consume_slots(out->signalfd_slots);
     pthread_mutex_unlock(&g_sigq_lk);
     return got;
 }
@@ -181,7 +306,28 @@ static void sigq_flush(int sig) {
     pthread_mutex_lock(&g_sigq_lk);
     g_sigq[sig].head = g_sigq[sig].count = 0;
     pthread_mutex_unlock(&g_sigq_lk);
-    __atomic_and_fetch(&g_pending, ~(1ull << sig), __ATOMIC_SEQ_CST);
+    process_pending_clear(sig);
+}
+
+// Linux discards a task's private pending queue when that task exits. Remove every entry owned by `tid`
+// before its registry slot can be reused, and consume the corresponding signalfd wake tokens so a dead
+// task cannot leave false physical readiness or permanently occupy the bounded realtime queue.
+static void sigq_drop_target_tid(int tid) {
+    if (tid <= 0) return;
+    pthread_mutex_lock(&g_sigq_lk);
+    for (int sig = 1; sig <= 64; ++sig) {
+        struct sigq_ent copy[SIGQ_DEPTH];
+        int kept = 0;
+        for (int index = 0; index < g_sigq[sig].count; ++index) {
+            struct sigq_ent entry = g_sigq[sig].e[(g_sigq[sig].head + index) % SIGQ_DEPTH];
+            if (entry.target_tid == tid) continue;
+            copy[kept++] = entry;
+        }
+        for (int index = 0; index < kept; ++index) g_sigq[sig].e[index] = copy[index];
+        g_sigq[sig].head = 0;
+        g_sigq[sig].count = kept;
+    }
+    pthread_mutex_unlock(&g_sigq_lk);
 }
 
 // sentinel lr: handler return -> sigreturn
@@ -394,6 +540,47 @@ static int sig_m2l(int s) {
 // the awaited signal here; maybe_deliver_signal then delivers it once, ignoring the mask, and the sigframe
 // saves/restores the true post-suspend mask. Cleared as the signal is claimed for delivery.
 static __thread uint64_t g_force_deliver;
+static __thread int g_force_deliver_hi;
+
+static int signal_force_test(int signal) {
+    return signal == 64 ? g_force_deliver_hi : (g_force_deliver & signal_pending_bit(signal)) != 0;
+}
+
+static void signal_force_set(int signal) {
+    if (signal == 64)
+        g_force_deliver_hi = 1;
+    else
+        g_force_deliver |= signal_pending_bit(signal);
+}
+
+static void signal_force_clear(int signal) {
+    if (signal == 64)
+        g_force_deliver_hi = 0;
+    else
+        g_force_deliver &= ~signal_pending_bit(signal);
+}
+
+// The dispatcher must leave translated code only when a pending signal can be acted on now. Merely pending
+// is insufficient: a blocked or handler-deferred signal must let the guest run until a mask change or the
+// enclosing sigreturn releases it. Otherwise every block immediately returns to the dispatcher and the
+// guest livelocks without reaching the operation that makes the signal deliverable.
+static int signal_deliverable(const struct cpu *cpu, int signal) {
+    if (signal < 1 || signal > 64) return 0;
+    if (!process_pending_test(signal) && !thread_pending_test(cpu, signal)) return 0;
+    int forced = signal_force_test(signal);
+    if ((cpu->sigmask & (UINT64_C(1) << (signal - 1))) && !forced) return 0;
+    uint64_t bit = signal_pending_bit(signal);
+    if ((signal == 64 ? thread_defer_hi_test(cpu) : (cpu->sig_defer & bit) != 0) && !forced) return 0;
+    return 1;
+}
+
+static int signal_deliverable_for_cpu(const struct cpu *cpu) {
+    for (int signal = 64; signal >= 1; --signal) {
+        if (!signal_deliverable(cpu, signal)) continue;
+        return 1;
+    }
+    return 0;
+}
 
 // --- signalfd open-file-description (OFD) pool ---------------------------------------------------------
 // Linux signalfd(2) creates an INDEPENDENT descriptor: each has its own signal mask and its own delivery
@@ -430,8 +617,8 @@ static int sfd_alloc(void) {
 // Deliver Linux signal `ls` to EVERY signalfd whose mask includes it. Each write is one queued byte encoding
 // the signo, so a realtime signal delivered N times reads back as N siginfo records on each matching fd.
 static void sfd_deliver(int ls) {
-    if (ls < 1 || ls > 63) return;
-    uint64_t bit = 1ull << ls;
+    if (ls < 1 || ls > 64) return;
+    uint64_t bit = UINT64_C(1) << (ls - 1);
     for (int i = 0; i < HL_SFD_MAX; i++)
         if (g_sfd[i].refs > 0 && g_sfd[i].wr >= 0 && (g_sfd[i].mask & bit)) {
             char b = (char)ls;
@@ -439,11 +626,174 @@ static void sfd_deliver(int ls) {
         }
 }
 
+static uint64_t sfd_subscribers(int signal) {
+    uint64_t slots = 0;
+    uint64_t bit = UINT64_C(1) << (signal - 1);
+    for (int slot = 0; slot < HL_SFD_MAX; ++slot)
+        if (g_sfd[slot].refs > 0 && g_sfd[slot].wr >= 0 && (g_sfd[slot].mask & bit))
+            slots |= UINT64_C(1) << slot;
+    return slots;
+}
+
+static void sfd_deliver_slots(uint64_t slots, int signal) {
+    char token = (char)signal;
+    for (int slot = 0; slot < HL_SFD_MAX; ++slot)
+        if ((slots & (UINT64_C(1) << slot)) && write(g_sfd[slot].wr, &token, 1) < 0) {}
+}
+
+static void sfd_consume_slots(uint64_t slots) {
+    for (int slot = 0; slot < HL_SFD_MAX; ++slot) {
+        if (!(slots & (UINT64_C(1) << slot)) || g_sfd[slot].rd < 0) continue;
+        struct pollfd poller = {.fd = g_sfd[slot].rd, .events = POLLIN};
+        if (poll(&poller, 1, 0) == 1) {
+            char token;
+            (void)read(g_sfd[slot].rd, &token, 1);
+        }
+    }
+}
+
+static int sfd_routed(int ls);
+
+static int thread_directed_signal_publish(struct cpu *target, int signal, int tag, int error, int code,
+                                          uint64_t value, int pid, int uid, uint64_t address) {
+    pthread_mutex_lock(&g_sigq_lk);
+    int queued = sigq_push_target_locked(signal, cpu_tid(target), 0, tag, error, code, value, pid, uid, address);
+    if (queued >= 0) thread_pending_set(target, signal);
+    pthread_mutex_unlock(&g_sigq_lk);
+    return queued;
+}
+
+static int sfd_ready_for_cpu(int fd, struct cpu *cpu) {
+    if (fd < 0 || fd >= HL_NFD || !g_sigfd_slot[fd]) return 0;
+    int slot = g_sigfd_slot[fd] - 1;
+    uint64_t mask = g_sfd[slot].mask;
+    int tid = cpu_tid(cpu);
+    int ready = 0;
+    for (int sig = 1; !ready && sig <= 64; ++sig)
+        if ((mask & (UINT64_C(1) << (sig - 1))) && process_pending_test(sig)) ready = 1;
+    pthread_mutex_lock(&g_sigq_lk);
+    for (int sig = 1; !ready && sig <= 64; ++sig) {
+        if (!(mask & (UINT64_C(1) << (sig - 1)))) continue;
+        for (int index = 0; index < g_sigq[sig].count; ++index) {
+            struct sigq_ent *entry = &g_sigq[sig].e[(g_sigq[sig].head + index) % SIGQ_DEPTH];
+            if (entry->target_tid == 0 || entry->target_tid == tid) {
+                ready = 1;
+                break;
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_sigq_lk);
+    return ready;
+}
+
+static int sfd_any_ready_for_cpu(struct cpu *cpu) {
+    for (int slot = 0; slot < HL_SFD_MAX; ++slot)
+        if (g_sfd[slot].refs > 0 && sfd_ready_for_cpu(g_sfd[slot].rd, cpu)) return 1;
+    return 0;
+}
+
+static int sfd_poll_apply_for_cpu(struct pollfd *fds, nfds_t count, struct cpu *cpu) {
+    int added = 0;
+    for (nfds_t index = 0; index < count; ++index) {
+        struct pollfd *entry = &fds[index];
+        if (entry->fd < 0 || entry->fd >= HL_NFD || !g_sigfd_slot[entry->fd] ||
+            !(entry->events & (POLLIN | POLLRDNORM)) || !sfd_ready_for_cpu(entry->fd, cpu))
+            continue;
+        if (entry->revents == 0) ++added;
+        entry->revents |= POLLIN;
+        if (entry->events & POLLRDNORM) entry->revents |= POLLRDNORM;
+    }
+    return added;
+}
+
+static int sfd_select_apply_for_cpu(int bound, const fd_set *requested, fd_set *ready, struct cpu *cpu) {
+    if (requested == NULL || ready == NULL) return 0;
+    int added = 0;
+    int limit = bound < HL_NFD ? bound : HL_NFD;
+    for (int fd = 0; fd < limit; ++fd) {
+        if (!FD_ISSET(fd, requested) || !g_sigfd_slot[fd] || !sfd_ready_for_cpu(fd, cpu)) continue;
+        if (!FD_ISSET(fd, ready)) ++added;
+        FD_SET(fd, ready);
+    }
+    return added;
+}
+
+static void sfd_refresh_slot(int slot) {
+    if (slot < 0 || slot >= HL_SFD_MAX || g_sfd[slot].rd < 0 || g_sfd[slot].wr < 0) return;
+    struct pollfd descriptor = {.fd = g_sfd[slot].rd, .events = POLLIN};
+    char byte;
+    while (poll(&descriptor, 1, 0) == 1 && (descriptor.revents & POLLIN) && read(g_sfd[slot].rd, &byte, 1) == 1)
+        descriptor.revents = 0;
+    uint64_t mask = g_sfd[slot].mask;
+    for (int signal = 1; signal <= 64; ++signal)
+        if ((mask & (UINT64_C(1) << (signal - 1))) && process_pending_test(signal)) {
+            unsigned char token = (unsigned char)signal;
+            if (write(g_sfd[slot].wr, &token, 1) < 0) {}
+        }
+}
+
+static void sfd_refresh_all(void) {
+    for (int slot = 0; slot < HL_SFD_MAX; ++slot)
+        if (g_sfd[slot].refs > 0) sfd_refresh_slot(slot);
+}
+
+static void signal_after_fork(struct cpu *cpu) {
+    pthread_mutex_init(&g_sigq_lk, NULL);
+    memset(g_sigq, 0, sizeof g_sigq);
+    memset(g_sigerror, 0, sizeof g_sigerror);
+    memset(g_sigcode, 0, sizeof g_sigcode);
+    memset(g_sigval, 0, sizeof g_sigval);
+    memset(g_sigpid, 0, sizeof g_sigpid);
+    memset(g_siguid, 0, sizeof g_siguid);
+    memset(g_sigaddr, 0, sizeof g_sigaddr);
+    __atomic_store_n(&g_pending, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&g_pending_hi, 0, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&cpu->tpending, 0, __ATOMIC_SEQ_CST);
+    thread_pending_hi_clear(cpu);
+    // Pending signals do not survive fork.  The pipe used to emulate a signalfd wake queue does, however,
+    // and its underlying open-file description is shared with the parent.  Draining that inherited pipe in
+    // the child would steal the parent's readiness.  Give every child signalfd OFD a fresh empty pipe while
+    // preserving all of its guest-visible aliases and their descriptor-local close-on-exec flags.
+    for (int slot = 0; slot < HL_SFD_MAX; ++slot) {
+        if (g_sfd[slot].refs <= 0 || g_sfd[slot].rd < 0) continue;
+        int pair[2];
+        if (pipe(pair) < 0) _exit(127);
+        int status = fcntl(g_sfd[slot].rd, F_GETFL);
+        if (status >= 0) (void)fcntl(pair[0], F_SETFL, status);
+        int private_write = fcntl(pair[1], F_DUPFD_CLOEXEC, 1 << 20);
+        if (private_write < 0) private_write = fcntl(pair[1], F_DUPFD_CLOEXEC, 64);
+        if (private_write < 0) {
+            close(pair[0]);
+            close(pair[1]);
+            _exit(127);
+        }
+        close(pair[1]);
+        int seed = pair[0];
+        int canonical = -1;
+        for (int fd = 0; fd < HL_NFD; ++fd) {
+            if (g_sigfd_slot[fd] != (uint8_t)(slot + 1) || fcntl(fd, F_GETFD) < 0) continue;
+            int descriptor_flags = fcntl(fd, F_GETFD);
+            if (fd != seed && dup2(seed, fd) < 0) continue;
+            if (descriptor_flags >= 0) (void)fcntl(fd, F_SETFD, descriptor_flags);
+            if (canonical < 0) canonical = fd;
+        }
+        if (canonical < 0) {
+            close(seed);
+            close(private_write);
+            _exit(127);
+        }
+        if (seed != canonical) close(seed);
+        close(g_sfd[slot].wr);
+        g_sfd[slot].rd = canonical;
+        g_sfd[slot].wr = private_write;
+    }
+}
+
 // Is Linux signal `ls` routed to at least one live signalfd (so a blocked instance must be captured for
 // its read queue rather than merely left pending for a future handler run)?
 static int sfd_routed(int ls) {
-    if (ls < 1 || ls > 63) return 0;
-    uint64_t bit = 1ull << ls;
+    if (ls < 1 || ls > 64) return 0;
+    uint64_t bit = UINT64_C(1) << (ls - 1);
     for (int i = 0; i < HL_SFD_MAX; i++)
         if (g_sfd[i].refs > 0 && g_sfd[i].wr >= 0 && (g_sfd[i].mask & bit)) return 1;
     return 0;
@@ -460,7 +810,7 @@ static int sfd_wr_is(int fd) {
 // Shared body: mark Linux signal `ls` pending, kick the running thread out of any in-cache loop,
 // and wake every signalfd routed to it.
 static void host_sig_pend(int ls) {
-    __atomic_or_fetch(&g_pending, 1ull << ls, __ATOMIC_SEQ_CST);
+    process_pending_set(ls);
     // kick this thread out of any no-syscall in-cache loop so the caught signal is delivered at the
     // next block boundary (the emitted body check polls cpu->irq). This runs on the thread the OS picked,
     // which for a process-directed signal to a busy single-threaded guest IS the spinner.
@@ -599,7 +949,7 @@ static int mach_async_fault_signal(struct cpu *c, int hostsig, siginfo_t *si) {
         g_sigpid[sig] = (int)si->si_pid;
         g_siguid[sig] = (int)si->si_uid;
     }
-    __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
+    process_pending_set(sig);
     __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
     return 1;
 }
@@ -637,30 +987,31 @@ static void maybe_deliver_signal(struct cpu *c) {
     while (!G_IS_SIGNAL_RETURN(c) && c->sig_depth > 0 && G_SP(c) > c->sig_frame_sp[c->sig_depth - 1]) {
         c->sig_depth--;
         c->sig_defer = c->sig_depth > 0 ? c->sig_defer_stack[c->sig_depth] : 0;
+        thread_defer_hi_restore(c, c->sig_depth);
     }
-    uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
     // Delivery order matches the native kernel: when several signals are pending together, the
     // HIGHEST-numbered deliverable one runs first (verified against native aarch64 for both standard
     // signals -- blocked_delivery_order 15,12,10 -- and realtime signals -- rt_signal_order highest
     // signo first, FIFO within a signo). Scan high->low; realtime instances are dequeued FIFO per signo.
     for (int sig = 64; sig >= 1; sig--) {
-        uint64_t bit = 1ull << sig;
+        uint64_t bit = signal_pending_bit(sig);
         // sigmask is sigset_t (bit N-1). A signal blocked by the mask is normally not delivered -- UNLESS it
         // was force-marked by rt_sigsuspend/pause (POSIX: the awaited handler runs during the suspend even
         // though the restored mask blocks it). g_force_deliver overrides the mask for exactly that one bit.
-        if (!(p & bit)) continue;
-        if ((c->sigmask & (1ull << (sig - 1))) && !(g_force_deliver & bit)) continue;
+        if (!process_pending_test(sig) && !thread_pending_test(c, sig)) continue;
+        if ((c->sigmask & (UINT64_C(1) << (sig - 1))) && !signal_force_test(sig)) continue;
         // Deferred: this signal was already pending when the current handler was entered, so it waits until
         // that handler returns (native delivers a batch of unblocked signals serially, not nested). A signal
         // raised DURING the handler is not in c->sig_defer and still nests. Force-delivery overrides.
-        if ((c->sig_defer & bit) && !(g_force_deliver & bit)) continue;
+        if (((sig == 64 ? thread_defer_hi_test(c) : (c->sig_defer & bit) != 0)) && !signal_force_test(sig))
+            continue;
         uint64_t h = g_sigact[sig].handler;
         if (h <= 1) {
             // No guest handler -- discard every pending instance from all queues (and any force mark).
-            g_force_deliver &= ~bit;
+            signal_force_clear(sig);
             sigq_flush(sig);
-            __atomic_and_fetch(&g_pending, ~bit, __ATOMIC_SEQ_CST);
-            __atomic_and_fetch(&c->tpending, ~bit, __ATOMIC_SEQ_CST);
+            process_pending_clear(sig);
+            thread_pending_clear(c, sig);
             // A SIG_DFL signal whose default action TERMINATES, still pending at the container init, was NOT
             // already actioned by the host: real Linux protects a PID-namespace init from an unhandled fatal
             // signal, so it lingered (e.g. the guest blocked it inside its handler, reset the disposition to
@@ -678,12 +1029,18 @@ static void maybe_deliver_signal(struct cpu *c) {
         // queue -- clear it directly. If nothing was actually queued (host async path set the bit with an
         // empty queue), fall back to clearing the process bit and using whatever g_sig* the host wrote.
         struct sigq_ent ent;
-        int popped = sigq_pop(sig, &ent);
-        uint64_t had_t = __atomic_fetch_and(&c->tpending, ~bit, __ATOMIC_SEQ_CST) & bit;
+        int popped_targeted = 0;
+        int targeted_remaining = 0;
+        int popped = sigq_pop_for(sig, c, &ent, &popped_targeted, &targeted_remaining);
+        uint64_t had_t = thread_pending_test(c, sig);
+        if (!popped && had_t) thread_pending_clear(c, sig);
         uint64_t had_p = 0;
-        if (!popped) had_p = __atomic_fetch_and(&g_pending, ~bit, __ATOMIC_SEQ_CST) & bit;
+        if (!popped) {
+            had_p = process_pending_test(sig);
+            process_pending_clear(sig);
+        }
         if (popped || had_t || had_p) {
-            g_force_deliver &= ~bit; // consumed: the sigframe (built below) saves the true post-suspend mask
+            signal_force_clear(sig); // consumed: the sigframe saves the true post-suspend mask
             if (popped) {
                 g_sigerror[sig] = ent.error;
                 g_sigcode[sig] = ent.code;
@@ -699,6 +1056,8 @@ static void maybe_deliver_signal(struct cpu *c) {
             // instances -- whose g_pending bit is still set -- deliver after this handler returns.)
             if (c->sig_depth < (int)(sizeof c->sig_defer_stack / sizeof c->sig_defer_stack[0])) {
                 c->sig_defer_stack[c->sig_depth] = c->sig_defer;
+                thread_defer_hi_push(c, c->sig_depth,
+                                     sig != 64 && (process_pending_test(64) || thread_pending_test(c, 64)));
                 c->sig_depth++;
                 c->sig_defer |=
                     (__atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST)) &
@@ -754,6 +1113,7 @@ static void signal_return_complete(struct cpu *c) {
     if (c->sig_depth > 0) {
         c->sig_depth--;
         c->sig_defer = c->sig_depth > 0 ? c->sig_defer_stack[c->sig_depth] : 0;
+        thread_defer_hi_restore(c, c->sig_depth);
     }
     maybe_deliver_signal(c);
 }
@@ -783,7 +1143,7 @@ static void raise_guest_signal_info(struct cpu *c, int sig, int error, int code,
     // handler disposition (Linux delivers a blocked signal to signalfd, not to a handler). Feed the
     // self-pipe (readability) AND queue the siginfo (ssi_int/pid/code); the read path drains it in order.
     if (blocked && sfd_routed(sig)) {
-        if (sigq_push(sig, 0, error, code, value, pid, uid, address)) sfd_deliver(sig);
+        (void)sigq_push_signalfd(sig, 0, error, code, value, pid, uid, address);
         return;
     }
     // custom handler -> queue for the dispatcher's maybe_deliver_signal (carries per-instance siginfo)
@@ -795,7 +1155,7 @@ static void raise_guest_signal_info(struct cpu *c, int sig, int error, int code,
     if (h == 1) return;
     // blocked, no handler: queue pending for delivery on unblock (also feeds any signalfd via sfd_deliver)
     if (blocked) {
-        if (sigq_push(sig, 0, error, code, value, pid, uid, address)) sfd_deliver(sig);
+        (void)sigq_push_signalfd(sig, 0, error, code, value, pid, uid, address);
         return;
     }
     // SIGCHLD/CONT/URG/WINCH: ignore
@@ -923,7 +1283,7 @@ static int deliver_guest_fault_hint(struct cpu *cpu_hint, int hostsig, siginfo_t
                 g_sigpid[sig] = (int)si->si_pid;
                 g_siguid[sig] = (int)si->si_uid;
             }
-            __atomic_or_fetch(&g_pending, 1ull << sig, __ATOMIC_SEQ_CST);
+            process_pending_set(sig);
             __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
             return 1;
         }
@@ -945,7 +1305,7 @@ static int deliver_guest_fault_hint(struct cpu *cpu_hint, int hostsig, siginfo_t
                        : 1;
     c->sigmask &= ~(1ull << (sig - 1)); // a sync fault forces delivery even if the guest blocked it
     c->reason = R_BRANCH;               // resume as a plain branch (no stale syscall/special-op handling)
-    __atomic_or_fetch(&c->tpending, 1ull << sig, __ATOMIC_SEQ_CST);
+    thread_pending_set(c, sig);
     sigframe_resume_dispatch(c, ucv);
     return 1;
 }

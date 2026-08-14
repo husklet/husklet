@@ -826,11 +826,9 @@ static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint
                 (void)poslk_op_identity(metadata.stable_device, metadata.stable_object, current, metadata.size, (int)a1,
                                         lock, &lock_result);
                 if (a1 != 7 || lock_result != -EAGAIN) break;
-                uint64_t pending =
-                    __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
                 int interrupted = 0;
-                for (int signal_number = 1; signal_number < 64; ++signal_number)
-                    if ((pending & (UINT64_C(1) << signal_number)) &&
+                for (int signal_number = 1; signal_number <= 64; ++signal_number)
+                    if ((process_pending_test(signal_number) || thread_pending_test(c, signal_number)) &&
                         !(c->sigmask & (UINT64_C(1) << (signal_number - 1)))) {
                         interrupted = 1;
                         break;

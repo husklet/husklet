@@ -1,0 +1,1 @@
+self_tgkill standard_sent=1 ready=1 bytes=128 signo=10 code=-6 eagain=1 pending=0 realtime_sent=1 first=128/34/-6 still_ready=1 second=128/34/-6 drained=1 pending_rt=0

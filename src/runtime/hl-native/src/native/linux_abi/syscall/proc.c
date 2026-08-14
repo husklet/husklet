@@ -341,6 +341,7 @@ static void fork_child_hooks(struct cpu *c) {
                                  // rebuild them so the child doesn't EBADF on its inherited event fds
                                  // (also reinits g_ep_mtx, inherited-locked if a peer forked mid-epoll)
     thread_after_fork();         // reset process-private thread/futex locks a dead peer may have held at fork
+    signal_after_fork(c);        // Linux does not inherit either process- or thread-pending signals
     sysv_after_fork();           // reset the SysV-shm lock (same fork-unsafe-mutex class)
     eventfd_after_fork();        // reset the eventfd counter+pipe lock (fork-unsafe-mutex class)
     anon_after_fork();           // reset the private-anon registry lock (fork-unsafe-mutex class); must precede

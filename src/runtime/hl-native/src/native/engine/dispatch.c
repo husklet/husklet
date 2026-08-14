@@ -417,7 +417,7 @@ static void run_guest(struct cpu *c) {
         // it remains the aarch64 path. Both arches define tier2_promote (per-arch).
         if (c->reason == R_TIER2) tier2_promote(G_PC(c));
         // async signal -> guest handler (process-directed g_pending OR thread-directed cpu->tpending)
-        if (g_pending || c->tpending) maybe_deliver_signal(c);
+        if (signal_deliverable_for_cpu(c)) maybe_deliver_signal(c);
     }
     /* A checkpoint may publish its request after the last loop-top safepoint
        but before this thread removes its registry slot. Acknowledge once more

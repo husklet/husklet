@@ -61,7 +61,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 2                                   // v2 adds the process filesystem context
+#define CKPT_VERSION 4 // v4 preserves process and thread signal-64 pending state
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -237,11 +237,12 @@ struct ckpt_socket_queue_frame {
     uint32_t rights_count;
 };
 
-#define CKPT_SIGNAL_MAGIC UINT64_C(0x484c5349474e3031)
+#define CKPT_SIGNAL_MAGIC UINT64_C(0x484c5349474e3033)
 
 struct ckpt_signal_state {
     uint64_t magic;
     uint64_t pending;
+    uint64_t pending_hi;
     int32_t error[65];
     int32_t code[65];
     int32_t pid[65];
@@ -330,6 +331,7 @@ static int ckpt_dump_signal_state(struct ckpt_sink *sink, const char *group) {
     if (state == NULL) return -1;
     state->magic = CKPT_SIGNAL_MAGIC;
     state->pending = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
+    state->pending_hi = __atomic_load_n(&g_pending_hi, __ATOMIC_SEQ_CST);
     memcpy(state->error, g_sigerror, sizeof state->error);
     memcpy(state->code, g_sigcode, sizeof state->code);
     memcpy(state->pid, g_sigpid, sizeof state->pid);
@@ -345,8 +347,13 @@ static int ckpt_dump_signal_state(struct ckpt_sink *sink, const char *group) {
             return -1;
         }
         state->queue_count[signal] = (uint32_t)count;
-        for (int index = 0; index < count; ++index)
+        for (int index = 0; index < count; ++index) {
             state->queue[signal][index] = g_sigq[signal].e[(g_sigq[signal].head + index) % SIGQ_DEPTH];
+            // A slot number identifies this process's transient signalfd pool.
+            // Descriptors and their masks are restored independently, so never
+            // serialize that process-local routing cache.
+            state->queue[signal][index].signalfd_slots = 0;
+        }
     }
     pthread_mutex_unlock(&g_sigq_lk);
     int result = ckpt_sink_put(sink, group, "signals", 0, state, sizeof *state);
@@ -377,11 +384,19 @@ static int ckpt_restore_signal_state(const char *procdir) {
     memset(g_sigq, 0, sizeof g_sigq);
     for (int signal = 1; signal <= 64; ++signal) {
         g_sigq[signal].count = (int)state->queue_count[signal];
-        for (int index = 0; index < g_sigq[signal].count; ++index)
+        for (int index = 0; index < g_sigq[signal].count; ++index) {
             g_sigq[signal].e[index] = state->queue[signal][index];
+            g_sigq[signal].e[index].signalfd_slots = 0;
+        }
     }
     pthread_mutex_unlock(&g_sigq_lk);
     __atomic_store_n(&g_pending, state->pending, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&g_pending_hi, state->pending_hi, __ATOMIC_SEQ_CST);
+    // Per-thread pending/defer state, including signal 64, is part of each
+    // serialized CPU image. The process word above is the only side state.
+    // Rebuild host-pipe wake hints from restored descriptors and authoritative
+    // pending words; targeted readiness is derived per calling CPU.
+    sfd_refresh_all();
     free(state);
     return 0;
 }
