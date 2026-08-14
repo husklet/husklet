@@ -27,11 +27,11 @@ fn main() -> gtk::glib::ExitCode {
 fn present(application: &gtk::Application) {
     let mut widgets = Widgets::new();
     let mut tree = Tree::new();
-    if std::env::var("STORYBOOK_LIVE").is_ok() {
-        live(application, widgets, tree);
+    let filter = std::env::var("STORYBOOK_STORY").ok();
+    if let Ok(mode) = std::env::var("STORYBOOK_LIVE") {
+        live(application, widgets, tree, &mode, filter);
         return;
     }
-    let filter = std::env::var("STORYBOOK_STORY").ok();
     let (_, frame) = Catalogue::selected(filter.as_deref());
     if let Err(failure) = tree.apply(&frame, &mut widgets) {
         eprintln!("[storybook] catalogue rejected: {failure}");
@@ -65,11 +65,18 @@ fn present(application: &gtk::Application) {
 /// Nothing about the interface is known here: it arrives as mutations from
 /// another thread speaking the protocol, which is the same path an extension
 /// running in its own container takes.
-fn live(application: &gtk::Application, mut widgets: Widgets, mut tree: Tree) {
-    match storybook::host(&mut widgets, &mut tree) {
-        Ok(applied) => eprintln!("[storybook] applied {applied} mutations from the extension"),
+fn live(application: &gtk::Application, mut widgets: Widgets, mut tree: Tree, mode: &str, filter: Option<String>) {
+    let served = match mode {
+        // The whole component library, described remotely, so every component
+        // is shown to survive the wire rather than only the ones an extension
+        // happens to use.
+        "catalogue" => storybook::catalogue(&mut widgets, &mut tree, filter),
+        _ => storybook::host(&mut widgets, &mut tree),
+    };
+    match served {
+        Ok(applied) => eprintln!("[storybook] applied {applied} mutations over the socket"),
         Err(fault) => {
-            eprintln!("[storybook] extension failed: {fault}");
+            eprintln!("[storybook] producer failed: {fault}");
             return;
         }
     }

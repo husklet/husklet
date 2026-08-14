@@ -9,6 +9,9 @@ mod layout;
 
 pub(crate) use collection::{answer, ROWS};
 
+/// The source the catalogue's table is drawn from.
+pub const SOURCE: hl_gui::SourceId = hl_gui::SourceId::new(1);
+
 /// One catalogue entry: a titled sample of a component family.
 pub struct Story {
     pub title: &'static str,

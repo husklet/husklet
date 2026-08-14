@@ -5,9 +5,9 @@
 //! rather than a hand-built demo window.
 
 mod live;
-mod story;
+pub(crate) mod story;
 
-pub use live::{host, Fault};
+pub use live::{catalogue, host, Fault};
 pub use story::{Catalogue, Story};
 
 /// How many rows the catalogue's table claims to have.

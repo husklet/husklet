@@ -15,6 +15,7 @@ use hl_ws_extension::{
 };
 
 mod host;
+mod producer;
 
 use host::Workspace;
 
@@ -46,6 +47,29 @@ impl std::error::Error for Fault {}
 pub fn host(widgets: &mut Widgets, tree: &mut Tree) -> Result<usize, Fault> {
     let (ours, theirs) = UnixStream::pair().map_err(|error| Fault::Socket(error.to_string()))?;
     let extension = std::thread::spawn(move || extension::serve(theirs, extension::Extension::new()));
+    converse_with(ours, widgets, tree, extension)
+}
+
+/// Runs the whole component catalogue through the same socket path, so every
+/// component in the library is shown to survive being described remotely
+/// rather than only the ones the reference extension happens to use.
+///
+/// # Errors
+/// Returns why the conversation could not be completed.
+pub fn catalogue(widgets: &mut Widgets, tree: &mut Tree, filter: Option<String>) -> Result<usize, Fault> {
+    let (ours, theirs) = UnixStream::pair().map_err(|error| Fault::Socket(error.to_string()))?;
+    let producer = std::thread::spawn(move || producer::serve(theirs, filter.as_deref()));
+    converse_with(ours, widgets, tree, producer)
+}
+
+/// Drives one producer to completion and applies everything it describes.
+fn converse_with<T>(
+    stream: UnixStream,
+    widgets: &mut Widgets,
+    tree: &mut Tree,
+    producer: std::thread::JoinHandle<T>,
+) -> Result<usize, Fault> {
+    let ours = stream;
 
     let mut wire = Wire::new(ours);
     let mut session = Session::new(authority());
@@ -53,9 +77,9 @@ pub fn host(widgets: &mut Widgets, tree: &mut Tree) -> Result<usize, Fault> {
     let mut applied = converse(&mut wire, &mut session, widgets, tree)?;
     applied += fill(&mut wire, widgets)?;
 
-    // Dropping our end ends the extension's loop; it reports a clean close.
+    // Dropping our end ends the producer's loop; it reports a clean close.
     drop(wire);
-    let _ = extension.join();
+    let _ = producer.join();
     Ok(applied)
 }
 
@@ -221,6 +245,11 @@ fn resize(widgets: &mut Widgets, mutation: &hl_gui::SourceMutation) {
     let Err(failure) = widgets.resize(*source, *version, *rows) else {
         return;
     };
+    // A source no table is bound to is ordinary when only part of the
+    // catalogue was asked for; anything else is worth saying out loud.
+    if matches!(failure, hl_gui_gtk::Failure::Unbound(_)) {
+        return;
+    }
     eprintln!("[storybook] source rejected: {failure}");
 }
 
