@@ -20,6 +20,15 @@ pub use checkpoint::{CheckpointBroker, CheckpointTransport};
 pub use engine::{Engine, EngineConfig, Exit};
 pub use provider::leak_check_nonvacuity;
 
+/// Verifies that the dynamically loaded private engine exposes the ABI this Rust wrapper expects.
+///
+/// This hidden packaging probe crosses the real C boundary after artifact relocation.
+#[doc(hidden)]
+#[must_use]
+pub fn artifact_smoke() -> bool {
+    bindings::engine_metadata_is_valid()
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), i32> {

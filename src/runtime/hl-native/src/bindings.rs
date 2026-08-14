@@ -91,9 +91,7 @@ unsafe extern "C" {
         calls: *mut c_uint,
         bytes: *mut c_ulonglong,
     ) -> c_int;
-    #[cfg(test)]
     pub(super) fn hl_engine_abi() -> c_uint;
-    #[cfg(test)]
     pub(super) fn hl_engine_version() -> *const c_char;
     pub(super) fn hl_c_backend_leak_check_nonvacuity() -> c_int;
     #[cfg(unix)]
@@ -168,7 +166,6 @@ pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32,
     }
 }
 
-#[cfg(test)]
 pub(super) fn engine_metadata_is_valid() -> bool {
     // SAFETY: both functions are immutable metadata queries exported by the
     // package-owned shared library and take no caller-provided pointers.

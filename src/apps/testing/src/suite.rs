@@ -184,6 +184,15 @@ pub(crate) struct Selection {
 }
 
 impl Selection {
+    pub(crate) fn all() -> Self {
+        Self {
+            case: None,
+            target: None,
+            jobs: parse::logical_jobs(),
+            resume: false,
+        }
+    }
+
     /// One named case on one ISA, run alone: what an in-process worker selects.
     pub(crate) fn exact(case: String, target: Target) -> Self {
         Self {

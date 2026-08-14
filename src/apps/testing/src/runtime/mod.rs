@@ -26,6 +26,7 @@ mod outcome;
 mod output;
 pub(crate) mod profile;
 pub(crate) mod scheduler;
+mod stage;
 
 use crate::suite::{Error, Target};
 use clap::Args;
@@ -35,9 +36,51 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub(crate) use execution::WorkerOptions;
+pub(crate) use stage::Options as StageOptions;
+pub(crate) use stage::run as stage;
 
 pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error> {
     image::ImageCache::for_platform(&target.platform())?.preflight(name)
+}
+
+pub(crate) fn inventory() -> Result<(), Error> {
+    let options = Options {
+        app: None,
+        selection: crate::suite::Selection::all(),
+        results: PathBuf::from("target/testing/runtime/inventory-unused.tsv"),
+        baseline: None,
+        engine_profile: profile::Requested::Release,
+    };
+    let apps = apps(&options)?;
+    validate_case_ids(&apps)?;
+    let app_count = apps.len();
+    let workloads = apps.iter().map(|app| app.cases.len()).sum::<usize>();
+    let planned = Schedule::plan(apps, &options);
+    let mut active = [0_usize; 2];
+    let mut inactive = [0_usize; 2];
+    for work in planned.work {
+        active[target_index(work.target)] += 1;
+    }
+    for row in planned.skipped {
+        inactive[target_index(row.attempt.key.target)] += 1;
+    }
+    println!("runtime inventory: apps={app_count} workloads={workloads}");
+    println!("runtime inventory: arm64 active={} NOT_RUN={}", active[0], inactive[0]);
+    println!("runtime inventory: amd64 active={} NOT_RUN={}", active[1], inactive[1]);
+    println!(
+        "runtime inventory: rows={} active={} NOT_RUN={}",
+        active.iter().sum::<usize>() + inactive.iter().sum::<usize>(),
+        active.iter().sum::<usize>(),
+        inactive.iter().sum::<usize>()
+    );
+    Ok(())
+}
+
+const fn target_index(target: Target) -> usize {
+    match target {
+        Target::Arm64 => 0,
+        Target::Amd64 => 1,
+    }
 }
 
 pub async fn run(options: Options) -> Result<(), Error> {
