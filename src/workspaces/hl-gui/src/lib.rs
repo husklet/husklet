@@ -23,6 +23,7 @@
 mod builder;
 mod data;
 mod dialog;
+mod element;
 mod identity;
 mod node;
 mod render;
@@ -35,6 +36,7 @@ pub use data::{
     Version,
 };
 pub use dialog::{Action, Dialog, Role};
+pub use element::{Element, Reconciliation};
 pub use identity::{Identities, NodeId};
 pub use node::{
     Choice, EventId, Fault, Frame, Handler, Node, Orientation, Patch, Prop, PropValue, Tag, Tree, TreeError, Trigger,
