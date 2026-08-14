@@ -19,13 +19,15 @@ pub(super) async fn calculate(work: &[Work]) -> Result<String, Error> {
                     .map(|entry| (entry.name().to_vec(), entry.value().to_vec()))
                     .collect(),
                 metadata: format!(
-                    "{}\0{}\0{:?}\0{:?}\0{}\0{}\0{:?}\0{:?}\0{:?}\0{:?}\0{:?}",
+                    "{}\0{}\0{:?}\0{:?}\0{}\0{}\0{:?}\0{:?}\0{:?}\0{:?}\0{:?}\0{:?}\0{:?}",
                     item.app.image,
                     item.app.compiler_name(item.target),
                     item.app.execution,
                     case.arguments,
                     case.timeout,
                     case.exit,
+                    case.expected_signal,
+                    case.orchestration,
                     case.flags,
                     case.destination,
                     case.compat,

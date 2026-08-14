@@ -8,15 +8,16 @@ build:
   flags: []
 cases:
   - id: runtime/ipc/socket-stop
-    status: !broken
-      reason: "the unified runner has no typed expected external-stop outcome"
+    status: !oracle-excluded
+      reason: "the compatibility contract requires the container lifecycle stop API, which a direct QEMU process cannot referee"
       evidence: "tests/runtime/ipc/EVIDENCE.md"
     compat: { class: compatibility }
     build: { source: source/socket_stop.c, output: socket-stop, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/socket-stop }
     run: []
     timeout: 3
-    expect: { exit: 0, stdout_empty: true }
+    orchestration: { stop-after-ms: 100 }
+    expect: { exit: 0, signal: 15, stdout_empty: true, diagnostics: [] }
   - id: runtime/ipc/sysv-fork
     status: active
     compat: { class: compatibility }
