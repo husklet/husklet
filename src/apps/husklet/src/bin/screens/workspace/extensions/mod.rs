@@ -13,6 +13,7 @@
 
 mod console;
 mod directory;
+mod gallery;
 mod settings;
 
 #[cfg(test)]
@@ -28,6 +29,7 @@ use hl_ws::storage::Directory;
 
 pub(crate) use console::Console;
 pub use directory::Catalogue;
+pub use gallery::Gallery;
 
 use super::View;
 

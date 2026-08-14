@@ -8,10 +8,10 @@
 use std::rc::Rc;
 
 use hl::extension::{Answer, Errand, Errands, Request};
-use hl_extension::port::{Division, HostError, PaneSummary, TabSummary};
+use hl_extension::port::{Division, HostError, PaneSummary, PaneText, TabSummary};
 use vte4::prelude::*;
 
-use super::super::terminal::{PaneView, Tabs, TermWin, Window};
+use super::super::terminal::{Adjustment, Occupancy, PaneView, Panes, Reading, Surface, Tabs, TermWin, Window};
 
 /// How often the window looks for errands.
 ///
@@ -72,6 +72,13 @@ impl Console {
             Request::OpenTab(title) => Ok(Answer::Slot(Self::open(window, title))),
             Request::Split { slot, division } => Self::split(window, slot, *division).map(Answer::Slot),
             Request::Spawn { slot, command } => Self::spawn(window, slot, command).map(|()| Answer::Done),
+            Request::Read { slot, lines } => Self::read(window, slot, *lines).map(Answer::Text),
+            Request::Close { slot } => Self::close(window, slot).map(|()| Answer::Done),
+            Request::Focus { slot } => Self::focus(window, slot).map(|()| Answer::Done),
+            Request::Ratio { slot, ratio } => Self::ratio(window, slot, *ratio).map(|()| Answer::Done),
+            Request::Surface { origin, slot, division } => {
+                Self::surface(window, origin.as_deref(), slot, *division).map(Answer::Slot)
+            }
         };
         errand.answer(answer);
     }
@@ -80,12 +87,79 @@ impl Console {
     fn tabs(window: &Rc<TermWin>) -> Vec<TabSummary> {
         Window::tabs(window)
             .into_iter()
-            .map(|(name, _, slots)| TabSummary {
+            .map(|(name, widget, _)| TabSummary {
                 id: name.clone(),
                 title: name,
-                panes: slots.into_iter().map(pane).collect(),
+                panes: Panes::under(window, &widget).into_iter().map(pane).collect(),
             })
             .collect()
+    }
+
+    /// A bounded tail of what one pane is showing.
+    ///
+    /// The bound arrives already applied by the protocol layer and is carried
+    /// into the extraction itself, so the window never builds an answer larger
+    /// than the one it is allowed to send.
+    fn read(window: &Rc<TermWin>, slot: &str, lines: usize) -> Result<PaneText, HostError> {
+        match Panes::read(window, slot, lines) {
+            Reading::Text(text) => Ok(text),
+            Reading::Drawn => Err(HostError::Conflict(format!(
+                "{slot} draws an interface, so it is showing no terminal text"
+            ))),
+            Reading::Absent => Err(absent(slot)),
+        }
+    }
+
+    /// Closes one pane. The last pane of a tab takes the tab with it, which is
+    /// what closing that pane by hand already does.
+    fn close(window: &Rc<TermWin>, slot: &str) -> Result<(), HostError> {
+        if Panes::close(window, slot) {
+            return Ok(());
+        }
+        Err(absent(slot))
+    }
+
+    /// Moves keyboard focus to one pane.
+    fn focus(window: &Rc<TermWin>, slot: &str) -> Result<(), HostError> {
+        if Panes::focus(window, slot) {
+            return Ok(());
+        }
+        // A pane that exists but refused focus is not a pane an extension can
+        // be told anything useful about, so it is reported the same way.
+        Err(absent(slot))
+    }
+
+    /// Sets how much of its split one pane takes.
+    fn ratio(window: &Rc<TermWin>, slot: &str, ratio: f64) -> Result<(), HostError> {
+        match Panes::ratio(window, slot, ratio) {
+            Adjustment::Set => Ok(()),
+            Adjustment::Whole => Err(HostError::Conflict(format!("{slot} is not inside a split"))),
+            Adjustment::Absent => Err(absent(slot)),
+        }
+    }
+
+    /// Divides one pane and gives the new half to an extension to draw in.
+    ///
+    /// The extension is named by the port the call arrived on. A call that
+    /// names none cannot be answered: the window would have to guess whose
+    /// interface belongs in the pane it just made.
+    fn surface(
+        window: &Rc<TermWin>,
+        origin: Option<&str>,
+        slot: &str,
+        division: Division,
+    ) -> Result<String, HostError> {
+        let origin = origin.ok_or_else(|| {
+            HostError::Conflict("a pane that draws an interface must be asked for by an extension".to_owned())
+        })?;
+        let held = Window::slot(window);
+        let content = Surface::build(window, origin, held.clone());
+        if Panes::divide(window, slot, orientation(division), &content) {
+            return Ok(held);
+        }
+        // Nothing took the pane, so the interface goes back where it came from.
+        Surface::discard(window, &content);
+        Err(absent(slot))
     }
 
     /// Opens a shell tab and names it back.
@@ -105,11 +179,7 @@ impl Console {
     fn split(window: &Rc<TermWin>, slot: &str, division: Division) -> Result<String, HostError> {
         let terminal = Window::pane(window, slot).ok_or_else(|| absent(slot))?;
         let before = Self::slots(window);
-        let orientation = match division {
-            Division::Beside => gtk::Orientation::Horizontal,
-            Division::Below => gtk::Orientation::Vertical,
-        };
-        PaneView::new(window, &terminal).split(orientation);
+        PaneView::new(window, &terminal).split(orientation(division));
         Self::slots(window)
             .into_iter()
             .find(|slot| !before.contains(slot))
@@ -140,11 +210,20 @@ impl Console {
 ///
 /// The working directory and the running command are left unsaid rather than
 /// guessed: the window knows a pane's shell, not what that shell is doing.
-fn pane(slot: String) -> PaneSummary {
+fn pane(occupancy: Occupancy) -> PaneSummary {
     PaneSummary {
-        slot,
+        slot: occupancy.slot,
         working_directory: None,
         command: None,
+        occupant: occupancy.occupant,
+    }
+}
+
+/// Which way a division divides, in the toolkit's own words.
+const fn orientation(division: Division) -> gtk::Orientation {
+    match division {
+        Division::Beside => gtk::Orientation::Horizontal,
+        Division::Below => gtk::Orientation::Vertical,
     }
 }
 

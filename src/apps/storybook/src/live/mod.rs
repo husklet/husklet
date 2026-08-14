@@ -16,6 +16,7 @@ use hl_extension::{
 
 mod host;
 mod producer;
+mod process;
 
 use host::Workspace;
 
@@ -62,6 +63,27 @@ pub fn catalogue(widgets: &mut Widgets, tree: &mut Tree, filter: Option<String>)
     converse_with(ours, widgets, tree, producer)
 }
 
+/// Hosts an extension running as a real process, rendering whatever it draws.
+///
+/// The in-process modes prove the protocol talks to itself. This proves the
+/// product: a command is started knowing only a socket path, exactly as a
+/// sidecar container is, and its interface is rendered here.
+///
+/// # Errors
+/// Returns why the extension could not be started or did not finish drawing.
+pub fn spawned(widgets: &mut Widgets, tree: &mut Tree, command: &str) -> Result<usize, Fault> {
+    let guest = process::Guest::invite(command)?;
+    let stream = guest.accept()?;
+
+    let mut wire = Wire::new(stream);
+    let mut session = Session::new(authority());
+    greet(&mut wire)?;
+    let mut applied = converse(&mut wire, &mut session, widgets, tree, 0)?;
+    applied += fill(&mut wire, widgets)?;
+    // The guest is stopped when it drops, which also unlinks the socket.
+    Ok(applied)
+}
+
 /// Drives one producer to completion and applies everything it describes.
 fn converse_with<T>(
     stream: UnixStream,
@@ -74,7 +96,7 @@ fn converse_with<T>(
     let mut wire = Wire::new(ours);
     let mut session = Session::new(authority());
     greet(&mut wire)?;
-    let mut applied = converse(&mut wire, &mut session, widgets, tree)?;
+    let mut applied = converse(&mut wire, &mut session, widgets, tree, crate::sources().len())?;
     applied += fill(&mut wire, widgets)?;
 
     // Dropping our end ends the producer's loop; it reports a clean close.
@@ -120,9 +142,13 @@ fn converse(
     session: &mut Session,
     widgets: &mut Widgets,
     tree: &mut Tree,
+    sources: usize,
 ) -> Result<usize, Fault> {
     let workspace = Workspace::new();
-    let mut progress = Progress::default();
+    let mut progress = Progress {
+        expected: sources,
+        ..Progress::default()
+    };
     for _ in 0..EXCHANGES {
         let frame = match wire.receive() {
             Ok(frame) => frame,
@@ -148,6 +174,9 @@ struct Progress {
     applied: usize,
     drawn: bool,
     sized: usize,
+    /// How many sources this producer was expected to describe. An extension
+    /// that draws no table describes none, and waiting for one would hang.
+    expected: usize,
 }
 
 impl Progress {
@@ -162,8 +191,8 @@ impl Progress {
     /// Complete once the interface is described and every source it draws
     /// from has a length. Stopping at the first would leave later tables
     /// empty, since a table with no length has nothing to ask for.
-    fn is_complete(&self) -> bool {
-        self.drawn && self.sized >= crate::sources().len()
+    const fn is_complete(&self) -> bool {
+        self.drawn && self.sized >= self.expected
     }
 }
 

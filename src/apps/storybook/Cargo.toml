@@ -16,6 +16,7 @@ path = "src/lib.rs"
 [dependencies]
 gtk = { package = "gtk4", version = "0.9", features = ["v4_10"] }
 hl-gui = { path = "../../workspaces/hl-gui" }
+hl-process = { path = "../../packages/hl-process" }
 hl-gui-gtk = { path = "../../workspaces/hl-gui-gtk" }
 hl-extension = { path = "../../workspaces/hl-extension" }
 extension = { path = "../extension" }

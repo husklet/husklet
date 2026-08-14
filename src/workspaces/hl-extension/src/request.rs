@@ -7,7 +7,7 @@
 use hl_rpc::{CapabilityKey, RelativePath};
 
 use crate::capability::Capability;
-use crate::port::{ContainerSummary, Division, Entry, HostError, ImageSummary, TabSummary};
+use crate::port::{ContainerSummary, Division, Entry, HostError, ImageSummary, PaneText, TabSummary, WorkspaceState};
 
 /// A call from an extension.
 ///
@@ -21,6 +21,7 @@ use crate::port::{ContainerSummary, Division, Entry, HostError, ImageSummary, Ta
 #[serde(tag = "call", content = "with", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     WorkspaceInfo,
+    WorkspaceList,
     ContainerList,
     ContainerInspect { id: String },
     ContainerCreate { image: String, name: String },
@@ -33,10 +34,15 @@ pub enum Request {
     TerminalOpenTab { title: String },
     TerminalSplit { slot: String, division: Division },
     TerminalSpawn { slot: String, command: Vec<String> },
+    TerminalReadPane { slot: String, lines: Option<usize> },
+    TerminalClosePane { slot: String },
+    TerminalFocusPane { slot: String },
+    TerminalRatio { slot: String, ratio: f64 },
     FilesystemList { path: RelativePath },
     FilesystemRead { path: RelativePath },
     FilesystemWrite { path: RelativePath, contents: Vec<u8> },
     InterfaceOpenTab { title: String },
+    InterfaceSplit { slot: String, division: Division },
     InterfaceRender { frame: hl_gui::Frame },
     SourceResize { mutation: hl_gui::SourceMutation },
     EventSubscribe { topic: Topic },
@@ -49,7 +55,7 @@ impl Request {
     #[must_use]
     pub const fn capability(&self) -> Capability {
         match self {
-            Self::WorkspaceInfo => Capability::WorkspaceRead,
+            Self::WorkspaceInfo | Self::WorkspaceList => Capability::WorkspaceRead,
             Self::ContainerList | Self::ContainerInspect { .. } => Capability::ContainerRead,
             Self::ContainerCreate { .. }
             | Self::ContainerStart { .. }
@@ -58,14 +64,22 @@ impl Request {
             Self::ImageList => Capability::ImageRead,
             Self::ImagePull { .. } => Capability::ImageWrite,
             Self::TerminalTabs => Capability::TerminalRead,
-            Self::TerminalOpenTab { .. } | Self::TerminalSplit { .. } | Self::TerminalSpawn { .. } => {
-                Capability::TerminalControl
-            }
+            Self::TerminalOpenTab { .. }
+            | Self::TerminalSplit { .. }
+            | Self::TerminalSpawn { .. }
+            | Self::TerminalClosePane { .. }
+            | Self::TerminalFocusPane { .. }
+            | Self::TerminalRatio { .. } => Capability::TerminalControl,
+            // Reading what a shell printed is what `TerminalOutput` was separated
+            // out for: listing panes says a pane exists, this says what was typed
+            // into it and what came back.
+            Self::TerminalReadPane { .. } => Capability::TerminalOutput,
             Self::FilesystemList { .. } | Self::FilesystemRead { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. } => Capability::FilesystemWrite,
-            Self::InterfaceOpenTab { .. } | Self::InterfaceRender { .. } | Self::SourceResize { .. } => {
-                Capability::Interface
-            }
+            Self::InterfaceOpenTab { .. }
+            | Self::InterfaceSplit { .. }
+            | Self::InterfaceRender { .. }
+            | Self::SourceResize { .. } => Capability::Interface,
             Self::EventSubscribe { topic } | Self::EventUnsubscribe { topic } => topic.capability(),
         }
     }
@@ -142,11 +156,13 @@ pub struct WorkspaceInfo {
 #[serde(tag = "reply", content = "with", rename_all = "snake_case")]
 pub enum Reply {
     Workspace(WorkspaceInfo),
+    Workspaces(Vec<WorkspaceState>),
     Containers(Vec<ContainerSummary>),
     Container(ContainerSummary),
     Images(Vec<ImageSummary>),
     Image(ImageSummary),
     Tabs(Vec<TabSummary>),
+    Text(PaneText),
     Entries(Vec<Entry>),
     Contents(Vec<u8>),
     Identity(String),
@@ -208,6 +224,38 @@ mod tests {
             .capability(),
             Capability::ImageWrite
         );
+    }
+
+    #[test]
+    fn reading_a_panes_text_is_gated_apart_from_listing_panes() {
+        assert_eq!(Request::TerminalTabs.capability(), Capability::TerminalRead);
+        assert_eq!(
+            Request::TerminalReadPane {
+                slot: "1".into(),
+                lines: None,
+            }
+            .capability(),
+            Capability::TerminalOutput
+        );
+        for request in [
+            Request::TerminalClosePane { slot: "1".into() },
+            Request::TerminalFocusPane { slot: "1".into() },
+            Request::TerminalRatio {
+                slot: "1".into(),
+                ratio: 0.5,
+            },
+        ] {
+            assert_eq!(request.capability(), Capability::TerminalControl, "{request:?}");
+        }
+        assert_eq!(
+            Request::InterfaceSplit {
+                slot: "1".into(),
+                division: crate::port::Division::Beside,
+            }
+            .capability(),
+            Capability::Interface
+        );
+        assert_eq!(Request::WorkspaceList.capability(), Capability::WorkspaceRead);
     }
 
     #[test]

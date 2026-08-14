@@ -738,6 +738,36 @@ mod tests {
         fn spawn(&self, _slot: &str, _command: &[String]) -> Result<(), HostError> {
             Ok(())
         }
+
+        fn read(&self, slot: &str, _lines: usize) -> Result<hl_extension::port::PaneText, HostError> {
+            Ok(hl_extension::port::PaneText {
+                slot: slot.to_owned(),
+                lines: Vec::new(),
+                truncated: false,
+            })
+        }
+
+        fn close(&self, _slot: &str) -> Result<(), HostError> {
+            Ok(())
+        }
+
+        fn focus(&self, _slot: &str) -> Result<(), HostError> {
+            Ok(())
+        }
+
+        fn ratio(&self, _slot: &str, _ratio: f64) -> Result<(), HostError> {
+            Ok(())
+        }
+
+        fn surface(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
+            Ok("slot".to_owned())
+        }
+    }
+
+    impl hl_extension::port::WorkspaceInventory for Ports {
+        fn workspaces(&self) -> Result<Vec<hl_extension::port::WorkspaceState>, HostError> {
+            Ok(Vec::new())
+        }
     }
 
     impl WorkspaceFiles for Ports {
@@ -862,6 +892,7 @@ mod tests {
                     architecture: "arm64".to_owned(),
                     image: "alpine:3.20".to_owned(),
                 },
+                workspaces: &ports,
                 containers: &ports,
                 control: &ports,
                 images: &ports,

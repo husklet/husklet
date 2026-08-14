@@ -208,6 +208,14 @@ impl PaneSnapshot {
         hist_idx: &mut usize,
     ) -> std::io::Result<Option<PaneNode>> {
         let tw = session.window;
+        // A surface is a leaf before it is a container: the widgets under it are
+        // the extension's drawing, and none of them is a pane of this window.
+        if let Some((slot, extension)) = Slots::new(tw).surface(w) {
+            return Ok(Some(PaneNode::Surface(SurfacePane {
+                extension,
+                slot: Some(slot),
+            })));
+        }
         if let Some(t) = w.downcast_ref::<vte4::Terminal>() {
             let cwd = PaneWorkingDirectory::read(t);
             let text = Terminal::new(t).history();

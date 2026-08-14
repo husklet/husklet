@@ -220,3 +220,41 @@ fn cwd_uri_decoding() {
     );
     assert_eq!(WorkingDirectory::from_osc7("http://x/y"), None);
 }
+
+#[test]
+fn a_surface_pane_survives_the_layout_round_trip_beside_a_shell() {
+    let session = Session {
+        tabs: vec![SessionTab {
+            title: "shell 1".to_string(),
+            root: PaneNode::Split {
+                dir: SplitDir::Horizontal,
+                ratio: 0.5,
+                a: Box::new(PaneNode::Leaf(Pane {
+                    cwd: None,
+                    history_file: None,
+                    slot: Some("0".to_string()),
+                })),
+                b: Box::new(PaneNode::Surface(SurfacePane {
+                    extension: "sample".to_string(),
+                    slot: Some("1".to_string()),
+                })),
+            },
+        }],
+    };
+
+    let parsed = Session::parse(&session.serialize()).expect("a layout with a surface pane");
+
+    assert_eq!(parsed, session);
+    assert_eq!(
+        parsed.tabs[0].root.leaves().len(),
+        1,
+        "a surface holds no scrollback file to retain"
+    );
+}
+
+#[test]
+fn a_surface_pane_without_an_extension_is_refused_rather_than_restored_as_a_shell() {
+    let refused = Session::parse("version 1\ntab t surface - 1\n").expect_err("an unnamed surface");
+
+    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData);
+}

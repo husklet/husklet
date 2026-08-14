@@ -14,7 +14,7 @@
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
-use hl_extension::port::{Division, HostError, TabSummary, TerminalSurface};
+use hl_extension::port::{Division, HostError, PaneText, TabSummary, TerminalSurface};
 
 /// How long a relayed call waits for the window to answer.
 ///
@@ -31,7 +31,10 @@ pub const PATIENCE: Duration = Duration::from_secs(5);
 pub const CAPACITY: usize = 16;
 
 /// What an extension asked the terminal for.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// Not `Eq`: a split ratio is a measurement, and a measurement has no total
+/// equality.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     /// Every tab and the panes in it.
     Tabs,
@@ -51,6 +54,40 @@ pub enum Request {
         /// The command and its arguments.
         command: Vec<String>,
     },
+    /// A bounded tail of what the named pane is showing.
+    Read {
+        /// The pane being read.
+        slot: String,
+        /// How many lines at most, already bounded by the protocol layer.
+        lines: usize,
+    },
+    /// The named pane, closed.
+    Close {
+        /// The pane being closed.
+        slot: String,
+    },
+    /// Keyboard focus, moved to the named pane.
+    Focus {
+        /// The pane being focused.
+        slot: String,
+    },
+    /// How much of its split the named pane takes.
+    Ratio {
+        /// The pane being resized.
+        slot: String,
+        /// The fraction of the split the pane takes.
+        ratio: f64,
+    },
+    /// A pane split off the named slot, holding an extension's interface.
+    Surface {
+        /// Which extension will draw into it. `None` when the port was not
+        /// attributed to one, which the window refuses rather than guesses at.
+        origin: Option<String>,
+        /// The pane being divided.
+        slot: String,
+        /// Which way it is divided.
+        division: Division,
+    },
 }
 
 /// What the window answered.
@@ -60,6 +97,8 @@ pub enum Answer {
     Tabs(Vec<TabSummary>),
     /// The identity of what was opened or split.
     Slot(String),
+    /// The text one pane is showing, for [`Request::Read`].
+    Text(PaneText),
     /// The work was done and names nothing.
     Done,
 }
@@ -109,6 +148,10 @@ pub type Errands = Receiver<Errand>;
 /// The terminal port as an extension holds it: a sender and a wait.
 pub struct Relay {
     errands: SyncSender<Errand>,
+    /// Which extension holds this port, when it was attributed to one. A pane
+    /// that draws an interface has to name whose interface it draws, and the
+    /// window cannot infer that from a request alone.
+    origin: Option<String>,
 }
 
 impl Relay {
@@ -116,7 +159,16 @@ impl Relay {
     #[must_use]
     pub fn open() -> (Self, Errands) {
         let (errands, drained) = std::sync::mpsc::sync_channel(CAPACITY);
-        (Self { errands }, drained)
+        (Self { errands, origin: None }, drained)
+    }
+
+    /// The same port, held by one named extension.
+    #[must_use]
+    pub fn of(&self, extension: &str) -> Self {
+        Self {
+            errands: self.errands.clone(),
+            origin: Some(extension.to_owned()),
+        }
     }
 
     /// Sends one request and waits out [`PATIENCE`] for the answer.
@@ -137,6 +189,14 @@ impl Relay {
     fn slot(&self, request: Request) -> Result<String, HostError> {
         match self.ask(request)? {
             Answer::Slot(slot) => Ok(slot),
+            other => Err(other.mismatch()),
+        }
+    }
+
+    /// A request that changes a pane and names nothing back.
+    fn done(&self, request: Request) -> Result<(), HostError> {
+        match self.ask(request)? {
+            Answer::Done => Ok(()),
             other => Err(other.mismatch()),
         }
     }
@@ -170,13 +230,54 @@ impl TerminalSurface for Relay {
     /// # Errors
     /// Returns a host failure when no window is drawing this workspace.
     fn spawn(&self, slot: &str, command: &[String]) -> Result<(), HostError> {
-        match self.ask(Request::Spawn {
+        self.done(Request::Spawn {
             slot: slot.to_owned(),
             command: command.to_vec(),
+        })
+    }
+
+    /// # Errors
+    /// Returns a host failure when no window is drawing this workspace.
+    fn read(&self, slot: &str, lines: usize) -> Result<PaneText, HostError> {
+        match self.ask(Request::Read {
+            slot: slot.to_owned(),
+            lines,
         })? {
-            Answer::Done => Ok(()),
+            Answer::Text(text) => Ok(text),
             other => Err(other.mismatch()),
         }
+    }
+
+    /// # Errors
+    /// Returns a host failure when no window is drawing this workspace.
+    fn close(&self, slot: &str) -> Result<(), HostError> {
+        self.done(Request::Close { slot: slot.to_owned() })
+    }
+
+    /// # Errors
+    /// Returns a host failure when no window is drawing this workspace.
+    fn focus(&self, slot: &str) -> Result<(), HostError> {
+        self.done(Request::Focus { slot: slot.to_owned() })
+    }
+
+    /// # Errors
+    /// Returns a host failure when no window is drawing this workspace.
+    fn ratio(&self, slot: &str, ratio: f64) -> Result<(), HostError> {
+        self.done(Request::Ratio {
+            slot: slot.to_owned(),
+            ratio,
+        })
+    }
+
+    /// # Errors
+    /// Returns a host failure when no window is drawing this workspace, and a
+    /// conflict when this port was not attributed to an extension.
+    fn surface(&self, slot: &str, division: Division) -> Result<String, HostError> {
+        self.slot(Request::Surface {
+            origin: self.origin.clone(),
+            slot: slot.to_owned(),
+            division,
+        })
     }
 }
 
@@ -209,6 +310,39 @@ mod tests {
         let produced = relay.split("shell-1", Division::Below).expect("a pane");
 
         assert_eq!(produced, "shell-2");
+        window.join().expect("the window thread");
+    }
+
+    #[test]
+    fn a_pane_that_draws_an_interface_names_whose_interface_it_draws() {
+        let (relay, errands) = Relay::open();
+        let window = std::thread::spawn(move || {
+            let anonymous = errands.recv().expect("an errand");
+            assert_eq!(
+                anonymous.request(),
+                &Request::Surface {
+                    origin: None,
+                    slot: "shell-1".to_owned(),
+                    division: Division::Beside,
+                }
+            );
+            anonymous.answer(Ok(Answer::Slot("pane-2".to_owned())));
+            let attributed = errands.recv().expect("an errand");
+            assert_eq!(
+                attributed.request(),
+                &Request::Surface {
+                    origin: Some("sample".to_owned()),
+                    slot: "shell-1".to_owned(),
+                    division: Division::Beside,
+                }
+            );
+            attributed.answer(Ok(Answer::Slot("pane-3".to_owned())));
+        });
+
+        drop(relay.surface("shell-1", Division::Beside).expect("a pane"));
+        let named = relay.of("sample").surface("shell-1", Division::Beside).expect("a pane");
+
+        assert_eq!(named, "pane-3");
         window.join().expect("the window thread");
     }
 

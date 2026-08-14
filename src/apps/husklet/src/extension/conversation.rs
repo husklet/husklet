@@ -506,6 +506,7 @@ mod tests {
                     slot: "s1".to_owned(),
                     working_directory: None,
                     command: None,
+                    occupant: hl_extension::port::Occupant::Terminal,
                 }],
             }])
         }
@@ -523,6 +524,42 @@ mod tests {
         fn spawn(&self, _slot: &str, _command: &[String]) -> Result<(), HostError> {
             self.ledger.note("terminal.spawn");
             Ok(())
+        }
+
+        fn read(&self, slot: &str, lines: usize) -> Result<hl_extension::port::PaneText, HostError> {
+            self.ledger.note("terminal.read");
+            Ok(hl_extension::port::PaneText {
+                slot: slot.to_owned(),
+                lines: vec![format!("at most {lines}")],
+                truncated: false,
+            })
+        }
+
+        fn close(&self, _slot: &str) -> Result<(), HostError> {
+            self.ledger.note("terminal.close");
+            Ok(())
+        }
+
+        fn focus(&self, _slot: &str) -> Result<(), HostError> {
+            self.ledger.note("terminal.focus");
+            Ok(())
+        }
+
+        fn ratio(&self, _slot: &str, _ratio: f64) -> Result<(), HostError> {
+            self.ledger.note("terminal.ratio");
+            Ok(())
+        }
+
+        fn surface(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
+            self.ledger.note("terminal.surface");
+            Ok("s3".to_owned())
+        }
+    }
+
+    impl hl_extension::port::WorkspaceInventory for Host {
+        fn workspaces(&self) -> Result<Vec<hl_extension::port::WorkspaceState>, HostError> {
+            self.ledger.note("workspace.list");
+            Ok(Vec::new())
         }
     }
 
@@ -554,6 +591,7 @@ mod tests {
                 architecture: "arm64".to_owned(),
                 image: "alpine:3.20".to_owned(),
             },
+            workspaces: host,
             containers: host,
             control: host,
             images: host,

@@ -7,7 +7,7 @@
 mod live;
 pub(crate) mod story;
 
-pub use live::{catalogue, host, Fault};
+pub use live::{catalogue, host, spawned, Fault};
 pub use story::{Catalogue, Story};
 
 /// How many rows the catalogue's tables claim to have.

@@ -11,7 +11,7 @@ pub(crate) use process::*;
 pub(crate) use resources::*;
 
 use poll::{spawn_overview_poller, Data};
-use screens::workspace::extensions::{Catalogue, Console, Inspection, Shelf, Surfaces};
+use screens::workspace::extensions::{Catalogue, Console, Gallery, Inspection, Shelf, Surfaces};
 use table::Table;
 
 pub(crate) struct Overview<'a> {
@@ -46,10 +46,15 @@ impl<'a> Overview<'a> {
     /// extension is disabled — costs the main loop nothing. An extension that
     /// is not running is told so through the same banner path a stopped one
     /// uses, over the empty surface it already has.
+    ///
+    /// The interface is placed inside a holder that stays on the shell: an
+    /// extension may move its interface into a terminal pane, and the page it
+    /// came from has to have somewhere to put it back.
     fn surface(
         workspace: &WorkspaceConfig,
         name: &hl_extension::ExtensionName,
         terminal: &std::sync::Arc<dyn hl_extension::port::TerminalSurface + Send + Sync>,
+        gallery: &Gallery,
     ) -> gtk::Widget {
         use hl::extension::{Order, Report};
         use screens::workspace::extension::{Delivery, Signal};
@@ -81,7 +86,12 @@ impl<'a> Overview<'a> {
         });
         let (widget, page) = screens::workspace::extension::Interface::new(deliveries, sink);
         page.install();
-        widget.upcast()
+        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder.set_hexpand(true);
+        holder.set_vexpand(true);
+        holder.append(&widget);
+        gallery.enrol(name.as_str(), &widget, &holder);
+        holder.upcast()
     }
 
     /// The workspace's extensions, as pages on the shell.
@@ -92,7 +102,8 @@ impl<'a> Overview<'a> {
     fn shelf(
         workspace: &WorkspaceConfig,
         view: &Rc<screens::workspace::View>,
-        terminal: &std::sync::Arc<dyn hl_extension::port::TerminalSurface + Send + Sync>,
+        relay: &Rc<hl::extension::Relay>,
+        gallery: &Gallery,
     ) -> Option<Rc<Catalogue>> {
         let roster = match hl::extension::Roster::workspace(workspace) {
             Ok(roster) => Rc::new(RefCell::new(roster)),
@@ -102,8 +113,16 @@ impl<'a> Overview<'a> {
             }
         };
         let held = workspace.clone();
-        let carried = std::sync::Arc::clone(terminal);
-        let surfaces: Surfaces = Rc::new(move |name| Self::surface(&held, name, &carried));
+        let carried = Rc::clone(relay);
+        let shown = gallery.clone();
+        // Each extension holds a port of its own, because a pane that draws an
+        // interface has to name whose interface it draws and one shared port
+        // could not say.
+        let surfaces: Surfaces = Rc::new(move |name| {
+            let port: std::sync::Arc<dyn hl_extension::port::TerminalSurface + Send + Sync> =
+                std::sync::Arc::new(carried.of(name.as_str()));
+            Self::surface(&held, name, &port, &shown)
+        });
         let shelf = Shelf::new(view, &roster, surfaces);
         shelf.install();
         Some(Catalogue::new(&shelf, Self::inspections(workspace)))
@@ -156,8 +175,14 @@ impl<'a> Overview<'a> {
         // drawing; the window answers it on its own tick, which is where the
         // widgets are.
         let (relay, errands) = hl::extension::Relay::open();
-        let relay: std::sync::Arc<dyn hl_extension::port::TerminalSurface + Send + Sync> = std::sync::Arc::new(relay);
-        let catalogue = Self::shelf(ws, &view, &relay);
+        let relay = Rc::new(relay);
+        let gallery = Gallery::new();
+        // The window looks its panes' interfaces up here, so it must be told
+        // where they are before a saved layout is restored into it.
+        if let Some(window) = self.window {
+            screens::workspace::terminal::Window::exhibit(window, gallery.clone());
+        }
+        let catalogue = Self::shelf(ws, &view, &relay, &gallery);
         if let Some(catalogue) = &catalogue {
             shelf.append(catalogue.widget());
         }

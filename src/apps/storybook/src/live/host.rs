@@ -6,7 +6,7 @@
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
-    TabSummary, TerminalSurface, WorkspaceFiles,
+    PaneText, TabSummary, TerminalSurface, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{RelativePath, Services as Bundle};
 
@@ -39,6 +39,7 @@ impl Workspace {
             images: self,
             terminal: self,
             files: self,
+            workspaces: self,
         }
     }
 }
@@ -103,6 +104,26 @@ impl TerminalSurface for Workspace {
     fn spawn(&self, _slot: &str, _command: &[String]) -> Result<(), HostError> {
         Err(unavailable())
     }
+
+    fn read(&self, _slot: &str, _lines: usize) -> Result<PaneText, HostError> {
+        Err(unavailable())
+    }
+
+    fn close(&self, _slot: &str) -> Result<(), HostError> {
+        Err(unavailable())
+    }
+
+    fn focus(&self, _slot: &str) -> Result<(), HostError> {
+        Err(unavailable())
+    }
+
+    fn ratio(&self, _slot: &str, _ratio: f64) -> Result<(), HostError> {
+        Err(unavailable())
+    }
+
+    fn surface(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
+        Err(unavailable())
+    }
 }
 
 impl WorkspaceFiles for Workspace {
@@ -116,6 +137,20 @@ impl WorkspaceFiles for Workspace {
 
     fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
         Err(unavailable())
+    }
+}
+
+/// The storybook hosts exactly one pretend workspace: its own.
+impl WorkspaceInventory for Workspace {
+    fn workspaces(&self) -> Result<Vec<WorkspaceState>, HostError> {
+        let described = super::workspace();
+        Ok(vec![WorkspaceState {
+            name: described.name,
+            architecture: described.architecture,
+            image: described.image,
+            running: true,
+            current: true,
+        }])
     }
 }
 

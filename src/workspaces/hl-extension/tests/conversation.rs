@@ -16,7 +16,7 @@ use std::os::unix::net::UnixStream;
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
-    TabSummary, TerminalSurface, WorkspaceFiles,
+    PaneText, TabSummary, TerminalSurface, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     codec, Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, RelativePath, Reply, Request, Services,
@@ -105,6 +105,41 @@ impl TerminalSurface for Host {
     fn spawn(&self, _slot: &str, _command: &[String]) -> Result<(), HostError> {
         Ok(())
     }
+    fn read(&self, slot: &str, lines: usize) -> Result<PaneText, HostError> {
+        Ok(PaneText {
+            slot: slot.into(),
+            lines: vec![format!("at most {lines}")],
+            truncated: true,
+        })
+    }
+
+    fn close(&self, _slot: &str) -> Result<(), HostError> {
+        Ok(())
+    }
+
+    fn focus(&self, _slot: &str) -> Result<(), HostError> {
+        Ok(())
+    }
+
+    fn ratio(&self, _slot: &str, _ratio: f64) -> Result<(), HostError> {
+        Ok(())
+    }
+
+    fn surface(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
+        Ok("s3".into())
+    }
+}
+
+impl WorkspaceInventory for Host {
+    fn workspaces(&self) -> Result<Vec<WorkspaceState>, HostError> {
+        Ok(vec![WorkspaceState {
+            name: "dev".into(),
+            architecture: "arm64".into(),
+            image: "alpine:3.20".into(),
+            running: true,
+            current: true,
+        }])
+    }
 }
 
 impl WorkspaceFiles for Host {
@@ -128,6 +163,7 @@ fn services(host: &Host) -> Services<'_> {
             architecture: "arm64".into(),
             image: "alpine:3.20".into(),
         },
+        workspaces: host,
         containers: host,
         control: host,
         images: host,

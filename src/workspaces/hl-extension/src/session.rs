@@ -8,7 +8,10 @@
 use hl_rpc::Authority;
 
 use crate::capability::Capability;
-use crate::port::{ContainerControl, ContainerInventory, ImageStore, TerminalSurface, WorkspaceFiles};
+use crate::port::{
+    pane_lines, ContainerControl, ContainerInventory, Division, ImageStore, TerminalSurface, WorkspaceFiles,
+    WorkspaceInventory,
+};
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 
 /// The host services a session dispatches to.
@@ -18,6 +21,7 @@ use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 /// [`Authority`].
 pub struct Services<'a> {
     pub workspace: WorkspaceInfo,
+    pub workspaces: &'a dyn WorkspaceInventory,
     pub containers: &'a dyn ContainerInventory,
     pub control: &'a dyn ContainerControl,
     pub images: &'a dyn ImageStore,
@@ -84,6 +88,7 @@ impl Session {
     fn serve(&mut self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         match request {
             Request::WorkspaceInfo => Ok(Reply::Workspace(services.workspace.clone())),
+            Request::WorkspaceList => self.workspaces(services),
             Request::ContainerList | Request::ContainerInspect { .. } => self.containers(request, services),
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }
@@ -93,11 +98,16 @@ impl Session {
             Request::TerminalTabs
             | Request::TerminalOpenTab { .. }
             | Request::TerminalSplit { .. }
-            | Request::TerminalSpawn { .. } => self.terminal(request, services),
+            | Request::TerminalSpawn { .. }
+            | Request::TerminalReadPane { .. }
+            | Request::TerminalClosePane { .. }
+            | Request::TerminalFocusPane { .. }
+            | Request::TerminalRatio { .. } => self.terminal(request, services),
             Request::FilesystemList { .. } | Request::FilesystemRead { .. } | Request::FilesystemWrite { .. } => {
                 self.files(request, services)
             }
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
+            Request::InterfaceSplit { slot, division } => self.open_pane(slot, *division, services),
             Request::InterfaceRender { frame } => self.render(frame),
             Request::SourceResize { mutation } => self.mutate(mutation.clone()),
             Request::EventSubscribe { topic } => {
@@ -147,6 +157,15 @@ impl Session {
         Ok(Reply::Images(port.list()?))
     }
 
+    /// Every workspace the host knows of.
+    fn workspaces(&self, services: &Services<'_>) -> Result<Reply, Failure> {
+        let port = self
+            .peer
+            .authority()
+            .port(Capability::WorkspaceRead, services.workspaces)?;
+        Ok(Reply::Workspaces(port.workspaces()?))
+    }
+
     fn terminal(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         if matches!(request, Request::TerminalTabs) {
             let port = self
@@ -154,6 +173,9 @@ impl Session {
                 .authority()
                 .port(Capability::TerminalRead, services.terminal)?;
             return Ok(Reply::Tabs(port.tabs()?));
+        }
+        if let Request::TerminalReadPane { slot, lines } = request {
+            return self.text(slot, *lines, services);
         }
         let port = self
             .peer
@@ -169,10 +191,28 @@ impl Session {
             Request::TerminalSpawn { slot, command } => {
                 port.spawn(slot, command).map(|()| Reply::Done).map_err(Failure::from)
             }
+            Request::TerminalClosePane { slot } => port.close(slot).map(|()| Reply::Done).map_err(Failure::from),
+            Request::TerminalFocusPane { slot } => port.focus(slot).map(|()| Reply::Done).map_err(Failure::from),
+            Request::TerminalRatio { slot, ratio } => {
+                port.ratio(slot, *ratio).map(|()| Reply::Done).map_err(Failure::from)
+            }
             _ => Err(Failure::Unsupported {
                 call: "terminal command".into(),
             }),
         }
+    }
+
+    /// Reads a bounded tail of one pane's text.
+    ///
+    /// The bound is applied here rather than trusted to the caller, so a host
+    /// implementation cannot be talked into extracting a whole scrollback by an
+    /// extension that asks for one.
+    fn text(&self, slot: &str, lines: Option<usize>, services: &Services<'_>) -> Result<Reply, Failure> {
+        let port = self
+            .peer
+            .authority()
+            .port(Capability::TerminalOutput, services.terminal)?;
+        Ok(Reply::Text(port.read(slot, pane_lines(lines))?))
     }
 
     fn files(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
@@ -247,6 +287,19 @@ impl Session {
         }
         let port = self.peer.authority().port(Capability::Interface, services.terminal)?;
         let id = port.open_tab(title)?;
+        self.tab = Some(id.clone());
+        Ok(Reply::Identity(id))
+    }
+
+    /// Divides a pane and takes the new one as the surface this session draws
+    /// into.
+    ///
+    /// A session has one interface, so the pane replaces whatever surface it was
+    /// drawing on rather than becoming a second one: two trees fed by one stream
+    /// of reconciliation frames would disagree the moment either missed a frame.
+    fn open_pane(&mut self, slot: &str, division: Division, services: &Services<'_>) -> Result<Reply, Failure> {
+        let port = self.peer.authority().port(Capability::Interface, services.terminal)?;
+        let id = port.surface(slot, division)?;
         self.tab = Some(id.clone());
         Ok(Reply::Identity(id))
     }

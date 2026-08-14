@@ -25,9 +25,18 @@ export class Session {
   #onReply;
   #onRows;
   #granted = [];
+  #greeted;
+  #ready;
 
   constructor(socket, { onReply = () => {}, onRows = () => {} } = {}) {
     this.#socket = socket;
+    // Resolved once the host has greeted us and we have answered. Nothing may
+    // be sent before that: the host reads the first frame it receives as the
+    // greeting, so a call written earlier is swallowed and every call after it
+    // arrives one step out of order.
+    this.#greeted = new Promise((resolve) => {
+      this.#ready = resolve;
+    });
     this.#onReply = onReply;
     this.#onRows = onRows;
     socket.on('data', (chunk) => this.#receive(chunk));
@@ -38,13 +47,23 @@ export class Session {
     return this.#granted;
   }
 
+  /** Resolves when the handshake is complete and calls may be sent. */
+  get ready() {
+    return this.#greeted;
+  }
+
   /** Opens the socket the host provided. */
   static connect(path = process.env[SOCKET], handlers) {
     if (!path) throw new Error(`${SOCKET} is not set; an extension runs inside a workspace`);
     return new Promise((resolve, reject) => {
       const socket = net.createConnection(path);
       socket.once('error', reject);
-      socket.once('connect', () => resolve(new Session(socket, handlers)));
+      // Resolve only after the handshake, so a caller that renders straight
+      // away cannot outrun it.
+      socket.once('connect', () => {
+        const session = new Session(socket, handlers);
+        session.ready.then(() => resolve(session)).catch(reject);
+      });
     });
   }
 
@@ -91,8 +110,9 @@ export class Session {
       encode({
         channel: CONTROL,
         kind: KIND.response,
-        payload: { protocol: PROTOCOL, name: welcome.extension, features: [] },
+        payload: { protocol: PROTOCOL, name: welcome.peer ?? welcome.extension, features: [] },
       }),
     );
+    this.#ready();
   }
 }

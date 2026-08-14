@@ -42,6 +42,12 @@ fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
     an_image_is_read_before_anybody_is_asked();
     a_declined_image_records_nothing();
     a_click_on_a_rendered_button_reaches_the_extension();
+    panes::reading_a_pane_hands_back_what_was_written_to_it();
+    panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
+    panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
+    panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
+    panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
+    panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
 }
 
 /// One shell, one roster, and the shelf between them.
@@ -499,7 +505,7 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
 mod ports {
     use hl_extension::port::{
         ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
-        TabSummary, TerminalSurface, WorkspaceFiles,
+        PaneText, TabSummary, TerminalSurface, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
     };
     use hl_extension::{RelativePath, Services, WorkspaceInfo};
 
@@ -560,6 +566,36 @@ mod ports {
         fn spawn(&self, _slot: &str, _command: &[String]) -> Result<(), HostError> {
             Ok(())
         }
+
+        fn read(&self, slot: &str, _lines: usize) -> Result<PaneText, HostError> {
+            Ok(PaneText {
+                slot: slot.to_owned(),
+                lines: Vec::new(),
+                truncated: false,
+            })
+        }
+
+        fn close(&self, _slot: &str) -> Result<(), HostError> {
+            Ok(())
+        }
+
+        fn focus(&self, _slot: &str) -> Result<(), HostError> {
+            Ok(())
+        }
+
+        fn ratio(&self, _slot: &str, _ratio: f64) -> Result<(), HostError> {
+            Ok(())
+        }
+
+        fn surface(&self, slot: &str, _division: Division) -> Result<String, HostError> {
+            Ok(slot.to_owned())
+        }
+    }
+
+    impl WorkspaceInventory for Ports {
+        fn workspaces(&self) -> Result<Vec<WorkspaceState>, HostError> {
+            Ok(Vec::new())
+        }
     }
 
     impl WorkspaceFiles for Ports {
@@ -585,11 +621,249 @@ mod ports {
                 architecture: "arm64".to_owned(),
                 image: "alpine:3.20".to_owned(),
             },
+            workspaces: &PORTS,
             containers: &PORTS,
             control: &PORTS,
             images: &PORTS,
             terminal: &PORTS,
             files: &PORTS,
         }
+    }
+}
+
+/// What a socket can do to the panes of a window: read one, restructure the
+/// tab, and put an extension's own interface in a pane beside a shell.
+///
+/// These run against a window built without an application behind it, because
+/// every one of them is about the widget tree and the pane registries rather
+/// than about a presented window or a running workspace.
+mod panes {
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+
+    use gtk::prelude::*;
+    use hl_extension::port::Occupant;
+    use hl_ws_term::session::{PaneNode, SurfacePane};
+
+    use super::super::super::terminal::{
+        Adjustment, PaneSplit, Panes, Reading, Slots, Surface, Tabs, TermWin, Window, WindowSession, ABSENCE,
+    };
+    use super::super::Gallery;
+    use hl::config::WorkspaceConfig;
+    use vte4::prelude::TerminalExt as _;
+
+    /// A window with one tab holding one terminal pane.
+    struct Bench {
+        window: Rc<TermWin>,
+        page: gtk::Box,
+    }
+
+    impl Bench {
+        fn new() -> Self {
+            let workspace = WorkspaceConfig::new("dev", "alpine:3.20", hl_ws::Arch::Arm64);
+            let window = Window::bench(&workspace);
+            let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            page.set_hexpand(true);
+            page.set_vexpand(true);
+            drop(Tabs::new(&window).add("shell 1", None, &page, true));
+            Self { window, page }
+        }
+
+        /// A terminal pane in the tab, registered under a fresh slot.
+        fn shell(&self) -> (vte4::Terminal, String) {
+            let terminal = vte4::Terminal::new();
+            let slot = Window::slot(&self.window);
+            Slots::new(&self.window).hold(&terminal, slot.clone());
+            self.page.append(&terminal);
+            (terminal, slot)
+        }
+
+        /// Another terminal pane, beside an existing one.
+        fn beside(&self, pane: &vte4::Terminal) -> (vte4::Terminal, String) {
+            let terminal = vte4::Terminal::new();
+            let slot = Window::slot(&self.window);
+            Slots::new(&self.window).hold(&terminal, slot.clone());
+            assert!(
+                PaneSplit::insert(
+                    pane.clone().upcast_ref::<gtk::Widget>(),
+                    gtk::Orientation::Horizontal,
+                    terminal.clone().upcast_ref::<gtk::Widget>(),
+                ),
+                "a pane in a tab can be divided"
+            );
+            (terminal, slot)
+        }
+
+        /// Every slot the window currently holds.
+        fn slots(&self) -> Vec<String> {
+            Panes::all(&self.window).into_iter().map(|pane| pane.slot).collect()
+        }
+    }
+
+    /// Runs the main loop until a condition holds, which is how text fed to a
+    /// terminal becomes text the terminal is showing.
+    fn until(condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            gtk::glib::MainContext::default().iteration(false);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        condition()
+    }
+
+    /// What a bounded read of one pane answered with.
+    fn lines(bench: &Bench, slot: &str, bound: usize) -> Vec<String> {
+        match Panes::read(&bench.window, slot, bound) {
+            Reading::Text(text) => text.lines,
+            other => panic!("a shell pane shows text, got {other:?}"),
+        }
+    }
+
+    pub(super) fn reading_a_pane_hands_back_what_was_written_to_it() {
+        let bench = Bench::new();
+        let (terminal, slot) = bench.shell();
+        terminal.feed(b"the quick brown fox\r\n");
+
+        assert!(
+            until(|| lines(&bench, &slot, 100)
+                .iter()
+                .any(|line| line.contains("quick brown"))),
+            "the pane hands back what was written to it, got {:?}",
+            lines(&bench, &slot, 100)
+        );
+        assert_eq!(
+            Panes::read(&bench.window, "no-such-pane", 100),
+            Reading::Absent,
+            "a slot naming no pane is refused rather than answered with nothing"
+        );
+    }
+
+    pub(super) fn a_pane_read_never_answers_with_more_than_it_was_allowed() {
+        let bench = Bench::new();
+        let (terminal, slot) = bench.shell();
+        for index in 0..60 {
+            terminal.feed(format!("line {index}\r\n").as_bytes());
+        }
+        assert!(
+            until(|| lines(&bench, &slot, 200).iter().any(|line| line.contains("line 59"))),
+            "the pane caught up with what was fed to it"
+        );
+
+        let Reading::Text(bounded) = Panes::read(&bench.window, &slot, 5) else {
+            panic!("a shell pane shows text");
+        };
+
+        assert!(
+            bounded.lines.len() <= 5,
+            "the bound bounds, got {}",
+            bounded.lines.len()
+        );
+        assert!(bounded.truncated, "and says that older lines were left behind");
+        assert!(
+            bounded.lines.last().is_some_and(|line| line.contains("line 59")),
+            "the tail is what is kept, got {:?}",
+            bounded.lines
+        );
+    }
+
+    pub(super) fn dividing_a_pane_produces_a_slot_that_can_be_addressed() {
+        let bench = Bench::new();
+        let (first, one) = bench.shell();
+        let before = bench.slots();
+
+        let (_second, two) = bench.beside(&first);
+
+        assert!(!before.contains(&two), "the slot is new");
+        assert_eq!(bench.slots().len(), before.len() + 1, "and there is one more pane");
+        assert!(Panes::at(&bench.window, &two).is_some(), "addressable by its own slot");
+        assert_eq!(Panes::ratio(&bench.window, &two, 0.25), Adjustment::Set);
+        assert_eq!(
+            Panes::ratio(&bench.window, "no-such-pane", 0.25),
+            Adjustment::Absent,
+            "a ratio for a pane that is not there is refused"
+        );
+        assert!(Panes::focus(&bench.window, &one), "focus moves by slot");
+    }
+
+    pub(super) fn closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest() {
+        let bench = Bench::new();
+        let (first, one) = bench.shell();
+        let (_second, two) = bench.beside(&first);
+
+        assert!(Panes::close(&bench.window, &two), "the pane was closed");
+
+        assert_eq!(bench.slots(), vec![one], "exactly the named pane is gone");
+        assert!(!Panes::close(&bench.window, &two), "and closing it again finds nothing");
+    }
+
+    pub(super) fn a_pane_can_hold_an_extensions_interface_beside_a_shell() {
+        let bench = Bench::new();
+        let (first, one) = bench.shell();
+        let gallery = Gallery::new();
+        let home = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let interface = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        interface.add_css_class(super::SURFACE);
+        home.append(&interface);
+        gallery.enrol("sample", &interface, &home);
+        Window::exhibit(&bench.window, gallery.clone());
+
+        let slot = Window::slot(&bench.window);
+        let pane = Surface::build(&bench.window, "sample", slot.clone());
+        assert!(Panes::divide(&bench.window, &one, gtk::Orientation::Horizontal, &pane));
+
+        let held = Panes::at(&bench.window, &slot).expect("the surface pane is addressable");
+        assert_eq!(held.occupant, Occupant::Surface, "and says what is in it");
+        assert!(
+            super::descendants(&pane)
+                .iter()
+                .any(|found| found == interface.upcast_ref::<gtk::Widget>()),
+            "the extension's own interface is what the pane holds"
+        );
+        assert!(
+            Panes::all(&bench.window).iter().any(|pane| pane.slot == one),
+            "the shell beside it is still a pane"
+        );
+        assert!(
+            matches!(Panes::read(&bench.window, &slot, 10), Reading::Drawn),
+            "and it is not pretending to be a shell"
+        );
+
+        assert!(
+            Panes::close(&bench.window, &slot),
+            "the surface pane closes like any other"
+        );
+        assert_eq!(
+            interface.parent().as_ref(),
+            Some(home.upcast_ref::<gtk::Widget>()),
+            "and hands the interface back to its page rather than taking it away"
+        );
+        drop(first);
+    }
+
+    pub(super) fn a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell() {
+        let bench = Bench::new();
+        Window::exhibit(&bench.window, Gallery::new());
+        let storage = tempfile::tempdir().expect("temporary directory");
+        let node = PaneNode::Surface(SurfacePane {
+            extension: "departed".to_owned(),
+            slot: Some("7".to_owned()),
+        });
+
+        let mut pids = Vec::new();
+        let (widget, terminal) = WindowSession::new(&bench.window).build_pane_widget(&node, storage.path(), &mut pids);
+        bench.page.append(&widget);
+
+        assert!(terminal.is_none(), "an absent extension is never replaced by a shell");
+        assert!(
+            super::descendants(&widget)
+                .iter()
+                .any(|found| found.has_css_class(ABSENCE)),
+            "the pane says whose interface belongs in it and that nobody is drawing"
+        );
+        let held = Panes::at(&bench.window, "7").expect("the restored pane keeps its slot");
+        assert_eq!(held.occupant, Occupant::Surface);
     }
 }

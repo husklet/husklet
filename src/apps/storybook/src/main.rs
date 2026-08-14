@@ -66,6 +66,10 @@ fn present(application: &gtk::Application) {
 /// running in its own container takes.
 fn live(application: &gtk::Application, mut widgets: Widgets, mut tree: Tree, mode: &str, filter: Option<String>) {
     let served = match mode {
+        // An extension that is a real process, given only a socket.
+        command if command.starts_with("run:") => {
+            storybook::spawned(&mut widgets, &mut tree, command.trim_start_matches("run:"))
+        }
         // The whole component library, described remotely, so every component
         // is shown to survive the wire rather than only the ones an extension
         // happens to use.

@@ -8,7 +8,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hl_extension::port::{Division, HostError, TabSummary, TerminalSurface};
+use hl_extension::port::{
+    Division, HostError, PaneText, TabSummary, TerminalSurface, WorkspaceInventory, WorkspaceState,
+};
 use hl_extension::{ExtensionName, Record, Services, WorkspaceInfo};
 
 use super::super::conversation::Conversation;
@@ -167,8 +169,12 @@ impl Supply for Workspace {
         let extensions = Extensions::open(&self.config).map_err(|error| error.to_string())?;
         let console = Console;
         let terminal: &dyn TerminalSurface = self.terminal.as_deref().unwrap_or(&console);
+        let store = Store {
+            current: self.config.name.clone(),
+        };
         let services = Services {
             workspace: self.describe(),
+            workspaces: &store,
             containers: extensions.containers(),
             control: extensions.control(),
             images: extensions.images(),
@@ -185,6 +191,47 @@ impl Supply for Workspace {
         if let Err(error) = Sidecar::new(bridge).stop(plan.spec.container()) {
             hl_log::hl_error!(hl_log::tag::RUNTIME, "extension {}: {error}", plan.record.name);
         }
+    }
+}
+
+/// The store of workspaces this user has, and whether each one is up.
+///
+/// Read from the store on each call rather than captured once: a workspace
+/// created after this extension started is a workspace that exists, and an
+/// answer from a stale copy would say otherwise.
+struct Store {
+    /// The workspace the asking extension is hosted by.
+    current: String,
+}
+
+impl Store {
+    /// Whether one workspace's execution domain is accepting connections.
+    ///
+    /// Connecting is the only honest test: a socket file outlives the process
+    /// that bound it, so its presence says nothing about what is running.
+    fn running(workspace: &WorkspaceConfig) -> bool {
+        let socket = crate::runtime::domain::Domain::new(workspace).socket();
+        std::os::unix::net::UnixStream::connect(socket).is_ok()
+    }
+}
+
+impl WorkspaceInventory for Store {
+    /// # Errors
+    /// Returns a host failure when the workspace store cannot be read.
+    fn workspaces(&self) -> Result<Vec<WorkspaceState>, HostError> {
+        let path = crate::paths::hl_root().join("workspaces.conf");
+        let store = crate::config::WorkspaceStore::load(path).map_err(|error| HostError::Failed(error.to_string()))?;
+        Ok(store
+            .all()
+            .iter()
+            .map(|workspace| WorkspaceState {
+                name: workspace.name.clone(),
+                architecture: workspace.arch.as_str().to_owned(),
+                image: workspace.image.clone(),
+                running: Self::running(workspace),
+                current: workspace.name == self.current,
+            })
+            .collect())
     }
 }
 
@@ -210,6 +257,26 @@ impl TerminalSurface for Console {
     }
 
     fn spawn(&self, _slot: &str, _command: &[String]) -> Result<(), HostError> {
+        Err(unreachable_terminal())
+    }
+
+    fn read(&self, _slot: &str, _lines: usize) -> Result<PaneText, HostError> {
+        Err(unreachable_terminal())
+    }
+
+    fn close(&self, _slot: &str) -> Result<(), HostError> {
+        Err(unreachable_terminal())
+    }
+
+    fn focus(&self, _slot: &str) -> Result<(), HostError> {
+        Err(unreachable_terminal())
+    }
+
+    fn ratio(&self, _slot: &str, _ratio: f64) -> Result<(), HostError> {
+        Err(unreachable_terminal())
+    }
+
+    fn surface(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
         Err(unreachable_terminal())
     }
 }

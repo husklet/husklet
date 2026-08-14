@@ -2584,6 +2584,7 @@ dependencies = [
  "hl-extension",
  "hl-gui",
  "hl-gui-gtk",
+ "hl-process",
  "serde",
  "serde_json",
 ]
