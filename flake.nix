@@ -917,7 +917,7 @@
           lipo -archs "$library" | grep -Fx 'arm64' >/dev/null
           otool -D "$library" | grep -Fx '@rpath/libhl_native_engine.dylib' >/dev/null
           nm -gjU "$library" | sort -u > "$TMPDIR/actual-exports"
-          sed 's/^/_/' src/runtime/hl-native/src/native/bridge/exports.txt \
+          sed 's/^/_/' ${workspaceSource}/src/runtime/hl-native/src/native/bridge/exports.txt \
             > "$TMPDIR/expected-exports"
           diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
           for name in hl-engine hl-aarch64 hl-x86_64; do
