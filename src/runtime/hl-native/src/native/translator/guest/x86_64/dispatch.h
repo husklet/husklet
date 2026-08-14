@@ -157,9 +157,11 @@ static int smc_tracked_written(uint64_t address, uint64_t size) {
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
         if (signal_deliverable_for_cpu(c)) { maybe_deliver_signal(c); /* deliverable signal -> handler */ }           \
-        g_prevpc = g_curpc;                                                                                            \
-        g_curpc = (c)->rip;                                                                                            \
-        g_disp_n++;                                                                                                    \
+        if (g_dispatch_diagnostics) {                                                                                  \
+            g_prevpc = g_curpc;                                                                                        \
+            g_curpc = (c)->rip;                                                                                        \
+            g_disp_n++;                                                                                                \
+        }                                                                                                              \
         if (g_trace && g_tracecap && g_disp_n > g_tracecap) { /* bound trace output for runaway guests */              \
             fprintf(stderr, "[hl] trace cap %llu blocks reached -> stop\n", (unsigned long long)g_tracecap);           \
             (c)->exited = 1;                                                                                           \

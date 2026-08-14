@@ -1144,6 +1144,7 @@ static int engine_global_init(void) {
     g_trace = 0;
     g_systrace = 0;
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
+    g_dispatch_diagnostics = g_prof || g_trace || g_nochain || g_w8 != NULL;
     g_fwdskip = 8;
     g_notier2x = 0;
     extern void jit86_lazyguard(int, siginfo_t *, void *);

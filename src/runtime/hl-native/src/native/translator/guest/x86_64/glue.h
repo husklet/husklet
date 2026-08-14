@@ -24,6 +24,7 @@ extern int g_itrace;
 extern uint64_t g_emit_gpc;
 extern int g_systrace;
 extern uint64_t g_disp_n;
+extern int g_dispatch_diagnostics;
 extern uint64_t g_ibtc_fill;
 extern uint64_t g_repmovs_n;
 extern uint64_t g_repstos_n;

@@ -6,6 +6,7 @@ int g_itrace;
 uint64_t g_emit_gpc;
 int g_systrace;
 uint64_t g_disp_n;
+int g_dispatch_diagnostics;
 uint64_t g_ibtc_fill;
 uint64_t g_repmovs_n;
 uint64_t g_repstos_n;

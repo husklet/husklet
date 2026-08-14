@@ -1,5 +1,38 @@
 use std::{fs, path::PathBuf, process::Command};
 
+#[test]
+fn x86_dispatch_bookkeeping_is_diagnostic_only() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let target = fs::read_to_string(native.join("engine/target/x86_64.c")).expect("read x86 target");
+    assert!(
+        target.contains("g_dispatch_diagnostics = g_prof || g_trace || g_nochain || g_w8 != NULL;"),
+        "x86 target does not bind every diagnostic mode to dispatcher bookkeeping"
+    );
+    for relative in [
+        "translator/guest/x86_64/dispatch.h",
+        "translator/guest/x86_64/interp_dispatch.h",
+    ] {
+        let source = fs::read_to_string(native.join(relative)).expect("read x86 dispatcher");
+        let start = source
+            .find("#define G_DISPATCH_DEBUG")
+            .expect("x86 dispatcher debug hook");
+        let end = source[start..].find("\n\n").map_or(source.len(), |end| start + end);
+        let body = &source[start..end];
+        let gate = body
+            .find("if (g_dispatch_diagnostics)")
+            .expect("diagnostic bookkeeping gate");
+        for write in ["g_prevpc =", "g_curpc =", "g_disp_n++"] {
+            let position = body
+                .find(write)
+                .unwrap_or_else(|| panic!("{relative} is missing {write}"));
+            assert!(
+                position > gate,
+                "{relative} performs {write} before its diagnostic gate"
+            );
+        }
+    }
+}
+
 const MACRO_CONTRACT_PROBE: &str = r#"
 #include "hl/log.h"
 #include <string.h>

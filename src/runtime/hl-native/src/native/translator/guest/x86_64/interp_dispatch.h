@@ -45,9 +45,11 @@ static inline int smc_seen(void) {
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
         if (g_pending) maybe_deliver_signal(c); /* redirect to the guest handler */                                    \
-        g_prevpc = g_curpc;                                                                                            \
-        g_curpc = (c)->rip;                                                                                            \
-        g_disp_n++;                                                                                                    \
+        if (g_dispatch_diagnostics) {                                                                                  \
+            g_prevpc = g_curpc;                                                                                        \
+            g_curpc = (c)->rip;                                                                                        \
+            g_disp_n++;                                                                                                \
+        }                                                                                                              \
     }
 
 // On-flush reset; g_xibtc holds HOST code pointers (header note).
