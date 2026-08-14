@@ -217,6 +217,30 @@ impl DirectoryImage {
             .map_err(|_| CheckpointError::new("checkpoint generation lock is poisoned"))
     }
 
+    fn state_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<MutexGuard<'_, DirectoryImageState>, CheckpointError> {
+        loop {
+            match self.state.try_lock() {
+                Ok(state) => return Ok(state),
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(CheckpointError::new("checkpoint generation lock is poisoned"));
+                }
+                Err(std::sync::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(
+                        deadline
+                            .saturating_duration_since(std::time::Instant::now())
+                            .min(std::time::Duration::from_millis(1)),
+                    );
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    return Err(CheckpointError::deadline());
+                }
+            }
+        }
+    }
+
     #[cfg(unix)]
     fn hold_generation(&self, generation: &DirectoryGeneration) -> Result<std::os::fd::OwnedFd, CheckpointError> {
         match generation {
@@ -257,6 +281,17 @@ impl CheckpointImage for DirectoryImage {
         Self::replace(&Self::path(&self.root.join(&state.generation), name)?, bytes)
     }
 
+    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError> {
+        let state = self.state_until(deadline)?;
+        #[cfg(unix)]
+        Self::replace_at(&self.directory, &format!("{}/{name}", state.generation), bytes)?;
+        #[cfg(not(unix))]
+        Self::replace(&Self::path(&self.root.join(&state.generation), name)?, bytes)?;
+        (std::time::Instant::now() < deadline)
+            .then_some(())
+            .ok_or_else(CheckpointError::deadline)
+    }
+
     fn get(&self, name: &str) -> Result<Vec<u8>, CheckpointError> {
         let state = self.state()?;
         let current = state
@@ -264,10 +299,27 @@ impl CheckpointImage for DirectoryImage {
             .as_ref()
             .ok_or_else(|| CheckpointError::new("checkpoint has no committed generation"))?;
         #[cfg(unix)]
-        return Self::read(&self.hold_generation(current)?, name);
+        let bytes = Self::read(&self.hold_generation(current)?, name)?;
         #[cfg(not(unix))]
-        std::fs::read(Self::path(&self.generation_path(current), name)?)
-            .map_err(|error| CheckpointError::new(format!("read checkpoint object: {error}")))
+        let bytes = std::fs::read(Self::path(&self.generation_path(current), name)?)
+            .map_err(|error| CheckpointError::new(format!("read checkpoint object: {error}")))?;
+        Ok(bytes)
+    }
+
+    fn get_until(&self, name: &str, deadline: std::time::Instant) -> Result<Vec<u8>, CheckpointError> {
+        let state = self.state_until(deadline)?;
+        let current = state
+            .current
+            .as_ref()
+            .ok_or_else(|| CheckpointError::new("checkpoint has no committed generation"))?;
+        #[cfg(unix)]
+        let bytes = Self::read(&self.hold_generation(current)?, name)?;
+        #[cfg(not(unix))]
+        let bytes = std::fs::read(Self::path(&self.generation_path(current), name)?)
+            .map_err(|error| CheckpointError::new(format!("read checkpoint object: {error}")))?;
+        (std::time::Instant::now() < deadline)
+            .then_some(bytes)
+            .ok_or_else(CheckpointError::deadline)
     }
 
     fn list(&self) -> Result<Vec<String>, CheckpointError> {
@@ -299,8 +351,67 @@ impl CheckpointImage for DirectoryImage {
         Ok(objects)
     }
 
+    fn list_until(&self, deadline: std::time::Instant) -> Result<Vec<String>, CheckpointError> {
+        let state = self.state_until(deadline)?;
+        let Some(current) = &state.current else {
+            return (std::time::Instant::now() < deadline)
+                .then(Vec::new)
+                .ok_or_else(CheckpointError::deadline);
+        };
+        let mut objects = Vec::new();
+        #[cfg(unix)]
+        Self::collect_held(
+            self.hold_generation(current)?,
+            "",
+            matches!(current, DirectoryGeneration::Namespace),
+            &mut objects,
+        )?;
+        #[cfg(not(unix))]
+        {
+            let current = self.generation_path(current);
+            Self::collect(
+                &current,
+                &current,
+                matches!(state.current, Some(DirectoryGeneration::Namespace)),
+                &mut objects,
+            )?;
+        }
+        objects.sort();
+        (std::time::Instant::now() < deadline)
+            .then_some(objects)
+            .ok_or_else(CheckpointError::deadline)
+    }
+
     fn commit(&self, manifest: &[u8]) -> Result<(), CheckpointError> {
-        let mut state = self.state()?;
+        self.commit_inner(manifest, None)
+    }
+
+    fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError> {
+        self.commit_inner(manifest, Some(deadline))
+    }
+}
+
+impl DirectoryImage {
+    #[cfg(unix)]
+    fn finish_publication(
+        state: &mut DirectoryImageState,
+        generation: Vec<u8>,
+        outcome: storage::PublicationOutcome,
+    ) -> Result<(), CheckpointError> {
+        state.current = Some(DirectoryGeneration::Named(state.generation.clone()));
+        state.base = Some(generation);
+        state.generation = Self::generation();
+        match outcome {
+            storage::PublicationOutcome::Durable => Ok(()),
+            storage::PublicationOutcome::PublishedNotDurable(error) => Err(error),
+        }
+    }
+
+    fn commit_inner(&self, manifest: &[u8], deadline: Option<std::time::Instant>) -> Result<(), CheckpointError> {
+        let mut state = match deadline {
+            Some(deadline) => self.state_until(deadline)?,
+            None => self.state()?,
+        };
         #[cfg(unix)]
         Self::replace_at(&self.directory, &format!("{}/MANIFEST", state.generation), manifest)?;
         #[cfg(not(unix))]
@@ -343,8 +454,30 @@ impl CheckpointImage for DirectoryImage {
             .write(true)
             .open(self.root.join(".publication.lock"))
             .map_err(|error| CheckpointError::new(format!("open checkpoint publication lock: {error}")))?;
-        fs2::FileExt::lock_exclusive(&lock)
-            .map_err(|error| CheckpointError::new(format!("lock checkpoint publication: {error}")))?;
+        match deadline {
+            Some(deadline) => loop {
+                match fs2::FileExt::try_lock_exclusive(&lock) {
+                    Ok(()) => break,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(
+                            deadline
+                                .saturating_duration_since(std::time::Instant::now())
+                                .min(std::time::Duration::from_millis(1)),
+                        );
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        return Err(CheckpointError::deadline());
+                    }
+                    Err(error) => {
+                        return Err(CheckpointError::new(format!("lock checkpoint publication: {error}")));
+                    }
+                }
+            },
+            None => fs2::FileExt::lock_exclusive(&lock)
+                .map_err(|error| CheckpointError::new(format!("lock checkpoint publication: {error}")))?,
+        }
         #[cfg(unix)]
         let published = Self::read_optional(&self.directory, "current")?;
         #[cfg(not(unix))]
@@ -362,14 +495,22 @@ impl CheckpointImage for DirectoryImage {
                 "checkpoint generation changed while capture was in progress",
             ));
         }
+        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            return Err(CheckpointError::deadline());
+        }
         let generation = state.generation.as_bytes().to_vec();
         #[cfg(unix)]
-        Self::replace_at(&self.directory, "current", &generation)?;
+        let publication = Self::replace_at_outcome(&self.directory, "current", &generation)?;
         #[cfg(not(unix))]
-        Self::replace(&self.root.join("current"), &generation)?;
-        state.current = Some(DirectoryGeneration::Named(state.generation.clone()));
-        state.base = Some(generation);
-        state.generation = Self::generation();
+        {
+            Self::replace(&self.root.join("current"), &generation)?;
+            state.current = Some(DirectoryGeneration::Named(state.generation.clone()));
+            state.base = Some(generation);
+            state.generation = Self::generation();
+        }
+        #[cfg(unix)]
+        return Self::finish_publication(&mut state, generation, publication);
+        #[cfg(not(unix))]
         Ok(())
     }
 }

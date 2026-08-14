@@ -4,6 +4,11 @@ use std::io::Write as _;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
+pub(super) enum PublicationOutcome {
+    Durable,
+    PublishedNotDurable(CheckpointError),
+}
+
 impl DirectoryImage {
     #[cfg(unix)]
     fn create_directory(directory: &std::os::fd::OwnedFd, component: &std::ffi::OsStr) -> Result<(), CheckpointError> {
@@ -296,6 +301,18 @@ impl DirectoryImage {
 
     #[cfg(unix)]
     pub(super) fn replace_at(root: &std::os::fd::OwnedFd, name: &str, bytes: &[u8]) -> Result<(), CheckpointError> {
+        match Self::replace_at_outcome(root, name, bytes)? {
+            PublicationOutcome::Durable => Ok(()),
+            PublicationOutcome::PublishedNotDurable(error) => Err(error),
+        }
+    }
+
+    #[cfg(unix)]
+    pub(super) fn replace_at_outcome(
+        root: &std::os::fd::OwnedFd,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<PublicationOutcome, CheckpointError> {
         use nix::fcntl::{OFlag, openat, renameat};
         use nix::sys::stat::Mode;
         use std::os::fd::AsFd as _;
@@ -313,17 +330,33 @@ impl DirectoryImage {
             Mode::from_bits_truncate(0o600),
         )
         .map_err(|error| CheckpointError::new(format!("create checkpoint replacement: {error}")))?;
-        let result = (|| {
+        let prepared = (|| {
             let mut file = std::fs::File::from(descriptor);
             file.write_all(bytes)?;
             file.sync_all()?;
-            renameat(&directory, temporary.as_str(), &directory, leaf.as_os_str()).map_err(std::io::Error::from)?;
-            nix::unistd::fsync(directory.as_fd()).map_err(std::io::Error::from)
+            Ok::<(), std::io::Error>(())
         })();
-        if result.is_err() {
+        if let Err(error) = prepared {
             let _ = nix::unistd::unlinkat(&directory, temporary.as_str(), nix::unistd::UnlinkatFlags::NoRemoveDir);
+            return Err(CheckpointError::new(format!("prepare checkpoint replacement: {error}")));
         }
-        result.map_err(|error| CheckpointError::new(format!("replace checkpoint object: {error}")))
+        if let Err(error) = renameat(&directory, temporary.as_str(), &directory, leaf.as_os_str()) {
+            let _ = nix::unistd::unlinkat(&directory, temporary.as_str(), nix::unistd::UnlinkatFlags::NoRemoveDir);
+            return Err(CheckpointError::new(format!("publish checkpoint replacement: {error}")));
+        }
+        Ok(Self::publication_after_rename(nix::unistd::fsync(directory.as_fd())))
+    }
+
+    #[cfg(unix)]
+    pub(super) fn publication_after_rename(result: Result<(), nix::errno::Errno>) -> PublicationOutcome {
+        result.map_or_else(
+            |error| {
+                PublicationOutcome::PublishedNotDurable(CheckpointError::published(format!(
+                    "checkpoint replacement was published but its directory sync failed: {error}"
+                )))
+            },
+            |()| PublicationOutcome::Durable,
+        )
     }
 
     #[cfg(unix)]

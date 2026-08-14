@@ -243,10 +243,14 @@ impl GuestMachine for ProductionMachine {
     }
 
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
+        self.capture_checkpoint_until(std::time::Instant::now() + crate::composition::DEFAULT_CHECKPOINT_TIMEOUT)
+    }
+
+    fn capture_checkpoint_until(&self, deadline: std::time::Instant) -> Result<(), EngineError> {
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
-            return checkpoint.capture(engine.as_ref(), self.isa);
+            return checkpoint.capture(engine.as_ref(), self.isa, deadline);
         }
         Err(EngineError::Unsupported)
     }
@@ -254,16 +258,6 @@ impl GuestMachine for ProductionMachine {
 
 fn native_run_failure(status: i32) -> EngineError {
     EngineError::NativeRunFailed(status)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn native_run_status_survives_the_engine_boundary() {
-        assert_eq!(native_run_failure(13), EngineError::NativeRunFailed(13));
-    }
 }
 
 #[cfg(unix)]
@@ -287,34 +281,57 @@ impl CheckpointControl {
         })
     }
 
-    fn capture(&self, engine: &hl_native::Engine, isa: crate::activation::GuestIsa) -> Result<(), EngineError> {
+    fn capture(
+        &self,
+        engine: &hl_native::Engine,
+        isa: crate::activation::GuestIsa,
+        deadline: std::time::Instant,
+    ) -> Result<(), EngineError> {
         use std::time::{Duration, Instant};
 
-        let _ = self.transport.bump();
+        if Instant::now() >= deadline {
+            return Err(EngineError::WaitFailed);
+        }
+        let generation = self.transport.bump();
+        let capture = self
+            .server
+            .begin_capture(generation, deadline)
+            .map_err(|failure| match failure {
+                super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
+                super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+                super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
+                    EngineError::LaunchFailed
+                }
+            })?;
         let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
             crate::activation::GuestIsa::Aarch64 => 1,
             crate::activation::GuestIsa::X86_64 => 2,
         });
         if signal <= 0 || engine.request(REQUEST_CHECKPOINT, 0).is_err() {
+            self.server
+                .abort_capture(capture)
+                .map_err(|_| EngineError::LaunchFailed)?;
             return Err(EngineError::StopFailed);
         }
-        let deadline = Instant::now() + Duration::from_secs(30);
         let mut next_interrupt = Instant::now() + Duration::from_millis(100);
         loop {
-            if self.server.committed() {
-                return Ok(());
-            }
-            if self.server.failure().is_some() {
-                return Err(EngineError::LaunchFailed);
-            }
-            if Instant::now() >= deadline {
-                return Err(EngineError::WaitFailed);
+            let result = self
+                .server
+                .wait_capture(capture, next_interrupt)
+                .map_err(|_| EngineError::LaunchFailed)?;
+            if let Some(result) = result {
+                return result.map_err(|failure| match failure {
+                    super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+                    super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
+                    super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
+                        EngineError::LaunchFailed
+                    }
+                });
             }
             if Instant::now() >= next_interrupt {
                 let _ = engine.request(REQUEST_CHECKPOINT, 0);
                 next_interrupt = Instant::now() + Duration::from_millis(100);
             }
-            std::thread::sleep(Duration::from_millis(2));
         }
     }
 }
@@ -326,5 +343,15 @@ impl Drop for CheckpointControl {
         if let Some(acceptor) = self.acceptor.take() {
             let _ = acceptor.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_run_status_survives_the_engine_boundary() {
+        assert_eq!(native_run_failure(13), EngineError::NativeRunFailed(13));
     }
 }

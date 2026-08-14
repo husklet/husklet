@@ -35,7 +35,7 @@ HL_EXTERN_C_BEGIN
 #define HL_CKPT_STREAM_MAGIC_HELLO UINT32_C(0x484b4348)   /* "HKCH" */
 #define HL_CKPT_STREAM_MAGIC_REQUEST UINT32_C(0x484b4351) /* "HKCQ" */
 #define HL_CKPT_STREAM_MAGIC_REPLY UINT32_C(0x484b4353)   /* "HKCS" */
-#define HL_CKPT_STREAM_ABI 1u
+#define HL_CKPT_STREAM_ABI 2u
 
 /* Largest object name the protocol will carry, and the largest payload in a single request. Both are
  * enforced on both sides; a hostile or corrupt peer can never make the other end allocate without bound. */
@@ -83,7 +83,7 @@ typedef struct hl_ckpt_request {
     uint64_t offset;    /* WRITE_AT / SOURCE_READ */
     uint64_t length;    /* payload bytes following the name, or requested read length */
     uint32_t name_size; /* including the terminating NUL; 0 when the op takes no name */
-    uint32_t reserved;
+    uint32_t generation; /* shared trigger generation; 0 for restore-only traffic */
 } hl_ckpt_request;
 
 #define HL_CKPT_STATUS_OK 0

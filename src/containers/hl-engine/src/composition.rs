@@ -6,6 +6,12 @@ use crate::launcher::plan::RuntimePlan;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
+/// Default bound for callers that use the convenience checkpoint API.
+///
+/// Product paths should pass their request deadline explicitly through
+/// `capture_checkpoint_until`; the default exists for direct embedders only.
+pub const DEFAULT_CHECKPOINT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompositionError {
     MissingCheckpointSink,
@@ -13,6 +19,11 @@ pub enum CompositionError {
     /// Native execution does not yet own a PTY/stdio bridge for the requested terminal.
     UnsupportedTerminal,
     RuntimeConstruction,
+    DeadlineExceeded,
+    /// The authoritative generation changed, but its containing directory
+    /// could not be synced. Callers must not retry the same publication as if
+    /// the former generation were still authoritative.
+    PublishedNotDurable,
 }
 
 /// Transactional destination for a checkpoint image.
@@ -29,13 +40,25 @@ pub trait CheckpointSink: Send + Sync {
         Err(CompositionError::RuntimeConstruction)
     }
 
+    /// Stores without spawning detachable work. Implementations must bound all
+    /// userspace waits they control and report deadline expiry cooperatively.
+    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError>;
+
     /// Atomically publishes the generation after every object is durable.
     fn commit(&self, _manifest: &[u8]) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
+
+    /// Publishes transactionally. Expiry before the irrevocable publication
+    /// point must leave the former generation authoritative; once publication
+    /// succeeds the implementation must return success, not a late timeout.
+    fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError>;
 }
 
-/// Bounded source for a checkpoint image.
+/// Deadline-aware source for a checkpoint image.
+///
+/// Deadlines cooperatively bound userspace waits. They cannot interrupt a
+/// synchronous kernel filesystem operation already in progress.
 pub trait CheckpointSource: Send + Sync {
     fn read(&self, maximum: usize) -> Result<Vec<u8>, CompositionError>;
 
@@ -44,10 +67,14 @@ pub trait CheckpointSource: Send + Sync {
         Err(CompositionError::RuntimeConstruction)
     }
 
+    fn get_until(&self, name: &str, deadline: std::time::Instant) -> Result<Vec<u8>, CompositionError>;
+
     /// Lists every object in the committed checkpoint generation.
     fn list(&self) -> Result<Vec<String>, CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
+
+    fn list_until(&self, deadline: std::time::Instant) -> Result<Vec<String>, CompositionError>;
 }
 
 /// Host-facing byte transport for one terminal master.
@@ -205,6 +232,12 @@ pub trait GuestMachine: Send + Sync {
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         Err(EngineError::Unsupported)
     }
+    /// Captures without detached timeout work. Storage waits under Husklet's
+    /// control stop by `deadline`; a publication already past its irrevocable
+    /// replacement point completes synchronously and reports its real outcome.
+    fn capture_checkpoint_until(&self, _deadline: std::time::Instant) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported)
+    }
 }
 
 /// Constructs all runtime domains for one engine.
@@ -272,6 +305,10 @@ impl<M: GuestMachine> MachineLauncher<M> {
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.machine.capture_checkpoint()
     }
+
+    fn capture_checkpoint_until(&self, deadline: std::time::Instant) -> Result<(), EngineError> {
+        self.machine.capture_checkpoint_until(deadline)
+    }
 }
 
 /// Public app composition around one independently owned runtime machine.
@@ -327,6 +364,14 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
 
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.engine.launcher().capture_checkpoint()
+    }
+
+    /// Captures the running process tree before an absolute monotonic deadline.
+    ///
+    /// # Errors
+    /// Returns lifecycle, storage, synchronization, or deadline failures.
+    pub fn capture_checkpoint_until(&self, deadline: std::time::Instant) -> Result<(), EngineError> {
+        self.engine.launcher().capture_checkpoint_until(deadline)
     }
 
     pub fn destroy(&self) -> Result<Option<EngineExit>, EngineError> {

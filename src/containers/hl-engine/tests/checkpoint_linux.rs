@@ -58,6 +58,20 @@ impl CheckpointSink for Store {
     fn commit(&self, manifest: &[u8]) -> Result<(), CompositionError> {
         self.put("MANIFEST", manifest)
     }
+
+    fn put_until(&self, name: &str, bytes: &[u8], deadline: Instant) -> Result<(), CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.put(name, bytes)
+    }
+
+    fn commit_until(&self, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.commit(manifest)
+    }
 }
 
 impl CheckpointSource for Store {
@@ -76,6 +90,20 @@ impl CheckpointSource for Store {
 
     fn list(&self) -> Result<Vec<String>, CompositionError> {
         Ok(self.0.lock().unwrap().keys().cloned().collect())
+    }
+
+    fn get_until(&self, name: &str, deadline: Instant) -> Result<Vec<u8>, CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.get(name)
+    }
+
+    fn list_until(&self, deadline: Instant) -> Result<Vec<String>, CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.list()
     }
 }
 
@@ -196,13 +224,12 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     )
     .unwrap();
     recapture.start().unwrap();
-    if !wait_cycle_ready(&output) {
-        panic!(
-            "restored guest process tree did not reach the second checkpoint; status={:?}:\n{}",
-            recapture.wait(),
-            std::fs::read_to_string(&output).unwrap_or_default()
-        );
-    }
+    assert!(
+        wait_cycle_ready(&output),
+        "restored guest process tree did not reach the second checkpoint; status={:?}:\n{}",
+        recapture.wait(),
+        std::fs::read_to_string(&output).unwrap_or_default()
+    );
     recapture.capture_checkpoint().unwrap_or_else(|error| {
         panic!(
             "second checkpoint failed: {error:?}\n{}",

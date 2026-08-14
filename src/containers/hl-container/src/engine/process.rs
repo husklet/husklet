@@ -134,7 +134,7 @@ impl Running for Process {
             match engine.checkpoint_supported() {
                 Ok(()) => {
                     return engine
-                        .capture_checkpoint()
+                        .capture_checkpoint_until(deadline.into_std())
                         .map_err(|error| Error::Runtime(format!("engine checkpoint: {error:?}")));
                 }
                 Err(_) if tokio::time::Instant::now() < deadline => {

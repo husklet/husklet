@@ -36,6 +36,7 @@ static int ckpt_stream_call(uint32_t op, const char *name, uint64_t stream, uint
     request.stream = stream;
     request.offset = offset;
     request.length = (uint64_t)size;
+    request.generation = g_ckpt_seen_gen;
     if (hl_ckpt_channel_call(&request, name, payload, reply, out, capacity) != 0) return -1;
     return reply->status;
 }

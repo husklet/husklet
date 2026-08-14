@@ -243,7 +243,6 @@ int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void 
     request->magic = HL_CKPT_STREAM_MAGIC_REQUEST;
     request->abi = HL_CKPT_STREAM_ABI;
     request->name_size = (uint32_t)name_size;
-    request->reserved = 0;
     if (checkpoint_write_all(descriptor, request, sizeof *request) != 0) return -1;
     if (name_size != 0 && checkpoint_write_all(descriptor, name, name_size) != 0) return -1;
     /* A NULL payload with a non-zero length is a REQUESTED length (SOURCE_READ), not bytes to send. */

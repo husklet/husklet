@@ -1,4 +1,4 @@
-use super::{CheckpointImages as _, DirectoryImages};
+use super::{CheckpointImage as _, CheckpointImages as _, DirectoryImage, DirectoryImageState, DirectoryImages};
 
 #[test]
 fn incomplete_capture_cannot_modify_committed_generation() {
@@ -215,4 +215,134 @@ fn failed_publication_preserves_current_and_cleans_staging() {
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .count();
     assert_eq!(generations, 1, "failed staging generation leaked");
+}
+
+#[cfg(unix)]
+#[test]
+fn expired_storage_deadline_does_not_wait_for_generation_lock() {
+    use nix::fcntl::{OFlag, open};
+    use nix::sys::stat::Mode;
+    use std::sync::Mutex;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = open(
+        temporary.path(),
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )
+    .unwrap();
+    let image = DirectoryImage {
+        directory,
+        state: Mutex::new(DirectoryImageState {
+            current: None,
+            base: None,
+            generation: "generation-deadline-test".into(),
+        }),
+    };
+    let held = image.state.lock().unwrap();
+    let started = std::time::Instant::now();
+    let error = image
+        .put_until("state", b"late", started)
+        .expect_err("expired deadline must fail while the state lock is held");
+    assert!(error.to_string().contains("deadline exceeded"));
+    assert!(started.elapsed() < std::time::Duration::from_millis(100));
+    drop(held);
+}
+
+#[test]
+fn expired_commit_deadline_preserves_authoritative_generation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let images = DirectoryImages::open(temporary.path()).unwrap();
+    let first = images.open("container").unwrap();
+    first.put("state", b"first").unwrap();
+    first.commit(b"manifest-one").unwrap();
+
+    let candidate = images.open("container").unwrap();
+    candidate.put("state", b"second").unwrap();
+    let expired = std::time::Instant::now();
+    let error = candidate
+        .commit_until(b"manifest-two", expired)
+        .expect_err("expired capture must not publish");
+    assert!(error.to_string().contains("deadline exceeded"));
+
+    let restored = images.open("container").unwrap();
+    assert_eq!(restored.get("state").unwrap(), b"first");
+    assert_eq!(restored.get("MANIFEST").unwrap(), b"manifest-one");
+}
+
+#[test]
+fn expired_list_on_empty_image_is_not_reported_as_success() {
+    let temporary = tempfile::tempdir().unwrap();
+    let images = DirectoryImages::open(temporary.path()).unwrap();
+    let empty = images.open("container").unwrap();
+    let error = empty
+        .list_until(std::time::Instant::now())
+        .expect_err("empty storage must still observe capture expiry");
+    assert!(error.is_deadline());
+}
+
+#[test]
+fn publication_lock_deadline_preserves_authoritative_generation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("checkpoints");
+    let images = DirectoryImages::open(&root).unwrap();
+    let first = images.open("container").unwrap();
+    first.put("state", b"first").unwrap();
+    first.commit(b"manifest-one").unwrap();
+
+    let candidate = images.open("container").unwrap();
+    candidate.put("state", b"second").unwrap();
+    let publication_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.join("container/.publication.lock"))
+        .unwrap();
+    fs2::FileExt::lock_exclusive(&publication_lock).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(10);
+    let error = candidate
+        .commit_until(b"manifest-two", deadline)
+        .expect_err("publication lock contention must observe the deadline");
+    assert!(error.to_string().contains("deadline exceeded"));
+    fs2::FileExt::unlock(&publication_lock).unwrap();
+
+    let restored = images.open("container").unwrap();
+    assert_eq!(restored.get("state").unwrap(), b"first");
+    assert_eq!(restored.get("MANIFEST").unwrap(), b"manifest-one");
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_sync_failure_reports_that_rename_already_published() {
+    let outcome = DirectoryImage::publication_after_rename(Err(nix::errno::Errno::EIO));
+    let super::storage::PublicationOutcome::PublishedNotDurable(error) = outcome else {
+        panic!("a post-rename sync failure must retain the publication outcome");
+    };
+    assert!(error.publication_occurred());
+    assert!(error.to_string().contains("published"));
+}
+
+#[cfg(unix)]
+#[test]
+fn post_rename_sync_failure_advances_in_memory_authority() {
+    let mut state = DirectoryImageState {
+        current: None,
+        base: None,
+        generation: "generation-published".into(),
+    };
+    let error = DirectoryImage::finish_publication(
+        &mut state,
+        b"generation-published".to_vec(),
+        super::storage::PublicationOutcome::PublishedNotDurable(crate::CheckpointError::published(
+            "injected directory sync failure",
+        )),
+    )
+    .expect_err("durability failure remains observable");
+
+    assert!(error.publication_occurred());
+    assert!(matches!(
+        state.current,
+        Some(super::DirectoryGeneration::Named(ref generation)) if generation == "generation-published"
+    ));
+    assert_eq!(state.base.as_deref(), Some(b"generation-published".as_slice()));
+    assert_ne!(state.generation, "generation-published");
 }

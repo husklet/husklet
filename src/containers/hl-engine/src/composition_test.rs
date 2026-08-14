@@ -31,11 +31,23 @@ impl CheckpointSink for Checkpoints {
         *self.image.lock().unwrap() = image.to_vec();
         Ok(())
     }
+    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
 }
 
 impl CheckpointSource for Checkpoints {
     fn read(&self, maximum: usize) -> Result<Vec<u8>, CompositionError> {
         Ok(self.image.lock().unwrap().iter().copied().take(maximum).collect())
+    }
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
     }
 }
 

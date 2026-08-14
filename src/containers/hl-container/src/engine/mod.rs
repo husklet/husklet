@@ -29,6 +29,16 @@ impl CheckpointTransport {
     fn new(image: Arc<dyn crate::CheckpointImage>) -> Self {
         Self { image }
     }
+
+    fn storage_error(error: &crate::CheckpointError) -> hl_engine::composition::CompositionError {
+        if error.is_deadline() {
+            hl_engine::composition::CompositionError::DeadlineExceeded
+        } else if error.publication_occurred() {
+            hl_engine::composition::CompositionError::PublishedNotDurable
+        } else {
+            hl_engine::composition::CompositionError::RuntimeConstruction
+        }
+    }
 }
 
 impl hl_engine::composition::CheckpointSink for CheckpointTransport {
@@ -54,6 +64,27 @@ impl hl_engine::composition::CheckpointSink for CheckpointTransport {
         self.image
             .commit(manifest)
             .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
+    }
+
+    fn put_until(
+        &self,
+        name: &str,
+        bytes: &[u8],
+        deadline: std::time::Instant,
+    ) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+        self.image
+            .put_until(name, bytes, deadline)
+            .map_err(|error| Self::storage_error(&error))
+    }
+
+    fn commit_until(
+        &self,
+        manifest: &[u8],
+        deadline: std::time::Instant,
+    ) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+        self.image
+            .commit_until(manifest, deadline)
+            .map_err(|error| Self::storage_error(&error))
     }
 }
 
@@ -95,6 +126,25 @@ impl hl_engine::composition::CheckpointSource for CheckpointTransport {
         self.image
             .list()
             .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
+    }
+
+    fn get_until(
+        &self,
+        name: &str,
+        deadline: std::time::Instant,
+    ) -> std::result::Result<Vec<u8>, hl_engine::composition::CompositionError> {
+        self.image
+            .get_until(name, deadline)
+            .map_err(|error| Self::storage_error(&error))
+    }
+
+    fn list_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> std::result::Result<Vec<String>, hl_engine::composition::CompositionError> {
+        self.image
+            .list_until(deadline)
+            .map_err(|error| Self::storage_error(&error))
     }
 }
 
@@ -355,6 +405,39 @@ mod tests {
 
         fn list(&self) -> Result<Vec<String>, crate::CheckpointError> {
             Ok(self.0.lock().unwrap().keys().cloned().collect())
+        }
+
+        fn put_until(
+            &self,
+            name: &str,
+            bytes: &[u8],
+            deadline: std::time::Instant,
+        ) -> Result<(), crate::CheckpointError> {
+            (std::time::Instant::now() < deadline)
+                .then_some(())
+                .ok_or_else(|| crate::CheckpointError::new("deadline exceeded"))?;
+            self.put(name, bytes)
+        }
+
+        fn get_until(&self, name: &str, deadline: std::time::Instant) -> Result<Vec<u8>, crate::CheckpointError> {
+            (std::time::Instant::now() < deadline)
+                .then_some(())
+                .ok_or_else(|| crate::CheckpointError::new("deadline exceeded"))?;
+            self.get(name)
+        }
+
+        fn list_until(&self, deadline: std::time::Instant) -> Result<Vec<String>, crate::CheckpointError> {
+            (std::time::Instant::now() < deadline)
+                .then_some(())
+                .ok_or_else(|| crate::CheckpointError::new("deadline exceeded"))?;
+            self.list()
+        }
+
+        fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), crate::CheckpointError> {
+            (std::time::Instant::now() < deadline)
+                .then_some(())
+                .ok_or_else(|| crate::CheckpointError::new("deadline exceeded"))?;
+            self.commit(manifest)
         }
     }
 

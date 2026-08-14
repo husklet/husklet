@@ -229,6 +229,13 @@ impl Engine {
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.backend.capture_checkpoint()
     }
+    /// Captures the running process tree before the caller's monotonic deadline.
+    ///
+    /// # Errors
+    /// Returns lifecycle, storage, synchronization, or deadline failures.
+    pub fn capture_checkpoint_until(&self, deadline: std::time::Instant) -> Result<(), EngineError> {
+        self.backend.capture_checkpoint_until(deadline)
+    }
     pub fn resize_terminal(&self, rows: u16, columns: u16) -> Result<(), EngineError> {
         self.terminal
             .as_ref()
