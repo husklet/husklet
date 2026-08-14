@@ -503,7 +503,7 @@ static hl_host_result hl_windows_event_wait(void *context, hl_host_handle pollse
         free(slots);
         return failure;
     }
-    if (waited >= WAIT_OBJECT_0 && waited < WAIT_OBJECT_0 + count + 1u) satisfied = (uint32_t)(waited - WAIT_OBJECT_0);
+    if (waited < WAIT_OBJECT_0 + count + 1u) satisfied = (uint32_t)(waited - WAIT_OBJECT_0);
     /* The wait that returned has already consumed the signalled object's state
      * -- an auto-reset timer is now reset -- so that one slot is reported from
      * the return value and only the others are re-sampled. */

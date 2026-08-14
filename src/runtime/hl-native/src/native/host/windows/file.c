@@ -148,8 +148,9 @@ hl_host_result hl_host_windows_import_file(hl_host_windows *host, int descriptor
     if (raw == -1) return hl_windows_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)raw, GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS))
         return hl_windows_last_error_result();
-    if ((access & ~(HL_HOST_FILE_READ | HL_HOST_FILE_WRITE | HL_HOST_FILE_APPEND | HL_HOST_FILE_NONBLOCK)) != 0 ||
-        (access & (HL_HOST_FILE_READ | HL_HOST_FILE_WRITE)) == 0) {
+    const uint32_t allowed =
+        (uint32_t)(HL_HOST_FILE_READ | HL_HOST_FILE_WRITE | HL_HOST_FILE_APPEND | HL_HOST_FILE_NONBLOCK);
+    if ((access & ~allowed) != 0 || (access & (HL_HOST_FILE_READ | HL_HOST_FILE_WRITE)) == 0) {
         CloseHandle(copy);
         return hl_windows_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     }
