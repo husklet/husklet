@@ -67,7 +67,12 @@ fn notice() -> gtk::Revealer {
     let emblem = gtk::Image::new();
     let message = gtk::Label::new(None);
     message.set_halign(gtk::Align::Start);
-    message.set_hexpand(true);
+    // Aligning the widget is not enough: a label that fills its slot still
+    // centres its own text, so a notice would read from the middle.
+    message.set_xalign(0.0);
+    // Deliberately not expanding: a notice may also carry described children,
+    // and an empty message slot that filled the strip would push them to the
+    // far edge.
     message.set_wrap(true);
     strip.append(&emblem);
     strip.append(&message);
