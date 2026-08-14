@@ -495,7 +495,7 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             int sslot = g_sigfd_slot[rfd] - 1;
             uint64_t omask = g_sfd[sslot].mask;
             struct sigq_ent ent;
-        signalfd_retry:
+        signalfd_retry:;
             int sig = 0, popped = 0;
             int popped_targeted = 0;
             int targeted_remaining = 0;
