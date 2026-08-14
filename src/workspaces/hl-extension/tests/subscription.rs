@@ -4,11 +4,11 @@
 //! subscribed through the real dispatch path so that what is tested here is the
 //! same grant check the protocol performs, not a restatement of it.
 
-use hl_ws_extension::port::{
+use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
     TabSummary, TerminalSurface, WorkspaceFiles,
 };
-use hl_ws_extension::{
+use hl_extension::{
     Authority, Capability, Channels, Emission, ExtensionName, Grant, Outbox, Parcel, RelativePath, Request, Services,
     Session, Snapshot, Streams, Subscriptions, Topic, WorkspaceInfo,
 };

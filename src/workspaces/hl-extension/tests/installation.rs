@@ -1,7 +1,7 @@
 //! The install lifecycle and the grant that survives across restarts. The
 //! property under test throughout is that a grant only ever narrows on its own.
 
-use hl_ws_extension::{
+use hl_extension::{
     Capability, Consent, Disposition, ExtensionName, Grant, Installation, Manifest, Record, Stage, Summary, PROTOCOL,
 };
 

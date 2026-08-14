@@ -4,8 +4,8 @@
 //! the interface directly, so the table costs a viewport however many there are.
 
 use hl_gui::{Cell, Row, RowRequest, RowWindow, SourceMutation, Tone, Version};
-use hl_ws_extension::port::ContainerSummary;
-use hl_ws_extension::Request;
+use hl_extension::port::ContainerSummary;
+use hl_extension::Request;
 
 use crate::SOURCE;
 
@@ -130,7 +130,7 @@ fn tone(state: &str) -> Tone {
 mod tests {
     use super::Catalogue;
     use hl_gui::{Cell, RequestId, RowRange, RowRequest, Tone, Version};
-    use hl_ws_extension::port::ContainerSummary;
+    use hl_extension::port::ContainerSummary;
 
     fn container(name: &str, state: &str) -> ContainerSummary {
         ContainerSummary {

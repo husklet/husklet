@@ -17,7 +17,7 @@ path = "src/lib.rs"
 gtk = { package = "gtk4", version = "0.9", features = ["v4_10"] }
 hl-gui = { path = "../../workspaces/hl-gui" }
 hl-gui-gtk = { path = "../../workspaces/hl-gui-gtk" }
-hl-ws-extension = { path = "../../workspaces/hl-ws-extension" }
+hl-extension = { path = "../../workspaces/hl-extension" }
 extension = { path = "../extension" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

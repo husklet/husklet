@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use hl_ws_extension::{Authority, ChannelId, Disposition, Installation, Manifest, Record};
+use hl_extension::{Authority, ChannelId, Disposition, Installation, Manifest, Record};
 
 mod voice;
 mod workspace;
@@ -604,11 +604,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use hl_ws_extension::port::{
+    use hl_extension::port::{
         ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
         TabSummary, TerminalSurface, WorkspaceFiles,
     };
-    use hl_ws_extension::{
+    use hl_extension::{
         codec, Capability, ExtensionName, Grant, Hello, Manifest, Record, RelativePath, Request, Resources, Services,
         Transit, Wire, WorkspaceInfo, PROTOCOL,
     };
@@ -762,7 +762,7 @@ mod tests {
             protocol: PROTOCOL,
             capabilities: Grant::new([Capability::ContainerRead, Capability::Interface]),
             entrypoint: None,
-            activation: hl_ws_extension::Activation::default(),
+            activation: hl_extension::Activation::default(),
             interface: None,
             resources: Resources::default(),
             filesystem_roots: Vec::new(),

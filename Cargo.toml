@@ -18,7 +18,7 @@ default-members = [
     "src/apps/storybook",
     "src/workspaces/hl-gui",
     "src/workspaces/hl-gui-gtk",
-    "src/workspaces/hl-ws-extension",
+    "src/workspaces/hl-extension",
     "src/workspaces/hl-ws-term",
     "src/workspaces/hl-ws",
 ]

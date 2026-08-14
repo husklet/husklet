@@ -2,7 +2,7 @@
 
 use std::io::{Read, Write};
 
-use hl_ws_extension::{ChannelId, Frame, Hello, Kind, Reply, Request, Transit, Welcome, Wire, PROTOCOL};
+use hl_extension::{ChannelId, Frame, Hello, Kind, Reply, Request, Transit, Welcome, Wire, PROTOCOL};
 
 use crate::Extension;
 

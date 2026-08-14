@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use hl_ws_extension::port::{HostError, ImageStore, ImageSummary};
+use hl_extension::port::{HostError, ImageStore, ImageSummary};
 
 use super::{failure, Bridge};
 

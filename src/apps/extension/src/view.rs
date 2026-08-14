@@ -123,7 +123,7 @@ mod tests {
     use super::{Actions, View};
     use crate::catalogue::Catalogue;
     use hl_gui::{Patch, Prop, PropValue, Tag, Tone};
-    use hl_ws_extension::port::ContainerSummary;
+    use hl_extension::port::ContainerSummary;
 
     fn container(name: &str, state: &str) -> ContainerSummary {
         ContainerSummary {

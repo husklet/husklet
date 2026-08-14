@@ -1,6 +1,6 @@
 //! Where a workspace keeps what it recorded about its extensions.
 //!
-//! [`Installation`](hl_ws_extension::Installation) owns the lifecycle policy and
+//! [`Installation`](hl_extension::Installation) owns the lifecycle policy and
 //! holds it in memory; this module is only its durable half. A [`Record`] is the
 //! written form of a person's consent, so it has to outlive the process that
 //! took it: without this, every restart would either ask again or — far worse —
@@ -11,7 +11,7 @@
 //! deserialize.
 
 use hl_ws::storage::{Key, Storage};
-use hl_ws_extension::{ExtensionName, Record};
+use hl_extension::{ExtensionName, Record};
 
 /// Storage prefix every extension record lives below.
 pub const PREFIX: &str = "state/extensions";
@@ -136,19 +136,19 @@ fn parse(key: &Key, bytes: &[u8]) -> Result<Record, Fault> {
 mod tests {
     use super::{Fault, Records, PREFIX};
     use hl_ws::storage::{Directory, Key, Storage as _};
-    use hl_ws_extension::{Capability, ExtensionName, Grant, Installation, Manifest, Record};
+    use hl_extension::{Capability, ExtensionName, Grant, Installation, Manifest, Record};
 
     fn manifest(capabilities: &[Capability]) -> Manifest {
         Manifest {
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
-            protocol: hl_ws_extension::PROTOCOL,
+            protocol: hl_extension::PROTOCOL,
             capabilities: Grant::new(capabilities.iter().copied()),
             entrypoint: None,
-            activation: hl_ws_extension::Activation::default(),
+            activation: hl_extension::Activation::default(),
             interface: None,
-            resources: hl_ws_extension::Resources::default(),
+            resources: hl_extension::Resources::default(),
             filesystem_roots: Vec::new(),
         }
     }

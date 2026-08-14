@@ -275,7 +275,7 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::time::{Duration, Instant};
 
-    use hl_ws_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
+    use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
     use super::super::Image;
     use super::{Listener, SidecarSpec};
@@ -285,10 +285,10 @@ mod tests {
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
-            protocol: hl_ws_extension::PROTOCOL,
+            protocol: hl_extension::PROTOCOL,
             capabilities: Grant::new([Capability::ContainerRead]),
             entrypoint: None,
-            activation: hl_ws_extension::Activation::default(),
+            activation: hl_extension::Activation::default(),
             interface: None,
             resources: Resources::default(),
             filesystem_roots: Vec::new(),

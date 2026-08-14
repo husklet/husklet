@@ -13,8 +13,8 @@ pub use session::{serve, Outcome};
 pub use view::{Actions, View};
 
 use hl_gui::RowRequest;
-use hl_ws_extension::port::ContainerSummary;
-use hl_ws_extension::{Capability, Grant, Manifest, RelativePath, Request, Topic};
+use hl_extension::port::ContainerSummary;
+use hl_extension::{Capability, Grant, Manifest, RelativePath, Request, Topic};
 
 /// The source the container table is drawn from.
 pub const SOURCE: hl_gui::SourceId = hl_gui::SourceId::new(1);
@@ -32,20 +32,20 @@ pub fn requested() -> Grant {
 ///
 /// # Errors
 /// Returns why the manifest could not be built.
-pub fn manifest() -> Result<Manifest, hl_ws_extension::Invalid> {
+pub fn manifest() -> Result<Manifest, hl_extension::Invalid> {
     Ok(Manifest {
-        name: hl_ws_extension::ExtensionName::new("containers")?,
+        name: hl_extension::ExtensionName::new("containers")?,
         display_name: "Containers".into(),
         version: env!("CARGO_PKG_VERSION").into(),
-        protocol: hl_ws_extension::PROTOCOL,
+        protocol: hl_extension::PROTOCOL,
         capabilities: requested(),
         entrypoint: Some(vec!["/usr/local/bin/hl-extension-containers".into()]),
-        activation: hl_ws_extension::Activation::Tab,
-        interface: Some(hl_ws_extension::Presentation {
+        activation: hl_extension::Activation::Tab,
+        interface: Some(hl_extension::Presentation {
             tab_title: "Containers".into(),
             icon: Some("view-list-symbolic".into()),
         }),
-        resources: hl_ws_extension::Resources::default(),
+        resources: hl_extension::Resources::default(),
         filesystem_roots: Vec::<RelativePath>::new(),
     })
 }

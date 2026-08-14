@@ -15,7 +15,7 @@ path = "src/lib.rs"
 
 [dependencies]
 hl-gui = { path = "../../workspaces/hl-gui", features = ["wire"] }
-hl-ws-extension = { path = "../../workspaces/hl-ws-extension" }
+hl-extension = { path = "../../workspaces/hl-extension" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

@@ -1,7 +1,7 @@
 //! Public contract of the extension protocol: framing, manifests, and the
 //! handshake. Everything an untrusted peer can send is exercised here.
 
-use hl_ws_extension::{
+use hl_extension::{
     Activation, Capability, ChannelId, Compatibility, ExtensionName, Flags, Frame, Grant, Hello, Invalid, Kind, Limits,
     Malformed, Manifest, RelativePath, Resources, Welcome, PROTOCOL,
 };

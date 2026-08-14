@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use hl_client::model::CreateContainer;
-use hl_ws_extension::port::{ContainerControl, HostError};
+use hl_extension::port::{ContainerControl, HostError};
 
 use super::{failure, Bridge};
 

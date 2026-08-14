@@ -18,11 +18,11 @@ use hl_gui::{
     Align, Choice, Column as TableColumn, EventId, Length, NodeId, Patch, Prop, PropValue, RowWindow, Scale, SourceId,
     Surface, Theme, Tone, Tree, Trigger, Variant,
 };
-use hl_ws_extension::port::{
+use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
     TabSummary, TerminalSurface, WorkspaceFiles,
 };
-use hl_ws_extension::{
+use hl_extension::{
     codec, Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, RelativePath, Reply, Request, Services,
     Session, Transit, Welcome, WorkspaceInfo, PROTOCOL,
 };
@@ -477,7 +477,7 @@ fn footer(composition: &mut Composition) -> NodeId {
 // ---------------------------------------------------------------------------
 
 /// One call and its answer, from the extension's side.
-fn call(wire: &mut hl_ws_extension::Wire<UnixStream>, request: &Request) -> Result<Reply, Failure> {
+fn call(wire: &mut hl_extension::Wire<UnixStream>, request: &Request) -> Result<Reply, Failure> {
     wire.send(&codec::request(request).expect("the call encodes"))
         .expect("sent");
     let frame = wire.receive().expect("an answer");
@@ -489,7 +489,7 @@ fn call(wire: &mut hl_ws_extension::Wire<UnixStream>, request: &Request) -> Resu
 
 /// Everything the extension process does, start to finish.
 fn extension(stream: UnixStream) -> Result<(), String> {
-    let mut wire = hl_ws_extension::Wire::new(stream);
+    let mut wire = hl_extension::Wire::new(stream);
 
     let opening = wire.receive().map_err(|error| error.to_string())?;
     let welcome = codec::read_welcome(&opening).map_err(|error| error.to_string())?;
@@ -538,7 +538,7 @@ fn extension(stream: UnixStream) -> Result<(), String> {
 
 /// Answers one call, keeping the host's tree in step with what it accepted.
 fn turn(
-    wire: &mut hl_ws_extension::Wire<UnixStream>,
+    wire: &mut hl_extension::Wire<UnixStream>,
     session: &mut Session,
     host: &Host,
     tree: &mut Tree,
@@ -654,7 +654,7 @@ fn a_whole_interface_is_rendered_from_a_socket() {
     let mut session = session();
     let mut tree = Tree::new();
     let mut journal = Journal::default();
-    let mut wire = hl_ws_extension::Wire::new(host_end);
+    let mut wire = hl_extension::Wire::new(host_end);
 
     wire.send(
         &codec::welcome(&Welcome {
@@ -663,7 +663,7 @@ fn a_whole_interface_is_rendered_from_a_socket() {
             workspace: "dev".into(),
             extension: ExtensionName::new("containers").expect("name"),
             granted: Grant::new([Capability::Interface]),
-            limits: hl_ws_extension::Limits::default(),
+            limits: hl_extension::Limits::default(),
         })
         .expect("the welcome encodes"),
     )
@@ -750,7 +750,7 @@ fn a_message_too_large_to_send_is_refused_rather_than_framed() {
     let refusal = codec::request(&request).expect_err("refused");
 
     match refusal {
-        Coding::Oversize(length) => assert!(length > hl_ws_extension::Frame::PAYLOAD_LIMIT),
+        Coding::Oversize(length) => assert!(length > hl_extension::Frame::PAYLOAD_LIMIT),
         other @ Coding::Malformed(_) => {
             panic!("an interface too large to send must be refused as oversize, got {other}")
         }

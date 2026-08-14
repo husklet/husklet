@@ -5,7 +5,7 @@
 use std::io::{Cursor, Read};
 use std::os::unix::net::UnixStream;
 
-use hl_ws_extension::{ChannelId, Frame, Kind, Malformed, Transit, Wire};
+use hl_extension::{ChannelId, Frame, Kind, Malformed, Transit, Wire};
 
 fn frame(channel: u32, payload: &[u8]) -> Frame {
     Frame::new(ChannelId::new(channel), Kind::Event, payload.to_vec())

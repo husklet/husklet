@@ -1,6 +1,6 @@
 //! Adapters that make the extension protocol's declared ports real.
 //!
-//! `hl-ws-extension` owns the ports and deliberately depends on no container
+//! `hl-extension` owns the ports and deliberately depends on no container
 //! stack; this module is the composition-root half of that split. It calls
 //! `hl-client` for container and image effects and the workspace storage
 //! directory for files.
@@ -28,7 +28,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hl_ws_extension::port::{ContainerControl, ContainerInventory, HostError, ImageStore, WorkspaceFiles};
+use hl_extension::port::{ContainerControl, ContainerInventory, HostError, ImageStore, WorkspaceFiles};
 
 pub use control::ContainerLifecycle;
 pub use conversation::{Conversation, Interface, Queue};
@@ -164,7 +164,7 @@ impl Extensions {
 #[cfg(test)]
 mod tests {
     use super::{failure, status_failure};
-    use hl_ws_extension::port::HostError;
+    use hl_extension::port::HostError;
 
     #[test]
     fn a_missing_container_is_absent_rather_than_a_failure() {

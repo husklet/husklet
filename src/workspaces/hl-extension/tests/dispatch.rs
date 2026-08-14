@@ -7,11 +7,11 @@
 
 use std::cell::RefCell;
 
-use hl_ws_extension::port::{
+use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
     PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
 };
-use hl_ws_extension::{
+use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
     WorkspaceInfo,
 };

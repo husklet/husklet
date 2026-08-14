@@ -8,8 +8,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hl_ws_extension::port::{Division, HostError, TabSummary, TerminalSurface};
-use hl_ws_extension::{ExtensionName, Manifest, Record, Services, WorkspaceInfo};
+use hl_extension::port::{Division, HostError, TabSummary, TerminalSurface};
+use hl_extension::{ExtensionName, Manifest, Record, Services, WorkspaceInfo};
 
 use super::super::conversation::Conversation;
 use super::super::sidecar::{Image, Sidecar, SidecarSpec};
@@ -144,12 +144,12 @@ fn described(record: &Record) -> Manifest {
         name: record.name.clone(),
         display_name: record.name.to_string(),
         version: String::new(),
-        protocol: hl_ws_extension::PROTOCOL,
+        protocol: hl_extension::PROTOCOL,
         capabilities: record.granted.clone(),
         entrypoint: None,
-        activation: hl_ws_extension::Activation::default(),
+        activation: hl_extension::Activation::default(),
         interface: None,
-        resources: hl_ws_extension::Resources::default(),
+        resources: hl_extension::Resources::default(),
         filesystem_roots: Vec::new(),
     }
 }

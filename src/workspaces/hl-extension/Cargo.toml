@@ -1,12 +1,12 @@
 [package]
-name = "hl-ws-extension"
+name = "hl-extension"
 version = "0.1.0"
 edition = "2021"
 description = "Workspace extension protocol: framing, channels, capabilities, and the host session."
 license = "MIT"
 
 [lib]
-name = "hl_ws_extension"
+name = "hl_extension"
 path = "src/lib.rs"
 
 # Deliberately no container, client, or toolkit dependency. Every host effect

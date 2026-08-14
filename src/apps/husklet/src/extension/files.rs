@@ -3,8 +3,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use hl_ws_extension::port::{Entry, HostError, WorkspaceFiles};
-use hl_ws_extension::RelativePath;
+use hl_extension::port::{Entry, HostError, WorkspaceFiles};
+use hl_extension::RelativePath;
 
 /// The workspace file port, rooted at one directory.
 ///
@@ -154,8 +154,8 @@ fn described(parent: &RelativePath, entry: &std::fs::DirEntry) -> Result<Entry, 
 #[cfg(test)]
 mod tests {
     use super::WorkspaceDirectory;
-    use hl_ws_extension::port::{HostError, WorkspaceFiles};
-    use hl_ws_extension::RelativePath;
+    use hl_extension::port::{HostError, WorkspaceFiles};
+    use hl_extension::RelativePath;
 
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("path")

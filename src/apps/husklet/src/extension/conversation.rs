@@ -1,6 +1,6 @@
 //! One extension's conversation, from the opening frame to the last call.
 //!
-//! `hl-ws-extension` owns the protocol and opens no socket; this is the half
+//! `hl-extension` owns the protocol and opens no socket; this is the half
 //! that holds one. A conversation is the join between a connected
 //! [`UnixStream`] and a [`Session`]: it reads frames, decodes them, dispatches
 //! through the session against the real adapters, and writes back what the
@@ -17,7 +17,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use hl_ws_extension::{
+use hl_extension::{
     codec, Authority, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, Reply, Services,
     Session, Snapshot, Streams, Subscriptions, Topic, Transit, Welcome, Wire, PROTOCOL,
 };
@@ -406,11 +406,11 @@ mod tests {
     use std::thread::JoinHandle;
     use std::time::Duration;
 
-    use hl_ws_extension::port::{
+    use hl_extension::port::{
         ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
-    use hl_ws_extension::{
+    use hl_extension::{
         codec, Authority, Capability, ExtensionName, Failure, Frame, Grant, Hello, Kind, RelativePath, Reply, Request,
         Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
     };

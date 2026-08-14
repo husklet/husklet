@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use hl_client::model::{Container, InspectContainer, List};
-use hl_ws_extension::port::{ContainerInventory, ContainerSummary, HostError};
+use hl_extension::port::{ContainerInventory, ContainerSummary, HostError};
 
 use super::{failure, Bridge};
 

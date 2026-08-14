@@ -11,7 +11,7 @@
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use hl_ws_extension::{Frame, Kind, Wire};
+use hl_extension::{Frame, Kind, Wire};
 
 use super::EVENTS;
 

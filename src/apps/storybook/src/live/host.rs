@@ -4,11 +4,11 @@
 //! only has to be a faithful counterpart, so the extension exercises the real
 //! protocol rather than a shortcut.
 
-use hl_ws_extension::port::{
+use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
     TabSummary, TerminalSurface, WorkspaceFiles,
 };
-use hl_ws_extension::{RelativePath, Services as Bundle};
+use hl_extension::{RelativePath, Services as Bundle};
 
 /// A workspace that exists only for the storybook.
 pub struct Workspace {

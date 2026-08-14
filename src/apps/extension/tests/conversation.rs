@@ -11,8 +11,8 @@ use std::os::unix::net::UnixStream;
 const EXCHANGES: usize = 8;
 
 use hl_gui::{Patch, Prop, PropValue, RequestId, RowRange, RowRequest, Tag, Tree, Version};
-use hl_ws_extension::port::ContainerSummary;
-use hl_ws_extension::{
+use hl_extension::port::ContainerSummary;
+use hl_extension::{
     ChannelId, ExtensionName, Frame, Grant, Kind, Limits, Reply, Request, Transit, Welcome, Wire, PROTOCOL,
 };
 
@@ -39,14 +39,14 @@ fn greet(wire: &mut Wire<UnixStream>) {
         workspace: "dev".into(),
         extension: ExtensionName::new("containers").expect("a name"),
         granted: Grant::new([
-            hl_ws_extension::Capability::ContainerRead,
-            hl_ws_extension::Capability::Interface,
+            hl_extension::Capability::ContainerRead,
+            hl_extension::Capability::Interface,
         ]),
         limits: Limits::default(),
     };
     send(wire, Kind::Request, &welcome);
     let hello = wire.receive().expect("a greeting");
-    let hello: hl_ws_extension::Hello = serde_json::from_slice(&hello.payload).expect("a hello");
+    let hello: hl_extension::Hello = serde_json::from_slice(&hello.payload).expect("a hello");
     assert_eq!(hello.protocol, PROTOCOL, "the extension must state its protocol");
 }
 
@@ -276,7 +276,7 @@ fn the_manifest_this_extension_ships_is_one_a_host_accepts() {
     let manifest = extension::manifest().expect("a manifest");
     let label = manifest.label().expect("a label");
 
-    let parsed = hl_ws_extension::Manifest::parse(&label, PROTOCOL).expect("a host accepts it");
+    let parsed = hl_extension::Manifest::parse(&label, PROTOCOL).expect("a host accepts it");
 
     assert_eq!(parsed, manifest, "the label round-trips unchanged");
     assert_eq!(parsed.name.as_str(), "containers");
@@ -290,8 +290,8 @@ fn the_manifest_this_extension_ships_is_one_a_host_accepts() {
 fn this_extension_asks_for_no_more_than_it_needs() {
     let manifest = extension::manifest().expect("a manifest");
 
-    assert!(manifest.capabilities.holds(hl_ws_extension::Capability::ContainerRead));
-    assert!(manifest.capabilities.holds(hl_ws_extension::Capability::Interface));
+    assert!(manifest.capabilities.holds(hl_extension::Capability::ContainerRead));
+    assert!(manifest.capabilities.holds(hl_extension::Capability::Interface));
     assert!(
         !manifest.capabilities.executes(),
         "nothing this extension does needs to run code in the workspace"

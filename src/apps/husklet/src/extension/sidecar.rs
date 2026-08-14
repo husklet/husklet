@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hl_client::model::{CreateContainer, DockerMount, HostConfig, InspectImage};
-use hl_ws_extension::port::HostError;
-use hl_ws_extension::{Grant, Manifest, Resources};
+use hl_extension::port::HostError;
+use hl_extension::{Grant, Manifest, Resources};
 
 use super::{failure, Bridge};
 
@@ -396,17 +396,17 @@ fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
 #[cfg(test)]
 mod tests {
     use super::{Image, SidecarSpec, NAME_LABEL, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE};
-    use hl_ws_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
+    use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
     fn manifest(capabilities: &[Capability], resources: Resources) -> Manifest {
         Manifest {
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
-            protocol: hl_ws_extension::PROTOCOL,
+            protocol: hl_extension::PROTOCOL,
             capabilities: Grant::new(capabilities.iter().copied()),
             entrypoint: None,
-            activation: hl_ws_extension::Activation::default(),
+            activation: hl_extension::Activation::default(),
             interface: None,
             resources,
             filesystem_roots: Vec::new(),
