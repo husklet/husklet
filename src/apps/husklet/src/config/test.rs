@@ -100,6 +100,15 @@ fn rich_config_roundtrips() {
 }
 
 #[test]
+fn workspace_scrollback_never_wraps_negative_at_the_vte_boundary() {
+    let mut workspace = WorkspaceConfig::new("large-scrollback", "alpine", Arch::Arm64);
+    workspace.scrollback = Some(i64::MAX as u64);
+    assert_eq!(workspace.scrollback_lines(), i64::MAX);
+    workspace.scrollback = Some(u64::MAX);
+    assert_eq!(workspace.scrollback_lines(), i64::MAX);
+}
+
+#[test]
 fn store_remove() {
     let path = tmp_path("remove");
     let _ = std::fs::remove_file(&path);
