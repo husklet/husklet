@@ -13,9 +13,9 @@ pub(crate) use environment::EnvironmentEntry;
 pub(crate) use host::EngineHost;
 use host::HostExclusion;
 use input::ManifestPath;
+use manifest::Orchestration;
 pub(crate) use manifest::Rootfs;
 use manifest::{CompatClass, Oracle, RuntimeManifest, Status};
-use manifest::Orchestration;
 pub(crate) use manifest::{GuestElf, GuestFile, GuestLibrary};
 use std::{
     collections::{BTreeMap, BTreeSet},

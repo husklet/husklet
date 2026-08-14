@@ -1,7 +1,7 @@
 #[path = "compiler.rs"]
 mod compiler;
 
-use compiler::{compile, HOSTED};
+use compiler::{HOSTED, compile};
 use std::path::{Path, PathBuf};
 
 fn repository(relative: &str) -> PathBuf {

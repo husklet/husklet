@@ -202,7 +202,9 @@ int main(void) {
         .output()
         .expect("path composition probe compiler");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
-    let run = Command::new(&executable).status().expect("path composition probe execution");
+    let run = Command::new(&executable)
+        .status()
+        .expect("path composition probe execution");
     assert!(run.success(), "path composition probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove path composition probe directory");
 }
@@ -272,16 +274,18 @@ int main(void) {
 
 #[test]
 fn fatal_guest_signal_path_excludes_printf_family_formatting() {
-    let source = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/engine/fatal_diagnostic.c"),
-    )
-        .expect("read native logging source");
+    let source =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/engine/fatal_diagnostic.c"))
+            .expect("read native logging source");
     let start = source
         .find("void hl_fatal_diagnostic_publish(")
         .expect("fatal diagnostic helper");
     let body = &source[start..];
     for forbidden in ["printf(", "snprintf(", "sprintf(", "hl_log_format(", "hl_log_message("] {
-        assert!(!body.contains(forbidden), "fatal signal path uses non-signal-safe {forbidden}");
+        assert!(
+            !body.contains(forbidden),
+            "fatal signal path uses non-signal-safe {forbidden}"
+        );
     }
 }
 
@@ -534,12 +538,7 @@ int main(void) {
     )
     .expect("engine output probe source");
     let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
-        .args([
-            "-std=c11",
-            "-D_GNU_SOURCE",
-            "-ffunction-sections",
-            "-fdata-sections",
-        ])
+        .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-fdata-sections"])
         .arg(if cfg!(target_os = "macos") {
             "-Wl,-dead_strip"
         } else {
@@ -591,12 +590,7 @@ int main(void) {
     )
     .expect("run output probe source");
     let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
-        .args([
-            "-std=c11",
-            "-D_GNU_SOURCE",
-            "-ffunction-sections",
-            "-fdata-sections",
-        ])
+        .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-fdata-sections"])
         .arg(if cfg!(target_os = "macos") {
             "-Wl,-dead_strip"
         } else {
@@ -955,7 +949,9 @@ int main(void) {
         .output()
         .expect("status output probe compiler");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
-    let run = Command::new(&executable).status().expect("status output probe execution");
+    let run = Command::new(&executable)
+        .status()
+        .expect("status output probe execution");
     assert!(run.success(), "status output probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove status output probe directory");
 }
@@ -1068,7 +1064,9 @@ int main(void) {
         .output()
         .expect("checkpoint bounds probe compiler");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
-    let run = Command::new(&executable).status().expect("checkpoint bounds probe execution");
+    let run = Command::new(&executable)
+        .status()
+        .expect("checkpoint bounds probe execution");
     assert!(run.success(), "checkpoint bounds probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove checkpoint bounds probe directory");
 }

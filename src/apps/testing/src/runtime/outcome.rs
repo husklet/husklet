@@ -10,7 +10,9 @@ pub(super) fn validate(
     expected_stderr: &[String],
     profile: Result<(), Error>,
 ) -> Result<(), Error> {
-    let expected = expected_signal.map_or(ExitStatus::Code(expected_exit), |signal| ExitStatus::Signal(i32::from(signal)));
+    let expected = expected_signal.map_or(ExitStatus::Code(expected_exit), |signal| {
+        ExitStatus::Signal(i32::from(signal))
+    });
     if status != expected {
         let diagnostic = String::from_utf8_lossy(&logs.stderr)
             .chars()

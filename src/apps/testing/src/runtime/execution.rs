@@ -454,7 +454,10 @@ impl<'a> CaseExecution<'a> {
             // An explicitly orchestrated signal ends the engine before its normal dispatcher
             // epilogue. The lifecycle result is the contract for that typed path; all ordinary
             // exits still require the complete profile summary.
-            profile_validation = self.case.expected_signal.map_or_else(|| output::validate_profile(text), |_| Ok(()));
+            profile_validation = self
+                .case
+                .expected_signal
+                .map_or_else(|| output::validate_profile(text), |_| Ok(()));
             output::forward_profile(text, std::io::stderr().lock())?;
             logs.stderr = text
                 .lines()
@@ -533,9 +536,16 @@ mod stderr_tests {
 
     #[test]
     fn exit_failure_precedes_missing_profile() {
-        let error =
-            super::super::outcome::validate(ExitStatus::Code(7), 0, None, &Logs::default(), b"", &[], missing_profile())
-                .unwrap_err();
+        let error = super::super::outcome::validate(
+            ExitStatus::Code(7),
+            0,
+            None,
+            &Logs::default(),
+            b"",
+            &[],
+            missing_profile(),
+        )
+        .unwrap_err();
         assert_eq!(error.to_string(), "exit Code(7), expected Code(0)");
     }
 
@@ -545,16 +555,24 @@ mod stderr_tests {
             stdout: b"wrong".to_vec(),
             stderr: Vec::new(),
         };
-        let error = super::super::outcome::validate(ExitStatus::Code(0), 0, None, &logs, b"right", &[], missing_profile())
-            .unwrap_err();
+        let error =
+            super::super::outcome::validate(ExitStatus::Code(0), 0, None, &logs, b"right", &[], missing_profile())
+                .unwrap_err();
         assert!(error.to_string().starts_with("stdout differs:"), "{error}");
     }
 
     #[test]
     fn otherwise_valid_output_still_requires_profile() {
-        let error =
-            super::super::outcome::validate(ExitStatus::Code(0), 0, None, &Logs::default(), b"", &[], missing_profile())
-                .unwrap_err();
+        let error = super::super::outcome::validate(
+            ExitStatus::Code(0),
+            0,
+            None,
+            &Logs::default(),
+            b"",
+            &[],
+            missing_profile(),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("crossings/translations"), "{error}");
     }
 
