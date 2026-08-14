@@ -174,7 +174,7 @@ static const hl_host_services *effective_host_services(void) {
     return hl_target_services_effective(&g_target_services);
 }
 
-static void jit86_store_alias_changed(uint64_t guest, uint64_t size);
+static void jit86_store_alias_changed(uint64_t guest, size_t size);
 static int jit86_store_alias_observation_active(void);
 
 static void jit86_smc_queue_range(uint64_t lo, uint64_t hi, void *opaque) {
@@ -583,7 +583,7 @@ static uint64_t jit86_store_alias_segment(struct cpu *cpu, uint64_t cursor, uint
     return segment_last;
 }
 
-static void jit86_store_alias_changed(uint64_t guest, uint64_t size) {
+static void jit86_store_alias_changed(uint64_t guest, size_t size) {
     if (size == 0 || guest > UINT64_MAX - size) return;
     struct cpu *cpu = pthread_getspecific(g_cpu_key);
     if (cpu == NULL) return;
