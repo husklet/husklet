@@ -78,6 +78,10 @@ static int hl_vfs_cursor_component_valid(const char *component) {
            strchr(component, '/') == NULL && strlen(component) <= 255;
 }
 
+static int hl_vfs_cursor_component_hidden(const char *component) {
+    return !strncmp(component, ".wh.", 4);
+}
+
 static int hl_vfs_cursor_marker(int directory, const char *component) {
     char marker[260];
     int length = snprintf(marker, sizeof marker, ".wh.%s", component);
@@ -100,6 +104,7 @@ static void hl_vfs_cursor_entry_release(hl_vfs_cursor_entry *entry) {
 static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor, const char *component,
                                                      hl_vfs_cursor_entry *output) {
     if (cursor == NULL || output == NULL || !hl_vfs_cursor_component_valid(component)) return -EINVAL;
+    if (hl_vfs_cursor_component_hidden(component)) return -ENOENT;
     memset(output, 0, sizeof *output);
     output->descriptor = -1;
     for (size_t index = 0; index < HL_VFS_CURSOR_LAYERS; index++)
@@ -112,7 +117,9 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
             selected = index;
             break;
         }
-        if (errno != ENOENT && errno != ENOTDIR) return -errno;
+        // Only genuine absence permits consulting a lower layer. ENOTDIR means a higher-layer ancestor or
+        // entry masks every descendant; EACCES/EIO/resource failures likewise cannot grant lower authority.
+        if (errno != ENOENT) return -errno;
         if (hl_vfs_cursor_marker(cursor->descriptors[index], component)) return -ENOENT;
     }
     if (selected == cursor->count) return -ENOENT;
@@ -167,4 +174,127 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
     }
     output->kind = HL_VFS_CURSOR_DIRECTORY;
     return 0;
+}
+
+#define HL_VFS_CURSOR_DEPTH 260
+
+// Walk from retained directory provenance. `root` is the namespace restart authority for absolute paths
+// and absolute symlink targets; `start` is the exact directory authority supplied by a relative dirfd.
+// Every frame owns its contributing descriptors, so renaming/unlinking an ancestor cannot redirect a later
+// component. The returned entry owns its file descriptor or merged-directory cursor.
+static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, const hl_vfs_cursor *start,
+                                                   const char *path, int nofollow_final,
+                                                   hl_vfs_cursor_entry *output) {
+    if (root == NULL || start == NULL || path == NULL || output == NULL || !path[0]) return -ENOENT;
+    hl_vfs_cursor *frames = calloc(HL_VFS_CURSOR_DEPTH, sizeof *frames);
+    if (frames == NULL) return -ENOMEM;
+    for (size_t frame = 0; frame < HL_VFS_CURSOR_DEPTH; frame++)
+        for (size_t layer = 0; layer < HL_VFS_CURSOR_LAYERS; layer++)
+            frames[frame].descriptors[layer] = -1;
+    size_t depth = 0;
+    int error = hl_vfs_cursor_clone(path[0] == '/' ? root : start, &frames[0]);
+    if (error != 0) {
+        free(frames);
+        return error;
+    }
+    char rest[8192];
+    if (snprintf(rest, sizeof rest, "%s", path) >= (int)sizeof rest) {
+        error = -ENAMETOOLONG;
+        goto done;
+    }
+    int follows = 0;
+    for (;;) {
+        char *component = rest;
+        while (*component == '/')
+            component++;
+        if (!*component) {
+            memset(output, 0, sizeof *output);
+            output->descriptor = -1;
+            output->kind = HL_VFS_CURSOR_DIRECTORY;
+            error = hl_vfs_cursor_clone(&frames[depth], &output->directory);
+            goto done;
+        }
+        char *end = component;
+        while (*end && *end != '/')
+            end++;
+        size_t component_length = (size_t)(end - component);
+        if (component_length > 255) {
+            error = -ENAMETOOLONG;
+            goto done;
+        }
+        char name[256];
+        memcpy(name, component, component_length);
+        name[component_length] = 0;
+        char tail[8192];
+        if (snprintf(tail, sizeof tail, "%s", end) >= (int)sizeof tail) {
+            error = -ENAMETOOLONG;
+            goto done;
+        }
+        char *tail_component = tail;
+        while (*tail_component == '/')
+            tail_component++;
+        int final = !*tail_component;
+        if (!strcmp(name, ".")) {
+            snprintf(rest, sizeof rest, "%s", tail);
+            continue;
+        }
+        if (!strcmp(name, "..")) {
+            if (depth != 0) hl_vfs_cursor_release(&frames[depth--]);
+            snprintf(rest, sizeof rest, "%s", tail);
+            continue;
+        }
+        hl_vfs_cursor_entry entry;
+        error = hl_vfs_cursor_lookup(&frames[depth], name, &entry);
+        if (error != 0) goto done;
+        if (entry.kind == HL_VFS_CURSOR_SYMLINK && !(final && nofollow_final)) {
+            if (++follows > 40) {
+                hl_vfs_cursor_entry_release(&entry);
+                error = -ELOOP;
+                goto done;
+            }
+            char next[8192];
+            int length = tail[0] ? snprintf(next, sizeof next, "%s%s", entry.symlink, tail)
+                                 : snprintf(next, sizeof next, "%s", entry.symlink);
+            int absolute = entry.symlink[0] == '/';
+            hl_vfs_cursor_entry_release(&entry);
+            if (length < 0 || (size_t)length >= sizeof next) {
+                error = -ENAMETOOLONG;
+                goto done;
+            }
+            if (absolute) {
+                while (depth != 0)
+                    hl_vfs_cursor_release(&frames[depth--]);
+                hl_vfs_cursor_release(&frames[0]);
+                error = hl_vfs_cursor_clone(root, &frames[0]);
+                if (error != 0) goto done;
+            }
+            snprintf(rest, sizeof rest, "%s", next);
+            continue;
+        }
+        if (final) {
+            *output = entry;
+            error = 0;
+            goto done;
+        }
+        if (entry.kind != HL_VFS_CURSOR_DIRECTORY) {
+            hl_vfs_cursor_entry_release(&entry);
+            error = -ENOTDIR;
+            goto done;
+        }
+        if (depth + 1 >= HL_VFS_CURSOR_DEPTH) {
+            hl_vfs_cursor_entry_release(&entry);
+            error = -ENAMETOOLONG;
+            goto done;
+        }
+        depth++;
+        frames[depth] = entry.directory;
+        memset(&entry.directory, 0, sizeof entry.directory);
+        entry.descriptor = -1;
+        snprintf(rest, sizeof rest, "%s", tail);
+    }
+done:
+    for (size_t frame = 0; frame <= depth; frame++)
+        hl_vfs_cursor_release(&frames[frame]);
+    free(frames);
+    return error;
 }
