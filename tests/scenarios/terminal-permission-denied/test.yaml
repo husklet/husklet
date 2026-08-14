@@ -10,13 +10,13 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "printf '#!/bin/sh\\ntouch /tmp/husklet-noexec-ran\\n' > /tmp/husklet-noexec; chmod 0644 /tmp/husklet-noexec; stty -echo; PS1='PERMISSION# '; printf 'PERMISSION-READY\\n'\r" }
+      - write: { text: "printf '#!/bin/sh\\ntouch /tmp/husklet-noexec-ran\\n' > /tmp/husklet-noexec; chmod 0644 /tmp/husklet-noexec; stty -echo; PS1='PERMISSION# '; printf 'PERMISSION-%s\\n' READY\r" }
       - await_output: { contains: PERMISSION-READY, timeout_ms: 5000 }
       - write: { text: "/tmp/husklet-noexec\r" }
       - await_output: { contains: "Permission denied", timeout_ms: 5000 }
-      - write: { text: "status=$?; test \"$status\" = 126 && test ! -e /tmp/husklet-noexec-ran && printf 'PERMISSION-STATUS-126\\n'\r" }
+      - write: { text: "status=$?; test \"$status\" = 126 && test ! -e /tmp/husklet-noexec-ran && printf 'PERMISSION-STATUS-%s\\n' 126\r" }
       - await_output: { contains: PERMISSION-STATUS-126, timeout_ms: 5000 }
-      - write: { text: "printf 'PERMISSION-SHELL-USABLE\\n'; stty echo; exit\r" }
+      - write: { text: "printf 'PERMISSION-SHELL-%s\\n' USABLE; stty echo; exit\r" }
       - await_output: { contains: PERMISSION-SHELL-USABLE, timeout_ms: 5000 }
       - close: {}
   expect:

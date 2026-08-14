@@ -10,13 +10,13 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "printf 'touch /tmp/husklet-bad-image-ran\\n' > /tmp/husklet-bad-image; chmod 0755 /tmp/husklet-bad-image; stty -echo; PS1='FORMAT# '; printf 'FORMAT-READY\\n'\r" }
+      - write: { text: "printf 'touch /tmp/husklet-bad-image-ran\\n' > /tmp/husklet-bad-image; chmod 0755 /tmp/husklet-bad-image; stty -echo; PS1='FORMAT# '; printf 'FORMAT-%s\\n' READY\r" }
       - await_output: { contains: FORMAT-READY, timeout_ms: 5000 }
       - write: { text: "/usr/bin/env /tmp/husklet-bad-image\r" }
       - await_output: { contains: "Exec format error", timeout_ms: 5000 }
-      - write: { text: "status=$?; test \"$status\" = 126 && test ! -e /tmp/husklet-bad-image-ran && printf 'FORMAT-STATUS-126\\n'\r" }
+      - write: { text: "status=$?; test \"$status\" = 126 && test ! -e /tmp/husklet-bad-image-ran && printf 'FORMAT-STATUS-%s\\n' 126\r" }
       - await_output: { contains: FORMAT-STATUS-126, timeout_ms: 5000 }
-      - write: { text: "printf 'FORMAT-SHELL-USABLE\\n'; stty echo; exit\r" }
+      - write: { text: "printf 'FORMAT-SHELL-%s\\n' USABLE; stty echo; exit\r" }
       - await_output: { contains: FORMAT-SHELL-USABLE, timeout_ms: 5000 }
       - close: {}
   expect:
