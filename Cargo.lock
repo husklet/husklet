@@ -1322,6 +1322,7 @@ dependencies = [
  "hl-design",
  "hl-fs",
  "hl-gui",
+ "hl-gui-gtk",
  "hl-images",
  "hl-log",
  "hl-ws",

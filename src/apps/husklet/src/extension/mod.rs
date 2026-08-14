@@ -15,9 +15,11 @@
 //! that owns the surface.
 
 mod control;
+mod conversation;
 mod files;
 mod image;
 mod inventory;
+mod listener;
 mod sidecar;
 mod state;
 
@@ -28,9 +30,11 @@ use std::sync::Arc;
 use hl_ws_extension::port::{ContainerControl, ContainerInventory, HostError, ImageStore, WorkspaceFiles};
 
 pub use control::ContainerLifecycle;
+pub use conversation::{Conversation, Interface, Queue};
 pub use files::WorkspaceDirectory;
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
+pub use listener::Listener;
 pub use sidecar::{Image, Outcome, Sidecar, SidecarSpec};
 pub use state::{Fault, Records};
 
