@@ -43,7 +43,9 @@ const KIND = {
   // Layout
   Gap: 'length',
   Pad: 'edges',
-  Grow: 'flag',
+  // A growth factor, not a switch: the host reads it as a number and a
+  // boolean would decode as nothing at all, silently refusing to expand.
+  Grow: 'factor',
   Width: 'bounds',
   Height: 'bounds',
   Align: 'align',
@@ -61,7 +63,7 @@ const KIND = {
   // Collection
   Schema: 'schema',
   Source: 'source',
-  RowHeight: 'length',
+  RowHeight: 'number',
   Choices: 'choices',
 };
 
@@ -145,6 +147,10 @@ export function value(prop, given) {
       return { Flag: Boolean(given) };
     case 'number':
       return { Number: Number(given) };
+    // Written as a boolean by most people and as a weight by some; both mean
+    // the same thing to the host, which compares the number against zero.
+    case 'factor':
+      return { Number: given === true ? 1 : given === false ? 0 : Number(given) };
     case 'integer':
       return { Integer: Math.round(Number(given)) };
     case 'variant':

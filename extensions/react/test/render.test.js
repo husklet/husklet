@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement as h } from 'react';
 
 import { Surface, reconciler } from '../src/reconciler.js';
+import { value } from '../src/protocol.js';
 import { Button, Column, Text } from '../src/components.js';
 
 /** A surface that keeps its frames instead of writing them to a socket. */
@@ -123,4 +124,12 @@ test('text children become the label', () => {
 test('an unknown prop is refused rather than dropped', () => {
   const host = surface();
   assert.throws(() => host.render(h(Text, { lable: 'typo' })), /has no prop lable/);
+});
+
+test('a growth factor is sent as a number, because a flag decodes as nothing', () => {
+  // The host reads Grow with as_number(); a Flag returns None there and
+  // silently means "do not expand", which is the opposite of what was asked.
+  assert.deepEqual(value('Grow', true), { Number: 1 });
+  assert.deepEqual(value('Grow', false), { Number: 0 });
+  assert.deepEqual(value('Grow', 2), { Number: 2 });
 });

@@ -1,0 +1,17 @@
+{
+  "name": "@husklet/storybook",
+  "version": "0.1.0",
+  "description": "A component playground: browse the library, render it, edit its properties.",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "test": "node --test 'test/*.test.js'",
+    "catalogue": "cargo run -q --manifest-path ../../Cargo.toml -p hl-gui --bin catalogue > src/catalogue.json"
+  },
+  "dependencies": {
+    "@husklet/react": "file:../react",
+    "react": "^18.3.1"
+  },
+  "engines": { "node": ">=20" }
+}
