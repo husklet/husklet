@@ -272,7 +272,7 @@ static void run_guest(struct cpu *c) {
         // map_host() races map_put() (torn entry) and lacks the acquire barrier
         // that makes a peer thread's freshly-emitted+icache-flushed code visible.
         // Single-threaded skips the lock entirely (g_threaded == 0).
-        if (g_threaded) pthread_mutex_lock(&g_jit_lock);
+        if (g_threaded) jit_dispatch_lock();
         void *code = map_host(G_PC(c));
         if (!code) {
             uint64_t _t0 = g_dispatch_profile.enabled ? hl_dispatch_profile_begin(&g_dispatch_profile, now_ns()) : 0;

@@ -1065,6 +1065,9 @@ static struct {
 } g_stw_threads[STW_MAXTHREAD];
 
 static pthread_mutex_t g_stw_reg_lock = PTHREAD_MUTEX_INITIALIZER;
+/* A checkpoint releases g_jit_lock while its dispatcher gate remains active.
+   Serialize every gate epoch so a second publisher cannot replace or clear it. */
+static pthread_mutex_t g_quiesce_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int g_stw_active; // 1 while a flush is in progress -> parked peers spin until cleared
 static _Atomic int g_stw_parked; // # of peers currently parked at the safepoint
 static uint64_t g_stw_flushes;   // PROF: stop-the-world flushes performed
@@ -1303,6 +1306,34 @@ static void stw_dispatch_safepoint(void) {
     }
 }
 
+/* A peer may reach cache lookup immediately before a quiescer publishes its
+   gate. Blocking on the writer lock there prevents that peer from reaching
+   the dispatcher acknowledgement the writer is awaiting. Retry through the
+   safepoint so an active epoch can park us without weakening writer exclusion. */
+static void jit_dispatch_lock(void) {
+    for (;;) {
+        int status = pthread_mutex_trylock(&g_jit_lock);
+        if (status == 0) return;
+        if (status != EBUSY) abort();
+        stw_dispatch_safepoint();
+        jit_backoff_ns(UINT64_C(50000));
+    }
+}
+
+/* Every quiescer arrives with JIT writer authority. A checkpoint may keep the
+   epoch lock after releasing that authority, so never wait for the epoch while
+   retaining g_jit_lock: a running peer must remain able to acknowledge and park. */
+static void stw_quiesce_lock(void) {
+    for (;;) {
+        int status = pthread_mutex_trylock(&g_quiesce_lock);
+        if (status == 0) return;
+        if (status != EBUSY) abort();
+        pthread_mutex_unlock(&g_jit_lock);
+        stw_dispatch_safepoint();
+        jit_dispatch_lock();
+    }
+}
+
 static int stw_before_translated(uint64_t selected_epoch) {
     if (g_my_stw_slot < 0) return 1;
     for (;;) {
@@ -1361,7 +1392,8 @@ static int stw_force_dispatch_flush(void) {
        callbacks publish first and lock second, the first can clear the second's
        gate; its signal is then mistaken for an ordinary park and its peer never
        acknowledges the newer epoch. */
-    pthread_mutex_lock(&g_jit_lock);
+    jit_dispatch_lock();
+    stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
     /* seq_cst: pairs with stw_before_translated's in_translated publication. */
     atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
@@ -1389,6 +1421,7 @@ static int stw_force_dispatch_flush(void) {
     int ok = jit_flush_to_fresh(0);
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_release);
     pthread_mutex_unlock(&g_stw_reg_lock);
+    pthread_mutex_unlock(&g_quiesce_lock);
     pthread_mutex_unlock(&g_jit_lock);
     return ok;
 }
@@ -1399,6 +1432,7 @@ static int stw_force_dispatch_flush(void) {
    until stw_mapping_end releases the gate. */
 static void stw_mapping_begin_locked(void) {
     pthread_t me = pthread_self();
+    stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
     /* seq_cst: pairs with stw_before_translated's in_translated publication. */
     atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
@@ -1422,7 +1456,7 @@ static void stw_mapping_begin_locked(void) {
 }
 
 static void stw_mapping_begin(void) {
-    pthread_mutex_lock(&g_jit_lock);
+    jit_dispatch_lock();
     stw_mapping_begin_locked();
 }
 
@@ -1437,6 +1471,7 @@ static void stw_mapping_end(void) {
 #endif
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_release);
     pthread_mutex_unlock(&g_stw_reg_lock);
+    pthread_mutex_unlock(&g_quiesce_lock);
     pthread_mutex_unlock(&g_jit_lock);
 }
 
@@ -1446,7 +1481,8 @@ static void stw_mapping_end(void) {
    the returned inventory cannot gain or lose a thread before release. */
 static uint64_t stw_checkpoint_arm(void) {
     pthread_t caller = pthread_self();
-    pthread_mutex_lock(&g_jit_lock);
+    jit_dispatch_lock();
+    stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
     atomic_store_explicit(&g_dispatch_gate, 1, memory_order_release);
     pthread_mutex_lock(&g_stw_reg_lock);
@@ -1512,6 +1548,7 @@ static int stw_checkpoint_cpus(struct cpu **out, int capacity) {
 static void stw_checkpoint_end(void) {
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_release);
     pthread_mutex_unlock(&g_stw_reg_lock);
+    pthread_mutex_unlock(&g_quiesce_lock);
 }
 
 // # of OTHER live guest threads (excludes the caller). 0 -> the cheap in-place flush is safe.
@@ -1645,6 +1682,7 @@ static int jit_flush_to_fresh(int retain_map_generations) {
 static int stw_flush(void) {
     g_stw_flushes++;
     pthread_t me = pthread_self();
+    stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
     /*
      * Quiesce at dispatcher boundaries instead of asynchronously parking a
@@ -1674,6 +1712,7 @@ static int stw_flush(void) {
     int ok = jit_flush_to_fresh(1);
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_release);
     pthread_mutex_unlock(&g_stw_reg_lock);
+    pthread_mutex_unlock(&g_quiesce_lock);
     return ok;
 }
 
@@ -1705,6 +1744,7 @@ static void stw_after_fork(void) {
        in the child, so inheriting its closed gate would deadlock first re-entry. */
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_relaxed);
     pthread_mutex_init(&g_stw_reg_lock, NULL);
+    pthread_mutex_init(&g_quiesce_lock, NULL);
     for (int i = 0; i < STW_MAXTHREAD; i++)
         atomic_store_explicit(&g_stw_threads[i].used, 0, memory_order_relaxed);
     g_stw_threads[0].th = pthread_self();
@@ -1751,7 +1791,7 @@ static int jit_after_fork(void) {
     // fork() only clones the CALLING thread. If a peer M was translating (holding g_jit_lock, and g_cache_lock
     // under it in map_put) at the instant the guest forked, the child inherits those mutexes LOCKED with no
     // owner thread left to release them -- so the child's very first dispatcher iteration deadlocks forever in
-    // run_guest's `pthread_mutex_lock(&g_jit_lock)` (0% CPU) while its parent blocks reaping it. This is THE
+    // run_guest's `jit_dispatch_lock()` (0% CPU) while its parent blocks reaping it. This is THE
     // go/npm/cargo build hang: a heavily-threaded driver (Go compiler, node) forks a child while
     // sibling Ms are mid-translate. The child is single-threaded now, so reinitialising both locks to a clean
     // unlocked state is always correct (no surviving peer can hold or want them; the calling thread never holds
