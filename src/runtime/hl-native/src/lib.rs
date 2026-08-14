@@ -61,6 +61,13 @@ pub fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), 
     bindings::bound_vector_io_test(isa, scenario)
 }
 
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn x86_store_preflight_test() -> bool {
+    bindings::x86_store_preflight_test()
+}
+
 #[cfg(test)]
 mod platform;
 

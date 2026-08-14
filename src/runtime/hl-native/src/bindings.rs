@@ -91,6 +91,8 @@ unsafe extern "C" {
         calls: *mut c_uint,
         bytes: *mut c_ulonglong,
     ) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_x86_64_store_preflight_test() -> c_int;
     pub(super) fn hl_engine_abi() -> c_uint;
     pub(super) fn hl_engine_version() -> *const c_char;
     #[cfg(unix)]
@@ -175,6 +177,12 @@ pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32,
     } else {
         Err(status)
     }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn x86_store_preflight_test() -> bool {
+    // SAFETY: the feature-gated hook owns its local emitter and CPU fixtures.
+    unsafe { hl_x86_64_store_preflight_test() == 0 }
 }
 
 pub(super) fn engine_metadata_is_valid() -> bool {

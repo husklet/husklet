@@ -181,21 +181,47 @@ static int host_range_mapped(uintptr_t a, size_t len) {
    storing into guest memory. Guest mappings and their read-only/PROT_NONE/EOF
    intervals are tracked when they are created or protected; the guarded READ
    probe catches unmapped and Darwin file-tail SIGBUS bytes. */
+static size_t host_range_writable_prefix(uintptr_t a, size_t len);
+
 static int host_range_writable(uintptr_t a, size_t len) {
-    if (!len) return 1;
-    uintptr_t end = a + len;
-    if (end < a || gna_hit((uint64_t)a, (uint64_t)len) || gro_hit((uint64_t)a, (uint64_t)len) ||
-        hl_linux_bus_hit((uint64_t)a, (uint64_t)len))
-        return 0;
+    return host_range_writable_prefix(a, len) == len;
+}
+
+/* Return the exact writable prefix without performing a store.  Protection
+   ledgers locate virtual denials; page-fragment probes locate absent mappings.
+   Callers can therefore reject a complete store atomically and report the
+   first guest byte that would have faulted. */
+static size_t host_range_writable_prefix(uintptr_t a, size_t len) {
+    if (!len) return 0;
+    if (a > (uintptr_t)INTPTR_MAX || len > (size_t)((uintptr_t)INTPTR_MAX - a)) return 0;
+    size_t available = len;
+    uint64_t none = gna_prefix((uint64_t)a, (uint64_t)len);
+    uint64_t readonly = gro_prefix((uint64_t)a, (uint64_t)len);
+    if (none < available) available = (size_t)none;
+    if (readonly < available) available = (size_t)readonly;
+    uint64_t bus = hl_linux_bus_fault((uint64_t)a, (uint64_t)len);
+    if (bus != 0) {
+        size_t prefix = bus > (uint64_t)a ? (size_t)(bus - (uint64_t)a) : 0;
+        if (prefix < available) available = prefix;
+    }
 #if defined(_WIN32)
     // A WRITE probe, not the read probe host_range_mapped issues. Two things follow from that on this host
     // and neither is available to the POSIX arm: a page that is mapped but not writable answers correctly
     // without consulting any registry, and the page is left present and dirty -- which is what closes the
     // kernel-write hole for the call this validation precedes, where a kernel store into a not-yet-good
     // page fails with no exception raised anywhere and no handler entered.
-    return hl_windows_fault_probe((uint64_t)a, (uint64_t)len, 1);
+    if (available < len) return available;
+    return hl_windows_fault_probe((uint64_t)a, (uint64_t)len, 1) ? len : 0;
 #else
-    return host_range_mapped(a, len);
+    size_t checked = 0;
+    while (checked < available) {
+        uintptr_t address = a + checked;
+        size_t fragment = 4096u - (size_t)(address & 4095u);
+        if (fragment > available - checked) fragment = available - checked;
+        if (!host_range_mapped(address, fragment)) return checked;
+        checked += fragment;
+    }
+    return available;
 #endif
 }
 
@@ -253,6 +279,7 @@ static void futex_rel_from_abs(struct timespec *rel, const struct timespec *dead
 // the guest would re-wait, see it still pending, and spin returning EINTR forever.
 static int thread_pending_test(const struct cpu *cpu, int signal);
 static int signal_deliverable(const struct cpu *cpu, int signal);
+
 static int cpu_has_actionable_tsig(const struct cpu *c) {
     uint64_t t = __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
     if (!t && !thread_pending_test(c, 64)) return 0;

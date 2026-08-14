@@ -5,6 +5,14 @@
 #include "../bus.h"
 #include "../../linux_abi/dns.h"
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int g_test_direct_store_guard_emissions;
+static int g_test_store_preflight_active;
+static int g_test_store_preflight_protected;
+static size_t g_test_store_preflight_prefix;
+static int g_test_store_preflight_calls;
+#endif
+
 // hl/core/target -- x86-64 Linux guest target composition.
 //
 // This unity translation unit wires the x86-64 translator frontend to the shared Linux ABI,
@@ -649,6 +657,23 @@ static void jit86_smc_commit(struct cpu *cpu) {
     ((c)->bus_ea != 0 && (c)->fault_addr == (c)->bus_ea ? (c)->soft_guest_ea : nonpie_unfold((c)->fault_addr))
 #include "../../linux_abi/signal.c" // SHARED: signal delivery driver + translation
 
+static size_t x86_store_writable_prefix(uintptr_t address, size_t length) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_test_store_preflight_active) {
+        ++g_test_store_preflight_calls;
+        return g_test_store_preflight_prefix < length ? g_test_store_preflight_prefix : length;
+    }
+#endif
+    return host_range_writable_prefix(address, length);
+}
+
+static int x86_store_fault_is_protected(uint64_t address) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_test_store_preflight_active) return g_test_store_preflight_protected;
+#endif
+    return gna_hit(address, 1) || gro_hit(address, 1);
+}
+
 static int soft_tlb_miss(struct cpu *c) {
     uint64_t address = c->bus_ea;
     uint64_t width = c->soft_width;
@@ -732,13 +757,23 @@ static int soft_tlb_miss(struct cpu *c) {
            handling remains authoritative after the identity rewrite. */
         c->soft_delta = 0;
         c->soft_protection = HL_LOGICAL_VMA_READ | HL_LOGICAL_VMA_WRITE | HL_LOGICAL_VMA_EXEC;
-        if (width > UINT64_MAX - address
-#if !defined(__APPLE__)
-            || !host_range_mapped((uintptr_t)address, (size_t)width)
-#endif
-        ) {
+        if (width > UINT64_MAX - address) {
             c->fault_addr = address;
             return raise_guest_data_map_fault(c);
+        }
+        if (required & HL_LOGICAL_VMA_WRITE) {
+            size_t writable = x86_store_writable_prefix((uintptr_t)nonpie_fold(address), (size_t)width);
+            if (writable < width) {
+                c->fault_addr = address + writable;
+                if (x86_store_fault_is_protected(c->fault_addr)) return raise_guest_fetch_fault(c);
+                return raise_guest_data_map_fault(c);
+            }
+#if !defined(__APPLE__)
+        } else if (!host_range_mapped((uintptr_t)nonpie_fold(address), (size_t)width)) {
+            uint64_t readable = gna_prefix(address, width);
+            c->fault_addr = address + (readable < width ? readable : 0);
+            return raise_guest_data_map_fault(c);
+#endif
         }
         /* The string-op helper rejects a store into a read-only mapping itself (it copies with the host
            memcpy, several C frames below translated code, where a hardware fault is unattributable) and
@@ -781,6 +816,56 @@ static int soft_tlb_miss(struct cpu *c) {
     c->reason = R_BRANCH;
     return 0;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int hl_x86_64_store_preflight_test(void) {
+    uint32_t code[256] = {0};
+    uint8_t *saved_cp = g_cp;
+    int saved_recorded = g_address_recorded;
+    int saved_rwx = g_rwx_guest;
+    uint64_t saved_handler = g_sigact[11].handler;
+    g_cp = (uint8_t *)code;
+    g_address_recorded = 0;
+    g_rwx_guest = 0;
+    g_test_direct_store_guard_emissions = 0;
+    emit_memory_guard(17, 8, UINT64_C(0x1000), X86_SOFT_WRITE);
+    emit_memory_guard(17, 16, UINT64_C(0x2000), X86_SOFT_WRITE);
+    int emitted = g_test_direct_store_guard_emissions == 2;
+    g_cp = saved_cp;
+    g_address_recorded = saved_recorded;
+    g_rwx_guest = saved_rwx;
+
+    unsigned char bytes[32];
+    memset(bytes, 0xa5, sizeof bytes);
+    g_sigact[11].handler = 2;
+    g_test_store_preflight_active = 1;
+    g_test_store_preflight_calls = 0;
+    int valid = emitted;
+    for (size_t width = 8; width <= 16; width *= 2) {
+        for (int classification = 0; classification < 3; ++classification) {
+            struct cpu cpu;
+            memset(&cpu, 0, sizeof cpu);
+            uint64_t address = (uint64_t)(uintptr_t)bytes;
+            g_test_store_preflight_prefix = width / 2;
+            /* Exercise absent, protected and read-only second-page classifications. */
+            g_test_store_preflight_protected = classification != 0;
+            cpu.bus_ea = address;
+            cpu.soft_guest_ea = address;
+            cpu.soft_width = width;
+            cpu.soft_required = X86_SOFT_WRITE;
+            int result = soft_tlb_miss(&cpu);
+            valid &= result == 1 && cpu.fault_addr == address + width / 2 && cpu.sync_address == address + width / 2 &&
+                     cpu.sync_code == (classification == 0 ? 1 : 2);
+            for (size_t index = 0; index < sizeof bytes; ++index)
+                valid &= bytes[index] == 0xa5;
+        }
+    }
+    valid &= g_test_store_preflight_calls == 6;
+    g_test_store_preflight_active = 0;
+    g_sigact[11].handler = saved_handler;
+    return valid ? 0 : 1;
+}
+#endif
 
 static int x86_signal_cache_contains(void *context, uint64_t pc) {
     (void)context;
@@ -1103,7 +1188,7 @@ static int guest_fetch_direct_valid(uint64_t address, size_t length) {
 }
 
 static int guest_store_direct_valid(uint64_t address, size_t length) {
-    return !gro_hit(address, (uint64_t)length) && host_range_mapped((uintptr_t)nonpie_fold(address), length);
+    return x86_store_writable_prefix((uintptr_t)nonpie_fold(address), length) == length;
 }
 
 static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
