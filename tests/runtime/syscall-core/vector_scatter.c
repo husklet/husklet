@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
@@ -24,6 +25,24 @@ static int eventfd_case(void) {
 
     errno = 0;
     ok &= readv(fd, split_read, 2) == -1 && errno == EAGAIN;
+    ok &= readv(fd, NULL, 0) == 0 && writev(fd, NULL, 0) == 0;
+    errno = 0;
+    ok &= readv(fd, (struct iovec *)1, 1) == -1 && errno == EFAULT;
+    errno = 0;
+    ok &= writev(fd, (struct iovec *)1, 1) == -1 && errno == EFAULT;
+    errno = 0;
+    ok &= readv(-1, (struct iovec *)1, 1) == -1 && errno == EBADF;
+    errno = 0;
+    ok &= writev(-1, (struct iovec *)1, 1) == -1 && errno == EBADF;
+    errno = 0;
+    ok &= syscall(SYS_readv, fd, split_read, 1025) == -1 && errno == EINVAL;
+    errno = 0;
+    ok &= syscall(SYS_writev, fd, split_read, 1025) == -1 && errno == EINVAL;
+    struct iovec overflow[2] = {{&readback, SIZE_MAX}, {&readback, 1}};
+    errno = 0;
+    ok &= readv(fd, overflow, 2) == -1 && errno == EINVAL;
+    errno = 0;
+    ok &= writev(fd, overflow, 2) == -1 && errno == EINVAL;
     struct iovec split_write[2] = {{&value, 4}, {(char *)&value + 4, 4}};
     errno = 0;
     ok &= writev(fd, split_write, 2) == -1 && errno == EINVAL;
