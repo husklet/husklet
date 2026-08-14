@@ -1067,6 +1067,7 @@
               packages = [
                 pkgs.clang-tools
                 pkgs.cppcheck
+                pkgs.git
                 pkgs.go
                 pkgs.nixfmt
                 pkgs.pkg-config
