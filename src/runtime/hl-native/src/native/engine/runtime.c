@@ -705,9 +705,6 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
             HL_ENGINE_ABI, sizeof(engine->executable_config), HL_ENGINE_FD_BORROW, 0, cloned.value, NULL, 0};
         status = hl_engine_read_executable(engine, cloned.value);
         if (status != HL_STATUS_OK) goto fail;
-        (void)engine->host.file->close(engine->host.context, cloned.value);
-        engine->executable = HL_HOST_HANDLE_INVALID;
-        engine->executable_config.host_handle = HL_HOST_HANDLE_INVALID;
         engine->config.executable = &engine->executable_config;
     }
     if (borrow_options) {

@@ -284,6 +284,8 @@ HL_API hl_status hl_linux_abi_validate_fds(const hl_linux_abi *linux_abi);
  * before lookup, so every failure has one explicit non-authoritative state. */
 HL_API hl_status hl_linux_fd_snapshot_get(const hl_linux_abi *linux_abi, hl_linux_fd fd,
                                           hl_linux_fd_snapshot *snapshot);
+/* Returns one when a live guest open-file description has write authority over this stable host identity. */
+HL_API int hl_linux_writable_identity_open(hl_linux_abi *linux_abi, uint64_t device, uint64_t object);
 /*
  * Map an ordinary typed file while its open-file-description is pinned. Closing
  * the guest descriptor concurrently cannot retire the opaque host file until

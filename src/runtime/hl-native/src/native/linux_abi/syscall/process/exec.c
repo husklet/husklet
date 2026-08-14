@@ -48,6 +48,7 @@ static int exec_image_is_write_open_scan(const struct stat *image, int limit) {
 // must not retire sibling guest threads. Guest descriptor operations have no process-wide table lock today, so this
 // is the same live-table snapshot used by the CLOEXEC sweep below rather than a claim of atomic host exec exclusion.
 static int exec_image_is_write_open(const struct stat *image) {
+    if (hl_linux_writable_identity_open(g_linux_box, (uint64_t)image->st_dev, (uint64_t)image->st_ino)) return 1;
     size_t need = 0;
     if (!hl_host_process_fds(getpid(), NULL, 0, &need)) return exec_image_is_write_open_scan(image, getdtablesize());
     size_t capacity = need <= SIZE_MAX - 32 ? need + 32 : need;
@@ -60,7 +61,6 @@ static int exec_image_is_write_open(const struct stat *image) {
     }
     int busy = 0;
     for (size_t index = 0; index < count && !busy; index++) {
-        if ((fds[index].flags & HL_HOST_PROCESS_FD_ENGINE_PRIVATE) != 0) continue;
         busy = exec_writable_fd_matches(fds[index].descriptor, image);
     }
     free(fds);
@@ -156,9 +156,16 @@ static int exec_image_open(const char *path, exec_image *image) {
 
 static int exec_image_authorized(const char *path, exec_image *image) {
     const unsigned char *header = g_authorized_executable_image;
-    if (path == NULL || image == NULL || header == NULL || g_authorized_executable_size < 2) return -ENOENT;
+    if (path == NULL || image == NULL || header == NULL || g_authorized_executable_size < 2 ||
+        !g_authorized_executable_metadata_ready)
+        return -ENOENT;
     memset(image, 0, sizeof *image);
     image->descriptor = -1;
+    image->status = g_authorized_executable_status;
+    image->dac = g_authorized_executable_dac;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    if (hl_dac_authorize_access(&image->dac, &credentials, HL_DAC_EXECUTE) != 0) return -EACCES;
     if (hl_linux_image_read_bytes(header, g_authorized_executable_size, &image->bytes) != 0) return -ENOMEM;
     int is_elf = image->bytes.size >= 4 && header[0] == 0x7f && header[1] == 'E' && header[2] == 'L' && header[3] == 'F';
     image->script = header[0] == '#' && header[1] == '!';
@@ -175,6 +182,43 @@ static int exec_image_authorized(const char *path, exec_image *image) {
     }
     snprintf(image->path, sizeof image->path, "%s", path);
     return 0;
+}
+
+static void exec_authority_seed_initial(const hl_host_services *host, hl_host_handle executable) {
+    const hl_host_posix_attachment_services *attachments = host != NULL ? host->posix_attachment : NULL;
+    free(g_authorized_executable_owned);
+    g_authorized_executable_owned = NULL;
+    g_authorized_executable_path[0] = 0;
+    g_authorized_executable_metadata_ready = 0;
+    memset(&g_authorized_executable_status, 0, sizeof g_authorized_executable_status);
+    memset(&g_authorized_executable_dac, 0, sizeof g_authorized_executable_dac);
+    if (attachments == NULL || attachments->borrow_file == NULL || attachments->release == NULL ||
+        executable == HL_HOST_HANDLE_INVALID)
+        return;
+    hl_host_result borrowed = attachments->borrow_file(host->context, executable);
+    if (borrowed.status != HL_STATUS_OK) return;
+    int descriptor = (int)borrowed.value;
+    if (fstat(descriptor, &g_authorized_executable_status) == 0) {
+        stat_virt_ids(&g_authorized_executable_status, NULL, descriptor, &g_authorized_executable_dac.uid,
+                      &g_authorized_executable_dac.gid);
+        g_authorized_executable_dac.mode = (uint32_t)stat_virt_mode(&g_authorized_executable_status, NULL, descriptor);
+        g_authorized_executable_metadata_ready = 1;
+    }
+    (void)attachments->release(host->context, borrowed.value);
+}
+
+static void exec_authority_rotate(exec_image *image, const char *guest_path) {
+    if (image == NULL || image->bytes.bytes == NULL || guest_path == NULL) return;
+    free(g_authorized_executable_owned);
+    g_authorized_executable_owned = image->bytes.bytes;
+    g_authorized_executable_image = image->bytes.bytes;
+    g_authorized_executable_size = image->bytes.size;
+    g_authorized_executable_status = image->status;
+    g_authorized_executable_dac = image->dac;
+    g_authorized_executable_metadata_ready = 1;
+    snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", guest_path);
+    image->bytes.bytes = NULL;
+    image->bytes.size = 0;
 }
 
 static int exec_image_parse_shebang(const exec_image *image, char *interpreter, size_t interpreter_size, char *argument,
@@ -530,6 +574,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // translates fresh + saves on exit.
         pcache_exec_reload(lm.identity, interp_identity, argv[0], jump);
 #endif
+        exec_authority_rotate(&main_image, gexe);
         exec_image_release(&program_interpreter);
         exec_image_release(&main_image);
         // execve is a wholesale code-cache flush (g_cp reset + g_map/g_ibtc zeroed above), so it must ALSO

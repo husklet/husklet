@@ -926,6 +926,10 @@ static int legacy_set_alarm(void *context, uint64_t seconds, uint64_t *remaining
 static char g_authorized_executable_path[4200];
 static const void *g_authorized_executable_image;
 static size_t g_authorized_executable_size;
+static void *g_authorized_executable_owned;
+static struct stat g_authorized_executable_status;
+static hl_dac_snapshot g_authorized_executable_dac;
+static int g_authorized_executable_metadata_ready;
 #include "../../linux_abi/syscall/dispatch.c" // SHARED: the canonical syscall layer
 #include "../../linux_abi/sentry.c"           // untrusted-guest isolation: SPSC ring + sentry split (g_untrusted)
 static void ckpt_poll(struct cpu *c);
@@ -1318,6 +1322,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_initial_interpreter_size = interpreter_size;
     g_authorized_executable_image = executable_image;
     g_authorized_executable_size = executable_size;
+    exec_authority_seed_initial(host, executable);
     if (argument_count > (uint32_t)INT_MAX) return 2;
     argc = (int)argument_count;
     hl_target_services_inject(&g_target_services, host);

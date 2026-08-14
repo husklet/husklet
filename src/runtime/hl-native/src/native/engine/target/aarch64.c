@@ -450,6 +450,10 @@ static uint64_t g_loaded_image_identity;
 static const void *g_authorized_executable_image;
 static size_t g_authorized_executable_size;
 static char g_authorized_executable_path[4200];
+static void *g_authorized_executable_owned;
+static struct stat g_authorized_executable_status;
+static hl_dac_snapshot g_authorized_executable_dac;
+static int g_authorized_executable_metadata_ready;
 
 static int aarch64_image_read(const char *path, hl_linux_image *image) {
     if (g_initial_executable_image != NULL)
@@ -1302,6 +1306,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_initial_interpreter_size = interpreter_size;
     g_authorized_executable_image = executable_image;
     g_authorized_executable_size = executable_size;
+    exec_authority_seed_initial(host, executable);
     g_engine_result_status = HL_STATUS_OK;
     if (argument_count > (uint32_t)INT_MAX) return 2;
     argc = (int)argument_count;

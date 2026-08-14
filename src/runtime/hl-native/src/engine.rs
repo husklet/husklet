@@ -846,11 +846,33 @@ mod tests {
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <string.h>
 int main(int argc, char **argv) {
-    if (argc == 2) return 0;
-    char *next[] = { (char *)"/proc/self/exe", (char *)"again", 0 };
+#if IMAGE_ID == 1
+    char *next[] = { (char *)"/next", (char *)"stage-b", 0 };
     syscall(SYS_execve, next[0], next, (char *[]){ 0 });
     return errno;
+#elif IMAGE_ID == 2
+    if (argc == 2 && !strcmp(argv[1], "stage-b")) {
+        unlink("/next");
+        char *next[] = { (char *)"/proc/self/exe", (char *)"verify-b", 0 };
+        syscall(SYS_execve, next[0], next, (char *[]){ 0 });
+        return errno;
+    }
+    return argc == 2 && !strcmp(argv[1], "verify-b") ? 0 : 92;
+#elif IMAGE_ID == 3
+    char *next[] = { (char *)"/proc/self/exe", (char *)"again", 0 };
+    syscall(SYS_execve, next[0], next, (char *[]){ 0 });
+    return errno == EACCES ? 0 : errno;
+#else
+    if (argc == 2) return 96;
+    int held = open("/busy", O_WRONLY);
+    if (held < 0) return 94;
+    char *next[] = { (char *)"/proc/self/exe", (char *)"again", 0 };
+    syscall(SYS_execve, next[0], next, (char *[]){ 0 });
+    return errno == ETXTBSY ? 0 : 95;
+#endif
 }
 "#;
         for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
@@ -858,39 +880,68 @@ int main(int argc, char **argv) {
             std::fs::create_dir_all(root.path().join("bin")).unwrap();
             let source = root.path().join("self.c");
             let main_path = root.path().join("bin/main");
+            let second_path = root.path().join("next");
+            let dac_path = root.path().join("dac");
+            let busy_path = root.path().join("busy");
             std::fs::write(&source, SOURCE).unwrap();
-            let compile = std::process::Command::new(compiler)
-                .args(["-static", "-no-pie", "-O2"])
-                .arg(&source)
-                .arg("-o")
-                .arg(&main_path)
-                .output()
-                .unwrap_or_else(|error| panic!("{compiler} is required for ISA {isa}: {error}"));
-            assert!(
-                compile.status.success(),
-                "{compiler} failed: {}",
-                String::from_utf8_lossy(&compile.stderr)
-            );
-            let main = CString::new(main_path.to_str().unwrap()).unwrap();
+            for (identity, output) in [(1, &main_path), (2, &second_path), (3, &dac_path), (4, &busy_path)] {
+                let compile = std::process::Command::new(compiler)
+                    .args(["-static", "-no-pie", "-O2"])
+                    .arg(format!("-DIMAGE_ID={identity}"))
+                    .arg(&source)
+                    .arg("-o")
+                    .arg(output)
+                    .output()
+                    .unwrap_or_else(|error| panic!("{compiler} is required for ISA {isa}: {error}"));
+                assert!(
+                    compile.status.success(),
+                    "{compiler} failed: {}",
+                    String::from_utf8_lossy(&compile.stderr)
+                );
+            }
             let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
-            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
-            let config = EngineConfig {
-                isa,
-                rootfs: Some(&root_path),
-                executable_host: Some(&main),
-                executable_fd: -1,
-                option_names: &[],
-                option_values: &[],
-                standard_fds: [standard.as_raw_fd(); 3],
-                provider_fd: -1,
+            let run = |host: &std::path::Path, guest: &str, after_create: &dyn Fn()| {
+                let executable = CString::new(host.to_str().unwrap()).unwrap();
+                let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+                let config = EngineConfig {
+                    isa,
+                    rootfs: Some(&root_path),
+                    executable_host: Some(&executable),
+                    executable_fd: -1,
+                    option_names: &[],
+                    option_values: &[],
+                    standard_fds: [standard.as_raw_fd(); 3],
+                    provider_fd: -1,
+                };
+                // SAFETY: every borrowed string and descriptor remains live through create.
+                let engine = unsafe { Engine::create(config) }.unwrap();
+                after_create();
+                let argument = CString::new(guest).unwrap();
+                engine.run(&[argument.as_ptr()]).unwrap();
+                engine.exit().status
             };
-            // SAFETY: every borrowed string and descriptor remains live through create.
-            let engine = unsafe { Engine::create(config) }.unwrap();
-            std::fs::remove_file(&main_path).unwrap();
-            std::fs::remove_dir(root.path().join("bin")).unwrap();
-            let argument = CString::new("/bin/main").unwrap();
-            engine.run(&[argument.as_ptr()]).unwrap();
-            assert_eq!(engine.exit().status, 0, "ISA {isa} did not re-exec its pinned image");
+            assert_eq!(
+                run(&main_path, "/bin/main", &|| {
+                    std::fs::remove_file(&main_path).unwrap();
+                    std::fs::remove_dir(root.path().join("bin")).unwrap();
+                }),
+                0,
+                "ISA {isa} did not rotate and re-exec image B"
+            );
+            let mut permissions = std::fs::metadata(&dac_path).unwrap().permissions();
+            use std::os::unix::fs::PermissionsExt as _;
+            permissions.set_mode(0o644);
+            std::fs::set_permissions(&dac_path, permissions).unwrap();
+            assert_eq!(
+                run(&dac_path, "/dac", &|| std::fs::remove_file(&dac_path).unwrap()),
+                0,
+                "ISA {isa} self authority lost execute DAC metadata"
+            );
+            assert_eq!(
+                run(&busy_path, "/busy", &|| {}),
+                0,
+                "ISA {isa} self authority lost ETXTBSY identity"
+            );
         }
     }
 
