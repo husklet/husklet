@@ -6,10 +6,12 @@ struct FocusTransition {
     update_current: bool,
 }
 
-fn focus_transition(previous: bool, search_visible: bool) -> FocusTransition {
-    FocusTransition {
-        clear_previous: previous,
-        update_current: search_visible,
+impl FocusTransition {
+    fn new(previous: bool, search_visible: bool) -> Self {
+        Self {
+            clear_previous: previous,
+            update_current: search_visible,
+        }
     }
 }
 
@@ -79,7 +81,7 @@ impl Search {
     }
 
     pub(crate) fn focus(&self, previous: Option<vte4::Terminal>, current: vte4::Terminal) {
-        let transition = focus_transition(previous.is_some(), self.bar.get_visible());
+        let transition = FocusTransition::new(previous.is_some(), self.bar.get_visible());
         if transition.clear_previous {
             if let Some(previous) = previous {
                 previous.search_set_regex(None, 0);
@@ -160,26 +162,26 @@ impl Search {
 
 #[cfg(test)]
 mod tests {
-    use super::{focus_transition, FocusTransition};
+    use super::FocusTransition;
 
     #[test]
     fn pane_focus_transfers_only_visible_search_state() {
         assert_eq!(
-            focus_transition(true, true),
+            FocusTransition::new(true, true),
             FocusTransition {
                 clear_previous: true,
                 update_current: true,
             }
         );
         assert_eq!(
-            focus_transition(true, false),
+            FocusTransition::new(true, false),
             FocusTransition {
                 clear_previous: true,
                 update_current: false,
             }
         );
         assert_eq!(
-            focus_transition(false, true),
+            FocusTransition::new(false, true),
             FocusTransition {
                 clear_previous: false,
                 update_current: true,
