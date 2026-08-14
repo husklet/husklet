@@ -934,16 +934,16 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         if (r >= 0 && nf_new) newfile_stamp_fd(r);
         if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
         if (r >= 0) {
-            if ((lf & G_O_DIRECTORY) && r < HL_NFD) {
+            struct stat opened_status;
+            if (r < HL_NFD && fstat(r, &opened_status) == 0 && S_ISDIR(opened_status.st_mode)) {
                 hl_vfs_cursor_entry authority;
                 memset(&authority, 0, sizeof authority);
                 authority.descriptor = -1;
                 int authority_error = hl_vfs_cursor_resolve_at((int)a0, (const char *)a1, nf_want, &authority);
-                struct stat opened_status, authority_status;
-                int authority_descriptor = hl_vfs_cursor_native_descriptor(&authority.directory);
+                struct stat authority_status;
                 if (authority_error == 0 && authority.kind != HL_VFS_CURSOR_DIRECTORY) authority_error = -ENOTDIR;
-                if (authority_error == 0 && (authority_descriptor < 0 || fstat(r, &opened_status) != 0 ||
-                                             fstat(authority_descriptor, &authority_status) != 0 ||
+                if (authority_error == 0 &&
+                    (hl_vfs_cursor_authority_metadata(&authority.directory.layers[0], ".", &authority_status) != 0 ||
                                              opened_status.st_dev != authority_status.st_dev ||
                                              opened_status.st_ino != authority_status.st_ino))
                     authority_error = -EAGAIN;
