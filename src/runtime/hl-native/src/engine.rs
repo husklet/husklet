@@ -853,7 +853,7 @@ int main(int argc, char **argv) {
     return errno;
 }
 "#;
-        for (isa, compiler) in [(1, "cc"), (2, "x86_64-linux-gnu-gcc")] {
+        for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
             let root = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(root.path().join("bin")).unwrap();
             let source = root.path().join("self.c");
