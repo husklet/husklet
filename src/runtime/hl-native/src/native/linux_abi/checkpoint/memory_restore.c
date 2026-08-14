@@ -220,6 +220,11 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
         fprintf(stderr, "[restore] open %s: %s\n", pf, strerror(errno));
         return -1;
     }
+    if (ckpt_minimum_counted_object_size(ckpt_source_object_size(pf), m->n_regions, sizeof(struct ckpt_region),
+                                         UINT64_C(1048576)) != 0) {
+        ckpt_source_fclose(f);
+        return -1;
+    }
     if (m->n_regions > SIZE_MAX / (2u * sizeof(*mapped))) {
         ckpt_source_fclose(f);
         return -1;

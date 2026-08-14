@@ -28,6 +28,14 @@ static inline int ckpt_record_object_size(int64_t stored, size_t element, uint64
     return 0;
 }
 
+static inline int ckpt_minimum_counted_object_size(int64_t stored, uint64_t count, size_t element,
+                                                   uint64_t count_limit) {
+    if (stored < 0 || count > count_limit || element == 0 || count > SIZE_MAX / element ||
+        count * element > (uint64_t)stored)
+        return -1;
+    return 0;
+}
+
 static inline int ckpt_inotify_object_size(int64_t stored, size_t *size) {
     return ckpt_bounded_object_size(stored, 1, CKPT_INOTIFY_IMAGE_LIMIT, size);
 }

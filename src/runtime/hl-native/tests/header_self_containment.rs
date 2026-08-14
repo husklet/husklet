@@ -1034,6 +1034,11 @@ int main(void) {
     if (ckpt_record_object_size(64, 16, 3, &size, &count) == 0) return 16;
     if (ckpt_record_object_size(0, 0, 0, &size, &count) == 0) return 17;
     if (ckpt_record_object_size(0, 16, 0, &size, &count) != 0 || size != 0 || count != 0) return 18;
+    if (ckpt_minimum_counted_object_size(160, 2, 80, 4) != 0) return 19;
+    if (ckpt_minimum_counted_object_size(159, 2, 80, 4) == 0) return 20;
+    if (ckpt_minimum_counted_object_size(INT64_MAX, 5, 80, 4) == 0) return 21;
+    if (ckpt_minimum_counted_object_size(INT64_MAX, UINT64_MAX, 80, UINT64_MAX) == 0) return 22;
+    if (ckpt_minimum_counted_object_size(0, 0, 0, 0) == 0) return 23;
     return 0;
 }
 "#,
