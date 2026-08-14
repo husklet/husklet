@@ -498,7 +498,6 @@ static int bound_fork_complete(bound_fork_state *state, int child, int child_pid
 // prctl per-process flags the kernel tracks and reports back on the matching GET (lsys-prctl-*):
 // no-new-privs is sticky (once set it can never clear), dumpable defaults to 1, pdeathsig defaults to 0.
 // (g_nnp lives in container/state.c so the /proc/self/status builder can report NoNewPrivs consistently.)
-static int g_dumpable = 1;                 // PR_SET/GET_DUMPABLE
 static int g_pdeathsig;                    // PR_SET/GET_PDEATHSIG
 static unsigned long g_timerslack = 50000; // PR_SET/GET_TIMERSLACK (ns); Linux default is 50us
 static int g_thp_disable;                  // PR_SET/GET_THP_DISABLE (per-process transparent-hugepage opt-out)

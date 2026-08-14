@@ -663,6 +663,7 @@ int main(void) {
     if (hl_dac_authorize_sticky(&sticky, &owned, &owner) != 0) return 16;
     return 0;
 }
+
 "#,
     )
     .expect("write DAC policy probe source");
@@ -678,6 +679,111 @@ int main(void) {
     let run = Command::new(&executable).status().expect("DAC policy probe execution");
     assert!(run.success(), "DAC policy probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove DAC policy probe directory");
+}
+
+#[test]
+fn exec_credential_policy_copies_saved_ids_and_keeps_capability_state_coherent() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-exec-credentials-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create exec credential probe directory");
+    let source = scratch.join("exec_credentials.c");
+    let executable = scratch.join("exec_credentials");
+    fs::write(&source, r#"
+#include "linux_abi/container/exec_credential_policy.h"
+static hl_exec_credential_state user(void) {
+    return (hl_exec_credential_state){1000,1000,0,1000,1000,0,0,0,UINT64_C(0xff),0,0,0,0};
+}
+int main(void) {
+    hl_exec_file_capabilities none={0};
+    unsigned char v2[20]={1,0,0,2,0x42,0,0,0};
+    if(hl_exec_file_capabilities_parse(v2,sizeof v2,&none)||none.permitted!=UINT64_C(0x42)||!none.effective)return 10;
+    if(hl_exec_file_capabilities_parse(v2,3,&none)!=-EINVAL)return 11;
+    v2[1]=1;
+    if(hl_exec_file_capabilities_parse(v2,sizeof v2,&none)!=-EINVAL)return 16;
+    v2[1]=0;
+    v2[4]=0;v2[15]=0x80;
+    if(hl_exec_file_capabilities_parse(v2,sizeof v2,&none)||none.permitted)return 20;
+    v2[4]=0x42;v2[15]=0;
+    unsigned char v3[24]={1,0,0,3};v3[20]=1;
+    if(hl_exec_file_capabilities_parse(v3,sizeof v3,&none)||none.present||none.permitted)return 12;
+    none=(hl_exec_file_capabilities){0};
+    hl_exec_credential_result r=hl_exec_credential_transition(user(),0755,0,0,none);
+    if(r.state.suid!=1000||r.state.sgid!=1000||r.state.permitted||r.state.effective||r.secure_exec||r.dumpable!=1)return 1;
+    hl_exec_credential_state s=user(); r=hl_exec_credential_transition(s,04755,0,0,none);
+    if(r.state.euid||r.state.suid||r.state.permitted!=UINT64_C(0xff)||r.state.effective!=UINT64_C(0xff)||!r.secure_exec||r.dumpable!=2)return 2;
+    s.no_new_privileges=1; r=hl_exec_credential_transition(s,04755,0,0,none);
+    if(r.state.euid!=1000||r.state.suid!=1000||r.state.permitted||r.state.effective||r.secure_exec)return 3;
+    hl_exec_file_capabilities file={UINT64_C(0x42),0,1,1}; s=user();s.suid=1000;
+    r=hl_exec_credential_transition(s,0755,1000,1000,file);
+    if(r.state.permitted!=UINT64_C(0x42)||r.state.effective!=UINT64_C(0x42)||!r.secure_exec)return 4;
+    hl_exec_credential_state root={0,0,0,0,0,0,3,1,UINT64_C(0x55),0,0,0,0};
+    r=hl_exec_credential_transition(root,0755,0,0,none);
+    if(r.state.permitted!=UINT64_C(0x55)||r.state.effective!=UINT64_C(0x55)||r.secure_exec)return 5;
+    if((r.state.effective&~r.state.permitted)||(r.state.permitted&~r.state.bounding))return 6;
+    root.securebits=HL_EXEC_SECURE_NOROOT;r=hl_exec_credential_transition(root,0755,0,0,none);
+    if(r.state.permitted||r.state.effective)return 7;
+    s=user();s.suid=1000;s.sgid=1000;s.permitted=s.effective=s.inheritable=s.ambient=UINT64_C(0x40);
+    s.securebits=HL_EXEC_SECURE_KEEP_CAPS|HL_EXEC_SECURE_KEEP_CAPS_LOCKED;
+    r=hl_exec_credential_transition(s,0755,1000,1000,none);
+    if(r.state.permitted!=UINT64_C(0x40)||r.state.effective!=UINT64_C(0x40)||
+       r.state.inheritable!=UINT64_C(0x40)||r.state.ambient!=UINT64_C(0x40))return 8;
+    if((r.state.securebits&HL_EXEC_SECURE_KEEP_CAPS)||
+       !(r.state.securebits&HL_EXEC_SECURE_KEEP_CAPS_LOCKED))return 9;
+    /* A real UID of zero supplies notional permitted/inheritable sets, but a
+       nonzero effective UID must not receive notional effective caps. */
+    hl_exec_credential_state mixed={0,1000,0,1000,1000,0,UINT64_C(0x11),UINT64_C(0x11),UINT64_C(0x7f),0,0,0,0};
+    r=hl_exec_credential_transition(mixed,0755,1000,1000,none);
+    if(r.state.permitted!=UINT64_C(0x7f)||r.state.effective)return 13;
+    /* NNP may retain current authority but cannot let root magic regain the
+       rest of the bounding set. */
+    root=(hl_exec_credential_state){0,0,0,0,0,0,UINT64_C(0x5),UINT64_C(0x5),UINT64_C(0xff),0,0,0,1};
+    r=hl_exec_credential_transition(root,0755,0,0,none);
+    if(r.state.permitted!=UINT64_C(0x5)||r.state.effective!=UINT64_C(0x5))return 14;
+    /* Merely carrying a set-ID bit clears ambient authority, even where the
+       owner already matches and no numeric ID transition occurs. */
+    s=user();s.permitted=s.inheritable=s.ambient=UINT64_C(0x40);
+    r=hl_exec_credential_transition(s,04755,1000,1000,none);
+    if(r.state.ambient||r.state.effective)return 15;
+    s=user();s.bounding=UINT64_C(0x1);
+    file=(hl_exec_file_capabilities){UINT64_C(0x3),0,1,1};
+    r=hl_exec_credential_transition(s,0755,1000,1000,file);
+    if(r.error!=EPERM)return 17;
+    file.effective=0;r=hl_exec_credential_transition(s,0755,1000,1000,file);
+    if(r.error||r.state.permitted!=UINT64_C(0x1)||r.state.effective)return 18;
+    s=user();s.bounding=UINT64_C(0xff);file=(hl_exec_file_capabilities){UINT64_C(0x2),0,1,1};
+    r=hl_exec_credential_transition(s,04755,0,1000,file);
+    if(r.error||r.state.euid!=0||r.state.permitted!=UINT64_C(0x2)||r.state.effective!=UINT64_C(0x2))return 19;
+    /* An identity mismatch remains secure when exec does not numerically
+       change the effective ID. Conversely, setuid back to the real ID is not
+       secure merely because it changed the pre-exec effective ID. */
+    s=user();s.euid=s.suid=0;s.securebits=HL_EXEC_SECURE_NOROOT;
+    r=hl_exec_credential_transition(s,0755,1000,1000,none);
+    if(!r.secure_exec||r.dumpable!=2)return 21;
+    r=hl_exec_credential_transition(s,04755,1000,1000,none);
+    if(r.state.euid!=1000||r.secure_exec||r.dumpable!=1)return 22;
+    /* S_ISGID without S_IXGRP is not an exec-time group transition. */
+    s=user();r=hl_exec_credential_transition(s,02700,1000,0,none);
+    if(r.state.egid!=1000||r.state.sgid!=1000||r.secure_exec)return 23;
+    r=hl_exec_credential_transition(s,02710,1000,0,none);
+    if(r.state.egid!=0||r.state.sgid!=0||!r.secure_exec)return 24;
+    return 0;
+}
+"#).expect("write exec credential probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("exec credential policy probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("exec credential policy probe execution");
+    assert!(run.success(), "exec credential policy probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove exec credential probe directory");
 }
 
 #[cfg(target_os = "linux")]

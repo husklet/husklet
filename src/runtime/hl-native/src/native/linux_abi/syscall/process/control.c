@@ -339,14 +339,32 @@ static int proc_prctl_ambient(struct cpu *c, uint64_t option, uint64_t subop, ui
                               uint64_t arg5) {
     if ((int)option != 47) return 0;
     if (subop == 4) {
-        G_RET(c) = (cap || arg4 || arg5) ? (uint64_t)(-EINVAL) : 0;
+        if (cap || arg4 || arg5)
+            G_RET(c) = (uint64_t)(-EINVAL);
+        else {
+            g_cap_amb = 0;
+            G_RET(c) = 0;
+        }
         return 1;
     }
     if (arg4 || arg5 || (subop != 1 && subop != 2 && subop != 3) || cap > 40) {
         G_RET(c) = (uint64_t)(-EINVAL);
         return 1;
     }
-    G_RET(c) = subop == 2 ? (uint64_t)(-EPERM) : 0;
+    uint64_t bit = UINT64_C(1) << cap;
+    if (subop == 1)
+        G_RET(c) = (g_cap_amb & bit) != 0;
+    else if (subop == 2) {
+        if ((g_securebits & HL_EXEC_SECURE_NO_CAP_AMBIENT_RAISE) || !(g_cap_prm & bit) || !(g_cap_inh & bit))
+            G_RET(c) = (uint64_t)(-EPERM);
+        else {
+            g_cap_amb |= bit;
+            G_RET(c) = 0;
+        }
+    } else {
+        g_cap_amb &= ~bit;
+        G_RET(c) = 0;
+    }
     return 1;
 }
 
@@ -367,8 +385,19 @@ static int proc_prctl_capability(struct cpu *c, uint64_t option, uint64_t arg) {
     case 28:
         if (!(g_cap_eff & (1ull << CAP_SETPCAP)))
             G_RET(c) = (uint64_t)(-EPERM);
+        else if (arg & ~(uint64_t)HL_EXEC_SECURE_ALL)
+            G_RET(c) = (uint64_t)(-EINVAL);
         else {
-            g_securebits = (int)arg;
+            int requested = (int)arg;
+            int locked = g_securebits & (HL_EXEC_SECURE_NOROOT_LOCKED | HL_EXEC_SECURE_NO_SETUID_FIXUP_LOCKED |
+                                         HL_EXEC_SECURE_KEEP_CAPS_LOCKED | HL_EXEC_SECURE_NO_CAP_AMBIENT_RAISE_LOCKED);
+            int protected_bits = locked | (locked >> 1);
+            if ((requested & locked) != locked || ((requested ^ g_securebits) & protected_bits) != 0) {
+                G_RET(c) = (uint64_t)(-EPERM);
+                return 1;
+            }
+            g_securebits = requested;
+            g_keepcaps = (requested & HL_EXEC_SECURE_KEEP_CAPS) != 0;
             G_RET(c) = 0;
         }
         return 1;
@@ -447,8 +476,20 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // PR_SET_KEEPCAPS(8)/PR_GET_KEEPCAPS(7) drive the CAP_SETID retention model -- setpriv arms
         // KEEPCAPS so its post-uid-drop capset can re-raise CAP_SETGID (see cred_uid_changed/capset).
         if ((int)a0 == 8) {
-            g_keepcaps = (a1 != 0);
-            G_RET(c) = 0;
+            /* Linux validates only arg2 here. prctl(3) is variadic, so a
+               two-argument caller may leave the unused registers nonzero. */
+            if (a1 > 1)
+                G_RET(c) = (uint64_t)(-EINVAL);
+            else if (g_securebits & HL_EXEC_SECURE_KEEP_CAPS_LOCKED)
+                G_RET(c) = (uint64_t)(-EPERM);
+            else {
+                g_keepcaps = (int)a1;
+                if (a1)
+                    g_securebits |= HL_EXEC_SECURE_KEEP_CAPS;
+                else
+                    g_securebits &= ~HL_EXEC_SECURE_KEEP_CAPS;
+                G_RET(c) = 0;
+            }
             break;
         }
         if ((int)a0 == 7) {

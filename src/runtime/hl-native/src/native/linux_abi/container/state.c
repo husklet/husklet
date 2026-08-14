@@ -386,6 +386,7 @@ static int cgid(void) {
 #include "../host_fs.h"
 #include "owner.h"
 #include "dac_policy.h"
+#include "exec_credential_policy.h"
 #define HL_MODE_XATTR "user.hl.mode"
 
 static int mode_xattr_set_path(const char *hostpath, mode_t mode) {
@@ -531,6 +532,8 @@ static int g_keepcaps = 0;                     // PR_SET_KEEPCAPS armed (caps su
 static int g_cap_setid_perm, g_cap_setid_eff;  // permitted / effective CAP_SETUID+CAP_SETGID (move together)
 static int g_nnp;                              // sticky PR_SET/GET_NO_NEW_PRIVS state
 static int g_fsuid_ovr = -1, g_fsgid_ovr = -1; // -1 = follow effective identity
+static int g_exec_secure;                      // AT_SECURE for the current image
+static int g_dumpable = 1;                     // PR_SET/GET_DUMPABLE; reset by exec
 
 static void cred_init(void) {
     if (g_cred_init) return;
@@ -549,26 +552,28 @@ static void cred_uid_changed(void);
 // Apply Linux exec credential transitions using guest-visible mode and ownership. Host ownership is not
 // authoritative for image files: extracted roots use virtual ownership metadata. no_new_privs suppresses
 // set-id transitions exactly as Linux does.
-static void cred_after_exec_snapshot(const hl_dac_snapshot *snapshot) {
-    cred_init();
-    if (!g_nnp && snapshot != NULL) {
-        if (snapshot->mode & S_ISUID) g_euid = g_suid = (int)snapshot->uid;
-        if (snapshot->mode & S_ISGID) g_egid = g_sgid = (int)snapshot->gid;
-    }
-    g_fsuid_ovr = -1;
-    g_fsgid_ovr = -1;
-    g_keepcaps = 0;
-    g_cap_setid_perm = g_cap_setid_eff = (g_euid == 0);
-}
+static hl_exec_credential_result cred_exec_transition(const hl_dac_snapshot *snapshot,
+                                                      const hl_exec_file_capabilities *file_capabilities);
+static void cred_after_exec_transition(const hl_exec_credential_result *result);
 
 static int cred_euid(void) {
     cred_init();
     return g_euid;
 }
 
+static int cred_ruid(void) {
+    cred_init();
+    return g_ruid;
+}
+
 static int cred_egid(void) {
     cred_init();
     return g_egid;
+}
+
+static int cred_rgid(void) {
+    cred_init();
+    return g_rgid;
 }
 
 // A task may set an id it already holds (real/effective/saved) or ANY id while it holds effective
@@ -598,9 +603,44 @@ static int gid_permitted(int id) {
 static uint64_t g_cap_eff = HL_CAP_DEFAULT; // process EFFECTIVE cap set (capset(2) may narrow it)
 static uint64_t g_cap_prm = HL_CAP_DEFAULT; // process PERMITTED cap set (uid transitions/capset may narrow it)
 static uint64_t g_cap_bnd = HL_CAP_DEFAULT; // process BOUNDING cap set (PR_CAPBSET_DROP clears bits)
+static uint64_t g_cap_inh;                  // process INHERITABLE cap set
+static uint64_t g_cap_amb;                  // process AMBIENT cap set
 static int g_securebits;                    // PR_SET/GET_SECUREBITS
 
+static hl_exec_credential_result cred_exec_transition(const hl_dac_snapshot *snapshot,
+                                                      const hl_exec_file_capabilities *file_capabilities) {
+    cred_init();
+    hl_exec_credential_state state = {g_ruid,    g_euid,    g_suid,    g_rgid,    g_egid,       g_sgid, g_cap_prm,
+                                      g_cap_eff, g_cap_bnd, g_cap_inh, g_cap_amb, g_securebits, g_nnp};
+    hl_exec_file_capabilities file = file_capabilities != NULL ? *file_capabilities : (hl_exec_file_capabilities){0};
+    return hl_exec_credential_transition(state, snapshot != NULL ? snapshot->mode : 0,
+                                         snapshot != NULL ? snapshot->uid : 0, snapshot != NULL ? snapshot->gid : 0,
+                                         file);
+}
+
+static void cred_after_exec_transition(const hl_exec_credential_result *result) {
+    g_ruid = result->state.ruid;
+    g_euid = result->state.euid;
+    g_suid = result->state.suid;
+    g_rgid = result->state.rgid;
+    g_egid = result->state.egid;
+    g_sgid = result->state.sgid;
+    g_cap_prm = result->state.permitted;
+    g_cap_eff = result->state.effective;
+    g_cap_inh = result->state.inheritable;
+    g_cap_amb = result->state.ambient;
+    g_securebits = result->state.securebits;
+    g_cap_setid_perm = (g_cap_prm & ((1ull << 6) | (1ull << 7))) != 0;
+    g_cap_setid_eff = (g_cap_eff & ((1ull << 6) | (1ull << 7))) != 0;
+    g_exec_secure = result->secure_exec;
+    g_dumpable = result->dumpable;
+    g_fsuid_ovr = -1;
+    g_fsgid_ovr = -1;
+    g_keepcaps = 0;
+}
+
 static void cred_uid_changed(void) {
+    if (g_securebits & HL_EXEC_SECURE_NO_SETUID_FIXUP) return;
     if (g_euid == 0) {
         g_cap_eff = g_cap_prm;
         g_cap_setid_perm = (g_cap_prm & ((1ull << 6) | (1ull << 7))) != 0;
@@ -609,10 +649,11 @@ static void cred_uid_changed(void) {
     }
     g_cap_eff = 0;
     g_cap_setid_eff = 0;
-    if (g_ruid != 0 && g_suid != 0 && !g_keepcaps) {
+    if (g_ruid != 0 && g_suid != 0 && !(g_securebits & HL_EXEC_SECURE_KEEP_CAPS)) {
         g_cap_prm = 0;
         g_cap_setid_perm = 0;
     }
+    g_cap_amb &= g_cap_prm & g_cap_inh;
 }
 
 // The file-mode creation mask. Forwarded to the host on umask(2) so real inode creation honours it, but ALSO
@@ -649,7 +690,11 @@ static void cred_reset_initial(void) {
     g_cap_eff = initial;
     g_cap_prm = initial;
     g_cap_bnd = HL_CAP_DEFAULT;
+    g_cap_inh = 0;
+    g_cap_amb = 0;
     g_securebits = 0;
+    g_exec_secure = 0;
+    g_dumpable = 1;
     g_ngroups = 0;
     g_groups_parsed = 0;
 }
@@ -678,7 +723,8 @@ static hl_dac_credentials dac_credentials_current(uint32_t groups[HL_NGROUPS_MAX
     credentials.fsuid = (uint32_t)(g_fsuid_ovr >= 0 ? g_fsuid_ovr : cred_euid());
     credentials.fsgid = (uint32_t)(g_fsgid_ovr >= 0 ? g_fsgid_ovr : cred_egid());
     credentials.group_count = (size_t)g_ngroups;
-    for (int index = 0; index < g_ngroups; ++index) groups[index] = (uint32_t)g_groups[index];
+    for (int index = 0; index < g_ngroups; ++index)
+        groups[index] = (uint32_t)g_groups[index];
     credentials.groups = groups;
     credentials.capabilities = g_cap_eff;
     return credentials;
@@ -761,8 +807,7 @@ static void newfile_stamp_fd(int fd) {
 
 static void newfile_stamp_path(const char *hostpath, int nofollow) {
     int u = newfile_uid(), g = newfile_gid();
-    hl_owner_set_path(hostpath, g_rootfs_mode || u != cuid() ? u : -1, g_rootfs_mode || g != cgid() ? g : -1,
-                      nofollow);
+    hl_owner_set_path(hostpath, g_rootfs_mode || u != cuid() ? u : -1, g_rootfs_mode || g != cgid() ? g : -1, nofollow);
 }
 
 // ---- NET ns Phase 1: port-map (docker run -p H:C). bind(:C) actually binds the host port :H;

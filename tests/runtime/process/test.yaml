@@ -606,6 +606,14 @@ cases:
     artifact: { destination: /opt/husklet/exec-dac }
     run: []
     expect: { exit: 0, stdout: golden/exec_dac.txt }
+  - id: runtime/process/exec-credentials
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exec_credentials.c, output: exec-credentials, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/exec-credentials }
+    run: []
+    expect: { exit: 0, stdout: golden/exec_credentials.txt }
   - id: runtime/process/capability-transition
     targets: [arm64, amd64]
     status: active

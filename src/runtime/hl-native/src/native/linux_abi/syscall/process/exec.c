@@ -71,10 +71,35 @@ typedef struct exec_image {
     int descriptor;
     struct stat status;
     hl_dac_snapshot dac;
+    hl_exec_file_capabilities file_capabilities;
     hl_linux_image bytes;
     int script;
     char path[4200];
 } exec_image;
+
+static int exec_image_capabilities(int descriptor, hl_exec_file_capabilities *capabilities) {
+    unsigned char bytes[24];
+    *capabilities = (hl_exec_file_capabilities){0};
+#if defined(_WIN32)
+    (void)descriptor;
+    return 0;
+#else
+    const char *name = "user.hl.guest.security.capability";
+    ssize_t length = hl_native_fgetxattr(descriptor, name, bytes, sizeof bytes, 0, 0);
+    if (length < 0) {
+        if (errno == ENODATA
+#ifdef ENOATTR
+            || errno == ENOATTR
+#endif
+        )
+            return 0;
+        if (errno == ERANGE) return -EINVAL;
+        return -errno;
+    }
+    if (length != 20 && length != 24) return -EINVAL;
+    return hl_exec_file_capabilities_parse(bytes, (size_t)length, capabilities);
+#endif
+}
 
 static void exec_image_release(exec_image *image) {
     if (image == NULL) return;
@@ -143,6 +168,13 @@ static int exec_image_adopt(int descriptor, const char *path, exec_image *image)
             return -ENOEXEC;
         }
     }
+    /* Linux classifies an invalid image before consulting security.capability.
+       Keep malformed xattrs from hiding ENOEXEC/ELIBBAD for the pinned file. */
+    int capability_error = exec_image_capabilities(descriptor, &image->file_capabilities);
+    if (capability_error != 0) {
+        exec_image_release(image);
+        return capability_error;
+    }
     snprintf(image->path, sizeof image->path, "%s", path);
     return 0;
 }
@@ -163,6 +195,7 @@ static int exec_image_authorized(const char *path, exec_image *image) {
     image->descriptor = -1;
     image->status = g_authorized_executable_status;
     image->dac = g_authorized_executable_dac;
+    image->file_capabilities = g_authorized_executable_file_capabilities;
     uint32_t groups[HL_NGROUPS_MAX];
     hl_dac_credentials credentials = dac_credentials_current(groups);
     if (hl_dac_authorize_access(&image->dac, &credentials, HL_DAC_EXECUTE) != 0) return -EACCES;
@@ -194,6 +227,7 @@ static void exec_authority_seed_initial(const hl_host_services *host, hl_host_ha
     g_authorized_executable_metadata_ready = 0;
     memset(&g_authorized_executable_status, 0, sizeof g_authorized_executable_status);
     memset(&g_authorized_executable_dac, 0, sizeof g_authorized_executable_dac);
+    memset(&g_authorized_executable_file_capabilities, 0, sizeof g_authorized_executable_file_capabilities);
     if (attachments == NULL || attachments->borrow_file == NULL || attachments->release == NULL ||
         executable == HL_HOST_HANDLE_INVALID) {
         if (serialized != NULL && serialized->ready) {
@@ -215,6 +249,8 @@ static void exec_authority_seed_initial(const hl_host_services *host, hl_host_ha
                       &g_authorized_executable_dac.gid);
         g_authorized_executable_dac.mode = (uint32_t)stat_virt_mode(&g_authorized_executable_status, NULL, descriptor);
         g_authorized_executable_metadata_ready = 1;
+        if (exec_image_capabilities(descriptor, &g_authorized_executable_file_capabilities) != 0)
+            g_authorized_executable_metadata_ready = 0;
     }
     (void)attachments->release(host->context, borrowed.value);
 }
@@ -227,6 +263,7 @@ static void exec_authority_rotate(exec_image *image, const char *guest_path) {
     g_authorized_executable_size = image->bytes.size;
     g_authorized_executable_status = image->status;
     g_authorized_executable_dac = image->dac;
+    g_authorized_executable_file_capabilities = image->file_capabilities;
     g_authorized_executable_metadata_ready = 1;
     snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", guest_path);
     image->bytes.bytes = NULL;
@@ -342,6 +379,7 @@ typedef struct exec_prepared {
     exec_image program_interpreter;
     int has_program_interpreter;
     hl_exec_environment_update environment;
+    hl_exec_credential_result credentials;
 } exec_prepared;
 
 static void exec_capture_comm(const char *path, char *comm, size_t capacity) {
@@ -396,7 +434,10 @@ static int exec_prepare_interpreter(exec_prepared *prepared) {
     if (!prepared->has_program_interpreter) return 0;
 
     const char *resolved = xresolve_overlay(interpreter_path, interpreter_backing, sizeof interpreter_backing);
-    return exec_image_open(resolved, &prepared->program_interpreter);
+    int error = exec_image_open(resolved, &prepared->program_interpreter);
+    /* Linux reports a malformed PT_INTERP target as ELIBBAD, while the same
+       bytes used as the main image are ENOEXEC. */
+    return error == -ENOEXEC ? -ELIBBAD : error;
 }
 
 static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, uint64_t environment_address,
@@ -449,6 +490,13 @@ static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, ui
          (prepared->has_program_interpreter && exec_image_is_write_open(&prepared->program_interpreter.status))))
         error = -ETXTBSY;
     if (error != 0) {
+        exec_prepared_discard(prepared);
+        return error;
+    }
+    prepared->credentials =
+        cred_exec_transition(&prepared->main_image.dac, &prepared->main_image.file_capabilities);
+    if (prepared->credentials.error != 0) {
+        error = -prepared->credentials.error;
         exec_prepared_discard(prepared);
         return error;
     }
@@ -558,7 +606,7 @@ static int exec_commit_request(struct cpu *cpu, exec_prepared *prepared) {
     exec_publish_env(&prepared->environment);
     vfork_release_parent();
     set_guest_comm(prepared->comm);
-    cred_after_exec_snapshot(&prepared->main_image.dac);
+    cred_after_exec_transition(&prepared->credentials);
 #ifdef PCACHE_SAVE_HOOK
     PCACHE_SAVE_HOOK;
 #endif

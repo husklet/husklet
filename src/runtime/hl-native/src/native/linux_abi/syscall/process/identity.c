@@ -72,7 +72,7 @@ static int svc_proc_90(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 uint32_t prm = (i == 0) ? (uint32_t)g_cap_prm : (uint32_t)(g_cap_prm >> 32);
                 d[i * 3 + 0] = eff; // effective: the guest's live effective set (respects drops)
                 d[i * 3 + 1] = prm; // permitted: the docker default bounding/permitted set
-                d[i * 3 + 2] = 0;   // inheritable: empty (Docker default)
+                d[i * 3 + 2] = (i == 0) ? (uint32_t)g_cap_inh : (uint32_t)(g_cap_inh >> 32);
             }
             size_t bytes = (size_t)u32s * 12;
             if (guest_copy_to(a1, d, bytes) != (ssize_t)bytes) {
@@ -123,13 +123,19 @@ static int svc_proc_91(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
         if (u32s == 2) eff |= (uint64_t)d[3] << 32;
         uint64_t prm = d[1];
         if (u32s == 2) prm |= (uint64_t)d[4] << 32;
+        uint64_t inh = d[2];
+        if (u32s == 2) inh |= (uint64_t)d[5] << 32;
         cred_init();
-        if ((eff & ~prm) != 0 || (prm & ~g_cap_prm) != 0) {
+        uint64_t inheritable_allowed = g_cap_inh | prm;
+        if (g_cap_eff & (1ull << CAP_SETPCAP)) inheritable_allowed |= g_cap_bnd;
+        if ((eff & ~prm) != 0 || (prm & ~g_cap_prm) != 0 || (inh & ~inheritable_allowed) != 0) {
             G_RET(c) = (uint64_t)(int64_t)-EPERM;
             break;
         }
         g_cap_eff = eff;
         g_cap_prm = prm;
+        g_cap_inh = inh;
+        g_cap_amb &= g_cap_prm & g_cap_inh;
         g_cap_setid_perm = (prm & ((1ull << 6) | (1ull << 7))) != 0;
         g_cap_setid_eff = (eff & ((1ull << 6) | (1ull << 7))) != 0;
         G_RET(c) = 0;

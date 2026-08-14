@@ -1046,10 +1046,10 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         {7, at_base},
         {8, 0},
         {9, lm->entry},
-        {11, (uint64_t)cuid()},
-        {12, (uint64_t)cuid()},
-        {13, (uint64_t)cgid()},
-        {14, (uint64_t)cgid()},
+        {11, (uint64_t)cred_ruid()},
+        {12, (uint64_t)cred_euid()},
+        {13, (uint64_t)cred_rgid()},
+        {14, (uint64_t)cred_egid()},
         {16, g_aarch64_cpu_model.hwcap},
         // AT_HWCAP2 is where arm64 keeps BF16/I8MM/SVE2/MTE/BTI. arm64's ARCH_DLINFO emits it unconditionally,
         // so omitting it was not "advertise nothing" but a shape no kernel produces; the value stays 0 until
@@ -1058,7 +1058,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         {17, 100},
         {15, plat},
         {25, rnd},
-        {23, 0},
+        {23, (uint64_t)g_exec_secure},
         {31, execfn},
         {0, 0},
     };

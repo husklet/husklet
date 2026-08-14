@@ -455,6 +455,7 @@ static char g_authorized_executable_path[4200];
 static void *g_authorized_executable_owned;
 static struct stat g_authorized_executable_status;
 static hl_dac_snapshot g_authorized_executable_dac;
+static hl_exec_file_capabilities g_authorized_executable_file_capabilities;
 static int g_authorized_executable_metadata_ready;
 
 static int aarch64_image_read(const char *path, hl_linux_image *image) {

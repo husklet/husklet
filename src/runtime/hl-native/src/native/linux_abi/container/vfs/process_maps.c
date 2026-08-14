@@ -1065,14 +1065,15 @@ static int proc_status_text(char *b, size_t n) {
         // sticky prctl flag; the docker default seccomp profile shows Seccomp:2/Seccomp_filters:1.
         // These MUST agree with capget(2) and PR_CAPBSET_READ (see syscall/proc.c). Speculation
         // lines match what the host kernel reports to a container.
-        "CapInh:\t0000000000000000\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
-        "CapAmb:\t0000000000000000\nNoNewPrivs:\t%d\nSeccomp:\t2\nSeccomp_filters:\t1\n"
+        "CapInh:\t%016llx\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\n"
+        "CapAmb:\t%016llx\nNoNewPrivs:\t%d\nSeccomp:\t2\nSeccomp_filters:\t1\n"
         "Speculation_Store_Bypass:\tvulnerable\nSpeculationIndirectBranch:\tunknown\n"
         "Cpus_allowed:\t%s\nCpus_allowed_list:\t%s\nvoluntary_ctxt_switches:\t1\n"
         "nonvoluntary_ctxt_switches:\t0\n",
         comm, (unsigned)g_umask, pid, pid, ppid, uid_r, uid_e, uid_s, uid_fs, gid_r, gid_e, gid_s, gid_fs, groups, vsz,
-        vsz, vmlck, rss, rss, rss, threads, (unsigned long long)g_cap_prm, (unsigned long long)g_cap_eff,
-        (unsigned long long)g_cap_bnd, g_nnp, cpumask, cpulist);
+        vsz, vmlck, rss, rss, rss, threads, (unsigned long long)g_cap_inh, (unsigned long long)g_cap_prm,
+        (unsigned long long)g_cap_eff, (unsigned long long)g_cap_bnd, (unsigned long long)g_cap_amb, g_nnp, cpumask,
+        cpulist);
 }
 
 // /proc/[pid]/stat -- the 52-field single line (pid (comm) state ppid ...). Field 23 = vsize (bytes),

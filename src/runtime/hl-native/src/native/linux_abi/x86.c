@@ -449,14 +449,14 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         // identity (state.c: configured id, else the host's) and are what container_init seeds g_ruid/g_euid
         // from -- so the constant did not mean root, it meant auxv contradicted this guest's own getuid() and
         // the aarch64 engine. Measured: aarch64 guest 1000, x86-64 guest 0, same uncontainerised run.
-        {11, (uint64_t)cuid()},
-        {12, (uint64_t)cuid()},
-        {13, (uint64_t)cgid()},
-        {14, (uint64_t)cgid()},
+        {11, (uint64_t)cred_ruid()},
+        {12, (uint64_t)cred_euid()},
+        {13, (uint64_t)cred_rgid()},
+        {14, (uint64_t)cred_egid()},
         {16, x86_guest_hwcap()},
         {15, plat},
         {25, rnd},
-        {23, 0},      // AT_SECURE 0
+        {23, (uint64_t)g_exec_secure},
         {17, 100},    // AT_CLKTCK
         {26, 0},      // AT_HWCAP2 -- 0 by derivation, see x86_guest_hwcap()
         {31, execfn}, // AT_EXECFN -> execve pathname string (glibc/Rust/uutils multicall read it). Missing it

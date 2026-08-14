@@ -932,6 +932,7 @@ static size_t g_authorized_executable_size;
 static void *g_authorized_executable_owned;
 static struct stat g_authorized_executable_status;
 static hl_dac_snapshot g_authorized_executable_dac;
+static hl_exec_file_capabilities g_authorized_executable_file_capabilities;
 static int g_authorized_executable_metadata_ready;
 #include "../../linux_abi/syscall/dispatch.c" // SHARED: the canonical syscall layer
 #include "../../linux_abi/sentry.c"           // untrusted-guest isolation: SPSC ring + sentry split (g_untrusted)
