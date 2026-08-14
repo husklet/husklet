@@ -2,7 +2,6 @@ cases:
 - id: terminal-permission-denied/status-and-recovery
   image: bash:5.2
   resources: [pty]
-  xfail: [arm64, amd64]
   timeout: 15
   actions:
   - terminal:

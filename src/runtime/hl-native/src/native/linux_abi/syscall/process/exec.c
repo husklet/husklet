@@ -71,6 +71,7 @@ static int exec_validate_image(const char *path, int *script_image) {
     if (stat(path, &status) == 0) {
         if (S_ISDIR(status.st_mode)) return -EACCES;
         if (S_ISREG(status.st_mode)) {
+            if ((status.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0) return -EACCES;
             if (exec_image_is_write_open(&status)) return -ETXTBSY;
             FILE *image = fopen(path, "rb");
             if (image) {
