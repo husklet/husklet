@@ -308,6 +308,15 @@ static int readlink_procfd_special(struct cpu *c, int fd, char *buf, size_t size
 }
 
 static int readlink_procfd_typed(struct cpu *c, int fd, char *buf, size_t size) {
+    if (fd >= 0 && fd < HL_NFD && !strncmp(g_proc_text_desc[fd], "namespace:", 10)) {
+        char target[64];
+        int length = ns_link_target(g_proc_text_desc[fd] + 10, target, sizeof target);
+        if (length < 0)
+            G_RET(c) = (uint64_t)(-ENOENT);
+        else
+            readlink_copy(c, buf, size, target, (size_t)length);
+        return 1;
+    }
     if (fd >= 0 && fd < HL_NFD && g_fdpath[fd][0]) {
         char target[4200];
         snprintf(target, sizeof target, "%s", g_fdpath[fd]);
@@ -413,6 +422,16 @@ static int readlink_procfd(struct cpu *c, const char *path, char *buf, size_t si
     char host_path[4200];
     if (hl_native_fd_path(fd, host_path, sizeof host_path) != 0) {
         readlink_procfd_pathless(c, fd, buf, size);
+        return 1;
+    }
+    /* Linux names pathless open descriptions with non-filesystem procfd targets such as
+     * "pipe:[inode]", "socket:[inode]", and "anon_inode:[kind]".  readlink(2) on the host
+     * returns those names successfully, so reaching this branch does not prove that host_path
+     * is an absolute host filesystem path.  Preserve synthetic names verbatim: passing one to
+     * proc_fd_rebase() classifies it as outside a rootfs and incorrectly turns a live descriptor
+     * link into EACCES. */
+    if (hl_proc_fd_pseudo_target(host_path)) {
+        readlink_copy(c, buf, size, host_path, strlen(host_path));
         return 1;
     }
     int mapped = proc_fd_rebase(host_path, sizeof host_path);

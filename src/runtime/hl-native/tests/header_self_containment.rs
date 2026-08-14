@@ -17,6 +17,53 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
+fn proc_fd_pseudo_targets_exclude_host_filesystem_spellings() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-procfd-target-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create procfd target probe directory");
+    let source = scratch.join("procfd_target.c");
+    let executable = scratch.join("procfd_target");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/proc_fd_target.h"
+
+int main(void) {
+    const char *accepted[] = {
+        "pipe:[7]", "socket:[19]", "anon_inode:[eventfd]", "anon_inode:inotify", "net:[4026531840]",
+        "mnt:[1]", "pid_for_children:[2]", "time_for_children:[3]"
+    };
+    const char *rejected[] = {
+        "pipe:", "pipe:[]", "pipe:[x]", "pipe:[7]suffix", "other:[7]", "anon_inode:", "anon_inode:[]",
+        "anon_inode:../../file", "anon_inode:[event/fd]", "memfd:name", "/memfd:name (deleted)", "/tmp/file",
+        "/tmp/file (deleted)", "net:[x]",
+        "C:\\rootfs\\tmp\\file", "C:/rootfs/tmp/file", "\\\\server\\share\\file", "relative/file", ""
+    };
+    for (unsigned i = 0; i < sizeof accepted / sizeof accepted[0]; ++i)
+        if (!hl_proc_fd_pseudo_target(accepted[i])) return 1;
+    for (unsigned i = 0; i < sizeof rejected / sizeof rejected[0]; ++i)
+        if (hl_proc_fd_pseudo_target(rejected[i])) return 2;
+    return hl_proc_fd_pseudo_target(0) ? 3 : 0;
+}
+"#,
+    )
+    .expect("write procfd target probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("procfd target probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("procfd target probe execution");
+    assert!(run.success(), "procfd target probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove procfd target probe directory");
+}
+
+#[test]
 fn elf64_parser_rejects_hostile_ranges_before_loader_access() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");
