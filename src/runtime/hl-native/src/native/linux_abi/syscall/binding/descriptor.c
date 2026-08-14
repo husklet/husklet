@@ -471,8 +471,8 @@ static int bound_vectors_copy(uint64_t address, uint64_t count, hl_host_iovec ve
     if (guest_copy_from(vectors, address, array_size) != (ssize_t)array_size) return -HL_LINUX_EFAULT;
     for (index = 0; index < count; ++index) {
         uint64_t base = vectors[index].address, size = vectors[index].size;
-        /* import_iovec rejects an aggregate that cannot be returned in ssize_t before access_ok examines
-           payload addresses. Keep the same ordering before any bounce allocation or provider operation. */
+        /* import_iovec validates each segment's accumulated byte count and address range in sequence.
+           Keep that ordering before any bounce allocation or provider operation. */
         int validated = hl_guest_iov_validate(base, size, &total);
         if (validated != 0) return validated;
     }

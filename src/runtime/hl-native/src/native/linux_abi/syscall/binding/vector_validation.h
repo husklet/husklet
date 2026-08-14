@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-/* Linux validates the aggregate byte count before payload address ranges. */
+/* Linux validates each imported segment's accumulated byte count and address range in sequence. */
 static inline int hl_guest_iov_validate(uint64_t base, uint64_t size, uint64_t *total) {
     if (total == NULL || size > (uint64_t)INT64_MAX - *total) return -EINVAL;
     *total += size;
