@@ -62,6 +62,10 @@ struct cpu {
     // which reports container_pid() (==1); each spawned thread gets a unique id. Appended after the
     // baked-offset fields so the emitted-code offsets above are unaffected.
     int tid;
+    /* Per-task seccomp state.  The filter chain is immutable after
+       publication, so clone can inherit this pointer byte-for-byte. */
+    void *seccomp_filters;
+    unsigned int seccomp_mode;
     // Thread-DIRECTED pending signals (1<<signo), the per-thread analogue of the process-wide g_pending.
     // A tgkill()/tkill() to THIS thread sets a bit here so the signal is delivered by this thread alone
     // (a process-directed signal in g_pending may be taken by any thread). Drained by maybe_deliver_signal.

@@ -74,6 +74,10 @@ struct cpu {
     // gettid()/tgkill() identity (shared os/linux/{thread,proc,signal}.c): the guest thread id this cpu
     // runs as. 0 on the init thread (reports container_pid()==1); each spawned thread gets a unique id.
     int tid;
+    /* Per-task seccomp state.  The filter chain is immutable after
+       publication, so clone can inherit this pointer byte-for-byte. */
+    void *seccomp_filters;
+    unsigned int seccomp_mode;
     // Thread-DIRECTED pending signals (1<<signo) -- the per-thread analogue of g_pending. A tkill/tgkill to
     // THIS thread sets a bit here so only this thread delivers it. Drained by maybe_deliver_signal.
     volatile uint64_t tpending;

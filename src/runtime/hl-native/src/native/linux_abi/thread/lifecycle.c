@@ -1,3 +1,5 @@
+struct hl_linux_bpf_filter;
+
 static void thread_after_fork(void) {
     pthread_mutex_init(&g_threg_m, NULL); // thread registry (tkill/tgkill lookup, thread_register)
     struct cpu *self = (g_my_threg >= 0) ? g_threg[g_my_threg].c : NULL;
@@ -126,6 +128,32 @@ static void thread_register(struct cpu *c) {
             break;
         }
     pthread_mutex_unlock(&g_threg_m);
+}
+
+/* Atomically attach one filter to every live task in the caller's thread
+   group. Linux reports the first incompatible tid instead of partially
+   synchronizing the group. */
+static long seccomp_tsync_attach(struct cpu *caller, struct hl_linux_bpf_filter *node) {
+    long status = 0;
+    pthread_mutex_lock(&g_threg_m);
+    for (int i = 0; i < THREAD_REG_MAX; i++) {
+        struct cpu *peer = g_threg[i].c;
+        if (peer && peer->seccomp_filters != caller->seccomp_filters) {
+            status = cpu_tid(peer);
+            break;
+        }
+    }
+    if (status == 0) {
+        for (int i = 0; i < THREAD_REG_MAX; i++) {
+            struct cpu *peer = g_threg[i].c;
+            if (peer) {
+                peer->seccomp_filters = node;
+                peer->seccomp_mode = 2;
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_threg_m);
+    return status;
 }
 
 static void thread_unregister(struct cpu *c) {

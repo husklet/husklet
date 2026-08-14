@@ -583,6 +583,10 @@ static int ckpt_restore_cpu_dir(const char *procdir, const struct ckpt_meta *m, 
         c->in_service = 0;
         c->exited = 0;
         c->redirect = 0;
+        /* Filter nodes are engine addresses, not checkpoint data.  The former
+           host-TLS model also did not serialize seccomp state. */
+        c->seccomp_filters = NULL;
+        c->seccomp_mode = 0;
         G_CKPT_CPU_SANITIZE(c);
     }
     *out = images;

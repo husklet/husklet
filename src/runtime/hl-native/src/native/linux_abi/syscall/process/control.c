@@ -1,5 +1,6 @@
 // Cohesive process-syscall handlers. Included by ../proc.c after shared process state.
-static int svc_proc_118(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_118(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 118: {
         int pid = (int)a0;
@@ -35,7 +36,8 @@ static int svc_proc_118(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_119(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_119(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 119: {
         int pid = (int)a0, policy = (int)a1;
@@ -79,7 +81,8 @@ static int svc_proc_119(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_120(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_120(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 120: {
         int pid = (int)a0;
@@ -100,7 +103,8 @@ static int svc_proc_120(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_121(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_121(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 121: {
         int pid = (int)a0;
@@ -125,7 +129,8 @@ static int svc_proc_121(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_155(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_155(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 155: {
         // Map the guest's view of the init (pid 1) to its real host pid, then query. Linux getpgid fails
@@ -147,7 +152,8 @@ static int svc_proc_155(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_156(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_156(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 156: {
         // getsid: same contract as getpgid above -- fails only with ESRCH for a pid that names no process
@@ -167,7 +173,8 @@ static int svc_proc_156(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_158(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_158(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 158: {
         // getgroups(size, list): in rootfs mode report the IMAGE-DERIVED supplementary set runc computes
@@ -233,7 +240,8 @@ static int svc_proc_158(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_159(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_159(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 159: {
         if (!g_groups_parsed) {
@@ -262,7 +270,8 @@ static int svc_proc_159(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_165(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_165(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 165: {
         struct rusage ru;
@@ -326,8 +335,8 @@ static int proc_prctl_name(struct cpu *c, uint64_t option, uint64_t arg) {
     return 1;
 }
 
-static int proc_prctl_ambient(struct cpu *c, uint64_t option, uint64_t subop, uint64_t cap,
-                              uint64_t arg4, uint64_t arg5) {
+static int proc_prctl_ambient(struct cpu *c, uint64_t option, uint64_t subop, uint64_t cap, uint64_t arg4,
+                              uint64_t arg5) {
     if ((int)option != 47) return 0;
     if (subop == 4) {
         G_RET(c) = (cap || arg4 || arg5) ? (uint64_t)(-EINVAL) : 0;
@@ -343,9 +352,7 @@ static int proc_prctl_ambient(struct cpu *c, uint64_t option, uint64_t subop, ui
 
 static int proc_prctl_capability(struct cpu *c, uint64_t option, uint64_t arg) {
     switch ((int)option) {
-    case 23:
-        G_RET(c) = arg > 40 ? (uint64_t)(-EINVAL) : (uint64_t)((g_cap_bnd >> arg) & 1ull);
-        return 1;
+    case 23: G_RET(c) = arg > 40 ? (uint64_t)(-EINVAL) : (uint64_t)((g_cap_bnd >> arg) & 1ull); return 1;
     case 24:
         if (!(g_cap_eff & (1ull << CAP_SETPCAP)))
             G_RET(c) = (uint64_t)(-EPERM);
@@ -369,8 +376,8 @@ static int proc_prctl_capability(struct cpu *c, uint64_t option, uint64_t arg) {
     }
 }
 
-static int proc_prctl_mce(struct cpu *c, uint64_t option, uint64_t operation, uint64_t policy,
-                          uint64_t arg4, uint64_t arg5) {
+static int proc_prctl_mce(struct cpu *c, uint64_t option, uint64_t operation, uint64_t policy, uint64_t arg4,
+                          uint64_t arg5) {
     if ((int)option == 34) {
         G_RET(c) = (operation || policy || arg4 || arg5) ? (uint64_t)(-EINVAL) : (uint64_t)(unsigned)g_mce_kill;
         return 1;
@@ -387,7 +394,8 @@ static int proc_prctl_mce(struct cpu *c, uint64_t option, uint64_t operation, ui
     return 1;
 }
 
-static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 167: {
         if (proc_prctl_name(c, a0, a1)) break;
@@ -551,8 +559,8 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // software that gates behaviour on being sandboxed reads this. arg2..5 are ignored by the kernel.
         if ((int)a0 == 21) {
             const char *baseline = hl_option_get("HL_SECCOMP_BASELINE");
-            G_RET(c) = t_seccomp_mode != 0 ? t_seccomp_mode
-                                           : (baseline != NULL && strcmp(baseline, "disabled") == 0 ? 0 : 2);
+            G_RET(c) = c->seccomp_mode != 0 ? c->seccomp_mode
+                                            : (baseline != NULL && strcmp(baseline, "disabled") == 0 ? 0 : 2);
             break;
         }
         // PR_SET_SECCOMP(22): the legacy entry point for seccomp, ENFORCED like the seccomp(2) syscall
@@ -560,9 +568,9 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // these differ from seccomp(2)'s op numbers); FILTER takes the struct sock_fprog* in arg3 (a2).
         if ((int)a0 == 22) {
             if (a1 == 1 /*SECCOMP_MODE_STRICT*/)
-                G_RET(c) = (uint64_t)(int64_t)seccomp_set_strict();
+                G_RET(c) = (uint64_t)(int64_t)seccomp_set_strict(c);
             else if (a1 == 2 /*SECCOMP_MODE_FILTER*/)
-                G_RET(c) = (uint64_t)(int64_t)seccomp_install_filter(a2, 0);
+                G_RET(c) = (uint64_t)(int64_t)seccomp_install_filter(c, a2, 0);
             else
                 G_RET(c) = (uint64_t)(-EINVAL);
             break;

@@ -51,14 +51,13 @@ struct hl_linux_bpf_filter {
 };
 
 static volatile int g_seccomp_active;
-static __thread unsigned char t_seccomp_mode;
-static __thread struct hl_linux_bpf_filter *t_seccomp_filters;
+static long seccomp_tsync_attach(struct cpu *caller, struct hl_linux_bpf_filter *node);
 
 // Run every installed filter and return the highest-precedence (most restrictive) action word.
-static uint32_t hl_linux_seccomp_evaluate(const struct hl_linux_seccomp_data *sd) {
+static uint32_t hl_linux_seccomp_evaluate(const struct cpu *c, const struct hl_linux_seccomp_data *sd) {
     uint32_t best = HL_LINUX_SECCOMP_RET_ALLOW;
     int best_prec = 7;
-    for (struct hl_linux_bpf_filter *f = t_seccomp_filters; f; f = f->prev) {
+    for (struct hl_linux_bpf_filter *f = c->seccomp_filters; f; f = f->prev) {
         uint32_t r = hl_seccomp_run(f->insns, f->len, sd);
         int p = hl_seccomp_precedence(r);
         if (p < best_prec) {
@@ -79,11 +78,16 @@ static void hl_linux_seccomp_kill(struct cpu *c, int signo) {
     guest_group_fatal(c, signo);
 }
 
+static void hl_linux_seccomp_kill_thread(struct cpu *c, int signo) {
+    c->exited = 1;
+    c->exit_code = 128 + signo;
+}
+
 // The syscall-entry gate. Returns 1 if the syscall was intercepted (its result is already set in G_RET, a
 // signal was queued, or the process was killed -- the dispatcher must NOT service it), 0 to allow it. Only
 // reached when g_seccomp_active (see seccomp_gate below), so the no-seccomp case never runs any of this.
 static int hl_linux_seccomp_apply(struct cpu *c) {
-    unsigned mode = t_seccomp_mode;
+    unsigned mode = c->seccomp_mode;
     if (mode == 1) { // SECCOMP_MODE_STRICT: only read/write/exit/rt_sigreturn (canonical aarch64 numbers)
         uint64_t nr = G_NR(c);
         if (nr == 63 /*read*/ || nr == 64 /*write*/ || nr == 93 /*exit*/ || nr == 139 /*rt_sigreturn*/) return 0;
@@ -104,7 +108,7 @@ static int hl_linux_seccomp_apply(struct cpu *c) {
     sd.args[4] = G_A4(c);
     sd.args[5] = G_A5(c);
 
-    uint32_t action = hl_linux_seccomp_evaluate(&sd);
+    uint32_t action = hl_linux_seccomp_evaluate(c, &sd);
     switch (action & HL_LINUX_SECCOMP_RET_ACTION_FULL) {
     case HL_LINUX_SECCOMP_RET_ALLOW: return 0;
     case HL_LINUX_SECCOMP_RET_LOG: // treated as ALLOW (we don't emit an audit log); the syscall proceeds
@@ -134,8 +138,8 @@ static int hl_linux_seccomp_apply(struct cpu *c) {
         raise_guest_signal_info(c, 31, (int)(action & HL_LINUX_SECCOMP_RET_DATA), 1 /*SYS_SECCOMP*/,
                                 (uint64_t)(uint32_t)sd.nr | ((uint64_t)sd.arch << 32), 0, 0, sd.instruction_pointer);
         return 1;
+    case HL_LINUX_SECCOMP_RET_KILL_THREAD: hl_linux_seccomp_kill_thread(c, 31); return 1;
     case HL_LINUX_SECCOMP_RET_KILL_PROCESS:
-    case HL_LINUX_SECCOMP_RET_KILL_THREAD: // modeled as process death (faithful for a single-threaded guest)
     default: hl_linux_seccomp_kill(c, 31 /*SIGSYS -- a filter KILL action reports WTERMSIG=SIGSYS*/); return 1;
     }
 }
@@ -144,16 +148,16 @@ static int hl_linux_seccomp_apply(struct cpu *c) {
 // common (no-seccomp) case; the real work is out-of-line in hl_linux_seccomp_apply.
 static inline int seccomp_gate(struct cpu *c) {
     if (__builtin_expect(!g_seccomp_active, 1)) return 0;
-    if (__builtin_expect(t_seccomp_mode == 0, 1)) return 0;
+    if (__builtin_expect(c->seccomp_mode == 0, 1)) return 0;
     return hl_linux_seccomp_apply(c);
 }
 
 // ---- install paths (called from the seccomp(2) and prctl(PR_SET_SECCOMP) handlers) ----
 
 // SECCOMP_SET_MODE_STRICT / PR_SET_SECCOMP(SECCOMP_MODE_STRICT). Returns 0 or -errno.
-static long seccomp_set_strict(void) {
-    if (t_seccomp_mode == 2) return -EINVAL; // cannot go strict after a filter is installed
-    t_seccomp_mode = 1;
+static long seccomp_set_strict(struct cpu *c) {
+    if (c->seccomp_mode == 2) return -EINVAL; // cannot go strict after a filter is installed
+    c->seccomp_mode = 1;
     g_seccomp_active = 1;
     return 0;
 }
@@ -162,7 +166,7 @@ static long seccomp_set_strict(void) {
 // `struct sock_fprog { unsigned short len; struct sock_filter *filter; }`; `flags` are the seccomp(2)
 // filter flags (0 for the prctl entry point). Copies the program into engine memory and pushes it onto
 // this thread's stacked chain. Returns 0 or -errno, matching the kernel's argument validation.
-static long seccomp_install_filter(uint64_t fprog_ptr, uint32_t flags) {
+static long seccomp_install_filter(struct cpu *c, uint64_t fprog_ptr, uint32_t flags) {
     if (flags & ~HL_LINUX_SECCOMP_FILTER_FLAGS_KNOWN) return -EINVAL;
     // NEW_LISTENER would have us return a userspace-notification fd and run a supervisor protocol we do not
     // implement; reject it honestly rather than hand back a listener that never delivers notifications.
@@ -196,15 +200,29 @@ static long seccomp_install_filter(uint64_t fprog_ptr, uint32_t flags) {
         free(node);
         return -EFAULT;
     }
+    if (!hl_seccomp_validate(node->insns, len)) {
+        free(node->insns);
+        free(node);
+        return -EINVAL;
+    }
     if (!g_nnp && !(g_cap_eff & (1ull << CAP_SYS_ADMIN))) {
         free(node->insns);
         free(node);
         return -EACCES;
     }
     node->len = len;
-    node->prev = t_seccomp_filters;
-    t_seccomp_filters = node;
-    t_seccomp_mode = 2;
+    node->prev = c->seccomp_filters;
+    if (flags & HL_LINUX_SECCOMP_FILTER_FLAG_TSYNC) {
+        long status = seccomp_tsync_attach(c, node);
+        if (status != 0) {
+            free(node->insns);
+            free(node);
+            return status;
+        }
+    } else {
+        c->seccomp_filters = node;
+        c->seccomp_mode = 2;
+    }
     g_seccomp_active = 1;
     return 0;
 }
