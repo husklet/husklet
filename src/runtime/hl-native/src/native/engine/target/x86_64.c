@@ -894,8 +894,9 @@ static uint64_t eflags_to_nzcv(uint64_t eflags) {
 
 #include "../../linux_abi/container/vfs.c"   // SHARED: rootfs jail, overlay, /proc synth, stat
 #include "../../linux_abi/container/netns.c" // SHARED: sockets, loopback netns, termios
-static void load_elf(const char *path, struct loaded *out, const void *placement);
-static int elf_interp(const char *path, char *out, size_t n);
+#include "../../linux_abi/image.h"
+static void load_elf(const char *path, struct loaded *out, const void *placement, const hl_linux_image *pinned);
+static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned);
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base);
 
 static int64_t legacy_time_seconds(void *context) {
@@ -1219,21 +1220,21 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         }
         placement = &main_placement;
     }
-    load_elf(prog_host, lm, placement);
+    load_elf(prog_host, lm, placement, NULL);
     g_loadbase = lm->base;
     *jump = lm->entry;
     *at_base = 0;
     *have_interp = 0;
     const char *interp_host = NULL;
     char interp[256];
-    int has_interp = elf_interp(prog_host, interp, sizeof interp) == 0;
+    int has_interp = elf_interp(prog_host, interp, sizeof interp, NULL) == 0;
     g_initial_executable_image = NULL;
     g_initial_executable_size = 0;
     if (has_interp) {
         static char ib[4200];
         interp_host = xresolve_overlay(interp, ib, sizeof ib);
         if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
-        load_elf(interp_host, li, NULL);
+        load_elf(interp_host, li, NULL, NULL);
         *jump = li->entry;
         *at_base = li->base;
         *have_interp = 1;
@@ -1353,7 +1354,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     sb_argv[sb_argc] = NULL;
     const char *sb_finalhost;
     int sb_new =
-        resolve_shebang_chain(sb_argv, sb_argc, 256, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost, NULL);
+        resolve_shebang_chain(sb_argv, sb_argc, 256, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", argv[0]);
         return hl_vfs_cursor_state_finish(40); // ELOOP

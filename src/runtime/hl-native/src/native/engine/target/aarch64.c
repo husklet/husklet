@@ -509,8 +509,9 @@ static int aarch64_image_read(const char *path, hl_linux_image *image) {
 #include "../../linux_abi/container/netns.c"
 // ELF fwd-decls + FS-metadata cache
 struct main_placement;
-static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement);
-static int elf_interp(const char *path, char *out, size_t n);
+static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement,
+                     const hl_linux_image *pinned);
+static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned);
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base);
 // the syscall layer (service())
 #include "../../linux_abi/syscall/dispatch.c"
@@ -1197,7 +1198,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         }
         placement = &main_placement;
     }
-    load_elf(prog_host, lm, placement);
+    load_elf(prog_host, lm, placement, NULL);
 
     // Dynamic: load the PT_INTERP (ld.so) and enter THERE; it loads libs + relocates.
     *jump = lm->entry;
@@ -1205,7 +1206,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     *have_interp = 0;
     const char *interp_host = NULL;
     char interp[256];
-    int has_interp = elf_interp(prog_host, interp, sizeof interp) == 0;
+    int has_interp = elf_interp(prog_host, interp, sizeof interp, NULL) == 0;
     g_initial_executable_image = NULL;
     g_initial_executable_size = 0;
     if (has_interp) {
@@ -1213,7 +1214,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         // follow+confine ld.so symlink (through the overlay)
         interp_host = xresolve_overlay(interp, ib, sizeof ib);
         if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
-        load_elf(interp_host, li, NULL);
+        load_elf(interp_host, li, NULL, NULL);
         *jump = li->entry;
         *at_base = li->base;
         *have_interp = 1;
@@ -1350,7 +1351,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     const char *sb_finalhost;
     char sb_fhb[4200];
     int sb_new =
-        resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost, NULL);
+        resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", prog);
         return hl_vfs_cursor_state_finish(40); // ELOOP

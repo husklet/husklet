@@ -549,15 +549,11 @@ static void cred_uid_changed(void);
 // Apply Linux exec credential transitions using guest-visible mode and ownership. Host ownership is not
 // authoritative for image files: extracted roots use virtual ownership metadata. no_new_privs suppresses
 // set-id transitions exactly as Linux does.
-static void cred_after_exec(const char *hostpath) {
+static void cred_after_exec_snapshot(const hl_dac_snapshot *snapshot) {
     cred_init();
-    struct stat status;
-    if (!g_nnp && hostpath != NULL && stat(hostpath, &status) == 0) {
-        mode_t mode = stat_virt_mode(&status, hostpath, -1);
-        uint32_t uid, gid;
-        stat_virt_ids(&status, hostpath, -1, &uid, &gid);
-        if (mode & S_ISUID) g_euid = g_suid = (int)uid;
-        if (mode & S_ISGID) g_egid = g_sgid = (int)gid;
+    if (!g_nnp && snapshot != NULL) {
+        if (snapshot->mode & S_ISUID) g_euid = g_suid = (int)snapshot->uid;
+        if (snapshot->mode & S_ISGID) g_egid = g_sgid = (int)snapshot->gid;
     }
     g_fsuid_ovr = -1;
     g_fsgid_ovr = -1;

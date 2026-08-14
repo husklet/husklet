@@ -22,9 +22,11 @@ static uint64_t rd64(const uint8_t *p) {
 }
 
 // Read PT_INTERP (the dynamic loader path) out of an ELF.
-static int elf_interp(const char *path, char *out, size_t n) {
+static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned) {
     hl_linux_image image;
-    if (aarch64_image_read(path, &image) != 0) return -1;
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image)
+                        : aarch64_image_read(path, &image)) != 0)
+        return -1;
     hl_linux_elf64_layout layout;
     if (n == 0 || hl_linux_elf64_validate(&image, 0xB7, &layout) != 0) {
         hl_linux_image_release(&image);
@@ -801,9 +803,11 @@ static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struc
     return 0;
 }
 
-static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement) {
+static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement,
+                     const hl_linux_image *pinned) {
     hl_linux_image image;
-    if (aarch64_image_read(path, &image) != 0) {
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image)
+                        : aarch64_image_read(path, &image)) != 0) {
         fprintf(stderr, "hl-engine: cannot read guest ELF %s through host services\n", path);
         exit(1);
     }

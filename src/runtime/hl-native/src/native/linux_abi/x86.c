@@ -116,9 +116,11 @@ static void wr64(uint8_t *p, uint64_t v) {
 
 // struct loaded is defined by the shared os/linux (container/netns.c).
 
-static int elf_interp(const char *path, char *out, size_t n) {
+static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned) {
     hl_linux_image image;
-    if (x86_image_read(path, &image) != 0) return -1;
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image) : x86_image_read(path, &image)) !=
+        0)
+        return -1;
     hl_linux_elf64_layout layout;
     if (n == 0 || hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
         hl_linux_image_release(&image);
@@ -161,10 +163,12 @@ static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struc
     return 0;
 }
 
-static void load_elf(const char *path, struct loaded *out, const void *placement_argument) {
+static void load_elf(const char *path, struct loaded *out, const void *placement_argument,
+                     const hl_linux_image *pinned) {
     const struct main_placement *placement = placement_argument;
     hl_linux_image image;
-    if (x86_image_read(path, &image) != 0) {
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image) : x86_image_read(path, &image)) !=
+        0) {
         fprintf(stderr, "hl-engine: cannot read guest ELF %s through host services\n", path);
         exit(1);
     }
