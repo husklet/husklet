@@ -206,6 +206,9 @@ static int exec_resolve_shebang_images(char **argv, int argc, int capacity, exec
         exec_image next;
         int error = exec_image_open(resolved, &next);
         if (error != 0) return error;
+#if defined(HL_NATIVE_TEST_HOOKS)
+        exec_pin_test_wait(HL_EXEC_PIN_TEST_SHEBANG_HOP);
+#endif
         exec_image_release(image);
         *image = next;
     }

@@ -400,7 +400,7 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     case 167: {
 #if defined(HL_NATIVE_TEST_HOOKS)
         if ((uint32_t)a0 == HL_EXEC_PIN_TEST_PRCTL) {
-            if (a1 == HL_EXEC_PIN_TEST_MAIN || a1 == HL_EXEC_PIN_TEST_FINAL) {
+            if (a1 == HL_EXEC_PIN_TEST_MAIN || a1 == HL_EXEC_PIN_TEST_FINAL || a1 == HL_EXEC_PIN_TEST_SHEBANG_HOP) {
                 atomic_store_explicit(&g_exec_pin_test_phase, 0, memory_order_release);
                 atomic_store_explicit(&g_exec_pin_test_mode, (unsigned)a1, memory_order_release);
                 G_RET(c) = 0;

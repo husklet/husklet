@@ -511,6 +511,7 @@ static int g_mce_kill = 2; // PR_MCE_KILL/PR_MCE_KILL_GET machine-check policy: 
 #define HL_EXEC_PIN_TEST_PRCTL 0x48504e54u
 #define HL_EXEC_PIN_TEST_MAIN 1u
 #define HL_EXEC_PIN_TEST_FINAL 2u
+#define HL_EXEC_PIN_TEST_SHEBANG_HOP 4u
 static atomic_uint g_exec_pin_test_mode;
 static atomic_uint g_exec_pin_test_phase;
 
