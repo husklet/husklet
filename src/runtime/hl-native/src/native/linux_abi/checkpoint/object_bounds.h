@@ -36,6 +36,25 @@ static inline int ckpt_minimum_counted_object_size(int64_t stored, uint64_t coun
     return 0;
 }
 
+static inline int ckpt_capacity_object_size(int64_t stored, size_t capacity, size_t *size) {
+    if (capacity == 0) return -1;
+    return ckpt_bounded_object_size(stored, 0, capacity, size);
+}
+
+static inline int ckpt_decimal_capacity(const char *text, size_t fallback, size_t maximum, size_t *capacity) {
+    if (text == NULL || capacity == NULL || maximum == 0 || fallback == 0 || fallback > maximum || *text == '\0')
+        return -1;
+    size_t value = 0;
+    for (const unsigned char *cursor = (const unsigned char *)text; *cursor != '\0'; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') return -1;
+        size_t digit = (size_t)(*cursor - '0');
+        if (digit > maximum || value > (maximum - digit) / 10u) return -1;
+        value = value * 10u + digit;
+    }
+    *capacity = value == 0 ? fallback : value;
+    return 0;
+}
+
 static inline int ckpt_inotify_object_size(int64_t stored, size_t *size) {
     return ckpt_bounded_object_size(stored, 1, CKPT_INOTIFY_IMAGE_LIMIT, size);
 }

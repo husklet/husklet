@@ -1039,6 +1039,15 @@ int main(void) {
     if (ckpt_minimum_counted_object_size(INT64_MAX, 5, 80, 4) == 0) return 21;
     if (ckpt_minimum_counted_object_size(INT64_MAX, UINT64_MAX, 80, UINT64_MAX) == 0) return 22;
     if (ckpt_minimum_counted_object_size(0, 0, 0, 0) == 0) return 23;
+    if (ckpt_capacity_object_size(65536, 65536, &size) != 0 || size != 65536) return 24;
+    if (ckpt_capacity_object_size(65537, 65536, &size) == 0) return 25;
+    if (ckpt_capacity_object_size(-1, 65536, &size) == 0) return 26;
+    if (ckpt_capacity_object_size(0, 0, &size) == 0) return 27;
+    if (ckpt_decimal_capacity("8192", 65536, 1048576, &size) != 0 || size != 8192) return 28;
+    if (ckpt_decimal_capacity("0", 65536, 1048576, &size) != 0 || size != 65536) return 29;
+    if (ckpt_decimal_capacity("8192x", 65536, 1048576, &size) == 0) return 30;
+    if (ckpt_decimal_capacity("1048577", 65536, 1048576, &size) == 0) return 31;
+    if (ckpt_decimal_capacity("", 65536, 1048576, &size) == 0) return 32;
     return 0;
 }
 "#,

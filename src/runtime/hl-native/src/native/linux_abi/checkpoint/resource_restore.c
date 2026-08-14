@@ -20,7 +20,12 @@ static int ckpt_prepare_restore_pipes(void) {
                 pipe = &g_restore_pipes[g_nrestore_pipes++];
                 *pipe = (struct ckpt_restore_pipe){.identity = identity, .reader = -1, .writer = -1};
             }
-            int size = atoi(record.path);
+            size_t parsed;
+            if (ckpt_decimal_capacity(record.path, 65536, INT_MAX, &parsed) != 0) {
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            int size = (int)parsed;
             if (size > pipe->size) pipe->size = size;
         }
         if (!feof(file)) {
@@ -28,6 +33,14 @@ static int ckpt_prepare_restore_pipes(void) {
             return -1;
         }
         ckpt_source_fclose(file);
+    }
+    for (int i = 0; i < g_nrestore_pipes; i++) {
+        char data_path[1300];
+        snprintf(data_path, sizeof data_path, "pipe.%016llx", (unsigned long long)g_restore_pipes[i].identity);
+        int64_t stored = ckpt_source_object_size(data_path);
+        size_t data_size;
+        if (stored >= 0 && ckpt_capacity_object_size(stored, (size_t)g_restore_pipes[i].size, &data_size) != 0)
+            return -1;
     }
     for (int i = 0; i < g_nrestore_pipes; i++) {
         char data_path[1300];
