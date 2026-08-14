@@ -48,6 +48,8 @@ static int worker(const char *release, const char *final_release, int role) {
     int descriptors[2];
     int sockets[2];
     int file;
+    int independent_file;
+    int duplicate_file;
     struct sigaction action = {0};
     sigset_t blocked, previous;
     ssize_t expected_size;
@@ -65,6 +67,12 @@ static int worker(const char *release, const char *final_release, int role) {
     if (snprintf(file_path, sizeof file_path, "%s.file.%d", release, role) >= (int)sizeof file_path) return 10 + role;
     file = open(file_path, O_CREAT | O_TRUNC | O_RDWR, 0600);
     if (file < 0 || write(file, "offset", 6) != 6 || lseek(file, role, SEEK_SET) != role) return 10 + role;
+    independent_file = open(file_path, O_RDONLY);
+    duplicate_file = dup(file);
+    if (independent_file < 0 || duplicate_file < 0 || lseek(independent_file, 0, SEEK_SET) != 0 ||
+        fcntl(duplicate_file, F_SETFD, FD_CLOEXEC) != 0 ||
+        fcntl(duplicate_file, F_SETFL, fcntl(duplicate_file, F_GETFL) | O_APPEND | O_NONBLOCK) != 0)
+        return 10 + role;
     if (pipe(descriptors) != 0) return 10 + role;
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) return 10 + role;
     expected_size = snprintf(expected, sizeof expected, "pipe-%d", role);
@@ -102,6 +110,14 @@ static int worker(const char *release, const char *final_release, int role) {
         pthread_mutex_unlock(&held_mutex) != 0)
         return 55 + role;
     if (read(file, observed, 1) != 1 || observed[0] != "offset"[role]) return 60 + role;
+    if (read(duplicate_file, observed, 1) != 1 || observed[0] != "offset"[role + 1]) return 63 + role;
+    if (read(independent_file, observed, 1) != 1 || observed[0] != 'o') return 66 + role;
+    if ((fcntl(file, F_GETFL) & (O_APPEND | O_NONBLOCK)) != (O_APPEND | O_NONBLOCK) ||
+        (fcntl(duplicate_file, F_GETFL) & (O_APPEND | O_NONBLOCK)) != (O_APPEND | O_NONBLOCK) ||
+        (fcntl(independent_file, F_GETFL) & (O_APPEND | O_NONBLOCK)) != 0 ||
+        (fcntl(file, F_GETFD) & FD_CLOEXEC) != 0 || (fcntl(duplicate_file, F_GETFD) & FD_CLOEXEC) == 0 ||
+        (fcntl(independent_file, F_GETFD) & FD_CLOEXEC) != 0)
+        return 69 + role;
     memset(observed, 0, sizeof observed);
     if (read(descriptors[0], observed, sizeof observed) != expected_size ||
         memcmp(observed, expected, (size_t)expected_size))
@@ -120,13 +136,16 @@ static int worker(const char *release, const char *final_release, int role) {
         if (errno != ENOENT) return 110 + role;
         state += (unsigned long)(role * 2 + 1);
     }
-    if (read(file, observed, 1) != 1 || observed[0] != "offset"[role + 1]) return 120 + role;
+    if (read(file, observed, 1) != 1 || observed[0] != "offset"[role + 2]) return 120 + role;
+    if (read(independent_file, observed, 1) != 1 || observed[0] != 'f') return 123 + role;
     if (read(descriptors[0], observed, sizeof observed) != 0) return 130 + role;
     if (sigprocmask(SIG_SETMASK, &previous, NULL) != 0) return 140 + role;
     for (int attempt = 0; attempt < 1000 && delivered != 2; ++attempt)
         usleep(1000);
     if (delivered != 2) return 150 + role;
     close(file);
+    close(independent_file);
+    close(duplicate_file);
     close(descriptors[0]);
     close(sockets[0]);
     close(sockets[1]);

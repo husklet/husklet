@@ -1012,6 +1012,11 @@ static int ckpt_same_native_ofd(int first, int second) {
     off_t first_offset = lseek(first, 0, SEEK_CUR);
     off_t second_offset = lseek(second, 0, SEEK_CUR);
     if (first_offset < 0 || second_offset < 0) return 0;
+    // Moving one descriptor can only identify a shared open file description when both views began at
+    // the same offset. Otherwise an independent descriptor may already sit at the probe value and appear
+    // to have followed the move. Besides producing a false identity, that collapses independent offsets
+    // and status flags onto one OFD during restore.
+    if (first_offset != second_offset) return 0;
     off_t probe = first_offset == 0 ? 1 : 0;
     if (lseek(first, probe, SEEK_SET) != probe) return 0;
     off_t observed = lseek(second, 0, SEEK_CUR);
