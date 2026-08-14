@@ -433,8 +433,11 @@ impl<'a> CaseExecution<'a> {
         }
         self.containers.start(name).await?;
         let status = if let Some(orchestration) = self.case.orchestration {
-            tokio::time::sleep(Duration::from_millis(orchestration.stop_after_ms)).await;
-            self.containers.stop(name, timeout).await?
+            let delay = Duration::from_millis(orchestration.stop_after_ms);
+            tokio::time::sleep(delay).await;
+            // The manifest timeout bounds the complete attempt, including the pre-stop delay.
+            // Validation proves the delay is shorter, so this never silently widens the case.
+            self.containers.stop(name, timeout.saturating_sub(delay)).await?
         } else {
             self.wait(name, timeout).await?
         };
