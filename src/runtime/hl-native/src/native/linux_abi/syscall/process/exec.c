@@ -429,6 +429,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             argv[i] = xargv[i];
         argv[ac < HL_MAXARGV - 1 ? ac : HL_MAXARGV - 1] = NULL;
         struct loaded lm;
+        uint64_t interp_identity = 0;
         char pc_ihost[4200];
         const char *pc_interp_host = NULL;
         (void)pc_ihost;
@@ -447,6 +448,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
 #endif
             struct loaded li;
             load_elf(ih, &li, NULL, &program_interpreter.bytes);
+            interp_identity = li.identity;
             jump = li.entry;
             at_base = li.base;
         }
@@ -462,7 +464,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // the new image is loaded + the arena is flushed -> try to restore its warm translated arena
         // from the persistent cache (this is what makes the go-build fork+execve storm fast). Graceful MISS
         // translates fresh + saves on exit.
-        pcache_exec_reload(p, pc_interp_host, argv[0], jump);
+        pcache_exec_reload(lm.identity, interp_identity, argv[0], jump);
 #endif
         exec_image_release(&program_interpreter);
         exec_image_release(&main_image);

@@ -173,6 +173,7 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
         exit(1);
     }
     uint8_t *f = image.bytes;
+    out->identity = hl_identity_image(image.bytes, image.size);
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
         hl_linux_image_release(&image);

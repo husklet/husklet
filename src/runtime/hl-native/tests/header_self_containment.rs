@@ -168,6 +168,48 @@ int main(void) {
 }
 
 #[test]
+fn executable_cache_identity_follows_pinned_bytes_not_a_reused_path() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-image-identity-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("identity probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"
+#include <stdint.h>
+#include <string.h>
+#include "translator/identity.h"
+
+int main(void) {
+    static const unsigned char first[] = {0x7f, 'E', 'L', 'F', 1};
+    static const unsigned char replacement[] = {0x7f, 'E', 'L', 'F', 2};
+    uint64_t pinned = hl_identity_image(first, sizeof first);
+    if (pinned != hl_identity_image(first, sizeof first)) return 1;
+    if (pinned == hl_identity_image(replacement, sizeof replacement)) return 2;
+    return 0;
+}
+"#,
+    )
+    .expect("identity probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("translator/identity.c"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("identity probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("identity probe execution");
+    assert!(run.success(), "identity probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove identity probe directory");
+}
+
+#[test]
 fn smc_page_index_is_exact_under_collisions_removal_and_publication() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");

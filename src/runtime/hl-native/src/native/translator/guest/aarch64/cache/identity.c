@@ -29,9 +29,9 @@ static uint64_t pcache_argv0_id(const char *argv0) {
     return hl_identity_name(argv0);
 }
 
-static uint64_t pcache_make_id(const char *prog_host, const char *interp_host, const char *argv0) {
-    uint64_t a = pcache_id_of(prog_host);
-    uint64_t b = interp_host ? pcache_id_of(interp_host) : 0xABCDEFull;
+static uint64_t pcache_make_id(uint64_t program, uint64_t interpreter, const char *argv0) {
+    uint64_t a = program;
+    uint64_t b = interpreter ? interpreter : 0xABCDEFull;
     return hl_identity_mix(a, b, pcache_engine_id(), pcache_argv0_id(argv0));
 }
 

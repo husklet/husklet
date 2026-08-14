@@ -1220,7 +1220,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         *have_interp = 1;
     }
     // key the cache by the identity of the guest binary + interp (+ the invoked name).
-    if (g_pcache) g_pc_binid = pcache_make_id(prog_host, interp_host, argv0);
+    if (g_pcache) g_pc_binid = pcache_make_id(lm->identity, *have_interp ? li->identity : 0, argv0);
     return prog;
 }
 

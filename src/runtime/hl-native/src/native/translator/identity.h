@@ -1,6 +1,7 @@
 #ifndef HL_TRANSLATOR_IDENTITY_H
 #define HL_TRANSLATOR_IDENTITY_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <hl/host_services.h>
@@ -15,6 +16,7 @@
 typedef enum hl_host_isa { HL_HOST_ISA_AARCH64 = 1, HL_HOST_ISA_X86_64 = 2 } hl_host_isa;
 
 uint64_t hl_identity_name(const char *name);
+uint64_t hl_identity_image(const void *bytes, size_t size);
 uint64_t hl_identity_file(const hl_host_file_metadata *metadata);
 uint64_t hl_identity_source(const hl_host_services *services, const char *path);
 uint64_t hl_identity_mix(uint64_t program, uint64_t interpreter, uint64_t engine, uint64_t name);

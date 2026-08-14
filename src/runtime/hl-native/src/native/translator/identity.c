@@ -33,6 +33,20 @@ uint64_t hl_identity_name(const char *name) {
     return identity_bytes(HL_IDENTITY_SEED, base);
 }
 
+uint64_t hl_identity_image(const void *bytes, size_t size) {
+    const uint8_t *data = bytes;
+    uint64_t value = HL_IDENTITY_SEED;
+    for (size_t index = 0; index < sizeof size; ++index) {
+        value ^= (uint8_t)(size >> (index * 8u));
+        value *= HL_IDENTITY_PRIME;
+    }
+    for (size_t index = 0; index < size; ++index) {
+        value ^= data[index];
+        value *= HL_IDENTITY_PRIME;
+    }
+    return value;
+}
+
 uint64_t hl_identity_file(const hl_host_file_metadata *metadata) {
     uint64_t value = HL_IDENTITY_SEED;
     uint64_t fields[5];
