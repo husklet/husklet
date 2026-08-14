@@ -120,10 +120,7 @@ static int smc_tracked_written(uint64_t address, uint64_t size) {
     uint64_t first = address & ~(page_size - 1);
     uint64_t last = (address + size - 1) & ~(page_size - 1);
     for (uint64_t guest_page = first;; guest_page += page_size) {
-        const void *canonical = NULL;
-        size_t contiguous = 0;
-        int resolved = hl_guest_memory_resolve_exec(guest_page, 1, &canonical, &contiguous);
-        uint64_t page = resolved > 0 ? (uint64_t)(uintptr_t)canonical : guest_page;
+        uint64_t page = hl_x86_guest_pointer(guest_page);
         page &= ~(page_size - 1);
         if (hl_smc_page_index_contains(&g_smc_index, page)) {
         /* Re-arm before publication. A concurrent writer which was already

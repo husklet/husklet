@@ -118,6 +118,7 @@ static void jit_guest_soft_restore_activate(void);
 static void jit_guest_soft_restore_deactivate(void);
 static void jit_guest_soft_deactivate(void);
 static int jit_guest_soft_active(void);
+uint64_t hl_x86_guest_pointer(uint64_t address);
 
 #include "../../translator/guest/x86_64/cpu.h"
 #include "../../translator/guest/x86_64/frame.h"
