@@ -88,7 +88,9 @@ static void svc_fs_access_50(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                 G_RET(c) = (uint64_t)(int64_t)-EBADF;
                 break;
             }
-            int changed = fchdir((int)a0) == 0 ? hl_vfs_cwd_cursor_set(destination) : -errno;
+            int authority = hl_vfs_cursor_native_descriptor(destination);
+            int changed = authority >= 0 && fchdir(authority) == 0 ? hl_vfs_cwd_cursor_set(destination)
+                                                                   : (authority < 0 ? -ENOSYS : -errno);
             if (changed == 0) (void)path_copy(g_cwd, sizeof g_cwd, destination->guest);
             G_RET(c) = (uint64_t)(int64_t)changed;
             break;

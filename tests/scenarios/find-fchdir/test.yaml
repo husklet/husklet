@@ -1,0 +1,14 @@
+cases:
+- id: find-fchdir/restores-initial-directory
+  image: ubuntu:22.04
+  timeout: 120
+  actions:
+  - shell:
+      script: |
+        set -eu
+        cd /
+        result=$(find /etc -type f -name passwd -print -quit)
+        test "$result" = /etc/passwd
+        test "$(pwd)" = /
+        echo FIND_RESTORED_CWD
+  expect: { stdout_contains: golden/restored.txt }
