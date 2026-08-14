@@ -1,0 +1,20 @@
+cases:
+- id: terminal-kill-suffix/readline-replace-suffix
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      steps:
+      - write: { text: "printf '<%s>\\n' BAD" }
+      - write: { text: "\u001b[D\u001b[D\u001b[D" }
+      - write: { text: "\u000b" }
+      - write: { text: "GOOD\r" }
+      - await_output: { contains: "<GOOD>", timeout_ms: 5000 }
+      - reject_output: { text: "<BAD>" }
+      - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/replaced.txt, golden/shell_ok.txt]
