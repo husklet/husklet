@@ -478,10 +478,10 @@ mod tests {
             };
             let process = i32::try_from(child.id())
                 .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "child PID exceeds i32"))?;
-            if let Err(error) = deliver(-process) {
-                if error.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(error);
-                }
+            if let Err(error) = deliver(-process)
+                && error.raw_os_error() != Some(libc::ESRCH)
+            {
+                return Err(error);
             }
             // Once delivery succeeds (or the group is already absent), retaining the
             // numeric PID would let a later Drop signal an unrelated, reused group.
@@ -551,7 +551,7 @@ mod tests {
         std::thread::spawn(move || {
             sender
                 .send(output.bytes().collect::<std::io::Result<Vec<_>>>())
-                .unwrap()
+                .unwrap();
         });
         let closed = receiver.recv_timeout(Duration::from_secs(2));
         if closed.is_err() {
@@ -1187,9 +1187,10 @@ int main(int argc, char **argv) {
                     assert!(status.success(), "checkpoint transaction child failed: {status}");
                     return;
                 }
-                if Instant::now() >= deadline {
-                    panic!("checkpoint transaction child exceeded 15 seconds");
-                }
+                assert!(
+                    Instant::now() < deadline,
+                    "checkpoint transaction child exceeded 15 seconds"
+                );
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
