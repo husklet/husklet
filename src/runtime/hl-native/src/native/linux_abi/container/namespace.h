@@ -9,6 +9,7 @@
 struct hl_linux_vfs_lower {
     char canon[HL_LINUX_VFS_LOWER_PATH_CAPACITY];
     size_t clen;
+    int descriptor;
 };
 
 struct hl_linux_vfs_namespace {

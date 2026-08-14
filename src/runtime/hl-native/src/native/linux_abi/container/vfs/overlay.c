@@ -28,11 +28,16 @@ static int g_nlower = 0;
 // register a read-only lower layer (image layer)
 static void add_lower(const char *dir) {
     if (g_nlower >= 8 || !dir || !dir[0]) return;
-    if (canonicalize_path(dir, g_lower[g_nlower].canon, sizeof g_lower[g_nlower].canon) != 0 &&
-        snprintf(g_lower[g_nlower].canon, sizeof g_lower[g_nlower].canon, "%s", dir) >=
-            (int)sizeof g_lower[g_nlower].canon)
+    struct hl_linux_vfs_lower *lower = &g_lower[g_nlower];
+    if (canonicalize_path(dir, lower->canon, sizeof lower->canon) != 0 &&
+        snprintf(lower->canon, sizeof lower->canon, "%s", dir) >= (int)sizeof lower->canon)
         return;
-    g_lower[g_nlower].clen = strlen(g_lower[g_nlower].canon);
+    // Keep namespace authority rooted in the directory object selected at launch. Reopening `canon` during
+    // exec would let a host-side ancestor replacement redirect authorization and image loading outside the
+    // immutable lower that the container was granted.
+    lower->descriptor = open(lower->canon, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (lower->descriptor < 0) return;
+    lower->clen = strlen(lower->canon);
     g_nlower++;
 }
 
