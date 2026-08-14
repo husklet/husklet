@@ -77,6 +77,7 @@
           host = pkgs.stdenv.hostPlatform;
           hostCpu = host.parsed.cpu.name;
           nativeCC = "${pkgs.stdenv.cc}/bin/cc";
+          nativeCXX = "${pkgs.stdenv.cc}/bin/c++";
           isNative = guest: host.isLinux && hostCpu == guest.isa;
           pkgsFor = guest: if isNative guest then pkgs else pkgs.pkgsCross.${guest.crossAttr};
           ccFor =
@@ -148,7 +149,9 @@
               )
               {
                 CC = nativeCC;
+                CXX = nativeCXX;
                 NATIVE_CC = nativeCC;
+                NATIVE_CXX = nativeCXX;
               }
               guestISAs;
         };
@@ -1081,7 +1084,16 @@
               );
               shellHook = ''
                 export CC="${toolchain.env.CC}"
+                export CXX="${toolchain.env.CXX}"
                 export NATIVE_CC="${toolchain.env.NATIVE_CC}"
+                export NATIVE_CXX="${toolchain.env.NATIVE_CXX}"
+                native_c_target="$($CC -dumpmachine)"
+                native_cxx_target="$($CXX -dumpmachine)"
+                if [ "$native_c_target" != "$native_cxx_target" ]; then
+                  printf 'native compiler target mismatch: CC=%s CXX=%s\n' \
+                    "$native_c_target" "$native_cxx_target" >&2
+                  return 1
+                fi
                 export CARGO_BUILD_JOBS="''${CARGO_BUILD_JOBS:-1}"
                 export HL_COMPAT_JOBS="''${HL_COMPAT_JOBS:-1}"
               '';
