@@ -13,9 +13,11 @@
 #include <unistd.h>
 
 #define HL_ENGINE_REQUEST_CHECKPOINT_PRIVATE 4u
+#if !defined(_WIN32)
 #include <sys/socket.h>
 #include <errno.h>
 #include <poll.h>
+#endif
 
 /* One process may embed every guest translator.  Keep registration keyed by
  * guest ISA: a constructor for one backend must never overwrite another. */
@@ -87,6 +89,10 @@ static void hl_engine_yield(hl_engine *engine) {
 }
 
 static hl_status hl_engine_checkpoint_control_ready(hl_engine *engine) {
+#if defined(_WIN32)
+    (void)engine;
+    return HL_STATUS_NOT_SUPPORTED;
+#else
     struct pollfd waiting;
     unsigned char ack = 0;
     int ready;
@@ -100,6 +106,7 @@ static hl_status hl_engine_checkpoint_control_ready(hl_engine *engine) {
         return HL_STATUS_PLATFORM_FAILURE;
     engine->checkpoint_control_ready = 1;
     return HL_STATUS_OK;
+#endif
 }
 
 uint32_t hl_engine_abi(void) {
@@ -115,6 +122,10 @@ uint64_t hl_engine_translation_count(const hl_engine *engine) {
 }
 
 hl_status hl_engine_checkpoint_configure(hl_engine *engine, int broker, int trigger) {
+#if defined(_WIN32)
+    if (engine == NULL || broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
+    return HL_STATUS_NOT_SUPPORTED;
+#else
     int broker_copy;
     int trigger_copy;
     if (engine == NULL || broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
@@ -160,6 +171,7 @@ hl_status hl_engine_checkpoint_configure(hl_engine *engine, int broker, int trig
     engine->checkpoint_broker = broker_copy;
     engine->checkpoint_trigger = trigger_copy;
     return HL_STATUS_OK;
+#endif
 }
 
 enum { HL_ENGINE_STRING_LIMIT = 64 * 1024 * 1024 };
@@ -892,6 +904,9 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
     if (engine == NULL || (data_size != 0 && data == NULL)) return HL_STATUS_INVALID_ARGUMENT;
     if (request == HL_ENGINE_REQUEST_CHECKPOINT_PRIVATE) {
         if (data_size != 0) return HL_STATUS_INVALID_ARGUMENT;
+#if defined(_WIN32)
+        return HL_STATUS_NOT_SUPPORTED;
+#else
         if (engine->checkpoint_control_parent < 0) return HL_STATUS_NOT_SUPPORTED;
         status = hl_engine_checkpoint_control_ready(engine);
         if (status != HL_STATUS_OK) return status;
@@ -913,6 +928,7 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
             if (written < 0 && errno == EINTR) continue;
             return HL_STATUS_PLATFORM_FAILURE;
         }
+#endif
     } else if (request == HL_ENGINE_REQUEST_SIGNAL) {
         uint32_t signal_number;
         if (data == NULL || data_size != sizeof(signal_number)) return HL_STATUS_INVALID_ARGUMENT;
