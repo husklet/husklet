@@ -56,8 +56,11 @@ static int invalid_case(void) {
     pid_t child = fork();
     if (child == 0) {
         prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-        struct sock_filter code[] = {BPF_JUMP(BPF_JMP | BPF_JA, 8, 0, 0)};
-        struct sock_fprog program = {.len = 1, .filter = code};
+        struct sock_filter code[] = {
+            BPF_STMT(BPF_LD | BPF_W | BPF_ABS, sizeof(struct seccomp_data)),
+            BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+        };
+        struct sock_fprog program = {.len = 2, .filter = code};
         errno = 0;
         _exit(syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &program) == -1 && errno == EINVAL ? 0 : 1);
     }

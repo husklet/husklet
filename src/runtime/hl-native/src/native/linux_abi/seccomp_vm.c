@@ -20,14 +20,16 @@ int hl_seccomp_validate(const struct hl_linux_sock_filter *f, uint16_t flen) {
         switch (CLASS(code)) {
         case 0x00:                                   /* LD */
             if (code == 0x00 || code == 0x80) break; /* IMM, LEN */
-            if (MODE(code) == 0x20 || MODE(code) == 0x40) {
-                if (!((code & 0x18) == 0 || (code & 0x18) == 0x08 || (code & 0x18) == 0x10)) return 0;
+            if (MODE(code) == 0x20) {
+                if (SIZE(code) != 0 || value > sizeof(struct hl_linux_seccomp_data) - sizeof(uint32_t) ||
+                    (value & (sizeof(uint32_t) - 1u)) != 0)
+                    return 0;
                 break;
             }
             if (code == 0x60 && value < MEMWORDS) break;
             return 0;
         case 0x01: /* LDX */
-            if (code == 0x01 || code == 0x81 || (code == 0x61 && value < MEMWORDS) || code == 0xb1) break;
+            if (code == 0x01 || code == 0x81 || (code == 0x61 && value < MEMWORDS)) break;
             return 0;
         case 0x02: /* ST */
         case 0x03: /* STX */

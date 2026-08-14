@@ -25,9 +25,17 @@ int main(void) {
         {0x34, 0, 0, 0},
         {0x06, 0, 0, HL_LINUX_SECCOMP_RET_ALLOW},
     };
+    const struct hl_linux_sock_filter invalid_loads[][3] = {
+        {{0x20, 0, 0, sizeof(struct hl_linux_seccomp_data)}, {0x06, 0, 0, HL_LINUX_SECCOMP_RET_ALLOW}},
+        {{0x28, 0, 0, 0}, {0x06, 0, 0, HL_LINUX_SECCOMP_RET_ALLOW}},
+        {{0x20, 0, 0, 1}, {0x06, 0, 0, HL_LINUX_SECCOMP_RET_ALLOW}},
+        {{0x01, 0, 0, 0}, {0x40, 0, 0, 0}, {0x06, 0, 0, HL_LINUX_SECCOMP_RET_ALLOW}},
+    };
     if (!hl_seccomp_validate(valid, 4)) return 1;
     if (hl_seccomp_validate(invalid_jump, 1)) return 2;
     if (hl_seccomp_validate(invalid_divide, 2)) return 3;
+    for (unsigned i = 0; i < sizeof invalid_loads / sizeof invalid_loads[0]; i++)
+        if (hl_seccomp_validate(invalid_loads[i], i == 3 ? 3 : 2)) return 4 + i;
     return 0;
 }
 "#,
