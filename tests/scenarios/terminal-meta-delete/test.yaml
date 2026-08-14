@@ -10,7 +10,8 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "stty -echo\r" }
+      - write: { text: "stty -echo; printf \"META-${x}READY\\n\"\r" }
+      - await_output: { contains: META-READY, timeout_ms: 5000 }
       - write: { text: "DELETE stty echo; printf \"META-${x}DELETE-OK\\n\"" }
       - write: { text: "\u0001" }
       - write: { text: "\u001bd" }
