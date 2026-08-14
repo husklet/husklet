@@ -880,13 +880,20 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
             if (kv[i].flags & EV_EOF) {
                 // kqueue raises EV_EOF for BOTH a peer half-close (shutdown SHUT_WR: the read side hits
                 // EOF but the socket is still writable) and a full hangup. Linux distinguishes them:
-                // EPOLLRDHUP on a half-close, EPOLLHUP only on a full disconnect. poll() reports POLLHUP
-                // only for a full hangup, so use it to tell the two apart. EPOLLRDHUP is edge-reported
-                // only when the guest actually registered interest in it (unlike EPOLLHUP/EPOLLERR).
+                // EPOLLRDHUP on a peer close, EPOLLHUP only once the local connection is also closed.
+                // The AF_UNIX transport collapses a peer close into host POLLHUP, so its socket EOF must
+                // not become guest EPOLLHUP. Non-sockets retain the poll distinction. EPOLLRDHUP is
+                // edge-reported only when the guest registered it (unlike EPOLLHUP/EPOLLERR).
                 int hup = 1;
                 if (kv[i].filter == EVFILT_READ) {
                     struct pollfd pf = {.fd = (int)kv[i].ident, .events = POLLIN, .revents = 0};
                     if (poll(&pf, 1, 0) >= 0) hup = (pf.revents & POLLHUP) != 0;
+                    {
+                        int socket_type;
+                        socklen_t socket_type_size = sizeof(socket_type);
+                        if (getsockopt((int)kv[i].ident, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_size) == 0)
+                            hup = 0;
+                    }
                 }
                 if (hup) ev |= 0x10u;                                                            // EPOLLHUP
                 if (kv[i].ident < HL_NFD && (g_ep_events[kv[i].ident] & 0x2000u)) ev |= 0x2000u; // EPOLLRDHUP
