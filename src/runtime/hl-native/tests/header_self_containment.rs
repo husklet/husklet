@@ -1048,6 +1048,12 @@ int main(void) {
     if (ckpt_decimal_capacity("8192x", 65536, 1048576, &size) == 0) return 30;
     if (ckpt_decimal_capacity("1048577", 65536, 1048576, &size) == 0) return 31;
     if (ckpt_decimal_capacity("", 65536, 1048576, &size) == 0) return 32;
+    if (ckpt_fixed_payload_object_size(48, 16, 2, 16, 2, &size) != 0 || size != 32) return 33;
+    if (ckpt_fixed_payload_object_size(47, 16, 2, 16, 2, &size) == 0) return 34;
+    if (ckpt_fixed_payload_object_size(49, 16, 2, 16, 2, &size) == 0) return 35;
+    if (ckpt_fixed_payload_object_size(48, 16, 3, 16, 2, &size) == 0) return 36;
+    if (ckpt_fixed_payload_object_size(INT64_MAX, 16, UINT64_MAX, 16, UINT64_MAX, &size) == 0) return 37;
+    if (ckpt_fixed_payload_object_size(48, 16, 2, 16, 2, 0) == 0) return 38;
     return 0;
 }
 "#,

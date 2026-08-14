@@ -552,29 +552,31 @@ static int ckpt_restore_fds_dir(const char *procdir) {
 static int ckpt_restore_cpu_dir(const char *procdir, const struct ckpt_meta *m, struct cpu **out) {
     char pf[1300];
     snprintf(pf, sizeof pf, "%s/cpu", procdir);
-    if (m->n_threads > SIZE_MAX / sizeof(struct cpu)) return -1;
-    size_t bytes = (size_t)m->n_threads * sizeof(struct cpu);
-    if (bytes > SIZE_MAX - sizeof(struct ckpt_cpu_header)) return -1;
-    size_t file_bytes = sizeof(struct ckpt_cpu_header) + bytes;
-    struct ckpt_cpu_header *cpu_file = malloc(file_bytes);
-    if (!cpu_file || ckpt_source_load(pf, cpu_file, file_bytes) != 0) {
-        free(cpu_file);
+    *out = NULL;
+    size_t bytes;
+    if (ckpt_fixed_payload_object_size(ckpt_source_object_size(pf), sizeof(struct ckpt_cpu_header), m->n_threads,
+                                       sizeof(struct cpu), THREAD_REG_MAX, &bytes) != 0)
+        return -1;
+    FILE *file = ckpt_source_fopen(pf);
+    struct ckpt_cpu_header header;
+    if (file == NULL || ckpt_rd_all(file, &header, sizeof header) != 0) {
+        if (file != NULL) ckpt_source_fclose(file);
         fprintf(stderr, "[restore] cannot read cpu state\n");
         return -1;
     }
-    if (cpu_file->magic != CKPT_CPU_MAGIC || cpu_file->version != m->version || cpu_file->arch != G_CKPT_ARCH ||
-        cpu_file->count != m->n_threads || cpu_file->payload_size != sizeof(struct cpu)) {
+    if (header.magic != CKPT_CPU_MAGIC || header.version != m->version || header.arch != G_CKPT_ARCH ||
+        header.count != m->n_threads || header.payload_size != sizeof(struct cpu)) {
         fprintf(stderr, "[restore] cpu image version/architecture/layout mismatch\n");
-        free(cpu_file);
+        ckpt_source_fclose(file);
         return -1;
     }
     struct cpu *images = malloc(bytes);
-    if (!images) {
-        free(cpu_file);
+    if (!images || ckpt_rd_all(file, images, bytes) != 0 || fgetc(file) != EOF) {
+        free(images);
+        ckpt_source_fclose(file);
         return -1;
     }
-    memcpy(images, cpu_file + 1, bytes);
-    free(cpu_file);
+    ckpt_source_fclose(file);
     // Zero host-transient fields (meaningful only WHILE a block runs; run_block re-populates them). The
     // architectural state (x[],sp,pc,tls,nzcv,v[],sigmask,tpending,alt_*,tid,ctid) + shadow stack are verbatim.
     for (uint64_t i = 0; i < m->n_threads; i++) {

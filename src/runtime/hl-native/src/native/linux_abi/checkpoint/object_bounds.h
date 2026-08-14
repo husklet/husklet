@@ -55,6 +55,15 @@ static inline int ckpt_decimal_capacity(const char *text, size_t fallback, size_
     return 0;
 }
 
+static inline int ckpt_fixed_payload_object_size(int64_t stored, size_t header, uint64_t count, size_t element,
+                                                 uint64_t count_limit, size_t *payload) {
+    if (payload == NULL || stored < 0 || (uint64_t)stored > SIZE_MAX ||
+        ckpt_counted_object_size((size_t)stored, header, count, element, count_limit) != 0)
+        return -1;
+    *payload = (size_t)count * element;
+    return 0;
+}
+
 static inline int ckpt_inotify_object_size(int64_t stored, size_t *size) {
     return ckpt_bounded_object_size(stored, 1, CKPT_INOTIFY_IMAGE_LIMIT, size);
 }
