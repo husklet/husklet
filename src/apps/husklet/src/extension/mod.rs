@@ -18,6 +18,8 @@ mod control;
 mod files;
 mod image;
 mod inventory;
+mod sidecar;
+mod state;
 
 use std::io;
 use std::path::PathBuf;
@@ -29,6 +31,8 @@ pub use control::ContainerLifecycle;
 pub use files::WorkspaceDirectory;
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
+pub use sidecar::{Image, Outcome, Sidecar, SidecarSpec};
+pub use state::{Fault, Records};
 
 use crate::config::WorkspaceConfig;
 
