@@ -30,7 +30,7 @@ impl Definition {
     }
 
     #[must_use]
-    pub fn definition_value(&self) -> Option<&str> {
+    pub fn replacement(&self) -> Option<&str> {
         self.value.as_deref()
     }
 }
@@ -294,7 +294,7 @@ impl<'a> CCompiler<'a> {
             build.flag_if_supported(warning.flag());
         }
         for definition in &spec.definitions {
-            build.define(definition.name(), definition.definition_value());
+            build.define(definition.name(), definition.replacement());
         }
         for source in &spec.sources {
             build.file(source);
@@ -327,7 +327,7 @@ mod tests {
         let spec = ArchiveSpec::new("core").definitions([Definition::value("EXPRESSION", "left=right")]);
         let definition = &spec.definitions[0];
         assert_eq!(definition.name(), "EXPRESSION");
-        assert_eq!(definition.definition_value(), Some("left=right"));
+        assert_eq!(definition.replacement(), Some("left=right"));
     }
 
     #[test]
