@@ -4,6 +4,7 @@ use crate::style::{Align, Length, Scale, Token, Tone, Variant};
 /// One typed property name. A closed set keeps the wire small and lets an
 /// adapter be a total function over properties.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Prop {
     // Content
     Label,
@@ -55,6 +56,7 @@ pub enum Prop {
 
 /// Orientation of a container or divider.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Orientation {
     #[default]
     Horizontal,
@@ -63,6 +65,7 @@ pub enum Orientation {
 
 /// One selectable option offered by a choice control.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Choice {
     pub value: String,
     pub label: String,
@@ -81,6 +84,7 @@ impl Choice {
 /// no nesting beyond one list level, so an adapter never recurses on a value.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum PropValue {
     Text(String),
     Number(f64),
@@ -141,6 +145,7 @@ impl PropValue {
 
 /// A user interaction kind a node can react to.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Trigger {
     Invoke,
     Change,
@@ -156,6 +161,7 @@ pub enum Trigger {
 
 /// Stable producer-owned identity for a reaction, echoed back on every event.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct EventId(String);
 
 impl EventId {
@@ -171,6 +177,7 @@ impl EventId {
 
 /// One declared reaction: a trigger bound to a producer-owned identity.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Handler {
     pub trigger: Trigger,
     pub id: EventId,

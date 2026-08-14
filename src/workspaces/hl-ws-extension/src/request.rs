@@ -13,7 +13,10 @@ use crate::port::{ContainerSummary, Division, Entry, HostError, ImageSummary, Ta
 /// Adjacently tagged rather than internally tagged: an internal tag silently
 /// ignores unmodelled arguments, and a call carrying an argument this host does
 /// not implement must be refused, not quietly executed without it.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+///
+/// Not `Eq`: an interface description carries measurements, and a measurement
+/// has no total equality.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "call", content = "with", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     WorkspaceInfo,
@@ -33,6 +36,7 @@ pub enum Request {
     FilesystemRead { path: RelativePath },
     FilesystemWrite { path: RelativePath, contents: Vec<u8> },
     InterfaceOpenTab { title: String },
+    InterfaceRender { frame: hl_gui::Frame },
     EventSubscribe { topic: Topic },
     EventUnsubscribe { topic: Topic },
 }
@@ -57,7 +61,7 @@ impl Request {
             }
             Self::FilesystemList { .. } | Self::FilesystemRead { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. } => Capability::FilesystemWrite,
-            Self::InterfaceOpenTab { .. } => Capability::Interface,
+            Self::InterfaceOpenTab { .. } | Self::InterfaceRender { .. } => Capability::Interface,
             Self::EventSubscribe { topic } | Self::EventUnsubscribe { topic } => topic.capability(),
         }
     }

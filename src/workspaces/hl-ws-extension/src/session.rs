@@ -26,6 +26,7 @@ pub struct Session {
     authority: Authority,
     topics: BTreeSet<Topic>,
     tab: Option<String>,
+    pending: Vec<hl_gui::Frame>,
 }
 
 impl Session {
@@ -35,6 +36,7 @@ impl Session {
             authority,
             topics: BTreeSet::new(),
             tab: None,
+            pending: Vec::new(),
         }
     }
 
@@ -102,6 +104,7 @@ impl Session {
                 self.files(request, services)
             }
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
+            Request::InterfaceRender { frame } => self.render(frame),
             Request::EventSubscribe { topic } => {
                 self.topics.insert(*topic);
                 Ok(Reply::Done)
@@ -183,6 +186,30 @@ impl Session {
                 call: "filesystem".into(),
             }),
         }
+    }
+
+    /// Accepts an interface description for the session's own tab.
+    ///
+    /// The frame is handed to the surface the host owns; an extension that has
+    /// not opened a tab has nowhere to draw, which is a conflict rather than a
+    /// refusal, because the grant is present and only the order is wrong.
+    fn render(&mut self, frame: &hl_gui::Frame) -> Result<Reply, Failure> {
+        if self.tab.is_none() {
+            return Err(Failure::Conflict {
+                detail: "no tab is open to render into".into(),
+            });
+        }
+        self.pending.push(frame.clone());
+        Ok(Reply::Done)
+    }
+
+    /// Interface frames received since the host last collected them.
+    ///
+    /// The protocol layer holds them rather than applying them: it owns no
+    /// toolkit, and the surface belongs to the host.
+    #[must_use]
+    pub fn drain(&mut self) -> Vec<hl_gui::Frame> {
+        std::mem::take(&mut self.pending)
     }
 
     /// Opens the one tab a session owns. A second call returns the same tab

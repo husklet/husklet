@@ -3,6 +3,7 @@
 /// Toolkit adapters must handle every variant; adding one is a deliberate
 /// widening of the component library, not a rendering hint.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Tag {
     // Layout
     Column,

@@ -475,3 +475,53 @@ fn an_empty_grant_reaches_nothing_at_all() {
         assert!(host.ledger.reached().is_empty());
     }
 }
+
+#[test]
+fn an_interface_is_rendered_only_into_a_tab_the_session_opened() {
+    let host = Host::new();
+    let mut session = session(&[Capability::Interface], &[]);
+    let services = services(&host);
+
+    let mut surface = hl_gui::Surface::new();
+    let card = surface.create(hl_gui::Tag::Card);
+    surface.append(hl_gui::NodeId::ROOT, card);
+    let frame = surface.frame();
+
+    let premature = session
+        .dispatch(&Request::InterfaceRender { frame: frame.clone() }, &services)
+        .expect_err("nowhere to draw");
+    assert!(
+        matches!(premature, Failure::Conflict { .. }),
+        "the grant is present and only the order is wrong, got {premature:?}"
+    );
+
+    session
+        .dispatch(
+            &Request::InterfaceOpenTab {
+                title: "Containers".into(),
+            },
+            &services,
+        )
+        .expect("opened");
+    session
+        .dispatch(&Request::InterfaceRender { frame: frame.clone() }, &services)
+        .expect("rendered");
+
+    let collected = session.drain();
+    assert_eq!(collected, vec![frame], "the host receives exactly what was sent");
+    assert!(session.drain().is_empty(), "frames are handed over once");
+}
+
+#[test]
+fn rendering_an_interface_requires_the_interface_capability() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    let frame = hl_gui::Surface::new().frame();
+
+    let failure = session
+        .dispatch(&Request::InterfaceRender { frame }, &services(&host))
+        .expect_err("refused");
+
+    assert!(matches!(failure, Failure::Denied { .. }));
+    assert!(host.ledger.reached().is_empty());
+}

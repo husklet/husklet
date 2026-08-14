@@ -13,7 +13,7 @@ path = "src/lib.rs"
 # is reached through a port this crate declares and something else implements,
 # so the protocol is provable without a runtime.
 [dependencies]
-hl-gui = { path = "../hl-gui" }
+hl-gui = { path = "../hl-gui", features = ["wire"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

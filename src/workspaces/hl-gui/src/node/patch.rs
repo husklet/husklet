@@ -5,6 +5,7 @@ use crate::identity::NodeId;
 /// One structural mutation. This is the only shape structure takes on the wire;
 /// there is no whole-tree replacement.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Patch {
     /// Allocate a detached node. Never attaches it, so a subtree is built
     /// bottom-up and inserted once.
@@ -66,6 +67,7 @@ impl Patch {
 /// An ordered batch applied atomically between paints. A frame is never
 /// partially visible: the adapter commits once, after the last patch.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Frame {
     pub sequence: u64,
     pub patches: Vec<Patch>,

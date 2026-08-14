@@ -11,6 +11,7 @@ use crate::style::{Align, Length, Tone};
 
 /// Identity of one data source within a session.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct SourceId(u64);
 
 impl SourceId {
@@ -28,6 +29,7 @@ impl SourceId {
 /// Generation of a source's contents. A window carrying a stale generation is
 /// discarded rather than shown next to fresh rows.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Version(u64);
 
 impl Version {
@@ -49,6 +51,7 @@ impl Version {
 
 /// Identity of one outstanding window request.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct RequestId(u64);
 
 impl RequestId {
@@ -65,6 +68,7 @@ impl RequestId {
 
 /// One declared column of a table source.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Column {
     pub key: String,
     pub title: String,
@@ -106,6 +110,7 @@ impl Column {
 /// One rendered cell. Typed so alignment and formatting are the adapter's job,
 /// not string formatting at the producer.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Cell {
     Text(String),
     Number(f64),
@@ -132,6 +137,7 @@ impl Cell {
 
 /// One materialized row; cells match the declared columns positionally.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Row {
     pub key: u64,
     pub cells: Vec<Cell>,
@@ -148,6 +154,7 @@ impl Row {
 
 /// A half-open span of absolute row indices.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct RowRange {
     pub start: u64,
     pub count: u32,
@@ -186,6 +193,7 @@ impl RowRange {
 
 /// Sort intent for a source, applied by the producer.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Sort {
     pub column: String,
     pub descending: bool,
@@ -193,6 +201,7 @@ pub struct Sort {
 
 /// Host request for one window of rows.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct RowRequest {
     pub id: RequestId,
     pub source: SourceId,
@@ -204,6 +213,7 @@ pub struct RowRequest {
 
 /// Producer answer carrying the rows for one previously requested window.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct RowWindow {
     pub source: SourceId,
     pub version: Version,
@@ -215,6 +225,7 @@ pub struct RowWindow {
 /// A producer-side mutation of a source, independent of the node tree.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum SourceMutation {
     Open {
         source: SourceId,

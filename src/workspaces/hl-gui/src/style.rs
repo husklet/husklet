@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 /// A semantic color slot resolved by the active theme.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Token {
     Ground,
     Surface,
@@ -60,6 +61,7 @@ impl Token {
 
 /// A spacing or sizing quantity. `Step` is the only numeric spacing on the wire.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Length {
     /// `n` steps on the 4px scale. Clamped to the generated class range.
     Step(u8),
@@ -97,6 +99,7 @@ impl Length {
 
 /// Emphasis level of a control.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Variant {
     #[default]
     Plain,
@@ -121,6 +124,7 @@ impl Variant {
 
 /// Semantic weight of a control or badge.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Tone {
     #[default]
     Neutral,
@@ -147,6 +151,7 @@ impl Tone {
 
 /// Placement of a child within its allocation.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Align {
     #[default]
     Start,
@@ -171,6 +176,7 @@ impl Align {
 
 /// Overall compactness of the generated spacing.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Density {
     Compact,
     #[default]
@@ -193,6 +199,7 @@ impl Density {
 
 /// Text size role, independent of the concrete font stack.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Scale {
     Caption,
     #[default]
@@ -217,6 +224,7 @@ impl Scale {
 
 /// An opaque 24-bit color. The adapter converts to its toolkit representation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Rgb {
     pub red: u8,
     pub green: u8,
@@ -238,6 +246,7 @@ impl Rgb {
 
 /// Resolved appearance for one rendering session.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct Theme {
     pub name: String,
     pub colors: BTreeMap<Token, Rgb>,

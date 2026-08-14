@@ -3,6 +3,7 @@
 /// Identifiers are monotonic within a session and are never reused, so a late
 /// patch naming a removed node is always detectable rather than ambiguous.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub struct NodeId(u64);
 
 impl NodeId {
