@@ -125,48 +125,6 @@ fn create_workspace(store: &mut WorkspaceStore, workspace: WorkspaceConfig) -> s
     store.upsert(workspace)
 }
 
-#[cfg(test)]
-mod create_tests {
-    use super::*;
-
-    #[test]
-    fn duplicate_creation_preserves_the_existing_workspace() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("workspaces.conf");
-        let mut store = WorkspaceStore::load(&path).unwrap();
-        store
-            .upsert(WorkspaceConfig::new("demo", "original:latest", Arch::Arm64))
-            .unwrap();
-
-        let error = create_workspace(
-            &mut store,
-            WorkspaceConfig::new("demo", "replacement:latest", Arch::Amd64),
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
-
-        let reloaded = WorkspaceStore::load(path).unwrap();
-        let workspace = reloaded.get("demo").unwrap();
-        assert_eq!(workspace.image, "original:latest");
-        assert_eq!(workspace.arch, Arch::Arm64);
-    }
-
-    #[test]
-    fn unique_creation_is_persisted() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("workspaces.conf");
-        let mut store = WorkspaceStore::load(&path).unwrap();
-
-        create_workspace(
-            &mut store,
-            WorkspaceConfig::new("demo", "image:latest", Arch::Arm64),
-        )
-        .unwrap();
-
-        assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
-    }
-}
-
 impl Form {
     pub(crate) fn new() -> Self {
         let terminal = TermConfig::default();
@@ -462,3 +420,45 @@ impl Form {
 }
 
 // ---- new-workspace widget helpers ----
+
+#[cfg(test)]
+mod create_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_creation_preserves_the_existing_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.conf");
+        let mut store = WorkspaceStore::load(&path).unwrap();
+        store
+            .upsert(WorkspaceConfig::new("demo", "original:latest", Arch::Arm64))
+            .unwrap();
+
+        let error = create_workspace(
+            &mut store,
+            WorkspaceConfig::new("demo", "replacement:latest", Arch::Amd64),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+
+        let reloaded = WorkspaceStore::load(path).unwrap();
+        let workspace = reloaded.get("demo").unwrap();
+        assert_eq!(workspace.image, "original:latest");
+        assert_eq!(workspace.arch, Arch::Arm64);
+    }
+
+    #[test]
+    fn unique_creation_is_persisted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.conf");
+        let mut store = WorkspaceStore::load(&path).unwrap();
+
+        create_workspace(
+            &mut store,
+            WorkspaceConfig::new("demo", "image:latest", Arch::Arm64),
+        )
+        .unwrap();
+
+        assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
+    }
+}
