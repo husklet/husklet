@@ -435,6 +435,95 @@ mod tests {
     #[cfg(feature = "native-test-hooks")]
     use std::time::{Duration, Instant};
 
+    #[cfg(feature = "native-test-hooks")]
+    struct IsolatedTestChild(std::process::Child);
+
+    #[cfg(feature = "native-test-hooks")]
+    impl IsolatedTestChild {
+        fn spawn(mut command: std::process::Command) -> std::io::Result<Self> {
+            use std::os::unix::process::CommandExt as _;
+
+            // SAFETY: setsid is async-signal-safe and touches no Rust-owned state.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+            command.spawn().map(Self)
+        }
+
+        fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+            self.0.try_wait()
+        }
+
+        fn terminate(&mut self) -> std::io::Result<()> {
+            if let Ok(process) = i32::try_from(self.0.id()) {
+                // SAFETY: spawn made the child a session and process-group leader, so the
+                // negative identifier is confined to this test's descendants.
+                let result = unsafe { libc::kill(-process, libc::SIGKILL) };
+                if result < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::ESRCH) {
+                        let _ = self.0.wait();
+                        return Err(error);
+                    }
+                }
+            }
+            self.0.wait().map(drop)
+        }
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    impl Drop for IsolatedTestChild {
+        fn drop(&mut self) {
+            let _ = self.terminate();
+        }
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn isolated_test_child_termination_closes_descendant_descriptors() {
+        use std::io::BufRead as _;
+        use std::process::Stdio;
+
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 60 & echo $!; wait"]).stdout(Stdio::piped());
+        let mut child = IsolatedTestChild::spawn(command).unwrap();
+        let output = child.0.stdout.take().unwrap();
+        let mut output = std::io::BufReader::new(output);
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        let descendant = line.trim().parse::<i32>().unwrap();
+        // SAFETY: signal zero only probes the PID printed by the live test child.
+        assert_eq!(
+            unsafe { libc::kill(descendant, 0) },
+            0,
+            "descendant was not live before cleanup"
+        );
+
+        child.terminate().unwrap();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            sender
+                .send(output.bytes().collect::<std::io::Result<Vec<_>>>())
+                .unwrap()
+        });
+        let closed = receiver.recv_timeout(Duration::from_secs(2));
+        if closed.is_err() {
+            // SAFETY: this is the exact PID reported by the deliberately spawned descendant.
+            unsafe { libc::kill(descendant, libc::SIGKILL) };
+        }
+        assert_eq!(
+            closed.unwrap().unwrap(),
+            Vec::<u8>::new(),
+            "a descendant retained the inherited descriptor"
+        );
+    }
+
     fn put16(bytes: &mut [u8], offset: usize, value: u16) {
         bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -1034,15 +1123,15 @@ int main(int argc, char **argv) {
     fn checkpoint_control_transaction_serializes_readiness_and_acknowledgement() {
         const CHILD: &str = "HL_NATIVE_CHECKPOINT_TRANSACTION_CHILD";
         if std::env::var_os(CHILD).is_none() {
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
                 .args([
                     "--exact",
                     "engine::tests::checkpoint_control_transaction_serializes_readiness_and_acknowledgement",
                     "--nocapture",
                 ])
-                .env(CHILD, "1")
-                .spawn()
-                .unwrap();
+                .env(CHILD, "1");
+            let mut child = IsolatedTestChild::spawn(command).unwrap();
             let deadline = Instant::now() + Duration::from_secs(15);
             loop {
                 if let Some(status) = child.try_wait().unwrap() {
@@ -1050,8 +1139,6 @@ int main(int argc, char **argv) {
                     return;
                 }
                 if Instant::now() >= deadline {
-                    child.kill().unwrap();
-                    let _ = child.wait();
                     panic!("checkpoint transaction child exceeded 15 seconds");
                 }
                 std::thread::sleep(Duration::from_millis(10));
