@@ -1397,9 +1397,8 @@ static int stw_force_dispatch_flush(void) {
    and its BUS ledger are changed as one transaction.  Unlike cache rotation,
    this preserves the current arena: only the mapping publisher is active
    until stw_mapping_end releases the gate. */
-static void stw_mapping_begin(void) {
+static void stw_mapping_begin_locked(void) {
     pthread_t me = pthread_self();
-    pthread_mutex_lock(&g_jit_lock);
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
     /* seq_cst: pairs with stw_before_translated's in_translated publication. */
     atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
@@ -1420,6 +1419,11 @@ static void stw_mapping_begin(void) {
         if (atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire) && g_stw_threads[i].cpu != NULL)
             G_SOFT_TLB_CLEAR(g_stw_threads[i].cpu);
 #endif
+}
+
+static void stw_mapping_begin(void) {
+    pthread_mutex_lock(&g_jit_lock);
+    stw_mapping_begin_locked();
 }
 
 static void stw_mapping_end(void) {

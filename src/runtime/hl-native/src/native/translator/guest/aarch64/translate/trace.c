@@ -223,6 +223,10 @@ static int smc_commit(struct cpu *c) {
         pthread_mutex_unlock(&g_jit_lock);
         return 1;
     }
+    /* Freeze peer writers before hashing whole cache lines. Distinct generated-code slots share a
+       line: classifying before the rendezvous can record a peer's new bytes before that peer has
+       invalidated its stale translation, making its later flush look unchanged. */
+    stw_mapping_begin_locked();
     __atomic_store_n(&g_smc_seen, 1, __ATOMIC_RELEASE);
     if (!c->smc_range_overflow && !force_whole) {
         uint32_t retained = 0;
@@ -253,13 +257,12 @@ static int smc_commit(struct cpu *c) {
         }
         c->smc_range_count = retained;
         if (!retained) {
-            pthread_mutex_unlock(&g_jit_lock);
             c->smc_range_count = 0;
             c->smc_range_overflow = 0;
+            stw_mapping_end();
             return 1;
         }
     }
-    pthread_mutex_unlock(&g_jit_lock);
     /*
      * Do not rewrite live map entries in place here.  Besides leaving several
      * independent ingress paths to the old body (direct chains, shadow
@@ -274,7 +277,6 @@ static int smc_commit(struct cpu *c) {
      * executing host PC is invalidated.  Subsequent entries translate the
      * modified guest bytes on demand.
     */
-    stw_mapping_begin();
 #if HL_ENABLE_LOGGING
     uint32_t removed;
 #endif
