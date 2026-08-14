@@ -1,5 +1,5 @@
-use super::*;
 use crate::build::Changes;
+use std::collections::BTreeMap;
 
 #[test]
 fn commit_changes_apply_runtime_and_image_metadata_and_reject_unknowns() {
