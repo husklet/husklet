@@ -58,7 +58,7 @@
 #include "../../persist.h"
 
 #define PC_MAGIC 0x31304350544a4c48ull // "HLJTPC01" (LE)
-#define PC_VERSION 10                  // v10 stores the full executable content identity.
+#define PC_VERSION 11                  // v11 disables persistence for mutable file-backed library mappings.
 #define PC_VERSION_EFF PC_VERSION
 #define PC_TRANSLATOR_ABI HL_PCACHE_ABI_X86_64
 // Fixed guest VA bases (high, reliably free above the kernel-chosen heap/stack and below the dyld shared
@@ -249,8 +249,6 @@ static uint64_t pcache_mmap_hint(uint64_t len) {
     return a;
 }
 
-#define PCACHE_MMAP_HINT 1
-
 // Called by mem.c after a hinted file-backed mmap SUCCEEDED AT ITS HINT (r == hint). Cold epoch: record
 // the mapping in the manifest so its blocks persist. Warm epoch: this is the activation gate -- if the
 // mapped file's identity matches the manifest entry restored for this base, the deferred blocks in
@@ -372,7 +370,7 @@ static int pcache_load(uint64_t entry_jump) {
         h.cpu_sz != sizeof(struct cpu) || h.map_n != JIT_MAP_N || h.ibtc_n != IBTC_N || h.img_base != PC_IMG_BASE ||
         h.interp_base != PC_INTERP_BASE || !hl_identity_digest_equal(&h.bin_id, &g_pc_binid) || h.entry_jump != entry_jump ||
         h.arena_used > CACHE_SZ || h.n_mapent > JIT_MAP_N || h.n_pend > (1u << 16) || h.n_reloc > PC_RELOC_CAP ||
-        h.n_lib > PC_LIB_MAX) { // n_reloc bound tracks the g_reloc cap
+        h.n_lib != 0) { // mutable file mappings are never persistent translation authority
         free(image);
         return 0;
     }

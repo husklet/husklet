@@ -33,8 +33,6 @@ static uint64_t pcache_mmap_hint(uint64_t len) {
     return base;
 }
 
-#define PCACHE_MMAP_HINT 1
-
 static void pcache_note_libmap(uint64_t base, uint64_t len, const hl_host_file_metadata *metadata) {
     if (!g_pcache || !metadata || !len || base > UINT64_MAX - len) return;
     uint64_t id = hl_identity_file(metadata);

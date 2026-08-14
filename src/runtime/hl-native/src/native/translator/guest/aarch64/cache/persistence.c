@@ -99,7 +99,7 @@ static int pcache_load(uint64_t entry_jump) {
         h.interp_base != PC_INTERP_BASE || !hl_identity_digest_equal(&h.bin_id, &g_pc_binid) || h.entry_jump != entry_jump ||
         h.arena_used > CACHE_SZ || (h.arena_used & 3) || h.n_reloc > PC_RELOC_CAP || h.n_mapent > JIT_MAP_N ||
         h.n_pend > (1u << 16) || h.n_t2 > T2_MAX || h.n_txpg > TXPG_N || h.n_prov > PC_PROV_CAP ||
-        h.n_lib > PC_LIB_MAX) {
+        h.n_lib != 0) {
         free(image);
         return 0;
     }
