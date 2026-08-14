@@ -1,0 +1,25 @@
+cases:
+- id: terminal-shebang-missing/status-and-recovery
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "printf '#!/definitely/missing-husklet-interpreter\\ntouch /tmp/husklet-shebang-ran\\n' > /tmp/husklet-shebang; chmod 0755 /tmp/husklet-shebang; stty -echo; PS1='SHEBANG# '; printf 'SHEBANG-%s\\n' READY\r" }
+      - await_output: { contains: SHEBANG-READY, timeout_ms: 5000 }
+      - write: { text: "/tmp/husklet-shebang\r" }
+      - await_output: { contains: "cannot execute", timeout_ms: 5000 }
+      - write: { text: "status=$?; if test -e /tmp/husklet-shebang-ran; then ran=yes; else ran=no; fi; printf 'SHEBANG-STATUS-%s-RAN-%s\\n' \"$status\" \"$ran\"\r" }
+      - await_output: { contains: SHEBANG-STATUS-127-RAN-no, timeout_ms: 5000 }
+      - write: { text: "printf 'SHEBANG-SHELL-%s\\n' USABLE; stty echo; exit\r" }
+      - await_output: { contains: SHEBANG-SHELL-USABLE, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/status.txt
+    - golden/shell_usable.txt
