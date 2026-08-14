@@ -219,8 +219,9 @@ int hl_x86_lower_mov(struct insn *I, uint64_t next, const hl_x86_move_image *ima
     if (op >= 0x50 && op <= 0x57) {
         int r = (op - 0x50) | (I->rexB << 3);
         int w = (I->opsize == 2) ? 2 : 8;
-        if (emit_soft_memory_active()) {
+        if (emit_soft_memory_active() || emit_displaced_stack_active()) {
             e_subi(17, 4, (unsigned)w, 1);
+            emit_displaced_stack_address(17);
             emit_memory_guard(17, (uint64_t)w, next - (uint64_t)I->len, X86_SOFT_WRITE);
             e_subi(4, 4, (unsigned)w, 1);
             e_store(w, r, 17);
@@ -232,16 +233,17 @@ int hl_x86_lower_mov(struct insn *I, uint64_t next, const hl_x86_move_image *ima
     } // push
     if (op >= 0x58 && op <= 0x5F) {
         int r = (op - 0x58) | (I->rexB << 3);
-        if (emit_soft_memory_active()) {
+        if (emit_soft_memory_active() || emit_displaced_stack_active()) {
             e_mov_rr(17, 4, 1);
+            emit_displaced_stack_address(17);
             emit_memory_guard(17, I->opsize == 2 ? 2u : 8u, next - (uint64_t)I->len, X86_SOFT_READ);
         }
         if (I->opsize == 2) { // pop r16: writes only bits 15:0, RSP += 2
-            e_load(2, 16, emit_soft_memory_active() ? 17 : 4);
+            e_load(2, 16, (emit_soft_memory_active() || emit_displaced_stack_active()) ? 17 : 4);
             e_bfi(r, 16, 0, 16, 1);
             e_addi(4, 4, 2, 1);
         } else {
-            e_load(8, r, emit_soft_memory_active() ? 17 : 4);
+            e_load(8, r, (emit_soft_memory_active() || emit_displaced_stack_active()) ? 17 : 4);
             e_addi(4, 4, 8, 1);
         }
         return TX_NEXT;

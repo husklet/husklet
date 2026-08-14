@@ -1117,6 +1117,21 @@ int emit_soft_memory_active(void) {
     return jit_guest_soft_active() || g_rwx_guest;
 }
 
+int emit_displaced_stack_active(void) {
+    return g_nonpie_lo != 0;
+}
+
+void emit_displaced_stack_address(int address_register) {
+    if (!g_nonpie_lo) return;
+    e_lsr_i(16, address_register, 32, 1);
+    uint32_t *already_host = (uint32_t *)g_cp;
+    emit32(0);
+    e_movconst(16, g_nonpie_bias);
+    e_rrr(A_ADD, address_register, address_register, 16, 1, 0);
+    *already_host = UINT32_C(0xB5000000) |
+                    (((uint32_t)(((uint8_t *)g_cp - (uint8_t *)already_host) / 4) & UINT32_C(0x7FFFF)) << 5) | 16u;
+}
+
 void emit_soft_store_observe(uint64_t size) {
     if (!jit_guest_soft_active() && !g_rwx_guest) return;
     emit_spill();
@@ -1317,7 +1332,7 @@ static void emit_fast_syscall(uint64_t next) {
     e_subi_s(16, 0, 228, 1); // subs x16, x0,
     uint32_t *m1 = (uint32_t *)g_cp;
     e_bcond(1, 0); // b.ne -> gettimeofday
-    if (g_nonpie_lo) {
+    if (g_nonpie_lo || jit_guest_soft_active()) {
         // The inline path writes RSI directly, while an ET_EXEC image's static
         // pointers name the low Linux link address and require nonpie_p()
         // rebasing. Keep fixed-layout guests on the canonical syscall path;
@@ -1377,7 +1392,7 @@ static void emit_fast_syscall(uint64_t next) {
     e_subi_s(16, 0, 96, 1);                 // subs x16, x0, #96
     uint32_t *gtod_miss = (uint32_t *)g_cp; // W4F: rax!=96 -> fall into the W4F arms (was straight to slow)
     e_bcond(1, 0);                          // b.ne -> W4F arms (or slow when g_siginline off)
-    if (g_nonpie_lo) {
+    if (g_nonpie_lo || jit_guest_soft_active()) {
         to_slow[nsl++] = (uint32_t *)g_cp;
         e_bcond(14, 0); // fixed-layout pointers require canonical rebasing
     }
@@ -1432,7 +1447,7 @@ static void emit_fast_syscall(uint64_t next) {
         e_subi_s(16, 0, 14, 1); // subs x16, x0, #14
         uint32_t *spm_miss = (uint32_t *)g_cp;
         e_bcond(1, 0); // b.ne -> sched_yield
-        if (g_nonpie_lo) {
+        if (g_nonpie_lo || jit_guest_soft_active()) {
             // A non-PIE ET_EXEC hands rt_sigprocmask the low static link addresses of its .bss/.data
             // sigsets (set=rsi, oldset=rdx); the inline path dereferences them directly, but those
             // pointers require nonpie_p() rebasing before the bytes are reachable in the high-mapped
