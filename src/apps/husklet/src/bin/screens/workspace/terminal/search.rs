@@ -1,5 +1,18 @@
 use super::*;
 
+#[derive(Debug, Eq, PartialEq)]
+struct FocusTransition {
+    clear_previous: bool,
+    update_current: bool,
+}
+
+fn focus_transition(previous: bool, search_visible: bool) -> FocusTransition {
+    FocusTransition {
+        clear_previous: previous,
+        update_current: search_visible,
+    }
+}
+
 impl Search {
     pub(crate) fn new() -> Self {
         let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -62,6 +75,19 @@ impl Search {
             if !self.entry.text().is_empty() {
                 self.update(terminal);
             }
+        }
+    }
+
+    pub(crate) fn focus(&self, previous: Option<vte4::Terminal>, current: vte4::Terminal) {
+        let transition = focus_transition(previous.is_some(), self.bar.get_visible());
+        if transition.clear_previous {
+            if let Some(previous) = previous {
+                previous.search_set_regex(None, 0);
+                previous.unselect_all();
+            }
+        }
+        if transition.update_current {
+            self.update(Some(current));
         }
     }
 
@@ -129,6 +155,36 @@ impl Search {
             self.info.set_text("no match");
             self.info.add_css_class("nomatch");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{focus_transition, FocusTransition};
+
+    #[test]
+    fn pane_focus_transfers_only_visible_search_state() {
+        assert_eq!(
+            focus_transition(true, true),
+            FocusTransition {
+                clear_previous: true,
+                update_current: true,
+            }
+        );
+        assert_eq!(
+            focus_transition(true, false),
+            FocusTransition {
+                clear_previous: true,
+                update_current: false,
+            }
+        );
+        assert_eq!(
+            focus_transition(false, true),
+            FocusTransition {
+                clear_previous: false,
+                update_current: true,
+            }
+        );
     }
 }
 

@@ -99,7 +99,10 @@ pub(crate) fn make_terminal_ex(
         let tw = tw.clone();
         let t = term.clone();
         let fc = gtk::EventControllerFocus::new();
-        fc.connect_enter(move |_| *tw.focused.borrow_mut() = Some(t.clone()));
+        fc.connect_enter(move |_| {
+            let previous = tw.focused.replace(Some(t.clone()));
+            tw.search.focus(previous, t.clone());
+        });
         term.add_controller(fc);
     }
     // Gentler, more natural scrolling. macOS trackpad / high-res wheel deltas make VTE's default scroll
