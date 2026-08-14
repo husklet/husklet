@@ -10,11 +10,11 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "echo ALPHA BETA" }
+      - write: { text: "printf '<%s>\\n' ALPHA-BETA" }
       - write: { text: "\u0017" }
       - write: { text: "\u001f" }
       - write: { text: "\r" }
-      - await_output: { contains: "ALPHA BETA", timeout_ms: 5000 }
+      - await_output: { contains: "<ALPHA-BETA>", timeout_ms: 5000 }
       - write: { text: "printf 'SHELL-OK\\n'; exit\r" }
       - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
       - close: {}
