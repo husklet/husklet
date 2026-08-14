@@ -32,13 +32,19 @@ HL_API void hl_log_format(const hl_log_context *context, uint32_t tag, const cha
 HL_API const char *hl_log_tag_name(uint32_t tag);
 
 #if defined(HL_ENABLE_LOGGING) && HL_ENABLE_LOGGING
-#define HL_LOG(context, tag, message)                                                                                \
-    do {                                                                                                             \
-        if (hl_log_enabled((context), (tag))) hl_log_message((context), (tag), (message), sizeof(message) - 1u);    \
+#define HL_LOG(context, tag, message)                                                                                  \
+    do {                                                                                                               \
+        const hl_log_context *hl_log_macro_context = (context);                                                        \
+        uint32_t hl_log_macro_tag = (uint32_t)(tag);                                                                   \
+        if (hl_log_enabled(hl_log_macro_context, hl_log_macro_tag))                                                    \
+            hl_log_message(hl_log_macro_context, hl_log_macro_tag, (message), sizeof(message) - 1u);                   \
     } while (0)
-#define HL_LOGF(context, tag, ...)                                                                                   \
-    do {                                                                                                             \
-        if (hl_log_enabled((context), (tag))) hl_log_format((context), (tag), __VA_ARGS__);                         \
+#define HL_LOGF(context, tag, ...)                                                                                     \
+    do {                                                                                                               \
+        const hl_log_context *hl_log_macro_context = (context);                                                        \
+        uint32_t hl_log_macro_tag = (uint32_t)(tag);                                                                   \
+        if (hl_log_enabled(hl_log_macro_context, hl_log_macro_tag))                                                    \
+            hl_log_format(hl_log_macro_context, hl_log_macro_tag, __VA_ARGS__);                                        \
     } while (0)
 #else
 #define HL_LOG(context, tag, message) ((void)0)
