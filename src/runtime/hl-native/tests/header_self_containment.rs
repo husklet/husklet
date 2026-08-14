@@ -1027,6 +1027,13 @@ int main(void) {
         size != CKPT_INOTIFY_IMAGE_LIMIT) return 10;
     if (ckpt_inotify_object_size((int64_t)CKPT_INOTIFY_IMAGE_LIMIT + 1, &size) == 0) return 11;
     if (ckpt_inotify_object_size(0, &size) == 0) return 12;
+    size_t count = 0;
+    if (ckpt_record_object_size(48, 16, 3, &size, &count) != 0 || size != 48 || count != 3) return 13;
+    if (ckpt_record_object_size(-1, 16, 3, &size, &count) == 0) return 14;
+    if (ckpt_record_object_size(49, 16, 4, &size, &count) == 0) return 15;
+    if (ckpt_record_object_size(64, 16, 3, &size, &count) == 0) return 16;
+    if (ckpt_record_object_size(0, 0, 0, &size, &count) == 0) return 17;
+    if (ckpt_record_object_size(0, 16, 0, &size, &count) != 0 || size != 0 || count != 0) return 18;
     return 0;
 }
 "#,

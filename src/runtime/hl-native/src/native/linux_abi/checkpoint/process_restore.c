@@ -514,19 +514,19 @@ static int ckpt_restore_fds_dir(const char *procdir) {
     struct ckpt_fd *records = NULL;
     char pf[1300];
     snprintf(pf, sizeof pf, "%s/fds", procdir);
-    FILE *f = ckpt_source_fopen(pf);
-    if (!f) return 0;
     // The object's length, asked of the source. fstat(fileno()) does not work here: a streamed object is a
-    // memory stream with no descriptor behind it.
+    // memory stream with no descriptor behind it. Validate before ckpt_source_fopen materializes the object,
+    // so an invalid record count cannot drive an otherwise unnecessary allocation.
     int64_t record_bytes = ckpt_source_object_size(pf);
-    if (record_bytes < 0 || record_bytes % (int64_t)sizeof *records != 0 ||
-        (uint64_t)record_bytes / sizeof *records > HL_NFD) {
-        ckpt_source_fclose(f);
-        return -1;
-    }
-    int count = (int)((uint64_t)record_bytes / sizeof *records);
-    records = calloc((size_t)(count ? count : 1), sizeof *records);
-    if (records == NULL || (count != 0 && fread(records, sizeof *records, (size_t)count, f) != (size_t)count) ||
+    size_t image_size, record_count;
+    if (record_bytes < 0) return 0;
+    if (ckpt_record_object_size(record_bytes, sizeof *records, HL_NFD, &image_size, &record_count) != 0) return -1;
+    if (image_size != record_count * sizeof *records) return -1;
+    FILE *f = ckpt_source_fopen(pf);
+    if (!f) return -1;
+    int count = (int)record_count;
+    records = calloc(record_count ? record_count : 1, sizeof *records);
+    if (records == NULL || (record_count != 0 && fread(records, sizeof *records, record_count, f) != record_count) ||
         fgetc(f) != EOF) {
         free(records);
         ckpt_source_fclose(f);
@@ -979,6 +979,11 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
     free(images);
 
     snprintf(path, sizeof path, "%s/fds", procdir);
+    int64_t fd_bytes = ckpt_source_object_size(path);
+    size_t fd_size, fd_count;
+    if (ckpt_record_object_size(fd_bytes, sizeof(struct ckpt_fd), HL_NFD, &fd_size, &fd_count) != 0 ||
+        fd_count != meta->n_fds || fd_size != fd_count * sizeof(struct ckpt_fd))
+        return -1;
     FILE *fds = ckpt_source_fopen(path);
     if (!fds) return -1;
     uint64_t descriptors = 0;

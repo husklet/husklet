@@ -18,6 +18,16 @@ static inline int ckpt_counted_object_size(size_t stored, size_t header, uint64_
     return header + (size_t)count * element == stored ? 0 : -1;
 }
 
+static inline int ckpt_record_object_size(int64_t stored, size_t element, uint64_t count_limit, size_t *size,
+                                          size_t *count) {
+    if (size == NULL || count == NULL || stored < 0 || element == 0 || (uint64_t)stored > SIZE_MAX ||
+        (uint64_t)stored % element != 0 || (uint64_t)stored / element > count_limit)
+        return -1;
+    *size = (size_t)stored;
+    *count = (size_t)((uint64_t)stored / element);
+    return 0;
+}
+
 static inline int ckpt_inotify_object_size(int64_t stored, size_t *size) {
     return ckpt_bounded_object_size(stored, 1, CKPT_INOTIFY_IMAGE_LIMIT, size);
 }
