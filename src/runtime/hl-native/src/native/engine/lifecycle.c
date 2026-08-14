@@ -174,12 +174,13 @@ static size_t hl_production_launch_text(const char *text) {
 
 static void *hl_production_launch_encode(const hl_host_services *host, const hl_engine_config *config,
                                          const hl_options *options, uint32_t argc, const char *const argv[],
-                                         size_t *out_size) {
+                                         size_t *out_size, hl_status *out_status) {
     hl_production_launch_header header;
     const hl_engine_executable *spec = config->executable;
     unsigned char *bytes;
     size_t offset;
     size_t index;
+    *out_status = HL_STATUS_OK;
     memset(&header, 0, sizeof(header));
     header.magic = HL_PRODUCTION_LAUNCH_MAGIC;
     header.version = HL_PRODUCTION_LAUNCH_VERSION;
@@ -200,14 +201,18 @@ static void *hl_production_launch_encode(const hl_host_services *host, const hl_
     if (spec != NULL && spec->host_handle != HL_HOST_HANDLE_INVALID && host != NULL && host->file != NULL &&
         host->file->metadata != NULL) {
         hl_host_file_metadata metadata = {0};
-        if (host->file->metadata(host->context, spec->host_handle, &metadata).status == HL_STATUS_OK) {
-            header.executable_authority.stable_device = metadata.stable_device;
-            header.executable_authority.stable_object = metadata.stable_object;
-            header.executable_authority.user = metadata.user;
-            header.executable_authority.group = metadata.group;
-            header.executable_authority.mode = metadata.permissions;
-            header.executable_authority.ready = 1;
+        /* The presence of an engine executable in this launch record is the
+         * parent's explicit execute authority. Windows metadata deliberately
+         * has no execute bits, so carry the policy separately from host DAC. */
+        if (host->file->metadata(host->context, spec->host_handle, &metadata).status != HL_STATUS_OK ||
+            !hl_executable_authority_from_metadata(&metadata, 1, &header.executable_authority)) {
+            *out_status = HL_STATUS_PLATFORM_FAILURE;
+            return NULL;
         }
+    }
+    if (header.image_size != 0 && !header.executable_authority.ready) {
+        *out_status = HL_STATUS_PLATFORM_FAILURE;
+        return NULL;
     }
 
     offset = sizeof(header);
@@ -623,11 +628,12 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     (void)box;
     {
         size_t payload_size = 0;
-        void *payload = hl_production_launch_encode(host, config, options, argc, argv, &payload_size);
+        hl_status encode_status;
+        void *payload = hl_production_launch_encode(host, config, options, argc, argv, &payload_size, &encode_status);
         hl_status published;
         if (payload == NULL) {
             hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
-            return HL_STATUS_OUT_OF_MEMORY;
+            return encode_status == HL_STATUS_OK ? HL_STATUS_OUT_OF_MEMORY : encode_status;
         }
         published = hl_host_windows_launch_publish(payload, payload_size, result->mapping.handle);
         spawned = published == HL_STATUS_OK ? host->process->spawn_cloned(host->context, hl_production_cold_entry, NULL)

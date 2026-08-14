@@ -201,7 +201,7 @@ static void exec_authority_seed_initial(const hl_host_services *host, hl_host_ha
             g_authorized_executable_status.st_mode = (mode_t)serialized->mode;
             g_authorized_executable_dac.uid = serialized->user;
             g_authorized_executable_dac.gid = serialized->group;
-            g_authorized_executable_dac.mode = serialized->mode;
+            g_authorized_executable_dac.mode = hl_executable_authority_guest_mode(serialized);
             g_authorized_executable_metadata_ready = 1;
         }
         return;

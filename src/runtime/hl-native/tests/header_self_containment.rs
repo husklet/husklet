@@ -17,6 +17,56 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
+fn serialized_windows_executable_authority_is_distinct_and_executable() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-windows-authority-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("authority probe directory");
+    let source = scratch.join("authority.c");
+    let executable = scratch.join("authority");
+    fs::write(
+        &source,
+        r#"
+#include "engine/executable_authority.h"
+#include "linux_abi/container/dac_policy.h"
+int main(void) {
+    hl_host_file_metadata first = {.stable_device=7, .stable_object=11, .type=HL_HOST_FILE_TYPE_REGULAR,
+                                   .permissions=0444, .user=1000, .group=1000};
+    hl_host_file_metadata second = first;
+    second.stable_object = 12;
+    hl_executable_authority a = {0}, b = {0};
+    if (!hl_executable_authority_from_metadata(&first, 1, &a) ||
+        !hl_executable_authority_from_metadata(&second, 1, &b)) return 1;
+    if (a.stable_device == b.stable_device && a.stable_object == b.stable_object) return 2;
+    hl_dac_snapshot dac = {.uid=a.user, .gid=a.group, .mode=hl_executable_authority_guest_mode(&a)};
+    hl_dac_credentials credentials = {.fsuid=1000, .fsgid=1000};
+    if (hl_dac_authorize_access(&dac, &credentials, HL_DAC_EXECUTE) != 0) return 3;
+    first.stable_device = 0;
+    if (hl_executable_authority_from_metadata(&first, 1, &a)) return 4;
+    first.stable_device = 7;
+    if (hl_executable_authority_from_metadata(&first, 0, &a)) return 5;
+    return 0;
+}
+"#,
+    )
+    .expect("authority probe source");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let built = Command::new(&compiler)
+        .args(["-std=c11", "-D_GNU_SOURCE"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .status()
+        .expect("compile authority probe");
+    assert!(built.success(), "authority probe did not compile");
+    let ran = Command::new(&executable).status().expect("run authority probe");
+    assert!(ran.success(), "authority probe failed with {ran}");
+    fs::remove_dir_all(scratch).expect("remove authority probe directory");
+}
+
+#[test]
 fn guest_memory_pin_projects_data_and_owns_each_span() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");
@@ -163,7 +213,12 @@ int main(void) {
         .output()
         .expect("guest pin leak mutation compiler");
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    assert!(!Command::new(&mutation).status().expect("guest pin leak mutation").success());
+    assert!(
+        !Command::new(&mutation)
+            .status()
+            .expect("guest pin leak mutation")
+            .success()
+    );
     fs::remove_dir_all(scratch).expect("remove guest pin probe directory");
 }
 
