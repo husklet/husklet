@@ -269,7 +269,7 @@ impl WorkspaceContainer {
 
 #[cfg(test)]
 mod pane_execution_tests {
-    use super::{PaneExecution, terminal_identity};
+    use super::{terminal_identity, PaneExecution};
     use crate::config::WorkspaceConfig;
     use hl_ws::Arch;
 

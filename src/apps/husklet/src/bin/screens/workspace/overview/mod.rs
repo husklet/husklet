@@ -23,6 +23,24 @@ impl<'a> Overview<'a> {
         Self { workspace, page }
     }
 
+    /// The surface an extension draws into.
+    ///
+    /// Nothing is posted to it yet: the host that accepts an extension's
+    /// socket is a separate lane, and the page is deliberately reachable
+    /// before that lands so the two can be joined without touching the shell
+    /// again. Until then it shows an empty surface rather than pretending.
+    fn extension_page() -> gtk::Box {
+        let (post, deliveries) = screens::workspace::extension::channel();
+        // The sink holds the posting end so the queue stays open rather than
+        // reading as a disconnected extension the moment the page is built.
+        let sink = std::rc::Rc::new(move |_signal: screens::workspace::extension::Signal| {
+            let _held = &post;
+        });
+        let (widget, page) = screens::workspace::extension::Interface::new(deliveries, sink);
+        page.install();
+        widget
+    }
+
     pub(crate) fn view(&self) -> gtk::Box {
         use screens::workspace::Page as WorkspacePage;
 
@@ -37,6 +55,7 @@ impl<'a> Overview<'a> {
         let volumes = Table::new(&["NAME", "DRIVER"]);
         let networks = Table::new(&["NAME", "DRIVER", "SCOPE"]);
         let (ppane, pbody) = live_proc_pane();
+        let extension = Self::extension_page();
         let view = screens::workspace::View::new([
             (WorkspacePage::Overview, self.overview().upcast()),
             (WorkspacePage::Containers, containers.widget.clone().upcast()),
@@ -44,6 +63,7 @@ impl<'a> Overview<'a> {
             (WorkspacePage::Volumes, volumes.widget.clone().upcast()),
             (WorkspacePage::Networks, networks.widget.clone().upcast()),
             (WorkspacePage::Processes, ppane.upcast()),
+            (WorkspacePage::Extension, extension.upcast()),
             (WorkspacePage::Settings, self.settings().upcast()),
         ]);
         let weak_view = view.widget.downgrade();

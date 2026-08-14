@@ -1,4 +1,5 @@
 pub mod create;
+pub mod extension;
 pub mod overview;
 pub mod settings;
 pub mod terminal;
@@ -15,17 +16,19 @@ pub enum Page {
     Volumes,
     Networks,
     Processes,
+    Extension,
     Settings,
 }
 
 impl Page {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Overview,
         Self::Containers,
         Self::Images,
         Self::Volumes,
         Self::Networks,
         Self::Processes,
+        Self::Extension,
         Self::Settings,
     ];
 
@@ -38,6 +41,7 @@ impl Page {
             Self::Volumes => "Volumes",
             Self::Networks => "Networks",
             Self::Processes => "Processes",
+            Self::Extension => "Extension",
             Self::Settings => "Settings",
         }
     }
@@ -52,7 +56,10 @@ pub struct View {
 
 impl View {
     #[must_use]
-    pub fn new(content: [(Page, gtk::Widget); 7]) -> Self {
+    /// Generic over the page count so adding a page is one entry in `ALL` and
+    /// one at the call site, rather than an arity change every caller must
+    /// absorb.
+    pub fn new<const N: usize>(content: [(Page, gtk::Widget); N]) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 2);
         sidebar.add_css_class("dside");
