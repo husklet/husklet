@@ -30,6 +30,8 @@ pub(crate) struct ProductionMachine {
     output: Option<NativeOutputBridge>,
     #[cfg(unix)]
     checkpoint: Option<CheckpointControl>,
+    #[cfg(unix)]
+    recovery: Mutex<Option<RecoveryAdmission>>,
     engine: Mutex<Option<Arc<hl_native::Engine>>>,
 }
 
@@ -75,6 +77,8 @@ impl RuntimeFactory for ProductionFactory {
             output,
             #[cfg(unix)]
             checkpoint,
+            #[cfg(unix)]
+            recovery: Mutex::new(None),
             engine: Mutex::new(None),
         })
     }
@@ -217,11 +221,11 @@ impl GuestMachine for ProductionMachine {
             None
         };
         let run = engine.run(&pointers).map_err(native_run_failure);
+        run?;
         #[cfg(unix)]
         if let Some(recovery) = recovery {
-            recovery.finish()?;
+            *self.recovery.lock().map_err(|_| EngineError::Synchronization)? = Some(recovery);
         }
-        run?;
         #[cfg(unix)]
         if let Some(terminal) = &self.terminal {
             terminal.flush();
@@ -350,42 +354,29 @@ impl CheckpointControl {
         }
     }
 
-    fn begin_recovery(&self, deadline: std::time::Instant) -> Result<RecoveryAdmission<'_>, EngineError> {
+    fn begin_recovery(&self, deadline: std::time::Instant) -> Result<RecoveryAdmission, EngineError> {
         let generation = self.transport.bump();
         let id = self
             .server
             .begin_recovery(generation, deadline)
             .map_err(capture_failure)?;
         Ok(RecoveryAdmission {
-            server: self.server.as_ref(),
+            server: Arc::clone(&self.server),
             id,
-            finished: false,
         })
     }
 }
 
 #[cfg(unix)]
-struct RecoveryAdmission<'a> {
-    server: &'a Server,
+struct RecoveryAdmission {
+    server: Arc<Server>,
     id: u64,
-    finished: bool,
 }
 
 #[cfg(unix)]
-impl RecoveryAdmission<'_> {
-    fn finish(mut self) -> Result<(), EngineError> {
-        let result = self.server.abort_recovery(self.id).map_err(capture_failure);
-        self.finished = result.is_ok();
-        result
-    }
-}
-
-#[cfg(unix)]
-impl Drop for RecoveryAdmission<'_> {
+impl Drop for RecoveryAdmission {
     fn drop(&mut self) {
-        if !self.finished {
-            let _ = self.server.abort_recovery(self.id);
-        }
+        let _ = self.server.abort_recovery(self.id);
     }
 }
 
@@ -456,15 +447,14 @@ mod tests {
     #[test]
     fn dropped_recovery_admission_releases_scope_and_rejects_stale_id() {
         let store = Arc::new(EmptyCheckpointStore);
-        let server = Server::new(store.clone(), store);
+        let server = Arc::new(Server::new(store.clone(), store));
         let first = server
             .begin_recovery(11, std::time::Instant::now() + std::time::Duration::from_secs(1))
             .unwrap();
         {
             let _admission = RecoveryAdmission {
-                server: &server,
+                server: Arc::clone(&server),
                 id: first,
-                finished: false,
             };
         }
         let second = server
