@@ -717,9 +717,11 @@ impl Server {
     #[allow(clippy::too_many_lines)]
     fn dispatch(&self, id: u64, request: &Request, name: &str, payload: &[u8]) -> Reply {
         if !self.request_in_scope(id, request, name) {
-            eprintln!(
-                "REJECT op={} generation={} name={name:?}",
-                request.op, request.generation
+            hl_log::hl_debug!(
+                hl_log::tag::CHECKPOINT,
+                "checkpoint request rejected: op={} generation={} name={name:?}",
+                request.op,
+                request.generation
             );
             return Reply::error();
         }
