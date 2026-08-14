@@ -513,6 +513,22 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             return svc_done(c);
         }
+        /*
+         * Linux rejects an aggregate vector length that cannot fit in ssize_t
+         * with EINVAL before access_ok() considers the payload ranges.  This
+         * matters for a single SSIZE_MAX+1 segment: treating its inevitably
+         * overflowing address range first incorrectly turns EINVAL into
+         * EFAULT.  Keep the sum overflow-safe because iov_len is unsigned.
+         */
+        uint64_t total = 0;
+        for (int i = 0; i < (int)a2; i++) {
+            uint64_t len = (uint64_t)imported[i].iov_len;
+            if (len > (uint64_t)SSIZE_MAX - total) {
+                G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+                return svc_done(c);
+            }
+            total += len;
+        }
         for (int i = 0; i < (int)a2; i++) {
             uintptr_t base = (uintptr_t)imported[i].iov_base;
             uintptr_t len = (uintptr_t)imported[i].iov_len;
