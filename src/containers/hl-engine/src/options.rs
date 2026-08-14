@@ -161,6 +161,11 @@ const DEFINITIONS: &[Definition] = &[
     launch!("HL_PUBLISH", "guest-to-host port publication rules", Records),
     launch!("HL_PUBLISH_DAEMON", "host daemon publishes guest ports", Flag),
     launch!("HL_RESTORE", "restore the image held by the store channel", Flag),
+    internal!(
+        "HL_CKPT_TEST_FAIL_AFTER_FORK",
+        "test-only restore failure after rebuilding descendants",
+        Flag
+    ),
     launch!("HL_ROOTFS_RO", "mount the guest root filesystem read-only", Flag),
     launch!("HL_SANDBOX", "apply host confinement to the untrusted worker", Flag),
     launch!("HL_SECCOMP_BASELINE", "guest-visible launch seccomp baseline", Text),

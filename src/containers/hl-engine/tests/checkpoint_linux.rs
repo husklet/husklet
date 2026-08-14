@@ -161,6 +161,31 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     }
 
     std::fs::write(&release, []).unwrap();
+    let failed_restore = Engine::with_checkpoint(
+        isa,
+        plan(
+            executable,
+            &release,
+            &final_release,
+            &["HL_RESTORE", "HL_CKPT_TEST_FAIL_AFTER_FORK"],
+        ),
+        StandardStreams::default(),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    failed_restore.start().unwrap();
+    assert!(matches!(
+        failed_restore.wait(),
+        Err(hl_engine::engine::EngineError::NativeCreateFailed(_))
+    ));
+    std::thread::sleep(Duration::from_millis(100));
+    let failed_output = std::fs::read_to_string(&output).unwrap();
+    assert!(
+        !failed_output.contains("CYCLE-READY"),
+        "a descendant ran after restore rollback:\n{failed_output}"
+    );
+
     let second_store = Arc::new(Store::default());
     let recapture = Engine::with_checkpoint(
         isa,
