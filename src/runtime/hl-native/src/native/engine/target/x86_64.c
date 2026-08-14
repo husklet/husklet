@@ -272,10 +272,14 @@ static int jit86_guest_memory_pin(uint64_t guest, size_t length, hl_guest_memory
     hl_logical_vma_pin logical_pin = {0};
     uint32_t required = access == HL_GUEST_MEMORY_WRITE ? HL_LOGICAL_VMA_WRITE : HL_LOGICAL_VMA_READ;
     int logical = hl_logical_vma_pin_data(guest, length, required, &logical_pin);
-    if (logical < 0) return -1;
-    pin->host = logical_pin.host;
+    if (logical < 0) return HL_GUEST_MEMORY_FAULT;
+    pin->host = logical ? logical_pin.host : (void *)(uintptr_t)hl_x86_guest_pointer(guest);
     pin->contiguous = logical_pin.contiguous;
     pin->token = logical_pin.token;
+    if (!logical && g_nonpie_lo) {
+        uint64_t boundary = guest < g_nonpie_lo ? g_nonpie_lo : (guest < g_nonpie_hi ? g_nonpie_hi : UINT64_MAX);
+        if (boundary > guest && boundary - guest < pin->contiguous) pin->contiguous = (size_t)(boundary - guest);
+    }
     return logical;
 }
 

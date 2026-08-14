@@ -17,6 +17,122 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
+fn guest_memory_pin_projects_data_and_owns_each_span() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-guest-pin-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("guest pin probe directory");
+    let source = scratch.join("guest_pin.c");
+    let executable = scratch.join("guest_pin");
+    fs::write(
+        &source,
+        r#"
+#include <stdint.h>
+#include <string.h>
+#include "translator/guest_memory.h"
+
+static unsigned char identity[512], projected[512];
+static int pins, unpins;
+static int indirect(void) { return 1; }
+static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_guest_memory_pin *out) {
+    (void)access;
+    uintptr_t first = (uintptr_t)identity;
+    if (guest < first || guest >= first + sizeof(identity)) return HL_GUEST_MEMORY_FAULT;
+    size_t offset = (size_t)(guest - first);
+#ifdef IDENTITY_PROJECTION
+    out->host = identity + offset;
+#else
+    out->host = projected + offset;
+#endif
+    size_t boundary = 8 - (offset & 7);
+    out->contiguous = length < boundary ? length : boundary;
+    out->token = out;
+    ++pins;
+    return HL_GUEST_MEMORY_PROJECTED;
+}
+static void unpin(hl_guest_memory_pin *pin_) { if (pin_->token) ++unpins; }
+
+static int copy_from(uint64_t guest, void *destination, size_t length) {
+    size_t copied = 0;
+    while (copied < length) {
+        hl_guest_memory_pin span = {0};
+        if (hl_guest_memory_pin_data(guest + copied, length - copied, HL_GUEST_MEMORY_READ, &span) < 0 ||
+            span.host == 0 || span.contiguous == 0) return -1;
+        size_t chunk = span.contiguous < length - copied ? span.contiguous : length - copied;
+        memcpy((unsigned char *)destination + copied, span.host, chunk);
+        hl_guest_memory_unpin_data(&span);
+        copied += chunk;
+    }
+    return 0;
+}
+static int copy_to(uint64_t guest, const void *source, size_t length) {
+    size_t copied = 0;
+    while (copied < length) {
+        hl_guest_memory_pin span = {0};
+        if (hl_guest_memory_pin_data(guest + copied, length - copied, HL_GUEST_MEMORY_WRITE, &span) < 0 ||
+            span.host == 0 || span.contiguous == 0) return -1;
+        size_t chunk = span.contiguous < length - copied ? span.contiguous : length - copied;
+        memcpy(span.host, (const unsigned char *)source + copied, chunk);
+        hl_guest_memory_unpin_data(&span);
+        copied += chunk;
+    }
+    return 0;
+}
+
+int main(void) {
+    for (size_t i = 0; i < sizeof(projected); ++i) { identity[i] = 0xa5; projected[i] = (unsigned char)i; }
+    const hl_guest_memory_ops ops = {.indirect = indirect, .pin = pin, .unpin = unpin};
+    hl_guest_memory_bind(&ops);
+    unsigned char scalar[8], cross[12], sse[16], stack[32], xsave[512];
+    for (size_t width = 1; width <= 8; width *= 2)
+        if (copy_from((uintptr_t)identity + 3, scalar, width) != 0 || memcmp(scalar, projected + 3, width)) return 1;
+    if (copy_from((uintptr_t)identity + 5, cross, sizeof(cross)) != 0 ||
+        memcmp(cross, projected + 5, sizeof(cross))) return 2;
+    if (copy_from((uintptr_t)identity + 7, sse, sizeof(sse)) != 0 ||
+        memcmp(sse, projected + 7, sizeof(sse))) return 3;
+    if (copy_from((uintptr_t)identity + 16, stack, sizeof(stack)) != 0 ||
+        memcmp(stack, projected + 16, sizeof(stack))) return 4;
+    if (copy_from((uintptr_t)identity, xsave, sizeof(xsave)) != 0 || memcmp(xsave, projected, sizeof(xsave))) return 5;
+    memset(sse, 0x3c, sizeof(sse));
+    if (copy_to((uintptr_t)identity + 7, sse, sizeof(sse)) != 0 ||
+        memcmp(projected + 7, sse, sizeof(sse)) || identity[7] != 0xa5) return 6;
+    return pins == unpins && pins != 0 ? 0 : 7;
+}
+"#,
+    )
+    .expect("guest pin probe source");
+    let compile = |output: &Path, mutation: bool| {
+        let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
+        command.args(["-std=c11", "-Wall", "-Wextra", "-Werror"]);
+        if mutation {
+            command.arg("-DIDENTITY_PROJECTION");
+        }
+        command
+            .arg(format!("-I{}", native.display()))
+            .arg(&source)
+            .arg(native.join("translator/guest_memory.c"))
+            .arg("-o")
+            .arg(output)
+            .output()
+            .expect("guest pin probe compiler")
+    };
+    let built = compile(&executable, false);
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    assert!(Command::new(&executable).status().expect("guest pin probe").success());
+    let mutation = scratch.join("guest_pin_identity");
+    let built = compile(&mutation, true);
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    assert!(
+        !Command::new(&mutation)
+            .status()
+            .expect("guest pin identity mutation")
+            .success(),
+        "identity projection mutation did not redden the canary probe"
+    );
+    fs::remove_dir_all(scratch).expect("remove guest pin probe directory");
+}
+
+#[test]
 fn smc_page_index_is_exact_under_collisions_removal_and_publication() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");

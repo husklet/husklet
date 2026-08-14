@@ -57,7 +57,7 @@ int hl_guest_memory_pin_data(uint64_t guest, size_t length, hl_guest_memory_acce
     if (g_ops != NULL && g_ops->pin != NULL) return g_ops->pin(guest, length, access, pin);
     pin->host = (void *)(uintptr_t)guest;
     pin->contiguous = length;
-    return 0;
+    return HL_GUEST_MEMORY_IDENTITY;
 }
 
 void hl_guest_memory_unpin_data(hl_guest_memory_pin *pin) {

@@ -236,9 +236,9 @@ void interp_signal_resume(struct cpu *cpu, void *native_context) {
 #endif
 }
 
-// ---- Guest memory. Guest VA == host VA except that a non-PIE ET_EXEC's low link range is served at
-// +g_nonpie_bias (hl_x86_guest_pointer); no software TLB, no page table. Everything goes through memcpy
-// because UNALIGNED ACCESS MUST WORK and a cast through uint64_t* is UB (a real fault on some hosts). No
+// ---- Guest memory. Once a logical mapping exists, every data access projects through
+// hl_guest_memory_pin_data. The common identity/non-PIE case keeps its direct one-copy path. Everything
+// goes through memcpy because UNALIGNED ACCESS MUST WORK and a cast through uint64_t* is UB. No
 // byte swapping: guest and every host so far are little-endian. Nothing is emitted, so the guest sees the
 // host's memory ordering -- x86-64 host TSO IS guest TSO, hence the empty fence below.
 
@@ -281,44 +281,141 @@ static void interp_copy_indivisible(void *destination, const void *source, unsig
     }
 }
 
+static _Noreturn void interp_projection_fault(uint64_t guest_address, size_t length, hl_guest_memory_access access) {
+    struct cpu *cpu = g_interp_pad_cpu;
+    if (cpu == NULL || !g_interp_pad_armed) abort();
+    cpu->bus_ea = guest_address;
+    cpu->soft_width = length;
+    cpu->soft_required = access == HL_GUEST_MEMORY_WRITE ? X86_SOFT_WRITE : X86_SOFT_READ;
+    cpu->reason = R_SOFTMISS;
+    g_interp_guest_access = 0;
+#if defined(_WIN32)
+    g_interp_pad_taken = 1;
+    hl_windows_fault_pad_jump(&g_interp_fault_pad);
+    abort();
+#else
+    siglongjmp(g_interp_fault_pad, 1);
+#endif
+}
+
+static void interp_copy_from_guest(uint64_t guest, void *destination, size_t length) {
+    if (!hl_guest_memory_indirect()) {
+        const void *host = (const void *)(uintptr_t)hl_x86_guest_pointer(guest);
+        interp_access_begin(guest, length);
+        memcpy(destination, host, length);
+        interp_access_end();
+        return;
+    }
+    size_t copied = 0;
+    while (copied < length) {
+        hl_guest_memory_pin pin = {0};
+        int resolution = hl_guest_memory_pin_data(guest + copied, length - copied, HL_GUEST_MEMORY_READ, &pin);
+        if (resolution < 0 || pin.host == NULL || pin.contiguous == 0) {
+            hl_guest_memory_unpin_data(&pin);
+            interp_projection_fault(guest + copied, length - copied, HL_GUEST_MEMORY_READ);
+        }
+        size_t chunk = pin.contiguous < length - copied ? pin.contiguous : length - copied;
+        interp_access_begin(guest + copied, chunk);
+        memcpy((unsigned char *)destination + copied, pin.host, chunk);
+        interp_access_end();
+        hl_guest_memory_unpin_data(&pin);
+        copied += chunk;
+    }
+}
+
+static void interp_copy_to_guest(uint64_t guest, const void *source, size_t length) {
+    if (!hl_guest_memory_indirect()) {
+        void *host = (void *)(uintptr_t)hl_x86_guest_pointer(guest);
+        interp_access_begin(guest, length);
+        memcpy(host, source, length);
+        interp_access_end();
+        return;
+    }
+    size_t copied = 0;
+    while (copied < length) {
+        hl_guest_memory_pin pin = {0};
+        int resolution = hl_guest_memory_pin_data(guest + copied, length - copied, HL_GUEST_MEMORY_WRITE, &pin);
+        if (resolution < 0 || pin.host == NULL || pin.contiguous == 0) {
+            hl_guest_memory_unpin_data(&pin);
+            interp_projection_fault(guest + copied, length - copied, HL_GUEST_MEMORY_WRITE);
+        }
+        size_t chunk = pin.contiguous < length - copied ? pin.contiguous : length - copied;
+        interp_access_begin(guest + copied, chunk);
+        memcpy(pin.host, (const unsigned char *)source + copied, chunk);
+        interp_access_end();
+        hl_guest_memory_unpin_data(&pin);
+        copied += chunk;
+    }
+}
+
 static uint64_t interp_load(uint64_t guest_address, int width) {
     uint64_t value = 0;
-    const void *host = (const void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
-    interp_access_begin(guest_address, (uint64_t)width);
-    interp_copy_indivisible(&value, host, (unsigned)width);
-    interp_access_end();
+    if (!hl_guest_memory_indirect()) {
+        const void *host = (const void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
+        interp_access_begin(guest_address, (uint64_t)width);
+        interp_copy_indivisible(&value, host, (unsigned)width);
+        interp_access_end();
+    } else {
+        hl_guest_memory_pin pin = {0};
+        int resolution = hl_guest_memory_pin_data(guest_address, (size_t)width, HL_GUEST_MEMORY_READ, &pin);
+        if (resolution < 0 || pin.host == NULL || pin.contiguous == 0) {
+            hl_guest_memory_unpin_data(&pin);
+            interp_projection_fault(guest_address, (size_t)width, HL_GUEST_MEMORY_READ);
+        }
+        if (pin.contiguous >= (size_t)width) {
+            interp_access_begin(guest_address, (uint64_t)width);
+            interp_copy_indivisible(&value, pin.host, (unsigned)width);
+            interp_access_end();
+            hl_guest_memory_unpin_data(&pin);
+        } else {
+            hl_guest_memory_unpin_data(&pin);
+            interp_copy_from_guest(guest_address, &value, (size_t)width);
+        }
+    }
     interp_tso_fence();
     return value;
 }
 
 static void interp_store(uint64_t guest_address, int width, uint64_t value) {
-    void *host = (void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
     interp_tso_fence();
-    interp_access_begin(guest_address, (uint64_t)width);
-    interp_copy_indivisible(host, &value, (unsigned)width);
-    interp_access_end();
+    if (!hl_guest_memory_indirect()) {
+        void *host = (void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
+        interp_access_begin(guest_address, (uint64_t)width);
+        interp_copy_indivisible(host, &value, (unsigned)width);
+        interp_access_end();
+    } else {
+        hl_guest_memory_pin pin = {0};
+        int resolution = hl_guest_memory_pin_data(guest_address, (size_t)width, HL_GUEST_MEMORY_WRITE, &pin);
+        if (resolution < 0 || pin.host == NULL || pin.contiguous == 0) {
+            hl_guest_memory_unpin_data(&pin);
+            interp_projection_fault(guest_address, (size_t)width, HL_GUEST_MEMORY_WRITE);
+        }
+        if (pin.contiguous >= (size_t)width) {
+            interp_access_begin(guest_address, (uint64_t)width);
+            interp_copy_indivisible(pin.host, &value, (unsigned)width);
+            interp_access_end();
+            hl_guest_memory_unpin_data(&pin);
+        } else {
+            hl_guest_memory_unpin_data(&pin);
+            interp_copy_to_guest(guest_address, &value, (size_t)width);
+        }
+    }
     // Stores into an emulated MAP_SHARED mapping (or an executable alias) must be queued for
     // jit86_smc_commit before a syscall lets a peer observe them.
     if (jit86_store_alias_observation_active()) jit86_store_alias_changed(guest_address, (uint64_t)width);
 }
 
-// Operands wider than a general register. ONE interp_access_begin/end pair spans the whole transfer, so a
-// fault inside a straddling 16-byte access abandons the instruction with no architectural change -- hence
-// callers read operands into locals FIRST and commit after the last access.
+// Operands wider than a general register. Reads land in caller-owned locals, so a fault in a later projected
+// span cannot partially mutate architectural register state. Ordinary x86 stores may expose an accessible
+// prefix before faulting on the next span; atomic instructions use their separate staged path.
 static void interp_load_bytes(uint64_t guest_address, void *destination, unsigned length) {
-    const void *host = (const void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
-    interp_access_begin(guest_address, length);
-    memcpy(destination, host, length);
-    interp_access_end();
+    interp_copy_from_guest(guest_address, destination, length);
     interp_tso_fence();
 }
 
 static void interp_store_bytes(uint64_t guest_address, const void *source, unsigned length) {
-    void *host = (void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
     interp_tso_fence();
-    interp_access_begin(guest_address, length);
-    memcpy(host, source, length);
-    interp_access_end();
+    interp_copy_to_guest(guest_address, source, length);
     if (jit86_store_alias_observation_active()) jit86_store_alias_changed(guest_address, (uint64_t)length);
 }
 
