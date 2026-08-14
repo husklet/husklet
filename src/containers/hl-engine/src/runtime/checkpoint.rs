@@ -7,7 +7,8 @@
 use crate::composition::{CheckpointSink, CheckpointSource};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    io::{Read, Write},
+    io::Read,
+    os::{fd::AsRawFd, unix::net::UnixStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -16,6 +17,9 @@ use std::{
 
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
+#[cfg(test)]
+#[path = "checkpoint_test.rs"]
+mod test;
 use protocol::{
     CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, OBJECT_ABORT,
     OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PAYLOAD_MAX, REQUEST_BYTES, Reply,
@@ -44,6 +48,7 @@ pub(crate) struct Server {
     sink: Arc<dyn CheckpointSink>,
     source: Arc<dyn CheckpointSource>,
     state: Mutex<State>,
+    channels: Mutex<HashMap<i32, UnixStream>>,
     committed: AtomicBool,
     running: AtomicBool,
     connections: AtomicUsize,
@@ -55,6 +60,7 @@ impl Server {
             sink,
             source,
             state: Mutex::new(State::default()),
+            channels: Mutex::new(HashMap::new()),
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
@@ -71,6 +77,11 @@ impl Server {
 
     pub(crate) fn stop(&self) {
         self.running.store(false, Ordering::Release);
+        if let Ok(mut channels) = self.channels.lock() {
+            for (_, channel) in channels.drain() {
+                let _ = channel.shutdown(std::net::Shutdown::Both);
+            }
+        }
     }
 
     pub(crate) fn start(server: &Arc<Self>, broker: hl_native::CheckpointBroker) -> std::thread::JoinHandle<()> {
@@ -80,12 +91,12 @@ impl Server {
             .spawn(move || {
                 let mut workers = Vec::new();
                 while server.running.load(Ordering::Acquire) {
-                    let Some((mut channel, host_pid)) = broker.accept(std::time::Duration::from_millis(50)) else {
+                    let Some((channel, host_pid)) = broker.accept(std::time::Duration::from_millis(50)) else {
                         continue;
                     };
                     server.connections.fetch_add(1, Ordering::Release);
                     let worker = Arc::clone(&server);
-                    workers.push(std::thread::spawn(move || worker.serve(&mut channel, host_pid)));
+                    workers.push(std::thread::spawn(move || worker.serve(channel, host_pid)));
                 }
                 for worker in workers {
                     let _ = worker.join();
@@ -158,7 +169,23 @@ impl Server {
         Ok(Self::image_hash(&objects))
     }
 
-    pub(crate) fn serve(self: &Arc<Self>, channel: &mut (impl Read + Write), id: u64) {
+    pub(crate) fn serve(self: &Arc<Self>, mut channel: UnixStream, id: u64) {
+        let descriptor = channel.as_raw_fd();
+        let Ok(control) = channel.try_clone() else {
+            return;
+        };
+        let Ok(mut channels) = self.channels.lock() else {
+            return;
+        };
+        channels.insert(descriptor, control);
+        drop(channels);
+        let _connection = Connection {
+            server: self,
+            descriptor,
+        };
+        if !self.running.load(Ordering::Acquire) {
+            return;
+        }
         loop {
             let mut header = [0_u8; REQUEST_BYTES];
             if channel.read_exact(&mut header).is_err() {
@@ -188,7 +215,7 @@ impl Server {
                 }
             }
             let reply = self.dispatch(id, &request, &name, &payload);
-            if reply.write(channel).is_err() {
+            if reply.write(&mut channel).is_err() {
                 return;
             }
         }
@@ -395,5 +422,18 @@ impl Server {
             payload.push(0);
         }
         Reply::counted_payload(seen.len() as u64, payload)
+    }
+}
+
+struct Connection<'a> {
+    server: &'a Server,
+    descriptor: i32,
+}
+
+impl Drop for Connection<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut channels) = self.server.channels.lock() {
+            channels.remove(&self.descriptor);
+        }
     }
 }
