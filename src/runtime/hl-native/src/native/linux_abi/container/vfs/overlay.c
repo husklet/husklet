@@ -74,6 +74,32 @@ static int hl_vfs_cwd_cursor_set(const hl_vfs_cursor *cursor) {
     return 0;
 }
 
+static void hl_vfs_cursor_state_clear(void) {
+    if (g_vfs_cwd_cursor != NULL) {
+        hl_vfs_cursor_release(g_vfs_cwd_cursor);
+        free(g_vfs_cwd_cursor);
+        g_vfs_cwd_cursor = NULL;
+    }
+    hl_vfs_fd_cursor_clear();
+}
+
+static void hl_vfs_cursor_state_after_fork(void) {
+    if (g_vfs_cwd_cursor != NULL) {
+        hl_vfs_cursor *replacement = calloc(1, sizeof *replacement);
+        if (replacement != NULL && hl_vfs_cursor_clone(g_vfs_cwd_cursor, replacement) == 0) {
+            hl_vfs_cursor_release(g_vfs_cwd_cursor);
+            free(g_vfs_cwd_cursor);
+            g_vfs_cwd_cursor = replacement;
+        } else {
+            free(replacement);
+            hl_vfs_cursor_release(g_vfs_cwd_cursor);
+            free(g_vfs_cwd_cursor);
+            g_vfs_cwd_cursor = NULL;
+        }
+    }
+    hl_vfs_fd_cursor_after_fork();
+}
+
 static int hl_vfs_cwd_cursor_require(void) {
     if (g_vfs_cwd_cursor != NULL) return 0;
     hl_vfs_cursor root;

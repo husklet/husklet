@@ -847,6 +847,35 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         if (plan.directory == HL_HOST_HANDLE_INVALID && plan.target != HL_HOST_HANDLE_INVALID &&
             ((plan.target_type == HL_HOST_FILE_TYPE_REGULAR && !(lf & G_O_DIRECTORY)) || typed_directory)) {
             int64_t opened;
+            hl_vfs_cursor_entry typed_authority;
+            int typed_authority_live = 0;
+            memset(&typed_authority, 0, sizeof typed_authority);
+            typed_authority.descriptor = -1;
+            if (typed_directory) {
+                hl_host_file_metadata target_metadata;
+                struct stat cursor_metadata;
+                int authority_error = hl_vfs_cursor_resolve_at((int)a0, (const char *)a1, nf_want, &typed_authority);
+                if (authority_error == 0 && typed_authority.kind != HL_VFS_CURSOR_DIRECTORY) authority_error = -ENOTDIR;
+                if (authority_error == 0 &&
+                    hl_vfs_cursor_authority_metadata(&typed_authority.directory.layers[0], ".", &cursor_metadata) != 0)
+                    authority_error = -EAGAIN;
+                if (authority_error == 0 &&
+                    g_host_services->file->metadata(g_host_services->context, plan.target, &target_metadata).status !=
+                        HL_STATUS_OK)
+                    authority_error = -EAGAIN;
+                if (authority_error == 0 && ((uint64_t)cursor_metadata.st_dev != target_metadata.stable_device ||
+                                             (uint64_t)cursor_metadata.st_ino != target_metadata.stable_object))
+                    authority_error = -EAGAIN;
+                if (authority_error != 0) {
+                    hl_vfs_cursor_entry_release(&typed_authority);
+                    bound_handle_cancel(&typed_slot);
+                    (void)g_host_services->file->close(g_host_services->context, plan.target);
+                    close(pfd);
+                    G_RET(c) = (uint64_t)(int64_t)authority_error;
+                    return 1;
+                }
+                typed_authority_live = 1;
+            }
             char typed_host_path[HL_LINUX_PATH_MAX + 1];
             int have_typed_host_path =
                 bound_handle_host_path(plan.target, typed_host_path, sizeof typed_host_path) == 0;
@@ -854,6 +883,14 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
             opened = bound_adopt_handle(&typed_slot, plan.target, typed_open_flags(a2));
             if (opened < 0) (void)g_host_services->file->close(g_host_services->context, plan.target);
             opened = bound_relocate_lowest(opened);
+            if (opened >= 0 && typed_authority_live) {
+                int authority_error = hl_vfs_fd_cursor_publish((int)opened, &typed_authority.directory);
+                if (authority_error != 0) {
+                    (void)hl_linux_close(g_linux_box, (hl_linux_fd)opened);
+                    opened = authority_error;
+                }
+            }
+            if (typed_authority_live) hl_vfs_cursor_entry_release(&typed_authority);
             if (opened >= 0 && (projected != NULL || hl_provider_tree_files_active()) && opened < HL_NFD) {
                 if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], overlay_guest) != 0)
                     g_fdpath[(int)opened][0] = 0;

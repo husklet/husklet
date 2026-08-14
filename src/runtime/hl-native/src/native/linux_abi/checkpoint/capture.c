@@ -61,7 +61,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 4 // v4 preserves process and thread signal-64 pending state
+#define CKPT_VERSION 5 // v5 retains directory cursor guest ancestry for capability reconstruction
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -189,12 +189,14 @@ struct ckpt_fd {
     uint64_t ofd_id;
     uint64_t auxiliary;
     char path[512];
+    char cursor_guest[4200];
 };
 
 // `path` arrives as 512 raw image bytes with no guaranteed NUL. Every C-string use (open, snprintf,
 // the recovery-journal escaper) would otherwise scan past the record. Terminate at read time.
 static void ckpt_fd_terminate(struct ckpt_fd *record) {
     record->path[sizeof record->path - 1] = 0;
+    record->cursor_guest[sizeof record->cursor_guest - 1] = 0;
 }
 
 static void ckpt_fd_terminate_all(struct ckpt_fd *records, size_t count) {
@@ -894,8 +896,7 @@ static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capac
     int access_mode = fcntl(fd, F_GETFL);
     if (access_mode >= 0 && (access_mode & O_ACCMODE) == O_WRONLY) {
         char descriptor_path[64];
-        if (snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", fd) <
-            (int)sizeof descriptor_path)
+        if (snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", fd) < (int)sizeof descriptor_path)
             reader = open(descriptor_path, O_RDONLY | O_CLOEXEC);
         if (reader >= 0) input = reader;
     }

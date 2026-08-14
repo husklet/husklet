@@ -1281,6 +1281,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_engine_result_status = HL_STATUS_OK;
     if (argument_count > (uint32_t)INT_MAX) return 2;
     argc = (int)argument_count;
+    hl_vfs_cursor_state_clear();
     hl_target_services_inject(&g_target_services, host);
     hl_gmap_bind_host(host);
     futex_table_init(host);

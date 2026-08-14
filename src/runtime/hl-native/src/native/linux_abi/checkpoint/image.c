@@ -354,11 +354,17 @@ static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
         if (ckpt_fd_was_captured(recs, n, fd)) continue;
         int result = ckpt_capture_early_emulated_fd(recs, &n, fd);
         if (result == CKPT_FD_CAPTURE_ERROR) return -1;
-        if (result == CKPT_FD_CAPTURED) continue;
+        if (result == CKPT_FD_CAPTURED) goto captured;
         result = ckpt_capture_typed_fd(recs, &n, fd);
         if (result == CKPT_FD_CAPTURE_ERROR) return -1;
-        if (result == CKPT_FD_CAPTURED) continue;
+        if (result == CKPT_FD_CAPTURED) goto captured;
         if (ckpt_capture_native_fd(recs, &n, &views[index]) == CKPT_FD_CAPTURE_ERROR) return -1;
+    captured: {
+        const hl_vfs_cursor *cursor = hl_vfs_fd_cursor_get(fd);
+        if (cursor != NULL && n != 0 && recs[n - 1].gfd == fd &&
+            path_copy(recs[n - 1].cursor_guest, sizeof recs[n - 1].cursor_guest, cursor->guest) != 0)
+            return -1;
+    }
     }
     *out_n = n;
     return 0;

@@ -534,6 +534,7 @@ static int ckpt_restore_fds_dir(const char *procdir) {
     }
     ckpt_source_fclose(f);
     ckpt_fd_terminate_all(records, (size_t)count);
+    hl_vfs_fd_cursor_clear();
     ckpt_restore_reset_inherited_fds(records, count);
     for (int index = 0; index < count; ++index)
         if (ckpt_restore_fd_record(procdir, records, count, index) != 0) {
@@ -543,6 +544,32 @@ static int ckpt_restore_fds_dir(const char *procdir) {
     if (ckpt_restore_epoll_fds(procdir, records, count) != 0) {
         free(records);
         return -1;
+    }
+    for (int index = 0; index < count; ++index) {
+        const struct ckpt_fd *record = &records[index];
+        if (record->cursor_guest[0] == 0) continue;
+        hl_vfs_cursor root;
+        hl_vfs_cursor_entry entry;
+        memset(&root, 0, sizeof root);
+        memset(&entry, 0, sizeof entry);
+        entry.descriptor = -1;
+        int error = hl_vfs_cursor_namespace_root(&root);
+        if (error == 0) error = hl_vfs_cursor_walk(&root, &root, record->cursor_guest, 0, &entry);
+        if (error == 0 && entry.kind != HL_VFS_CURSOR_DIRECTORY) error = -ENOTDIR;
+        if (error == 0) {
+            struct stat restored, authority;
+            if (fstat(record->gfd, &restored) != 0 ||
+                hl_vfs_cursor_authority_metadata(&entry.directory.layers[0], ".", &authority) != 0 ||
+                restored.st_dev != authority.st_dev || restored.st_ino != authority.st_ino)
+                error = -EAGAIN;
+        }
+        if (error == 0) error = hl_vfs_fd_cursor_publish(record->gfd, &entry.directory);
+        if (entry.kind != HL_VFS_CURSOR_ABSENT) hl_vfs_cursor_entry_release(&entry);
+        hl_vfs_cursor_release(&root);
+        if (error != 0) {
+            free(records);
+            return -1;
+        }
     }
     int restored = ckpt_restore_inotify_sidecar(procdir);
     free(records);
