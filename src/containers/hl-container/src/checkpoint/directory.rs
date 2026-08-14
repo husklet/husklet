@@ -184,6 +184,33 @@ impl Drop for DirectoryImage {
 }
 
 impl DirectoryImage {
+    fn lock_publication(lock: &std::fs::File, deadline: Option<std::time::Instant>) -> Result<(), CheckpointError> {
+        let Some(deadline) = deadline else {
+            return fs2::FileExt::lock_exclusive(lock)
+                .map_err(|error| CheckpointError::new(format!("lock checkpoint publication: {error}")));
+        };
+        loop {
+            match fs2::FileExt::try_lock_exclusive(lock) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(
+                        deadline
+                            .saturating_duration_since(std::time::Instant::now())
+                            .min(std::time::Duration::from_millis(1)),
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    return Err(CheckpointError::deadline());
+                }
+                Err(error) => {
+                    return Err(CheckpointError::new(format!("lock checkpoint publication: {error}")));
+                }
+            }
+        }
+    }
+
     fn report_cleanup<E: std::fmt::Display>(generation: &str, result: Result<(), E>) {
         if let Err(error) = result {
             hl_log::hl_error!(
@@ -454,30 +481,7 @@ impl DirectoryImage {
             .write(true)
             .open(self.root.join(".publication.lock"))
             .map_err(|error| CheckpointError::new(format!("open checkpoint publication lock: {error}")))?;
-        match deadline {
-            Some(deadline) => loop {
-                match fs2::FileExt::try_lock_exclusive(&lock) {
-                    Ok(()) => break,
-                    Err(error)
-                        if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline =>
-                    {
-                        std::thread::sleep(
-                            deadline
-                                .saturating_duration_since(std::time::Instant::now())
-                                .min(std::time::Duration::from_millis(1)),
-                        );
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        return Err(CheckpointError::deadline());
-                    }
-                    Err(error) => {
-                        return Err(CheckpointError::new(format!("lock checkpoint publication: {error}")));
-                    }
-                }
-            },
-            None => fs2::FileExt::lock_exclusive(&lock)
-                .map_err(|error| CheckpointError::new(format!("lock checkpoint publication: {error}")))?,
-        }
+        Self::lock_publication(&lock, deadline)?;
         #[cfg(unix)]
         let published = Self::read_optional(&self.directory, "current")?;
         #[cfg(not(unix))]

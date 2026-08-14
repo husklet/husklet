@@ -315,13 +315,7 @@ impl CheckpointControl {
         let capture = self
             .server
             .begin_capture(generation, deadline)
-            .map_err(|failure| match failure {
-                super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
-                super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
-                super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
-                    EngineError::LaunchFailed
-                }
-            })?;
+            .map_err(Self::capture_failure)?;
         let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
             crate::activation::GuestIsa::Aarch64 => 1,
             crate::activation::GuestIsa::X86_64 => 2,
@@ -339,13 +333,7 @@ impl CheckpointControl {
                 .wait_capture(capture, next_interrupt)
                 .map_err(|_| EngineError::LaunchFailed)?;
             if let Some(result) = result {
-                return result.map_err(|failure| match failure {
-                    super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
-                    super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
-                    super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
-                        EngineError::LaunchFailed
-                    }
-                });
+                return result.map_err(Self::capture_failure);
             }
             if Instant::now() >= next_interrupt {
                 let _ = engine.request(REQUEST_CHECKPOINT, 0);
@@ -359,11 +347,21 @@ impl CheckpointControl {
         let id = self
             .server
             .begin_recovery(generation, deadline)
-            .map_err(capture_failure)?;
+            .map_err(Self::capture_failure)?;
         Ok(RecoveryAdmission {
             server: Arc::clone(&self.server),
             id,
         })
+    }
+
+    fn capture_failure(failure: super::checkpoint::CaptureFailure) -> EngineError {
+        match failure {
+            super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
+            super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+            super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
+                EngineError::LaunchFailed
+            }
+        }
     }
 }
 
@@ -377,17 +375,6 @@ struct RecoveryAdmission {
 impl Drop for RecoveryAdmission {
     fn drop(&mut self) {
         let _ = self.server.abort_recovery(self.id);
-    }
-}
-
-#[cfg(unix)]
-fn capture_failure(failure: super::checkpoint::CaptureFailure) -> EngineError {
-    match failure {
-        super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
-        super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
-        super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
-            EngineError::LaunchFailed
-        }
     }
 }
 

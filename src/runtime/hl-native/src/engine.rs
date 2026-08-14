@@ -3,11 +3,20 @@
 use std::{
     ffi::{c_char, c_int, c_uint},
     fs::File,
-    io::{Read, Seek, SeekFrom},
+    io::{Seek, SeekFrom},
     ptr::NonNull,
 };
 
 use crate::bindings::{self, Backend};
+
+#[cfg(unix)]
+mod image;
+#[cfg(unix)]
+use image::pin_guest_image;
+#[cfg(all(test, unix))]
+use image::resolve_layered_guest;
+mod layout;
+use layout::validate_elf_image;
 
 pub const STATUS_OK: i32 = 0;
 
@@ -28,15 +37,6 @@ pub struct EngineConfig<'a> {
 }
 
 type Plan = crate::bindings::MainImagePlan;
-
-/// Validated information derived from an ELF program-header table before it
-/// is projected into the stable native ABI plan.
-struct ProgramLayout {
-    load_start: u64,
-    load_end: u64,
-    interpreter: Option<Vec<u8>>,
-    entry_is_executable: bool,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Exit {
@@ -210,46 +210,6 @@ impl Plan {
     }
 }
 
-fn validate_elf_image(file: &mut (impl Read + Seek), image_length: u64, isa: u32) -> Result<(u32, ProgramLayout), i32> {
-    file.seek(SeekFrom::Start(0)).map_err(|_| 1)?;
-    if image_length < 64 {
-        return Err(1);
-    }
-    let mut header = [0_u8; 64];
-    file.read_exact(&mut header).map_err(|_| 1)?;
-    if &header[..7] != b"\x7fELF\x02\x01\x01" || !matches!(header[7], 0 | 3) {
-        return Err(1);
-    }
-    let word16 = |offset| u16::from_le_bytes(header[offset..offset + 2].try_into().expect("fixed header"));
-    let word32 = |offset| u32::from_le_bytes(header[offset..offset + 4].try_into().expect("fixed header"));
-    let word64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().expect("fixed header"));
-    let kind = match word16(16) {
-        2 => 1,
-        3 => 2,
-        _ => return Err(1),
-    };
-    let machine = match isa {
-        1 => 0xb7,
-        2 => 0x3e,
-        _ => return Err(1),
-    };
-    if word16(18) != machine {
-        return Err(1);
-    }
-    if word32(20) != 1 || word16(52) != 64 {
-        return Err(1);
-    }
-    let entry = word64(24);
-    if isa == 1 && !entry.is_multiple_of(4) {
-        return Err(1);
-    }
-    let layout = ProgramLayout::inspect(file, image_length, entry, word64(32), u64::from(word16(54)), word16(56))?;
-    if !layout.entry_is_executable {
-        return Err(1);
-    }
-    Ok((kind, layout))
-}
-
 fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
     if config.executable_fd >= 0 {
         #[cfg(unix)]
@@ -276,28 +236,8 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
 }
 
 #[cfg(unix)]
-fn pin_guest_image(config: &EngineConfig<'_>, guest: &[u8]) -> Result<Vec<u8>, i32> {
-    use std::os::unix::ffi::OsStrExt as _;
-    let guest = std::path::Path::new(std::ffi::OsStr::from_bytes(guest));
-    let roots = launch_roots(config)?;
-    let mut file = if roots.is_empty() {
-        File::open(guest).map_err(|_| 1)?
-    } else {
-        resolve_layered_guest(guest, &roots).map_err(|_| 1)?.ok_or(1)?
-    };
-    let size = usize::try_from(file.metadata().map_err(|_| 1)?.len()).map_err(|_| 1)?;
-    if size == 0 || size > 64 * 1024 * 1024 {
-        return Err(1);
-    }
-    let mut image = Vec::with_capacity(size);
-    file.read_to_end(&mut image).map_err(|_| 1)?;
-    (image.len() == size).then_some(image).ok_or(1)
-}
-
-#[cfg(unix)]
 fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<File>, i32> {
-    use std::os::unix::ffi::OsStrExt as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use std::os::unix::{ffi::OsStrExt as _, fs::OpenOptionsExt as _};
     let mut roots = Vec::new();
     let open = |path: &std::ffi::OsStr| {
         std::fs::OpenOptions::new()
@@ -313,12 +253,12 @@ fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<File>, i32> {
         if name.is_null() || value.is_null() {
             return Err(1);
         }
-        // SAFETY: EngineConfig's contract requires every option pointer to name a live NUL-terminated string.
+        // SAFETY: EngineConfig guarantees live NUL-terminated option strings.
         let name = unsafe { std::ffi::CStr::from_ptr(name) };
         if name.to_bytes() != b"HL_LOWER" {
             continue;
         }
-        // SAFETY: same EngineConfig string contract as the corresponding name above.
+        // SAFETY: same EngineConfig string contract as the name above.
         for record in unsafe { std::ffi::CStr::from_ptr(value) }
             .to_bytes()
             .split(|byte| *byte == b'\n')
@@ -331,73 +271,10 @@ fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<File>, i32> {
 }
 
 #[cfg(unix)]
-fn resolve_layered_guest(guest: &std::path::Path, roots: &[File]) -> std::io::Result<Option<File>> {
-    use std::path::Component;
-    let mut pending = guest
-        .components()
-        .filter_map(|component| match component {
-            Component::RootDir | Component::CurDir => None,
-            Component::Normal(value) => Some(value.to_owned()),
-            Component::ParentDir | Component::Prefix(_) => Some(std::ffi::OsString::new()),
-        })
-        .collect::<Vec<_>>();
-    if pending
-        .iter()
-        .any(|part| part.is_empty() || part.as_encoded_bytes().starts_with(b".wh."))
-    {
-        return Ok(None);
-    }
-    for _ in 0..40 {
-        let mut prefix = Vec::new();
-        let mut followed = false;
-        let mut layer_limit = roots.len();
-        for index in 0..pending.len() {
-            prefix.push(pending[index].clone());
-            let Some((root, kind)) = layered_entry(&prefix, &roots[..layer_limit])? else {
-                return Ok(None);
-            };
-            if let EntryKind::Symlink(target) = kind {
-                let mut replacement = if target.is_absolute() {
-                    Vec::new()
-                } else {
-                    prefix[..prefix.len() - 1].to_vec()
-                };
-                for component in target.components() {
-                    match component {
-                        Component::RootDir | Component::CurDir => {}
-                        Component::Normal(value) => replacement.push(value.to_owned()),
-                        Component::ParentDir => {
-                            if replacement.pop().is_none() {
-                                return Ok(None);
-                            }
-                        }
-                        Component::Prefix(_) => return Ok(None),
-                    }
-                }
-                replacement.extend_from_slice(&pending[index + 1..]);
-                pending = replacement;
-                followed = true;
-                break;
-            }
-            if index + 1 < pending.len() && !matches!(kind, EntryKind::Directory) {
-                return Err(std::io::Error::from_raw_os_error(libc::ENOTDIR));
-            }
-            if matches!(kind, EntryKind::Directory) && entry_is_opaque(&roots[root], &prefix) {
-                layer_limit = layer_limit.min(root + 1);
-            }
-        }
-        if followed {
-            continue;
-        }
-        let Some((root, kind)) = layered_entry(&pending, &roots[..layer_limit])? else {
-            return Ok(None);
-        };
-        if !matches!(kind, EntryKind::Regular) {
-            return Ok(None);
-        }
-        return open_components(&roots[root], &pending, false).map(Some);
-    }
-    Ok(None)
+enum EntryKind {
+    Directory,
+    Regular,
+    Symlink(std::path::PathBuf),
 }
 
 #[cfg(unix)]
@@ -411,22 +288,12 @@ fn entry_is_opaque(root: &File, parts: &[std::ffi::OsString]) -> bool {
 }
 
 #[cfg(unix)]
-enum EntryKind {
-    Directory,
-    Regular,
-    Symlink(std::path::PathBuf),
-}
-
-#[cfg(unix)]
 fn layered_entry(parts: &[std::ffi::OsString], roots: &[File]) -> std::io::Result<Option<(usize, EntryKind)>> {
     let Some((leaf, parent)) = parts.split_last() else {
         return Ok(None);
     };
-    let whiteout = {
-        let mut name = std::ffi::OsString::from(".wh.");
-        name.push(leaf);
-        name
-    };
+    let mut whiteout = std::ffi::OsString::from(".wh.");
+    whiteout.push(leaf);
     for (index, root) in roots.iter().enumerate() {
         let directory = match open_components(root, parent, true) {
             Ok(directory) => directory,
@@ -457,9 +324,11 @@ fn layered_entry(parts: &[std::ffi::OsString], roots: &[File]) -> std::io::Resul
 
 #[cfg(unix)]
 fn open_components(root: &File, parts: &[std::ffi::OsString], directory: bool) -> std::io::Result<File> {
-    use std::os::fd::{AsRawFd as _, FromRawFd as _};
-    use std::os::unix::ffi::OsStrExt as _;
-    // SAFETY: root is a live owned descriptor and fcntl receives no pointer arguments.
+    use std::os::{
+        fd::{AsRawFd as _, FromRawFd as _},
+        unix::ffi::OsStrExt as _,
+    };
+    // SAFETY: root is live and fcntl receives no pointer arguments.
     let duplicate = unsafe { libc::fcntl(root.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
     if duplicate < 0 {
         return Err(std::io::Error::last_os_error());
@@ -474,7 +343,7 @@ fn open_components(root: &File, parts: &[std::ffi::OsString], directory: bool) -
             | libc::O_NOFOLLOW
             | libc::O_CLOEXEC
             | if !final_part || directory { libc::O_DIRECTORY } else { 0 };
-        // SAFETY: current is live and name is a NUL-terminated buffer that outlives this call.
+        // SAFETY: current is live and name is NUL-terminated for this call.
         let descriptor = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
         if descriptor < 0 {
             return Err(std::io::Error::last_os_error());
@@ -487,11 +356,14 @@ fn open_components(root: &File, parts: &[std::ffi::OsString], directory: bool) -
 
 #[cfg(unix)]
 fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<Option<libc::mode_t>> {
-    use std::{mem::MaybeUninit, os::fd::AsRawFd as _, os::unix::ffi::OsStrExt as _};
+    use std::{
+        mem::MaybeUninit,
+        os::{fd::AsRawFd as _, unix::ffi::OsStrExt as _},
+    };
     let name =
         std::ffi::CString::new(name.as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let mut metadata = MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: directory and name stay live, and metadata points to writable storage for one stat.
+    // SAFETY: inputs are live and metadata is writable for one stat.
     let status = unsafe {
         libc::fstatat(
             directory.as_raw_fd(),
@@ -501,7 +373,7 @@ fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<Optio
         )
     };
     if status == 0 {
-        // SAFETY: successful fstatat initialized the entire stat value.
+        // SAFETY: successful fstatat initialized metadata.
         return Ok(Some(unsafe { metadata.assume_init().st_mode }));
     }
     let error = std::io::Error::last_os_error();
@@ -514,14 +386,14 @@ fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<Optio
 
 #[cfg(unix)]
 fn read_link(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<std::path::PathBuf> {
-    use std::{
-        os::fd::AsRawFd as _,
-        os::unix::ffi::{OsStrExt as _, OsStringExt as _},
+    use std::os::{
+        fd::AsRawFd as _,
+        unix::ffi::{OsStrExt as _, OsStringExt as _},
     };
     let name =
         std::ffi::CString::new(name.as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let mut bytes = vec![0_u8; 4096];
-    // SAFETY: directory and name stay live, and bytes exposes its initialized writable capacity.
+    // SAFETY: inputs stay live and bytes is writable for its initialized length.
     let count = unsafe {
         libc::readlinkat(
             directory.as_raw_fd(),
@@ -541,98 +413,6 @@ fn read_link(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<std::p
     Ok(std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
 
-impl ProgramLayout {
-    fn inspect(
-        file: &mut (impl Read + Seek),
-        image_length: u64,
-        entry: u64,
-        phoff: u64,
-        phentsize: u64,
-        phnum: u16,
-    ) -> Result<Self, i32> {
-        const PROGRAM_HEADER_SIZE: u64 = 56;
-        const MAX_PROGRAM_HEADERS: u16 = 1024;
-        const MAX_LOAD_SEGMENTS: u16 = 128;
-        if phentsize != PROGRAM_HEADER_SIZE || phnum == 0 || phnum > MAX_PROGRAM_HEADERS {
-            return Err(1);
-        }
-        let table_size = phentsize.checked_mul(u64::from(phnum)).ok_or(1)?;
-        if phoff.checked_add(table_size).is_none_or(|end| end > image_length) {
-            return Err(1);
-        }
-        let mut first = u64::MAX;
-        let mut last = 0_u64;
-        let mut interpreter = None;
-        let mut loads = 0_u16;
-        let mut entry_is_executable = false;
-        for index in 0..phnum {
-            let offset = phoff
-                .checked_add(u64::from(index).checked_mul(phentsize).ok_or(1)?)
-                .ok_or(1)?;
-            file.seek(SeekFrom::Start(offset)).map_err(|_| 1)?;
-            let mut program = [0_u8; 56];
-            file.read_exact(&mut program).map_err(|_| 1)?;
-            let u32_at = |offset| u32::from_le_bytes(program[offset..offset + 4].try_into().expect("program header"));
-            let u64_at = |offset| u64::from_le_bytes(program[offset..offset + 8].try_into().expect("program header"));
-            match u32_at(0) {
-                1 => {
-                    loads = loads.checked_add(1).ok_or(1)?;
-                    if loads > MAX_LOAD_SEGMENTS {
-                        return Err(1);
-                    }
-                    let file_offset = u64_at(8);
-                    let start = u64_at(16);
-                    let file_size = u64_at(32);
-                    let memory_size = u64_at(40);
-                    let alignment = u64_at(48);
-                    if file_size > memory_size
-                        || (file_size != 0 && file_offset.checked_add(file_size).is_none_or(|end| end > image_length))
-                        || (alignment > 1
-                            && (!alignment.is_power_of_two() || start % alignment != file_offset % alignment))
-                    {
-                        return Err(1);
-                    }
-                    let end = start.checked_add(memory_size).ok_or(1)?;
-                    first = first.min(start);
-                    last = last.max(end);
-                    entry_is_executable |= u32_at(4) & 1 != 0 && entry >= start && entry < end;
-                }
-                3 => {
-                    if interpreter.is_some() {
-                        return Err(1);
-                    }
-                    interpreter = Some(read_interpreter(file, u64_at(8), u64_at(32))?);
-                }
-                _ => {}
-            }
-        }
-        if first == u64::MAX {
-            return Err(1);
-        }
-        Ok(Self {
-            load_start: first,
-            load_end: last,
-            interpreter,
-            entry_is_executable,
-        })
-    }
-}
-
-fn read_interpreter(file: &mut (impl Read + Seek), offset: u64, encoded_size: u64) -> Result<Vec<u8>, i32> {
-    let size = usize::try_from(encoded_size).map_err(|_| 1)?;
-    if size == 0 || size > 4096 {
-        return Err(1);
-    }
-    let mut path = vec![0; size];
-    file.seek(SeekFrom::Start(offset)).map_err(|_| 1)?;
-    file.read_exact(&mut path).map_err(|_| 1)?;
-    if path.last() != Some(&0) || path[..path.len() - 1].contains(&0) {
-        return Err(1);
-    }
-    path.pop();
-    Ok(path)
-}
-
 impl Drop for Engine {
     fn drop(&mut self) {
         // SAFETY: `Engine` is the unique owner of this live backend pointer and
@@ -648,7 +428,7 @@ mod tests {
         ffi::CString,
         fs::{File, OpenOptions},
         io::{Read as _, Seek, SeekFrom, Write},
-        os::fd::AsRawFd,
+        os::{fd::AsRawFd, unix::fs::PermissionsExt as _},
         path::PathBuf,
     };
 
@@ -944,7 +724,6 @@ int main(int argc, char **argv) {
                 "ISA {isa} did not rotate and re-exec image B"
             );
             let mut permissions = std::fs::metadata(&dac_path).unwrap().permissions();
-            use std::os::unix::fs::PermissionsExt as _;
             permissions.set_mode(0o644);
             std::fs::set_permissions(&dac_path, permissions).unwrap();
             assert_eq!(
