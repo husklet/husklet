@@ -157,6 +157,14 @@ fn copy_mode_captures(active: bool, shortcut: Option<Shortcut>) -> bool {
     active && shortcut.is_none()
 }
 
+fn editable_captures(focused: bool, shortcut: Option<Shortcut>) -> bool {
+    focused
+        && matches!(
+            shortcut,
+            Some(Shortcut::Copy | Shortcut::Cut | Shortcut::Paste | Shortcut::SelectAll)
+        )
+}
+
 impl SplitAction {
     pub(crate) fn focused(window: &Rc<TermWin>, vertical: bool) {
         let Some(terminal) = window.focused.borrow().clone() else {
@@ -286,6 +294,12 @@ impl Window {
             let tw = tw.clone();
             keys.connect_key_pressed(move |_, key, _c, state| {
                 let shortcut = Shortcut::from_key(key, state);
+                // Window shortcuts are captured before the focused widget sees them. Text-editing
+                // commands must remain with the search entry; redirecting Paste to the last VTE can
+                // execute clipboard contents in the shell while the user is entering a query.
+                if editable_captures(tw.search.entry.has_focus(), shortcut) {
+                    return glib::Propagation::Proceed;
+                }
                 // Copy/scroll mode intercepts plain (unmodified) keys for keyboard scrollback navigation.
                 if copy_mode_captures(tw.copymode.is_active(), shortcut) && tw.copymode.key(&tw, key, state) {
                     return glib::Propagation::Stop;
@@ -531,7 +545,7 @@ pub(crate) use state::*;
 
 #[cfg(test)]
 mod shortcut_tests {
-    use super::Shortcut;
+    use super::{editable_captures, Shortcut};
     use gtk::gdk;
 
     #[cfg(target_os = "macos")]
@@ -587,5 +601,17 @@ mod shortcut_tests {
         }
         assert!((zoom.scale() - super::ZOOM_MIN).abs() < f64::EPSILON);
         assert!((zoom.reset() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn focused_editable_keeps_only_text_editing_shortcuts() {
+        for shortcut in [Shortcut::Copy, Shortcut::Cut, Shortcut::Paste, Shortcut::SelectAll] {
+            assert!(editable_captures(true, Some(shortcut)));
+            assert!(!editable_captures(false, Some(shortcut)));
+        }
+        for shortcut in [Shortcut::Tab, Shortcut::ZoomIn, Shortcut::ZoomOut, Shortcut::ZoomReset] {
+            assert!(!editable_captures(true, Some(shortcut)));
+        }
+        assert!(!editable_captures(true, None));
     }
 }
