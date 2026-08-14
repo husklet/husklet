@@ -64,8 +64,8 @@ int main(void) {
     int sse_fault = EXPECT_FAULT(_mm_storeu_si128((__m128i *)(mapping + page - 8), xmm));
     int sse_clean = unchanged(mapping + page - 8, 8, 0xa5);
     int avx = avx_fault(mapping + page - 16);
-    int avx_partial = !unchanged(mapping + page - 16, 16, 0xa5);
-    printf("vector=%d/%d avx=%d/%d\n", sse_fault, sse_clean, avx, avx_partial);
+    int avx_clean = unchanged(mapping + page - 16, 16, 0xa5);
+    printf("vector=%d/%d avx=%d/%d\n", sse_fault, sse_clean, avx, avx_clean);
 
     long double extended = 1.25L;
     memset(mapping + page - 64, 0xa5, 64);
@@ -101,7 +101,7 @@ int main(void) {
     printf("rotate=%d%d%d/%d\n", rotate2, rotate4, rotate8, rotate_clean);
 
     printf("x86-projection-fault complete=1\n");
-    return !(scalar_fault && scalar_clean && sse_fault && sse_clean && avx && avx_partial && m80 && m80_clean &&
+    return !(scalar_fault && scalar_clean && sse_fault && sse_clean && avx && avx_clean && m80 && m80_clean &&
              env28 && env28_clean && save108 && save108_clean && save512 && save512_clean && cmp2 && cmp4 &&
              cmp8 && cmp16 && compare_clean && rotate2 && rotate4 && rotate8 && rotate_clean);
 }

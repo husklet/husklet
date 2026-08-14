@@ -218,6 +218,11 @@ static int jit86_avx_memory_write(uint64_t guest, const void *source, size_t len
     int logical = hl_logical_vma_pin_data(guest, length, HL_LOGICAL_VMA_WRITE, &pin);
     if (logical < 0) return -1;
     if (logical == 0) {
+        // AVX helpers execute in the dispatcher rather than translated code, so no emitted soft guard
+        // protects this direct copy. Validate the complete guest span before touching its first byte;
+        // otherwise a cross-page store partially commits and then faults in engine C code, where the
+        // guest's synchronous-fault landing authority is not armed.
+        if (!hl_x86_guest_writable(guest, length)) return -1;
         memcpy((void *)(uintptr_t)guest, source, length);
         jit86_store_alias_changed(guest, length);
         return 1;
