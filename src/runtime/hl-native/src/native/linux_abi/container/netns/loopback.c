@@ -685,6 +685,13 @@ static uint32_t g_icmp_ip[HL_NFD];  // connected/last echo destination
 // AF_INET traffic silently falls through to host passthrough and never rendezvous with a peer container.
 static void fd_carry_sock(int dst, int src) {
     if (dst < 0 || dst >= HL_NFD || src < 0 || src >= HL_NFD) return;
+    memcpy(g_unix_bind[dst], g_unix_bind[src], sizeof g_unix_bind[dst]);
+    memcpy(g_unix_peer[dst], g_unix_peer[src], sizeof g_unix_peer[dst]);
+    if (g_unix_path_anchor[src] > 0) {
+        int anchor = dup(g_unix_path_anchor[src] - 1);
+        if (anchor >= 0) anchor = hl_host_process_fd_private_adopt(anchor);
+        g_unix_path_anchor[dst] = anchor < 0 ? 0 : anchor + 1;
+    }
     g_sock_stream[dst] = g_sock_stream[src];
     g_sock_dgram[dst] = g_sock_dgram[src];
     udp_ref_dup(dst, src);

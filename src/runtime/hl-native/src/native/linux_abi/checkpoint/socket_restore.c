@@ -206,6 +206,19 @@ static int ckpt_prepare_restore_socket_states(void) {
         if (ckpt_socket_state_is_bound(state)) {
             if (state->host_family == AF_UNIX) {
                 struct sockaddr_un *address = (void *)&state->local;
+                if (address->sun_path[0] == '/' && unix_path_routed(address->sun_path)) {
+                    char host[1024];
+                    if (g_rootfs)
+                        overlay_copyup(address->sun_path, host, sizeof host);
+                    else
+                        xlate(address->sun_path, host, sizeof host);
+                    unlink(host);
+                    if (unix_sock_at(fd, host, 0) != 0) {
+                        close(fd);
+                        return -1;
+                    }
+                    goto socket_bound;
+                }
                 if (address->sun_path[0] != 0) unlink(address->sun_path);
             }
             if (bind(fd, (struct sockaddr *)&state->local, (socklen_t)state->local_size) != 0) {
@@ -214,6 +227,7 @@ static int ckpt_prepare_restore_socket_states(void) {
                 close(fd);
                 return -1;
             }
+        socket_bound:;
         }
         if (state->listening && listen(fd, state->backlog) != 0) {
             fprintf(stderr, "[restore] socket %016llx listen backlog=%d failed: %s\n",

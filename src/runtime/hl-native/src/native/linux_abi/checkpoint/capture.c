@@ -800,6 +800,16 @@ static int ckpt_capture_socket_state(int fd, uint64_t identity, int require_quie
         goto fail;
     state.host_family = state.local.ss_family;
     state.local_size = local_size;
+    if (state.guest_family == AF_UNIX && g_unix_bind[fd][0] == '/') {
+        struct sockaddr_un *local = (void *)&state.local;
+        size_t path_length = strlen(g_unix_bind[fd]);
+        if (path_length >= sizeof local->sun_path) goto fail;
+        memset(local, 0, sizeof *local);
+        local->sun_family = AF_UNIX;
+        memcpy(local->sun_path, g_unix_bind[fd], path_length + 1);
+        state.host_family = AF_UNIX;
+        state.local_size = (uint32_t)(offsetof(struct sockaddr_un, sun_path) + path_length + 1);
+    }
     if (state.guest_family == AF_UNIX && state.host_family == 0) {
         state.host_family = AF_UNIX;
 #if defined(__APPLE__)

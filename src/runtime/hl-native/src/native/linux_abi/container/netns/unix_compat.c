@@ -85,6 +85,39 @@ static int unix_sock_at(int fd, const char *host, int connecting) {
     *sl = 0;
     int pfd = open(dir[0] ? dir : "/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (pfd < 0) return -1;
+#if defined(__linux__)
+    int adopted = hl_host_process_fd_private_adopt(pfd);
+    if (adopted < 0) {
+        int e = -adopted;
+        close(pfd);
+        errno = e;
+        return -1;
+    }
+    pfd = adopted;
+    /* A bind performed after fchdir records only the leaf spelling. recvfrom then cannot reverse-map
+     * that peer into its guest pathname. /proc/<pid>/fd keeps the sockaddr short while leaving an
+     * absolute spelling that canonicalizes back to the complete overlay path. */
+    if (snprintf(un.sun_path, sizeof un.sun_path, "/proc/%ld/fd/%d/%s", (long)getpid(), pfd, sl + 1) >=
+        (int)sizeof un.sun_path) {
+        close(pfd);
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    int rc = connecting ? connect(fd, (struct sockaddr *)&un, sizeof un) : bind(fd, (struct sockaddr *)&un, sizeof un);
+    int e = errno;
+    if (rc == 0 && !connecting && fd >= 0 && fd < HL_NFD) {
+        if (g_unix_path_anchor[fd] > 0) {
+            hl_host_process_fd_private_remove(g_unix_path_anchor[fd] - 1);
+            close(g_unix_path_anchor[fd] - 1);
+        }
+        g_unix_path_anchor[fd] = pfd + 1;
+    } else {
+        hl_host_process_fd_private_remove(pfd);
+        close(pfd);
+    }
+    errno = e;
+    return rc;
+#else
     int cwd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (cwd < 0) {
         close(pfd);
@@ -105,6 +138,7 @@ static int unix_sock_at(int fd, const char *host, int connecting) {
     close(pfd);
     errno = e;
     return rc;
+#endif
 }
 
 // AF_UNIX DATAGRAM send to a host pathname `host`, path-length safe (fchdir-shortens past macOS's 104-byte

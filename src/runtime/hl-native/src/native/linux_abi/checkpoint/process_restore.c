@@ -48,6 +48,10 @@ static void ckpt_restore_retire_typed_fd(const struct ckpt_fd *record) {
 }
 
 static void ckpt_restore_socket_state(int fd, const struct ckpt_socket_state *state) {
+    if (state->guest_family == AF_UNIX && state->host_family == AF_UNIX) {
+        const struct sockaddr_un *local = (const void *)&state->local;
+        if (local->sun_path[0] == '/') unix_bind_note(fd, local->sun_path);
+    }
     g_tcp_listen[fd] = state->listening != 0;
     g_sock_backlog[fd] = state->backlog;
     g_lo_port[fd] = state->lo_port;
