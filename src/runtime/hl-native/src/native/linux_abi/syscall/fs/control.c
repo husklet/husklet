@@ -23,10 +23,7 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
         // TCSETS/W/F
         termios_l2m((const uint8_t *)arg, &t);
         int act = rq == 0x5402 ? TCSANOW : rq == 0x5403 ? TCSADRAIN : TCSAFLUSH;
-        sigset_t sv;
-        tty_ctl_block(&sv);              // a bg-group tcsetattr would otherwise SIGTTOU-stop the caller
         int r = tcsetattr(tfd, act, &t); // push live to any open real slave (best effort on a master)
-        tty_ctl_restore(&sv);
         if (is_master) {
             g_ptm_term[fd] = t;
             g_ptm_tset[fd] = 1;
@@ -60,10 +57,7 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
         cfsetispeed(&t, *(uint32_t *)((const uint8_t *)arg + 36));
         cfsetospeed(&t, *(uint32_t *)((const uint8_t *)arg + 40));
         int act = rq == 0x402c542b ? TCSANOW : rq == 0x402c542c ? TCSADRAIN : TCSAFLUSH;
-        sigset_t sv;
-        tty_ctl_block(&sv); // a bg-group tcsetattr would otherwise SIGTTOU-stop the caller
         int r = tcsetattr(tfd, act, &t);
-        tty_ctl_restore(&sv);
         if (is_master) {
             g_ptm_term[fd] = t;
             g_ptm_tset[fd] = 1;
