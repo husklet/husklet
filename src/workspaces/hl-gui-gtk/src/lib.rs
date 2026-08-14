@@ -7,11 +7,13 @@
 
 mod build;
 mod collection;
+mod component;
 mod event;
 mod prop;
 mod registry;
 pub mod rows;
 pub mod style;
+mod text;
 
 pub use event::Reports;
 pub use registry::Failure;
@@ -115,13 +117,13 @@ impl Surface {
         Ok(())
     }
 
-    fn place(&self, parent: NodeId, child: NodeId, index: usize) -> Result<(), Failure> {
+    fn place(&self, parent: NodeId, child: NodeId, index: usize, tag: hl_gui::Tag) -> Result<(), Failure> {
         let host = self.require(parent)?;
         let widget = self.require(child)?;
         if collection::append(host, widget) {
             return Ok(());
         }
-        if build::attach(host, widget, index) {
+        if build::attach(host, widget, tag, index) {
             return Ok(());
         }
         Err(Failure::NotAContainer(parent))
@@ -138,6 +140,11 @@ impl Surface {
         let widget = self.require(id)?;
         let node = tree.node(id).ok_or(Failure::Unmapped(id))?;
         Ok((widget, node))
+    }
+
+    /// What the child is, which is what decides the slot it belongs in.
+    fn tag(tree: &Tree, child: NodeId) -> Result<hl_gui::Tag, Failure> {
+        tree.node(child).map(|node| node.tag).ok_or(Failure::Unmapped(child))
     }
 
     /// Where the child now sits among its siblings. The tree is already updated
@@ -163,12 +170,12 @@ impl Renderer for Surface {
             Patch::Create { id, .. } => self.create(*id, tree),
             Patch::Insert { parent, child, .. } => {
                 let index = Self::index(tree, *parent, *child);
-                self.place(*parent, *child, index)
+                self.place(*parent, *child, index, Self::tag(tree, *child)?)
             }
             Patch::Move { parent, child, .. } => {
                 let index = Self::index(tree, *parent, *child);
                 build::detach(self.require(*child)?);
-                self.place(*parent, *child, index)
+                self.place(*parent, *child, index, Self::tag(tree, *child)?)
             }
             Patch::SetProp { id, prop, value } => {
                 if let (Prop::Source, PropValue::Source(source)) = (*prop, value) {

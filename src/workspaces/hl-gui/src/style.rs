@@ -60,6 +60,14 @@ impl Token {
 }
 
 /// A spacing or sizing quantity. `Step` is the only numeric spacing on the wire.
+///
+/// There is deliberately no proportional variant. A fraction of a row is a
+/// promise only a toolkit with a real flex solver can keep: GTK expresses
+/// per-child growth as a boolean (`hexpand`) and equal shares (`homogeneous`),
+/// neither of which is a ratio. Proportion is expressed instead by describing a
+/// [`crate::Tag::Grid`] with a column count and giving each child a column span
+/// — three of twelve columns is a third of the width, and it is a third in
+/// every adapter rather than only in the one that happens to have a solver.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
 pub enum Length {
@@ -93,6 +101,118 @@ impl Length {
             Self::MAXIMUM_STEP
         } else {
             step
+        }
+    }
+}
+
+/// Space on each side of a widget, named in writing order.
+///
+/// Padding is one idea with four faces, so it stays one property carrying a
+/// richer value rather than four properties (`PadTop`, `PadEnd`, …). Four names
+/// would quadruple the layout vocabulary, and — worse — a producer changing
+/// "the padding" would emit up to four patches that a renderer could apply
+/// between paints, showing arrangements the producer never described.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
+pub struct Edges {
+    pub top: Length,
+    pub end: Length,
+    pub bottom: Length,
+    pub start: Length,
+}
+
+impl Edges {
+    /// The same space on every side.
+    #[must_use]
+    pub const fn all(space: Length) -> Self {
+        Self {
+            top: space,
+            end: space,
+            bottom: space,
+            start: space,
+        }
+    }
+
+    /// One space above and below, another before and after.
+    #[must_use]
+    pub const fn symmetric(vertical: Length, horizontal: Length) -> Self {
+        Self {
+            top: vertical,
+            end: horizontal,
+            bottom: vertical,
+            start: horizontal,
+        }
+    }
+
+    /// Four distinct sides, clockwise from the top.
+    #[must_use]
+    pub const fn sides(top: Length, end: Length, bottom: Length, start: Length) -> Self {
+        Self {
+            top,
+            end,
+            bottom,
+            start,
+        }
+    }
+
+    /// No space at all, which is what clearing the property restores.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self::all(Length::Step(0))
+    }
+}
+
+impl Default for Edges {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
+/// A size constraint along one axis.
+///
+/// The floor is universal: every toolkit can refuse to shrink a widget. The
+/// ceiling is not — GTK4 has no maximum size on a plain widget — so `maximum`
+/// is documented as a request an adapter honours where its toolkit can express
+/// one (scrolled content, character-counted text) and reports rather than fakes
+/// where it cannot.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
+pub struct Bounds {
+    pub minimum: Option<Length>,
+    pub maximum: Option<Length>,
+}
+
+impl Bounds {
+    /// A floor with no ceiling.
+    #[must_use]
+    pub const fn at_least(minimum: Length) -> Self {
+        Self {
+            minimum: Some(minimum),
+            maximum: None,
+        }
+    }
+
+    /// A ceiling with no floor.
+    #[must_use]
+    pub const fn at_most(maximum: Length) -> Self {
+        Self {
+            minimum: None,
+            maximum: Some(maximum),
+        }
+    }
+
+    /// Both ends of the range. A ceiling below the floor is raised to it, so a
+    /// contradictory description resolves to a fixed size instead of an
+    /// impossible one the layout pass would have to guess at.
+    #[must_use]
+    pub fn between(minimum: Length, maximum: Length) -> Self {
+        let ceiling = match (minimum.pixels(), maximum.pixels()) {
+            (Some(floor), Some(ceiling)) if ceiling < floor => minimum,
+            _ => maximum,
+        };
+        Self {
+            minimum: Some(minimum),
+            maximum: Some(ceiling),
         }
     }
 }

@@ -5,7 +5,7 @@ use hl_gui::{Align, Column, Length, Prop, PropValue, RowWindow, SourceId};
 
 use crate::rows::{Rows, UNIT};
 
-use crate::build;
+use crate::component;
 
 /// Nominal advance width of one character in the default interface font.
 const CHARACTER_PIXELS: i32 = 9;
@@ -23,7 +23,7 @@ pub(crate) fn configure(widget: &gtk::Widget, prop: Prop, value: &PropValue) {
 
 /// Rebuilds the declared columns of a table.
 fn schema(widget: &gtk::Widget, columns: &[Column]) {
-    let Some(view) = build::collection::view(widget) else {
+    let Some(view) = component::table::columns(widget) else {
         return;
     };
     while let Some(existing) = view.columns().item(0) {
@@ -88,7 +88,7 @@ fn bind(item: &gtk::glib::Object, index: usize) {
 /// Widget count stays proportional to the viewport rather than the source, so
 /// a table over a large result set costs what is on screen.
 pub(crate) fn model(widget: &gtk::Widget, source: SourceId) -> Option<Rows> {
-    let view = build::collection::view(widget)?;
+    let view = component::table::columns(widget)?;
     if let Some(existing) = view
         .model()
         .and_then(|model| model.downcast::<gtk::NoSelection>().ok())
@@ -119,7 +119,7 @@ pub(crate) fn present(widget: &gtk::Widget, window: &RowWindow) {
 
 /// Appends a row widget to a list component.
 pub(crate) fn append(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
-    let Some(rows) = build::collection::rows(parent) else {
+    let Some(rows) = component::list::rows(parent) else {
         return false;
     };
     rows.append(child);

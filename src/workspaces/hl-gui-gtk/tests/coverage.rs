@@ -106,6 +106,8 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     every_tag_materializes_as_its_own_widget();
     every_container_keeps_the_child_it_is_given();
     every_property_changes_the_widget_it_is_applied_to();
+    every_tag_honours_the_property_it_is_for();
+    every_part_lands_in_the_slot_its_parent_keeps();
 }
 
 /// A tag that no builder maps is the defect this catches: the surface would
@@ -365,17 +367,20 @@ fn measure() -> Vec<Probe> {
             value: PropValue::Length(Length::Step(4)),
             verdict: |widget| widget.size_request().1 == 16,
         },
+        // Alignment names the container's axes, not the screen's: these probes
+        // hang their node from the root, which stacks its children downwards,
+        // so the main axis here is the vertical one.
         Probe {
             prop: Prop::Align,
             tag: Tag::Text,
             value: PropValue::Align(Align::End),
-            verdict: |widget| widget.halign() == gtk::Align::End,
+            verdict: |widget| widget.valign() == gtk::Align::End,
         },
         Probe {
             prop: Prop::Justify,
             tag: Tag::Text,
             value: PropValue::Align(Align::Center),
-            verdict: |widget| widget.valign() == gtk::Align::Center,
+            verdict: |widget| widget.halign() == gtk::Align::Center,
         },
         Probe {
             prop: Prop::Orientation,
@@ -445,4 +450,485 @@ fn scale(widget: &gtk::Widget) -> gtk::Scale {
         .clone()
         .downcast::<gtk::Scale>()
         .expect("a slider tag builds a scale")
+}
+
+/// What a component is *for*: the one property it would be dishonest to accept
+/// and ignore. Every tag names one, so a component that materializes an inert
+/// widget is caught here rather than in an application.
+#[derive(Clone, Copy, Debug)]
+enum Aspect {
+    Label,
+    Value,
+    Number,
+    Icon,
+    Uri,
+    Fraction,
+    Choices,
+    Checked,
+    Busy,
+    Gap,
+    Grow,
+    Orientation,
+    Measure,
+    Date,
+    Time,
+}
+
+/// The text every label-shaped scenario writes, and reads back.
+const TITLE: &str = "Ready";
+/// The value every value-shaped scenario writes, and reads back.
+const CONTENT: &str = "nginx";
+/// The icon every icon-shaped scenario names.
+const EMBLEM: &str = "dialog-information-symbolic";
+/// The file every reference-shaped scenario names.
+const REFERENCE: &str = "/var/lib/hl/sample.png";
+
+/// A tag that accepts its own principal property and changes nothing is the
+/// defect this catches: the component library would claim a component it does
+/// not actually have.
+fn every_tag_honours_the_property_it_is_for() {
+    for tag in Tag::ALL {
+        let aspect = principal(*tag);
+        let mut session = Session::new();
+        let node = session.producer.create(*tag);
+        session.producer.append(NodeId::ROOT, node);
+        session.producer.set(node, asked(aspect), written(aspect));
+
+        let outcome = session.flush();
+
+        assert!(outcome.is_ok(), "{} failed to render: {outcome:?}", tag.as_str());
+        let widget = session
+            .tagged(*tag)
+            .unwrap_or_else(|| panic!("{} built no widget", tag.as_str()));
+        assert!(
+            honoured(&widget, aspect),
+            "{} ignores {:?}, the property it exists for",
+            tag.as_str(),
+            asked(aspect)
+        );
+    }
+}
+
+fn asked(aspect: Aspect) -> Prop {
+    match aspect {
+        Aspect::Label => Prop::Label,
+        Aspect::Value | Aspect::Number | Aspect::Date | Aspect::Time => Prop::Value,
+        Aspect::Icon => Prop::Icon,
+        Aspect::Uri => Prop::Uri,
+        Aspect::Fraction => Prop::Fraction,
+        Aspect::Choices => Prop::Choices,
+        Aspect::Checked => Prop::Checked,
+        Aspect::Busy => Prop::Busy,
+        Aspect::Gap => Prop::Gap,
+        Aspect::Grow => Prop::Grow,
+        Aspect::Orientation => Prop::Orientation,
+        Aspect::Measure => Prop::Width,
+    }
+}
+
+fn written(aspect: Aspect) -> PropValue {
+    match aspect {
+        Aspect::Label => PropValue::text(TITLE),
+        Aspect::Value => PropValue::text(CONTENT),
+        Aspect::Number => PropValue::Number(42.0),
+        Aspect::Icon => PropValue::text(EMBLEM),
+        Aspect::Uri => PropValue::text(REFERENCE),
+        Aspect::Fraction => PropValue::Number(0.5),
+        Aspect::Choices => PropValue::Choices(vec![Choice::new("all", "All"), Choice::new("some", "Some")]),
+        Aspect::Checked => PropValue::Flag(true),
+        Aspect::Busy => PropValue::Flag(false),
+        Aspect::Gap => PropValue::Length(Length::Step(3)),
+        Aspect::Grow => PropValue::Number(1.0),
+        Aspect::Orientation => PropValue::Orientation(Orientation::Vertical),
+        Aspect::Measure => PropValue::Length(Length::Step(4)),
+        Aspect::Date => PropValue::text("2024-03-05"),
+        Aspect::Time => PropValue::text("14:30"),
+    }
+}
+
+fn honoured(widget: &gtk::Widget, aspect: Aspect) -> bool {
+    match aspect {
+        Aspect::Label => shows(widget, TITLE),
+        Aspect::Value => holds(widget, CONTENT),
+        Aspect::Number => measured(widget, 42.0),
+        Aspect::Icon => named(widget, EMBLEM),
+        Aspect::Uri => referenced(widget),
+        Aspect::Fraction => filled(widget),
+        Aspect::Choices => offered(widget),
+        Aspect::Checked => active(widget),
+        Aspect::Busy => !widget.property::<bool>("spinning"),
+        Aspect::Gap => spaced(widget),
+        Aspect::Grow => widget.hexpands(),
+        Aspect::Orientation => upright(widget),
+        Aspect::Measure => widget.size_request().0 == 16,
+        Aspect::Date => dated(widget),
+        Aspect::Time => timed(widget),
+    }
+}
+
+/// Every widget at or below one widget, parents before children.
+fn subtree(widget: &gtk::Widget) -> Vec<gtk::Widget> {
+    let mut found = vec![widget.clone()];
+    let mut index = 0;
+    while index < found.len() {
+        found.extend(offspring(&found[index]));
+        index += 1;
+    }
+    found
+}
+
+/// Whether the text became something a person can read, wherever the component
+/// keeps its caption.
+fn shows(widget: &gtk::Widget, text: &str) -> bool {
+    subtree(widget).iter().any(|held| captioned(held, text))
+}
+
+fn captioned(widget: &gtk::Widget, text: &str) -> bool {
+    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+        return label.text() == text;
+    }
+    if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+        return button.label().is_some_and(|held| held == text);
+    }
+    if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
+        return check.label().is_some_and(|held| held == text);
+    }
+    if let Some(menu) = widget.downcast_ref::<gtk::MenuButton>() {
+        return menu.label().is_some_and(|held| held == text);
+    }
+    chromed(widget, text)
+}
+
+fn chromed(widget: &gtk::Widget, text: &str) -> bool {
+    if let Some(frame) = widget.downcast_ref::<gtk::Frame>() {
+        return frame.label().is_some_and(|held| held == text);
+    }
+    if let Some(expander) = widget.downcast_ref::<gtk::Expander>() {
+        return expander.label().is_some_and(|held| held == text);
+    }
+    widget.tooltip_text().is_some_and(|held| held == text)
+}
+
+/// Whether the value reached whatever the component holds a value in.
+fn holds(widget: &gtk::Widget, text: &str) -> bool {
+    subtree(widget).iter().any(|held| kept(held, text))
+}
+
+fn kept(widget: &gtk::Widget, text: &str) -> bool {
+    if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
+        return entry.text() == text;
+    }
+    if let Some(entry) = widget.downcast_ref::<gtk::SearchEntry>() {
+        return entry.text() == text;
+    }
+    if let Some(entry) = widget.downcast_ref::<gtk::PasswordEntry>() {
+        return entry.text() == text;
+    }
+    if let Some(view) = widget.downcast_ref::<gtk::TextView>() {
+        return written_text(view).contains(text);
+    }
+    captioned(widget, text)
+}
+
+fn written_text(view: &gtk::TextView) -> String {
+    let buffer = view.buffer();
+    buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string()
+}
+
+fn measured(widget: &gtk::Widget, number: f64) -> bool {
+    subtree(widget).iter().any(|held| counted(held, number))
+}
+
+fn counted(widget: &gtk::Widget, number: f64) -> bool {
+    if let Some(spin) = widget.downcast_ref::<gtk::SpinButton>() {
+        return near(spin.value(), number);
+    }
+    let Some(scale) = widget.downcast_ref::<gtk::Scale>() else {
+        return false;
+    };
+    near(scale.value(), number)
+}
+
+fn named(widget: &gtk::Widget, icon: &str) -> bool {
+    subtree(widget).iter().any(|held| marked(held, icon))
+}
+
+fn marked(widget: &gtk::Widget, icon: &str) -> bool {
+    if let Some(image) = widget.downcast_ref::<gtk::Image>() {
+        return image.icon_name().is_some_and(|held| held == icon);
+    }
+    if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+        return button.icon_name().is_some_and(|held| held == icon);
+    }
+    let Some(menu) = widget.downcast_ref::<gtk::MenuButton>() else {
+        return false;
+    };
+    menu.icon_name().is_some_and(|held| held == icon)
+}
+
+fn referenced(widget: &gtk::Widget) -> bool {
+    if let Some(picture) = widget.downcast_ref::<gtk::Picture>() {
+        return picture.file().is_some();
+    }
+    let Some(video) = widget.downcast_ref::<gtk::Video>() else {
+        return false;
+    };
+    video.file().is_some()
+}
+
+fn filled(widget: &gtk::Widget) -> bool {
+    if let Some(progress) = widget.downcast_ref::<gtk::ProgressBar>() {
+        return near(progress.fraction(), 0.5);
+    }
+    let Some(level) = widget.downcast_ref::<gtk::LevelBar>() else {
+        return false;
+    };
+    near(level.value(), 0.5)
+}
+
+fn offered(widget: &gtk::Widget) -> bool {
+    if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
+        return drop.model().is_some_and(|model| model.n_items() == 2);
+    }
+    subtree(widget)
+        .iter()
+        .filter(|held| held.is::<gtk::CheckButton>())
+        .count()
+        == 2
+}
+
+fn active(widget: &gtk::Widget) -> bool {
+    if let Some(switch) = widget.downcast_ref::<gtk::Switch>() {
+        return switch.is_active();
+    }
+    let Some(check) = widget.downcast_ref::<gtk::CheckButton>() else {
+        return false;
+    };
+    check.is_active()
+}
+
+fn spaced(widget: &gtk::Widget) -> bool {
+    if let Some(container) = widget.downcast_ref::<gtk::Box>() {
+        return container.spacing() == 12;
+    }
+    let Some(grid) = widget.downcast_ref::<gtk::Grid>() else {
+        return false;
+    };
+    grid.row_spacing() == 12
+}
+
+fn upright(widget: &gtk::Widget) -> bool {
+    let Some(separator) = widget.downcast_ref::<gtk::Separator>() else {
+        return false;
+    };
+    separator.orientation() == gtk::Orientation::Vertical
+}
+
+fn dated(widget: &gtk::Widget) -> bool {
+    let Some(calendar) = widget.downcast_ref::<gtk::Calendar>() else {
+        return false;
+    };
+    calendar.day() == 5 && calendar.month() == 2 && calendar.year() == 2024
+}
+
+fn timed(widget: &gtk::Widget) -> bool {
+    let counters = subtree(widget)
+        .into_iter()
+        .filter_map(|held| held.downcast::<gtk::SpinButton>().ok())
+        .collect::<Vec<_>>();
+    let (Some(hours), Some(minutes)) = (counters.first(), counters.last()) else {
+        return false;
+    };
+    near(hours.value(), 14.0) && near(minutes.value(), 30.0)
+}
+
+/// The property each component exists to honour.
+///
+/// Total over the catalogue on purpose: a new tag cannot be added without
+/// saying what it is for, and saying it here is what makes the scenario above
+/// run for it.
+fn principal(tag: Tag) -> Aspect {
+    match tag {
+        Tag::Column | Tag::Row | Tag::Grid | Tag::Container => Aspect::Gap,
+        Tag::Scroll | Tag::Splitter | Tag::Stack | Tag::Overlay | Tag::Spacer => Aspect::Grow,
+        Tag::Separator | Tag::StepConnector => Aspect::Orientation,
+        Tag::Card | Tag::Paper | Tag::CardHeader | Tag::CardActionArea => Aspect::Label,
+        Tag::CardContent | Tag::CardActions | Tag::Section | Tag::Toolbar | Tag::Sidebar => Aspect::Gap,
+        Tag::CardMedia | Tag::Image | Tag::ImageListItem | Tag::Video => Aspect::Uri,
+        Tag::HeaderBar | Tag::ImageList | Tag::Tabs | Tag::List | Tag::DataTable | Tag::TreeTable => Aspect::Grow,
+        Tag::Popover | Tag::ContextMenu | Tag::ColorPicker => Aspect::Grow,
+        Tag::AvatarGroup => Aspect::Gap,
+        Tag::Icon | Tag::IconButton | Tag::Fab | Tag::SpeedDial | Tag::Overflow => Aspect::Icon,
+        Tag::ListItemIcon | Tag::StepIcon => Aspect::Icon,
+        Tag::Progress | Tag::Meter => Aspect::Fraction,
+        Tag::Spinner => Aspect::Busy,
+        Tag::Skeleton => Aspect::Measure,
+        Tag::Stat => Aspect::Value,
+        Tag::Switch => Aspect::Checked,
+        Tag::Select | Tag::Autocomplete | Tag::RadioGroup => Aspect::Choices,
+        Tag::NumberEntry | Tag::Slider => Aspect::Number,
+        Tag::DatePicker => Aspect::Date,
+        Tag::TimePicker => Aspect::Time,
+        Tag::Entry
+        | Tag::Search
+        | Tag::TextArea
+        | Tag::PasswordEntry
+        | Tag::TextField
+        | Tag::CodeView
+        | Tag::LogView => Aspect::Value,
+        _ => structural(tag),
+    }
+}
+
+/// The families whose principal property is how they arrange what they hold.
+fn structural(tag: Tag) -> Aspect {
+    match tag {
+        Tag::ButtonGroup
+        | Tag::ToggleButtonGroup
+        | Tag::FormControl
+        | Tag::FormGroup
+        | Tag::ListRow
+        | Tag::ListItemAction
+        | Tag::Table
+        | Tag::TableHead
+        | Tag::TableBody
+        | Tag::TableFooter
+        | Tag::TableRow => Aspect::Gap,
+        Tag::TabPage
+        | Tag::Breadcrumb
+        | Tag::Pagination
+        | Tag::Stepper
+        | Tag::Step
+        | Tag::StepContent
+        | Tag::NavigationRail
+        | Tag::BottomNavigation
+        | Tag::AccordionDetails
+        | Tag::AccordionActions => Aspect::Gap,
+        Tag::Dialog | Tag::DialogContent | Tag::DialogActions | Tag::Menu => Aspect::Gap,
+        // Everything else names itself: a caption is what it carries.
+        _ => Aspect::Label,
+    }
+}
+
+/// A part accepted by its parent and then merely appended is the defect this
+/// catches: the description says "this is the header" and the surface renders
+/// one more anonymous row.
+fn every_part_lands_in_the_slot_its_parent_keeps() {
+    a_card_header_lands_in_the_cards_header();
+    a_disclosure_keeps_its_summary_and_its_details_apart();
+    a_dialog_orders_its_title_and_its_actions();
+    a_table_puts_its_heading_above_its_body();
+    a_row_leads_with_its_mark_and_trails_with_its_controls();
+    a_revealed_action_lands_inside_the_menu_it_belongs_to();
+    an_adornment_lands_beside_the_value_it_decorates();
+}
+
+/// One parent, one part, rendered: the shape every slot scenario needs.
+fn placed(parent: Tag, parts: &[Tag]) -> Session {
+    let mut session = Session::new();
+    let host = session.producer.create(parent);
+    session.producer.append(NodeId::ROOT, host);
+    session.producer.set(host, Prop::Expanded, PropValue::Flag(true));
+    for part in parts {
+        let child = session.producer.create(*part);
+        session.producer.append(host, child);
+    }
+    session.flush().expect("a part its parent declares must render");
+    session
+}
+
+fn a_card_header_lands_in_the_cards_header() {
+    let session = placed(Tag::Card, &[Tag::CardContent, Tag::CardHeader]);
+    let card = session.tagged(Tag::Card).expect("a card renders");
+    let header = card
+        .downcast_ref::<gtk::Frame>()
+        .and_then(gtk::Frame::label_widget)
+        .expect("a card keeps a header slot");
+    assert!(
+        header.has_css_class("hl-cardheader"),
+        "the card header was appended as content instead of filling the header slot"
+    );
+}
+
+fn a_disclosure_keeps_its_summary_and_its_details_apart() {
+    let session = placed(Tag::Accordion, &[Tag::AccordionDetails, Tag::AccordionSummary]);
+    let accordion = session.tagged(Tag::Accordion).expect("an accordion renders");
+    let disclosure = accordion
+        .downcast_ref::<gtk::Expander>()
+        .expect("an accordion is a disclosure");
+    let summary = disclosure.label_widget().expect("a summary slot is kept");
+    assert!(
+        summary.has_css_class("hl-accordionsummary"),
+        "the summary is not the label"
+    );
+    let details = session.tagged(Tag::AccordionDetails).expect("details render");
+    assert!(
+        subtree(&disclosure.child().expect("a body is revealed")).contains(&details),
+        "the details are not inside the body the disclosure reveals"
+    );
+}
+
+fn a_dialog_orders_its_title_and_its_actions() {
+    let session = placed(Tag::Dialog, &[Tag::DialogActions, Tag::DialogContent, Tag::DialogTitle]);
+    let dialog = session.tagged(Tag::Dialog).expect("a dialog renders");
+    let parts = offspring(&dialog);
+    assert!(
+        parts.first().is_some_and(|part| part.has_css_class("hl-dialogtitle")),
+        "the title is not at the top of the dialog"
+    );
+    assert!(
+        parts.last().is_some_and(|part| part.has_css_class("hl-dialogactions")),
+        "the actions are not at the foot of the dialog"
+    );
+}
+
+fn a_table_puts_its_heading_above_its_body() {
+    let session = placed(Tag::Table, &[Tag::TableBody, Tag::TableHead]);
+    let table = session.tagged(Tag::Table).expect("a table renders");
+    let sections = offspring(&table);
+    assert!(
+        sections.first().is_some_and(|part| part.has_css_class("hl-tablehead")),
+        "the heading was placed under the body it heads"
+    );
+}
+
+fn a_row_leads_with_its_mark_and_trails_with_its_controls() {
+    let session = placed(
+        Tag::ListRow,
+        &[Tag::ListItemAction, Tag::ListItemText, Tag::ListItemIcon],
+    );
+    let row = session.tagged(Tag::ListRow).expect("a row renders");
+    let parts = offspring(&row);
+    assert!(
+        parts.first().is_some_and(|part| part.has_css_class("hl-listitemicon")),
+        "the mark does not lead the row"
+    );
+    assert!(
+        parts.last().is_some_and(|part| part.has_css_class("hl-listitemaction")),
+        "the controls do not trail the row"
+    );
+}
+
+fn a_revealed_action_lands_inside_the_menu_it_belongs_to() {
+    let session = placed(Tag::SpeedDial, &[Tag::SpeedDialAction]);
+    let dial = session.tagged(Tag::SpeedDial).expect("a speed dial renders");
+    let popover = dial
+        .downcast_ref::<gtk::MenuButton>()
+        .and_then(gtk::MenuButton::popover)
+        .expect("a speed dial reveals a popover");
+    let action = session.tagged(Tag::SpeedDialAction).expect("an action renders");
+    assert!(
+        subtree(&popover.child().expect("the popover holds a column")).contains(&action),
+        "the action was placed beside the dial instead of inside what it reveals"
+    );
+}
+
+fn an_adornment_lands_beside_the_value_it_decorates() {
+    let session = placed(Tag::TextField, &[Tag::InputAdornment]);
+    let adornment = session.tagged(Tag::InputAdornment).expect("an adornment renders");
+    let line = adornment.parent().expect("an adornment is placed somewhere");
+    assert!(
+        offspring(&line).iter().any(gtk::prelude::ObjectExt::is::<gtk::Entry>),
+        "the adornment does not sit beside the field's own value"
+    );
 }

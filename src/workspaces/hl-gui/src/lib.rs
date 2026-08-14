@@ -21,6 +21,7 @@
 //! ```
 
 mod builder;
+mod component;
 mod data;
 mod dialog;
 mod element;
@@ -43,4 +44,4 @@ pub use node::{
 };
 pub use render::{Event, Events, Renderer};
 pub use size::ByteSize;
-pub use style::{Align, Density, Length, Rgb, Scale, Theme, Token, Tone, Variant};
+pub use style::{Align, Bounds, Density, Edges, Length, Rgb, Scale, Theme, Token, Tone, Variant};

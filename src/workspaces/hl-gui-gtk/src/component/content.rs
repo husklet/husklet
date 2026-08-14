@@ -1,51 +1,66 @@
+//! Long-form content: source text, a running log, media and plots.
+
 use gtk::prelude::*;
 use hl_gui::Tag;
 
-/// Row-oriented components. All of them recycle widgets, so a source with a
-/// million rows still costs one viewport of widgets.
-pub(super) fn widget(tag: Tag) -> gtk::Widget {
+use super::field;
+
+/// Content components.
+pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
-        Tag::List => list().upcast(),
-        Tag::ListRow => row().upcast(),
-        // TreeTable shares the column view. The row protocol delivers flat
-        // rows of cells with no parent or depth on the wire, so a tree model
-        // would have nothing to nest by; the two differ only once the protocol
-        // carries hierarchy.
-        Tag::DataTable | Tag::TreeTable => table().upcast(),
-        // Chart is the last collection tag, and `build::widget` routes only
-        // collection tags here.
+        Tag::CodeView => source().upcast(),
+        Tag::LogView => log().upcast(),
+        Tag::Video => gtk::Video::new().upcast(),
+        // Chart is the last content tag routed here.
         _ => chart().upcast(),
     }
 }
 
-fn list() -> gtk::ScrolledWindow {
-    let view = gtk::ListBox::new();
-    view.set_selection_mode(gtk::SelectionMode::Single);
-    let window = gtk::ScrolledWindow::new();
-    window.set_child(Some(&view));
+/// A read-only monospaced view of source text.
+///
+/// Without line numbers: numbering needs a gutter widget that re-measures on
+/// every edit, which is what `GtkSourceView` exists for, and that library is
+/// not a dependency here. A wrong or drifting gutter would be worse than none.
+fn source() -> gtk::ScrolledWindow {
+    let window = field::editor(false);
+    window.set_min_content_height(240);
+    if let Some(view) = field::view(&window.clone().upcast()) {
+        view.set_wrap_mode(gtk::WrapMode::None);
+    }
+    window
+}
+
+/// An append-only view that follows its tail.
+fn log() -> gtk::ScrolledWindow {
+    let window = field::editor(false);
     window.set_vexpand(true);
     window
 }
 
-fn row() -> gtk::Box {
-    let widget = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    widget.set_hexpand(true);
-    widget
+/// Appends a line to a log and follows it.
+///
+/// Appending rather than replacing is the component's contract: a producer
+/// streams what happened since the last frame instead of resending the whole
+/// log, which is what keeps a long-running log affordable on the wire.
+pub(crate) fn append(widget: &gtk::Widget, content: &str) -> bool {
+    let Some(view) = field::view(widget) else {
+        return false;
+    };
+    let buffer = view.buffer();
+    buffer.insert(&mut buffer.end_iter(), content);
+    follow(widget, &view);
+    true
 }
 
-/// A column view over a model the source layer populates. Columns are declared
-/// as a property, so construction leaves the view empty on purpose.
-fn table() -> gtk::ScrolledWindow {
-    let view = gtk::ColumnView::new(None::<gtk::SelectionModel>);
-    view.set_reorderable(false);
-    view.set_show_row_separators(true);
-    view.set_show_column_separators(false);
-    let window = gtk::ScrolledWindow::new();
-    window.set_child(Some(&view));
-    window.set_hexpand(true);
-    window.set_vexpand(true);
-    window.set_min_content_height(160);
-    window
+/// Scrolls to the end, so the newest line is the one on screen.
+fn follow(widget: &gtk::Widget, view: &gtk::TextView) {
+    let mark = view.buffer().create_mark(None, &view.buffer().end_iter(), false);
+    view.scroll_mark_onscreen(&mark);
+    let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() else {
+        return;
+    };
+    let adjustment = window.vadjustment();
+    adjustment.set_value(adjustment.upper());
 }
 
 /// Charts have no toolkit equivalent, so the adapter paints them itself.
@@ -96,20 +111,4 @@ fn caption(area: &gtk::DrawingArea, context: &gtk::cairo::Context, width: f64, h
     };
     context.move_to((width - extents.width()) / 2.0, f64::midpoint(height, extents.height()));
     let _ = context.show_text(&text);
-}
-
-/// The column view behind a table component, when the widget is one.
-pub(crate) fn view(widget: &gtk::Widget) -> Option<gtk::ColumnView> {
-    widget
-        .downcast_ref::<gtk::ScrolledWindow>()
-        .and_then(gtk::ScrolledWindow::child)
-        .and_then(|child| child.downcast::<gtk::ColumnView>().ok())
-}
-
-/// The list box behind a list component, when the widget is one.
-pub(crate) fn rows(widget: &gtk::Widget) -> Option<gtk::ListBox> {
-    widget
-        .downcast_ref::<gtk::ScrolledWindow>()
-        .and_then(gtk::ScrolledWindow::child)
-        .and_then(|child| child.downcast::<gtk::ListBox>().ok())
 }

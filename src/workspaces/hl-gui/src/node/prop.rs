@@ -1,5 +1,5 @@
 use crate::data::{Column, SourceId};
-use crate::style::{Align, Length, Scale, Token, Tone, Variant};
+use crate::style::{Align, Bounds, Edges, Length, Scale, Token, Tone, Variant};
 
 /// One typed property name. A closed set keeps the wire small and lets an
 /// adapter be a total function over properties.
@@ -24,6 +24,8 @@ pub enum Prop {
     Busy,
     Secret,
     Monospace,
+    /// Whether content runs onto further lines instead of overflowing: words
+    /// for a text node, whole children for a row or a column.
     Wrap,
     Ellipsize,
     // Appearance
@@ -33,13 +35,26 @@ pub enum Prop {
     Color,
     // Layout
     Gap,
+    /// Space inside a container's own edges. Takes a [`Length`] for all four
+    /// sides or [`PropValue::Edges`] for one, two, or four distinct sides.
     Pad,
     Grow,
+    /// Extent along the horizontal axis: a [`Length`], or [`PropValue::Bounds`]
+    /// for a floor and ceiling.
     Width,
+    /// Extent along the vertical axis, read like [`Prop::Width`].
     Height,
+    /// Placement along the container's *main* axis — the axis children advance
+    /// on, horizontal for a row and vertical for a column.
     Align,
+    /// Placement along the container's *cross* axis, the one children share.
     Justify,
+    /// How many columns a grid lays out, or how many a table declares.
     Columns,
+    /// How many grid columns this child occupies. Never fewer than one.
+    Span,
+    /// How many grid rows this child occupies. Never fewer than one.
+    RowSpan,
     Orientation,
     Position,
     // Range
@@ -92,6 +107,8 @@ pub enum PropValue {
     Flag(bool),
     Token(Token),
     Length(Length),
+    Edges(Edges),
+    Bounds(Bounds),
     Variant(Variant),
     Tone(Tone),
     Scale(Scale),
@@ -158,6 +175,51 @@ impl PropValue {
             Self::Length(value) => Some(*value),
             _ => None,
         }
+    }
+
+    /// Per-side space, reading a plain [`Length`] as the same space on all four
+    /// sides so the simple description keeps working unchanged.
+    #[must_use]
+    pub fn as_edges(&self) -> Option<Edges> {
+        match self {
+            Self::Edges(value) => Some(*value),
+            Self::Length(value) => Some(Edges::all(*value)),
+            _ => None,
+        }
+    }
+
+    /// A size range, reading a plain [`Length`] as an exact size — a floor and
+    /// a ceiling at the same place.
+    #[must_use]
+    pub fn as_bounds(&self) -> Option<Bounds> {
+        match self {
+            Self::Bounds(value) => Some(*value),
+            Self::Length(value) => Some(Bounds::between(*value, *value)),
+            _ => None,
+        }
+    }
+
+    /// A cell count: how many columns a grid has, or how many a child spans.
+    ///
+    /// Never zero. A child occupying no columns is not a layout a producer can
+    /// mean — it would vanish, or in GTK's case be rejected by the container —
+    /// so zero and every negative number read as one, and a count too large for
+    /// a grid saturates rather than wrapping around.
+    #[must_use]
+    pub fn as_count(&self) -> Option<u16> {
+        let number = self.as_number()?;
+        if !number.is_finite() {
+            return Some(1);
+        }
+        let floored = number.floor();
+        if floored < 1.0 {
+            return Some(1);
+        }
+        Some(if floored > f64::from(u16::MAX) {
+            u16::MAX
+        } else {
+            floored as u16
+        })
     }
 }
 
