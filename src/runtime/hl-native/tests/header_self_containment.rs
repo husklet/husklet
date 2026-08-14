@@ -17,6 +17,67 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
+fn smc_page_index_is_exact_under_collisions_removal_and_publication() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-smc-index-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create SMC index probe directory");
+    let source = scratch.join("smc_index.c");
+    let executable = scratch.join("smc_index");
+    fs::write(
+        &source,
+        r#"
+#include "translator/guest/x86_64/smc_page_index.h"
+#include <pthread.h>
+
+static _Atomic uint64_t slots[8];
+static hl_smc_page_index index_ = {slots, 8};
+static _Atomic int start;
+
+static void *reader(void *unused) {
+    (void)unused;
+    while (!atomic_load_explicit(&start, memory_order_acquire)) {}
+    while (!hl_smc_page_index_contains(&index_, UINT64_C(0xabc000))) {}
+    return NULL;
+}
+
+int main(void) {
+    uint64_t first = UINT64_C(0x1000), collision = 0;
+    size_t bucket = hl_smc_page_index_hash(first) & 7;
+    for (uint64_t page = UINT64_C(0x2000); page < UINT64_C(0x100000); page += UINT64_C(0x1000))
+        if ((hl_smc_page_index_hash(page) & 7) == bucket) { collision = page; break; }
+    if (!collision || hl_smc_page_index_contains(&index_, first)) return 1;
+    if (!hl_smc_page_index_add(&index_, first) || !hl_smc_page_index_add(&index_, collision)) return 2;
+    if (!hl_smc_page_index_contains(&index_, first) || !hl_smc_page_index_contains(&index_, collision)) return 3;
+    if (!hl_smc_page_index_add(&index_, first)) return 4;
+    if (!hl_smc_page_index_remove(&index_, first) || hl_smc_page_index_contains(&index_, first)) return 5;
+    if (!hl_smc_page_index_contains(&index_, collision)) return 6;
+    if (!hl_smc_page_index_add(&index_, first) || !hl_smc_page_index_contains(&index_, first)) return 7;
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, reader, NULL) != 0) return 8;
+    atomic_store_explicit(&start, 1, memory_order_release);
+    if (!hl_smc_page_index_add(&index_, UINT64_C(0xabc000))) return 9;
+    if (pthread_join(thread, NULL) != 0) return 10;
+    return 0;
+}
+"#,
+    )
+    .expect("write SMC index probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("SMC index probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("SMC index probe execution");
+    assert!(run.success(), "SMC index probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove SMC index probe directory");
+}
+
+#[test]
 fn proc_fd_pseudo_targets_exclude_host_filesystem_spellings() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");

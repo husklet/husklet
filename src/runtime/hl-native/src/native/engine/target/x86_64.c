@@ -125,6 +125,7 @@ static int jit_guest_soft_active(void);
 // The dispatch seam is per (guest ISA, HOST CPU): dispatch.h patches AArch64 branch encodings.
 #include "../../host/cpu.h"
 #if defined(HL_HOST_CPU_AARCH64)
+#include "../../translator/guest/x86_64/smc_page_index.h"
 #include "../../translator/guest/x86_64/dispatch.h" // x86 dispatch seam for the SHARED engine/dispatch.c
 #else
 #include "../../translator/guest/x86_64/interp_dispatch.h"
