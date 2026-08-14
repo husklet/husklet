@@ -840,6 +840,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unlinked_pinned_image_can_reexec_proc_self_exe_on_both_isas() {
+        const SOURCE: &str = r#"
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <errno.h>
+int main(int argc, char **argv) {
+    if (argc == 2) return 0;
+    char *next[] = { (char *)"/proc/self/exe", (char *)"again", 0 };
+    syscall(SYS_execve, next[0], next, (char *[]){ 0 });
+    return errno;
+}
+"#;
+        for (isa, compiler) in [(1, "cc"), (2, "x86_64-linux-gnu-gcc")] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(root.path().join("bin")).unwrap();
+            let source = root.path().join("self.c");
+            let main_path = root.path().join("bin/main");
+            std::fs::write(&source, SOURCE).unwrap();
+            let compile = std::process::Command::new(compiler)
+                .args(["-static", "-no-pie", "-O2"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&main_path)
+                .output()
+                .unwrap_or_else(|error| panic!("{compiler} is required for ISA {isa}: {error}"));
+            assert!(
+                compile.status.success(),
+                "{compiler} failed: {}",
+                String::from_utf8_lossy(&compile.stderr)
+            );
+            let main = CString::new(main_path.to_str().unwrap()).unwrap();
+            let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
+            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+            let config = EngineConfig {
+                isa,
+                rootfs: Some(&root_path),
+                executable_host: Some(&main),
+                executable_fd: -1,
+                option_names: &[],
+                option_values: &[],
+                standard_fds: [standard.as_raw_fd(); 3],
+                provider_fd: -1,
+            };
+            // SAFETY: every borrowed string and descriptor remains live through create.
+            let engine = unsafe { Engine::create(config) }.unwrap();
+            std::fs::remove_file(&main_path).unwrap();
+            std::fs::remove_dir(root.path().join("bin")).unwrap();
+            let argument = CString::new("/bin/main").unwrap();
+            engine.run(&[argument.as_ptr()]).unwrap();
+            assert_eq!(engine.exit().status, 0, "ISA {isa} did not re-exec its pinned image");
+        }
+    }
+
     fn resolved(mut roots: Vec<std::fs::File>, path: &str) -> Option<String> {
         let mut file = resolve_layered_guest(std::path::Path::new(path), &roots).ok()??;
         let mut value = String::new();

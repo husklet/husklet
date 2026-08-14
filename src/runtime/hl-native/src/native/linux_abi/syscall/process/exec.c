@@ -1,11 +1,13 @@
 // Cohesive process-syscall handlers. Included by ../proc.c after shared process state.
-static int exec_resolve_proc_path(uint64_t *path) {
+static int exec_resolve_proc_path(uint64_t *path, int *self_executable) {
     static char resolved_path[4200];
     char link_path[4200];
     const char *guest_path = (const char *)(uintptr_t)*path;
+    *self_executable = 0;
     if (proc_self_exe(guest_path, link_path, sizeof link_path)) {
         snprintf(resolved_path, sizeof resolved_path, "%s", link_path);
         *path = (uint64_t)(uintptr_t)resolved_path;
+        *self_executable = 1;
         return 0;
     }
     int fd = procfd_num(guest_path);
@@ -152,6 +154,29 @@ static int exec_image_open(const char *path, exec_image *image) {
     return exec_image_adopt(descriptor, path, image);
 }
 
+static int exec_image_authorized(const char *path, exec_image *image) {
+    const unsigned char *header = g_authorized_executable_image;
+    if (path == NULL || image == NULL || header == NULL || g_authorized_executable_size < 2) return -ENOENT;
+    memset(image, 0, sizeof *image);
+    image->descriptor = -1;
+    if (hl_linux_image_read_bytes(header, g_authorized_executable_size, &image->bytes) != 0) return -ENOMEM;
+    int is_elf = image->bytes.size >= 4 && header[0] == 0x7f && header[1] == 'E' && header[2] == 'L' && header[3] == 'F';
+    image->script = header[0] == '#' && header[1] == '!';
+    if (!is_elf && !image->script) {
+        exec_image_release(image);
+        return -ENOEXEC;
+    }
+    if (is_elf) {
+        hl_linux_elf64_layout layout;
+        if (hl_linux_elf64_validate(&image->bytes, HL_EXEC_ELF_MACHINE, &layout) != 0) {
+            exec_image_release(image);
+            return -ENOEXEC;
+        }
+    }
+    snprintf(image->path, sizeof image->path, "%s", path);
+    return 0;
+}
+
 static int exec_image_parse_shebang(const exec_image *image, char *interpreter, size_t interpreter_size, char *argument,
                                     size_t argument_size) {
     if (image == NULL || !image->script || image->bytes.size <= 3) return 0;
@@ -272,7 +297,8 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // exec THROUGH the /proc magic links: execve("/proc/self/exe") (busybox re-exec, daemons,
         // test harnesses) and execve("/proc/self/fd/N") (glibc fexecve fallback) must exec the link's
         // TARGET -- the rootfs /proc is empty, so resolving them as ordinary paths ENOENTed.
-        int path_error = requested_descriptor >= 0 ? 0 : exec_resolve_proc_path(&a0);
+        int self_executable = 0;
+        int path_error = requested_descriptor >= 0 ? 0 : exec_resolve_proc_path(&a0, &self_executable);
         if (path_error) {
             if (requested_descriptor >= 0) close(requested_descriptor);
             G_RET(c) = (uint64_t)(int64_t)path_error;
@@ -298,7 +324,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // way, so the gate isolated nothing; an unreadable or unloadable image still fails right here.
         exec_image main_image;
         int image_error = requested_descriptor >= 0 ? exec_image_adopt(requested_descriptor, p, &main_image)
-                                                    : exec_image_open(p, &main_image);
+                            : self_executable ? exec_image_authorized(p, &main_image) : exec_image_open(p, &main_image);
         if (image_error) {
             G_RET(c) = (uint64_t)(int64_t)image_error;
             break;

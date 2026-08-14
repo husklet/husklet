@@ -924,6 +924,8 @@ static int legacy_set_alarm(void *context, uint64_t seconds, uint64_t *remaining
 }
 
 static char g_authorized_executable_path[4200];
+static const void *g_authorized_executable_image;
+static size_t g_authorized_executable_size;
 #include "../../linux_abi/syscall/dispatch.c" // SHARED: the canonical syscall layer
 #include "../../linux_abi/sentry.c"           // untrusted-guest isolation: SPSC ring + sentry split (g_untrusted)
 static void ckpt_poll(struct cpu *c);
@@ -956,8 +958,6 @@ static size_t g_initial_executable_size;
 static const void *g_initial_interpreter_image;
 static size_t g_initial_interpreter_size;
 static uint64_t g_loaded_image_identity;
-static const void *g_authorized_executable_image;
-static size_t g_authorized_executable_size;
 #include "../../linux_abi/x86.c" // Linux x86-64 ELF loader + stack + fault handlers
 #include "../../linux_abi/checkpoint.c"
 
