@@ -106,7 +106,7 @@ void _start(void) {
     volatile struct vector partial[2];
     partial[0].base = (void *)"Q"; partial[0].length = 1;
     partial[1].base = (void *)1; partial[1].length = 1;
-    if (call6(SYS_PWRITEV, fd, (long)partial, 2, 5, 0, 0) != 1) finish(26);
+    if (call6(SYS_PWRITEV, fd, (long)partial, 2, 5, 0, 0) != -14) finish(26);
     volatile struct vector bad_read[2];
     bad_read[0].base = first; bad_read[0].length = 1;
     bad_read[1].base = (void *)1; bad_read[1].length = 1;
@@ -124,6 +124,8 @@ void _start(void) {
     if (call6(SYS_PWRITEV, -1, 1, 2, 0, 0, 0) != -9) finish(29);
     if (call6(SYS_PREADV, fd, 1, 1025, 0, 0, 0) != -22) finish(30);
     if (call6(SYS_PWRITEV, fd, 1, 1025, 0, 0, 0) != -22) finish(31);
+    if (call6(SYS_PREADV, -1, 1, 1025, 0, 0, 0) != -9) finish(38);
+    if (call6(SYS_PWRITEV, -1, 1, 1025, 0, 0, 0) != -9) finish(39);
     if (call6(SYS_PREADV, fd, 1, 0, 0, 0, 0) != 0) finish(32);
     if (call6(SYS_PWRITEV, fd, 1, 0, 0, 0, 0) != 0) finish(33);
     if (call6(SYS_PREADV, fd, (long)reads, 1, -1, -1, 0) != -22) finish(34);
@@ -132,14 +134,14 @@ void _start(void) {
     short_read[0].base = tail; short_read[0].length = 1;
     short_read[1].base = tail + 1; short_read[1].length = 3;
     if (call6(SYS_PREADV, fd, (long)short_read, 2, 4, 0, 0) != 2
-        || !same(tail, "4Q", 2)) finish(35);
+        || !same(tail, "4f", 2)) finish(35);
     long appender = call6(SYS_OPENAT, AT_FDCWD, (long)path, O_WRONLY | O_APPEND, 0, 0, 0);
     if (appender < 0) finish(13);
     if (call6(SYS_PWRITE64, appender, (long)append, 1, 0, 0, 0) != 1) finish(14);
     if (call6(SYS_LSEEK, appender, 0, SEEK_CUR, 0, 0, 0) != 0) finish(15);
     if (call6(SYS_LSEEK, fd, 0, SEEK_SET, 0, 0, 0) != 0) finish(16);
     if (call6(SYS_READ, fd, (long)bytes, 7, 0, 0, 0) != 7
-        || !same(bytes, "a1234QZ", 7)) finish(17);
+        || !same(bytes, "a1234fZ", 7)) finish(17);
     if (call6(SYS_CLOSE, appender, 0, 0, 0, 0, 0) != 0) finish(18);
     if (call6(SYS_CLOSE, alias, 0, 0, 0, 0, 0) != 0) finish(19);
     if (call6(SYS_CLOSE, fd, 0, 0, 0, 0, 0) != 0) finish(20);

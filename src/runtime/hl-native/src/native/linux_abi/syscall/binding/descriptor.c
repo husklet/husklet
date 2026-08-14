@@ -501,15 +501,19 @@ static int64_t bound_vector_io(const hl_linux_fd_snapshot *file, hl_host_iovec g
             goto cleanup;
         }
         if (!output) {
-            ssize_t copied = guest_copy_from(buffers[usable], guest_vectors[index].address, size);
-            if (copied <= 0) {
-                if (usable == 0) {
-                    result = bound_access_rejects(file, 0) ? -EBADF : -EFAULT;
-                    goto cleanup;
-                }
-                goto issue_or_fail;
+            size_t copied = 0;
+            while (copied < size) {
+                uint64_t address = guest_vectors[index].address + copied;
+                size_t page = 4096u - (size_t)(address & 4095u);
+                size_t chunk = size - copied < page ? size - copied : page;
+                if (guest_copy_from((char *)buffers[usable] + copied, address, chunk) != (ssize_t)chunk) break;
+                copied += chunk;
             }
-            size = (size_t)copied;
+            if (copied == 0) {
+                result = bound_access_rejects(file, 0) ? -EBADF : -EFAULT;
+                goto cleanup;
+            }
+            size = copied;
         }
         host_vectors[usable] = (hl_host_iovec){(uint64_t)(uintptr_t)buffers[usable], size};
         usable++;

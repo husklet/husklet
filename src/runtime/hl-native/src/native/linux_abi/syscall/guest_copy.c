@@ -317,12 +317,16 @@ static ssize_t guest_fd_write(int fd, uint64_t guest, size_t length, off_t offse
 /*
  * Translate a guest vector array and each segment.  Linux imports the complete
  * descriptor array before moving data, but a fault in a later payload segment
- * permits the already-accessible byte prefix to be transferred.
+ * permits the already-accessible byte prefix to be transferred. `current_offset`
+ * is the preadv2/pwritev2-only `offset == -1` mode; plain preadv/pwritev reject
+ * every negative offset even though both syscall families otherwise share this
+ * transfer path.
  */
 static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t guest_count, off_t offset, int positional,
-                                     int output, int flags) {
+                                     int current_offset, int output, int flags) {
     if (guest_count > GUEST_IOV_STACK_MAX) {
-        errno = EINVAL;
+        // Linux resolves the descriptor before importing or validating the iovec array.
+        errno = guest_fd_rejects(fd, output) ? EBADF : EINVAL;
         return -1;
     }
     struct iovec guest_iov[GUEST_IOV_STACK_MAX];
@@ -332,7 +336,7 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
         return -1;
     }
     if (!guest_count) {
-        if (positional && offset == (off_t)-1 && flags == 0)
+        if (current_offset && offset == (off_t)-1 && flags == 0)
             return output ? readv(fd, NULL, 0) : writev(fd, NULL, 0);
 #if defined(__linux__)
         if (positional && flags)
@@ -358,6 +362,12 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
             guest, guest_iov[index].iov_len, output ? HL_LOGICAL_VMA_WRITE : HL_LOGICAL_VMA_READ, host_iov + host_count,
             pins + host_count, guest_bases + host_count, GUEST_IOV_STACK_MAX - host_count, &covered);
         if (count < 0) {
+            if (!output) {
+                for (size_t pinned = 0; pinned < host_count; ++pinned)
+                    hl_logical_vma_unpin(&pins[pinned]);
+                errno = guest_fd_rejects(fd, output) ? EBADF : EFAULT;
+                return -1;
+            }
             if (!host_count) {
                 // The descriptor array itself imported fine, so a read that moves nothing still never
                 // reaches the payload segment: same EOF/would-block escape as plain read(2).
@@ -368,7 +378,9 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
             break;
         }
         host_count += (size_t)count;
-        if (covered != guest_iov[index].iov_len) break;
+        if (covered != guest_iov[index].iov_len) {
+            break;
+        }
     }
 
     /*
@@ -395,7 +407,7 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
     }
 #endif
     ssize_t result;
-    if (positional && offset == (off_t)-1 && flags == 0)
+    if (current_offset && offset == (off_t)-1 && flags == 0)
         result = output ? readv(fd, host_iov, (int)host_count) : writev(fd, host_iov, (int)host_count);
 #if defined(__linux__)
     else if (positional && flags)
@@ -421,5 +433,5 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
 
 static ssize_t guest_fd_vector(int fd, uint64_t guest_vectors, size_t guest_count, off_t offset, int positional,
                                int output) {
-    return guest_fd_vector_flags(fd, guest_vectors, guest_count, offset, positional, output, 0);
+    return guest_fd_vector_flags(fd, guest_vectors, guest_count, offset, positional, 0, output, 0);
 }

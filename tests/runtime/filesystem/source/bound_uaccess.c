@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
@@ -34,8 +35,21 @@ int main(void) {
     int fault_write = pwrite(fd, guard, 1, 0) == -1 && errno == EFAULT;
     int fault_ok = fault_read && fault_write;
 
+    char *pages = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (pages == MAP_FAILED || munmap(pages + 4096, 4096) != 0) return 4;
+    memset(pages, 'x', 4096);
+    struct iovec crossing = {pages, 8192};
+    int crossing_ok = ftruncate(fd, 0) == 0 && lseek(fd, 0, SEEK_SET) == 0 && writev(fd, &crossing, 1) == 4096;
+
+    struct iovec later_fault[2] = {{first, 1}, {guard, 1}};
+    struct stat after = {0};
+    errno = 0;
+    int later_ok = ftruncate(fd, 0) == 0 && lseek(fd, 0, SEEK_SET) == 0 && writev(fd, later_fault, 2) == -1 &&
+                   errno == EFAULT && fstat(fd, &after) == 0 && after.st_size == 0;
+
     close(fd);
     unlink(path);
-    printf("bound-uaccess write=%d read=%d ioctl=%d fault=%d\n", write_ok, read_ok, ioctl_ok, fault_ok);
-    return !(write_ok && read_ok && ioctl_ok && fault_ok);
+    printf("bound-uaccess write=%d read=%d ioctl=%d fault=%d crossing=%d later=%d\n", write_ok, read_ok, ioctl_ok,
+           fault_ok, crossing_ok, later_ok);
+    return !(write_ok && read_ok && ioctl_ok && fault_ok && crossing_ok && later_ok);
 }

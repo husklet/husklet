@@ -1158,7 +1158,7 @@ static int svc_rare_identity_system(struct cpu *c, uint64_t nr, uint64_t a0, uin
             break;
         }
 #endif
-        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, (off_t)a3, 1, 1, (int)a5);
+        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, (off_t)a3, 1, 1, 1, (int)a5);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -1210,9 +1210,9 @@ static int svc_rare_identity_system(struct cpu *c, uint64_t nr, uint64_t a0, uin
             G_RET(c) = (uint64_t)(int64_t)(-EOPNOTSUPP);
             break;
         }
-        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, hl_off, 1, 0, 0);
+        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, hl_off, 1, 1, 0, 0);
 #else
-        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, (off_t)a3, 1, 0, (int)a5);
+        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, (off_t)a3, 1, 1, 0, (int)a5);
 #endif
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
