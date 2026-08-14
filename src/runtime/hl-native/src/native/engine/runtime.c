@@ -93,6 +93,53 @@ static void hl_engine_checkpoint_control_unlock(hl_engine *engine) {
     atomic_store_explicit(&engine->checkpoint_control_lock, false, memory_order_release);
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static atomic_uint checkpoint_test_phase;
+
+HL_API uint32_t hl_c_backend_checkpoint_test_arm(void);
+HL_API uint32_t hl_c_backend_checkpoint_test_phase(void);
+HL_API void hl_c_backend_checkpoint_test_release(void);
+
+HL_API uint32_t hl_c_backend_checkpoint_test_arm(void) {
+    atomic_store_explicit(&checkpoint_test_phase, 1, memory_order_release);
+    return 1;
+}
+
+HL_API uint32_t hl_c_backend_checkpoint_test_phase(void) {
+    return atomic_load_explicit(&checkpoint_test_phase, memory_order_acquire);
+}
+
+HL_API void hl_c_backend_checkpoint_test_release(void) {
+    atomic_store_explicit(&checkpoint_test_phase, 5, memory_order_release);
+}
+
+static void hl_engine_checkpoint_test_pause(hl_engine *engine) {
+    unsigned int expected = 1;
+    if (!atomic_compare_exchange_strong_explicit(&checkpoint_test_phase, &expected, 2, memory_order_acq_rel,
+                                                 memory_order_acquire))
+        return;
+    while (atomic_load_explicit(&checkpoint_test_phase, memory_order_acquire) != 5) hl_engine_yield(engine);
+}
+
+static void hl_engine_checkpoint_test_process_started(void) {
+    unsigned int expected = 2;
+    (void)atomic_compare_exchange_strong_explicit(&checkpoint_test_phase, &expected, 3, memory_order_acq_rel,
+                                                  memory_order_acquire);
+}
+
+static void hl_engine_checkpoint_test_request_completed(void) {
+    unsigned int expected = 5;
+    (void)atomic_compare_exchange_strong_explicit(&checkpoint_test_phase, &expected, 6, memory_order_acq_rel,
+                                                  memory_order_acquire);
+}
+
+static void hl_engine_checkpoint_test_run_ready(void) {
+    unsigned int expected = 6;
+    (void)atomic_compare_exchange_strong_explicit(&checkpoint_test_phase, &expected, 7, memory_order_acq_rel,
+                                                  memory_order_acquire);
+}
+#endif
+
 static void hl_engine_yield(hl_engine *engine) {
     hl_host_result now = engine->host.clock->monotonic_ns(engine->host.context);
     uint64_t deadline;
@@ -871,9 +918,15 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     hl_engine_unlock(engine);
     if (pending != 0) engine->host.process->terminate(engine->host.context, process, pending);
     if (engine->checkpoint_control_parent >= 0) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        hl_engine_checkpoint_test_process_started();
+#endif
         hl_engine_checkpoint_control_lock(engine);
         status = hl_engine_checkpoint_control_ready(engine);
         hl_engine_checkpoint_control_unlock(engine);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        hl_engine_checkpoint_test_run_ready();
+#endif
         if (status != HL_STATUS_OK)
             (void)engine->host.process->terminate(engine->host.context, process, HL_HOST_PROCESS_TERMINATE_FORCE);
     }
@@ -925,6 +978,9 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
 #else
         if (engine->checkpoint_control_parent < 0) return HL_STATUS_NOT_SUPPORTED;
         hl_engine_checkpoint_control_lock(engine);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        hl_engine_checkpoint_test_pause(engine);
+#endif
         status = hl_engine_checkpoint_control_ready(engine);
         if (status != HL_STATUS_OK) {
             hl_engine_checkpoint_control_unlock(engine);
@@ -946,6 +1002,9 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
                 else
                     status = HL_STATUS_PLATFORM_FAILURE;
                 hl_engine_checkpoint_control_unlock(engine);
+#if defined(HL_NATIVE_TEST_HOOKS)
+                hl_engine_checkpoint_test_request_completed();
+#endif
                 return status;
             }
             if (written < 0 && errno == EINTR) continue;

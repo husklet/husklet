@@ -11,6 +11,9 @@ links = "hl_native"
 [lints]
 workspace = true
 
+[features]
+native-test-hooks = []
+
 [build-dependencies]
 cc = "1.4.0"
 

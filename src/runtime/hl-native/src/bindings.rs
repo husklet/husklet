@@ -115,6 +115,12 @@ unsafe extern "C" {
     ) -> c_int;
     pub(super) fn hl_c_backend_run(backend: *mut Backend, argc: c_int, argv: *const *const c_char) -> c_int;
     pub(super) fn hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int;
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    pub(super) fn hl_c_backend_checkpoint_test_arm() -> c_uint;
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    pub(super) fn hl_c_backend_checkpoint_test_phase() -> c_uint;
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    pub(super) fn hl_c_backend_checkpoint_test_release();
     pub(super) fn hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int;
     #[cfg(test)]
     pub(super) fn hl_c_backend_exit_kind(backend: *const Backend) -> c_uint;

@@ -348,6 +348,9 @@ mod tests {
         path::PathBuf,
     };
 
+    #[cfg(feature = "native-test-hooks")]
+    use std::time::{Duration, Instant};
+
     fn put16(bytes: &mut [u8], offset: usize, value: u16) {
         bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -518,6 +521,65 @@ mod tests {
                 "ISA {isa} reader observed a partially published exit record"
             );
             drop(engine);
+        }
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn checkpoint_control_transaction_serializes_readiness_and_acknowledgement() {
+        for isa in [1, 2] {
+            let (mut engine, _standard) = create_engine(isa);
+            let (_broker, transport) = crate::CheckpointTransport::create().unwrap();
+            engine.configure_checkpoint(&transport).unwrap();
+            let argument = CString::new("guest").unwrap();
+
+            // SAFETY: these test-feature-only functions own a process-global
+            // deterministic barrier and take no caller-provided pointers.
+            assert_eq!(unsafe { crate::bindings::hl_c_backend_checkpoint_test_arm() }, 1);
+            std::thread::scope(|scope| {
+                let request = scope.spawn(|| engine.request(4, 0));
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 2 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "ISA {isa} request did not acquire checkpoint transaction"
+                    );
+                    std::thread::yield_now();
+                }
+                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 3 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "ISA {isa} guest process did not reach checkpoint control"
+                    );
+                    std::thread::yield_now();
+                }
+                let _generation = transport.bump();
+                // SAFETY: phase 2 proves the request owns the transaction lock;
+                // release lets it consume the sole readiness byte and complete
+                // the full command/ack exchange before run may inspect it.
+                unsafe { crate::bindings::hl_c_backend_checkpoint_test_release() };
+                assert_eq!(
+                    request.join().unwrap(),
+                    Err(12),
+                    "ISA {isa} zero-executor acknowledgement changed"
+                );
+                assert_eq!(unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() }, 6);
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 7 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "ISA {isa} run did not cross serialized readiness"
+                    );
+                    std::thread::yield_now();
+                }
+                engine.request(2, 0).unwrap();
+                assert_eq!(
+                    running.join().unwrap(),
+                    Ok(()),
+                    "ISA {isa} run failed after checkpoint ack"
+                );
+            });
         }
     }
 }

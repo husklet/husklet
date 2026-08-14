@@ -14,6 +14,7 @@ mod platform;
 const NATIVE_ROOT: &str = "src/native";
 const COMMON_DEFINITIONS: &[&str] = &["HL_ENABLE_LOGGING=0", "HL_TRANSLIT_DEFAULT=0"];
 const RUST_BRIDGE_EXPORTS: &str = include_str!("src/native/bridge/exports.txt");
+const TEST_HOOK_EXPORTS: &str = include_str!("src/native/bridge/test_exports.txt");
 fn main() {
     for input in build_support::BUILD_POLICY_INPUTS {
         println!("cargo:rerun-if-changed={input}");
@@ -33,7 +34,13 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo supplies CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo supplies CARGO_CFG_TARGET_ARCH");
     let target_env = env::var("CARGO_CFG_TARGET_ENV").expect("Cargo supplies CARGO_CFG_TARGET_ENV");
-    let bridge_exports = build_support::export_symbols(RUST_BRIDGE_EXPORTS);
+    let test_hooks = env::var_os("CARGO_FEATURE_NATIVE_TEST_HOOKS").is_some();
+    let export_manifest = if test_hooks {
+        TEST_HOOK_EXPORTS
+    } else {
+        RUST_BRIDGE_EXPORTS
+    };
+    let bridge_exports = build_support::export_symbols(export_manifest);
     let Some(target) = platform::HostTarget::from_cfg(&target_os, &target_arch) else {
         println!("cargo:supported=0");
         println!("cargo:warning=native C engine unavailable for {target_arch}-{target_os}");
@@ -83,7 +90,11 @@ fn main() {
         &shim_definitions,
         false,
     );
-    compile("hl_c_backend_runtime", &runtime_source_refs, COMMON_DEFINITIONS, true);
+    let mut runtime_definitions = COMMON_DEFINITIONS.to_vec();
+    if test_hooks {
+        runtime_definitions.push("HL_NATIVE_TEST_HOOKS=1");
+    }
+    compile("hl_c_backend_runtime", &runtime_source_refs, &runtime_definitions, true);
     if !x86_only {
         compile(
             "hl_c_backend_target_aarch64",
