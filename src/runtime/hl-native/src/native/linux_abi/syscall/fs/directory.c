@@ -292,6 +292,11 @@ static int readlink_procfd_special(struct cpu *c, int fd, char *buf, size_t size
         G_RET(c) = (uint64_t)(-ENOENT);
         return 1;
     }
+    if (fd >= 0 && fd < HL_NFD && g_eventfd_peer[fd]) {
+        static const char target[] = "anon_inode:[eventfd]";
+        readlink_copy(c, buf, size, target, sizeof target - 1u);
+        return 1;
+    }
     int pts = pts_index_of_fd(fd);
     if (pts >= 0) {
         char target[32];
