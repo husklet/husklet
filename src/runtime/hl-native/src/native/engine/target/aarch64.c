@@ -1,4 +1,6 @@
 #include "namespace.h"
+#include "../executable_authority.h"
+#include "../../translator/digest.h"
 #include "../checkpoint_channel.c"
 #include "../bus.h"
 #include "../../linux_abi/dns.h"
@@ -1295,6 +1297,7 @@ static int hl_restore_checkpoint(const char *rootfs) {
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
                        const void *executable_image, size_t executable_size,
+                       const hl_executable_authority *executable_authority,
                        const hl_engine_main_image_plan *image_plan,
                        const void *interpreter_image, size_t interpreter_size,
                        uint32_t argument_count, char *const argv[]) {
@@ -1306,7 +1309,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_initial_interpreter_size = interpreter_size;
     g_authorized_executable_image = executable_image;
     g_authorized_executable_size = executable_size;
-    exec_authority_seed_initial(host, executable);
+    exec_authority_seed_initial(host, executable, executable_authority);
     g_engine_result_status = HL_STATUS_OK;
     if (argument_count > (uint32_t)INT_MAX) return 2;
     argc = (int)argument_count;

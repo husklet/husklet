@@ -2,6 +2,7 @@
 #include "backend.h"
 #include "result.h"
 #include "options.h"
+#include "executable_authority.h"
 #include "hl/syscall_trap.h"
 #if defined(__APPLE__)
 #include "../linux_abi/dns.h"
@@ -30,6 +31,7 @@ extern int hl_ckpt_interrupt_executors(void);
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
                        const void *executable_image, size_t executable_size,
+                       const hl_executable_authority *executable_authority,
                        const hl_engine_main_image_plan *main_image_plan,
                        const void *interpreter_image, size_t interpreter_size,
                        uint32_t argc, char *const argv[]);
@@ -138,7 +140,7 @@ typedef struct hl_production_entry_context {
 #include "hl/windows.h"
 
 #define HL_PRODUCTION_LAUNCH_MAGIC UINT32_C(0x484c4357)
-#define HL_PRODUCTION_LAUNCH_VERSION 1u
+#define HL_PRODUCTION_LAUNCH_VERSION 2u
 
 typedef struct hl_production_launch_header {
     uint32_t magic;
@@ -156,6 +158,7 @@ typedef struct hl_production_launch_header {
     uint64_t options_size;
     uint64_t image_offset; /* 0 when the engine carried no executable image */
     uint64_t image_size;
+    hl_executable_authority executable_authority;
 } hl_production_launch_header;
 
 typedef struct hl_production_launch_option {
@@ -170,7 +173,8 @@ static size_t hl_production_launch_text(const char *text) {
     return text == NULL ? 0 : strlen(text) + 1u;
 }
 
-static void *hl_production_launch_encode(const hl_engine_config *config, const hl_options *options, uint32_t argc,
+static void *hl_production_launch_encode(const hl_host_services *host, const hl_engine_config *config,
+                                         const hl_options *options, uint32_t argc,
                                          const char *const argv[], size_t *out_size) {
     hl_production_launch_header header;
     const hl_engine_executable *spec = config->executable;
@@ -194,6 +198,18 @@ static void *hl_production_launch_encode(const hl_engine_config *config, const h
             header.options_size += sizeof(hl_production_launch_option) + options->value_sizes[index];
         }
     header.image_size = spec == NULL || spec->image == NULL ? 0u : (uint64_t)spec->image_size;
+    if (spec != NULL && spec->host_handle != HL_HOST_HANDLE_INVALID && host != NULL && host->file != NULL &&
+        host->file->metadata != NULL) {
+        hl_host_file_metadata metadata = {0};
+        if (host->file->metadata(host->context, spec->host_handle, &metadata).status == HL_STATUS_OK) {
+            header.executable_authority.stable_device = metadata.stable_device;
+            header.executable_authority.stable_object = metadata.stable_object;
+            header.executable_authority.user = metadata.user;
+            header.executable_authority.group = metadata.group;
+            header.executable_authority.mode = metadata.permissions;
+            header.executable_authority.ready = 1;
+        }
+    }
 
     offset = sizeof(header);
     if (header.rootfs_size != 0) {
@@ -443,8 +459,8 @@ static int32_t hl_production_cold_entry(void *opaque) {
      * not return until the run is over, which is the same lifetime the call
      * below already relies on for the services pointer itself. */
     box = hl_production_cold_box(&services);
-    result = hl_run_linux_guest(&services, box, rootfs, HL_HOST_HANDLE_INVALID, image, (size_t)header.image_size, NULL,
-                                NULL, 0, header.argc, argv);
+    result = hl_run_linux_guest(&services, box, rootfs, HL_HOST_HANDLE_INVALID, image, (size_t)header.image_size,
+                                &header.executable_authority, NULL, NULL, 0, header.argc, argv);
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);
@@ -543,6 +559,7 @@ static int32_t hl_production_entry(void *opaque) {
     int32_t result =
         hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
                            spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
+                           NULL,
                            context->config->main_image_plan, context->interpreter_image,
                            context->interpreter_size, context->argc, (char *const *)(uintptr_t)context->argv);
     (void)hl_options_bind_process_state(previous_state);
@@ -612,7 +629,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     (void)box;
     {
         size_t payload_size = 0;
-        void *payload = hl_production_launch_encode(config, options, argc, argv, &payload_size);
+        void *payload = hl_production_launch_encode(host, config, options, argc, argv, &payload_size);
         hl_status published;
         if (payload == NULL) {
             hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);

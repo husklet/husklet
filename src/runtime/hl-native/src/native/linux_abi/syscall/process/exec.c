@@ -184,7 +184,8 @@ static int exec_image_authorized(const char *path, exec_image *image) {
     return 0;
 }
 
-static void exec_authority_seed_initial(const hl_host_services *host, hl_host_handle executable) {
+static void exec_authority_seed_initial(const hl_host_services *host, hl_host_handle executable,
+                                        const hl_executable_authority *serialized) {
     const hl_host_posix_attachment_services *attachments = host != NULL ? host->posix_attachment : NULL;
     free(g_authorized_executable_owned);
     g_authorized_executable_owned = NULL;
@@ -193,8 +194,18 @@ static void exec_authority_seed_initial(const hl_host_services *host, hl_host_ha
     memset(&g_authorized_executable_status, 0, sizeof g_authorized_executable_status);
     memset(&g_authorized_executable_dac, 0, sizeof g_authorized_executable_dac);
     if (attachments == NULL || attachments->borrow_file == NULL || attachments->release == NULL ||
-        executable == HL_HOST_HANDLE_INVALID)
+        executable == HL_HOST_HANDLE_INVALID) {
+        if (serialized != NULL && serialized->ready) {
+            g_authorized_executable_status.st_dev = (dev_t)serialized->stable_device;
+            g_authorized_executable_status.st_ino = (ino_t)serialized->stable_object;
+            g_authorized_executable_status.st_mode = (mode_t)serialized->mode;
+            g_authorized_executable_dac.uid = serialized->user;
+            g_authorized_executable_dac.gid = serialized->group;
+            g_authorized_executable_dac.mode = serialized->mode;
+            g_authorized_executable_metadata_ready = 1;
+        }
         return;
+    }
     hl_host_result borrowed = attachments->borrow_file(host->context, executable);
     if (borrowed.status != HL_STATUS_OK) return;
     int descriptor = (int)borrowed.value;
