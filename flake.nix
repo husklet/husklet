@@ -823,9 +823,18 @@
             runHook preBuild
             export CC_x86_64_pc_windows_gnu=${lib.escapeShellArg compiler}
             export CARGO_TARGET_${targetKey}_LINKER=${lib.escapeShellArg compiler}
+            export CARGO_TARGET_${targetKey}_RUSTFLAGS=${lib.escapeShellArg "-Lnative=${windows.windows.pthreads}/lib"}
             export HL_NATIVE_COMPILE_CHECK=1
-            cargo check --locked --offline --target ${target} -p hl-native -p hl-engine 2>&1 |
+            cargo build --locked --offline --target ${target} -p hl-native -p hl-engine -p engine 2>&1 |
               tee "$TMPDIR/windows-contract.log"
+            for executable in hl-engine hl-aarch64 hl-x86_64; do
+              binary="target/${target}/debug/$executable.exe"
+              test -s "$binary"
+              ${windows.stdenv.cc.targetPrefix}objdump -f "$binary" \
+                | grep -F 'file format pei-x86-64' >/dev/null
+              ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
+                | grep -F 'DLL Name: hl_native_engine.dll' >/dev/null
+            done
             dll="$(find target/${target}/debug/build -path '*/out/hl_native_engine.dll' -print -quit)"
             import="$(find target/${target}/debug/build -path '*/out/libhl_native_engine.dll.a' -print -quit)"
             test -n "$dll"
@@ -904,7 +913,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows hl-native/hl-engine Rust target compile, complete engine DLL/import-library link with exact public exports, every Windows host-service translation unit, forced POSIX compatibility, and strict C/C++ public-header contracts; this is compile/link evidence, not MSVC SDK or runtime proof' \
+              'GNU Windows hl-native/hl-engine Rust target compile, final engine-executable links through the generated import library, complete engine DLL/import-library link with exact public exports, every Windows host-service translation unit, forced POSIX compatibility, and strict C/C++ public-header contracts; this is compile/link evidence, not MSVC SDK or runtime proof' \
               > "$out/evidence"
           '';
         };
