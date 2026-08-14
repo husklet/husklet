@@ -266,7 +266,7 @@ impl Conversation {
             protocol: PROTOCOL,
             host: env!("CARGO_PKG_VERSION").to_owned(),
             workspace: self.workspace.clone(),
-            extension: self.session.authority().extension().clone(),
+            peer: self.session.authority().peer().clone(),
             granted: self.session.authority().granted().clone(),
             limits: Limits::default(),
         };

@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, VecDeque};
 
 use crate::channel::{Channels, Permission, Purpose};
 use crate::frame::ChannelId;
-use crate::request::Topic;
 
 /// What happened to an emission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,10 +24,13 @@ pub enum Emission {
 }
 
 /// One queued message.
+///
+/// The topic is whatever the domain coalesces on, and this crate only ever
+/// compares it: a queued value is replaced by a newer value of the same topic.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Message {
+pub struct Message<T> {
     pub channel: ChannelId,
-    pub topic: Option<Topic>,
+    pub topic: Option<T>,
     pub payload: Vec<u8>,
     /// Values this message superseded, so a receiver is told it is seeing the
     /// newest state rather than every state.
@@ -36,13 +38,22 @@ pub struct Message {
 }
 
 /// Pending output for one session.
-#[derive(Debug, Default)]
-pub struct Outbox {
-    queues: BTreeMap<ChannelId, VecDeque<Message>>,
+#[derive(Debug)]
+pub struct Outbox<T> {
+    queues: BTreeMap<ChannelId, VecDeque<Message<T>>>,
     dropped: u64,
 }
 
-impl Outbox {
+impl<T> Default for Outbox<T> {
+    fn default() -> Self {
+        Self {
+            queues: BTreeMap::new(),
+            dropped: 0,
+        }
+    }
+}
+
+impl<T: Copy + PartialEq> Outbox<T> {
     /// Messages held per channel before backpressure applies.
     pub const DEPTH: usize = 32;
 
@@ -80,7 +91,7 @@ impl Outbox {
         &mut self,
         channels: &mut Channels,
         channel: ChannelId,
-        topic: Option<Topic>,
+        topic: Option<T>,
         payload: Vec<u8>,
     ) -> Emission {
         let Some(purpose) = channels.purpose(channel) else {
@@ -100,7 +111,7 @@ impl Outbox {
     }
 
     /// Takes what may now be sent on a channel.
-    pub fn drain(&mut self, channel: ChannelId) -> Vec<Message> {
+    pub fn drain(&mut self, channel: ChannelId) -> Vec<Message<T>> {
         self.queues
             .get_mut(&channel)
             .map(|queue| queue.drain(..).collect())
@@ -112,7 +123,7 @@ impl Outbox {
         self.queues.remove(&channel);
     }
 
-    fn enqueue(&mut self, channel: ChannelId, message: Message, purpose: Purpose) -> Emission {
+    fn enqueue(&mut self, channel: ChannelId, message: Message<T>, purpose: Purpose) -> Emission {
         let queue = self.queues.entry(channel).or_default();
         if queue.len() < Self::DEPTH {
             queue.push_back(message);
@@ -126,7 +137,7 @@ impl Outbox {
 
     /// Handles an emission with no credit. A coalescing channel still records
     /// the newest value; anything else must stop the producer.
-    fn withhold(&mut self, channel: ChannelId, message: Message, purpose: Purpose) -> Emission {
+    fn withhold(&mut self, channel: ChannelId, message: Message<T>, purpose: Purpose) -> Emission {
         if !purpose.coalesces() {
             return Emission::Blocked;
         }
@@ -139,7 +150,7 @@ impl Outbox {
 
     /// Replaces the newest queued value of the same topic, returning how many
     /// values were dropped. Returns `None` when the channel may not drop.
-    fn supersede(queue: &mut VecDeque<Message>, message: Message, purpose: Purpose) -> Option<u64> {
+    fn supersede(queue: &mut VecDeque<Message<T>>, message: Message<T>, purpose: Purpose) -> Option<u64> {
         if !purpose.coalesces() {
             return None;
         }
@@ -161,7 +172,13 @@ impl Outbox {
 mod tests {
     use super::{Emission, Outbox};
     use crate::channel::{Channels, Purpose};
-    use crate::request::Topic;
+
+    /// Two topics is all this needs: the subject is coalescing, not routing.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Topic {
+        Containers,
+        Images,
+    }
 
     fn payload(value: u8) -> Vec<u8> {
         vec![value]
@@ -191,7 +208,7 @@ mod tests {
         }
 
         assert!(
-            outbox.len() <= Outbox::DEPTH,
+            outbox.len() <= Outbox::<Topic>::DEPTH,
             "queued {} messages for a subscriber that never read one",
             outbox.len()
         );
@@ -204,7 +221,7 @@ mod tests {
         let mut outbox = Outbox::new();
         let channel = channels.open(Purpose::Subscription).expect("opened");
 
-        for value in 0..(Outbox::DEPTH + 4) {
+        for value in 0..(Outbox::<Topic>::DEPTH + 4) {
             outbox.emit(
                 &mut channels,
                 channel,
@@ -217,7 +234,7 @@ mod tests {
         let newest = held.last().expect("something is held");
         assert_eq!(
             newest.payload,
-            payload(u8::try_from((Outbox::DEPTH + 3) % 256).expect("in range")),
+            payload(u8::try_from((Outbox::<Topic>::DEPTH + 3) % 256).expect("in range")),
             "a snapshot subscriber must end up with the newest state"
         );
         assert!(newest.superseded > 0, "and be told it is not seeing every state");
@@ -226,7 +243,7 @@ mod tests {
     #[test]
     fn a_byte_stream_blocks_rather_than_dropping() {
         let mut channels = Channels::new();
-        let mut outbox = Outbox::new();
+        let mut outbox: Outbox<Topic> = Outbox::new();
         let channel = channels.open(Purpose::Stream).expect("opened");
 
         let mut blocked = false;
@@ -241,7 +258,7 @@ mod tests {
             blocked,
             "dropping bytes would corrupt the stream, so the producer stops"
         );
-        assert!(outbox.len() <= Outbox::DEPTH);
+        assert!(outbox.len() <= Outbox::<Topic>::DEPTH);
         assert_eq!(outbox.dropped(), 0, "a stream never drops silently");
     }
 

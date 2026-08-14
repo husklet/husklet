@@ -2,101 +2,40 @@
 //!
 //! [`Channels`] says how much may be sent and [`Outbox`] says what happens when
 //! a subscriber falls behind; neither knows which channel a topic belongs on.
-//! That routing lives here, together with the two shapes a host push can take:
-//! a whole-listing [`Snapshot`] for state, and a [`Parcel`] of bytes for bulk.
+//! That routing lives here, together with the [`Parcel`] of bytes a bulk stream
+//! carries.
 //!
-//! The two are separated because their failure modes are opposites. A state
-//! subscription may drop superseded values, so its payload has to survive being
-//! the only one that arrives. A byte stream may not drop anything, so its
+//! State and bytes are separated because their failure modes are opposites. A
+//! state subscription may drop superseded values, so its payload has to survive
+//! being the only one that arrives. A byte stream may not drop anything, so its
 //! producer has to stop instead.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::channel::{Channels, Purpose, Refusal};
-use crate::codec::Coding;
-use crate::frame::{ChannelId, Frame};
+use crate::coding::Coding;
+use crate::frame::ChannelId;
 use crate::outbox::{Emission, Outbox};
-use crate::port::{ContainerSummary, ImageSummary, TabSummary};
-use crate::request::Topic;
-use crate::session::Session;
-
-/// A volume as an extension sees it.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct VolumeSummary {
-    pub name: String,
-    pub driver: String,
-    pub size: u64,
-}
-
-/// A network as an extension sees it.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct NetworkSummary {
-    pub name: String,
-    pub driver: String,
-    pub scope: String,
-}
-
-/// The whole current listing behind one topic.
-///
-/// Every variant carries the complete listing rather than the change that
-/// produced it, and that is a requirement rather than a convenience. A
-/// subscription coalesces: when the subscriber stops returning credit, the
-/// [`Outbox`] replaces the queued value for a topic with the newer one, so the
-/// subscriber may receive one value where the host emitted a thousand. A delta
-/// would then describe a change from a state that was dropped on the way, and
-/// every listing rebuilt from it afterwards would be silently wrong. A whole
-/// listing has no such dependency: whatever was superseded, the survivor is
-/// still the truth, and `Message::superseded` tells the receiver how much it
-/// skipped.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(tag = "snapshot", content = "of", rename_all = "snake_case")]
-pub enum Snapshot {
-    Containers(Vec<ContainerSummary>),
-    Images(Vec<ImageSummary>),
-    Volumes(Vec<VolumeSummary>),
-    Networks(Vec<NetworkSummary>),
-    Terminal(Vec<TabSummary>),
-}
-
-impl Snapshot {
-    /// The topic this listing belongs to. Routing reads this rather than being
-    /// told separately, so a listing cannot be delivered on another topic's
-    /// channel.
-    #[must_use]
-    pub const fn topic(&self) -> Topic {
-        match self {
-            Self::Containers(_) => Topic::Containers,
-            Self::Images(_) => Topic::Images,
-            Self::Volumes(_) => Topic::Volumes,
-            Self::Networks(_) => Topic::Networks,
-            Self::Terminal(_) => Topic::Terminal,
-        }
-    }
-
-    /// Encodes the listing as a frame payload.
-    ///
-    /// # Errors
-    /// Returns `Coding::Oversize` when the encoded listing exceeds the payload
-    /// limit, and `Coding::Malformed` when it cannot be serialized.
-    pub fn payload(&self) -> Result<Vec<u8>, Coding> {
-        let bytes = serde_json::to_vec(self).map_err(|error| Coding::Malformed(error.to_string()))?;
-        if bytes.len() > Frame::PAYLOAD_LIMIT {
-            return Err(Coding::Oversize(bytes.len()));
-        }
-        Ok(bytes)
-    }
-}
+use crate::session::{Session, Topic};
 
 /// Which channel each followed topic is delivered on.
 ///
 /// One channel per topic, so a busy container listing cannot delay an image
 /// listing, and so coalescing on one topic cannot discard another's value.
-#[derive(Debug, Default)]
-pub struct Subscriptions {
-    routes: BTreeMap<Topic, ChannelId>,
+#[derive(Debug)]
+pub struct Subscriptions<T: Topic> {
+    routes: BTreeMap<T, ChannelId>,
 }
 
-impl Subscriptions {
+impl<T: Topic> Default for Subscriptions<T> {
+    fn default() -> Self {
+        Self {
+            routes: BTreeMap::new(),
+        }
+    }
+}
+
+impl<T: Topic> Subscriptions<T> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -115,7 +54,7 @@ impl Subscriptions {
 
     /// The channel a topic is delivered on, if it is open.
     #[must_use]
-    pub fn channel(&self, topic: Topic) -> Option<ChannelId> {
+    pub fn channel(&self, topic: T) -> Option<ChannelId> {
         self.routes.get(&topic).copied()
     }
 
@@ -126,7 +65,7 @@ impl Subscriptions {
     ///
     /// # Errors
     /// Returns `Refusal::Exhausted` when the session has no channel left.
-    pub fn open(&mut self, topic: Topic, channels: &mut Channels) -> Result<ChannelId, Refusal> {
+    pub fn open(&mut self, topic: T, channels: &mut Channels) -> Result<ChannelId, Refusal> {
         if let Some(existing) = self.routes.get(&topic) {
             return Ok(*existing);
         }
@@ -145,7 +84,7 @@ impl Subscriptions {
     /// alongside its channel, so a channel that refuses to close means the two
     /// have drifted apart, and the route is dropped either way rather than left
     /// pointing at something the session no longer owns.
-    pub fn close(&mut self, topic: Topic, channels: &mut Channels, outbox: &mut Outbox) -> Option<ChannelId> {
+    pub fn close(&mut self, topic: T, channels: &mut Channels, outbox: &mut Outbox<T>) -> Option<ChannelId> {
         let channel = self.routes.remove(&topic)?;
         outbox.discard(channel);
         channels.close(channel).ok().map(|()| channel)
@@ -160,11 +99,11 @@ impl Subscriptions {
     /// subscription that was established while it was still held.
     pub fn emit(
         &mut self,
-        topic: Topic,
+        topic: T,
         payload: Vec<u8>,
-        session: &Session,
+        session: &Session<T>,
         channels: &mut Channels,
-        outbox: &mut Outbox,
+        outbox: &mut Outbox<T>,
     ) -> Emission {
         if !session.may_emit(topic) {
             return Emission::Ignored;
@@ -287,12 +226,12 @@ impl Streams {
     /// Returns `Emission::Blocked` when the reader has returned no credit. The
     /// producer must then stop and offer the same chunk again, because dropping
     /// it would corrupt the result rather than merely age it.
-    pub fn write(
+    pub fn write<T: Topic>(
         &mut self,
         channel: ChannelId,
         chunk: Vec<u8>,
         channels: &mut Channels,
-        outbox: &mut Outbox,
+        outbox: &mut Outbox<T>,
     ) -> Emission {
         self.send(channel, &Parcel::Chunk(chunk), channels, outbox)
     }
@@ -301,7 +240,12 @@ impl Streams {
     ///
     /// Queued like any other parcel, so it arrives after the bytes before it
     /// rather than overtaking them. A blocked marker must be offered again.
-    pub fn finish(&mut self, channel: ChannelId, channels: &mut Channels, outbox: &mut Outbox) -> Emission {
+    pub fn finish<T: Topic>(
+        &mut self,
+        channel: ChannelId,
+        channels: &mut Channels,
+        outbox: &mut Outbox<T>,
+    ) -> Emission {
         self.send(channel, &Parcel::End, channels, outbox)
     }
 
@@ -309,7 +253,12 @@ impl Streams {
     ///
     /// # Errors
     /// Returns `Refusal::Unknown` when no stream is open on that channel.
-    pub fn close(&mut self, channel: ChannelId, channels: &mut Channels, outbox: &mut Outbox) -> Result<(), Refusal> {
+    pub fn close<T: Topic>(
+        &mut self,
+        channel: ChannelId,
+        channels: &mut Channels,
+        outbox: &mut Outbox<T>,
+    ) -> Result<(), Refusal> {
         if !self.open.remove(&channel) {
             return Err(Refusal::Unknown(channel));
         }
@@ -319,7 +268,13 @@ impl Streams {
 
     /// A stream carries no topic: it is one continuous body of bytes, and a
     /// topic is what the outbox would coalesce on.
-    fn send(&self, channel: ChannelId, parcel: &Parcel, channels: &mut Channels, outbox: &mut Outbox) -> Emission {
+    fn send<T: Topic>(
+        &self,
+        channel: ChannelId,
+        parcel: &Parcel,
+        channels: &mut Channels,
+        outbox: &mut Outbox<T>,
+    ) -> Emission {
         if !self.open.contains(&channel) {
             return Emission::Ignored;
         }
@@ -329,18 +284,37 @@ impl Streams {
 
 #[cfg(test)]
 mod tests {
-    use super::{Parcel, Snapshot, Streams, Subscriptions};
+    use super::{Parcel, Streams, Subscriptions};
+    use crate::capability::{Capability, CapabilityKey};
     use crate::channel::Channels;
-    use crate::outbox::Outbox;
-    use crate::request::Topic;
+    use crate::frame::ChannelId;
+    use crate::outbox::{Emission, Outbox};
+    use crate::session::Topic;
 
-    #[test]
-    fn a_listing_names_the_topic_it_belongs_to() {
-        assert_eq!(Snapshot::Containers(Vec::new()).topic(), Topic::Containers);
-        assert_eq!(Snapshot::Images(Vec::new()).topic(), Topic::Images);
-        assert_eq!(Snapshot::Volumes(Vec::new()).topic(), Topic::Volumes);
-        assert_eq!(Snapshot::Networks(Vec::new()).topic(), Topic::Networks);
-        assert_eq!(Snapshot::Terminal(Vec::new()).topic(), Topic::Terminal);
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    enum Reach {
+        Read,
+    }
+
+    impl Capability for Reach {
+        const DOMAIN: &'static str = "sample";
+        const ALL: &'static [Self] = &[Self::Read];
+
+        fn name(&self) -> &'static str {
+            "read"
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    enum Subject {
+        Containers,
+        Images,
+    }
+
+    impl Topic for Subject {
+        fn requirement(&self) -> CapabilityKey {
+            Reach::Read.key()
+        }
     }
 
     #[test]
@@ -361,10 +335,10 @@ mod tests {
     #[test]
     fn subscribing_twice_allocates_one_channel() {
         let mut channels = Channels::new();
-        let mut subscriptions = Subscriptions::new();
+        let mut subscriptions = Subscriptions::default();
 
-        let first = subscriptions.open(Topic::Containers, &mut channels).expect("opened");
-        let second = subscriptions.open(Topic::Containers, &mut channels).expect("opened");
+        let first = subscriptions.open(Subject::Containers, &mut channels).expect("opened");
+        let second = subscriptions.open(Subject::Containers, &mut channels).expect("opened");
 
         assert_eq!(first, second);
         assert_eq!(channels.len(), 1);
@@ -375,21 +349,21 @@ mod tests {
     fn closing_an_unrouted_topic_releases_nothing() {
         let mut channels = Channels::new();
         let mut outbox = Outbox::new();
-        let mut subscriptions = Subscriptions::new();
+        let mut subscriptions = Subscriptions::default();
 
-        assert_eq!(subscriptions.close(Topic::Images, &mut channels, &mut outbox), None);
+        assert_eq!(subscriptions.close(Subject::Images, &mut channels, &mut outbox), None);
     }
 
     #[test]
     fn a_stream_that_was_never_opened_receives_nothing() {
         let mut channels = Channels::new();
-        let mut outbox = Outbox::new();
+        let mut outbox: Outbox<Subject> = Outbox::new();
         let mut streams = Streams::new();
-        let ghost = crate::frame::ChannelId::new(80);
+        let ghost = ChannelId::new(80);
 
         assert_eq!(
             streams.write(ghost, b"x".to_vec(), &mut channels, &mut outbox),
-            crate::outbox::Emission::Ignored
+            Emission::Ignored
         );
         assert!(outbox.is_empty());
     }

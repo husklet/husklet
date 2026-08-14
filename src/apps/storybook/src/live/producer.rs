@@ -32,7 +32,7 @@ fn greet<S: Read + Write>(wire: &mut Wire<S>) -> Result<(), Transit> {
     };
     let hello = Hello {
         protocol: PROTOCOL,
-        name: welcome.extension,
+        name: welcome.peer,
         features: Vec::new(),
     };
     send(wire, Kind::Response, &hello)

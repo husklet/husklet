@@ -81,7 +81,7 @@ fn greet<S: Read + Write>(wire: &mut Wire<S>) -> Result<Welcome, Outcome> {
     }
     let hello = Hello {
         protocol: PROTOCOL,
-        name: welcome.extension.clone(),
+        name: welcome.peer.clone(),
         features: Vec::new(),
     };
     let payload = encode(&hello)?;

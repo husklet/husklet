@@ -37,7 +37,7 @@ fn greet(wire: &mut Wire<UnixStream>) {
         protocol: PROTOCOL,
         host: "test".into(),
         workspace: "dev".into(),
-        extension: ExtensionName::new("containers").expect("a name"),
+        peer: ExtensionName::new("containers").expect("a name"),
         granted: Grant::new([
             hl_extension::Capability::ContainerRead,
             hl_extension::Capability::Interface,

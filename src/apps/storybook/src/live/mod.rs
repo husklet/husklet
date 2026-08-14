@@ -99,7 +99,7 @@ fn greet(wire: &mut Wire<UnixStream>) -> Result<(), Fault> {
         protocol: PROTOCOL,
         host: env!("CARGO_PKG_VERSION").into(),
         workspace: "storybook".into(),
-        extension: ExtensionName::new("containers").expect("a valid name"),
+        peer: ExtensionName::new("containers").expect("a valid name"),
         granted: Grant::new([Capability::ContainerRead, Capability::Interface]),
         limits: Limits::default(),
     };

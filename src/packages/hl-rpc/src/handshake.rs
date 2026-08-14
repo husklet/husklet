@@ -1,11 +1,11 @@
-//! Version negotiation, mirroring the workspace domain's published protocol.
+//! Version negotiation.
 //!
-//! The host speaks first and states the grant, so an extension knows what it
+//! The host speaks first and states the grant, so a peer knows what it
 //! actually holds before it asks for anything and can degrade rather than
 //! collect refusals.
 
-use crate::capability::Grant;
-use crate::manifest::ExtensionName;
+use crate::capability::{Capability, Grant};
+use crate::name::PeerName;
 
 /// The protocol this host speaks.
 pub const PROTOCOL: u32 = 1;
@@ -32,12 +32,15 @@ impl Default for Limits {
 /// The host's opening frame.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Welcome {
+pub struct Welcome<C: Capability> {
     pub protocol: u32,
     pub host: String,
     pub workspace: String,
-    pub extension: ExtensionName,
-    pub granted: Grant,
+    /// Named `extension` on the wire, which is what the first peer to speak
+    /// this protocol was; the grant it carries is one domain's.
+    #[serde(rename = "extension")]
+    pub peer: PeerName,
+    pub granted: Grant<C>,
     pub limits: Limits,
 }
 
@@ -48,7 +51,7 @@ pub struct Hello {
     pub protocol: u32,
     /// Logged for diagnosis only. The socket is the credential; this is never
     /// trusted to name which extension is connected.
-    pub name: ExtensionName,
+    pub name: PeerName,
     #[serde(default)]
     pub features: Vec<String>,
 }
