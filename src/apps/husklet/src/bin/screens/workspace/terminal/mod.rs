@@ -13,6 +13,7 @@ pub(crate) struct TermWin {
     pub(crate) panes: RefCell<Vec<PaneRegistration>>,
     /// Slim Cmd+F search bar over the focused terminal.
     search: Search,
+    zoom: Zoom,
     /// Keyboard scrollback-navigation ("copy") mode is active.
     copymode: CopyMode,
     /// The window is closing; child exits should not mutate the saved layout during teardown.
@@ -63,6 +64,36 @@ enum Shortcut {
     Cut,
     Paste,
     SelectAll,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+}
+
+const ZOOM_MIN: f64 = 0.5;
+const ZOOM_MAX: f64 = 3.0;
+const ZOOM_STEP: f64 = 0.1;
+
+pub(crate) struct Zoom(Cell<f64>);
+
+impl Zoom {
+    fn new() -> Self {
+        Self(Cell::new(1.0))
+    }
+
+    pub(crate) fn scale(&self) -> f64 {
+        self.0.get()
+    }
+
+    fn adjust(&self, delta: f64) -> f64 {
+        let scale = (self.scale() + delta).clamp(ZOOM_MIN, ZOOM_MAX);
+        self.0.set(scale);
+        scale
+    }
+
+    fn reset(&self) -> f64 {
+        self.0.set(1.0);
+        1.0
+    }
 }
 
 impl Shortcut {
@@ -70,6 +101,12 @@ impl Shortcut {
     fn from_key(key: gdk::Key, state: gdk::ModifierType) -> Option<Self> {
         if !state.contains(gdk::ModifierType::META_MASK) {
             return None;
+        }
+        match key {
+            gdk::Key::plus | gdk::Key::equal | gdk::Key::KP_Add => return Some(Self::ZoomIn),
+            gdk::Key::minus | gdk::Key::KP_Subtract => return Some(Self::ZoomOut),
+            gdk::Key::_0 | gdk::Key::KP_0 => return Some(Self::ZoomReset),
+            _ => {}
         }
         let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
         match key {
@@ -88,7 +125,16 @@ impl Shortcut {
 
     #[cfg(not(target_os = "macos"))]
     fn from_key(key: gdk::Key, state: gdk::ModifierType) -> Option<Self> {
-        if !state.contains(gdk::ModifierType::CONTROL_MASK) || !state.contains(gdk::ModifierType::SHIFT_MASK) {
+        if !state.contains(gdk::ModifierType::CONTROL_MASK) {
+            return None;
+        }
+        match key {
+            gdk::Key::plus | gdk::Key::equal | gdk::Key::KP_Add => return Some(Self::ZoomIn),
+            gdk::Key::minus | gdk::Key::KP_Subtract => return Some(Self::ZoomOut),
+            gdk::Key::_0 | gdk::Key::KP_0 => return Some(Self::ZoomReset),
+            _ => {}
+        }
+        if !state.contains(gdk::ModifierType::SHIFT_MASK) {
             return None;
         }
         let alternate = state.contains(gdk::ModifierType::ALT_MASK);
@@ -118,6 +164,18 @@ impl SplitAction {
             gtk::Orientation::Horizontal
         };
         PaneView::new(window, &terminal).split(orientation);
+    }
+}
+
+impl TermWin {
+    fn apply_zoom(&self, scale: f64) {
+        self.panes.borrow_mut().retain(|pane| {
+            let Some(terminal) = pane.terminal.upgrade() else {
+                return false;
+            };
+            terminal.set_font_scale(scale);
+            true
+        });
     }
 }
 
@@ -209,6 +267,7 @@ impl Window {
             slot_ctr: Cell::new(0),
             panes: RefCell::new(Vec::new()),
             search,
+            zoom: Zoom::new(),
             copymode: CopyMode::new(),
             closing: Cell::new(false),
             overview_page,
@@ -253,6 +312,21 @@ impl Window {
                     Some(Shortcut::Copy | Shortcut::Cut) => Clipboard::copy_selection(&tw),
                     Some(Shortcut::Paste) => Clipboard::paste(&tw),
                     Some(Shortcut::SelectAll) => Clipboard::select_all(&tw),
+                    Some(Shortcut::ZoomIn) => {
+                        let scale = tw.zoom.adjust(ZOOM_STEP);
+                        tw.apply_zoom(scale);
+                        glib::Propagation::Stop
+                    }
+                    Some(Shortcut::ZoomOut) => {
+                        let scale = tw.zoom.adjust(-ZOOM_STEP);
+                        tw.apply_zoom(scale);
+                        glib::Propagation::Stop
+                    }
+                    Some(Shortcut::ZoomReset) => {
+                        let scale = tw.zoom.reset();
+                        tw.apply_zoom(scale);
+                        glib::Propagation::Stop
+                    }
                     None => glib::Propagation::Proceed,
                 }
             });
@@ -453,6 +527,9 @@ mod shortcut_tests {
         assert_eq!(Shortcut::from_key(gdk::Key::v, command), Some(Shortcut::Paste));
         assert_eq!(Shortcut::from_key(gdk::Key::a, command), Some(Shortcut::SelectAll));
         assert_eq!(Shortcut::from_key(gdk::Key::c, gdk::ModifierType::empty()), None);
+        assert_eq!(Shortcut::from_key(gdk::Key::plus, command), Some(Shortcut::ZoomIn));
+        assert_eq!(Shortcut::from_key(gdk::Key::minus, command), Some(Shortcut::ZoomOut));
+        assert_eq!(Shortcut::from_key(gdk::Key::_0, command), Some(Shortcut::ZoomReset));
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -465,5 +542,22 @@ mod shortcut_tests {
         assert_eq!(Shortcut::from_key(gdk::Key::v, command), Some(Shortcut::Paste));
         assert_eq!(Shortcut::from_key(gdk::Key::t, command), Some(Shortcut::Tab));
         assert_eq!(Shortcut::from_key(gdk::Key::w, command), Some(Shortcut::Close));
+        assert_eq!(Shortcut::from_key(gdk::Key::plus, control), Some(Shortcut::ZoomIn));
+        assert_eq!(Shortcut::from_key(gdk::Key::minus, control), Some(Shortcut::ZoomOut));
+        assert_eq!(Shortcut::from_key(gdk::Key::_0, control), Some(Shortcut::ZoomReset));
+    }
+
+    #[test]
+    fn zoom_clamps_and_resets_around_the_configured_font() {
+        let zoom = super::Zoom::new();
+        for _ in 0..100 {
+            zoom.adjust(super::ZOOM_STEP);
+        }
+        assert!((zoom.scale() - super::ZOOM_MAX).abs() < f64::EPSILON);
+        for _ in 0..100 {
+            zoom.adjust(-super::ZOOM_STEP);
+        }
+        assert!((zoom.scale() - super::ZOOM_MIN).abs() < f64::EPSILON);
+        assert!((zoom.reset() - 1.0).abs() < f64::EPSILON);
     }
 }

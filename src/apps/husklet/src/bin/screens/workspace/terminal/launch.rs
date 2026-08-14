@@ -104,6 +104,7 @@ pub(crate) fn make_terminal_ex(
     let term = vte4::Terminal::new();
     let cfg = tw.ws.terminal_config();
     Terminal::new(&term).style(&cfg);
+    term.set_font_scale(tw.zoom.scale());
     Terminal::new(&term).setup_hyperlinks();
     {
         let tw = tw.clone();
