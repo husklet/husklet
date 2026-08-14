@@ -29,6 +29,20 @@ pub fn artifact_smoke() -> bool {
     bindings::engine_metadata_is_valid()
 }
 
+/// Returns the exact dynamic export contract for the Cargo-selected native library.
+#[doc(hidden)]
+#[must_use]
+pub const fn artifact_export_manifest() -> &'static str {
+    #[cfg(feature = "native-test-hooks")]
+    {
+        include_str!("native/bridge/test_exports.txt")
+    }
+    #[cfg(not(feature = "native-test-hooks"))]
+    {
+        include_str!("native/bridge/exports.txt")
+    }
+}
+
 /// Resolves the shared objects that supplied the linked engine lifecycle symbols.
 #[cfg(unix)]
 #[doc(hidden)]

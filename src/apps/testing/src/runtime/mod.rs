@@ -20,8 +20,10 @@ mod diagnostic;
 mod execution;
 mod fingerprint;
 pub(crate) mod image;
+mod inventory_report;
 mod ledger;
 pub(crate) mod load;
+mod options;
 mod outcome;
 mod output;
 pub(crate) mod profile;
@@ -29,59 +31,20 @@ pub(crate) mod scheduler;
 mod stage;
 
 use crate::suite::{Error, Target};
-use clap::Args;
 use definition::{App, EngineHost};
 use diagnostic::BoundedDiagnostic as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub(crate) use execution::WorkerOptions;
+pub(crate) use execution::{WorkerOptions, worker};
+pub(crate) use inventory_report::run as inventory;
+pub(crate) use options::Options;
 pub(crate) use stage::Options as StageOptions;
 pub(crate) use stage::artifact_smoke;
 pub(crate) use stage::run as stage;
 
 pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error> {
     image::ImageCache::for_platform(&target.platform())?.preflight(name)
-}
-
-pub(crate) fn inventory() -> Result<(), Error> {
-    let options = Options {
-        app: None,
-        selection: crate::suite::Selection::all(),
-        results: PathBuf::from("target/testing/runtime/inventory-unused.tsv"),
-        baseline: None,
-        engine_profile: profile::Requested::Release,
-    };
-    let apps = apps(&options)?;
-    validate_case_ids(&apps)?;
-    let app_count = apps.len();
-    let workloads = apps.iter().map(|app| app.cases.len()).sum::<usize>();
-    let planned = Schedule::plan(apps, &options);
-    let mut active = [0_usize; 2];
-    let mut inactive = [0_usize; 2];
-    for work in planned.work {
-        active[target_index(work.target)] += 1;
-    }
-    for row in planned.skipped {
-        inactive[target_index(row.attempt.key.target)] += 1;
-    }
-    println!("runtime inventory: apps={app_count} workloads={workloads}");
-    println!("runtime inventory: arm64 active={} NOT_RUN={}", active[0], inactive[0]);
-    println!("runtime inventory: amd64 active={} NOT_RUN={}", active[1], inactive[1]);
-    println!(
-        "runtime inventory: rows={} active={} NOT_RUN={}",
-        active.iter().sum::<usize>() + inactive.iter().sum::<usize>(),
-        active.iter().sum::<usize>(),
-        inactive.iter().sum::<usize>()
-    );
-    Ok(())
-}
-
-const fn target_index(target: Target) -> usize {
-    match target {
-        Target::Arm64 => 0,
-        Target::Amd64 => 1,
-    }
 }
 
 pub async fn run(options: Options) -> Result<(), Error> {
@@ -139,36 +102,9 @@ pub async fn run(options: Options) -> Result<(), Error> {
         println!("runtime: SUSPECT {contended} case(s) ran under a saturated host; their elapsed_ms is not comparable");
     }
     match &options.baseline {
-        Some(mark) => compare(&workspace()?.join(mark), &workspace()?.join(&options.results)),
+        Some(mark) => baseline::compare(&workspace()?.join(mark), &workspace()?.join(&options.results)),
         None if failed.is_empty() => Ok(()),
         None => Err(failed.join("\n").into()),
-    }
-}
-
-/// Judges the published ledger against a recorded mark: only a row that moved the wrong way fails
-/// the sweep, so a known failing set stays green and a new failure cannot hide inside the count.
-fn compare(mark: &Path, results: &Path) -> Result<(), Error> {
-    let mark = baseline::load(mark)?;
-    println!("runtime: baseline {}", mark.describe());
-    let changes = mark.diff(&baseline::observed(results)?);
-    if changes.is_empty() {
-        println!("runtime: no case moved against the baseline");
-        return Ok(());
-    }
-    // A regressing row is printed by the error below, so printing it here too double-counts it: a
-    // lane read one regression as two on first pass. The summary carries only what the error omits.
-    for change in changes.iter().filter(|change| !change.regression) {
-        println!("runtime: {}", change.line);
-    }
-    let regressions: Vec<&str> = changes
-        .iter()
-        .filter(|change| change.regression)
-        .map(|change| change.line.as_str())
-        .collect();
-    if regressions.is_empty() {
-        Ok(())
-    } else {
-        Err(regressions.join("\n").into())
     }
 }
 
@@ -216,10 +152,6 @@ async fn record_all(ledger: &Arc<ledger::Ledger>, rows: Vec<ledger::Row>) -> Res
     })
     .await??;
     Ok(())
-}
-
-pub async fn worker(options: WorkerOptions) -> Result<(), Error> {
-    execution::worker(options).await
 }
 
 fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error> {
@@ -546,28 +478,6 @@ pub(crate) fn workspace() -> Result<PathBuf, Error> {
         path = path.parent().ok_or("workspace root not found")?;
     }
     Ok(path.to_path_buf())
-}
-
-#[derive(Args)]
-pub(crate) struct Options {
-    /// Run only the named runtime application.
-    app: Option<String>,
-    #[command(flatten)]
-    selection: crate::suite::Selection,
-    /// Relative durable result path beneath the repository workspace.
-    #[arg(long, default_value = "target/testing/runtime/results.tsv", value_parser = crate::suite::parse::results)]
-    results: PathBuf,
-    /// Diff the sweep against a recorded corpus mark instead of against "everything passes".
-    #[arg(
-        long,
-        num_args = 0..=1,
-        default_missing_value = "tests/runtime/baseline.tsv",
-        value_parser = crate::suite::parse::results,
-    )]
-    baseline: Option<PathBuf>,
-    /// Engine build profile this sweep is measuring; must match how the runner was built.
-    #[arg(long, value_enum, env = "HL_COMPAT_ENGINE_PROFILE", default_value_t = profile::Requested::Release)]
-    engine_profile: profile::Requested,
 }
 
 #[cfg(test)]

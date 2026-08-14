@@ -27,6 +27,30 @@ pub(super) struct Change {
     pub line: String,
 }
 
+/// Judges a published ledger against a recorded mark.
+pub(super) fn compare(mark: &Path, results: &Path) -> Result<(), Error> {
+    let mark = load(mark)?;
+    println!("runtime: baseline {}", mark.describe());
+    let changes = mark.diff(&observed(results)?);
+    if changes.is_empty() {
+        println!("runtime: no case moved against the baseline");
+        return Ok(());
+    }
+    for change in changes.iter().filter(|change| !change.regression) {
+        println!("runtime: {}", change.line);
+    }
+    let regressions = changes
+        .iter()
+        .filter(|change| change.regression)
+        .map(|change| change.line.as_str())
+        .collect::<Vec<_>>();
+    if regressions.is_empty() {
+        Ok(())
+    } else {
+        Err(regressions.join("\n").into())
+    }
+}
+
 pub(super) fn load(path: &Path) -> Result<Mark, Error> {
     let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let mut provenance = Vec::new();

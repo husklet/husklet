@@ -1,21 +1,23 @@
 //! Content-bound staging for an immutable runtime-corpus runner and its private C engine.
 
+use crate::platform::HostProcess;
 use crate::suite::Error;
 use clap::Args;
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use std::{
     fs,
-    io::{BufRead, BufReader, Read as _, Write as _},
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
+
+mod build;
 
 const RECEIPT_SCHEMA: &str = "husklet-runtime-corpus-artifacts-v1";
 const SMOKE_RECEIPT: &str = "hl-native-artifact-smoke-v1";
 // The testing application enables hl-native's test hooks, so its exact Cargo-emitted library has
 // the test export surface rather than the smaller production-package surface.
-const NATIVE_EXPORTS: &str = include_str!("../../../../runtime/hl-native/src/native/bridge/test_exports.txt");
 
 #[derive(Args)]
 pub(crate) struct Options {
@@ -45,11 +47,6 @@ struct ArtifactReceipt<'a> {
     bytes: u64,
 }
 
-struct BuildArtifacts {
-    runner: PathBuf,
-    library: PathBuf,
-}
-
 struct Artifact {
     bytes: Vec<u8>,
     digest: String,
@@ -65,7 +62,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
         return Err(format!("runtime corpus artifact prefix already exists: {}", output.display()).into());
     }
     let commit = source_commit(&workspace)?;
-    let built = build(&options.cargo, &workspace)?;
+    let built = build::run(&options.cargo, &workspace)?;
     let runner = Artifact::settled(&built.runner, ElfKind::Executable)?;
     let library = Artifact::settled(&built.library, ElfKind::SharedLibrary)?;
     require_matching_architecture(&runner.bytes, &library.bytes)?;
@@ -102,150 +99,14 @@ pub(crate) fn artifact_smoke() -> Result<(), Error> {
         if !hl_native::artifact_smoke() {
             return Err("native artifact ABI metadata is invalid".into());
         }
-        hl_native::artifact_lifecycle_smoke().map_err(|error| format!("relocated native lifecycle smoke: {error}"))?;
+        let scratch = tempfile::tempdir()?;
+        hl_native::artifact_lifecycle_smoke(scratch.path())
+            .map_err(|error| format!("relocated native lifecycle smoke: {error}"))?;
         Ok(())
     }
     #[cfg(not(unix))]
     {
         Err("native artifact smoke is unavailable on this host".into())
-    }
-}
-
-fn build(cargo: &Path, workspace: &Path) -> Result<BuildArtifacts, Error> {
-    let packages = package_ids(cargo, workspace)?;
-    let mut child = Command::new(cargo)
-        .current_dir(workspace)
-        .args([
-            "build",
-            "--release",
-            "--locked",
-            "--offline",
-            "-p",
-            "testing",
-            "--bin",
-            "testing",
-            "--message-format=json-render-diagnostics",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|error| format!("start exact runtime corpus build: {error}"))?;
-    let stdout = child.stdout.take().ok_or("Cargo build stdout was not captured")?;
-    let artifacts = select_messages(BufReader::new(stdout), &packages.testing, &packages.native);
-    let status = child.wait()?;
-    if !status.success() {
-        return Err(format!("exact runtime corpus build failed with {status}").into());
-    }
-    let artifacts = artifacts?;
-    artifacts.ok_or_else(|| "Cargo did not identify both the testing runner and hl-native library".into())
-}
-
-struct PackageIds {
-    testing: String,
-    native: String,
-}
-
-fn package_ids(cargo: &Path, workspace: &Path) -> Result<PackageIds, Error> {
-    let output = Command::new(cargo)
-        .current_dir(workspace)
-        .args(["metadata", "--locked", "--offline", "--no-deps", "--format-version=1"])
-        .output()?;
-    if !output.status.success() {
-        return Err(format!("Cargo metadata failed with {}", output.status).into());
-    }
-    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    let packages = metadata
-        .get("packages")
-        .and_then(serde_json::Value::as_array)
-        .ok_or("Cargo metadata omitted packages")?;
-    Ok(PackageIds {
-        testing: unique_package_id(packages, "testing", &workspace.join("src/apps/testing/Cargo.toml"))?,
-        native: unique_package_id(
-            packages,
-            "hl-native",
-            &workspace.join("src/runtime/hl-native/Cargo.toml"),
-        )?,
-    })
-}
-
-fn unique_package_id(packages: &[serde_json::Value], name: &str, manifest: &Path) -> Result<String, Error> {
-    let expected = fs::canonicalize(manifest)?;
-    let matches = packages
-        .iter()
-        .filter(|package| package.get("name").and_then(serde_json::Value::as_str) == Some(name))
-        .filter(|package| {
-            package
-                .get("manifest_path")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|path| fs::canonicalize(path).ok())
-                .as_deref()
-                == Some(expected.as_path())
-        })
-        .filter_map(|package| package.get("id").and_then(serde_json::Value::as_str))
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [package] => Ok((*package).to_owned()),
-        _ => Err(format!("Cargo metadata identified {} {name} packages", matches.len()).into()),
-    }
-}
-
-fn select_messages(
-    reader: impl BufRead,
-    testing_package: &str,
-    native_package: &str,
-) -> Result<Option<BuildArtifacts>, Error> {
-    let mut runner = None;
-    let mut library = None;
-    for line in reader.lines() {
-        let line = line?;
-        let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        match message.get("reason").and_then(serde_json::Value::as_str) {
-            Some("compiler-artifact")
-                if message.get("package_id").and_then(serde_json::Value::as_str) == Some(testing_package)
-                    && message.pointer("/target/name").and_then(serde_json::Value::as_str) == Some("testing")
-                    && message
-                        .pointer("/target/kind")
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("bin"))) =>
-            {
-                let executable = message
-                    .get("executable")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or("testing compiler artifact has no executable")?;
-                unique(&mut runner, PathBuf::from(executable), "testing runner")?;
-            }
-            Some("build-script-executed")
-                if message.get("package_id").and_then(serde_json::Value::as_str) == Some(native_package) =>
-            {
-                let path = message
-                    .get("env")
-                    .and_then(serde_json::Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(serde_json::Value::as_array)
-                    .find(|pair| pair.first().and_then(serde_json::Value::as_str) == Some("HL_NATIVE_LIBRARY_PATH"))
-                    .and_then(|pair| pair.get(1))
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or("hl-native build result omitted HL_NATIVE_LIBRARY_PATH")?;
-                unique(&mut library, PathBuf::from(path), "hl-native library")?;
-            }
-            _ => {}
-        }
-    }
-    Ok(match (runner, library) {
-        (Some(runner), Some(library)) => Some(BuildArtifacts { runner, library }),
-        (None, None) => None,
-        _ => return Err("Cargo identified only one member of the runtime artifact pair".into()),
-    })
-}
-
-fn unique(slot: &mut Option<PathBuf>, value: PathBuf, name: &str) -> Result<(), Error> {
-    if slot.replace(value).is_some() {
-        Err(format!("Cargo identified more than one {name}").into())
-    } else {
-        Ok(())
     }
 }
 
@@ -310,7 +171,11 @@ fn publish(
 }
 
 fn source_commit(workspace: &Path) -> Result<String, Error> {
-    let commit = command_text(Command::new("git").current_dir(workspace).args(["rev-parse", "HEAD"]))?;
+    let commit = command_text(
+        HostProcess::standard("git")
+            .current_dir(workspace)
+            .args(["rev-parse", "HEAD"]),
+    )?;
     let commit = commit.trim();
     if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("git returned an invalid source commit".into());
@@ -342,7 +207,7 @@ fn publish_prefix(_: &Path, _: &Path) -> Result<(), Error> {
 
 fn smoke(launcher: &Path) -> Result<(), Error> {
     for injected in [false, true] {
-        let mut command = Command::new(launcher);
+        let mut command = HostProcess::standard(launcher);
         command
             .arg("native-artifact-smoke")
             .env_clear()
@@ -367,16 +232,37 @@ fn smoke(launcher: &Path) -> Result<(), Error> {
 
 fn inspect_artifacts(runner: &Path, library: &Path) -> Result<(), Error> {
     for artifact in [runner, library] {
-        let description = command_text(Command::new("file").args(["--brief"]).arg(artifact))?;
+        let description = command_text(HostProcess::standard("file").args(["--brief"]).arg(artifact))?;
         if !description.contains("ELF 64-bit") {
             return Err(format!("staged artifact is not an ELF64 image: {}", artifact.display()).into());
         }
-        command_text(Command::new("readelf").args(["--wide", "--file-header"]).arg(artifact))?;
+        command_text(
+            HostProcess::standard("readelf")
+                .args(["--wide", "--file-header"])
+                .arg(artifact),
+        )?;
     }
-    let runner_dynamic = command_text(Command::new("readelf").args(["--wide", "--dynamic"]).arg(runner))?;
-    let library_dynamic = command_text(Command::new("readelf").args(["--wide", "--dynamic"]).arg(library))?;
-    let library_symbols = command_text(Command::new("readelf").args(["--wide", "--dyn-syms"]).arg(library))?;
-    require_readelf_contract(&runner_dynamic, &library_dynamic, &library_symbols, NATIVE_EXPORTS)
+    let runner_dynamic = command_text(
+        HostProcess::standard("readelf")
+            .args(["--wide", "--dynamic"])
+            .arg(runner),
+    )?;
+    let library_dynamic = command_text(
+        HostProcess::standard("readelf")
+            .args(["--wide", "--dynamic"])
+            .arg(library),
+    )?;
+    let library_symbols = command_text(
+        HostProcess::standard("readelf")
+            .args(["--wide", "--dyn-syms"])
+            .arg(library),
+    )?;
+    require_readelf_contract(
+        &runner_dynamic,
+        &library_dynamic,
+        &library_symbols,
+        hl_native::artifact_export_manifest(),
+    )
 }
 
 fn require_readelf_contract(runner: &str, library: &str, symbols: &str, expected_exports: &str) -> Result<(), Error> {
@@ -558,100 +444,4 @@ const fn native_library_receipt_path() -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        Artifact, ElfKind, publish_prefix, require_matching_architecture, require_readelf_contract, select_messages,
-        temporary_prefix,
-    };
-    use std::{fs, io::Cursor};
-
-    fn elf(kind: u16, machine: u16) -> Vec<u8> {
-        let mut bytes = vec![0_u8; 64];
-        bytes[..6].copy_from_slice(b"\x7fELF\x02\x01");
-        bytes[16..18].copy_from_slice(&kind.to_le_bytes());
-        bytes[18..20].copy_from_slice(&machine.to_le_bytes());
-        bytes
-    }
-
-    #[test]
-    fn cargo_messages_bind_one_runner_to_one_native_library() {
-        let messages = concat!(
-            "{\"reason\":\"compiler-artifact\",\"package_id\":\"path+file:///source/src/apps/testing#0.1.0\",\"target\":{\"name\":\"testing\",\"kind\":[\"bin\"]},\"executable\":\"/build/testing\"}\n",
-            "{\"reason\":\"build-script-executed\",\"package_id\":\"path+file:///source/src/runtime/hl-native#0.1.0\",\"env\":[[\"HL_NATIVE_LIBRARY_PATH\",\"/build/libhl_native_engine.so\"]]}\n"
-        );
-        let testing = "path+file:///source/src/apps/testing#0.1.0";
-        let native = "path+file:///source/src/runtime/hl-native#0.1.0";
-        let selected = select_messages(Cursor::new(messages), testing, native)
-            .unwrap()
-            .unwrap();
-        assert_eq!(selected.runner, std::path::Path::new("/build/testing"));
-        assert_eq!(selected.library, std::path::Path::new("/build/libhl_native_engine.so"));
-        assert!(select_messages(Cursor::new(&messages[..messages.find('\n').unwrap()]), testing, native).is_err());
-        assert!(select_messages(Cursor::new(format!("{messages}{messages}")), testing, native).is_err());
-        assert!(select_messages(Cursor::new(messages), testing, "path+file:///foreign/hl-native#0.1.0").is_err());
-        assert!(select_messages(Cursor::new(messages), "path+file:///foreign/testing#0.1.0", native).is_err());
-    }
-
-    #[test]
-    fn missing_corrupt_symlinked_and_wrong_kind_libraries_are_rejected() {
-        let directory = tempfile::tempdir().unwrap();
-        let missing = directory.path().join("missing.so");
-        assert!(Artifact::settled(&missing, ElfKind::SharedLibrary).is_err());
-        let corrupt = directory.path().join("corrupt.so");
-        fs::write(&corrupt, b"not an ELF image").unwrap();
-        assert!(Artifact::settled(&corrupt, ElfKind::SharedLibrary).is_err());
-        let executable = directory.path().join("executable.so");
-        fs::write(&executable, elf(2, 183)).unwrap();
-        assert!(Artifact::settled(&executable, ElfKind::SharedLibrary).is_err());
-        #[cfg(unix)]
-        {
-            let symlink = directory.path().join("link.so");
-            std::os::unix::fs::symlink(&executable, &symlink).unwrap();
-            assert!(Artifact::settled(&symlink, ElfKind::SharedLibrary).is_err());
-        }
-    }
-
-    #[test]
-    fn staging_prefix_is_reserved_and_publication_never_replaces_a_name() {
-        let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("published");
-        let temporary = temporary_prefix(&output).unwrap();
-        assert!(temporary.is_dir());
-        fs::create_dir(&output).unwrap();
-        assert!(publish_prefix(&temporary, &output).is_err());
-        assert!(temporary.is_dir());
-
-        fs::remove_dir(&output).unwrap();
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink("missing", &output).unwrap();
-            assert!(publish_prefix(&temporary, &output).is_err());
-            assert!(temporary.is_dir());
-        }
-    }
-
-    #[test]
-    fn a_valid_shared_image_for_the_wrong_architecture_is_rejected() {
-        let runner = elf(3, 183);
-        assert!(require_matching_architecture(&runner, &elf(3, 62)).is_err());
-        assert!(require_matching_architecture(&runner, &elf(3, 183)).is_ok());
-        assert!(require_matching_architecture(&elf(3, 8), &elf(3, 8)).is_err());
-    }
-
-    #[test]
-    fn a_same_architecture_shared_object_with_the_wrong_contract_is_rejected() {
-        let runner = " 0x1 (NEEDED) Shared library: [libhl_native_engine.so]\n";
-        let library = " 0xe (SONAME) Library soname: [libhl_native_engine.so]\n";
-        let exports = concat!(
-            " 1: 1 1 FUNC GLOBAL DEFAULT 12 hl_engine_abi\n",
-            " 2: 1 1 FUNC GLOBAL DEFAULT 12 hl_engine_version\n",
-            " 3: 1 1 FUNC GLOBAL DEFAULT 12 hl_c_backend_create\n",
-        );
-        let expected = "hl_c_backend_create\nhl_engine_abi\nhl_engine_version\n";
-        assert!(require_readelf_contract(runner, library, exports, expected).is_ok());
-        assert!(require_readelf_contract(runner, library, "", expected).is_err());
-        assert!(require_readelf_contract(runner, library, exports, "hl_engine_abi\n").is_err());
-        assert!(require_readelf_contract(runner, "SONAME [libm.so.6]", exports, expected).is_err());
-        assert!(require_readelf_contract("NEEDED [libm.so.6]", library, exports, expected).is_err());
-    }
-}
+mod test;
