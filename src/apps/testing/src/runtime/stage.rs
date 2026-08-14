@@ -77,9 +77,12 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
 pub(crate) fn artifact_smoke() -> Result<(), Error> {
     #[cfg(unix)]
     {
-        let expected = std::env::var_os("HL_NATIVE_EXPECT_LIBRARY")
-            .map(PathBuf::from)
-            .ok_or("native artifact smoke has no expected library path")?;
+        let runner = std::env::current_exe()?;
+        let prefix = runner
+            .parent()
+            .and_then(Path::parent)
+            .ok_or("native artifact smoke runner has no immutable prefix")?;
+        let expected = prefix.join(native_library_receipt_path());
         let loaded = hl_native::artifact_path().ok_or("dladdr could not resolve the native engine library")?;
         if fs::canonicalize(&loaded)? != fs::canonicalize(&expected)? {
             return Err(format!(
@@ -271,13 +274,10 @@ fn sync_directory(path: &Path) -> Result<(), Error> {
 }
 
 fn smoke(launcher: &Path) -> Result<(), Error> {
-    let prefix = launcher.parent().ok_or("runtime corpus launcher has no prefix")?;
-    let library = prefix.join(native_library_receipt_path());
     let output = Command::new(launcher)
         .arg("native-artifact-smoke")
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
-        .env("HL_NATIVE_EXPECT_LIBRARY", &library)
         .output()?;
     if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != SMOKE_RECEIPT {
         return Err(format!(
