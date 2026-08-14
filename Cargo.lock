@@ -1165,6 +1165,14 @@ name = "hl-gui"
 version = "0.4.0"
 
 [[package]]
+name = "hl-gui-gtk"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "hl-gui",
+]
+
+[[package]]
 name = "hl-images"
 version = "0.1.0"
 dependencies = [
@@ -2528,6 +2536,15 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "storybook"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "hl-gui",
+ "hl-gui-gtk",
+]
 
 [[package]]
 name = "streaming-iterator"

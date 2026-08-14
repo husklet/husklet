@@ -13,9 +13,10 @@ members = [
 exclude = [
     "src/containers/.cache",
 ]
-# hl-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host, so it stays
-# out of the default set; build it explicitly with `cargo build -p hl-gui` on macOS.
 default-members = [
+    "src/apps/storybook",
+    "src/workspaces/hl-gui",
+    "src/workspaces/hl-gui-gtk",
     "src/workspaces/hl-ws-term",
     "src/workspaces/hl-ws",
 ]

@@ -1,0 +1,76 @@
+//! The toolkit port. Implementors live in the embedding application, never here.
+
+use crate::data::{RowRequest, RowWindow};
+use crate::node::{EventId, NodeId, Patch, Tree};
+use crate::style::Theme;
+
+/// Applies validated mutations to retained widgets.
+///
+/// Deliberately narrow, and deliberately free of any handle-returning method:
+/// returning a widget would drag a toolkit type across this boundary and make
+/// the library non-portable.
+pub trait Renderer {
+    type Error;
+
+    /// Apply one mutation. The tree is already updated for reads of context
+    /// the adapter needs, such as sibling order or companion properties.
+    ///
+    /// # Errors
+    /// Returns a toolkit failure; the tree treats it as fatal for the frame.
+    fn patch(&mut self, patch: &Patch, tree: &Tree) -> Result<(), Self::Error>;
+
+    /// Present everything applied since the previous commit, in one pass.
+    ///
+    /// # Errors
+    /// Returns a toolkit failure raised while presenting.
+    fn commit(&mut self, sequence: u64) -> Result<(), Self::Error>;
+
+    /// Deliver rows answering an earlier request.
+    ///
+    /// # Errors
+    /// Returns a toolkit failure raised while binding rows.
+    fn rows(&mut self, window: &RowWindow) -> Result<(), Self::Error>;
+
+    /// Replace the active appearance.
+    ///
+    /// # Errors
+    /// Returns a toolkit failure raised while restyling.
+    fn theme(&mut self, theme: &Theme) -> Result<(), Self::Error>;
+}
+
+/// What a user did, reported back to the producer.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Event {
+    Invoke {
+        node: NodeId,
+        id: EventId,
+    },
+    Change {
+        node: NodeId,
+        id: EventId,
+        value: crate::node::PropValue,
+    },
+    Submit {
+        node: NodeId,
+        id: EventId,
+    },
+    Select {
+        node: NodeId,
+        id: EventId,
+        rows: Vec<u64>,
+    },
+    /// The host needs a window of rows it does not have cached.
+    Rows(RowRequest),
+}
+
+/// Sink for interaction reported by a renderer.
+pub trait Events {
+    fn emit(&mut self, event: Event);
+}
+
+impl Events for Vec<Event> {
+    fn emit(&mut self, event: Event) {
+        self.push(event);
+    }
+}
