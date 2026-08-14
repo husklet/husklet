@@ -1,0 +1,25 @@
+cases:
+- id: terminal-shebang-crlf/status-and-recovery
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "printf '#!/bin/sh\\r\\ntouch /tmp/husklet-crlf-ran\\n' > /tmp/husklet-crlf; chmod 0755 /tmp/husklet-crlf; stty -echo; PS1='CRLF# '; printf 'CRLF-%s\\n' READY\r" }
+      - await_output: { contains: CRLF-READY, timeout_ms: 5000 }
+      - write: { text: "/tmp/husklet-crlf\r" }
+      - await_output: { contains: "cannot execute", timeout_ms: 5000 }
+      - write: { text: "status=$?; if test -e /tmp/husklet-crlf-ran; then ran=yes; else ran=no; fi; printf 'CRLF-STATUS-%s-RAN-%s\\n' \"$status\" \"$ran\"\r" }
+      - await_output: { contains: CRLF-STATUS-127-RAN-no, timeout_ms: 5000 }
+      - write: { text: "printf 'CRLF-SHELL-%s\\n' USABLE; stty echo; exit\r" }
+      - await_output: { contains: CRLF-SHELL-USABLE, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/status.txt
+    - golden/shell_usable.txt
