@@ -79,10 +79,14 @@ int hl_windows_resolve_ntdll(hl_windows_ntdll *nt) {
     HMODULE module = GetModuleHandleW(L"ntdll.dll");
     if (module == NULL) module = LoadLibraryW(L"ntdll.dll");
     if (module == NULL) return 0;
-    /* Same cast shape as hl_windows_resolve_kernelbase: FARPROC converts back
-     * only to a function pointer type, so the hop through one is what ISO C
-     * permits. */
-#define HL_WINDOWS_BIND(field, name) *(void (**)(void)) & nt->field = (void (*)(void))GetProcAddress(module, name)
+    /* Copy the function-pointer representation instead of accessing each typed
+     * member through an incompatible pointer lvalue. */
+#define HL_WINDOWS_BIND(field, name)                                                                                   \
+    do {                                                                                                               \
+        FARPROC symbol = GetProcAddress(module, (name));                                                               \
+        _Static_assert(sizeof nt->field == sizeof symbol, "Windows function pointer width");                           \
+        memcpy(&nt->field, &symbol, sizeof symbol);                                                                    \
+    } while (0)
     HL_WINDOWS_BIND(create_file, "NtCreateFile");
     HL_WINDOWS_BIND(read_file, "NtReadFile");
     HL_WINDOWS_BIND(write_file, "NtWriteFile");

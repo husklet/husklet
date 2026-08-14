@@ -113,7 +113,8 @@ static INIT_ONCE g_winsock_once = INIT_ONCE_STATIC_INIT;
     do {                                                                                                               \
         FARPROC symbol = GetProcAddress(module, (name));                                                               \
         if (symbol == NULL) return FALSE;                                                                              \
-        *(FARPROC *)&g_winsock.field = symbol;                                                                         \
+        _Static_assert(sizeof g_winsock.field == sizeof symbol, "Windows function pointer width");                     \
+        memcpy(&g_winsock.field, &symbol, sizeof symbol);                                                              \
     } while (0)
 
 static BOOL CALLBACK hl_windows_winsock_resolve(PINIT_ONCE once, PVOID parameter, PVOID *context) {
