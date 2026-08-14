@@ -436,7 +436,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[cfg(feature = "native-test-hooks")]
-    struct IsolatedTestChild(std::process::Child);
+    struct IsolatedTestChild(Option<std::process::Child>);
 
     #[cfg(feature = "native-test-hooks")]
     impl IsolatedTestChild {
@@ -453,27 +453,40 @@ mod tests {
                     }
                 });
             }
-            command.spawn().map(Self)
+            command.spawn().map(|child| Self(Some(child)))
         }
 
         fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
-            self.0.try_wait()
+            self.0.as_mut().expect("live isolated child").try_wait()
         }
 
         fn terminate(&mut self) -> std::io::Result<()> {
-            if let Ok(process) = i32::try_from(self.0.id()) {
+            self.terminate_with(|group| {
                 // SAFETY: spawn made the child a session and process-group leader, so the
                 // negative identifier is confined to this test's descendants.
-                let result = unsafe { libc::kill(-process, libc::SIGKILL) };
-                if result < 0 {
-                    let error = std::io::Error::last_os_error();
-                    if error.raw_os_error() != Some(libc::ESRCH) {
-                        let _ = self.0.wait();
-                        return Err(error);
-                    }
+                if unsafe { libc::kill(group, libc::SIGKILL) } < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            })
+        }
+
+        fn terminate_with(&mut self, deliver: impl FnOnce(i32) -> std::io::Result<()>) -> std::io::Result<()> {
+            let Some(child) = self.0.as_mut() else {
+                return Ok(());
+            };
+            let process = i32::try_from(child.id())
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "child PID exceeds i32"))?;
+            if let Err(error) = deliver(-process) {
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error);
                 }
             }
-            self.0.wait().map(drop)
+            // Once delivery succeeds (or the group is already absent), retaining the
+            // numeric PID would let a later Drop signal an unrelated, reused group.
+            let mut child = self.0.take().expect("live isolated child");
+            child.wait().map(drop)
         }
     }
 
@@ -486,14 +499,14 @@ mod tests {
 
     #[cfg(feature = "native-test-hooks")]
     #[test]
-    fn isolated_test_child_termination_closes_descendant_descriptors() {
+    fn isolated_test_child_termination_is_retryable_idempotent_and_closes_descendant_descriptors() {
         use std::io::BufRead as _;
         use std::process::Stdio;
 
         let mut command = std::process::Command::new("/bin/sh");
         command.args(["-c", "sleep 60 & echo $!; wait"]).stdout(Stdio::piped());
         let mut child = IsolatedTestChild::spawn(command).unwrap();
-        let output = child.0.stdout.take().unwrap();
+        let output = child.0.as_mut().unwrap().stdout.take().unwrap();
         let mut output = std::io::BufReader::new(output);
         let mut line = String::new();
         output.read_line(&mut line).unwrap();
@@ -505,7 +518,35 @@ mod tests {
             "descendant was not live before cleanup"
         );
 
-        child.terminate().unwrap();
+        let mut deliveries = 0;
+        assert_eq!(
+            child
+                .terminate_with(|_| {
+                    deliveries += 1;
+                    Err(std::io::Error::from_raw_os_error(libc::EPERM))
+                })
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::EPERM)
+        );
+        child
+            .terminate_with(|group| {
+                deliveries += 1;
+                // SAFETY: the helper supplied the negative identifier of its isolated group.
+                if unsafe { libc::kill(group, libc::SIGKILL) } < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+        child
+            .terminate_with(|_| {
+                deliveries += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(deliveries, 2, "termination was not retryable and idempotent");
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
             sender
