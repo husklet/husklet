@@ -19,6 +19,7 @@
 mod authority;
 mod capability;
 mod channel;
+pub mod codec;
 mod frame;
 mod handshake;
 mod manifest;
@@ -32,6 +33,7 @@ mod transport;
 pub use authority::{Authority, Denial, Permit, Reason};
 pub use capability::{Capability, Grant};
 pub use channel::{Channels, Permission, Purpose};
+pub use codec::Coding;
 pub use frame::{ChannelId, Flags, Frame, Kind, Malformed};
 pub use handshake::{Compatibility, Hello, Limits, Welcome, PROTOCOL};
 pub use manifest::{Activation, ExtensionName, Invalid, Manifest, Presentation, Resources};

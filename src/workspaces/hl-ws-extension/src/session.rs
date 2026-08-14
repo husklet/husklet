@@ -27,6 +27,7 @@ pub struct Session {
     topics: BTreeSet<Topic>,
     tab: Option<String>,
     pending: Vec<hl_gui::Frame>,
+    mutations: Vec<hl_gui::SourceMutation>,
 }
 
 impl Session {
@@ -37,6 +38,7 @@ impl Session {
             topics: BTreeSet::new(),
             tab: None,
             pending: Vec::new(),
+            mutations: Vec::new(),
         }
     }
 
@@ -105,6 +107,7 @@ impl Session {
             }
             Request::InterfaceOpenTab { title } => self.open_tab(title, services),
             Request::InterfaceRender { frame } => self.render(frame),
+            Request::SourceResize { mutation } => self.mutate(mutation.clone()),
             Request::EventSubscribe { topic } => {
                 self.topics.insert(*topic);
                 Ok(Reply::Done)
@@ -201,6 +204,23 @@ impl Session {
         }
         self.pending.push(frame.clone());
         Ok(Reply::Done)
+    }
+
+    /// Accepts a change to a windowed source the session's tables draw from.
+    fn mutate(&mut self, mutation: hl_gui::SourceMutation) -> Result<Reply, Failure> {
+        if self.tab.is_none() {
+            return Err(Failure::Conflict {
+                detail: "no tab is open to hold a source".into(),
+            });
+        }
+        self.mutations.push(mutation);
+        Ok(Reply::Done)
+    }
+
+    /// Source changes received since the host last collected them.
+    #[must_use]
+    pub fn drain_sources(&mut self) -> Vec<hl_gui::SourceMutation> {
+        std::mem::take(&mut self.mutations)
     }
 
     /// Interface frames received since the host last collected them.

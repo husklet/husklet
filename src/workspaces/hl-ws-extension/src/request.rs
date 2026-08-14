@@ -37,6 +37,7 @@ pub enum Request {
     FilesystemWrite { path: RelativePath, contents: Vec<u8> },
     InterfaceOpenTab { title: String },
     InterfaceRender { frame: hl_gui::Frame },
+    SourceResize { mutation: hl_gui::SourceMutation },
     EventSubscribe { topic: Topic },
     EventUnsubscribe { topic: Topic },
 }
@@ -61,7 +62,9 @@ impl Request {
             }
             Self::FilesystemList { .. } | Self::FilesystemRead { .. } => Capability::FilesystemRead,
             Self::FilesystemWrite { .. } => Capability::FilesystemWrite,
-            Self::InterfaceOpenTab { .. } | Self::InterfaceRender { .. } => Capability::Interface,
+            Self::InterfaceOpenTab { .. } | Self::InterfaceRender { .. } | Self::SourceResize { .. } => {
+                Capability::Interface
+            }
             Self::EventSubscribe { topic } | Self::EventUnsubscribe { topic } => topic.capability(),
         }
     }
@@ -127,7 +130,7 @@ pub struct WorkspaceInfo {
 
 /// The answer to a call.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(tag = "reply", rename_all = "snake_case")]
+#[serde(tag = "reply", content = "with", rename_all = "snake_case")]
 pub enum Reply {
     Workspace(WorkspaceInfo),
     Containers(Vec<ContainerSummary>),
