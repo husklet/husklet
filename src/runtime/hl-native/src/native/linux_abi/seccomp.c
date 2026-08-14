@@ -173,9 +173,11 @@ static long seccomp_set_strict(struct cpu *c) {
 // this thread's stacked chain. Returns 0 or -errno, matching the kernel's argument validation.
 static long seccomp_install_filter(struct cpu *c, uint64_t fprog_ptr, uint32_t flags) {
     if (flags & ~HL_LINUX_SECCOMP_FILTER_FLAGS_KNOWN) return -EINVAL;
-    // NEW_LISTENER would have us return a userspace-notification fd and run a supervisor protocol we do not
-    // implement; reject it honestly rather than hand back a listener that never delivers notifications.
-    if (flags & HL_LINUX_SECCOMP_FILTER_FLAG_NEW_LISTENER) return -EINVAL;
+    // Linux rejects this structurally invalid combination before checking
+    // installation authority.
+    if ((flags & (HL_LINUX_SECCOMP_FILTER_FLAG_NEW_LISTENER | HL_LINUX_SECCOMP_FILTER_FLAG_TSYNC)) ==
+        (HL_LINUX_SECCOMP_FILTER_FLAG_NEW_LISTENER | HL_LINUX_SECCOMP_FILTER_FLAG_TSYNC))
+        return -EINVAL;
     // struct sock_fprog on LP64: u16 len at +0, 8-byte filter pointer at +8.
     uint16_t len;
     uint64_t insn_ptr;
@@ -214,6 +216,14 @@ static long seccomp_install_filter(struct cpu *c, uint64_t fprog_ptr, uint32_t f
         free(node->insns);
         free(node);
         return -EACCES;
+    }
+    // NEW_LISTENER would have us return a userspace-notification fd and run a supervisor protocol we do not
+    // implement. Linux checks authority before creating that listener, so preserve EACCES for an
+    // unauthorized otherwise-valid request before reporting the unsupported operation.
+    if (flags & HL_LINUX_SECCOMP_FILTER_FLAG_NEW_LISTENER) {
+        free(node->insns);
+        free(node);
+        return -EINVAL;
     }
     node->len = len;
     node->prev = c->seccomp_filters;

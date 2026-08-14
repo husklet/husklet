@@ -1,1 +1,1 @@
-seccomp permission=1 invalid=1 strict=1 trap=1 kill_thread=1 kill_process=1 tsync=1 tsync_esrch=1 stack=1 clone=1 exec=1
+seccomp permission=1 flags=1 invalid=1 strict=1 trap=1 kill_thread=1 kill_process=1 tsync=1 tsync_esrch=1 stack=1 clone=1 exec=1

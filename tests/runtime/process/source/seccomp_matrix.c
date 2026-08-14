@@ -52,6 +52,26 @@ static int permission_case(void) {
     return status_exit(child, 0);
 }
 
+static int flag_case(void) {
+    pid_t child = fork();
+    if (child == 0) {
+        errno = 0;
+        int unknown = filter(SECCOMP_RET_ALLOW, 0x80000000u) == -1 && errno == EINVAL;
+        errno = 0;
+        int listener_tsync =
+            filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_NEW_LISTENER | SECCOMP_FILTER_FLAG_TSYNC) == -1 &&
+            errno == EINVAL;
+        errno = 0;
+        int listener_authority = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_NEW_LISTENER) == -1 && errno == EACCES;
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) _exit(2);
+        int esrch_alone = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_TSYNC_ESRCH) == 0;
+        int log = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_LOG) == 0;
+        int spec_allow = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_SPEC_ALLOW) == 0;
+        _exit(unknown && listener_tsync && listener_authority && esrch_alone && log && spec_allow ? 0 : 3);
+    }
+    return status_exit(child, 0);
+}
+
 static int invalid_case(void) {
     pid_t child = fork();
     if (child == 0) {
@@ -231,15 +251,16 @@ int main(void) {
         errno = 0;
         return syscall(__NR_getppid) == -1 && errno == 41 ? 0 : 1;
     }
-    int permission = permission_case(), invalid = invalid_case(), strict = strict_case();
+    int permission = permission_case(), flags = flag_case(), invalid = invalid_case(), strict = strict_case();
     int trap = trap_case(), kill_thread = kill_thread_case(), kill_process = kill_process_case();
     int tsync = tsync_case(), tsync_esrch = tsync_esrch_case(), stack = stack_case(), clone = clone_case(),
         exec = exec_case();
-    printf("seccomp permission=%d invalid=%d strict=%d trap=%d kill_thread=%d kill_process=%d tsync=%d tsync_esrch=%d "
+    printf("seccomp permission=%d flags=%d invalid=%d strict=%d trap=%d kill_thread=%d kill_process=%d tsync=%d "
+           "tsync_esrch=%d "
            "stack=%d clone=%d exec=%d\n",
-           permission, invalid, strict, trap, kill_thread, kill_process, tsync, tsync_esrch, stack, clone, exec);
-    return permission && invalid && strict && trap && kill_thread && kill_process && tsync && tsync_esrch && stack &&
-                   clone && exec
+           permission, flags, invalid, strict, trap, kill_thread, kill_process, tsync, tsync_esrch, stack, clone, exec);
+    return permission && flags && invalid && strict && trap && kill_thread && kill_process && tsync && tsync_esrch &&
+                   stack && clone && exec
                ? 0
                : 1;
 }
