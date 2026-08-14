@@ -66,7 +66,7 @@ static uint64_t g_smc_flushes;
  * path (threaded indirect branches miss to C every time). */
 #define G_IBTC_FILL(c)                                                                                                 \
     if ((c)->ic_site) {                                                                                                \
-        g_prof_miss++;                                                                                                 \
+        if (g_prof) g_prof_miss++;                                                                                     \
         int _mt = g_threaded;                                                                                          \
         void *bd = (_mt && !g_mtibtc) ? NULL : map_body((c)->pc);                                                      \
         if (bd) {                                                                                                      \
@@ -81,7 +81,7 @@ static uint64_t g_smc_flushes;
             if (_mt) {                                                                                                 \
                 /* threaded: single 128-bit atomic release publish; consumed by an atomic ldp reader */                \
                 ibtc_publish(&g_ibtc[h], (c)->pc, bind);                                                               \
-                g_mtfill++;                                                                                            \
+                if (g_prof) g_mtfill++;                                                                                \
             } else {                                                                                                   \
                 g_ibtc[h].body = bind; /* body_ind; written first */                                                   \
                 __atomic_store_n(&g_ibtc[h].target, (c)->pc, __ATOMIC_RELEASE);                                        \

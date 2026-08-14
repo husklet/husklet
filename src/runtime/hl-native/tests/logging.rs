@@ -33,6 +33,20 @@ fn x86_dispatch_bookkeeping_is_diagnostic_only() {
     }
 }
 
+#[test]
+fn aarch64_ibtc_profile_counters_are_diagnostic_only() {
+    let dispatch = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/translator/guest/aarch64/dispatch.h"),
+    )
+    .expect("AArch64 dispatcher source");
+    for counter in ["g_prof_miss++", "g_mtfill++"] {
+        assert!(
+            dispatch.contains(&format!("if (g_prof) {counter};")),
+            "{counter} is updated while diagnostics are disabled"
+        );
+    }
+}
+
 const MACRO_CONTRACT_PROBE: &str = r#"
 #include "hl/log.h"
 #include <string.h>
