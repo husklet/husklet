@@ -39,7 +39,7 @@ use components::layout::Field;
 use components::theme::{css, ACCENT};
 use components::workspace::Form;
 use gtk_adapter::{ColorPicker, FontPicker};
-use host::process::ProcessGroup;
+use host::process::{ProcessGroup, Processes};
 use host::pty::PtyProcess;
 use host::{
     command::{application_path, Hl},
@@ -367,9 +367,12 @@ impl Application {
                 let workspace_name = name.clone();
                 RemoveWorkspace::new(name.clone()).present(parent.as_ref(), move || {
                     let mut store = WorkspaceStore::load(Home::current().workspaces_config())?;
-                    remove_workspace(&mut store, &workspace_name, |workspace| {
-                        hl::runtime::domain::Domain::new(workspace).close(hl::runtime::domain::Close::Kill)
-                    })?;
+                    remove_workspace(
+                        &mut store,
+                        &workspace_name,
+                        |workspace| hl::runtime::domain::Domain::new(workspace).close(hl::runtime::domain::Close::Kill),
+                        |workspace| Processes::close_workspace(&hl_ws::Workspace::storage_component(&workspace.name)),
+                    )?;
                     Application(app.clone()).refresh_workspace_list(&list);
                     Ok(())
                 });
@@ -407,7 +410,8 @@ impl Application {
 fn remove_workspace(
     store: &mut WorkspaceStore,
     name: &str,
-    close: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
+    close_domain: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
+    close_launchers: impl FnOnce(&WorkspaceConfig) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     let workspace = store.get(name).cloned().ok_or_else(|| {
         std::io::Error::new(
@@ -417,7 +421,8 @@ fn remove_workspace(
     })?;
     // Keep the persisted entry until teardown succeeds: it is the authority needed to locate and
     // verify the runtime. Removing it first makes a live domain impossible to reclaim safely.
-    close(&workspace)?;
+    close_domain(&workspace)?;
+    close_launchers(&workspace)?;
     if store.remove(name)? {
         Ok(())
     } else {

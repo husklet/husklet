@@ -34,6 +34,10 @@ impl ProcessId {
         self.signal(ffi::Signal::kill)
     }
 
+    fn close(&self) -> std::io::Result<()> {
+        self.signal(|process| ffi::Signal::close_tree(process, std::time::Duration::from_millis(200)))
+    }
+
     fn signal(&self, signal: fn(i32) -> std::io::Result<()>) -> std::io::Result<()> {
         let snapshot = Processes::snapshot()?;
         if !self.matches(&snapshot) {
@@ -49,14 +53,65 @@ impl ProcessId {
         snapshot.lines().any(|line| {
             let fields: Vec<_> = line.split_whitespace().collect();
             fields.first().and_then(|value| value.parse::<i32>().ok()) == Some(self.value)
-                && fields
-                    .windows(3)
-                    .any(|values| values == ["--worker", "launch", self.workspace.as_str()])
+                && Processes::launches(&fields, &self.workspace)
         })
     }
 }
 
 impl Processes {
+    /// Reclaims every host launcher process that still belongs to one workspace.
+    ///
+    /// The domain socket is not an inventory: a launcher can outlive a crashed or replaced domain.
+    /// Discover all exact workspace launch identities first, then revalidate each PID against a
+    /// fresh process snapshot immediately before signalling it so PID reuse cannot target an
+    /// unrelated process.
+    pub fn close_workspace(workspace: &str) -> std::io::Result<()> {
+        let snapshot = Self::snapshot()?;
+        Self::close_workspace_with(&snapshot, workspace, ProcessId::close)
+    }
+
+    fn close_workspace_with(
+        snapshot: &str,
+        workspace: &str,
+        mut close: impl FnMut(&ProcessId) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        let mut failure = None;
+        for process in Self::workspace_launchers(snapshot, workspace) {
+            match close(&process) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) if failure.is_none() => failure = Some(error),
+                Err(_) => {}
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    fn workspace_launchers(snapshot: &str, workspace: &str) -> Vec<ProcessId> {
+        snapshot
+            .lines()
+            .filter_map(|line| {
+                let fields: Vec<_> = line.split_whitespace().collect();
+                let value = fields.first()?.parse().ok()?;
+                Self::launches(&fields, workspace).then(|| ProcessId {
+                    value,
+                    workspace: workspace.to_owned(),
+                })
+            })
+            .filter(|process| process.value > 1)
+            .collect()
+    }
+
+    fn launches(fields: &[&str], workspace: &str) -> bool {
+        fields.windows(4).any(|values| {
+            std::path::Path::new(values[0])
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                == Some("husklet")
+                && values[1..] == ["--worker", "launch", workspace]
+        })
+    }
+
     #[cfg(unix)]
     pub fn snapshot() -> std::io::Result<String> {
         let output = std::process::Command::new("/bin/ps")
@@ -234,7 +289,7 @@ mod ffi {
 mod tests {
     #[cfg(unix)]
     use super::ffi::Signal;
-    use super::{ProcessGroup, ProcessId};
+    use super::{ProcessGroup, ProcessId, Processes};
 
     #[test]
     fn invalid_identity() {
@@ -250,6 +305,44 @@ mod tests {
         assert!(process.matches("42 1 00:01 /x/husklet --worker launch design%20system pane"));
         assert!(!process.matches("42 1 00:01 /usr/bin/python unrelated.py"));
         assert!(!process.matches("42 1 00:01 /x/husklet --worker launch design pane"));
+    }
+
+    #[test]
+    fn workspace_cleanup_targets_every_exact_launcher_and_ignores_name_prefixes() {
+        let snapshot = "42 1 00:01 /x/husklet --worker launch demo pane-1\n\
+                        43 42 00:01 /x/husklet --worker launch demo pane-1\n\
+                        44 1 00:01 /x/husklet --worker launch demo-next pane-1\n\
+                        45 1 00:01 /usr/bin/tool --worker launch demo pane-1";
+        let mut closed = Vec::new();
+
+        Processes::close_workspace_with(snapshot, "demo", |process| {
+            closed.push(process.value);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(closed, [42, 43]);
+    }
+
+    #[test]
+    fn workspace_cleanup_is_idempotent_and_attempts_every_discovered_launcher() {
+        let snapshot = "42 1 00:01 /x/husklet --worker launch demo pane-1\n\
+                        43 1 00:01 /x/husklet --worker launch demo pane-2\n\
+                        44 1 00:01 /x/husklet --worker launch demo pane-3";
+        let mut closed = Vec::new();
+
+        let error = Processes::close_workspace_with(snapshot, "demo", |process| {
+            closed.push(process.value);
+            match process.value {
+                42 => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "already exited")),
+                43 => Err(std::io::Error::from_raw_os_error(libc::EPERM)),
+                _ => Ok(()),
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(closed, [42, 43, 44]);
+        assert_eq!(error.raw_os_error(), Some(libc::EPERM));
     }
 
     #[cfg(unix)]
