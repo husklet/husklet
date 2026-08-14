@@ -138,7 +138,7 @@ static long seccomp_tsync_attach(struct cpu *caller, struct hl_linux_bpf_filter 
     pthread_mutex_lock(&g_threg_m);
     for (int i = 0; i < THREAD_REG_MAX; i++) {
         struct cpu *peer = g_threg[i].c;
-        if (peer && peer->seccomp_filters != caller->seccomp_filters) {
+        if (peer && (peer->seccomp_mode != caller->seccomp_mode || peer->seccomp_filters != caller->seccomp_filters)) {
             status = cpu_tid(peer);
             break;
         }

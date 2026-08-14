@@ -50,6 +50,11 @@ struct hl_linux_bpf_filter {
     struct hl_linux_bpf_filter *prev;
 };
 
+/* Nodes are immutable after publication and intentionally process-lifetime.
+   clone threads share them, fork receives a COW-valid copy, TSYNC publishes a
+   new common head under the task-registry lock, and exec retains the caller's
+   chain. No path frees a node while a task can still reference it. */
+
 static volatile int g_seccomp_active;
 static long seccomp_tsync_attach(struct cpu *caller, struct hl_linux_bpf_filter *node);
 
