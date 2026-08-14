@@ -1,1 +1,1 @@
-dirfd=1 empty_path=1 nofollow=1 follow=1 bad_flags=1
+dirfd=1 empty_path=1 replaced_fd=1 unlinked_fd=1 nofollow=1 follow=1 bad_flags=1
