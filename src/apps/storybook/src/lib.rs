@@ -10,8 +10,14 @@ pub(crate) mod story;
 pub use live::{catalogue, host, Fault};
 pub use story::{Catalogue, Story};
 
-/// How many rows the catalogue's table claims to have.
+/// How many rows the catalogue's tables claim to have.
 pub const ROWS: u64 = story::ROWS;
+
+/// Every windowed source the catalogue draws from.
+#[must_use]
+pub fn sources() -> Vec<hl_gui::SourceId> {
+    vec![story::SOURCE, story::database::SOURCE]
+}
 
 /// Answers one window request, the way an out-of-process producer would.
 #[must_use]

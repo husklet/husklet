@@ -147,20 +147,23 @@ fn converse(
 struct Progress {
     applied: usize,
     drawn: bool,
-    sized: bool,
+    sized: usize,
 }
 
 impl Progress {
     fn note(&mut self, request: &Request) {
         match request {
             Request::InterfaceRender { .. } => self.drawn = true,
-            Request::SourceResize { .. } => self.sized = true,
+            Request::SourceResize { .. } => self.sized += 1,
             _ => {}
         }
     }
 
-    const fn is_complete(&self) -> bool {
-        self.drawn && self.sized
+    /// Complete once the interface is described and every source it draws
+    /// from has a length. Stopping at the first would leave later tables
+    /// empty, since a table with no length has nothing to ask for.
+    fn is_complete(&self) -> bool {
+        self.drawn && self.sized >= crate::sources().len()
     }
 }
 

@@ -49,16 +49,21 @@ fn open<S: Read + Write>(wire: &mut Wire<S>) -> Result<(), Transit> {
 fn describe<S: Read + Write>(wire: &mut Wire<S>, filter: Option<&str>) -> Result<(), Transit> {
     let (_, frame) = Catalogue::selected(filter);
     call(wire, &Request::InterfaceRender { frame })?;
-    call(
-        wire,
-        &Request::SourceResize {
-            mutation: hl_gui::SourceMutation::Length {
-                source: crate::story::SOURCE,
-                version: hl_gui::Version::new(1),
-                rows: crate::ROWS,
+    // Every source the interface names needs a length; a table whose source is
+    // never described has nothing to ask for and stays empty.
+    for source in crate::sources() {
+        call(
+            wire,
+            &Request::SourceResize {
+                mutation: hl_gui::SourceMutation::Length {
+                    source,
+                    version: hl_gui::Version::new(1),
+                    rows: crate::ROWS,
+                },
             },
-        },
-    )
+        )?;
+    }
+    Ok(())
 }
 
 /// Answers row windows until the host closes the socket.

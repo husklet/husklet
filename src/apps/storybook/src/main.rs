@@ -11,7 +11,6 @@ use storybook::Catalogue;
 mod capture;
 
 const APP_ID: &str = "dev.hlgui.storybook";
-const SOURCE: hl_gui::SourceId = hl_gui::SourceId::new(1);
 /// Fetch rounds the storybook plays before presenting; enough to fill a view.
 const ROUNDS: u64 = 4;
 const WIDTH: i32 = 1100;
@@ -102,9 +101,15 @@ fn window(application: &gtk::Application, widgets: &Widgets) {
 /// Plays the producer for the catalogue's table: declare the length, then
 /// answer whatever windows the view asks for.
 fn serve(widgets: &mut Widgets) {
-    if let Err(failure) = widgets.resize(SOURCE, hl_gui::Version::new(1), storybook::ROWS) {
-        eprintln!("[storybook] source rejected: {failure}");
-        return;
+    for source in storybook::sources() {
+        let Err(failure) = widgets.resize(source, hl_gui::Version::new(1), storybook::ROWS) else {
+            continue;
+        };
+        // A source no table is bound to is ordinary when only part of the
+        // catalogue was asked for.
+        if !matches!(failure, hl_gui_gtk::Failure::Unbound(_)) {
+            eprintln!("[storybook] source rejected: {failure}");
+        }
     }
     for round in 0..ROUNDS {
         let requests = widgets.requests(round);

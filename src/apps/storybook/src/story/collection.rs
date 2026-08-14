@@ -23,6 +23,11 @@ pub fn answer(request: &RowRequest) -> RowWindow {
     let rows = (0..request.range.count)
         .map(|offset| {
             let index = request.range.start + u64::from(offset);
+            // Each table answers from its own source; sharing one identifier
+            // would show every table the first table's rows.
+            if request.source == crate::story::database::SOURCE {
+                return crate::story::database::row(index);
+            }
             row(index)
         })
         .filter(|row| row.key < ROWS)
