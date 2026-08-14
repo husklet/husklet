@@ -64,8 +64,7 @@ static void svc_fs_access_50(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                              uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 50: {
-        if (!g_untrusted && g_fdvis_control != NULL &&
-            !proc_fdvis_lookup((int)getpid(), (int)a0, NULL, NULL, NULL)) {
+        if (!g_untrusted && g_fdvis_control != NULL && !proc_fdvis_lookup((int)getpid(), (int)a0, NULL, NULL, NULL)) {
             G_RET(c) = (uint64_t)(int64_t)(-EBADF);
             break;
         }
@@ -470,6 +469,75 @@ static int open_synthetic_cpu_path(struct cpu *c, const char *path, int flags, i
     return 0;
 }
 
+static int open_synthetic_device(struct cpu *c, const char *path, int flags, int host_flags, int is_opath) {
+    if (!path || strncmp(path, "/dev/", 5)) return 0;
+    if (dev_node_is_ptmx(path) && !is_opath) {
+        int open_flags = O_RDWR | O_NOCTTY;
+        if (flags & 0x800) open_flags |= O_NONBLOCK;
+        if (flags & 0x80000) open_flags |= O_CLOEXEC;
+        int master = nofile_gate(posix_openpt(open_flags));
+        if (master >= 0 && (grantpt(master) != 0 || unlockpt(master) != 0 || pts_alloc(master) < 0)) {
+            int saved_errno = errno ? errno : ENOSPC;
+            close(master);
+            master = -1;
+            errno = saved_errno;
+        }
+        G_RET(c) = master < 0 ? (uint64_t)(-errno) : (uint64_t)master;
+        return 1;
+    }
+    if (!strncmp(path, "/dev/pts/", 9) && path[9] >= '0' && path[9] <= '9' && !is_opath) {
+        char *end = NULL;
+        long parsed = strtol(path + 9, &end, 10);
+        if (parsed < 0 || parsed >= DEVPTS_MAX || end == path + 9 || *end != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
+            return 1;
+        }
+        int index = (int)parsed;
+        int master = pts_master_fd(index);
+        int anchor = index == 0 && master < 0 ? ctty_anchor() : -1;
+        const char *slave = master >= 0 ? ptsname(master) : pts_slave_name(index);
+        char anchor_path[4200];
+        int duplicate_anchor = 0;
+        if (!slave && anchor >= 0 && hl_native_fd_path(anchor, anchor_path, sizeof anchor_path) == 0)
+            slave = anchor_path;
+        else if (!slave && anchor >= 0)
+            duplicate_anchor = 1;
+        if (!slave && !duplicate_anchor) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
+            return 1;
+        }
+        int open_flags = host_flags;
+        if (flags & 0x800) open_flags |= O_NONBLOCK;
+        if (flags & 0x80000) open_flags |= O_CLOEXEC;
+        int descriptor = nofile_gate(duplicate_anchor ? dup(anchor) : open(slave, open_flags, 0));
+        if (descriptor >= 0 && master >= 0) ptm_apply_to_slave(master, descriptor);
+        if (descriptor >= 0 && master >= 0) pts_note_slave(descriptor, index);
+        G_RET(c) =
+            descriptor < 0 ? (uint64_t)(int64_t)(master < 0 && anchor < 0 ? -ENOENT : -errno) : (uint64_t)descriptor;
+        return 1;
+    }
+    const char *host_path = dev_node_hostpath(path);
+    if (!host_path) return 0;
+    int descriptor = nofile_gate(open(host_path, host_flags));
+    if (descriptor >= 0 && (flags & 0x80000)) fcntl(descriptor, F_SETFD, FD_CLOEXEC);
+    if (descriptor >= 0 && descriptor < HL_NFD) g_devfull[descriptor] = !strcmp(path, "/dev/full");
+    if (descriptor >= 0 && descriptor < HL_NFD)
+        g_devtty[descriptor] = (!strcmp(path, "/dev/tty") || !strcmp(path, "/dev/console"));
+    if (descriptor >= 0 && descriptor < HL_NFD) {
+        if (path_copy(g_fdpath[descriptor], sizeof g_fdpath[descriptor], path) != 0) g_fdpath[descriptor][0] = 0;
+        g_fdpath_guest[descriptor] = g_fdpath[descriptor][0] != 0;
+        (void)proc_fdvis_publish_native_fd(descriptor);
+    }
+    if (descriptor >= 0 && descriptor < HL_NFD && g_devtty[descriptor] && (flags & 0x800)) {
+        int current_flags = fcntl(descriptor, F_GETFL);
+        if (current_flags >= 0) fcntl(descriptor, F_SETFL, current_flags | O_NONBLOCK);
+    }
+    if (descriptor >= 0 && descriptor < HL_NFD)
+        g_devseed[descriptor] = (!strcmp(path, "/dev/urandom") || !strcmp(path, "/dev/random"));
+    G_RET(c) = descriptor < 0 ? (uint64_t)(-errno) : (uint64_t)descriptor;
+    return 1;
+}
+
 static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, int mf, int is_opath) {
     // synthesize /proc/* (macOS has no /proc)
     const char *rp = (const char *)a1;
@@ -488,8 +556,8 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
     // makes htop's relative openat(pid_dirfd, "stat"/"task"/...) re-enter the /proc synthesis.
     while (rp && rp[0] == '/' && rp[1] == '/')
         rp++;
-    if (rp && (!strcmp(rp, "/proc/self/fd") || !strcmp(rp, "/proc/self/fd/") ||
-               !strcmp(rp, "/proc/thread-self/fd") || !strcmp(rp, "/proc/thread-self/fd/"))) {
+    if (rp && (!strcmp(rp, "/proc/self/fd") || !strcmp(rp, "/proc/self/fd/") || !strcmp(rp, "/proc/thread-self/fd") ||
+               !strcmp(rp, "/proc/thread-self/fd/"))) {
         int d = proc_fd_dir_open();
         if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC);
         if (d >= 0 && d < HL_NFD) g_opath[d] = is_opath;
@@ -676,251 +744,163 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
             return 1;
         }
     }
-    // device nodes -> host devices (rootfs has no real /dev)
-    if (rp && !strncmp(rp, "/dev/", 5)) {
-        // Opening the multiplexer creates a new pseudoterminal pair.  Do this before the generic device
-        // path below: merely opening the host /dev/ptmx without registering its master leaves TIOCGPTN
-        // able to return an index that a later guest /dev/pts/N open cannot resolve.
-        if (dev_node_is_ptmx(rp) && !is_opath) {
-            int flags = O_RDWR | O_NOCTTY;
-            if (lf & 0x800) flags |= O_NONBLOCK;
-            if (lf & 0x80000) flags |= O_CLOEXEC;
-            int master = nofile_gate(posix_openpt(flags));
-            if (master >= 0 && (grantpt(master) != 0 || unlockpt(master) != 0 || pts_alloc(master) < 0)) {
-                int saved_errno = errno ? errno : ENOSPC;
-                close(master);
-                master = -1;
-                errno = saved_errno;
-            }
-            G_RET(c) = master < 0 ? (uint64_t)(-errno) : (uint64_t)master;
-            return 1;
-        }
-        if (!strncmp(rp, "/dev/pts/", 9) && rp[9] >= '0' && rp[9] <= '9' && !is_opath) {
-            char *end = NULL;
-            long parsed = strtol(rp + 9, &end, 10);
-            if (parsed < 0 || parsed >= DEVPTS_MAX || end == rp + 9 || *end != 0) {
-                G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
-                return 1;
-            }
-            int index = (int)parsed;
-            int master = pts_master_fd(index);
-            int anchor = index == 0 && master < 0 ? ctty_anchor() : -1;
-            const char *slave = master >= 0 ? ptsname(master) : pts_slave_name(index);
-            char anchor_path[4200];
-            int duplicate_anchor = 0;
-            if (!slave && anchor >= 0 && hl_native_fd_path(anchor, anchor_path, sizeof anchor_path) == 0)
-                slave = anchor_path;
-            else if (!slave && anchor >= 0)
-                duplicate_anchor = 1;
-            if (!slave && !duplicate_anchor) {
-                G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
-                return 1;
-            }
-            int flags = mf;
-            if (lf & 0x800) flags |= O_NONBLOCK;
-            if (lf & 0x80000) flags |= O_CLOEXEC;
-            int descriptor = nofile_gate(duplicate_anchor ? dup(anchor) : open(slave, flags, 0));
-            if (descriptor >= 0 && master >= 0) ptm_apply_to_slave(master, descriptor);
-            if (descriptor >= 0 && master >= 0) pts_note_slave(descriptor, index);
-            G_RET(c) = descriptor < 0 ? (uint64_t)(int64_t)(master < 0 && anchor < 0 ? -ENOENT : -errno)
-                                      : (uint64_t)descriptor;
-            return 1;
-        }
-        const char *hd = dev_node_hostpath(rp);
-        if (hd) {
-            // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap, exactly
-            // like every other open path (the /dev/* device open used to skip this and let the guest
-            // exceed its own soft limit -- opening /dev/null in a loop never hit EMFILE).
-            int d = nofile_gate(open(hd, mf));
-            // O_CLOEXEC (0x80000) must set FD_CLOEXEC on the new descriptor exactly like every
-            // other open branch -- mf here carries only the access mode (the flag translation at
-            // the bottom of case 56 runs after this block breaks), so a /dev/null (or any device
-            // node) opened O_CLOEXEC used to leak across execve because FD_CLOEXEC was never set.
-            if (d >= 0 && (lf & 0x80000)) fcntl(d, F_SETFD, FD_CLOEXEC);
-            // /dev/full is backed by /dev/zero for reads; flag the fd so its writes fail ENOSPC.
-            if (d >= 0 && d < HL_NFD) g_devfull[d] = !strcmp(rp, "/dev/full");
-            // /dev/tty (and /dev/console, backed by /dev/null): tty read semantics -- a nonblocking
-            // empty read is EAGAIN, never EOF (see g_devtty). Flag the fd so svc_io maps 0->EAGAIN.
-            if (d >= 0 && d < HL_NFD) g_devtty[d] = (!strcmp(rp, "/dev/tty") || !strcmp(rp, "/dev/console"));
-            if (d >= 0 && d < HL_NFD) {
-                // Native device opens still occupy the guest descriptor namespace. Publish their
-                // guest-visible name so /proc/self/fd never tries to rebase the host's /dev path
-                // through the rootfs (or mistakes an engine-private descriptor with the same number).
-                if (path_copy(g_fdpath[d], sizeof g_fdpath[d], rp) != 0) g_fdpath[d][0] = 0;
-                g_fdpath_guest[d] = g_fdpath[d][0] != 0;
-                (void)proc_fdvis_publish_native_fd(d);
-            }
-            // This dev open uses only the access mode (mf gains O_NONBLOCK below, after this block),
-            // so propagate the guest's O_NONBLOCK onto the tty fd now -- both so its host reads are
-            // genuinely nonblocking and so F_GETFL reflects it for the 0->EAGAIN remap in svc_io.
-            if (d >= 0 && d < HL_NFD && g_devtty[d] && (lf & 0x800)) {
-                int gf = fcntl(d, F_GETFL);
-                if (gf >= 0) fcntl(d, F_SETFL, gf | O_NONBLOCK);
-            }
-            // /dev/urandom + /dev/random accept seed writes on Linux (macOS EPERMs); flag the fd.
-            if (d >= 0 && d < HL_NFD)
-                g_devseed[d] = (!strcmp(rp, "/dev/urandom") || !strcmp(rp, "/dev/random"));
-            G_RET(c) = d < 0 ? (uint64_t)(-errno) : (uint64_t)d;
-            return 1;
-        }
-    }
+    // Device nodes are backed by host devices because the rootfs has no real /dev.
+    if (open_synthetic_device(c, rp, lf, mf, is_opath)) return 1;
     return 0;
 }
 
-static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, int lf,
-                            int mf, int osymlink, int is_opath, int nf_want, uint32_t openat2_intent,
+static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, int lf, int mf,
+                            int osymlink, int is_opath, int nf_want, uint32_t openat2_intent,
                             const hl_provider_node *projected, const char *overlay_guest) {
-// TOCTOU-free per-component resolve in the jail
-if (jail_routed_at((int)a0, (const char *)a1)) {
-    // W4D: openat resolution cache. Memoizes the guest-abs-path -> canonical host path that the
-    // jail walk below produces, so a REPEATED open of the same path collapses the ~6-syscall
-    // per-component walk to a single open(host, O_NOFOLLOW). The real open ALWAYS still runs (no
-    // fabricated existence/contents); a stale entry can only ever be the wrong PATH, which the
-    // shared g_res_epoch (bumped above on every FS mutation, incl. this case's O_CREAT) prevents.
-    // EXCLUDE O_CREAT/O_EXCL/O_TRUNC (mutating/creating) and O_DIRECTORY (deep-host-path reopen
-    // regressed; see optimization-research/w4d-openat.md). Kill switch: W4_NOOPENCACHE=1.
-    // ALSO exclude O_NOFOLLOW: the cache stores the CANONICAL (symlink-followed) host
-    // path from a follow-mode walk, so serving it to an O_NOFOLLOW open of a symlink would
-    // succeed on the target where Linux must fail ELOOP -- and an O_NOFOLLOW walk's result
-    // stored under the same key would let a later follow-mode open miss the link. Keep both
-    // exact by never mixing nofollow opens into the cache.
-    int cacheable = !(lf & (0x40 | 0x80 | 0x200 | G_O_DIRECTORY | G_O_NOFOLLOW));
-    char gkey[4200], hostc[4200];
-    if (cacheable) abs_guest((int)a0, (const char *)a1, gkey, sizeof gkey);
-    if (cacheable && hl_fdcache_open_lookup(gkey, hostc, sizeof hostc)) {
-        // ONE atomic open replaces the per-component walk; hostc is already canonical+symlink-free.
-        int r = open(hostc, mf | O_NOFOLLOW, (mode_t)a3);
+    // TOCTOU-free per-component resolve in the jail
+    if (jail_routed_at((int)a0, (const char *)a1)) {
+        // W4D: openat resolution cache. Memoizes the guest-abs-path -> canonical host path that the
+        // jail walk below produces, so a REPEATED open of the same path collapses the ~6-syscall
+        // per-component walk to a single open(host, O_NOFOLLOW). The real open ALWAYS still runs (no
+        // fabricated existence/contents); a stale entry can only ever be the wrong PATH, which the
+        // shared g_res_epoch (bumped above on every FS mutation, incl. this case's O_CREAT) prevents.
+        // EXCLUDE O_CREAT/O_EXCL/O_TRUNC (mutating/creating) and O_DIRECTORY (deep-host-path reopen
+        // regressed; see optimization-research/w4d-openat.md). Kill switch: W4_NOOPENCACHE=1.
+        // ALSO exclude O_NOFOLLOW: the cache stores the CANONICAL (symlink-followed) host
+        // path from a follow-mode walk, so serving it to an O_NOFOLLOW open of a symlink would
+        // succeed on the target where Linux must fail ELOOP -- and an O_NOFOLLOW walk's result
+        // stored under the same key would let a later follow-mode open miss the link. Keep both
+        // exact by never mixing nofollow opens into the cache.
+        int cacheable = !(lf & (0x40 | 0x80 | 0x200 | G_O_DIRECTORY | G_O_NOFOLLOW));
+        char gkey[4200], hostc[4200];
+        if (cacheable) abs_guest((int)a0, (const char *)a1, gkey, sizeof gkey);
+        if (cacheable && hl_fdcache_open_lookup(gkey, hostc, sizeof hostc)) {
+            // ONE atomic open replaces the per-component walk; hostc is already canonical+symlink-free.
+            int r = open(hostc, mf | O_NOFOLLOW, (mode_t)a3);
+            int e = errno;
+            r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE
+            if (r < 0 && errno == EMFILE) e = EMFILE;
+            if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
+            if (r >= 0) {
+                hl_fdcache_fd_setpath(r, hostc);
+                if (lf & 3) { // write-open: keep the metadata caches coherent (same as the walk path)
+                    hl_fdcache_metadata_evict(hostc);
+                    hl_fdcache_readlink_evict(hostc);
+                    hl_fdcache_access_evict(hostc);
+                }
+            }
+            G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
+            return 1;
+        }
+        char fin[512];
+        hl_open_plan plan;
+        int typed_created = 0;
+        bound_handle_slot typed_slot = {0};
+        uint32_t intent = (lf & 3) == 0 ? HL_OPEN_READ : HL_OPEN_WRITE;
+        if (lf & 0x40) intent |= HL_OPEN_CREATE;
+        if (lf & 0x200) intent |= HL_OPEN_TRUNCATE;
+        if (lf & 0x400) intent |= HL_OPEN_APPEND;
+        if (is_opath) intent |= HL_OPEN_PATH_ONLY;
+        if (lf & G_O_NOFOLLOW) intent |= HL_OPEN_NOFOLLOW;
+        if (lf & G_O_DIRECTORY) intent |= HL_OPEN_DIRECTORY;
+        intent |= openat2_intent;
+        if (is_opath)
+            intent &= ~(uint32_t)(HL_OPEN_READ | HL_OPEN_WRITE | HL_OPEN_CREATE | HL_OPEN_TRUNCATE | HL_OPEN_APPEND);
+        // resolve following the final symlink unless the guest asked O_NOFOLLOW (per-arch bit)
+        int pfd = jail_open_plan((int)a0, (const char *)a1, intent, typed_host_access(a2, is_opath),
+                                 is_opath ? 0 : typed_host_creation(a2), (uint32_t)a3, !nf_want, bound_handle_reserve,
+                                 &typed_slot, bound_handle_dirfd_error, &typed_created, fin, sizeof fin, &plan);
+        if (pfd < 0) {
+            bound_handle_cancel(&typed_slot);
+            G_RET(c) = (uint64_t)(int64_t)pfd;
+            return 1;
+        }
+        // fin is resolved -> O_NOFOLLOW safe
+        // probe pre-existence (relative to the resolved parent) so we stamp ONLY a fresh create.
+        int nf_new = nf_want && faccessat(pfd, fin, F_OK, AT_SYMLINK_NOFOLLOW) != 0;
+        char typed_guest_path[4200];
+        abs_guest((int)a0, (const char *)a1, typed_guest_path, sizeof typed_guest_path);
+        int typed_directory = plan.target_type == HL_HOST_FILE_TYPE_DIRECTORY && (lf & G_O_DIRECTORY) &&
+                              (!g_nlower || jail_is_vol(typed_guest_path));
+        /* The sentry owns newly opened descriptors and virtualizes their numbers before returning to the
+         * worker, so opaque host handles remain typed across the boundary without lending a native fd. */
+        if (plan.directory == HL_HOST_HANDLE_INVALID && plan.target != HL_HOST_HANDLE_INVALID &&
+            ((plan.target_type == HL_HOST_FILE_TYPE_REGULAR && !(lf & G_O_DIRECTORY)) || typed_directory)) {
+            int64_t opened;
+            char typed_host_path[HL_LINUX_PATH_MAX + 1];
+            int have_typed_host_path =
+                bound_handle_host_path(plan.target, typed_host_path, sizeof typed_host_path) == 0;
+            close(pfd);
+            opened = bound_adopt_handle(&typed_slot, plan.target, typed_open_flags(a2));
+            if (opened < 0) (void)g_host_services->file->close(g_host_services->context, plan.target);
+            opened = bound_relocate_lowest(opened);
+            if (opened >= 0 && (projected != NULL || hl_provider_tree_files_active()) && opened < HL_NFD) {
+                if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], overlay_guest) != 0)
+                    g_fdpath[(int)opened][0] = 0;
+                g_fdpath_guest[(int)opened] = g_fdpath[(int)opened][0] != 0;
+            } else if (opened >= 0 && have_typed_host_path) {
+                if (opened < HL_NFD) {
+                    if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], typed_host_path) != 0)
+                        g_fdpath[(int)opened][0] = 0;
+                    g_fdpath_guest[(int)opened] = 0;
+                }
+                hl_fdcache_fd_setpath((int)opened, typed_host_path);
+                if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
+                    HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "open-cache-evict path=%s typed=1 created=%d", typed_host_path,
+                            typed_created);
+                    hl_fdcache_metadata_evict(typed_host_path);
+                    hl_fdcache_readlink_evict(typed_host_path);
+                    hl_fdcache_access_evict(typed_host_path);
+                }
+                if (typed_created && newfile_stamp_wanted()) newfile_stamp_path(typed_host_path, 1);
+            }
+            if (opened >= 0 && opened < 1024 && (lf & G_O_DIRECTORY)) {
+                uint32_t provider_cursor = 0;
+                if (hl_provider_namespace_launch_child(typed_guest_path, strlen(typed_guest_path), &provider_cursor) !=
+                        NULL &&
+                    path_copy(g_ovldir[(int)opened], sizeof g_ovldir[(int)opened], typed_guest_path) != 0)
+                    g_ovldir[(int)opened][0] = 0;
+            }
+            G_RET(c) = (uint64_t)opened;
+            return 1;
+        }
+        bound_handle_cancel(&typed_slot);
+        if (plan.target != HL_HOST_HANDLE_INVALID)
+            (void)g_host_services->file->close(g_host_services->context, plan.target);
+        if (plan.directory != HL_HOST_HANDLE_INVALID)
+            (void)g_host_services->file->close(g_host_services->context, plan.directory);
+        // O_PATH|O_NOFOLLOW on a symlink -> open the LINK via O_SYMLINK (else O_NOFOLLOW ELOOPs); a
+        // regular O_NOFOLLOW open keeps ELOOPing on a symlink as Linux does.
+        int r = openat(pfd, fin, mf | (osymlink ? O_SYMLINK : O_NOFOLLOW), (mode_t)a3);
         int e = errno;
-        r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE
+        close(pfd);
+        r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE (host table is far larger)
         if (r < 0 && errno == EMFILE) e = EMFILE;
+        if (r >= 0 && nf_new) newfile_stamp_fd(r);
         if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
         if (r >= 0) {
-            hl_fdcache_fd_setpath(r, hostc);
-            if (lf & 3) { // write-open: keep the metadata caches coherent (same as the walk path)
-                hl_fdcache_metadata_evict(hostc);
-                hl_fdcache_readlink_evict(hostc);
-                hl_fdcache_access_evict(hostc);
+            char gp[4200];
+            // canonical host path for tracking
+            if (hl_native_fd_path(r, gp, sizeof gp) == 0) {
+                hl_fdcache_fd_setpath(r, gp);
+                if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
+                    HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "open-cache-evict path=%s typed=0 created=%d", gp, nf_new);
+                    hl_fdcache_metadata_evict(gp);
+                    hl_fdcache_readlink_evict(gp);
+                    hl_fdcache_access_evict(gp);
+                }
+                // W4D: memoize this walk's result (gp = F_GETPATH = canonical in-jail host path) so the
+                // next open of the same guest path is a single open(). hl_fdcache_open_store re-checks
+                // in-jail+epoch.
+                if (cacheable) hl_fdcache_open_store(gkey, gp);
+            }
+            // A bound launch still has a few deliberately native opens (directories and special
+            // filesystem objects). Publish those logical descriptors too: fdvis is the complete
+            // /proc/self/fd authority in bound mode and must not fall through to worker-private fds.
+            if (!bound_source_is_native()) (void)proc_fdvis_publish_native_fd(r);
+            if (r < HL_NFD) {
+                if (path_copy(g_fdpath[r], sizeof g_fdpath[r], typed_guest_path) != 0) g_fdpath[r][0] = 0;
+                g_fdpath_guest[r] = g_fdpath[r][0] != 0;
             }
         }
         G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
         return 1;
     }
-    char fin[512];
-    hl_open_plan plan;
-    int typed_created = 0;
-    bound_handle_slot typed_slot = {0};
-    uint32_t intent = (lf & 3) == 0 ? HL_OPEN_READ : HL_OPEN_WRITE;
-    if (lf & 0x40) intent |= HL_OPEN_CREATE;
-    if (lf & 0x200) intent |= HL_OPEN_TRUNCATE;
-    if (lf & 0x400) intent |= HL_OPEN_APPEND;
-    if (is_opath) intent |= HL_OPEN_PATH_ONLY;
-    if (lf & G_O_NOFOLLOW) intent |= HL_OPEN_NOFOLLOW;
-    if (lf & G_O_DIRECTORY) intent |= HL_OPEN_DIRECTORY;
-    intent |= openat2_intent;
-    if (is_opath)
-        intent &=
-            ~(uint32_t)(HL_OPEN_READ | HL_OPEN_WRITE | HL_OPEN_CREATE | HL_OPEN_TRUNCATE | HL_OPEN_APPEND);
-    // resolve following the final symlink unless the guest asked O_NOFOLLOW (per-arch bit)
-    int pfd =
-        jail_open_plan((int)a0, (const char *)a1, intent, typed_host_access(a2, is_opath),
-                       is_opath ? 0 : typed_host_creation(a2), (uint32_t)a3, !nf_want, bound_handle_reserve,
-                       &typed_slot, bound_handle_dirfd_error, &typed_created, fin, sizeof fin, &plan);
-    if (pfd < 0) {
-        bound_handle_cancel(&typed_slot);
-        G_RET(c) = (uint64_t)(int64_t)pfd;
-        return 1;
-    }
-    // fin is resolved -> O_NOFOLLOW safe
-    // probe pre-existence (relative to the resolved parent) so we stamp ONLY a fresh create.
-    int nf_new = nf_want && faccessat(pfd, fin, F_OK, AT_SYMLINK_NOFOLLOW) != 0;
-    char typed_guest_path[4200];
-    abs_guest((int)a0, (const char *)a1, typed_guest_path, sizeof typed_guest_path);
-    int typed_directory = plan.target_type == HL_HOST_FILE_TYPE_DIRECTORY && (lf & G_O_DIRECTORY) &&
-                          (!g_nlower || jail_is_vol(typed_guest_path));
-    /* The sentry owns newly opened descriptors and virtualizes their numbers before returning to the
-     * worker, so opaque host handles remain typed across the boundary without lending a native fd. */
-    if (plan.directory == HL_HOST_HANDLE_INVALID && plan.target != HL_HOST_HANDLE_INVALID &&
-        ((plan.target_type == HL_HOST_FILE_TYPE_REGULAR && !(lf & G_O_DIRECTORY)) || typed_directory)) {
-        int64_t opened;
-        char typed_host_path[HL_LINUX_PATH_MAX + 1];
-        int have_typed_host_path =
-            bound_handle_host_path(plan.target, typed_host_path, sizeof typed_host_path) == 0;
-        close(pfd);
-        opened = bound_adopt_handle(&typed_slot, plan.target, typed_open_flags(a2));
-        if (opened < 0) (void)g_host_services->file->close(g_host_services->context, plan.target);
-        opened = bound_relocate_lowest(opened);
-        if (opened >= 0 && (projected != NULL || hl_provider_tree_files_active()) && opened < HL_NFD) {
-            if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], overlay_guest) != 0)
-                g_fdpath[(int)opened][0] = 0;
-            g_fdpath_guest[(int)opened] = g_fdpath[(int)opened][0] != 0;
-        } else if (opened >= 0 && have_typed_host_path) {
-            if (opened < HL_NFD) {
-                if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], typed_host_path) != 0)
-                    g_fdpath[(int)opened][0] = 0;
-                g_fdpath_guest[(int)opened] = 0;
-            }
-            hl_fdcache_fd_setpath((int)opened, typed_host_path);
-            if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
-                HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "open-cache-evict path=%s typed=1 created=%d",
-                        typed_host_path, typed_created);
-                hl_fdcache_metadata_evict(typed_host_path);
-                hl_fdcache_readlink_evict(typed_host_path);
-                hl_fdcache_access_evict(typed_host_path);
-            }
-            if (typed_created && newfile_stamp_wanted()) newfile_stamp_path(typed_host_path, 1);
-        }
-        if (opened >= 0 && opened < 1024 && (lf & G_O_DIRECTORY)) {
-            uint32_t provider_cursor = 0;
-            if (hl_provider_namespace_launch_child(typed_guest_path, strlen(typed_guest_path),
-                                                   &provider_cursor) != NULL &&
-                path_copy(g_ovldir[(int)opened], sizeof g_ovldir[(int)opened], typed_guest_path) != 0)
-                g_ovldir[(int)opened][0] = 0;
-        }
-        G_RET(c) = (uint64_t)opened;
-        return 1;
-    }
-    bound_handle_cancel(&typed_slot);
-    if (plan.target != HL_HOST_HANDLE_INVALID)
-        (void)g_host_services->file->close(g_host_services->context, plan.target);
-    if (plan.directory != HL_HOST_HANDLE_INVALID)
-        (void)g_host_services->file->close(g_host_services->context, plan.directory);
-    // O_PATH|O_NOFOLLOW on a symlink -> open the LINK via O_SYMLINK (else O_NOFOLLOW ELOOPs); a
-    // regular O_NOFOLLOW open keeps ELOOPing on a symlink as Linux does.
-    int r = openat(pfd, fin, mf | (osymlink ? O_SYMLINK : O_NOFOLLOW), (mode_t)a3);
-    int e = errno;
-    close(pfd);
-    r = nofile_gate(r); // fd past the guest's soft RLIMIT_NOFILE -> EMFILE (host table is far larger)
-    if (r < 0 && errno == EMFILE) e = EMFILE;
-    if (r >= 0 && nf_new) newfile_stamp_fd(r);
-    if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
-    if (r >= 0) {
-        char gp[4200];
-        // canonical host path for tracking
-        if (hl_native_fd_path(r, gp, sizeof gp) == 0) {
-            hl_fdcache_fd_setpath(r, gp);
-            if ((lf & 3) || (lf & 0x40) || (lf & 0x200)) {
-                HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "open-cache-evict path=%s typed=0 created=%d", gp, nf_new);
-                hl_fdcache_metadata_evict(gp);
-                hl_fdcache_readlink_evict(gp);
-                hl_fdcache_access_evict(gp);
-            }
-            // W4D: memoize this walk's result (gp = F_GETPATH = canonical in-jail host path) so the
-            // next open of the same guest path is a single open(). hl_fdcache_open_store re-checks
-            // in-jail+epoch.
-            if (cacheable) hl_fdcache_open_store(gkey, gp);
-        }
-        // A bound launch still has a few deliberately native opens (directories and special
-        // filesystem objects). Publish those logical descriptors too: fdvis is the complete
-        // /proc/self/fd authority in bound mode and must not fall through to worker-private fds.
-        if (!bound_source_is_native()) (void)proc_fdvis_publish_native_fd(r);
-        if (r < HL_NFD) {
-            if (path_copy(g_fdpath[r], sizeof g_fdpath[r], typed_guest_path) != 0) g_fdpath[r][0] = 0;
-            g_fdpath_guest[r] = g_fdpath[r][0] != 0;
-        }
-    }
-    G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
-    return 1;
-}
     return 0;
 }
 
