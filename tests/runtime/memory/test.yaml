@@ -983,6 +983,22 @@ cases:
     artifact: { destination: /opt/husklet/memory/x86-rep-logical-fault }
     run: []
     expect: { exit: 0, stdout: golden/x86_replogicalfault.out }
+  - id: runtime/memory/x86-projection-classes
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/x86_projectionclasses.c, output: x86-projection-classes, flags: ["-static","-O2","-std=gnu11","-mcx16","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/x86-projection-classes }
+    run: []
+    expect: { exit: 0, stdout: golden/x86_projectionclasses.out }
+  - id: runtime/memory/x86-projection-xsave
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/x86_projectionxsave.c, output: x86-projection-xsave, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/x86-projection-xsave }
+    run: []
+    expect: { exit: 0, stdout: golden/x86_projectionxsave.out }
   - id: runtime/memory/copyout-readonly
     targets: [arm64, amd64]
     status: active
