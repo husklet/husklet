@@ -232,7 +232,9 @@ impl TerminalAttachment for NativeTerminalControl {
 
 pub(super) struct NativeTerminalBridge {
     slave: OwnedFd,
+    monitor: File,
     stop: Arc<AtomicBool>,
+    in_flight: Arc<Mutex<usize>>,
     terminal: Arc<Terminal>,
     port: Arc<dyn TerminalPort>,
     workers: Vec<JoinHandle<()>>,
@@ -244,12 +246,19 @@ impl NativeTerminalBridge {
         set_nonblocking(&master)?;
         let input_master = duplicate(&master)?;
         let output_master = duplicate(&master)?;
+        let monitor = duplicate(&master)?;
         let control = Arc::new(NativeTerminalControl { master });
         terminal.attach(control)?;
         let stop = Arc::new(AtomicBool::new(false));
+        let in_flight = Arc::new(Mutex::new(0));
         let port = terminal.port();
         let input = spawn_input(Arc::clone(&port), Arc::clone(&stop), input_master)?;
-        let output = match spawn_output(Arc::clone(&port), Arc::clone(&stop), output_master) {
+        let output = match spawn_output(
+            Arc::clone(&port),
+            Arc::clone(&stop),
+            Arc::clone(&in_flight),
+            output_master,
+        ) {
             Ok(worker) => worker,
             Err(error) => {
                 stop.store(true, Ordering::Release);
@@ -260,7 +269,9 @@ impl NativeTerminalBridge {
         };
         Ok(Self {
             slave,
+            monitor,
             stop,
+            in_flight,
             terminal,
             port,
             workers: vec![input, output],
@@ -269,6 +280,27 @@ impl NativeTerminalBridge {
 
     pub(super) fn standard_fds(&self) -> [i32; 3] {
         [self.slave.as_raw_fd(); 3]
+    }
+
+    pub(super) fn flush(&self) {
+        for _ in 0..200 {
+            let in_flight = self.in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *in_flight == 0 && self.pending_bytes() == 0 {
+                return;
+            }
+            drop(in_flight);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn pending_bytes(&self) -> i32 {
+        let mut pending = 0;
+        // SAFETY: FIONREAD writes one integer and borrows a live duplicate of the PTY master.
+        if unsafe { libc::ioctl(self.monitor.as_raw_fd(), libc::FIONREAD, &raw mut pending) } == 0 {
+            pending
+        } else {
+            1
+        }
     }
 }
 
@@ -377,6 +409,7 @@ fn write_master(master: &mut File, bytes: &[u8], stop: &AtomicBool) -> std::io::
 fn spawn_output(
     port: Arc<dyn TerminalPort>,
     stop: Arc<AtomicBool>,
+    in_flight: Arc<Mutex<usize>>,
     mut master: File,
 ) -> Result<JoinHandle<()>, CompositionError> {
     std::thread::Builder::new()
@@ -397,14 +430,29 @@ fn spawn_output(
                 if ready == 0 {
                     continue;
                 }
+                let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let count = match master.read(&mut bytes) {
                     Ok(0) => break,
-                    Ok(count) => count,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Ok(count) => {
+                        *active += 1;
+                        count
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        drop(active);
+                        continue;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                        drop(active);
+                        continue;
+                    }
                     Err(_) => break,
                 };
-                if !write_output(port.as_ref(), &bytes[..count]) {
+                drop(active);
+                let written = write_output(port.as_ref(), &bytes[..count]);
+                let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                *active -= 1;
+                drop(active);
+                if !written {
                     return;
                 }
             }

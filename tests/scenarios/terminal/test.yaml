@@ -97,6 +97,18 @@ cases:
       - close: {}
   expect:
     stdout_contains: golden/ubuntu_stty_setsize.txt
+- id: terminal/large-output-tail
+  image: alpine
+  resources: [pty]
+  timeout: 60
+  actions:
+  - terminal:
+      argv: [/bin/sh, -c, "yes x | head -c 524288; printf '\\nPIPE-OK\\n'"]
+      steps:
+      - await_output: { contains: PIPE-OK, timeout_ms: 15000 }
+      - close: {}
+  expect:
+    stdout_contains: golden/jobctl_fg_pipeline.txt
 - id: terminal/ubuntu-isatty
   image: ubuntu:latest
   resources:

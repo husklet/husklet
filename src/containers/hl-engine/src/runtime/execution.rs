@@ -207,6 +207,10 @@ impl GuestMachine for ProductionMachine {
         let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
         engine.run(&pointers).map_err(native_run_failure)?;
         #[cfg(unix)]
+        if let Some(terminal) = &self.terminal {
+            terminal.flush();
+        }
+        #[cfg(unix)]
         if let Some(output) = &self.output {
             output.flush();
         }
