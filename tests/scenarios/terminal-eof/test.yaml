@@ -7,7 +7,7 @@ cases:
   - terminal:
       argv: [/bin/sh]
       steps:
-      - write: { text: "stty -echo; trap 'echo EOF-OK' EXIT; PS1='READY>'; export PS1\r" }
+      - write: { text: "stty -echo; trap \"printf 'EOF-%s\\n' OK\" EXIT; PS1=\"$(printf 'REA%s' DY)>\"; export PS1\r" }
       - await_output: { contains: "READY>", timeout_ms: 5000 }
       - write: { text: "\u0004" }
       - await_output: { contains: EOF-OK, timeout_ms: 5000 }
