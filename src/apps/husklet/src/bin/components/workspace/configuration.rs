@@ -38,21 +38,21 @@ impl Form {
         workspace.docker_sock = self.features.docker.is_active();
         workspace.vpn = self.vpn()?;
         for (key, value) in self.env_rows.borrow().iter() {
-            if let Some(variable) = Self::environment_row(&key.text(), &value.text())? {
-                workspace.env.push(variable);
-            }
+            Self::push_environment(&mut workspace.env, &key.text(), &value.text())?;
         }
         for (host, container, readonly) in self.mount_rows.borrow().iter() {
-            if let Some(mount) = Self::mount_row(&host.text(), &container.text(), readonly.is_active())? {
-                workspace.mounts.push(mount);
-            }
+            Self::push_mount(
+                &mut workspace.mounts,
+                &host.text(),
+                &container.text(),
+                readonly.is_active(),
+            )?;
         }
         Ok(workspace)
     }
 
     fn environment_row(key: &str, value: &str) -> std::io::Result<Option<(String, String)>> {
         let key = key.trim();
-        let value = value.trim();
         if key.is_empty() && value.is_empty() {
             return Ok(None);
         }
@@ -61,7 +61,23 @@ impl Form {
                 "Environment variable name is required when a value is provided.",
             ));
         }
+        if key.contains('=') || key.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err(Self::invalid(
+                "Environment variable names cannot contain '=' or control characters.",
+            ));
+        }
         Ok(Some((key.to_owned(), value.to_owned())))
+    }
+
+    fn push_environment(environment: &mut Vec<(String, String)>, key: &str, value: &str) -> std::io::Result<()> {
+        let Some(variable) = Self::environment_row(key, value)? else {
+            return Ok(());
+        };
+        if environment.iter().any(|(existing, _)| existing == &variable.0) {
+            return Err(Self::invalid("Environment variable names must be unique."));
+        }
+        environment.push(variable);
+        Ok(())
     }
 
     fn mount_row(host: &str, container: &str, read_only: bool) -> std::io::Result<Option<Mount>> {
@@ -73,11 +89,36 @@ impl Form {
         if host.is_empty() || container.is_empty() {
             return Err(Self::invalid("Mount host and container paths are both required."));
         }
+        if !std::path::Path::new(host).is_absolute() {
+            return Err(Self::invalid("Mount host paths must be absolute."));
+        }
+        let target = std::path::Path::new(container);
+        if !target.is_absolute()
+            || target.components().any(|component| {
+                !matches!(
+                    component,
+                    std::path::Component::RootDir | std::path::Component::Normal(_)
+                )
+            })
+        {
+            return Err(Self::invalid("Mount container paths must be normalized and absolute."));
+        }
         Ok(Some(Mount {
             host: host.to_owned(),
             container: container.to_owned(),
             ro: read_only,
         }))
+    }
+
+    fn push_mount(mounts: &mut Vec<Mount>, host: &str, container: &str, read_only: bool) -> std::io::Result<()> {
+        let Some(mount) = Self::mount_row(host, container, read_only)? else {
+            return Ok(());
+        };
+        if mounts.iter().any(|existing| existing.container == mount.container) {
+            return Err(Self::invalid("Mount container paths must be unique."));
+        }
+        mounts.push(mount);
+        Ok(())
     }
 
     fn scrollback(&self) -> std::io::Result<Option<u64>> {
@@ -123,6 +164,43 @@ mod tests {
     }
 
     #[test]
+    fn environment_values_preserve_intentional_whitespace() {
+        assert_eq!(
+            Form::environment_row(" FLAGS ", "  -O2 -g  ").unwrap(),
+            Some(("FLAGS".into(), "  -O2 -g  ".into()))
+        );
+    }
+
+    #[test]
+    fn unpersistable_environment_names_are_rejected() {
+        for key in ["BAD=NAME", "BAD\nNAME", "BAD\tNAME", "BAD\x7fNAME"] {
+            assert!(Form::environment_row(key, "value").is_err(), "accepted {key:?}");
+        }
+        assert_eq!(
+            Form::environment_row("CARGO-FLAGS", "value").unwrap(),
+            Some(("CARGO-FLAGS".into(), "value".into()))
+        );
+    }
+
+    #[test]
+    fn duplicate_environment_names_are_rejected_without_case_folding() {
+        let mut environment = Vec::new();
+        Form::push_environment(&mut environment, "PATH", "/first").unwrap();
+        assert!(Form::push_environment(&mut environment, " PATH ", "/second").is_err());
+        Form::push_environment(&mut environment, "Path", "/case-sensitive").unwrap();
+        Form::push_environment(&mut environment, "EMPTY", "").unwrap();
+
+        assert_eq!(
+            environment,
+            [
+                ("PATH".into(), "/first".into()),
+                ("Path".into(), "/case-sensitive".into()),
+                ("EMPTY".into(), String::new()),
+            ]
+        );
+    }
+
+    #[test]
     fn partial_mount_rows_are_rejected_instead_of_discarded() {
         assert!(Form::mount_row("/host", "", false).is_err());
         assert!(Form::mount_row("", "/guest", false).is_err());
@@ -132,5 +210,19 @@ mod tests {
         assert_eq!(mount.host, "/host");
         assert_eq!(mount.container, "/guest");
         assert!(mount.ro);
+    }
+
+    #[test]
+    fn mounts_rejected_by_runtime_validation_are_rejected_before_save() {
+        assert!(Form::mount_row("relative", "/guest", false).is_err());
+        assert!(Form::mount_row("/host", "relative", false).is_err());
+        assert!(Form::mount_row("/host", "/guest/../escape", false).is_err());
+        assert!(Form::mount_row("/host", "/guest/./nested", false).is_err());
+
+        let mut mounts = Vec::new();
+        Form::push_mount(&mut mounts, "/first", "/guest", false).unwrap();
+        assert!(Form::push_mount(&mut mounts, "/second", " /guest ", true).is_err());
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].host, "/first");
     }
 }

@@ -9,7 +9,7 @@ pub(super) struct WorkspaceDocument {
 impl WorkspaceDocument {
     pub(super) fn parse(text: &str) -> io::Result<Vec<WorkspaceConfig>> {
         let mut document = Self::default();
-        for (index, line) in text.lines().map(str::trim).enumerate() {
+        for (index, line) in text.lines().enumerate() {
             document.read(line).map_err(|error| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -22,10 +22,11 @@ impl WorkspaceDocument {
     }
 
     fn read(&mut self, line: &str) -> io::Result<()> {
-        if line.is_empty() || line.starts_with('#') {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
             return Ok(());
         }
-        if line == "[workspace]" {
+        if trimmed == "[workspace]" {
             self.finish()?;
             self.current = Some(WsBuilder::default());
             return Ok(());
@@ -42,7 +43,7 @@ impl WorkspaceDocument {
                 "field appears before a `[workspace]` section",
             )
         })?;
-        builder.set(key.trim(), value.trim())
+        builder.set(key.trim(), value.strip_prefix(' ').unwrap_or(value))
     }
 
     fn finish(&mut self) -> io::Result<()> {
@@ -90,6 +91,10 @@ struct WsBuilder {
 
 impl WsBuilder {
     fn set(&mut self, k: &str, v: &str) -> io::Result<()> {
+        if k == "env" {
+            return self.set_env(v);
+        }
+        let v = v.trim();
         match k {
             "name" => self.name = Some(v.to_string()),
             "image" => self.image = Some(v.to_string()),
@@ -111,7 +116,6 @@ impl WsBuilder {
             "terminal_cursor_blink" => {
                 self.terminal.cursor_blink = Some(Value::new("terminal_cursor_blink", v).boolean()?);
             }
-            "env" => self.set_env(v)?,
             "mount" => self.set_mount(v)?,
             _ => return Err(Value::new("field", k).invalid()),
         }
@@ -125,7 +129,7 @@ impl WsBuilder {
         if key.trim().is_empty() {
             return Err(Value::new("environment key", key).invalid());
         }
-        self.env.push((key.trim().to_owned(), value.trim().to_owned()));
+        self.env.push((key.trim().to_owned(), value.to_owned()));
         Ok(())
     }
 
@@ -242,5 +246,36 @@ impl WorkspaceText {
 
     pub(super) fn into_string(self) -> io::Result<String> {
         self.error.map_or(Ok(self.text), Err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{WorkspaceConfig, WorkspaceStore};
+    use hl_ws::Arch;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn environment_values_roundtrip_exactly_through_the_store() {
+        let path = std::env::temp_dir().join(format!(
+            "husklet-workspaces-env-{}-{}.conf",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut workspace = WorkspaceConfig::new("env-roundtrip", "ubuntu:24.04", Arch::Arm64);
+        workspace.env = vec![
+            ("FLAGS".into(), "  -O2 -g  ".into()),
+            ("TOKEN".into(), "left=middle=right".into()),
+            ("EMPTY".into(), String::new()),
+            ("UNICODE".into(), " 中 🙂 ".into()),
+        ];
+
+        WorkspaceStore::load(&path).unwrap().upsert(workspace.clone()).unwrap();
+        let loaded = WorkspaceStore::load(&path).unwrap();
+        assert_eq!(loaded.get("env-roundtrip").unwrap().env, workspace.env);
+
+        std::fs::remove_file(path).unwrap();
     }
 }
