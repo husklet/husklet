@@ -26,6 +26,8 @@ pub struct MainImagePlan {
     pub has_interpreter: u32,
     pub flags: u32,
     pub interpreter_identity: u64,
+    pub interpreter_image: *const c_void,
+    pub interpreter_size: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -38,9 +40,10 @@ pub(super) struct EngineExit {
     pub detail: u64,
 }
 
-const _: () = assert!(size_of::<MainImagePlan>() == 48);
+const _: () = assert!(size_of::<MainImagePlan>() == 64);
 const _: () = assert!(offset_of!(MainImagePlan, link_start) == 16);
 const _: () = assert!(offset_of!(MainImagePlan, interpreter_identity) == 40);
+const _: () = assert!(offset_of!(MainImagePlan, interpreter_image) == 48);
 const _: () = assert!(size_of::<EngineExit>() == 24);
 const _: () = assert!(offset_of!(EngineExit, detail) == 16);
 

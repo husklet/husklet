@@ -46,10 +46,12 @@ HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend);
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend);
 HL_API void hl_c_backend_destroy(hl_c_backend *backend);
 
-HL_STATIC_ASSERT(sizeof(hl_c_main_image_plan) == 48, "main image plan size ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_c_main_image_plan) == 64, "main image plan size ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_c_main_image_plan, link_start) == 16, "main image plan link_start ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_c_main_image_plan, interpreter_identity) == 40,
                  "main image plan interpreter identity ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_c_main_image_plan, interpreter_image) == 48,
+                 "main image plan interpreter image ABI drifted");
 
 HL_EXTERN_C_END
 

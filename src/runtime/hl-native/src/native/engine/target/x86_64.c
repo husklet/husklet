@@ -953,6 +953,8 @@ static int engine_global_init(void);
 // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
 static const void *g_initial_executable_image;
 static size_t g_initial_executable_size;
+static const void *g_initial_interpreter_image;
+static size_t g_initial_interpreter_size;
 static uint64_t g_loaded_image_identity;
 static const void *g_authorized_executable_image;
 static size_t g_authorized_executable_size;
@@ -1235,8 +1237,12 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     if (has_interp) {
         static char ib[4200];
         interp_host = xresolve_overlay(interp, ib, sizeof ib);
+        g_initial_executable_image = g_initial_interpreter_image;
+        g_initial_executable_size = g_initial_interpreter_size;
         if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
         load_elf(interp_host, li, NULL, NULL);
+        g_initial_executable_image = NULL;
+        g_initial_executable_size = 0;
         *jump = li->entry;
         *at_base = li->base;
         *have_interp = 1;
@@ -1303,6 +1309,8 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     (void)executable;
     g_initial_executable_image = executable_image;
     g_initial_executable_size = executable_size;
+    g_initial_interpreter_image = image_plan != NULL ? image_plan->interpreter_image : NULL;
+    g_initial_interpreter_size = image_plan != NULL ? image_plan->interpreter_size : 0;
     g_authorized_executable_image = executable_image;
     g_authorized_executable_size = executable_size;
     if (argument_count > (uint32_t)INT_MAX) return 2;

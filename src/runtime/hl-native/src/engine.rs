@@ -7,6 +7,9 @@ use std::{
     ptr::NonNull,
 };
 
+#[cfg(unix)]
+use std::path::PathBuf;
+
 use crate::bindings::{self, Backend};
 
 pub const STATUS_OK: i32 = 0;
@@ -91,6 +94,17 @@ impl Engine {
         };
         after_pin();
         let image_plan = Plan::inspect(&config)?;
+        #[cfg(unix)]
+        let mut image_plan = image_plan;
+        #[cfg(unix)]
+        let interpreter_image = Plan::interpreter(&config)?
+            .map(|path| pin_guest_image(&config, &path))
+            .transpose()?;
+        #[cfg(unix)]
+        if let Some(image) = interpreter_image.as_deref() {
+            image_plan.interpreter_image = image.as_ptr().cast();
+            image_plan.interpreter_size = image.len();
+        }
         let mut output = std::ptr::null_mut();
         // SAFETY: the caller guarantees that the raw option and callback
         // pointers satisfy the documented C ABI. All Rust-owned arrays and
@@ -158,6 +172,7 @@ impl Engine {
 impl Plan {
     fn inspect(config: &EngineConfig<'_>) -> Result<Self, i32> {
         let mut file = open_main_image(config)?;
+        file.seek(SeekFrom::Start(0)).map_err(|_| 1)?;
         let image_length = file.metadata().map_err(|_| 1)?.len();
         if image_length < 64 {
             return Err(1);
@@ -224,7 +239,29 @@ impl Plan {
             // layer translates every guest-visible address back to the ELF link range.
             flags: u32::from(kind == 1),
             interpreter_identity,
+            interpreter_image: std::ptr::null(),
+            interpreter_size: 0,
         })
+    }
+
+    #[cfg(unix)]
+    fn interpreter(config: &EngineConfig<'_>) -> Result<Option<Vec<u8>>, i32> {
+        let mut file = open_main_image(config)?;
+        file.seek(SeekFrom::Start(0)).map_err(|_| 1)?;
+        let image_length = file.metadata().map_err(|_| 1)?.len();
+        let mut header = [0_u8; 64];
+        file.read_exact(&mut header).map_err(|_| 1)?;
+        let word16 = |offset| u16::from_le_bytes(header[offset..offset + 2].try_into().expect("fixed header"));
+        let word64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().expect("fixed header"));
+        ProgramLayout::inspect(
+            &mut file,
+            image_length,
+            word64(24),
+            word64(32),
+            u64::from(word16(54)),
+            word16(56),
+        )
+        .map(|layout| layout.interpreter)
     }
 }
 
@@ -251,6 +288,134 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
     }
     #[cfg(not(unix))]
     return Err(3);
+}
+
+#[cfg(unix)]
+fn pin_guest_image(config: &EngineConfig<'_>, guest: &[u8]) -> Result<Vec<u8>, i32> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let guest = std::path::Path::new(std::ffi::OsStr::from_bytes(guest));
+    let roots = launch_roots(config)?;
+    let path = if roots.is_empty() {
+        guest.to_owned()
+    } else {
+        resolve_layered_guest(guest, &roots).ok_or(1)?
+    };
+    let mut file = File::open(path).map_err(|_| 1)?;
+    let size = usize::try_from(file.metadata().map_err(|_| 1)?.len()).map_err(|_| 1)?;
+    if size == 0 || size > 64 * 1024 * 1024 {
+        return Err(1);
+    }
+    let mut image = Vec::with_capacity(size);
+    file.read_to_end(&mut image).map_err(|_| 1)?;
+    (image.len() == size).then_some(image).ok_or(1)
+}
+
+#[cfg(unix)]
+fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<PathBuf>, i32> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut roots = Vec::new();
+    if let Some(root) = config.rootfs {
+        roots.push(PathBuf::from(std::ffi::OsStr::from_bytes(root.to_bytes())));
+    }
+    for (&name, &value) in config.option_names.iter().zip(config.option_values) {
+        if name.is_null() || value.is_null() {
+            return Err(1);
+        }
+        // SAFETY: EngineConfig's contract requires every option pointer to name a live NUL-terminated string.
+        let name = unsafe { std::ffi::CStr::from_ptr(name) };
+        if name.to_bytes() != b"HL_LOWER" {
+            continue;
+        }
+        // SAFETY: same EngineConfig string contract as the corresponding name above.
+        for record in unsafe { std::ffi::CStr::from_ptr(value) }
+            .to_bytes()
+            .split(|byte| *byte == b'\n')
+            .filter(|record| !record.is_empty())
+        {
+            roots.push(PathBuf::from(std::ffi::OsStr::from_bytes(record)));
+        }
+    }
+    Ok(roots)
+}
+
+#[cfg(unix)]
+fn resolve_layered_guest(guest: &std::path::Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut pending = guest
+        .components()
+        .filter_map(|component| match component {
+            Component::RootDir | Component::CurDir => None,
+            Component::Normal(value) => Some(value.to_owned()),
+            Component::ParentDir | Component::Prefix(_) => Some(std::ffi::OsString::new()),
+        })
+        .collect::<Vec<_>>();
+    if pending.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+    for _ in 0..40 {
+        let mut prefix = Vec::new();
+        let mut followed = false;
+        for index in 0..pending.len() {
+            prefix.push(pending[index].clone());
+            let relative = prefix.iter().collect::<PathBuf>();
+            let (root, metadata) = layered_metadata(&relative, roots)?;
+            if metadata.file_type().is_symlink() {
+                let target = std::fs::read_link(root.join(relative)).ok()?;
+                let mut replacement = if target.is_absolute() {
+                    Vec::new()
+                } else {
+                    prefix[..prefix.len() - 1].to_vec()
+                };
+                for component in target.components() {
+                    match component {
+                        Component::RootDir | Component::CurDir => {}
+                        Component::Normal(value) => replacement.push(value.to_owned()),
+                        Component::ParentDir => {
+                            replacement.pop()?;
+                        }
+                        Component::Prefix(_) => return None,
+                    }
+                }
+                replacement.extend_from_slice(&pending[index + 1..]);
+                pending = replacement;
+                followed = true;
+                break;
+            }
+        }
+        if followed {
+            continue;
+        }
+        let relative = pending.iter().collect::<PathBuf>();
+        return roots
+            .iter()
+            .map(|root| root.join(&relative))
+            .find(|candidate| candidate.is_file());
+    }
+    None
+}
+
+#[cfg(unix)]
+fn layered_metadata<'a>(relative: &std::path::Path, roots: &'a [PathBuf]) -> Option<(&'a PathBuf, std::fs::Metadata)> {
+    let parent = relative.parent().unwrap_or_else(|| std::path::Path::new(""));
+    let leaf = relative.file_name()?;
+    let whiteout = {
+        let mut name = std::ffi::OsString::from(".wh.");
+        name.push(leaf);
+        name
+    };
+    for root in roots {
+        let directory = root.join(parent);
+        if directory.join(&whiteout).symlink_metadata().is_ok() {
+            return None;
+        }
+        if let Ok(metadata) = std::fs::symlink_metadata(root.join(relative)) {
+            return Some((root, metadata));
+        }
+        if directory.join(".wh..wh..opq").symlink_metadata().is_ok() {
+            return None;
+        }
+    }
+    None
 }
 
 impl ProgramLayout {
@@ -403,6 +568,29 @@ mod tests {
         bytes
     }
 
+    fn dynamic_image(interpreter: &[u8]) -> Vec<u8> {
+        let mut bytes = image();
+        put16(&mut bytes, 56, 2);
+        put32(&mut bytes, 120, 3);
+        put64(&mut bytes, 128, 0x200);
+        put64(&mut bytes, 152, u64::try_from(interpreter.len() + 1).unwrap());
+        bytes[0x200..0x200 + interpreter.len()].copy_from_slice(interpreter);
+        bytes[0x200 + interpreter.len()] = 0;
+        bytes
+    }
+
+    fn exiting_interpreter() -> Vec<u8> {
+        let mut bytes = image();
+        put16(&mut bytes, 16, 3);
+        put64(&mut bytes, 24, 0x100);
+        put64(&mut bytes, 80, 0);
+        put64(&mut bytes, 88, 0);
+        bytes[0x100..0x104].copy_from_slice(&0xd280_0000_u32.to_le_bytes());
+        bytes[0x104..0x108].copy_from_slice(&0xd280_0ba8_u32.to_le_bytes());
+        bytes[0x108..0x10c].copy_from_slice(&0xd400_0001_u32.to_le_bytes());
+        bytes
+    }
+
     fn create_engine(isa: u32) -> (Engine, std::fs::File) {
         let mut executable = tempfile::tempfile().unwrap();
         let mut bytes = image();
@@ -458,6 +646,36 @@ mod tests {
             })
         };
         assert!(engine.is_ok(), "creation reopened the replaced executable pathname");
+    }
+
+    #[test]
+    fn interpreter_replacement_between_create_and_run_cannot_change_image() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("bin")).unwrap();
+        std::fs::create_dir_all(root.path().join("lib")).unwrap();
+        let main = root.path().join("bin/main");
+        let interpreter = root.path().join("lib/ld-test.so");
+        std::fs::write(&main, dynamic_image(b"/lib/ld-test.so")).unwrap();
+        std::fs::write(&interpreter, exiting_interpreter()).unwrap();
+        let main = CString::new(main.to_str().unwrap()).unwrap();
+        let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
+        let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+        let config = EngineConfig {
+            isa: 1,
+            rootfs: Some(&root_path),
+            executable_host: Some(&main),
+            executable_fd: -1,
+            option_names: &[],
+            option_values: &[],
+            standard_fds: [standard.as_raw_fd(); 3],
+            provider_fd: -1,
+        };
+        // SAFETY: every borrowed string and descriptor remains live through create.
+        let engine = unsafe { Engine::create(config) }.unwrap();
+        std::fs::write(&interpreter, b"replacement is not an ELF image").unwrap();
+        let argument = CString::new("/bin/main").unwrap();
+        engine.run(&[argument.as_ptr()]).unwrap();
+        assert_eq!(engine.exit().status, 0);
     }
 
     fn inspect(bytes: &[u8]) -> Result<Plan, i32> {
