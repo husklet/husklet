@@ -511,8 +511,19 @@ static int ckpt_restore_commit_futex(_Atomic int *word, int operation, int value
     (void)timeout;
     errno = ENOSYS;
     return -1;
-#else
+#elif defined(__linux__)
     return (int)syscall(SYS_futex, word, operation, value, timeout, NULL, 0);
+#else
+    /* The restore protocol always rechecks its shared atomic after a wait and
+     * treats wake as a hint.  Hosts without futex can therefore poll at a
+     * bounded interval without weakening the publication barrier. */
+    (void)word;
+    (void)value;
+    if (operation == CKPT_FUTEX_WAIT) {
+        const struct timespec interval = {.tv_sec = 0, .tv_nsec = 10000000};
+        (void)nanosleep(timeout != NULL ? timeout : &interval, NULL);
+    }
+    return 0;
 #endif
 }
 
