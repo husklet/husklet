@@ -9,6 +9,7 @@ use crate::{Error, Result, error::At as _};
 use crate::storage::{Native, Persistence as _};
 
 use super::{DraftOwner, Id, LayerRecord, Names, Ownerships, Publication, Tree, archive};
+use crate::storage::Directory;
 
 pub struct Draft {
     pub(super) path: PathBuf,
@@ -16,6 +17,7 @@ pub struct Draft {
     pub(super) root: PathBuf,
     pub(super) ownership: Ownerships,
     pub(super) names: Names,
+    pub(super) publications: Arc<Directory>,
     pub(super) finished: bool,
     pub(super) lock: File,
 }
@@ -114,11 +116,8 @@ impl Draft {
         if publication.is_layer_chain() {
             super::index::publish(&self.root, &id, &target)?;
         }
-        Native.replace(
-            &self
-                .root
-                .join("publication/committed")
-                .join(format!("{}.json", id.as_str())),
+        self.publications.replace(
+            Path::new(&format!("{}.json", id.as_str())),
             &serde_json::to_vec(&publication)?,
         )?;
         Native.remove(&self.root.join("drafts").join(format!("{}.json", self.key.as_str())))?;
