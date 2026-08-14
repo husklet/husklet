@@ -73,6 +73,133 @@ fn restore_digest_remains_available_without_a_capture_scope() {
     assert_eq!(server.dispatch(1, &request, "", &[]).status, protocol::STATUS_OK);
 }
 
+#[derive(Default)]
+struct RecoveryStore(Mutex<Vec<(String, Vec<u8>)>>);
+
+impl CheckpointSink for RecoveryStore {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CompositionError::DeadlineExceeded);
+        }
+        self.0.lock().unwrap().push((name.to_owned(), bytes.to_vec()));
+        Ok(())
+    }
+
+    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
+impl CheckpointSource for RecoveryStore {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn list_until(&self, deadline: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CompositionError::DeadlineExceeded);
+        }
+        Ok(Vec::new())
+    }
+
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
+fn object_request(op: u32, stream: u64, generation: u32) -> protocol::Request {
+    protocol::Request {
+        op,
+        stream,
+        offset: 0,
+        length: 0,
+        name_size: 0,
+        generation,
+    }
+}
+
+fn publish_recovery(server: &Server, generation: u32, stream: u64) -> (i32, i32) {
+    let begin = object_request(protocol::OBJECT_BEGIN, stream, generation);
+    let finish = object_request(protocol::OBJECT_FINISH, stream, generation);
+    (
+        server.dispatch(7, &begin, "RECOVERY.jsonl", &[]).status,
+        server.dispatch(7, &finish, "", &[]).status,
+    )
+}
+
+#[test]
+fn recovery_report_requires_and_closes_its_typed_scope() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Server::new(store.clone(), store.clone());
+    let recovery = server
+        .begin_recovery(9, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    assert_eq!(
+        publish_recovery(&server, 9, 1),
+        (protocol::STATUS_OK, protocol::STATUS_OK)
+    );
+    assert_eq!(
+        store.0.lock().unwrap().as_slice(),
+        &[("RECOVERY.jsonl".into(), Vec::new())]
+    );
+    assert_eq!(server.abort_recovery(recovery), Ok(()));
+    assert!(
+        server
+            .begin_capture(10, std::time::Instant::now() + Duration::from_secs(1))
+            .is_ok()
+    );
+}
+
+#[test]
+fn idle_and_stale_scopes_cannot_publish_recovery_reports() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Server::new(store.clone(), store.clone());
+    assert_ne!(publish_recovery(&server, 0, 1).0, protocol::STATUS_OK);
+    server
+        .begin_recovery(4, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    assert_ne!(publish_recovery(&server, 3, 2).0, protocol::STATUS_OK);
+    assert_ne!(publish_recovery(&server, 5, 3).0, protocol::STATUS_OK);
+    assert!(store.0.lock().unwrap().is_empty());
+}
+
+#[test]
+fn recovery_and_capture_scopes_are_mutually_exclusive() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Server::new(store.clone(), store);
+    let recovery = server
+        .begin_recovery(3, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    assert_eq!(
+        server.begin_capture(4, std::time::Instant::now() + Duration::from_secs(1)),
+        Err(CaptureFailure::Busy)
+    );
+    server.abort_recovery(recovery).unwrap();
+    server
+        .begin_capture(4, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    assert_eq!(
+        server.begin_recovery(5, std::time::Instant::now() + Duration::from_secs(1)),
+        Err(CaptureFailure::Busy)
+    );
+}
+
+#[test]
+fn expired_recovery_scope_rejects_publication() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Server::new(store.clone(), store.clone());
+    server
+        .begin_recovery(6, std::time::Instant::now() + Duration::from_millis(5))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(10));
+    assert_ne!(publish_recovery(&server, 6, 1).0, protocol::STATUS_OK);
+    assert!(store.0.lock().unwrap().is_empty());
+}
+
 impl CheckpointSource for Store {
     fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
         Err(CompositionError::RuntimeConstruction)

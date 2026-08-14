@@ -197,6 +197,16 @@ fn encode_environment_record(encoded: &mut Vec<u8>, record: &[u8]) {
 
 impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
+        #[cfg(unix)]
+        let recovery = if self.plan.options.get_bytes("HL_RESTORE").is_some() {
+            let checkpoint = self.checkpoint.as_ref().ok_or(EngineError::LaunchFailed)?;
+            Some(
+                checkpoint
+                    .begin_recovery(std::time::Instant::now() + crate::composition::DEFAULT_CHECKPOINT_TIMEOUT)?,
+            )
+        } else {
+            None
+        };
         let engine = Arc::new(self.create()?);
         *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
         let arguments = self
@@ -206,7 +216,15 @@ impl GuestMachine for ProductionMachine {
             .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
             .collect::<Result<Vec<_>, _>>()?;
         let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
-        engine.run(&pointers).map_err(native_run_failure)?;
+        let run = engine.run(&pointers).map_err(native_run_failure);
+        #[cfg(unix)]
+        if let Some(recovery) = recovery {
+            self.checkpoint
+                .as_ref()
+                .ok_or(EngineError::LaunchFailed)?
+                .end_recovery(recovery)?;
+        }
+        run?;
         #[cfg(unix)]
         if let Some(terminal) = &self.terminal {
             terminal.flush();
@@ -332,6 +350,28 @@ impl CheckpointControl {
                 let _ = engine.request(REQUEST_CHECKPOINT, 0);
                 next_interrupt = Instant::now() + Duration::from_millis(100);
             }
+        }
+    }
+
+    fn begin_recovery(&self, deadline: std::time::Instant) -> Result<u64, EngineError> {
+        let generation = self.transport.bump();
+        self.server
+            .begin_recovery(generation, deadline)
+            .map_err(capture_failure)
+    }
+
+    fn end_recovery(&self, id: u64) -> Result<(), EngineError> {
+        self.server.abort_recovery(id).map_err(capture_failure)
+    }
+}
+
+#[cfg(unix)]
+fn capture_failure(failure: super::checkpoint::CaptureFailure) -> EngineError {
+    match failure {
+        super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
+        super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+        super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
+            EngineError::LaunchFailed
         }
     }
 }

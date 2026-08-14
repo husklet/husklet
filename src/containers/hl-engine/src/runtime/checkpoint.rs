@@ -55,6 +55,10 @@ pub(crate) enum CaptureFailure {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CapturePhase {
     Idle,
+    Recovery {
+        id: u64,
+        deadline: std::time::Instant,
+    },
     Active {
         id: u64,
         deadline: std::time::Instant,
@@ -149,6 +153,41 @@ impl Server {
         Ok(id)
     }
 
+    pub(crate) fn begin_recovery(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CaptureFailure::Deadline);
+        }
+        let mut capture = self.capture_lock()?;
+        if !matches!(capture.phase, CapturePhase::Idle) {
+            return Err(match capture.phase {
+                CapturePhase::Poisoned => CaptureFailure::Poisoned,
+                _ => CaptureFailure::Busy,
+            });
+        }
+        let id = u64::from(generation);
+        if id == 0 {
+            return Err(CaptureFailure::Poisoned);
+        }
+        *self.state.lock().map_err(|_| CaptureFailure::Poisoned)? = State::default();
+        capture.phase = CapturePhase::Recovery { id, deadline };
+        capture.mutations = 0;
+        Ok(id)
+    }
+
+    pub(crate) fn abort_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        match capture.phase {
+            CapturePhase::Recovery { id: active, .. } if active == id && capture.mutations == 0 => {
+                capture.phase = CapturePhase::Idle;
+                self.capture_changed.notify_all();
+                Ok(())
+            }
+            CapturePhase::Idle => Ok(()),
+            CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
+            _ => Err(CaptureFailure::Busy),
+        }
+    }
+
     fn capture_lock(&self) -> Result<std::sync::MutexGuard<'_, CaptureState>, CaptureFailure> {
         match self.capture.lock() {
             Ok(capture) => Ok(capture),
@@ -184,6 +223,16 @@ impl Server {
                     finished: false,
                 }))
             }
+            CapturePhase::Recovery { id, deadline } if std::time::Instant::now() < deadline => {
+                capture.mutations = capture.mutations.checked_add(1).ok_or(CaptureFailure::Poisoned)?;
+                Ok(Some(MutationAdmission {
+                    server: self,
+                    id,
+                    deadline,
+                    finished: false,
+                }))
+            }
+            CapturePhase::Recovery { .. } => Err(CaptureFailure::Deadline),
             CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
             CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
             _ => Err(CaptureFailure::Busy),
@@ -206,6 +255,9 @@ impl Server {
                 result: Err(failure),
             };
         }
+        if result.is_err() && matches!(capture.phase, CapturePhase::Recovery { id: active, .. } if active == id) {
+            capture.phase = CapturePhase::Poisoned;
+        }
         self.capture_changed.notify_all();
         let terminal = result.is_err();
         drop(capture);
@@ -219,6 +271,8 @@ impl Server {
         let capture = self.capture_lock()?;
         match capture.phase {
             CapturePhase::Idle => Ok(None),
+            CapturePhase::Recovery { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
+            CapturePhase::Recovery { .. } => Err(CaptureFailure::Deadline),
             CapturePhase::Active { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
             CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
             CapturePhase::Publishing { .. } => Err(CaptureFailure::Busy),
@@ -540,10 +594,36 @@ impl Server {
             .map_err(|_| ())
     }
 
-    fn request_in_scope(&self, request: &Request) -> bool {
+    fn recovery_object_request(&self, connection: u64, request: &Request, name: &str) -> bool {
+        match request.op {
+            OBJECT_BEGIN => name == "RECOVERY.jsonl",
+            OBJECT_WRITE | OBJECT_WRITE_AT | OBJECT_TELL | OBJECT_FINISH | OBJECT_ABORT => self
+                .state
+                .lock()
+                .ok()
+                .and_then(|state| {
+                    state
+                        .open
+                        .get(&(connection, request.stream))
+                        .map(|object| object.name.as_str() == "RECOVERY.jsonl")
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    fn request_in_scope(&self, connection: u64, request: &Request, name: &str) -> bool {
         let Ok(capture) = self.capture_lock() else { return false };
         match capture.phase {
-            CapturePhase::Idle => true,
+            CapturePhase::Idle => {
+                request.generation == 0 && matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST)
+            }
+            CapturePhase::Recovery { id, deadline } => {
+                u64::from(request.generation) == id
+                    && std::time::Instant::now() < deadline
+                    && (matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST)
+                        || self.recovery_object_request(connection, request, name))
+            }
             CapturePhase::Complete => false,
             CapturePhase::Active { id, .. } | CapturePhase::Publishing { id } => u64::from(request.generation) == id,
             CapturePhase::Finished { id, .. } => u64::from(request.generation) == id && request.op == COMMIT,
@@ -605,12 +685,7 @@ impl Server {
 
     #[allow(clippy::too_many_lines)]
     fn dispatch(&self, id: u64, request: &Request, name: &str, payload: &[u8]) -> Reply {
-        if !self.request_in_scope(request) {
-            return Reply::error();
-        }
-        if !matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST | COMMIT)
-            && self.active_deadline().is_err()
-        {
+        if !self.request_in_scope(id, request, name) {
             return Reply::error();
         }
         let key = (id, request.stream);
@@ -685,6 +760,18 @@ impl Server {
                     return Reply::ok();
                 }
                 if self.publish(&object, admission).is_ok() {
+                    if object.name == "RECOVERY.jsonl" {
+                        let mut capture = match self.capture_lock() {
+                            Ok(capture) => capture,
+                            Err(_) => return Reply::error(),
+                        };
+                        if matches!(capture.phase, CapturePhase::Recovery { .. }) && capture.mutations == 0 {
+                            capture.phase = CapturePhase::Idle;
+                            self.capture_changed.notify_all();
+                        } else {
+                            return Reply::error();
+                        }
+                    }
                     Reply::ok()
                 } else {
                     self.fail(format!("checkpoint store rejected {}", object.name));
