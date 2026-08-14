@@ -21,7 +21,10 @@ static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_
     const char *resolved;
     if (g_rootfs) {
         abs_guest(directory, raw, guest, sizeof guest);
-        if (!overlay_resolve(guest, host, sizeof host, nofollow)) return -ENOENT;
+        if (!overlay_resolve(guest, host, sizeof host, nofollow)) {
+            int ancestor_error = overlay_ancestor_error(guest);
+            return ancestor_error != 0 ? ancestor_error : -ENOENT;
+        }
         resolved = host;
     } else {
         resolved = atpath(directory, raw, path, sizeof path, nofollow);

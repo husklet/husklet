@@ -376,12 +376,38 @@ static const char *xresolve_overlay(const char *p, char *buf, size_t n) {
     return buf;
 }
 
+// Return the first path-component error visible in the merged overlay. A host operation against the upper
+// alone cannot distinguish a genuinely absent ancestor from a lower-only non-directory ancestor: both look
+// absent in the upper and degrade to ENOENT. Prefix components are resolved following symlinks, as Linux does.
+static int overlay_ancestor_error(const char *guest) {
+    if (!g_nlower || !guest || guest[0] != '/') return 0;
+    const char *canon;
+    size_t clen;
+    const char *rel;
+    if (jail_pick(guest, &canon, &clen, &rel) != g_root_fd) return 0; // volume jail -> real backing governs
+    char g[4200];
+    snprintf(g, sizeof g, "%s", guest);
+    size_t gl = strlen(g);
+    while (gl > 1 && g[gl - 1] == '/')
+        g[--gl] = 0;
+    char host[4300];
+    struct stat st;
+    for (size_t i = 1; i < gl; i++) {
+        if (g[i] != '/') continue;
+        char pfx[4200];
+        memcpy(pfx, g, i);
+        pfx[i] = 0;
+        if (!overlay_resolve(pfx, host, sizeof host, 0)) return -ENOENT;
+        if (lstat(host, &st) != 0) return -ENOENT;
+        if (!S_ISDIR(st.st_mode)) return -ENOTDIR;
+    }
+    return 0;
+}
+
 // Overlay CREATE-op pre-flight (mkdirat / mknodat / symlinkat). The host create these syscalls issue is
-// confined to the writable UPPER (jail_at), so it cannot see a name a read-only lower still provides, nor a
-// non-directory ancestor that lives only in a lower. Without this the create would wrongly SUCCEED (silently
-// masking the lower entry with a fresh upper inode) where real overlayfs returns EEXIST, and would report
-// ENOENT where a real overlay reports ENOTDIR. Return the negative errno the syscall must fail with, or 0 to
-// proceed with the host create:
+// confined to the writable UPPER (jail_at), so it cannot see a name a read-only lower still provides. Without
+// this the create would wrongly SUCCEED (silently masking the lower entry with a fresh upper inode) where real
+// overlayfs returns EEXIST. Return the negative errno the syscall must fail with, or 0 to proceed:
 //   * a missing intermediate path component (merged view)          -> ENOENT;
 //   * an intermediate component that is NOT a directory (merged)    -> ENOTDIR;
 //   * the final NAME already present -- upper OR a non-whited-out lower, incl. a symlink -> EEXIST.
@@ -401,17 +427,8 @@ static int overlay_create_precheck(const char *guest) {
     while (gl > 1 && g[gl - 1] == '/')
         g[--gl] = 0; // "mkdir foo/" -> strip trailing slash
     char host[4300];
-    struct stat st;
-    // 1) prefix: every ancestor directory must exist and be a directory in the merged view.
-    for (size_t i = 1; i < gl; i++) {
-        if (g[i] != '/') continue;
-        char pfx[4200];
-        memcpy(pfx, g, i);
-        pfx[i] = 0;
-        if (!overlay_resolve(pfx, host, sizeof host, 0)) return -ENOENT; // ancestor absent in every layer
-        if (lstat(host, &st) != 0) return -ENOENT;
-        if (!S_ISDIR(st.st_mode)) return -ENOTDIR; // a file/symlink-to-file used as a directory
-    }
+    int ancestor_error = overlay_ancestor_error(g);
+    if (ancestor_error != 0) return ancestor_error;
     // 2) final name already present (nofollow: a symlink hit is still EEXIST) -> EEXIST.
     if (overlay_lookup(g, host, sizeof host)) return -EEXIST;
     return 0;
