@@ -867,6 +867,10 @@ static int ckpt_restore_tree(const char *rootfs) {
     ckpt_restore_socket_seeds_close();
     ckpt_restore_commit_destroy();
     if (g_ckpt_fg_gpid == 1) ckpt_claim_tty_fg(); // the init itself was foreground (idle prompt)
+    if (ckpt_stream_recovery_complete() != 0) {
+        fprintf(stderr, "[restore] cannot close recovery publication scope\n");
+        return 70;
+    }
 
     run_guest(&c);
     return c.exit_code;

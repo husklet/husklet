@@ -64,7 +64,8 @@ typedef enum hl_ckpt_stream_op {
     /* --- source (restore) --- */
     HL_CKPT_OP_SOURCE_LIST = 16, /* name = prefix -> payload = NUL-terminated names, value = count */
     HL_CKPT_OP_SOURCE_SIZE = 17, /* name -> value = size, status 1 when absent */
-    HL_CKPT_OP_SOURCE_READ = 18  /* name, offset, length -> payload (short read at end of object) */
+    HL_CKPT_OP_SOURCE_READ = 18, /* name, offset, length -> payload (short read at end of object) */
+    HL_CKPT_OP_RECOVERY_COMPLETE = 19 /* restore is complete; release its publication authority */
 } hl_ckpt_stream_op;
 
 /* Announces one engine process on the broker. Carries exactly one descriptor: that process's channel. */

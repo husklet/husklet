@@ -138,6 +138,10 @@ fn recovery_report_requires_and_closes_its_typed_scope() {
     let recovery = server
         .begin_recovery(9, std::time::Instant::now() + Duration::from_secs(1))
         .unwrap();
+    let complete = object_request(protocol::RECOVERY_COMPLETE, 0, 9);
+    let stale_complete = object_request(protocol::RECOVERY_COMPLETE, 0, 8);
+    assert_ne!(server.dispatch(7, &complete, "", &[]).status, protocol::STATUS_OK);
+    assert_ne!(server.dispatch(7, &stale_complete, "", &[]).status, protocol::STATUS_OK);
     assert_eq!(
         publish_recovery(&server, 9, 1),
         (protocol::STATUS_OK, protocol::STATUS_OK)
@@ -145,6 +149,18 @@ fn recovery_report_requires_and_closes_its_typed_scope() {
     assert_eq!(
         store.0.lock().unwrap().as_slice(),
         &[("RECOVERY.jsonl".into(), Vec::new())]
+    );
+    assert_eq!(
+        server.begin_capture(10, std::time::Instant::now() + Duration::from_secs(1)),
+        Err(CaptureFailure::Busy),
+        "publishing the report is not proof that restore finished reading the image"
+    );
+    assert_eq!(server.dispatch(7, &complete, "", &[]).status, protocol::STATUS_OK);
+    assert_ne!(server.dispatch(7, &complete, "", &[]).status, protocol::STATUS_OK);
+    let stale_source = object_request(protocol::SOURCE_SIZE, 0, 9);
+    assert_ne!(
+        server.dispatch(7, &stale_source, "MANIFEST", &[]).status,
+        protocol::STATUS_OK
     );
     assert_eq!(server.abort_recovery(recovery), Ok(()));
     assert!(

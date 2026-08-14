@@ -22,8 +22,8 @@ mod protocol;
 mod test;
 use protocol::{
     CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, OBJECT_ABORT,
-    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PAYLOAD_MAX, REQUEST_BYTES, Reply,
-    Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
+    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PAYLOAD_MAX, RECOVERY_COMPLETE,
+    REQUEST_BYTES, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
 };
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -77,6 +77,7 @@ enum CapturePhase {
 struct CaptureState {
     phase: CapturePhase,
     mutations: usize,
+    recovery_report_published: bool,
 }
 
 struct MutationAdmission<'a> {
@@ -108,6 +109,7 @@ pub(crate) struct Server {
     capture: Mutex<CaptureState>,
     capture_changed: Condvar,
     channels: Mutex<HashMap<i32, UnixStream>>,
+    recovery_connections: Mutex<HashMap<u64, u64>>,
     committed: AtomicBool,
     running: AtomicBool,
     connections: AtomicUsize,
@@ -122,9 +124,11 @@ impl Server {
             capture: Mutex::new(CaptureState {
                 phase: CapturePhase::Idle,
                 mutations: 0,
+                recovery_report_published: false,
             }),
             capture_changed: Condvar::new(),
             channels: Mutex::new(HashMap::new()),
+            recovery_connections: Mutex::new(HashMap::new()),
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
@@ -150,6 +154,7 @@ impl Server {
         self.committed.store(false, Ordering::Release);
         capture.phase = CapturePhase::Active { id, deadline };
         capture.mutations = 0;
+        capture.recovery_report_published = false;
         Ok(id)
     }
 
@@ -171,6 +176,7 @@ impl Server {
         *self.state.lock().map_err(|_| CaptureFailure::Poisoned)? = State::default();
         capture.phase = CapturePhase::Recovery { id, deadline };
         capture.mutations = 0;
+        capture.recovery_report_published = false;
         Ok(id)
     }
 
@@ -629,9 +635,17 @@ impl Server {
                 request.generation == 0 && matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST)
             }
             CapturePhase::Recovery { id, deadline } => {
-                u64::from(request.generation) == id
+                let bound_restore_connection = request.generation == 0
+                    && self
+                        .recovery_connections
+                        .lock()
+                        .ok()
+                        .and_then(|connections| connections.get(&connection).copied())
+                        == Some(id);
+                (u64::from(request.generation) == id || bound_restore_connection)
                     && std::time::Instant::now() < deadline
                     && (matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST)
+                        || request.op == RECOVERY_COMPLETE
                         || self.recovery_object_request(connection, request, name))
             }
             CapturePhase::Complete => false,
@@ -651,9 +665,16 @@ impl Server {
         };
         channels.insert(descriptor, control);
         drop(channels);
+        if let Ok(capture) = self.capture_lock()
+            && let CapturePhase::Recovery { id: recovery, .. } = capture.phase
+            && let Ok(mut connections) = self.recovery_connections.lock()
+        {
+            connections.insert(id, recovery);
+        }
         let _connection = Connection {
             server: self,
             descriptor,
+            id,
         };
         if !self.running.load(Ordering::Acquire) {
             return;
@@ -696,6 +717,10 @@ impl Server {
     #[allow(clippy::too_many_lines)]
     fn dispatch(&self, id: u64, request: &Request, name: &str, payload: &[u8]) -> Reply {
         if !self.request_in_scope(id, request, name) {
+            eprintln!(
+                "REJECT op={} generation={} name={name:?}",
+                request.op, request.generation
+            );
             return Reply::error();
         }
         let key = (id, request.stream);
@@ -776,8 +801,7 @@ impl Server {
                             Err(_) => return Reply::error(),
                         };
                         if matches!(capture.phase, CapturePhase::Recovery { .. }) && capture.mutations == 0 {
-                            capture.phase = CapturePhase::Idle;
-                            self.capture_changed.notify_all();
+                            capture.recovery_report_published = true;
                         } else {
                             return Reply::error();
                         }
@@ -911,6 +935,20 @@ impl Server {
                 let length = usize::try_from(request.length).unwrap_or(0).min(PAYLOAD_MAX);
                 Reply::payload(bytes[offset..offset.saturating_add(length).min(bytes.len())].to_vec())
             }
+            RECOVERY_COMPLETE => {
+                let Ok(mut capture) = self.capture_lock() else {
+                    return Reply::error();
+                };
+                if !matches!(capture.phase, CapturePhase::Recovery { .. })
+                    || capture.mutations != 0
+                    || !capture.recovery_report_published
+                {
+                    return Reply::error();
+                }
+                capture.phase = CapturePhase::Idle;
+                self.capture_changed.notify_all();
+                Reply::ok()
+            }
             _ => Reply::error(),
         }
     }
@@ -954,12 +992,16 @@ impl Server {
 struct Connection<'a> {
     server: &'a Server,
     descriptor: i32,
+    id: u64,
 }
 
 impl Drop for Connection<'_> {
     fn drop(&mut self) {
         if let Ok(mut channels) = self.server.channels.lock() {
             channels.remove(&self.descriptor);
+        }
+        if let Ok(mut connections) = self.server.recovery_connections.lock() {
+            connections.remove(&self.id);
         }
     }
 }
