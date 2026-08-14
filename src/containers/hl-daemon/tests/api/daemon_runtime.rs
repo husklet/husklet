@@ -82,6 +82,88 @@ pub(crate) async fn run(containers: Containers, rootfs: &Path, work: &Path) -> R
     Ok(())
 }
 
+pub(crate) async fn failed_upgrade(
+    containers: Containers,
+    rootfs: &Path,
+    work: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    containers
+        .create(
+            ContainerSpec::from_directory(rootfs, Process::new("/bin/sleep").args(["60"]))
+                .name("daemon-upgrade")
+                .isolation(Isolation {
+                    sandbox: Sandbox::Disabled,
+                    ..Isolation::default()
+                }),
+        )
+        .await?;
+    log_container(&containers, rootfs).await?;
+    let socket = work.join("upgrade.sock");
+    let (shutdown, stopped) = oneshot::channel();
+    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(async move {
+        let _ = stopped.await;
+    }));
+    wait_for_path(&socket).await?;
+    let client = Client::unix(&socket)?;
+    client.containers().start("daemon-upgrade").await?;
+    failed_exec_upgrade_is_cleaned(&client, &socket).await?;
+    client.containers().kill("daemon-upgrade", "KILL").await?;
+    client.containers().remove("daemon-upgrade", true, false).await?;
+    let _ = shutdown.send(());
+    server.await??;
+    Ok(())
+}
+
+async fn failed_exec_upgrade_is_cleaned(client: &Client, socket: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let exec = client
+        .executions()
+        .create(
+            "daemon-upgrade",
+            &ExecConfig {
+                attach: Attachment {
+                    stdout: true,
+                    ..Attachment::default()
+                },
+                command: vec!["/bin/sleep".into(), "60".into()],
+                ..ExecConfig::default()
+            },
+        )
+        .await?;
+    let body = br#"{"Detach":false,"Tty":false,"KillOnDisconnect":true}"#;
+    let request = format!(
+        "POST /v1.43/exec/{}/start HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
+        exec.id,
+        body.len()
+    );
+    let mut stream = UnixStream::connect(socket).await?;
+    stream.write_all(request.as_bytes()).await?;
+    stream.write_all(body).await?;
+    let mut response = Vec::new();
+    while !response.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+        let mut bytes = [0_u8; 256];
+        let size = timeout(TIMEOUT, stream.read(&mut bytes))
+            .await
+            .map_err(|_| "exec upgrade response timed out")??;
+        require(size != 0, "exec upgrade response closed before its headers")?;
+        response.extend_from_slice(&bytes[..size]);
+    }
+    require(response.starts_with(b"HTTP/1.1 101"), "exec start did not upgrade")?;
+    drop(stream);
+
+    timeout(TIMEOUT, async {
+        loop {
+            match client.executions().inspect(&exec.id).await {
+                Err(hl_client::Error::Docker { status, .. }) if status == http::StatusCode::NOT_FOUND => return Ok(()),
+                Ok(_) => sleep(Duration::from_millis(10)).await,
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await
+    .map_err(|_| "exec survived a failed attach upgrade")??;
+    Ok(())
+}
+
 async fn terminal_job_control(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     let exec = client
         .executions()
