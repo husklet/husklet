@@ -151,7 +151,7 @@ vte-terminal.copymode, terminal.copymode {{ box-shadow: inset 0 0 0 1px {ACCENT}
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCENT_FILL, ACCENT_FILL_HOVER, BG0, BG1, BG2, CONTROL_LINE, FAINT, css};
+    use super::{css, ACCENT_FILL, ACCENT_FILL_HOVER, BG0, BG1, BG2, CONTROL_LINE, FAINT};
 
     fn channel(value: u8) -> f64 {
         let value = f64::from(value) / 255.0;

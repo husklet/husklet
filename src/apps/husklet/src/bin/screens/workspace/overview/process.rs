@@ -291,7 +291,10 @@ mod signal_feedback_tests {
             "bash",
             "killing",
             "force kill",
-            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied")),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "permission denied",
+            )),
         );
         assert_eq!(feedback.text, "bash · force kill failed: permission denied");
         assert!(!feedback.delivered);

@@ -489,11 +489,13 @@ pub(crate) struct Url(String);
 
 impl Url {
     pub(crate) fn new(url: &str) -> Self {
-        Self(if url.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("www.")) {
-            format!("https://{url}")
-        } else {
-            url.to_string()
-        })
+        Self(
+            if url.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("www.")) {
+                format!("https://{url}")
+            } else {
+                url.to_string()
+            },
+        )
     }
 
     pub(crate) fn open(&self) {

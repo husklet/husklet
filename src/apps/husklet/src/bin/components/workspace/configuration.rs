@@ -57,7 +57,9 @@ impl Form {
             return Ok(None);
         }
         if key.is_empty() {
-            return Err(Self::invalid("Environment variable name is required when a value is provided."));
+            return Err(Self::invalid(
+                "Environment variable name is required when a value is provided.",
+            ));
         }
         Ok(Some((key.to_owned(), value.to_owned())))
     }

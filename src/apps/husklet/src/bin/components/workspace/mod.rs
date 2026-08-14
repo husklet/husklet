@@ -453,11 +453,7 @@ mod create_tests {
         let path = directory.path().join("workspaces.conf");
         let mut store = WorkspaceStore::load(&path).unwrap();
 
-        create_workspace(
-            &mut store,
-            WorkspaceConfig::new("demo", "image:latest", Arch::Arm64),
-        )
-        .unwrap();
+        create_workspace(&mut store, WorkspaceConfig::new("demo", "image:latest", Arch::Arm64)).unwrap();
 
         assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
     }
