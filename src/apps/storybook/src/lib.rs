@@ -8,8 +8,11 @@ mod story;
 
 pub use story::{Catalogue, Story};
 
-/// The sample rows the catalogue's table is populated with.
+/// How many rows the catalogue's table claims to have.
+pub const ROWS: u64 = story::ROWS;
+
+/// Answers one window request, the way an out-of-process producer would.
 #[must_use]
-pub fn rows() -> hl_gui::RowWindow {
-    story::window()
+pub fn answer(request: &hl_gui::RowRequest) -> hl_gui::RowWindow {
+    story::answer(request)
 }

@@ -34,6 +34,8 @@ impl Registry {
 /// Why a mutation could not be applied to the widget tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Failure {
+    /// A source was named that no node is bound to.
+    Unbound(hl_gui::SourceId),
     /// The tree validated a node the adapter has no widget for. Indicates the
     /// adapter and the tree disagree, which is always a defect here.
     Unmapped(NodeId),
@@ -44,6 +46,7 @@ pub enum Failure {
 impl std::fmt::Display for Failure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Unbound(source) => write!(formatter, "no table bound to source {}", source.raw()),
             Self::Unmapped(id) => write!(formatter, "no widget for node {}", id.raw()),
             Self::NotAContainer(id) => {
                 write!(formatter, "node {} cannot hold children", id.raw())

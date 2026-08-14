@@ -7,7 +7,7 @@ mod control;
 mod display;
 mod layout;
 
-pub(crate) use collection::window;
+pub(crate) use collection::{answer, ROWS};
 
 /// One catalogue entry: a titled sample of a component family.
 pub struct Story {
@@ -164,7 +164,7 @@ impl Sample {
         vec![
             Column::new("name", "Name").width(Length::Fill).sortable(),
             Column::new("image", "Image").width(Length::Chars(22)),
-            Column::new("state", "State").width(Length::Chars(10)),
+            Column::new("state", "State").width(Length::Chars(14)),
             Column::new("size", "Size").width(Length::Chars(10)).align(Align::End),
         ]
     }

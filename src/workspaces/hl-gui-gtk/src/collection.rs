@@ -1,7 +1,9 @@
 //! Collection binding: declared columns and the rows answering a window.
 
 use gtk::prelude::*;
-use hl_gui::{Align, Cell, Column, Length, Prop, PropValue, Row, RowWindow, Tone};
+use hl_gui::{Align, Column, Length, Prop, PropValue, RowWindow, SourceId};
+
+use crate::rows::{Rows, UNIT};
 
 use crate::build;
 
@@ -78,46 +80,39 @@ fn bind(item: &gtk::glib::Object, index: usize) {
         return;
     };
     let cells = text.string();
-    label.set_text(cells.split('\u{1f}').nth(index).unwrap_or(""));
+    label.set_text(cells.split(UNIT).nth(index).unwrap_or(""));
 }
 
-/// Binds a delivered window of rows to a table.
+/// The virtualized model behind a table, created on first use.
 ///
-/// Rows arrive as unit-separated fields rather than a bespoke list model, so a
-/// window lands in one model swap; the windowing cache decides what is asked
-/// for in the first place.
+/// Widget count stays proportional to the viewport rather than the source, so
+/// a table over a large result set costs what is on screen.
+pub(crate) fn model(widget: &gtk::Widget, source: SourceId) -> Option<Rows> {
+    let view = build::collection::view(widget)?;
+    if let Some(existing) = view
+        .model()
+        .and_then(|model| model.downcast::<gtk::NoSelection>().ok())
+        .and_then(|selection| selection.model())
+        .and_then(|inner| inner.downcast::<Rows>().ok())
+    {
+        return Some(existing);
+    }
+    let rows = Rows::new(source);
+    view.set_model(Some(&gtk::NoSelection::new(Some(rows.clone()))));
+    Some(rows)
+}
+
+/// Delivers a window to the table bound to its source.
 pub(crate) fn present(widget: &gtk::Widget, window: &RowWindow) {
-    let Some(view) = build::collection::view(widget) else {
+    let Some(rows) = model(widget, window.source) else {
         return;
     };
-    let encoded: Vec<String> = window.rows.iter().map(encode).collect();
-    let borrowed: Vec<&str> = encoded.iter().map(String::as_str).collect();
-    let model = gtk::StringList::new(&borrowed);
-    view.set_model(Some(&gtk::NoSelection::new(Some(model))));
-}
-
-fn encode(row: &Row) -> String {
-    row.cells.iter().map(render).collect::<Vec<_>>().join("\u{1f}")
-}
-
-fn render(cell: &Cell) -> String {
-    match cell {
-        Cell::Text(value) => value.clone(),
-        Cell::Number(value) => format!("{value}"),
-        Cell::Bytes(value) => hl_gui::ByteSize::new(*value as i64).to_string(),
-        Cell::Badge { label, tone } => badge(label, *tone),
-        Cell::Stamp(value) => format!("{value}"),
-        Cell::Empty => "—".into(),
+    if u64::from(rows.n_items()) < window.range.end() {
+        // A window can arrive before the length does; describe at least what
+        // was delivered, so those rows are reachable rather than invisible.
+        rows.resize(window.version, window.range.end());
     }
-}
-
-fn badge(label: &str, tone: Tone) -> String {
-    match tone {
-        Tone::Positive => format!("● {label}"),
-        Tone::Warning => format!("▲ {label}"),
-        Tone::Danger => format!("✕ {label}"),
-        _ => label.into(),
-    }
+    rows.deliver(window);
 }
 
 /// Appends a row widget to a list component.

@@ -1,4 +1,4 @@
-use hl_gui::{Cell, Length, NodeId, Prop, PropValue, Row, RowRange, RowWindow, Surface, Tag, Tone};
+use hl_gui::{Cell, Length, NodeId, Prop, PropValue, Row, RowRequest, RowWindow, Surface, Tag, Tone, Version};
 
 use super::Sample;
 
@@ -11,44 +11,54 @@ pub(super) fn table(surface: &mut Surface, parent: NodeId) {
     surface.append(parent, table);
 }
 
-/// The rows the storybook answers its own window request with.
+/// How many rows the catalogue's table claims to have.
+///
+/// Far more than could be held, so the story demonstrates virtualization
+/// rather than merely displaying a handful of rows.
+pub const ROWS: u64 = 100_000;
+
+/// Answers one window request, the way an out-of-process producer would.
 #[must_use]
-pub fn window() -> RowWindow {
-    let rows = [
-        ("api", "husklet/api:1.4.2", "running", 184_549_376_u64, Tone::Positive),
-        ("worker", "husklet/worker:1.4.2", "running", 96_468_992, Tone::Positive),
-        (
-            "postgres",
-            "postgres:16-alpine",
-            "restarting",
-            251_658_240,
-            Tone::Warning,
-        ),
-        ("redis", "redis:7-alpine", "exited", 41_943_040, Tone::Danger),
-        ("migrate", "husklet/migrate:1.4.2", "created", 12_582_912, Tone::Neutral),
-    ];
-    let rows = rows
-        .into_iter()
-        .enumerate()
-        .map(|(index, (name, image, state, size, tone))| {
-            Row::new(
-                index as u64,
-                [
-                    Cell::text(name),
-                    Cell::text(image),
-                    Cell::badge(state, tone),
-                    Cell::Bytes(size),
-                ],
-            )
+pub fn answer(request: &RowRequest) -> RowWindow {
+    let rows = (0..request.range.count)
+        .map(|offset| {
+            let index = request.range.start + u64::from(offset);
+            row(index)
         })
+        .filter(|row| row.key < ROWS)
         .collect();
     RowWindow {
-        source: Sample::source(),
-        version: hl_gui::Version::new(1),
-        request: hl_gui::RequestId::new(1),
-        range: RowRange::new(0, 5),
+        source: request.source,
+        version: Version::new(1),
+        request: request.id,
+        range: request.range,
         rows,
     }
+}
+
+fn row(index: u64) -> Row {
+    let states = [
+        ("running", Tone::Positive),
+        ("restarting", Tone::Warning),
+        ("exited", Tone::Danger),
+        ("created", Tone::Neutral),
+    ];
+    let (state, tone) = states[(index % states.len() as u64) as usize];
+    let images = [
+        "husklet/api:1.4.2",
+        "postgres:16-alpine",
+        "redis:7-alpine",
+        "alpine:3.20",
+    ];
+    Row::new(
+        index,
+        [
+            Cell::text(format!("container-{index:05}")),
+            Cell::text(images[(index % images.len() as u64) as usize]),
+            Cell::badge(state, tone),
+            Cell::Bytes(12_582_912 + index * 7_919),
+        ],
+    )
 }
 
 /// Composed list rows: each is a real node tree, not a formatted string.

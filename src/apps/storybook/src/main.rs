@@ -11,6 +11,9 @@ use storybook::Catalogue;
 mod capture;
 
 const APP_ID: &str = "dev.hlgui.storybook";
+const SOURCE: hl_gui::SourceId = hl_gui::SourceId::new(1);
+/// Fetch rounds the storybook plays before presenting; enough to fill a view.
+const ROUNDS: u64 = 4;
 const WIDTH: i32 = 1100;
 const HEIGHT: i32 = 1400;
 
@@ -30,9 +33,7 @@ fn present(application: &gtk::Application) {
         eprintln!("[storybook] catalogue rejected: {failure}");
         return;
     }
-    if let Err(failure) = widgets.rows(&storybook_rows()) {
-        eprintln!("[storybook] rows rejected: {failure}");
-    }
+    serve(&mut widgets);
 
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_child(Some(widgets.widget()));
@@ -55,6 +56,28 @@ fn present(application: &gtk::Application) {
     window.present();
 }
 
-fn storybook_rows() -> hl_gui::RowWindow {
-    storybook::rows()
+/// Plays the producer for the catalogue's table: declare the length, then
+/// answer whatever windows the view asks for.
+fn serve(widgets: &mut Widgets) {
+    if let Err(failure) = widgets.resize(SOURCE, hl_gui::Version::new(1), storybook::ROWS) {
+        eprintln!("[storybook] source rejected: {failure}");
+        return;
+    }
+    for round in 0..ROUNDS {
+        let requests = widgets.requests(round);
+        if requests.is_empty() {
+            return;
+        }
+        answer(widgets, &requests);
+    }
+}
+
+/// Delivers one round of windows.
+fn answer(widgets: &mut Widgets, requests: &[hl_gui::RowRequest]) {
+    for request in requests {
+        let Err(failure) = widgets.rows(&storybook::answer(request)) else {
+            continue;
+        };
+        eprintln!("[storybook] window rejected: {failure}");
+    }
 }

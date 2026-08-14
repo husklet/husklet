@@ -10,10 +10,12 @@ mod collection;
 mod event;
 mod prop;
 mod registry;
+pub mod rows;
 pub mod style;
 
 pub use event::Reports;
 pub use registry::Failure;
+pub use rows::Rows;
 
 use std::collections::HashMap;
 
@@ -58,6 +60,36 @@ impl Surface {
     #[must_use]
     pub fn reports(&self) -> &Reports {
         &self.reports
+    }
+
+    /// Records how long a source is, which is what its scrollbar describes.
+    ///
+    /// # Errors
+    /// Returns `Failure::Unmapped` when no node is bound to the source.
+    pub fn resize(&mut self, source: SourceId, version: hl_gui::Version, rows: u64) -> Result<(), Failure> {
+        let id = self.sources.get(&source).copied().ok_or(Failure::Unbound(source))?;
+        let widget = self.require(id)?;
+        if let Some(model) = collection::model(widget, source) {
+            model.resize(version, rows);
+        }
+        Ok(())
+    }
+
+    /// Row windows the bound tables have decided they need, taken for sending.
+    #[must_use]
+    pub fn requests(&self, now: u64) -> Vec<hl_gui::RowRequest> {
+        let mut pending = Vec::new();
+        for (source, id) in &self.sources {
+            let Ok(widget) = self.require(*id) else {
+                continue;
+            };
+            let Some(model) = collection::model(widget, *source) else {
+                continue;
+            };
+            model.tick(now);
+            pending.extend(model.drain());
+        }
+        pending
     }
 
     /// Number of live widgets, for tests and diagnostics.
