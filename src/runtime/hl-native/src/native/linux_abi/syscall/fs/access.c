@@ -37,9 +37,7 @@ static void svc_fs_access_49(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                 G_RET(c) = (uint64_t)(int64_t)(resolved != 0 ? resolved : -ENOTDIR);
                 break;
             }
-            int authority = hl_vfs_cursor_native_descriptor(&destination.directory);
-            int changed = authority >= 0 && fchdir(authority) == 0 ? 0 : (authority < 0 ? -ENOSYS : -errno);
-            if (changed == 0) changed = hl_vfs_cwd_cursor_set(&destination.directory);
+            int changed = hl_vfs_cwd_cursor_set(&destination.directory);
             if (changed == 0) (void)path_copy(g_cwd, sizeof g_cwd, destination.directory.guest);
             hl_vfs_cursor_entry_release(&destination);
             G_RET(c) = (uint64_t)(int64_t)changed;
@@ -88,9 +86,7 @@ static void svc_fs_access_50(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                 G_RET(c) = (uint64_t)(int64_t)-EBADF;
                 break;
             }
-            int authority = hl_vfs_cursor_native_descriptor(destination);
-            int changed = authority >= 0 && fchdir(authority) == 0 ? hl_vfs_cwd_cursor_set(destination)
-                                                                   : (authority < 0 ? -ENOSYS : -errno);
+            int changed = hl_vfs_cwd_cursor_set(destination);
             if (changed == 0) (void)path_copy(g_cwd, sizeof g_cwd, destination->guest);
             G_RET(c) = (uint64_t)(int64_t)changed;
             break;
