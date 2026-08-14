@@ -253,6 +253,10 @@ static volatile uint32_t *g_ckpt_trigger;
 static uint32_t g_ckpt_seen_gen;
 static _Atomic int g_ckpt_barrier_active;
 
+uint32_t ckpt_request_generation(void) {
+    return g_ckpt_seen_gen;
+}
+
 // A whole-tree checkpoint has been requested. Consulted by syscall_should_restart / svc_poll_retry so a
 // process parked in a blocking host syscall (for example a shell in read()/poll on its pty)
 // returns EINTR and reaches the dispatcher safepoint (where G_CKPT_POLL runs) instead of transparently

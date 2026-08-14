@@ -32,6 +32,9 @@
 
 struct ckpt_sink;
 
+/* Generation authority is owned by checkpoint control, not by this header implementation. */
+uint32_t ckpt_request_generation(void);
+
 #define CKPT_SINK_BUFFER 65536u
 
 // One open object; the writer holds an opaque pointer to it.

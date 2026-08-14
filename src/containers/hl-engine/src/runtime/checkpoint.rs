@@ -796,9 +796,8 @@ impl Server {
                 }
                 if self.publish(&object, admission).is_ok() {
                     if object.name == "RECOVERY.jsonl" {
-                        let mut capture = match self.capture_lock() {
-                            Ok(capture) => capture,
-                            Err(_) => return Reply::error(),
+                        let Ok(mut capture) = self.capture_lock() else {
+                            return Reply::error();
                         };
                         if matches!(capture.phase, CapturePhase::Recovery { .. }) && capture.mutations == 0 {
                             capture.recovery_report_published = true;
