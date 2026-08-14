@@ -1,0 +1,29 @@
+cases:
+- id: terminal-canonical-kill/foreground-vkill
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; echo CANON-${x}READY; cat; stty echo; echo CANON-${x}DONE\r" }
+      - await_output: { contains: CANON-READY, timeout_ms: 5000 }
+      - write: { text: "DISCARD-ME" }
+      - write: { text: "\u0015" }
+      - write: { text: "CANONICAL-KEEP\r" }
+      - await_output: { contains: CANONICAL-KEEP, timeout_ms: 5000 }
+      - reject_output: { text: "DISCARD-ME" }
+      - write: { text: "\u0004" }
+      - await_output: { contains: CANON-DONE, timeout_ms: 5000 }
+      - write: { text: "printf \"SHELL-${x}OK\\n\"; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/kept.txt
+    - golden/canonical_done.txt
+    - golden/shell_ok.txt
