@@ -32,8 +32,14 @@ HL_API void hl_log_format(const hl_log_context *context, uint32_t tag, const cha
 HL_API const char *hl_log_tag_name(uint32_t tag);
 
 #if defined(HL_ENABLE_LOGGING) && HL_ENABLE_LOGGING
-#define HL_LOG(context, tag, message) hl_log_message((context), (tag), (message), sizeof(message) - 1u)
-#define HL_LOGF(context, tag, ...) hl_log_format((context), (tag), __VA_ARGS__)
+#define HL_LOG(context, tag, message)                                                                                \
+    do {                                                                                                             \
+        if (hl_log_enabled((context), (tag))) hl_log_message((context), (tag), (message), sizeof(message) - 1u);    \
+    } while (0)
+#define HL_LOGF(context, tag, ...)                                                                                   \
+    do {                                                                                                             \
+        if (hl_log_enabled((context), (tag))) hl_log_format((context), (tag), __VA_ARGS__);                         \
+    } while (0)
 #else
 #define HL_LOG(context, tag, message) ((void)0)
 #define HL_LOGF(context, tag, ...) ((void)0)
