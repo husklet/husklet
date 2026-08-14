@@ -883,9 +883,10 @@ static int t2_slot(uint64_t gpc) {
 // poll: a cycle of direct branches must contain a backward edge (code addresses strictly increase
 // along forward-only paths), and every indirect entry (IBTC/IC/ctx/SDC) still lands on body+0 --
 // so every possible in-cache loop keeps polling, while straight-line chains (the common case in
-// branchy interpreter code) stop paying a load+branch per block. g_fwdskip is 8 when that layout
-// is active (aarch64 default), 0 otherwise (x86 engine, NOIRQSLIM/NOIRQCHECK/NOSTEAL1617).
-static int g_fwdskip;
+// branchy interpreter code) stop paying a load+branch per block. The production translators initialize
+// this layout to 8; keeping the declaration at that effective default also makes pre-initialization
+// translator identity checks agree with the engine that produced a checkpoint.
+static int g_fwdskip = 8;
 
 static struct {
     uint32_t *slot;
