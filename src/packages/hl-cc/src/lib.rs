@@ -14,5 +14,6 @@ pub use cargo::CargoDirectives;
 pub use error::{Error, Result};
 pub use library::{LinkerFlavor, SharedLibrarySpec};
 pub use platform::{
-    BuildEnvironment, EnvFlag, EnvKey, Profile, TargetArch, TargetEnvironment, TargetOs, ToolCommand, Toolchain, Triple,
+    BuildEnvironment, EnvFlag, EnvKey, Profile, TargetArch, TargetEnvironment, TargetOs, TargetTools, ToolCommand,
+    Toolchain, Triple,
 };

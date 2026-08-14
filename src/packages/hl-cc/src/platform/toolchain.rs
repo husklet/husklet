@@ -1,6 +1,38 @@
 use std::{ffi::OsString, path::PathBuf, process::Command};
 
-use crate::{BuildEnvironment, Error, Result};
+use super::{TargetEnvironment, TargetOs};
+use crate::{BuildEnvironment, CompilerFlavor, Error, LinkerFlavor, Result};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TargetTools {
+    pub compiler: CompilerFlavor,
+    pub linker: LinkerFlavor,
+}
+
+impl TargetTools {
+    #[must_use]
+    pub fn resolve(os: &TargetOs, environment: &TargetEnvironment) -> Option<Self> {
+        match (os.as_str(), environment.as_str()) {
+            ("macos", _) => Some(Self {
+                compiler: CompilerFlavor::GnuLike,
+                linker: LinkerFlavor::Darwin,
+            }),
+            ("windows", "msvc") => Some(Self {
+                compiler: CompilerFlavor::Msvc,
+                linker: LinkerFlavor::MsvcWindows,
+            }),
+            ("windows", _) => Some(Self {
+                compiler: CompilerFlavor::GnuLike,
+                linker: LinkerFlavor::GnuWindows,
+            }),
+            ("linux", _) => Some(Self {
+                compiler: CompilerFlavor::GnuLike,
+                linker: LinkerFlavor::Elf,
+            }),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolCommand {
@@ -100,7 +132,8 @@ impl Toolchain {
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolCommand, Toolchain};
+    use super::{TargetTools, ToolCommand, Toolchain};
+    use crate::{CompilerFlavor, LinkerFlavor, TargetEnvironment, TargetOs};
     use std::ffi::OsStr;
 
     #[test]
@@ -132,5 +165,20 @@ mod tests {
                 .get_envs()
                 .any(|(name, value)| name == "ARCHIVE_CONTEXT" && value == Some(OsStr::new("kept")))
         );
+    }
+
+    #[test]
+    fn platform_tool_matrix_is_explicit_and_open_to_unknown_targets() {
+        let cases = [
+            ("linux", "gnu", CompilerFlavor::GnuLike, LinkerFlavor::Elf),
+            ("macos", "", CompilerFlavor::GnuLike, LinkerFlavor::Darwin),
+            ("windows", "msvc", CompilerFlavor::Msvc, LinkerFlavor::MsvcWindows),
+            ("windows", "gnu", CompilerFlavor::GnuLike, LinkerFlavor::GnuWindows),
+        ];
+        for (os, environment, compiler, linker) in cases {
+            let tools = TargetTools::resolve(&TargetOs::new(os), &TargetEnvironment::new(environment)).unwrap();
+            assert_eq!(tools, TargetTools { compiler, linker });
+        }
+        assert!(TargetTools::resolve(&TargetOs::new("newos"), &TargetEnvironment::new("eabi")).is_none());
     }
 }

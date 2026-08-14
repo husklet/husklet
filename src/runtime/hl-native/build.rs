@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use hl_cc::{
-    ArchiveFormat, ArchiveSpec, BuildEnvironment, CCompiler, CargoDirectives, CompilerFlavor, Definition, EnvFlag,
-    EnvKey, LanguageStandard, LinkerFlavor, Sanitizer, SharedLibrarySpec, Toolchain, Visibility, Warning,
+    ArchiveFormat, ArchiveSpec, BuildEnvironment, CCompiler, CargoDirectives, Definition, EnvFlag, EnvKey,
+    LanguageStandard, LinkerFlavor, Sanitizer, SharedLibrarySpec, TargetTools, Toolchain, Visibility, Warning,
 };
 
 #[path = "src/artifact.rs"]
@@ -52,14 +52,10 @@ fn main() {
     inventory::sources::emit_rerun_inputs(Path::new(NATIVE_ROOT));
     let plan = target.build_plan();
 
-    let compiler_flavor = if target.os == platform::HostOs::Windows && environment.target_environment.as_str() == "msvc"
-    {
-        CompilerFlavor::Msvc
-    } else {
-        CompilerFlavor::GnuLike
-    };
+    let tools = TargetTools::resolve(&environment.target_os, &environment.target_environment)
+        .unwrap_or_else(|| panic!("no C tool plan for {}", environment.target.as_str()));
     let toolchain = Toolchain::discover(&environment).unwrap_or_else(|error| panic!("{error}"));
-    let compiler = CCompiler::new(&environment, &toolchain, compiler_flavor);
+    let compiler = CCompiler::new(&environment, &toolchain, tools.compiler);
     let platform_definition = if target.os == platform::HostOs::Macos {
         "_DARWIN_C_SOURCE"
     } else {
@@ -181,15 +177,10 @@ fn main() {
         platform::HostOs::Windows => build_support::WINDOWS_SYSTEM_LIBRARIES.to_vec(),
         platform::HostOs::Linux => ELF_LIBRARIES.to_vec(),
     };
-    let linker = match (target.os, environment.target_environment.as_str()) {
-        (platform::HostOs::Macos, _) => LinkerFlavor::Darwin,
-        (platform::HostOs::Windows, "msvc") => LinkerFlavor::MsvcWindows,
-        (platform::HostOs::Windows, _) => {
-            libraries.push("atomic");
-            LinkerFlavor::GnuWindows
-        }
-        (platform::HostOs::Linux, _) => LinkerFlavor::Elf,
-    };
+    let linker = tools.linker;
+    if linker == LinkerFlavor::GnuWindows {
+        libraries.push("atomic");
+    }
     let filename = artifact::filename(environment.target_os.as_str());
     let mut library = SharedLibrarySpec::new("hl_native_engine", filename)
         .archives(linked_archives)
