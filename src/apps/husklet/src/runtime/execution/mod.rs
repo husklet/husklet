@@ -93,10 +93,6 @@ pub fn launch(
     // Otherwise Ubuntu images open as the unprivileged `ubuntu` account and cannot administer their own
     // package database. When user selection becomes public, it must flow through one explicit policy here.
     let (terminal_user, terminal_home) = terminal_identity();
-    let start_dir = cwd
-        .map(str::trim)
-        .filter(|value| value.starts_with('/') && !value.is_empty())
-        .unwrap_or(terminal_home);
     let base = workspace
         .shell
         .as_deref()
@@ -106,7 +102,7 @@ pub fn launch(
             || "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi".to_owned(),
             |shell| format!("exec {shell}"),
         );
-    let command = format!("cd {} 2>/dev/null; {base}", Shell::quote(start_dir));
+    let (working_dir, command) = terminal_start(cwd, terminal_home, &base);
     let size = Size::new(rows.max(1), columns.max(1)).map_err(LauncherError::io)?;
     let pane = PaneExecution::new(workspace, slot)?;
     let config = ExecConfig {
@@ -127,7 +123,7 @@ pub fn launch(
         ),
         command: vec!["/bin/sh".into(), "-c".into(), command],
         user: terminal_user.into(),
-        working_dir: start_dir.into(),
+        working_dir,
         ..ExecConfig::default()
     };
     let start = ExecStart {
@@ -227,6 +223,33 @@ pub fn launch(
 
 fn terminal_identity() -> (&'static str, &'static str) {
     ("0:0", "/root")
+}
+
+fn terminal_start(cwd: Option<&str>, home: &str, base: &str) -> (String, String) {
+    let requested = cwd
+        .map(str::trim)
+        .filter(|value| value.starts_with('/') && !value.is_empty())
+        .unwrap_or(home);
+    (
+        home.to_owned(),
+        format!(
+            "cd {} 2>/dev/null || cd {}; {base}",
+            Shell::quote(requested),
+            Shell::quote(home)
+        ),
+    )
+}
+
+#[cfg(test)]
+mod terminal_start_tests {
+    use super::terminal_start;
+
+    #[test]
+    fn inherited_directory_is_attempted_from_a_safe_home_baseline() {
+        let (working_dir, command) = terminal_start(Some(" /tmp/deleted "), "/root", "exec bash -il");
+        assert_eq!(working_dir, "/root");
+        assert_eq!(command, "cd '/tmp/deleted' 2>/dev/null || cd '/root'; exec bash -il");
+    }
 }
 
 struct WorkspaceContainer;
