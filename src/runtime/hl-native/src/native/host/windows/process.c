@@ -1066,6 +1066,7 @@ static unsigned hl_windows_child_cursor;
 
 static hl_windows_clone_process_fn hl_windows_clone_process(void) {
     static hl_windows_clone_process_fn resolved;
+    FARPROC address;
     HMODULE ntdll;
     if (resolved != NULL) return resolved;
     /* ntdll is mapped into every process before any user code runs, so this is a
@@ -1073,7 +1074,9 @@ static hl_windows_clone_process_fn hl_windows_clone_process(void) {
      * work inside a clone. */
     ntdll = GetModuleHandleW(L"ntdll.dll");
     if (ntdll == NULL) return NULL;
-    resolved = (hl_windows_clone_process_fn)(void *)GetProcAddress(ntdll, "RtlCloneUserProcess");
+    address = GetProcAddress(ntdll, "RtlCloneUserProcess");
+    _Static_assert(sizeof resolved == sizeof address, "Windows function pointers must share a representation");
+    memcpy(&resolved, &address, sizeof resolved);
     return resolved;
 }
 
@@ -1403,9 +1406,12 @@ int hl_host_windows_parent_pid(void) {
     PROCESS_BASIC_INFORMATION basic;
     ULONG written = 0;
     if (resolved == NULL) {
+        FARPROC address;
         HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
         if (ntdll == NULL) return -1;
-        resolved = (hl_windows_query_process_fn)(void *)GetProcAddress(ntdll, "NtQueryInformationProcess");
+        address = GetProcAddress(ntdll, "NtQueryInformationProcess");
+        _Static_assert(sizeof resolved == sizeof address, "Windows function pointers must share a representation");
+        memcpy(&resolved, &address, sizeof resolved);
         if (resolved == NULL) return -1;
     }
     memset(&basic, 0, sizeof basic);
