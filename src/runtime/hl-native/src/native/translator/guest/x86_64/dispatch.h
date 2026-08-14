@@ -35,7 +35,7 @@
 
 // ---- x86 dispatch support relocated out of the lifted dispatch.c -------------------------------------
 // These DEFINITIONS used to sit at the top of frontend/x86_64/dispatch.c (above run_guest). The swap
-// stops #include-ing that file, but linux_abi/x86.c (jit86_lazyguard / jit86_faulth) and the G_AFTER_TRANSLATE /
+// stops #include-ing that file, but linux_abi/x86.c (jit86_lazyguard) and the G_AFTER_TRANSLATE /
 // G_DISPATCH_DEBUG hooks still need them, so they move here (the x86 dispatch seam). This header is
 // #included exactly once in the x86 unity TU -> each is defined once. They reference only libc + the
 // extern g_rwx_guest (defined later in os/linux/service.c) -> position-independent here.

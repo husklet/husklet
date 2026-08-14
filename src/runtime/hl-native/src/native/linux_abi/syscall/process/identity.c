@@ -238,17 +238,6 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
             }
         }
-        // A3: §B shadow-return coverage. hit-rate = shret_hit / (shret_hit + shret_fb). bl_shadow /
-        // bl_leaf show how the depth-gate split call sites at translate time. PROF-only (keep dark).
-        if (0) {
-            unsigned long long h = (unsigned long long)g_prof_shret_hit, f = (unsigned long long)g_prof_shret_fb;
-            double hr = (h + f) ? 100.0 * (double)h / (double)(h + f) : 0.0;
-            fprintf(
-                stderr,
-                "[prof] shadow_push=%llu shret_hit=%llu shret_fb=%llu hit_rate=%.1f%% bl_shadow=%llu bl_leaf=%llu\n",
-                (unsigned long long)g_prof_shpush, h, f, hr, (unsigned long long)g_prof_bl_shadow,
-                (unsigned long long)g_prof_bl_leaf);
-        }
         if (g_noexit) { // W3D fork-server prewarm: don't kill the resident parent; unwind run_guest instead
             c->exited = 1;
             c->exit_code = (int)(a0 & 0xffu);

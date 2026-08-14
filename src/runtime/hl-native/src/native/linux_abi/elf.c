@@ -638,61 +638,6 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
     // registered guest handler is the guest's to handle: synthesize+deliver the guest signal. nonpie_fixup
     // (absolute-data) already won above.
     if (deliver_guest_fault(sig, si, uc)) return;
-    // DIAGNOSTIC (gated, async-signal-safe, NO user-pointer deref): every no-handler fault about to be
-    // turned into a fatal guest termination or re-raised. Prints sig / host PC / fault addr / host SP +
-    // whether the host PC is inside the RX code cache (1 = a wild jump in translated guest code).
-    if (0) {
-        extern int jit_pc_in_cache(uint64_t pc, uint64_t *base);
-        ucontext_t *u = (ucontext_t *)uc;
-        uint64_t hpc = u ? (uint64_t)HL_HOST_UC_PC(u) : 0;
-        uint64_t hsp = u ? (uint64_t)HL_HOST_UC_SP(u) : 0;
-        uint64_t rxb = 0;
-        int inc = jit_pc_in_cache(hpc, &rxb);
-        char b[224];
-        int o = 0;
-        const char *H = "0123456789abcdef";
-        memcpy(b, "[HL-ENGINE-FAULT] sig=", 22);
-        o = 22;
-        b[o++] = '0' + (sig / 10 % 10);
-        b[o++] = '0' + (sig % 10);
-
-        struct {
-            const char *l;
-            uint64_t v;
-        } F[] = {{" hpc=0x", hpc}, {" fault=0x", (uint64_t)si->si_addr}, {" hsp=0x", hsp}, {" rxbase=0x", rxb}};
-
-        for (int f = 0; f < 4; f++) {
-            for (const char *L = F[f].l; *L;)
-                b[o++] = *L++;
-            for (int i = 15; i >= 0; i--)
-                b[o++] = H[(F[f].v >> (i * 4)) & 0xf];
-        }
-        memcpy(b + o, " incache=", 9);
-        o += 9;
-        b[o++] = '0' + inc;
-        b[o++] = '\n';
-        if (write(2, b, o) < 0) {}
-        // Name the faulting engine function where the host supplies dladdr. It is not strictly
-        // async-signal-safe, but we exit immediately after this diagnostics-only path.
-#if !defined(_WIN32)
-        Dl_info di;
-        if (hpc && dladdr((void *)hpc, &di) && di.dli_sname) {
-            char c[160];
-            int p = 0;
-            memcpy(c, "[HL-ENGINE-FAULT] fn=", 21);
-            p = 21;
-            for (const char *s = di.dli_sname; *s && p < 140; s++)
-                c[p++] = *s;
-            memcpy(c + p, " +0x", 4);
-            p += 4;
-            uint64_t off = hpc - (uint64_t)di.dli_saddr;
-            for (int i = 12; i >= 0; i -= 4)
-                c[p++] = H[(off >> i) & 0xf];
-            c[p++] = '\n';
-            if (write(2, c, p) < 0) {}
-        }
-#endif
-    }
     // no guest handler -> a fatal, unmaskable synchronous fault. Terminate the guest process through
     // hl's fatal-signal machinery so its parent's wait4 sees WIFSIGNALED/WTERMSIG=sig (a raw host raise()
     // degrades to exit(255) across hl's fork). Declines (returns 0) for a genuine ENGINE fault -> re-raise.
