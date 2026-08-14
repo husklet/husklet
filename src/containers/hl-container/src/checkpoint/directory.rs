@@ -17,8 +17,9 @@ pub(crate) struct DirectoryImages {
 }
 
 impl DirectoryImages {
-    pub(crate) fn open(root: PathBuf) -> Result<Self, CheckpointError> {
-        std::fs::create_dir_all(&root)
+    pub(crate) fn open(root: impl AsRef<Path>) -> Result<Self, CheckpointError> {
+        let root = root.as_ref();
+        std::fs::create_dir_all(root)
             .map_err(|error| CheckpointError::new(format!("create checkpoint root: {error}")))?;
         #[cfg(unix)]
         let directory = {
@@ -26,7 +27,7 @@ impl DirectoryImages {
             use nix::sys::stat::Mode;
             Arc::new(
                 open(
-                    &root,
+                    root,
                     OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW,
                     Mode::empty(),
                 )
@@ -35,7 +36,7 @@ impl DirectoryImages {
         };
         Ok(Self {
             #[cfg(not(unix))]
-            root,
+            root: root.to_owned(),
             #[cfg(unix)]
             directory,
         })
@@ -60,25 +61,22 @@ impl DirectoryImages {
         )
         .map_err(|error| CheckpointError::new(format!("open checkpoint image: {error}")))?;
         let current_pointer = DirectoryImage::read_optional(&directory, "current")?;
-        let (current, base) = match current_pointer {
-            Some(bytes) => {
-                let generation = std::str::from_utf8(&bytes)
-                    .map_err(|_| CheckpointError::new("checkpoint current generation is not UTF-8"))?;
-                if !DirectoryImage::valid_generation(generation) {
-                    return Err(CheckpointError::new("checkpoint current generation is invalid"));
-                }
-                let held = DirectoryImage::open_directory(&directory, generation)
-                    .map_err(|_| CheckpointError::new("checkpoint current generation is incomplete"))?;
-                if !DirectoryImage::regular_exists(&held, "MANIFEST")? {
-                    return Err(CheckpointError::new("checkpoint current generation is incomplete"));
-                }
-                (Some(DirectoryGeneration::Named(generation.to_owned())), Some(bytes))
+        let (current, base) = if let Some(bytes) = current_pointer {
+            let generation = std::str::from_utf8(&bytes)
+                .map_err(|_| CheckpointError::new("checkpoint current generation is not UTF-8"))?;
+            if !DirectoryImage::valid_generation(generation) {
+                return Err(CheckpointError::new("checkpoint current generation is invalid"));
             }
-            None => {
-                let current =
-                    DirectoryImage::regular_exists(&directory, "MANIFEST")?.then_some(DirectoryGeneration::Namespace);
-                (current, None)
+            let held = DirectoryImage::open_directory(&directory, generation)
+                .map_err(|_| CheckpointError::new("checkpoint current generation is incomplete"))?;
+            if !DirectoryImage::regular_exists(&held, "MANIFEST")? {
+                return Err(CheckpointError::new("checkpoint current generation is incomplete"));
             }
+            (Some(DirectoryGeneration::Named(generation.to_owned())), Some(bytes))
+        } else {
+            let current =
+                DirectoryImage::regular_exists(&directory, "MANIFEST")?.then_some(DirectoryGeneration::Namespace);
+            (current, None)
         };
         let generation = DirectoryImage::generation();
         Ok(Arc::new(DirectoryImage {
