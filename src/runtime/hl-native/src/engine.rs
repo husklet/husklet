@@ -70,10 +70,26 @@ impl Engine {
     /// Borrowed create inputs need only remain valid for this call; C copies
     /// configuration.
     pub unsafe fn create(config: EngineConfig<'_>) -> Result<Self, i32> {
+        // SAFETY: forwarded unchanged; the hook does not observe raw inputs.
+        unsafe { Self::create_after_pinning(config, || {}) }
+    }
+
+    unsafe fn create_after_pinning(config: EngineConfig<'_>, after_pin: impl FnOnce()) -> Result<Self, i32> {
         if config.option_names.len() != config.option_values.len() {
             return Err(STATUS_OK.wrapping_add(1));
         }
         let count = c_uint::try_from(config.option_names.len()).map_err(|_| 1)?;
+        #[cfg(unix)]
+        let pinned_executable = open_main_image(&config)?;
+        #[cfg(unix)]
+        let config = {
+            use std::os::fd::AsRawFd as _;
+            EngineConfig {
+                executable_fd: pinned_executable.as_raw_fd(),
+                ..config
+            }
+        };
+        after_pin();
         let image_plan = Plan::inspect(&config)?;
         let mut output = std::ptr::null_mut();
         // SAFETY: the caller guarantees that the raw option and callback
@@ -412,6 +428,36 @@ mod tests {
         // the bridge copies configuration and imports its own descriptor handles.
         let engine = unsafe { Engine::create(config) }.unwrap();
         (engine, standard)
+    }
+
+    #[test]
+    fn pathname_replacement_cannot_change_pinned_initial_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("guest");
+        std::fs::write(&path, image()).unwrap();
+        let executable = CString::new(path.to_str().unwrap()).unwrap();
+        let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+        let config = EngineConfig {
+            isa: 1,
+            rootfs: None,
+            executable_host: Some(&executable),
+            executable_fd: -1,
+            option_names: &[],
+            option_values: &[],
+            standard_fds: [standard.as_raw_fd(); 3],
+            provider_fd: -1,
+        };
+        let displaced = directory.path().join("displaced");
+        // SAFETY: all pointers and descriptors remain live through creation. The hook runs only after
+        // the engine has pinned the path's file description and replaces the directory entry, not that
+        // open description.
+        let engine = unsafe {
+            Engine::create_after_pinning(config, || {
+                std::fs::rename(&path, &displaced).unwrap();
+                std::fs::write(&path, b"not an ELF image").unwrap();
+            })
+        };
+        assert!(engine.is_ok(), "creation reopened the replaced executable pathname");
     }
 
     fn inspect(bytes: &[u8]) -> Result<Plan, i32> {
