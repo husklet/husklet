@@ -68,14 +68,6 @@ static uint64_t smc_page_size(void) {
     return size;
 }
 
-static void smc_forget_page(uint64_t page) {
-    (void)hl_smc_page_index_remove(&g_smc_index, page);
-}
-
-static void smc_forget_all(void) {
-    hl_smc_page_index_reset(&g_smc_index);
-}
-
 static void smc_protect(uint64_t pc) {
     if (!g_rwx_guest) return; // no JIT guest -> inert (matrix bit-exact)
     const void *canonical = NULL;
@@ -86,7 +78,10 @@ static void smc_protect(uint64_t pc) {
     // runs long before any block is translated, so the answer is unchanged.
     int resolved = hl_guest_memory_resolve_exec(pc, 1, &canonical, &contiguous);
     if (resolved < 0) return;
-    if (resolved > 0) pc = (uint64_t)(uintptr_t)canonical;
+    /* Logical-VMA stores are observed through the executable-alias visitor.
+       Protecting canonical backing here would create a host fault outside the
+       direct-address domain represented by the exact index. */
+    if (!hl_smc_address_is_direct(resolved)) return;
     uint64_t size = smc_page_size();
     uint64_t pg = pc & ~(size - 1);
     for (int i = 0; i < g_smc_n; i++)
@@ -96,10 +91,11 @@ static void smc_protect(uint64_t pc) {
     // fault falls through as a real SIGSEGV / hangs on the un-handled write. Not protecting past SMC_MAX only
     // loses SMC coherence for the overflow pages (the separate "SMC capacity cliff" -> stale code, not a hang).
     if (g_smc_n >= SMC_MAX) return;
-    int indexed = hl_smc_page_index_add(&g_smc_index, pg);
-    if (!indexed) return;
+    hl_smc_page_index_add_result indexed = hl_smc_page_index_add(&g_smc_index, pg);
+    if (indexed == HL_SMC_PAGE_INDEX_FULL) return;
+    if (indexed == HL_SMC_PAGE_INDEX_EXISTS) return;
     if (mprotect((void *)pg, (size_t)size, PROT_READ) != 0) {
-        if (indexed == 1) (void)hl_smc_page_index_remove(&g_smc_index, pg);
+        if (indexed == HL_SMC_PAGE_INDEX_INSERTED) (void)hl_smc_page_index_remove(&g_smc_index, pg);
         return;
     }
     g_smc_pg[g_smc_n++] = pg;
@@ -111,13 +107,10 @@ static int smc_on_write(uint64_t a) {
     if (!g_rwx_guest) return 0;
     uint64_t size = smc_page_size();
     uint64_t pg = a & ~(size - 1);
-    for (int i = 0; i < g_smc_n; i++)
-        if (g_smc_pg[i] == pg) {
-            mprotect((void *)pg, (size_t)size, PROT_READ | PROT_WRITE); // let the guest's write through
-            g_smc_flushes++;
-            return 1;
-        }
-    return 0;
+    if (!hl_smc_page_index_contains(&g_smc_index, pg)) return 0;
+    mprotect((void *)pg, (size_t)size, PROT_READ | PROT_WRITE); // let the guest's write through
+    g_smc_flushes++;
+    return 1;
 }
 
 /* Claim a successful store to a tracked translated source page.  Keeping the

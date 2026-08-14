@@ -31,6 +31,9 @@ fn smc_page_index_is_exact_under_collisions_removal_and_publication() {
 
 static void claim_barrier(void);
 #define HL_SMC_PAGE_INDEX_BEFORE_CLAIM() claim_barrier()
+#ifdef OMIT_LIFECYCLE_INDEX_REMOVE
+#define HL_SMC_PAGE_INDEX_LIFECYCLE_REMOVE(index, page) ((void)(index), (void)(page), 0)
+#endif
 #include "translator/guest/x86_64/smc_page_index.h"
 
 static _Atomic uint64_t slots[8];
@@ -78,7 +81,7 @@ int main(void) {
     atomic_store_explicit(&start, 1, memory_order_release);
     if (!hl_smc_page_index_add(&index_, UINT64_C(0xabc000))) return 9;
     if (pthread_join(thread, NULL) != 0) return 10;
-    hl_smc_page_index_reset(&index_);
+    for (unsigned i = 0; i < 8; ++i) atomic_store_explicit(&slots[i], 0, memory_order_release);
     concurrent_pages[0] = first;
     concurrent_pages[1] = collision;
     unsigned which[] = {0, 1};
@@ -94,8 +97,25 @@ int main(void) {
     atomic_store_explicit(&claim_sync, 0, memory_order_release);
     pthread_barrier_destroy(&claims);
     if (!hl_smc_page_index_contains(&index_, first) || !hl_smc_page_index_contains(&index_, collision)) return 13;
-    hl_smc_page_index_reset(&index_);
+    for (unsigned i = 0; i < 8; ++i) atomic_store_explicit(&slots[i], 0, memory_order_release);
     if (hl_smc_page_index_contains(&index_, first) || hl_smc_page_index_contains(&index_, collision)) return 14;
+    for (unsigned i = 0; i < 8; ++i)
+        atomic_store_explicit(&slots[i], (UINT64_C(0x100000) + ((uint64_t)i << 12)) | HL_SMC_PAGE_INDEX_TOMB,
+                              memory_order_release);
+    if (hl_smc_page_index_add(&index_, UINT64_C(0xdef000)) != HL_SMC_PAGE_INDEX_INSERTED ||
+        !hl_smc_page_index_contains(&index_, UINT64_C(0xdef000))) return 15;
+    for (unsigned i = 0; i < 8; ++i) atomic_store_explicit(&slots[i], 0, memory_order_release);
+    uint64_t pages[3] = {first, collision, UINT64_C(0xabc000)};
+    int length = 3;
+    for (int i = 0; i < length; ++i)
+        if (hl_smc_page_index_add(&index_, pages[i]) != HL_SMC_PAGE_INDEX_INSERTED) return 16;
+    if (!hl_smc_page_registry_remove_range(&index_, pages, &length, first, first + UINT64_C(0x1000))) return 17;
+    if (length != 2 || hl_smc_page_index_contains(&index_, first) ||
+        !hl_smc_page_index_contains(&index_, collision) ||
+        !hl_smc_page_index_contains(&index_, UINT64_C(0xabc000))) return 18;
+    hl_smc_page_registry_remove_all(&index_, pages, &length);
+    if (length != 0 || hl_smc_page_index_contains(&index_, collision) ||
+        hl_smc_page_index_contains(&index_, UINT64_C(0xabc000))) return 19;
     return 0;
 }
 "#,
@@ -112,7 +132,78 @@ int main(void) {
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
     let run = Command::new(&executable).status().expect("SMC index probe execution");
     assert!(run.success(), "SMC index probe failed with {run}");
+    let mutation = scratch.join("smc_index_omit_lifecycle");
+    let compile_mutation = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args([
+            "-std=c11",
+            "-D_GNU_SOURCE",
+            "-DOMIT_LIFECYCLE_INDEX_REMOVE",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-pthread",
+        ])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&mutation)
+        .output()
+        .expect("mutated SMC index probe compiler");
+    assert!(
+        compile_mutation.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compile_mutation.stderr)
+    );
+    let mutation_run = Command::new(&mutation)
+        .status()
+        .expect("mutated SMC index probe execution");
+    assert!(
+        !mutation_run.success(),
+        "omitting lifecycle index removal did not redden the probe"
+    );
     fs::remove_dir_all(scratch).expect("remove SMC index probe directory");
+}
+
+#[test]
+fn smc_address_domains_are_explicit_and_idempotent() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-smc-address-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create SMC address probe directory");
+    let source = scratch.join("smc_address.c");
+    let executable = scratch.join("smc_address");
+    fs::write(
+        &source,
+        r#"
+#include "translator/guest/x86_64/smc_address.h"
+
+int main(void) {
+    const uint64_t page = UINT64_C(0x1000);
+    const uint64_t low = UINT64_C(0x400000);
+    const uint64_t high = UINT64_C(0x800000);
+    const uint64_t bias = UINT64_C(0x100000000);
+    if (!hl_smc_address_is_direct(0)) return 1;
+    if (hl_smc_address_is_direct(1) || hl_smc_address_is_direct(-1)) return 2;
+    if (hl_smc_direct_page(UINT64_C(0x401234), low, high, bias, page) != UINT64_C(0x100401000)) return 3;
+    if (hl_smc_direct_page(UINT64_C(0x100401234), low, high, bias, page) != UINT64_C(0x100401000)) return 4;
+    if (hl_smc_direct_page(UINT64_C(0x401234), 0, 0, 0, page) != UINT64_C(0x401000)) return 5;
+    return 0;
+}
+"#,
+    )
+    .expect("write SMC address probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("SMC address probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("SMC address probe execution");
+    assert!(run.success(), "SMC address probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove SMC address probe directory");
 }
 
 #[test]
@@ -157,7 +248,9 @@ int main(void) {
         .output()
         .expect("procfd target probe compiler");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
-    let run = Command::new(&executable).status().expect("procfd target probe execution");
+    let run = Command::new(&executable)
+        .status()
+        .expect("procfd target probe execution");
     assert!(run.success(), "procfd target probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove procfd target probe directory");
 }

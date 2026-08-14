@@ -1085,6 +1085,7 @@ static uint64_t g_stw_flushes;   // PROF: stop-the-world flushes performed
 // that corrupted parked peers.
 static __thread _Atomic uint64_t *g_my_exec_gen; // this thread's exec_gen slot (NULL until registered)
 static __thread int g_my_stw_slot = -1;
+static __thread unsigned g_mapping_stw_depth;
 static _Atomic uint64_t g_dispatch_request;
 static _Atomic int g_dispatch_gate;
 #define STW_RETIRED_MAX (STW_MAXTHREAD + 8)
@@ -1443,6 +1444,7 @@ static int stw_force_dispatch_flush(void) {
    this preserves the current arena: only the mapping publisher is active
    until stw_mapping_end releases the gate. */
 static void stw_mapping_begin_locked(void) {
+    if (g_mapping_stw_depth++ != 0) return;
     pthread_t me = pthread_self();
     stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
@@ -1468,11 +1470,17 @@ static void stw_mapping_begin_locked(void) {
 }
 
 static void stw_mapping_begin(void) {
+    if (g_mapping_stw_depth != 0) {
+        ++g_mapping_stw_depth;
+        return;
+    }
     jit_dispatch_lock();
     stw_mapping_begin_locked();
 }
 
 static void stw_mapping_end(void) {
+    if (g_mapping_stw_depth == 0) abort();
+    if (--g_mapping_stw_depth != 0) return;
 #ifdef G_SOFT_TLB_REFRESH
     /* The logical snapshot is now committed while every peer remains behind
        the mapping gate. Publish each CPU's conservative rejection hull before
