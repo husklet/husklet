@@ -22,6 +22,12 @@ int main(void){
     memcpy(CMSG_DATA(c), send, sizeof(int) * 3);
     sendmsg(sv[1], &mh, 0);
 
+    // Pin the next guest descriptor before receiving.  An absolute threshold is not a lifetime
+    // check: a conforming launcher may already own an arbitrary number of descriptors.  The two
+    // rights that fit must consume exactly two guest slots; a leaked truncated right consumes a third.
+    int baseline = dup(0);
+    if (baseline < 0 || close(baseline)) return 1;
+
     // Receive control buffer sized for exactly two fds.
     char rd; struct iovec rio = { &rd, 1 };
     char rcbuf[CMSG_LEN(0) + 2 * sizeof(int)]; memset(rcbuf, 0, sizeof rcbuf);
@@ -36,8 +42,8 @@ int main(void){
         int fd; memcpy(&fd, CMSG_DATA(rc) + i * sizeof(int), sizeof(int));
         char b; if (read(fd, &b, 1) == 1) readable++;
     }
-    // Detect an fd leak: the next fd we allocate should be a small number, not pushed up by leaked fds.
+    // Only the two delivered rights may consume guest descriptor slots; the truncated third right must not.
     int probe = dup(0);
-    printf("ctrunc=%d nfds=%d readable=%d no_leak=%d\n", ctrunc, nfds, readable, probe < 20);
+    printf("ctrunc=%d nfds=%d readable=%d no_leak=%d\n", ctrunc, nfds, readable, probe == baseline + nfds);
     return 0;
 }
