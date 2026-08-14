@@ -89,10 +89,10 @@ mod ffi {
 
     impl Signal {
         pub(super) fn hangup(group: i32) -> io::Result<()> {
-            Self::hangup_with(group, |group| {
-                // SAFETY: `killpg` consumes only integers and no Rust storage. The kernel
-                // owns concurrent delivery, and this non-unwinding C call retains no state.
-                Self::result(unsafe { libc::killpg(group, libc::SIGHUP) })
+            Self::hangup_with(group, |target| {
+                // SAFETY: `kill` consumes only integers and no Rust storage. A negative target
+                // addresses the process group; a positive target closes the pre-setsid race.
+                Self::result(unsafe { libc::kill(target, libc::SIGHUP) })
             })
         }
 
@@ -112,9 +112,14 @@ mod ffi {
             })
         }
 
-        pub(super) fn hangup_with(group: i32, mut deliver: impl FnMut(i32) -> io::Result<()>) -> io::Result<()> {
-            Self::validate(group)?;
-            deliver(group)
+        pub(super) fn hangup_with(process: i32, mut deliver: impl FnMut(i32) -> io::Result<()>) -> io::Result<()> {
+            Self::validate(process)?;
+            let group = deliver(-process);
+            let process = deliver(process);
+            match (group, process) {
+                (Err(_), Err(error)) => Err(error),
+                _ => Ok(()),
+            }
         }
 
         pub(super) fn send_with(
@@ -212,6 +217,33 @@ mod tests {
         })
         .unwrap();
         assert_eq!(calls, [(-42, libc::SIGTERM), (42, libc::SIGTERM)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hangup_targets_the_tree_and_the_verified_worker() {
+        let mut calls = Vec::new();
+        Signal::hangup_with(42, |process| {
+            calls.push(process);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, [-42, 42]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hangup_is_idempotent_when_either_identity_is_already_gone() {
+        for failed in [-42, 42] {
+            Signal::hangup_with(42, |process| {
+                if process == failed {
+                    Err(std::io::Error::from_raw_os_error(libc::ESRCH))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+        }
     }
 
     #[cfg(unix)]
