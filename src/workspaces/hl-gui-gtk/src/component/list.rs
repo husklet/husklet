@@ -12,7 +12,10 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::ListRow => row().upcast(),
         Tag::ListItemText => lines().upcast(),
         Tag::ListItemButton => button().upcast(),
-        // ListItemAction is the last list tag routed here.
+        // ListItemAction and ListItemSecondaryAction are the last list tags
+        // routed here: both are a group of controls at the end of a row, and
+        // which of the two trails the other is decided by placement, not by
+        // being a different widget.
         _ => trailing().upcast(),
     }
 }
@@ -63,20 +66,49 @@ pub(crate) fn rows(widget: &gtk::Widget) -> Option<gtk::ListBox> {
         .and_then(|child| child.downcast::<gtk::ListBox>().ok())
 }
 
+/// The parts of a row, in the order a row is read in.
+///
+/// One order, consulted both for the part being placed and for the parts
+/// already there, is what lets a producer describe them in any order at all —
+/// and what keeps the trailing action last even when the action beside it was
+/// described afterwards.
+const ORDER: [Tag; 5] = [
+    Tag::ListItemIcon,
+    Tag::ListItemAvatar,
+    Tag::ListItemText,
+    Tag::ListItemAction,
+    Tag::ListItemSecondaryAction,
+];
+
+fn rank(tag: Tag) -> Option<usize> {
+    ORDER.iter().position(|held| *held == tag)
+}
+
 /// Places a row's parts where a row reads from: marks lead, text takes the
-/// space between, and controls trail.
+/// space between, controls trail, and the trailing action comes after them.
 pub(crate) fn slotted(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag) -> bool {
     if !super::belongs(parent, Tag::ListRow) {
         return false;
     }
-    let Some(container) = parent.downcast_ref::<gtk::Box>() else {
+    let (Some(container), Some(place)) = (parent.downcast_ref::<gtk::Box>(), rank(tag)) else {
         return false;
     };
-    match tag {
-        Tag::ListItemIcon | Tag::ListItemAvatar => container.prepend(child),
-        Tag::ListItemText => super::precede(container, child, Tag::ListItemAction),
-        Tag::ListItemAction => container.append(child),
-        _ => return false,
-    }
+    seat(container, child, place);
     true
+}
+
+/// Inserts a part ahead of the first part that reads after it.
+fn seat(container: &gtk::Box, child: &gtk::Widget, place: usize) {
+    let later = slot::offspring(container.upcast_ref())
+        .into_iter()
+        .find(|held| seated(held).is_some_and(|found| found > place));
+    match later {
+        Some(next) => container.insert_child_after(child, next.prev_sibling().as_ref()),
+        None => container.append(child),
+    }
+}
+
+/// Which part of a row a widget already in it is.
+fn seated(widget: &gtk::Widget) -> Option<usize> {
+    ORDER.iter().position(|tag| super::belongs(widget, *tag))
 }

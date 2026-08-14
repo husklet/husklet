@@ -131,7 +131,9 @@ fn apply(
             let created = surface.create(*tag);
             mapping.insert(*id, created);
         }
-        hl_gui::Patch::Insert { parent: host, child, .. } => {
+        hl_gui::Patch::Insert {
+            parent: host, child, ..
+        } => {
             let (Some(child), host) = (mapping.get(child).copied(), mapping.get(host).copied()) else {
                 return;
             };

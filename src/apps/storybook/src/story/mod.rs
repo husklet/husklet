@@ -5,9 +5,9 @@ use hl_gui::{
 mod collection;
 mod control;
 pub(crate) mod database;
-mod settings;
 mod display;
 mod layout;
+mod settings;
 
 pub(crate) use collection::{answer, ROWS};
 

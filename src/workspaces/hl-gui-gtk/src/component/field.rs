@@ -9,6 +9,8 @@ use super::{axis, slot};
 /// time is entered with.
 const HOURS: f64 = 23.0;
 const MINUTES: f64 = 59.0;
+/// Stars a rating is measured in.
+const STARS: u8 = 5;
 
 /// Components that hold a value.
 pub(crate) fn widget(tag: Tag) -> gtk::Widget {
@@ -22,6 +24,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::TextField => field().upcast(),
         Tag::InputAdornment => adornment().upcast(),
         Tag::Slider => slider().upcast(),
+        Tag::Rating => rating().upcast(),
         Tag::DatePicker => gtk::Calendar::new().upcast(),
         Tag::TimePicker => clock().upcast(),
         // ColorPicker is the last field tag routed here.
@@ -100,6 +103,24 @@ fn slider() -> gtk::Scale {
     let widget = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
     widget.set_hexpand(true);
     widget.set_draw_value(true);
+    widget
+}
+
+/// A rating, in whole stars.
+///
+/// GTK4 has no rating widget. A box of toggle buttons would be inert here: a
+/// value reaches a component through the widget its node was created for, and
+/// only that widget reports interaction — a button built inside a composite
+/// could be pressed and would tell the producer nothing. A scale marked in
+/// stars is the control that actually works: it holds `Value`, moves in whole
+/// stars, and reports `Change`.
+fn rating() -> gtk::Scale {
+    let widget = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, f64::from(STARS), 1.0);
+    widget.set_round_digits(0);
+    widget.set_draw_value(false);
+    for star in 1..=STARS {
+        widget.add_mark(f64::from(star), gtk::PositionType::Bottom, Some("★"));
+    }
     widget
 }
 

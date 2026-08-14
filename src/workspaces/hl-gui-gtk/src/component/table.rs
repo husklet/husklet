@@ -4,12 +4,13 @@
 use gtk::prelude::*;
 use hl_gui::Tag;
 
-use super::axis;
+use super::{axis, slot};
 
 /// Table components.
 pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
         Tag::Table => table().upcast(),
+        Tag::TablePagination => pagination().upcast(),
         Tag::TableHead | Tag::TableBody | Tag::TableFooter => group().upcast(),
         Tag::TableRow => line().upcast(),
         Tag::TableCell => cell().upcast(),
@@ -39,6 +40,24 @@ fn group() -> gtk::Box {
 fn line() -> gtk::Box {
     let widget = axis::row(0);
     widget.set_homogeneous(true);
+    widget.set_hexpand(true);
+    widget
+}
+
+/// The strip under a table: which page is shown, and the controls that change
+/// it.
+///
+/// The count is the strip's own value, so a producer sends "21–40 of 240" as
+/// `Value`. The page-size selector and the two steps are described children
+/// rather than built-in parts, because a widget only reports interaction when
+/// it is the widget a node was created for — a button built inside a composite
+/// could be clicked and would tell the producer nothing.
+fn pagination() -> gtk::Box {
+    let widget = axis::row(8);
+    let count = axis::label();
+    slot::field(&count);
+    widget.append(&count);
+    widget.set_halign(gtk::Align::End);
     widget.set_hexpand(true);
     widget
 }

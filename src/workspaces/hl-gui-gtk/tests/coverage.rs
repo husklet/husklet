@@ -465,6 +465,10 @@ enum Aspect {
     Fraction,
     Choices,
     Checked,
+    /// Whether a surface has slid into view.
+    Revealed,
+    /// A count of whole stars.
+    Stars,
     Busy,
     Gap,
     Grow,
@@ -512,7 +516,8 @@ fn every_tag_honours_the_property_it_is_for() {
 fn asked(aspect: Aspect) -> Prop {
     match aspect {
         Aspect::Label => Prop::Label,
-        Aspect::Value | Aspect::Number | Aspect::Date | Aspect::Time => Prop::Value,
+        Aspect::Value | Aspect::Number | Aspect::Stars | Aspect::Date | Aspect::Time => Prop::Value,
+        Aspect::Revealed => Prop::Expanded,
         Aspect::Icon => Prop::Icon,
         Aspect::Uri => Prop::Uri,
         Aspect::Fraction => Prop::Fraction,
@@ -535,7 +540,10 @@ fn written(aspect: Aspect) -> PropValue {
         Aspect::Uri => PropValue::text(REFERENCE),
         Aspect::Fraction => PropValue::Number(0.5),
         Aspect::Choices => PropValue::Choices(vec![Choice::new("all", "All"), Choice::new("some", "Some")]),
-        Aspect::Checked => PropValue::Flag(true),
+        Aspect::Checked | Aspect::Revealed => PropValue::Flag(true),
+        // Three of five stars: a rating is bounded, so the figure every other
+        // number-shaped component is probed with would only prove clamping.
+        Aspect::Stars => PropValue::Number(3.0),
         Aspect::Busy => PropValue::Flag(false),
         Aspect::Gap => PropValue::Length(Length::Step(3)),
         Aspect::Grow => PropValue::Number(1.0),
@@ -556,6 +564,8 @@ fn honoured(widget: &gtk::Widget, aspect: Aspect) -> bool {
         Aspect::Fraction => filled(widget),
         Aspect::Choices => offered(widget),
         Aspect::Checked => active(widget),
+        Aspect::Revealed => revealed(widget),
+        Aspect::Stars => measured(widget, 3.0),
         Aspect::Busy => !widget.property::<bool>("spinning"),
         Aspect::Gap => spaced(widget),
         Aspect::Grow => widget.hexpands(),
@@ -707,6 +717,12 @@ fn active(widget: &gtk::Widget) -> bool {
     check.is_active()
 }
 
+fn revealed(widget: &gtk::Widget) -> bool {
+    widget
+        .downcast_ref::<gtk::Revealer>()
+        .is_some_and(gtk::Revealer::reveals_child)
+}
+
 fn spaced(widget: &gtk::Widget) -> bool {
     if let Some(container) = widget.downcast_ref::<gtk::Box>() {
         return container.spacing() == 12;
@@ -756,6 +772,10 @@ fn principal(tag: Tag) -> Aspect {
         Tag::CardContent | Tag::CardActions | Tag::Section | Tag::Toolbar | Tag::Sidebar => Aspect::Gap,
         Tag::CardMedia | Tag::Image | Tag::ImageListItem | Tag::Video => Aspect::Uri,
         Tag::HeaderBar | Tag::ImageList | Tag::Tabs | Tag::List | Tag::DataTable | Tag::TreeTable => Aspect::Grow,
+        Tag::Tree | Tag::Drawer => Aspect::Grow,
+        Tag::DrawerPanel => Aspect::Revealed,
+        Tag::Rating => Aspect::Stars,
+        Tag::TablePagination => Aspect::Value,
         Tag::Popover | Tag::ContextMenu | Tag::ColorPicker => Aspect::Grow,
         Tag::AvatarGroup => Aspect::Gap,
         Tag::Icon | Tag::IconButton | Tag::Fab | Tag::SpeedDial | Tag::Overflow => Aspect::Icon,
@@ -789,6 +809,7 @@ fn structural(tag: Tag) -> Aspect {
         | Tag::FormGroup
         | Tag::ListRow
         | Tag::ListItemAction
+        | Tag::ListItemSecondaryAction
         | Tag::Table
         | Tag::TableHead
         | Tag::TableBody
@@ -821,6 +842,9 @@ fn every_part_lands_in_the_slot_its_parent_keeps() {
     a_row_leads_with_its_mark_and_trails_with_its_controls();
     a_revealed_action_lands_inside_the_menu_it_belongs_to();
     an_adornment_lands_beside_the_value_it_decorates();
+    a_trailing_action_is_the_last_thing_in_its_row();
+    a_tree_nests_an_item_inside_the_item_that_holds_it();
+    a_drawer_panel_covers_the_content_instead_of_joining_it();
 }
 
 /// One parent, one part, rendered: the shape every slot scenario needs.
@@ -920,6 +944,83 @@ fn a_revealed_action_lands_inside_the_menu_it_belongs_to() {
     assert!(
         subtree(&popover.child().expect("the popover holds a column")).contains(&action),
         "the action was placed beside the dial instead of inside what it reveals"
+    );
+}
+
+/// The trailing slot of a row is the one part that must come after the ordinary
+/// controls, whatever order the producer described the two in.
+fn a_trailing_action_is_the_last_thing_in_its_row() {
+    let session = placed(
+        Tag::ListRow,
+        &[Tag::ListItemSecondaryAction, Tag::ListItemAction, Tag::ListItemText],
+    );
+    let row = session.tagged(Tag::ListRow).expect("a row renders");
+    let parts = offspring(&row);
+    assert!(
+        parts
+            .last()
+            .is_some_and(|part| part.has_css_class("hl-listitemsecondaryaction")),
+        "the trailing action is not at the end of the row"
+    );
+    assert!(
+        parts.first().is_some_and(|part| part.has_css_class("hl-listitemtext")),
+        "the text was pushed behind the controls it names"
+    );
+}
+
+/// A tree is only a tree if depth survives: an item described inside another is
+/// disclosed by it and indented under it, at any depth.
+fn a_tree_nests_an_item_inside_the_item_that_holds_it() {
+    let mut session = Session::new();
+    let tree = session.producer.create(Tag::Tree);
+    session.producer.append(NodeId::ROOT, tree);
+    let branch = session.producer.create(Tag::TreeItem);
+    session.producer.append(tree, branch);
+    // A collapsed disclosure unparents what it holds, so the level below is
+    // only reachable once the level above it is open.
+    session.producer.set(branch, Prop::Expanded, PropValue::Flag(true));
+    let leaf = session.producer.create(Tag::TreeItem);
+    session.producer.append(branch, leaf);
+    session.flush().expect("a described hierarchy must render");
+
+    let trunk = session.tagged(Tag::Tree).expect("a tree renders");
+    let items: Vec<gtk::Widget> = subtree(&trunk)
+        .into_iter()
+        .filter(|held| held.has_css_class("hl-treeitem"))
+        .collect();
+    assert_eq!(items.len(), 2, "the tree lost a level of its hierarchy");
+    let body = items[0]
+        .clone()
+        .downcast::<gtk::Expander>()
+        .expect("an item is a disclosure")
+        .child()
+        .expect("an item with children discloses a body");
+    assert!(
+        subtree(&body).contains(&items[1]),
+        "the nested item sits beside its parent instead of inside it"
+    );
+    assert!(
+        items[1].parent().is_some_and(|level| level.margin_start() > 0),
+        "a nested level is not indented, so its depth cannot be read"
+    );
+}
+
+/// A drawer that merely appends its panel is a second column, not a drawer.
+fn a_drawer_panel_covers_the_content_instead_of_joining_it() {
+    let session = placed(Tag::Drawer, &[Tag::DrawerPanel, Tag::Text]);
+    let drawer = session.tagged(Tag::Drawer).expect("a drawer renders");
+    let overlay = drawer
+        .downcast_ref::<gtk::Overlay>()
+        .expect("a drawer overlays what it covers");
+    let content = overlay.child().expect("a drawer keeps a slot for its content");
+    let panel = session.tagged(Tag::DrawerPanel).expect("a panel renders");
+    assert!(
+        !subtree(&content).contains(&panel),
+        "the panel was placed in the content it is supposed to cover"
+    );
+    assert!(
+        panel.parent().is_some_and(|held| held.eq(&drawer)),
+        "the panel is not an overlay child, so it would never draw above the content"
     );
 }
 

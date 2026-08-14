@@ -30,39 +30,54 @@ pub(super) fn workbench(surface: &mut Surface, parent: NodeId) {
     surface.append(workspace, results);
 }
 
-/// The schema browser.
+/// The schema browser, as an actual tree.
 ///
-/// A real one is a tree: database, then schemas, then tables, then columns,
-/// each expandable. The library has no tree, so this is a flat list of
-/// expanders — which loses the hierarchy below two levels and cannot show a
-/// column without a third.
+/// Database, schema, table, column — four levels, each disclosed in place.
+/// Until the library had a tree this was a flat list of expanders that lost
+/// the hierarchy below two levels and could not show a column at all.
 fn catalogue(surface: &mut Surface) -> NodeId {
-    let column = surface.container(Tag::Column, Length::Step(1));
-    surface.set(column, Prop::Pad, PropValue::Length(Length::Step(2)));
+    let tree = surface.create(Tag::Tree);
+    surface.set(tree, Prop::Pad, PropValue::Length(Length::Step(2)));
 
-    let heading = surface.text("SCHEMA");
-    surface.set(heading, Prop::Scale, PropValue::Scale(Scale::Caption));
-    surface.append(column, heading);
+    let database = branch(surface, "app", true);
+    surface.append(tree, database);
 
     for (schema, tables) in [
-        ("public", ["users", "orders", "order_items"]),
-        ("billing", ["invoices", "payments", "refunds"]),
+        (
+            "public",
+            [
+                ("users", ["id", "email", "created_at"]),
+                ("orders", ["id", "user_id", "total"]),
+            ],
+        ),
+        (
+            "billing",
+            [
+                ("invoices", ["id", "issued_at", "amount"]),
+                ("payments", ["id", "invoice_id", "paid_at"]),
+            ],
+        ),
     ] {
-        let group = surface.create(Tag::Expander);
-        surface.set(group, Prop::Label, PropValue::text(schema));
-        surface.set(group, Prop::Expanded, PropValue::Flag(true));
-        surface.append(column, group);
-
-        let inner = surface.container(Tag::Column, Length::Step(0));
-        surface.set(inner, Prop::Pad, PropValue::Length(Length::Step(1)));
-        surface.append(group, inner);
-        for table in tables {
-            let entry = surface.text(table);
-            surface.set(entry, Prop::Align, PropValue::Align(Align::Start));
-            surface.append(inner, entry);
+        let level = branch(surface, schema, schema == "public");
+        surface.append(database, level);
+        for (table, columns) in tables {
+            let entry = branch(surface, table, table == "users");
+            surface.append(level, entry);
+            for column in columns {
+                let leaf = branch(surface, column, false);
+                surface.append(entry, leaf);
+            }
         }
     }
-    column
+    tree
+}
+
+/// One node of the tree, disclosed or folded.
+fn branch(surface: &mut Surface, label: &str, open: bool) -> NodeId {
+    let item = surface.create(Tag::TreeItem);
+    surface.set(item, Prop::Label, PropValue::text(label));
+    surface.set(item, Prop::Expanded, PropValue::Flag(open));
+    item
 }
 
 /// The query editor and the actions that run it.

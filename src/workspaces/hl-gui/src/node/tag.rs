@@ -150,6 +150,7 @@ catalogue! {
     TimePicker: leaf,
     ColorPicker: leaf,
     FilePicker: leaf,
+    Rating: leaf,
 
     // Forms: the frame around a field, and the choice controls.
     FormControl: children,
@@ -171,6 +172,7 @@ catalogue! {
     ListItemAvatar: leaf,
     ListItemButton: children,
     ListItemAction: children,
+    ListItemSecondaryAction: children,
     ListSubheader: leaf,
 
     // Tables: the described table and the windowed, source-driven ones.
@@ -183,6 +185,11 @@ catalogue! {
     TableSortLabel: leaf,
     DataTable: leaf,
     TreeTable: leaf,
+    TablePagination: children,
+
+    // Trees: a hierarchy described as nodes rather than windowed as rows.
+    Tree: children,
+    TreeItem: children,
 
     // Navigation: moving between places and through steps.
     Tabs: children,
@@ -216,6 +223,8 @@ catalogue! {
     ContextMenu: children | detached,
     Menu: children,
     MenuItem: children,
+    Drawer: children,
+    DrawerPanel: children,
 
     // Content: long-form text and media.
     CodeView: leaf,

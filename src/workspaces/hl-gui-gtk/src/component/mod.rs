@@ -12,6 +12,7 @@ pub(crate) mod button;
 pub(crate) mod card;
 pub(crate) mod content;
 pub(crate) mod dialog;
+pub(crate) mod drawer;
 pub(crate) mod feedback;
 pub(crate) mod field;
 pub(crate) mod form;
@@ -20,6 +21,7 @@ pub(crate) mod navigation;
 pub(crate) mod slot;
 pub(crate) mod table;
 pub(crate) mod text;
+pub(crate) mod tree;
 
 use gtk::prelude::*;
 use hl_gui::Tag;
@@ -90,6 +92,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         | Tag::TextField
         | Tag::InputAdornment
         | Tag::Slider
+        | Tag::Rating
         | Tag::DatePicker
         | Tag::TimePicker
         | Tag::ColorPicker => field::widget(tag),
@@ -102,8 +105,16 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         | Tag::Radio
         | Tag::RadioGroup
         | Tag::Select => form::widget(tag),
-        Tag::List | Tag::ListRow | Tag::ListItemText | Tag::ListItemButton | Tag::ListItemAction => list::widget(tag),
+        Tag::List
+        | Tag::ListRow
+        | Tag::ListItemText
+        | Tag::ListItemButton
+        | Tag::ListItemAction
+        | Tag::ListItemSecondaryAction => list::widget(tag),
+        Tag::Tree | Tag::TreeItem => tree::widget(tag),
+        Tag::Drawer | Tag::DrawerPanel => drawer::widget(tag),
         Tag::Table
+        | Tag::TablePagination
         | Tag::TableHead
         | Tag::TableBody
         | Tag::TableFooter
@@ -174,7 +185,12 @@ pub(crate) fn attach(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index:
 
 /// Placement a parent decides from what its child *is*.
 fn part(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index: usize) -> bool {
-    card::slotted(parent, child, tag)
+    // The tree and the drawer are asked first: both are built from widgets
+    // another family also uses — a disclosure, a revealer — and the family that
+    // owns the parent is the one that knows where the child belongs.
+    tree::slotted(parent, child)
+        || drawer::slotted(parent, child, tag)
+        || card::slotted(parent, child, tag)
         || navigation::slotted(parent, child, tag)
         || dialog::slotted(parent, child, tag)
         || table::slotted(parent, child, tag)
