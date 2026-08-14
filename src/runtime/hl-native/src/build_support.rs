@@ -246,7 +246,7 @@ mod tests {
         let manifest = include_str!("native/bridge/exports.txt");
         let symbols = super::export_symbols(manifest);
         assert!(symbols.contains(&"hl_c_backend_checkpoint_configure"));
-        assert_eq!(symbols.len(), 21);
+        assert_eq!(symbols.len(), 19);
     }
 
     #[test]

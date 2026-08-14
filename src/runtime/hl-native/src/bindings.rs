@@ -28,9 +28,21 @@ pub struct MainImagePlan {
     pub interpreter_identity: u64,
 }
 
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(super) struct EngineExit {
+    pub abi: u32,
+    pub size: u32,
+    pub kind: u32,
+    pub guest_status: i32,
+    pub detail: u64,
+}
+
 const _: () = assert!(size_of::<MainImagePlan>() == 48);
 const _: () = assert!(offset_of!(MainImagePlan, link_start) == 16);
 const _: () = assert!(offset_of!(MainImagePlan, interpreter_identity) == 40);
+const _: () = assert!(size_of::<EngineExit>() == 24);
+const _: () = assert!(offset_of!(EngineExit, detail) == 16);
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -103,9 +115,7 @@ unsafe extern "C" {
     ) -> c_int;
     pub(super) fn hl_c_backend_run(backend: *mut Backend, argc: c_int, argv: *const *const c_char) -> c_int;
     pub(super) fn hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int;
-    pub(super) fn hl_c_backend_exit_kind(backend: *const Backend) -> c_uint;
-    pub(super) fn hl_c_backend_exit_status(backend: *const Backend) -> c_int;
-    pub(super) fn hl_c_backend_exit_detail(backend: *const Backend) -> c_ulonglong;
+    pub(super) fn hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int;
     #[cfg(test)]
     pub(super) fn hl_c_backend_translation_count(backend: *const Backend) -> c_ulonglong;
     pub(super) fn hl_c_backend_destroy(backend: *mut Backend);
@@ -152,9 +162,14 @@ mod tests {
             );
             assert_ne!(hl_c_backend_run(ptr::null_mut(), 0, ptr::null()), 0);
             assert_ne!(hl_c_backend_request(ptr::null_mut(), 0, 0), 0);
-            assert_eq!(hl_c_backend_exit_kind(ptr::null()), 0);
-            assert_eq!(hl_c_backend_exit_status(ptr::null()), -1);
-            assert_eq!(hl_c_backend_exit_detail(ptr::null()), 0);
+            let mut exit = EngineExit {
+                abi: 5,
+                size: size_of::<EngineExit>() as u32,
+                kind: 0,
+                guest_status: 0,
+                detail: 0,
+            };
+            assert_ne!(hl_c_backend_exit(ptr::null_mut(), &raw mut exit), 0);
             assert_eq!(hl_c_backend_translation_count(ptr::null()), 0);
             hl_c_backend_destroy(ptr::null_mut());
         }

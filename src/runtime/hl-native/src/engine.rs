@@ -118,16 +118,23 @@ impl Engine {
 
     #[must_use]
     pub fn exit(&self) -> Exit {
-        // SAFETY: `self` owns a live backend; this accessor only copies the
-        // completed engine's immutable exit kind.
-        let kind = unsafe { bindings::hl_c_backend_exit_kind(self.0.as_ptr()) };
-        // SAFETY: `self` owns a live backend; this accessor only copies the
-        // completed engine's immutable exit status.
-        let status = unsafe { bindings::hl_c_backend_exit_status(self.0.as_ptr()) };
-        // SAFETY: `self` owns a live backend; this accessor only copies the
-        // completed engine's immutable exit detail.
-        let detail = unsafe { bindings::hl_c_backend_exit_detail(self.0.as_ptr()) };
-        Exit { kind, status, detail }
+        let mut result = bindings::EngineExit {
+            abi: 5,
+            size: u32::try_from(std::mem::size_of::<bindings::EngineExit>()).expect("small ABI struct"),
+            kind: 0,
+            guest_status: 0,
+            detail: 0,
+        };
+        // SAFETY: `self` owns a live backend and `result` is writable. The C
+        // bridge publishes and copies the complete record under one lock, so a
+        // concurrent run cannot race or expose a torn group of fields.
+        let status = unsafe { bindings::hl_c_backend_exit(self.0.as_ptr(), &raw mut result) };
+        debug_assert_eq!(status, STATUS_OK);
+        Exit {
+            kind: result.kind,
+            status: result.guest_status,
+            detail: result.detail,
+        }
     }
 }
 
@@ -331,8 +338,9 @@ impl Drop for Engine {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{EngineConfig, Plan};
+    use super::{Engine, EngineConfig, Exit, Plan};
     use std::{
+        ffi::CString,
         fs::OpenOptions,
         io::{Seek, SeekFrom, Write},
         os::fd::AsRawFd,
@@ -370,7 +378,36 @@ mod tests {
         put64(&mut bytes, 96, 4096);
         put64(&mut bytes, 104, 4096);
         put64(&mut bytes, 112, 4096);
+        // `b .`: a valid AArch64 process that remains live until force-stop.
+        bytes[0x100..0x104].copy_from_slice(&0x1400_0000_u32.to_le_bytes());
         bytes
+    }
+
+    fn create_engine(isa: u32) -> (Engine, std::fs::File) {
+        let mut executable = tempfile::tempfile().unwrap();
+        let mut bytes = image();
+        if isa == 2 {
+            put16(&mut bytes, 18, 0x3e);
+            // `jmp .`: the x86-64 counterpart of the AArch64 live loop.
+            bytes[0x100..0x102].copy_from_slice(&[0xeb, 0xfe]);
+        }
+        executable.write_all(&bytes).unwrap();
+        executable.seek(SeekFrom::Start(0)).unwrap();
+        let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+        let config = EngineConfig {
+            isa,
+            rootfs: None,
+            executable_host: None,
+            executable_fd: executable.as_raw_fd(),
+            option_names: &[],
+            option_values: &[],
+            standard_fds: [standard.as_raw_fd(); 3],
+            provider_fd: -1,
+        };
+        // SAFETY: all descriptors and borrowed slices remain live through create;
+        // the bridge copies configuration and imports its own descriptor handles.
+        let engine = unsafe { Engine::create(config) }.unwrap();
+        (engine, standard)
     }
 
     fn inspect(bytes: &[u8]) -> Result<Plan, i32> {
@@ -437,5 +474,46 @@ mod tests {
             inspect(&bytes).is_err(),
             "entry outside an executable segment was accepted"
         );
+    }
+
+    #[test]
+    fn concurrent_exit_reads_only_coherent_publications() {
+        for isa in [1, 2] {
+            let (engine, _standard) = create_engine(isa);
+            let argument = CString::new("guest").unwrap();
+            let initial = Exit {
+                kind: 0,
+                status: 0,
+                detail: 0,
+            };
+            let observed = std::thread::scope(|scope| {
+                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                let reading = scope.spawn(|| {
+                    let mut values = Vec::with_capacity(50_000);
+                    for _ in 0..50_000 {
+                        values.push(engine.exit());
+                    }
+                    engine.request(2, 0).unwrap();
+                    for _ in 0..1_000_000 {
+                        let value = engine.exit();
+                        values.push(value);
+                        if value != initial {
+                            break;
+                        }
+                    }
+                    values
+                });
+                let values = reading.join().unwrap();
+                running.join().unwrap().unwrap();
+                values
+            });
+            let published = engine.exit();
+            assert!(observed.contains(&published), "ISA {isa} test never observed publication");
+            assert!(
+                observed.into_iter().all(|value| value == initial || value == published),
+                "ISA {isa} reader observed a partially published exit record"
+            );
+            drop(engine);
+        }
     }
 }
