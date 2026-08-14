@@ -1079,11 +1079,15 @@ static int parse_shebang(const char *host_path, char *interp, size_t ni, char *a
 // non-shebang / unreadable argv[0] is the base case (argc unchanged, *phost = its host path). Returns -1 on
 // ELOOP (chain deeper than SHEBANG_MAX) or when argv has no room -- the caller must then error out.
 static int resolve_shebang_chain(char **argv, int argc, int cap, const char *host0, char store[][256], char *hostbuf,
-                                 size_t nh, const char **phost) {
+                                 size_t nh, const char **phost, int (*validate)(const char *)) {
     char curhost[4200];
     snprintf(curhost, sizeof curhost, "%s", host0);
     int nstore = 0;
     for (int level = 0;; level++) {
+        if (validate != NULL) {
+            int error = validate(curhost);
+            if (error != 0) return error;
+        }
         char interp[256], opt[256];
         if (parse_shebang(curhost, interp, sizeof interp, opt, sizeof opt) != 1) {
             // base case: argv[0] is an ELF (or unreadable -> caller's load_elf/access reports it)

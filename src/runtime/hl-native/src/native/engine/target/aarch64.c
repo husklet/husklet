@@ -1350,7 +1350,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     const char *sb_finalhost;
     char sb_fhb[4200];
     int sb_new =
-        resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
+        resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost, NULL);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", prog);
         return hl_vfs_cursor_state_finish(40); // ELOOP

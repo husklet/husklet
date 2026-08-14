@@ -71,7 +71,12 @@ static int exec_validate_image(const char *path, int *script_image) {
     if (stat(path, &status) == 0) {
         if (S_ISDIR(status.st_mode)) return -EACCES;
         if (S_ISREG(status.st_mode)) {
-            if ((status.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0) return -EACCES;
+            hl_dac_snapshot snapshot;
+            uint32_t groups[HL_NGROUPS_MAX];
+            hl_dac_credentials credentials = dac_credentials_current(groups);
+            stat_virt_ids(&status, path, -1, &snapshot.uid, &snapshot.gid);
+            snapshot.mode = (uint32_t)stat_virt_mode(&status, path, -1);
+            if (hl_dac_authorize_access(&snapshot, &credentials, HL_DAC_EXECUTE) != 0) return -EACCES;
             if (exec_image_is_write_open(&status)) return -ETXTBSY;
             FILE *image = fopen(path, "rb");
             if (image) {
@@ -88,6 +93,11 @@ static int exec_validate_image(const char *path, int *script_image) {
         }
     }
     return access(path, F_OK) == 0 ? 0 : -ENOENT;
+}
+
+static int exec_validate_shebang_image(const char *path) {
+    int script_image;
+    return exec_validate_image(path, &script_image);
 }
 
 static int exec_collect_argv(uint64_t argv_address, char **argv, int *argc) {
@@ -201,11 +211,12 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             na[nn++] = argv[i];
         na[nn] = NULL;
         const char *sh_finalhost;
-        int sh_new = resolve_shebang_chain(na, nn, HL_MAXARGV, p, sh_store, shpb, sizeof shpb, &sh_finalhost);
+        int sh_new = resolve_shebang_chain(na, nn, HL_MAXARGV, p, sh_store, shpb, sizeof shpb, &sh_finalhost,
+                                            exec_validate_shebang_image);
         if (sh_new < 0) {
             // too many nested #! -> ELOOP. `-ELOOP` is the host macOS errno 62; svc_done's boundary translation
             // maps it to Linux ELOOP (40) at the syscall boundary, exactly like the vfs symlink-loop path.
-            G_RET(c) = (uint64_t)(-ELOOP);
+            G_RET(c) = (uint64_t)(int64_t)(sh_new == -1 ? -ELOOP : sh_new);
             break;
         }
         if (script_image && sh_new == nn) {
