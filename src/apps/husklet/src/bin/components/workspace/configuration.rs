@@ -38,23 +38,44 @@ impl Form {
         workspace.docker_sock = self.features.docker.is_active();
         workspace.vpn = self.vpn()?;
         for (key, value) in self.env_rows.borrow().iter() {
-            let key = key.text().trim().to_string();
-            if !key.is_empty() {
-                workspace.env.push((key, value.text().trim().to_string()));
+            if let Some(variable) = Self::environment_row(&key.text(), &value.text())? {
+                workspace.env.push(variable);
             }
         }
         for (host, container, readonly) in self.mount_rows.borrow().iter() {
-            let host = host.text().trim().to_string();
-            let container = container.text().trim().to_string();
-            if !host.is_empty() && !container.is_empty() {
-                workspace.mounts.push(Mount {
-                    host,
-                    container,
-                    ro: readonly.is_active(),
-                });
+            if let Some(mount) = Self::mount_row(&host.text(), &container.text(), readonly.is_active())? {
+                workspace.mounts.push(mount);
             }
         }
         Ok(workspace)
+    }
+
+    fn environment_row(key: &str, value: &str) -> std::io::Result<Option<(String, String)>> {
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() && value.is_empty() {
+            return Ok(None);
+        }
+        if key.is_empty() {
+            return Err(Self::invalid("Environment variable name is required when a value is provided."));
+        }
+        Ok(Some((key.to_owned(), value.to_owned())))
+    }
+
+    fn mount_row(host: &str, container: &str, read_only: bool) -> std::io::Result<Option<Mount>> {
+        let host = host.trim();
+        let container = container.trim();
+        if host.is_empty() && container.is_empty() {
+            return Ok(None);
+        }
+        if host.is_empty() || container.is_empty() {
+            return Err(Self::invalid("Mount host and container paths are both required."));
+        }
+        Ok(Some(Mount {
+            host: host.to_owned(),
+            container: container.to_owned(),
+            ro: read_only,
+        }))
     }
 
     fn scrollback(&self) -> std::io::Result<Option<u64>> {
@@ -82,5 +103,32 @@ impl Form {
 
     fn invalid(message: &str) -> std::io::Error {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Form;
+
+    #[test]
+    fn partial_environment_rows_are_rejected_instead_of_discarded() {
+        assert!(Form::environment_row("", "value").is_err());
+        assert_eq!(Form::environment_row("", "").unwrap(), None);
+        assert_eq!(
+            Form::environment_row(" NAME ", "").unwrap(),
+            Some(("NAME".into(), String::new()))
+        );
+    }
+
+    #[test]
+    fn partial_mount_rows_are_rejected_instead_of_discarded() {
+        assert!(Form::mount_row("/host", "", false).is_err());
+        assert!(Form::mount_row("", "/guest", false).is_err());
+        assert_eq!(Form::mount_row("", "", false).unwrap(), None);
+
+        let mount = Form::mount_row(" /host ", " /guest ", true).unwrap().unwrap();
+        assert_eq!(mount.host, "/host");
+        assert_eq!(mount.container, "/guest");
+        assert!(mount.ro);
     }
 }
