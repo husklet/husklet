@@ -1325,6 +1325,7 @@ dependencies = [
  "hl-images",
  "hl-log",
  "hl-ws",
+ "hl-ws-extension",
  "hl-ws-term",
  "libc",
  "objc2-app-kit",
