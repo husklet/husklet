@@ -868,7 +868,6 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
         g_nonpie_hi = image_projection.guest_end;
         g_nonpie_bias = image_projection.storage_bias;
     }
-    if (force_displaced && (image_projection.flags & HL_NATIVE_ADDRESS_PROJECTION_DISPLACED) != 0)
     for (int i = 0; i < phnum; i++) {
         uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
         if (rd32(ph) != 1) continue;
