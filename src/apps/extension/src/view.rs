@@ -1,9 +1,13 @@
 //! The interface this extension draws.
 //!
-//! Composed entirely from the component library, so it renders identically
-//! wherever the host runs and needs no toolkit of its own.
+//! Written as a description of what the interface should be, not as a sequence
+//! of mutations. The reconciler works out the difference from what was drawn
+//! last time, so a listing that changes one container's state costs one
+//! property change rather than a rebuilt table.
 
-use hl_gui::{EventId, Frame, Length, NodeId, Prop, PropValue, Scale, Surface, Tag, Tone, Trigger, Variant};
+use hl_gui::{
+    Align, Element, EventId, Frame, Length, Prop, PropValue, Reconciliation, Scale, Tag, Tone, Trigger, Variant,
+};
 
 use crate::catalogue::Catalogue;
 use crate::SOURCE;
@@ -27,7 +31,7 @@ impl Actions {
 
 /// Draws the container view.
 pub struct View {
-    surface: Surface,
+    reconciliation: Reconciliation,
 }
 
 impl Default for View {
@@ -40,60 +44,50 @@ impl View {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            surface: Surface::new(),
+            reconciliation: Reconciliation::new(),
         }
     }
 
-    /// Describes the whole interface as one frame.
+    /// Produces the mutations that bring the drawn interface up to date.
     pub fn render(&mut self, catalogue: &Catalogue) -> Frame {
-        let page = self.surface.container(Tag::Column, Length::Step(3));
-        self.surface.set(page, Prop::Pad, PropValue::Length(Length::Step(4)));
-        self.surface.append(NodeId::ROOT, page);
+        self.reconciliation.reconcile(&Self::describe(catalogue))
+    }
 
-        let toolbar = self.toolbar(catalogue);
-        self.surface.append(page, toolbar);
-
-        let table = self.table();
-        self.surface.append(page, table);
-
-        self.surface.frame()
+    /// The whole interface, as it should be for this listing.
+    fn describe(catalogue: &Catalogue) -> Element {
+        Element::column()
+            .gap(Length::Step(3))
+            .prop(Prop::Pad, PropValue::Length(Length::Step(4)))
+            .child(Self::toolbar(catalogue))
+            .child(Self::table())
     }
 
     /// Heading, live counts, filter, and the refresh action.
-    fn toolbar(&mut self, catalogue: &Catalogue) -> NodeId {
-        let bar = self.surface.create(Tag::Toolbar);
-        self.surface.set(bar, Prop::Pad, PropValue::Length(Length::Step(2)));
-
-        let heading = self.surface.heading("Containers");
-        self.surface.set(heading, Prop::Scale, PropValue::Scale(Scale::Title));
-        self.surface.append(bar, heading);
-
-        let count = self.surface.badge(Self::summary(catalogue), Self::tone(catalogue));
-        self.surface.append(bar, count);
-
-        let spacer = self.surface.create(Tag::Spacer);
-        self.surface.append(bar, spacer);
-
-        let search = self.surface.create(Tag::Search);
-        self.surface
-            .set(search, Prop::Placeholder, PropValue::text("Filter containers…"));
-        self.surface
-            .set(search, Prop::Width, PropValue::Length(Length::Chars(24)));
-        self.surface.on(search, Trigger::Change, Actions::filter());
-        self.surface.append(bar, search);
-
-        let refresh = self.surface.button("Refresh", Actions::refresh());
-        self.surface.style(refresh, Variant::Outline, Tone::Accent);
-        self.surface.append(bar, refresh);
-        bar
+    fn toolbar(catalogue: &Catalogue) -> Element {
+        Element::new(Tag::Toolbar)
+            .prop(Prop::Pad, PropValue::Length(Length::Step(2)))
+            .child(Element::heading("Containers").scale(Scale::Title))
+            .child(Element::badge(Self::summary(catalogue), Self::tone(catalogue)).key("summary"))
+            .child(Element::new(Tag::Spacer))
+            .child(
+                Element::new(Tag::Search)
+                    .prop(Prop::Placeholder, PropValue::text("Filter containers…"))
+                    .width(Length::Chars(24))
+                    .on(Trigger::Change, Actions::filter()),
+            )
+            .child(
+                Element::button("Refresh", Actions::refresh())
+                    .variant(Variant::Outline)
+                    .tone(Tone::Accent),
+            )
     }
 
-    /// The table itself, bound to the windowed source rather than to rows.
-    fn table(&mut self) -> NodeId {
-        let table = self.surface.table(SOURCE);
-        self.surface.set(table, Prop::Schema, PropValue::Schema(Self::schema()));
-        self.surface.set(table, Prop::Height, PropValue::Length(Length::Fill));
-        table
+    /// The table, bound to the windowed source rather than to rows.
+    fn table() -> Element {
+        Element::new(Tag::DataTable)
+            .prop(Prop::Source, PropValue::Source(SOURCE))
+            .prop(Prop::Schema, PropValue::Schema(Self::schema()))
+            .prop(Prop::Height, PropValue::Length(Length::Fill))
     }
 
     fn schema() -> Vec<hl_gui::Column> {
@@ -103,7 +97,7 @@ impl View {
             hl_gui::Column::new("state", "State").width(Length::Chars(14)),
             hl_gui::Column::new("created", "Created")
                 .width(Length::Chars(16))
-                .align(hl_gui::Align::End),
+                .align(Align::End),
         ]
     }
 
@@ -141,7 +135,19 @@ mod tests {
         }
     }
 
-    fn tags(frame: &hl_gui::Frame) -> Vec<Tag> {
+    fn listing(states: &[&str]) -> Catalogue {
+        let mut catalogue = Catalogue::new();
+        catalogue.replace(
+            states
+                .iter()
+                .enumerate()
+                .map(|(index, state)| container(&format!("c{index}"), state))
+                .collect(),
+        );
+        catalogue
+    }
+
+    fn created(frame: &hl_gui::Frame) -> Vec<Tag> {
         frame
             .patches
             .iter()
@@ -154,11 +160,7 @@ mod tests {
 
     #[test]
     fn the_view_is_composed_only_from_library_components() {
-        let mut catalogue = Catalogue::new();
-        catalogue.replace(vec![container("api", "running")]);
-
-        let frame = View::new().render(&catalogue);
-        let created = tags(&frame);
+        let frame = View::new().render(&listing(&["running"]));
 
         for expected in [
             Tag::Column,
@@ -170,18 +172,45 @@ mod tests {
             Tag::Button,
             Tag::DataTable,
         ] {
-            assert!(created.contains(&expected), "{expected:?} is missing from the view");
+            assert!(created(&frame).contains(&expected), "{expected:?} is missing");
         }
     }
 
     #[test]
-    fn the_table_is_bound_to_a_source_rather_than_carrying_rows() {
-        let mut catalogue = Catalogue::new();
-        catalogue.replace(
-            (0..500)
-                .map(|index| container(&format!("c{index}"), "running"))
-                .collect(),
+    fn an_unchanged_listing_costs_nothing_to_redraw() {
+        let catalogue = listing(&["running", "exited"]);
+        let mut view = View::new();
+        let first = view.render(&catalogue);
+        assert!(!first.is_empty(), "the first description builds the interface");
+
+        let second = view.render(&catalogue);
+
+        assert!(
+            second.is_empty(),
+            "polling an unchanged listing must not redraw it, got {:?}",
+            second.patches
         );
+    }
+
+    #[test]
+    fn one_container_changing_state_costs_one_property() {
+        let mut view = View::new();
+        let _ = view.render(&listing(&["running", "running"]));
+
+        let frame = view.render(&listing(&["running", "exited"]));
+
+        assert_eq!(
+            frame.patches.len(),
+            2,
+            "only the summary's text and tone should change, got {:?}",
+            frame.patches
+        );
+        assert!(created(&frame).is_empty(), "nothing is rebuilt when a listing changes");
+    }
+
+    #[test]
+    fn the_table_is_bound_to_a_source_rather_than_carrying_rows() {
+        let catalogue = listing(&["running"; 500]);
 
         let frame = View::new().render(&catalogue);
 
@@ -198,17 +227,14 @@ mod tests {
         assert!(bound, "the table must name its source");
         assert!(
             frame.patches.len() < 60,
-            "five hundred containers produced {} patches; rows belong in windows, not the interface",
+            "five hundred containers produced {} patches; rows belong in windows",
             frame.patches.len()
         );
     }
 
     #[test]
     fn the_summary_warns_when_something_is_not_running() {
-        let mut catalogue = Catalogue::new();
-        catalogue.replace(vec![container("api", "running"), container("db", "exited")]);
-
-        let frame = View::new().render(&catalogue);
+        let frame = View::new().render(&listing(&["running", "exited"]));
 
         let toned = frame.patches.iter().any(|patch| {
             matches!(
@@ -225,9 +251,7 @@ mod tests {
 
     #[test]
     fn the_actions_the_view_reports_are_stable() {
-        let mut catalogue = Catalogue::new();
-        catalogue.replace(vec![container("api", "running")]);
-        let frame = View::new().render(&catalogue);
+        let frame = View::new().render(&listing(&["running"]));
 
         let declared: Vec<String> = frame
             .patches
