@@ -690,7 +690,7 @@ fn exec_credential_policy_copies_saved_ids_and_keeps_capability_state_coherent()
     let source = scratch.join("exec_credentials.c");
     let executable = scratch.join("exec_credentials");
     fs::write(&source, r#"
-#include "linux_abi/container/exec_credential_policy.h"
+#include "linux_abi/container/credentials.h"
 static hl_exec_credential_state user(void) {
     return (hl_exec_credential_state){1000,1000,0,1000,1000,0,0,0,UINT64_C(0xff),0,0,0,0};
 }

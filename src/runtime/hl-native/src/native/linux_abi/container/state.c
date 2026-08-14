@@ -386,7 +386,7 @@ static int cgid(void) {
 #include "../host_fs.h"
 #include "owner.h"
 #include "dac_policy.h"
-#include "exec_credential_policy.h"
+#include "credentials.h"
 #define HL_MODE_XATTR "user.hl.mode"
 
 static int mode_xattr_set_path(const char *hostpath, mode_t mode) {
