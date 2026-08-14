@@ -1,0 +1,27 @@
+cases:
+- id: terminal-shell-state/persist-across-writes
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; printf \"STATE-${x}READY\\n\"\r" }
+      - await_output: { contains: STATE-READY, timeout_ms: 5000 }
+      - write: { text: "cd /tmp && export HUSKLET_SESSION_STATE=kept\r" }
+      - write: { text: "test \"$PWD\" = /tmp && test \"$HUSKLET_SESSION_STATE\" = kept && printf \"STATE-${x}PERSISTED\\n\"\r" }
+      - await_output: { contains: STATE-PERSISTED, timeout_ms: 5000 }
+      - write: { text: "(cd /); test \"$PWD\" = /tmp && printf \"SUBSHELL-${x}ISOLATED\\n\"\r" }
+      - await_output: { contains: SUBSHELL-ISOLATED, timeout_ms: 5000 }
+      - write: { text: "stty echo; printf \"SHELL-${x}OK\\n\"; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/persisted.txt
+    - golden/isolated.txt
+    - golden/shell_ok.txt
