@@ -14,7 +14,7 @@ impl ProcessGroup {
     }
 
     pub fn hangup(&self) -> std::io::Result<()> {
-        ffi::Signal::hangup(self.0)
+        ffi::Signal::close_tree(self.0, std::time::Duration::from_millis(200))
     }
 }
 
@@ -88,6 +88,31 @@ mod ffi {
     pub(super) struct Signal;
 
     impl Signal {
+        pub(super) fn close_tree(process: i32, grace: std::time::Duration) -> io::Result<()> {
+            match Self::hangup(process) {
+                Ok(()) => {}
+                Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return Ok(()),
+                Err(error) => return Err(error),
+            }
+            let deadline = std::time::Instant::now() + grace;
+            while std::time::Instant::now() < deadline {
+                if !Self::alive(process) {
+                    return Ok(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            match Self::send(process, libc::SIGKILL) {
+                Ok(()) => Ok(()),
+                Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+                Err(error) => Err(error),
+            }
+        }
+
+        fn alive(process: i32) -> bool {
+            // SAFETY: signal zero probes integer process identities without delivering a signal.
+            unsafe { libc::kill(-process, 0) == 0 || libc::kill(process, 0) == 0 }
+        }
+
         pub(super) fn hangup(group: i32) -> io::Result<()> {
             Self::hangup_with(group, |target| {
                 // SAFETY: `kill` consumes only integers and no Rust storage. A negative target
@@ -154,6 +179,26 @@ mod ffi {
                 Ok(())
             }
         }
+
+        #[cfg(test)]
+        pub(super) fn prepare_session(command: &mut std::process::Command) {
+            use std::os::unix::process::CommandExt as _;
+            // SAFETY: the closure invokes only the async-signal-safe setsid boundary before exec.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+        }
+
+        #[cfg(test)]
+        pub(super) fn force(process: i32) -> io::Result<()> {
+            Self::send(process, libc::SIGKILL)
+        }
     }
 }
 
@@ -189,7 +234,7 @@ mod ffi {
 mod tests {
     #[cfg(unix)]
     use super::ffi::Signal;
-    use super::ProcessId;
+    use super::{ProcessGroup, ProcessId};
 
     #[test]
     fn invalid_identity() {
@@ -244,6 +289,36 @@ mod tests {
             })
             .unwrap();
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn close_reaps_a_real_session_that_ignores_hangup_within_the_bound() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "trap '' HUP; while :; do sleep 60; done"]);
+        Signal::prepare_session(&mut command);
+        let mut child = command.spawn().unwrap();
+        let group = ProcessGroup::new(i32::try_from(child.id()).unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let started = std::time::Instant::now();
+
+        group.hangup().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = Signal::force(i32::try_from(child.id()).unwrap());
+                let _ = child.wait();
+                panic!("terminal process tree survived its bounded close");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+
+        assert!(!status.success());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        group.hangup().unwrap();
     }
 
     #[cfg(unix)]
