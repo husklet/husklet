@@ -45,6 +45,7 @@
 #define hl_ckpt_trigger_destroy HL_TARGET_LOCAL(ckpt_trigger_destroy)
 #define hl_ckpt_interrupt_signal HL_TARGET_LOCAL(ckpt_interrupt_signal)
 #define hl_ckpt_interrupt_executors HL_TARGET_LOCAL(ckpt_interrupt_executors)
+#define ckpt_request_generation HL_TARGET_LOCAL(ckpt_request_generation)
 
 #define hl_linux_bus_active HL_TARGET_LOCAL(linux_bus_active)
 #define hl_linux_bus_fault HL_TARGET_LOCAL(linux_bus_fault)
