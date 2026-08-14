@@ -167,7 +167,8 @@ static int exec_image_authorized(const char *path, exec_image *image) {
     hl_dac_credentials credentials = dac_credentials_current(groups);
     if (hl_dac_authorize_access(&image->dac, &credentials, HL_DAC_EXECUTE) != 0) return -EACCES;
     if (hl_linux_image_read_bytes(header, g_authorized_executable_size, &image->bytes) != 0) return -ENOMEM;
-    int is_elf = image->bytes.size >= 4 && header[0] == 0x7f && header[1] == 'E' && header[2] == 'L' && header[3] == 'F';
+    int is_elf =
+        image->bytes.size >= 4 && header[0] == 0x7f && header[1] == 'E' && header[2] == 'L' && header[3] == 'F';
     image->script = header[0] == '#' && header[1] == '!';
     if (!is_elf && !image->script) {
         exec_image_release(image);
@@ -331,304 +332,262 @@ static int exec_collect_argv(uint64_t argv_address, char **argv, int *argc) {
 
 static _Thread_local int g_exec_requested_descriptor = -1;
 
+typedef struct exec_prepared {
+    char comm[256];
+    char guest_executable[4200];
+    char *arguments[HL_MAXARGV];
+    int argument_count;
+    char script_arguments[SHEBANG_MAX * 2][256];
+    exec_image main_image;
+    exec_image program_interpreter;
+    int has_program_interpreter;
+    hl_exec_environment_update environment;
+} exec_prepared;
+
+static void exec_capture_comm(const char *path, char *comm, size_t capacity) {
+    const char *separator = path != NULL ? strrchr(path, '/') : NULL;
+    const char *name = separator != NULL ? separator + 1 : (path != NULL ? path : "");
+    size_t name_length = strnlen(name, capacity - 1);
+    memcpy(comm, name, name_length);
+    comm[name_length] = 0;
+}
+
+static void exec_prepared_discard(exec_prepared *prepared) {
+    exec_image_release(&prepared->program_interpreter);
+    exec_image_release(&prepared->main_image);
+    hl_exec_environment_discard(&prepared->environment);
+}
+
+static int exec_prepare_environment(uint64_t environment_address, hl_exec_environment_update *update) {
+    char *staged = exec_stage_env(environment_address);
+    if (staged == NULL) return -ENOMEM;
+    int error = hl_exec_environment_prepare(update, staged) == 0 ? 0 : -ENOMEM;
+    free(staged);
+    return error;
+}
+
+static int exec_prepare_script(uint64_t path_address, exec_prepared *prepared) {
+    char *script_argv[HL_MAXARGV];
+    int script_argc = 0;
+    script_argv[script_argc++] = (char *)(uintptr_t)path_address;
+    for (int index = 1; index < prepared->argument_count && script_argc < HL_MAXARGV - 1; index++)
+        script_argv[script_argc++] = prepared->arguments[index];
+    script_argv[script_argc] = NULL;
+
+    int original_argc = script_argc;
+    int resolved_argc = exec_resolve_shebang_images(script_argv, script_argc, HL_MAXARGV, &prepared->main_image,
+                                                    prepared->script_arguments);
+    if (resolved_argc < 0) return resolved_argc;
+    if (prepared->main_image.script && resolved_argc == original_argc) return -ENOEXEC;
+    if (resolved_argc != original_argc) {
+        snprintf(prepared->guest_executable, sizeof prepared->guest_executable, "%s", script_argv[0]);
+        for (int index = 0; index <= resolved_argc; index++)
+            prepared->arguments[index] = script_argv[index];
+        prepared->argument_count = resolved_argc;
+    }
+    return 0;
+}
+
+static int exec_prepare_interpreter(exec_prepared *prepared) {
+    char interpreter_path[256], interpreter_backing[4200];
+    prepared->program_interpreter.descriptor = -1;
+    prepared->has_program_interpreter = elf_interp(prepared->main_image.path, interpreter_path, sizeof interpreter_path,
+                                                   &prepared->main_image.bytes) == 0;
+    if (!prepared->has_program_interpreter) return 0;
+
+    const char *resolved = xresolve_overlay(interpreter_path, interpreter_backing, sizeof interpreter_backing);
+    return exec_image_open(resolved, &prepared->program_interpreter);
+}
+
+static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, uint64_t environment_address,
+                                int requested_descriptor, exec_prepared *prepared) {
+    memset(prepared, 0, sizeof *prepared);
+    prepared->main_image.descriptor = -1;
+    prepared->program_interpreter.descriptor = -1;
+    exec_capture_comm((const char *)(uintptr_t)path_address, prepared->comm, sizeof prepared->comm);
+
+    int self_executable = 0;
+    int error = requested_descriptor >= 0 ? 0 : exec_resolve_proc_path(&path_address, &self_executable);
+    if (error != 0) {
+        if (requested_descriptor >= 0) close(requested_descriptor);
+        return error;
+    }
+    char path_buffer[4200];
+    const char *resolved_path = requested_descriptor >= 0 ? (const char *)(uintptr_t)path_address
+                                                          : atpath(-100, (const char *)(uintptr_t)path_address,
+                                                                   path_buffer, sizeof path_buffer, 0);
+    error = requested_descriptor >= 0 ? exec_image_adopt(requested_descriptor, resolved_path, &prepared->main_image)
+            : self_executable         ? exec_image_authorized(resolved_path, &prepared->main_image)
+                                      : exec_image_open(resolved_path, &prepared->main_image);
+    if (error != 0) return error;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    exec_pin_test_wait(HL_EXEC_PIN_TEST_MAIN);
+#endif
+
+    error = exec_collect_argv(argv_address, prepared->arguments, &prepared->argument_count);
+    if (error != 0) {
+        exec_image_release(&prepared->main_image);
+        return error;
+    }
+    error = exec_prepare_environment(environment_address, &prepared->environment);
+    if (error != 0) {
+        exec_image_release(&prepared->main_image);
+        return error;
+    }
+
+    if (g_rootfs)
+        abs_guest(-100, (const char *)(uintptr_t)path_address, prepared->guest_executable,
+                  sizeof prepared->guest_executable);
+    else
+        snprintf(prepared->guest_executable, sizeof prepared->guest_executable, "%s",
+                 (const char *)(uintptr_t)path_address);
+
+    error = exec_prepare_script(path_address, prepared);
+    if (error == 0) error = exec_prepare_interpreter(prepared);
+    if (error == 0 &&
+        (exec_image_is_write_open(&prepared->main_image.status) ||
+         (prepared->has_program_interpreter && exec_image_is_write_open(&prepared->program_interpreter.status))))
+        error = -ETXTBSY;
+    if (error != 0) {
+        exec_prepared_discard(prepared);
+        return error;
+    }
+#if defined(HL_NATIVE_TEST_HOOKS)
+    exec_pin_test_wait(HL_EXEC_PIN_TEST_FINAL);
+#endif
+
+    char canonical[4200];
+    exe_canon(prepared->guest_executable, canonical, sizeof canonical);
+    snprintf(prepared->guest_executable, sizeof prepared->guest_executable, "%s", canonical);
+    return 0;
+}
+
+static void exec_reset_caught_signals(void) {
+    for (int signal = 1; signal < 65; signal++)
+        if (g_sigact[signal].handler > 1) {
+            g_sigact[signal].handler = 0;
+            g_sigact[signal].flags = 0;
+            g_sigact[signal].mask = 0;
+        }
+}
+
+static void exec_copy_reload_arguments(exec_prepared *prepared, char **path_copy, char **argument_copies) {
+    *path_copy = strdup(prepared->main_image.path);
+    for (int index = 0; index < prepared->argument_count && index < HL_MAXARGV - 1; index++)
+        argument_copies[index] = strdup(prepared->arguments[index]);
+    argument_copies[prepared->argument_count < HL_MAXARGV - 1 ? prepared->argument_count : HL_MAXARGV - 1] = NULL;
+}
+
+static void exec_release_reload_arguments(int argument_count, char *path_copy, char **argument_copies) {
+    free(path_copy);
+    for (int index = 0; index < argument_count && index < HL_MAXARGV - 1; index++)
+        free(argument_copies[index]);
+}
+
+static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
+    char *path_copy;
+    char *argument_copies[HL_MAXARGV];
+    exec_copy_reload_arguments(prepared, &path_copy, argument_copies);
+
+    bound_mapping_reset();
+    hl_gmap_reset();
+    gna_reset();
+    hl_gmap_lock_reset();
+    g_nonpie_lo = g_nonpie_hi = 0;
+    for (int index = 0; index < prepared->argument_count && index < HL_MAXARGV - 1; index++)
+        prepared->arguments[index] = argument_copies[index];
+    prepared->arguments[prepared->argument_count < HL_MAXARGV - 1 ? prepared->argument_count : HL_MAXARGV - 1] = NULL;
+
+    struct loaded main_loaded;
+    hl_identity_digest interpreter_identity = {0};
+    char pc_interpreter_path[4200];
+    const char *pc_interp_host = NULL;
+    (void)pc_interpreter_path;
+    (void)pc_interp_host;
+#ifdef PCACHE_EXEC_HOOKS
+    pcache_exec_force_main();
+#endif
+    load_elf(path_copy, &main_loaded, NULL, &prepared->main_image.bytes);
+    uint64_t jump = main_loaded.entry, at_base = 0;
+    if (prepared->has_program_interpreter) {
+        const char *interpreter_host = prepared->program_interpreter.path;
+#ifdef PCACHE_EXEC_HOOKS
+        snprintf(pc_interpreter_path, sizeof pc_interpreter_path, "%s", interpreter_host);
+        pc_interp_host = pc_interpreter_path;
+        pcache_exec_force_interp();
+#endif
+        struct loaded interpreter_loaded;
+        load_elf(interpreter_host, &interpreter_loaded, NULL, &prepared->program_interpreter.bytes);
+        interpreter_identity = interpreter_loaded.identity;
+        jump = interpreter_loaded.entry;
+        at_base = interpreter_loaded.base;
+    }
+    g_cp = g_cache;
+    map_clear();
+    pend_reset();
+    memset(g_ibtc, 0, sizeof g_ibtc);
+#ifdef PCACHE_EXEC_HOOKS
+    pcache_exec_reload(main_loaded.identity, interpreter_identity, prepared->arguments[0], jump);
+#endif
+    exec_authority_rotate(&prepared->main_image, prepared->guest_executable);
+    exec_image_release(&prepared->program_interpreter);
+    exec_image_release(&prepared->main_image);
+    G_SHADOW_CLEAR(cpu);
+    exec_reset_caught_signals();
+
+    uint64_t heap;
+    if (hl_gmap_map_anonymous(0, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_PRIVATE,
+                              &heap) != HL_STATUS_OK)
+        _exit(127);
+    brk_lo = brk_cur = heap;
+    brk_hi = brk_lo + (256u << 20);
+    snprintf(g_exe_path_store, sizeof g_exe_path_store, "%s", prepared->guest_executable);
+    g_exe_path = g_exe_path_store;
+    uint64_t stack_pointer = build_stack(prepared->argument_count, prepared->arguments, &main_loaded, at_base);
+    proc_reg_publish(prepared->guest_executable, prepared->argument_count, prepared->arguments);
+    exec_release_reload_arguments(prepared->argument_count, path_copy, argument_copies);
+
+    G_RESET_REGS(cpu);
+    cpu->nzcv = 0;
+    cpu->alt_sp = 0;
+    cpu->alt_size = 0;
+    cpu->alt_flags = 2;
+    G_TLS(cpu) = 0;
+    G_SP(cpu) = stack_pointer;
+    G_PC(cpu) = jump;
+    cpu->redirect = 1;
+}
+
+static int exec_commit_request(struct cpu *cpu, exec_prepared *prepared) {
+    if (!thread_exec_owner_handoff(cpu)) return -EAGAIN;
+    thread_exit_others(cpu);
+    exec_publish_env(&prepared->environment);
+    vfork_release_parent();
+    set_guest_comm(prepared->comm);
+    cred_after_exec_snapshot(&prepared->main_image.dac);
+#ifdef PCACHE_SAVE_HOOK
+    PCACHE_SAVE_HOOK;
+#endif
+    exec_close_cloexec();
+    sysv_after_exec();
+    exec_reload_image(cpu, prepared);
+    return 0;
+}
+
 static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                         uint64_t a5) {
     switch (nr) {
     case 221: {
         int requested_descriptor = g_exec_requested_descriptor;
         g_exec_requested_descriptor = -1;
-        memf_materialize_all(); // non-CLOEXEC scratch fds survive exec -> flush RAM into the real files
-        // Linux comm = last component of the path PASSED to execve, captured BEFORE the /proc magic-link
-        // rewrite below and before binfmt_script (execve("/proc/self/exe") -> comm "exe"; "./run.sh"
-        // keeps "run.sh"). Applied at the committed point further down, only once the exec cannot fail.
-        char comm_src[256];
-        {
-            const char *cb = (const char *)a0, *cs = cb ? strrchr(cb, '/') : NULL;
-            const char *name = cs ? cs + 1 : (cb ? cb : "");
-            size_t name_length = strnlen(name, sizeof comm_src - 1);
-            memcpy(comm_src, name, name_length);
-            comm_src[name_length] = 0; // Linux path components are NAME_MAX; set_guest_comm applies TASK_COMM_LEN
+        memf_materialize_all();
+        exec_prepared prepared;
+        int error = exec_prepare_request(a0, a1, a2, requested_descriptor, &prepared);
+        if (error == 0) error = exec_commit_request(c, &prepared);
+        if (error != 0) {
+            if (error == -EAGAIN) exec_prepared_discard(&prepared);
+            G_RET(c) = (uint64_t)(int64_t)error;
         }
-        // exec THROUGH the /proc magic links: execve("/proc/self/exe") (busybox re-exec, daemons,
-        // test harnesses) and execve("/proc/self/fd/N") (glibc fexecve fallback) must exec the link's
-        // TARGET -- the rootfs /proc is empty, so resolving them as ordinary paths ENOENTed.
-        int self_executable = 0;
-        int path_error = requested_descriptor >= 0 ? 0 : exec_resolve_proc_path(&a0, &self_executable);
-        if (path_error) {
-            if (requested_descriptor >= 0) close(requested_descriptor);
-            G_RET(c) = (uint64_t)(int64_t)path_error;
-            break;
-        }
-        char pb[4200];
-        const char *p =
-            requested_descriptor >= 0
-                ? (const char *)(uintptr_t)a0
-                :
-                // resolve the exec path through the SAME resolver openat uses (atpath): overlay-aware
-                // (upper then lowers), bind-mount/volume aware, AND relative-path aware -- a RELATIVE exec
-                // (`./x`, `./binary` from `go build`/`make`, `./script`) is joined to the guest cwd (g_cwd),
-                // not the host cwd. The old xresolve_overlay bailed on any non-'/' path and returned it raw,
-                // so `./x` was access()'d against the host process cwd (never the mounted guest cwd) -> ENOENT.
-                atpath(-100, (const char *)a0, pb, sizeof pb, 0);
-        // execve(2) error classification, matching Linux binfmt semantics, applied to the resolved target:
-        // a directory is EACCES, and a regular file that is neither an ELF this engine can translate nor a
-        // #! script is ENOEXEC. A missing path stat()s ENOENT and falls through to the access() check below.
-        // A bare-mode (no-rootfs) launch used to additionally require the target to BE the launched image,
-        // collapsing every other target to ENOENT -- `sh -c 'exec bash'` reported "not found" while the same
-        // binary launched directly ran. The engine reads the target through the same host services either
-        // way, so the gate isolated nothing; an unreadable or unloadable image still fails right here.
-        exec_image main_image;
-        int image_error = requested_descriptor >= 0 ? exec_image_adopt(requested_descriptor, p, &main_image)
-                            : self_executable ? exec_image_authorized(p, &main_image) : exec_image_open(p, &main_image);
-        if (image_error) {
-            G_RET(c) = (uint64_t)(int64_t)image_error;
-            break;
-        }
-#if defined(HL_NATIVE_TEST_HOOKS)
-        exec_pin_test_wait(HL_EXEC_PIN_TEST_MAIN);
-#endif
-        char *argv[HL_MAXARGV]; // Linux allows far more than 255 args within ARG_MAX -- a fixed 256 silently
-        int ac = 0;             // dropped the tail (a different command ran, and /proc/self/cmdline diverged)
-        int argument_error = exec_collect_argv(a1, argv, &ac);
-        if (argument_error) {
-            exec_image_release(&main_image);
-            G_RET(c) = (uint64_t)(int64_t)argument_error;
-            break;
-        }
-        // Forward the guest's ACTUAL environment across the exec: build_stack rebuilds the new process env
-        // from HL_GUEST_ENV, so serialize envp (a2) into it NOW while guest memory is still mapped. A guest
-        // that set/modified env vars (FOO=bar, a tweaked PATH) thus sees them survive; a NULL envp keeps the
-        // container's HL_GUEST_ENV defaults (a2 is NOT rebased by the dispatch redirect, unlike a0/a1).
-        char *staged_environment = exec_stage_env(a2);
-        if (staged_environment == NULL) {
-            exec_image_release(&main_image);
-            G_RET(c) = (uint64_t)(int64_t)-ENOMEM;
-            break;
-        }
-        hl_exec_environment_update environment_update;
-        if (hl_exec_environment_prepare(&environment_update, staged_environment) != 0) {
-            free(staged_environment);
-            exec_image_release(&main_image);
-            G_RET(c) = (uint64_t)(int64_t)-ENOMEM;
-            break;
-        }
-        free(staged_environment);
-        // Capture the guest-absolute exec path NOW (a0 is still mapped) so /proc/self/exe can name the new
-        // image after the teardown below. ld.so resolves a binary's $ORIGIN (DT_RUNPATH) via readlink of
-        // /proc/self/exe; a stale value makes an exec'd dynamic binary fail to find its own libraries (e.g.
-        // rustup's proxy execs the real rustc, whose RUNPATH $ORIGIN/../lib must point into the toolchain).
-        char gexe[4200];
-        if (g_rootfs)
-            abs_guest(-100, (const char *)a0, gexe, sizeof gexe);
-        else
-            // bare mode: abs_guest would join the untracked g_cwd ("/"); keep the raw path and let
-            // exe_canon below join the LIVE host cwd (the engine chdir()s for real without a rootfs)
-            snprintf(gexe, sizeof gexe, "%s", (const char *)a0);
-        // shebang: exec the #! interpreter instead (resolve_shebang_chain is shared with the initial loader).
-        // RECURSIVE -- the interpreter may itself be a #! script (e.g. /usr/bin/env -> coreutils multicall);
-        // resolve the whole chain (Linux binfmt_script, up to SHEBANG_MAX levels) and load the FINAL interp.
-        char sh_store[SHEBANG_MAX * 2][256];
-        char *na[HL_MAXARGV];
-        int nn = 0;
-        // Linux passes the execve path (a0) as the script-path arg; the original argv[0] is discarded.
-        na[nn++] = (char *)a0;
-        for (int i = 1; i < ac && nn < HL_MAXARGV - 1; i++)
-            na[nn++] = argv[i];
-        na[nn] = NULL;
-        int original_nn = nn;
-        int sh_new = exec_resolve_shebang_images(na, nn, HL_MAXARGV, &main_image, sh_store);
-        if (sh_new < 0) {
-            // too many nested #! -> ELOOP. `-ELOOP` is the host macOS errno 62; svc_done's boundary translation
-            // maps it to Linux ELOOP (40) at the syscall boundary, exactly like the vfs symlink-loop path.
-            exec_image_release(&main_image);
-            hl_exec_environment_discard(&environment_update);
-            G_RET(c) = (uint64_t)(int64_t)sh_new;
-            break;
-        }
-        if (main_image.script && sh_new == original_nn) {
-            // A file beginning with #! is accepted only when binfmt_script resolved a non-empty
-            // interpreter.  Falling through to the ELF loader after an empty/malformed shebang
-            // commits the exec, tears down the old image, and interprets text bytes as an ELF.
-            exec_image_release(&main_image);
-            hl_exec_environment_discard(&environment_update);
-            G_RET(c) = (uint64_t)(int64_t)-ENOEXEC;
-            break;
-        }
-        if (sh_new != original_nn) { // a shebang chain resolved -> load the final interpreter, not the script
-            snprintf(gexe, sizeof gexe, "%s", na[0]); // /proc/self/exe names the interpreter
-            for (int i = 0; i <= sh_new; i++)
-                argv[i] = na[i];
-            ac = sh_new;
-        }
-        p = main_image.path;
-        exec_image program_interpreter;
-        memset(&program_interpreter, 0, sizeof program_interpreter);
-        program_interpreter.descriptor = -1;
-        char interpreter_path[256], interpreter_backing[4200];
-        int has_program_interpreter = elf_interp(p, interpreter_path, sizeof interpreter_path, &main_image.bytes) == 0;
-        if (has_program_interpreter) {
-            const char *resolved = xresolve_overlay(interpreter_path, interpreter_backing, sizeof interpreter_backing);
-            int interpreter_error = exec_image_open(resolved, &program_interpreter);
-            if (interpreter_error != 0) {
-                exec_image_release(&main_image);
-                hl_exec_environment_discard(&environment_update);
-                G_RET(c) = (uint64_t)(int64_t)interpreter_error;
-                break;
-            }
-        }
-        if (exec_image_is_write_open(&main_image.status) ||
-            (has_program_interpreter && exec_image_is_write_open(&program_interpreter.status))) {
-            exec_image_release(&program_interpreter);
-            exec_image_release(&main_image);
-            hl_exec_environment_discard(&environment_update);
-            G_RET(c) = (uint64_t)(int64_t)-ETXTBSY;
-            break;
-        }
-#if defined(HL_NATIVE_TEST_HOOKS)
-        exec_pin_test_wait(HL_EXEC_PIN_TEST_FINAL);
-#endif
-        // /proc/self/exe must name the new image as an ABSOLUTE, CANONICAL guest path -- fold "."/".."
-        // and resolve symlinks to the backing file (an exec of /bin/sh -> busybox reports /bin/busybox,
-        // and a relative "./x" exec reports "<cwd>/x", exactly like Linux d_path). glibc static-pie
-        // asserts on a non-canonical value at startup (dl-origin.c).
-        {
-            char gcanon[4200];
-            exe_canon(gexe, gcanon, sizeof gcanon);
-            snprintf(gexe, sizeof gexe, "%s", gcanon);
-        }
-        // Committed to the exec now (all ENOENT early-returns are behind us). execve makes the process
-        // single-threaded -- the kernel terminates every OTHER thread in the group -- so before we flush the
-        // address space and CLOEXEC fds below, tear down any sibling guest threads (a Go all-threads setuid,
-        // e.g. gosu/su-exec, leaves netpoller/idle Ms live; a surviving M would run the old image against the
-        // freed state). Blocks until all peers have left run_guest, so the teardown below is race-free.
-        if (!thread_exec_owner_handoff(c)) {
-            exec_image_release(&program_interpreter);
-            exec_image_release(&main_image);
-            hl_exec_environment_discard(&environment_update);
-            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
-            break;
-        }
-        thread_exit_others(c);
-        exec_publish_env(&environment_update);
-        // All failure returns are behind us: Linux releases a vfork parent
-        // when exec commits, before the new image begins executing.
-        vfork_release_parent();
-        set_guest_comm(comm_src);                  // comm := basename of the exec'd NAME (captured pre-rewrite above)
-        cred_after_exec_snapshot(&main_image.dac); // apply set-id ownership from the pinned executable
-#ifdef PCACHE_SAVE_HOOK
-        // the exec below flushes this image's translated arena and RE-KEYS the cache identity for
-        // the new image (pcache_exec_reload), so the exit-time save can never again cover this epoch.
-        // Persist the outgoing image under its OWN (current) key now -- e.g. the `sh` of a `sh -c tar`
-        // chain, which otherwise never gets cached because the shell always ends in an exec. Every save
-        // refusal gate applies unchanged (fork child, restored-from-cache, poisoned, SMC, mixed-base); a
-        // restored epoch records its revival stats instead (pcache_warm_note, the policy input).
-        // Single-threaded here by construction (thread_exit_others above), so the snapshot cannot tear.
-        PCACHE_SAVE_HOOK;
-#endif
-        // emulate the kernel's close-on-exec sweep. No real host exec runs below -- we re-load the new image
-        // in this same process -- so FD_CLOEXEC fds must be closed by hand or they leak into the new program.
-        exec_close_cloexec();
-        sysv_after_exec(); // detach SysV shm + clear semadj across execve (registry itself survives)
-        // Tear down the inherited guest address space before loading the new image: a post-fork exec
-        // otherwise keeps the parent's DENSE layout, and load_elf must bias a non-PIE ET_EXEC off its
-        // fixed vaddr (__PAGEZERO blocks the low 4 GB) -> its baked absolute refs collide -> SIGSEGV.
-        // argv + path live in guest memory we're about to munmap, so copy them to the host heap first.
-        char *xpath = strdup(p);
-        char *xargv[HL_MAXARGV];
-        for (int i = 0; i < ac && i < HL_MAXARGV - 1; i++)
-            xargv[i] = strdup(argv[i]);
-        xargv[ac < HL_MAXARGV - 1 ? ac : HL_MAXARGV - 1] = NULL;
-        bound_mapping_reset();
-        hl_gmap_reset();
-        gna_reset();                   // the old image's PROT_NONE ranges are gone with its address space
-        hl_gmap_lock_reset();          // ... and so are its mlock'd ranges (VmLck resets across execve)
-        g_nonpie_lo = g_nonpie_hi = 0; // reset; load_elf re-sets it iff the new main image is non-PIE
-        p = xpath;
-        for (int i = 0; i < ac && i < HL_MAXARGV - 1; i++)
-            argv[i] = xargv[i];
-        argv[ac < HL_MAXARGV - 1 ? ac : HL_MAXARGV - 1] = NULL;
-        struct loaded lm;
-        hl_identity_digest interp_identity = {0};
-#ifdef PCACHE_EXEC_HOOKS
-        pcache_exec_force_main(); // map the new image at the fixed VA so its cached arena is reusable
-#endif
-        load_elf(p, &lm, NULL, &main_image.bytes);
-        uint64_t jump = lm.entry, at_base = 0;
-        if (has_program_interpreter) {
-            const char *ih = program_interpreter.path;
-#ifdef PCACHE_EXEC_HOOKS
-            pcache_exec_force_interp();
-#endif
-            struct loaded li;
-            load_elf(ih, &li, NULL, &program_interpreter.bytes);
-            interp_identity = li.identity;
-            jump = li.entry;
-            at_base = li.base;
-        }
-        g_cp = g_cache;
-        /* Translation-map visibility is generation-tagged. Clearing only the
-           record payload leaves the old generation slots logically live and
-           lets the new exec image observe zero/stale translation records. */
-        map_clear();
-        // flush old translations
-        pend_reset();
-        memset(g_ibtc, 0, sizeof g_ibtc);
-#ifdef PCACHE_EXEC_HOOKS
-        // the new image is loaded + the arena is flushed -> try to restore its warm translated arena
-        // from the persistent cache (this is what makes the go-build fork+execve storm fast). Graceful MISS
-        // translates fresh + saves on exit.
-        pcache_exec_reload(lm.identity, interp_identity, argv[0], jump);
-#endif
-        exec_authority_rotate(&main_image, gexe);
-        exec_image_release(&program_interpreter);
-        exec_image_release(&main_image);
-        // execve is a wholesale code-cache flush (g_cp reset + g_map/g_ibtc zeroed above), so it must ALSO
-        // run the per-arch wholesale-flush hook the dispatcher uses (jit/dispatch.c) -- not just the lighter
-        // fork/exec G_SHADOW_RESET. On x86 that hook drops the 2-way g_xibtc (G_SHADOW_RESET is a NO-OP there,
-        // so g_xibtc was surviving execve); on aarch64 it resets the §B shadow stack. Without it a forked
-        // child that execve's a new image (apt http method / gzip / cc1 / git child) keeps the OLD image's
-        // g_xibtc entries -- keyed by guest PC the new image REUSES, bodies pointing into the freed cache --
-        // and an indirect branch resolves into garbage host code -> SIGSEGV/SIGBUS (/ /).
-        G_SHADOW_CLEAR(c);
-        // POSIX execve resets CAUGHT signal handlers to SIG_DFL (SIG_IGN stays ignored). Without this, a
-        // handler the calling shell installed (e.g. busybox sh's SIGCHLD job-control handler) survives into
-        // the new image and is later delivered to a now-garbage handler address -> crash (redis/valkey run
-        // via `sh -c …`). handler>1 == a real caught handler; 0=DFL, 1=IGN.
-        for (int s = 1; s < 65; s++)
-            if (g_sigact[s].handler > 1) {
-                g_sigact[s].handler = 0;
-                g_sigact[s].flags = 0;
-                g_sigact[s].mask = 0;
-            }
-        uint64_t heap;
-        if (hl_gmap_map_anonymous(0, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_PRIVATE,
-                                  &heap) != HL_STATUS_OK)
-            _exit(127);
-        brk_lo = brk_cur = heap;
-        brk_hi = brk_lo + (256u << 20);
-        // Publish the new image's exec path BEFORE build_stack: build_stack points AT_EXECFN at
-        // g_exe_path (the canonical guest exec pathname), and /proc/self/exe reads it too.
-        snprintf(g_exe_path_store, sizeof g_exe_path_store, "%s", gexe); // /proc/self/exe -> the new image
-        g_exe_path = g_exe_path_store;
-        uint64_t sp = build_stack(ac, argv, &lm, at_base);
-        proc_reg_publish(gexe, ac, argv); // republish the process table entry (comm/argv changed on exec)
-        free(xpath);
-        for (int i = 0; i < ac && i < HL_MAXARGV - 1; i++) // mirror the strdup loop bound above; a 255 cap
-            free(xargv[i]);                                // leaked xargv[255..ac-1] on every argc>255 execve
-        G_RESET_REGS(c);
-        c->nzcv = 0;
-        // Linux disables the calling thread's alternate signal stack on a
-        // successful exec. The guest exec is an in-process image reload, so
-        // reset the emulated state explicitly rather than inheriting storage
-        // that belonged to the unmapped predecessor image.
-        c->alt_sp = 0;
-        c->alt_size = 0;
-        c->alt_flags = 2; // SS_DISABLE
-        G_TLS(c) = 0;
-        G_SP(c) = sp;
-        G_PC(c) = jump;
-        // jump to new program; don't advance pc
-        c->redirect = 1;
         break;
     }
     // wait4(pid, *status, opts, *rusage)
