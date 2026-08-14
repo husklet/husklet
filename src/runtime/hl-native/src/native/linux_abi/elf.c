@@ -33,7 +33,6 @@ static int elf_interp(const char *path, char *out, size_t n, const hl_linux_imag
         return -1;
     }
     uint8_t *f = image.bytes;
-    g_loaded_image_identity = g_pcache ? hl_digest_bytes(HL_DIGEST_SEED, image.bytes, image.size) : 0;
     int r = -1;
     uint64_t phoff = layout.program_offset;
     int phnum = layout.program_count, phent = layout.program_size;
@@ -820,6 +819,10 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
         fprintf(stderr, "hl-engine: %s: malformed aarch64 ELF image\n", path);
         exit(1);
     }
+    /* Publish the identity of the image this load consumes.  elf_interp also
+     * reads an image, but parsing metadata must never overwrite the cache key
+     * for a different load. */
+    g_loaded_image_identity = g_pcache ? hl_digest_bytes(HL_DIGEST_SEED, image.bytes, image.size) : 0;
     // Refuse a foreign-arch ELF up front: this engine only translates aarch64 (e_machine==EM_AARCH64).
     // Without this guard an x86-64 image's bytes are decoded as aarch64 instructions -- the translator
     // runs off into a zero/garbage region and dies deep inside translate_block with a cryptic SIGSEGV.

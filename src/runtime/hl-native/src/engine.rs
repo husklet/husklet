@@ -295,7 +295,7 @@ fn pin_guest_image(config: &EngineConfig<'_>, guest: &[u8]) -> Result<Vec<u8>, i
     let mut file = if roots.is_empty() {
         File::open(guest).map_err(|_| 1)?
     } else {
-        resolve_layered_guest(guest, &roots).ok_or(1)?
+        resolve_layered_guest(guest, &roots).map_err(|_| 1)?.ok_or(1)?
     };
     let size = usize::try_from(file.metadata().map_err(|_| 1)?.len()).map_err(|_| 1)?;
     if size == 0 || size > 64 * 1024 * 1024 {
@@ -343,7 +343,7 @@ fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<File>, i32> {
 }
 
 #[cfg(unix)]
-fn resolve_layered_guest(guest: &std::path::Path, roots: &[File]) -> Option<File> {
+fn resolve_layered_guest(guest: &std::path::Path, roots: &[File]) -> std::io::Result<Option<File>> {
     use std::path::Component;
     let mut pending = guest
         .components()
@@ -353,15 +353,21 @@ fn resolve_layered_guest(guest: &std::path::Path, roots: &[File]) -> Option<File
             Component::ParentDir | Component::Prefix(_) => Some(std::ffi::OsString::new()),
         })
         .collect::<Vec<_>>();
-    if pending.iter().any(|part| part.is_empty()) {
-        return None;
+    if pending
+        .iter()
+        .any(|part| part.is_empty() || part.as_encoded_bytes().starts_with(b".wh."))
+    {
+        return Ok(None);
     }
     for _ in 0..40 {
         let mut prefix = Vec::new();
         let mut followed = false;
+        let mut layer_limit = roots.len();
         for index in 0..pending.len() {
             prefix.push(pending[index].clone());
-            let (_root, kind) = layered_entry(&prefix, roots)?;
+            let Some((root, kind)) = layered_entry(&prefix, &roots[..layer_limit])? else {
+                return Ok(None);
+            };
             if let EntryKind::Symlink(target) = kind {
                 let mut replacement = if target.is_absolute() {
                     Vec::new()
@@ -373,9 +379,11 @@ fn resolve_layered_guest(guest: &std::path::Path, roots: &[File]) -> Option<File
                         Component::RootDir | Component::CurDir => {}
                         Component::Normal(value) => replacement.push(value.to_owned()),
                         Component::ParentDir => {
-                            replacement.pop()?;
+                            if replacement.pop().is_none() {
+                                return Ok(None);
+                            }
                         }
-                        Component::Prefix(_) => return None,
+                        Component::Prefix(_) => return Ok(None),
                     }
                 }
                 replacement.extend_from_slice(&pending[index + 1..]);
@@ -383,17 +391,35 @@ fn resolve_layered_guest(guest: &std::path::Path, roots: &[File]) -> Option<File
                 followed = true;
                 break;
             }
+            if index + 1 < pending.len() && !matches!(kind, EntryKind::Directory) {
+                return Err(std::io::Error::from_raw_os_error(libc::ENOTDIR));
+            }
+            if matches!(kind, EntryKind::Directory) && entry_is_opaque(&roots[root], &prefix) {
+                layer_limit = layer_limit.min(root + 1);
+            }
         }
         if followed {
             continue;
         }
-        let (root, kind) = layered_entry(&pending, roots)?;
+        let Some((root, kind)) = layered_entry(&pending, &roots[..layer_limit])? else {
+            return Ok(None);
+        };
         if !matches!(kind, EntryKind::Regular) {
-            return None;
+            return Ok(None);
         }
-        return open_components(&roots[root], &pending, false).ok();
+        return open_components(&roots[root], &pending, false).map(Some);
     }
-    None
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn entry_is_opaque(root: &File, parts: &[std::ffi::OsString]) -> bool {
+    open_components(root, parts, true).ok().is_some_and(|directory| {
+        entry_mode(&directory, std::ffi::OsStr::new(".wh..wh..opq"))
+            .ok()
+            .flatten()
+            .is_some()
+    })
 }
 
 #[cfg(unix)]
@@ -404,21 +430,25 @@ enum EntryKind {
 }
 
 #[cfg(unix)]
-fn layered_entry(parts: &[std::ffi::OsString], roots: &[File]) -> Option<(usize, EntryKind)> {
-    let (leaf, parent) = parts.split_last()?;
+fn layered_entry(parts: &[std::ffi::OsString], roots: &[File]) -> std::io::Result<Option<(usize, EntryKind)>> {
+    let Some((leaf, parent)) = parts.split_last() else {
+        return Ok(None);
+    };
     let whiteout = {
         let mut name = std::ffi::OsString::from(".wh.");
         name.push(leaf);
         name
     };
     for (index, root) in roots.iter().enumerate() {
-        let Ok(directory) = open_components(root, parent, true) else {
-            continue;
+        let directory = match open_components(root, parent, true) {
+            Ok(directory) => directory,
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => continue,
+            Err(error) => return Err(error),
         };
-        if entry_mode(&directory, &whiteout).is_some() {
-            return None;
+        if entry_mode(&directory, &whiteout)?.is_some() {
+            return Ok(None);
         }
-        if let Some(mode) = entry_mode(&directory, leaf) {
+        if let Some(mode) = entry_mode(&directory, leaf)? {
             let kind = if mode & libc::S_IFMT == libc::S_IFLNK {
                 EntryKind::Symlink(read_link(&directory, leaf)?)
             } else if mode & libc::S_IFMT == libc::S_IFDIR {
@@ -426,15 +456,15 @@ fn layered_entry(parts: &[std::ffi::OsString], roots: &[File]) -> Option<(usize,
             } else if mode & libc::S_IFMT == libc::S_IFREG {
                 EntryKind::Regular
             } else {
-                return None;
+                return Ok(None);
             };
-            return Some((index, kind));
+            return Ok(Some((index, kind)));
         }
-        if entry_mode(&directory, std::ffi::OsStr::new(".wh..wh..opq")).is_some() {
-            return None;
+        if entry_mode(&directory, std::ffi::OsStr::new(".wh..wh..opq"))?.is_some() {
+            return Ok(None);
         }
     }
-    None
+    Ok(None)
 }
 
 #[cfg(unix)]
@@ -466,9 +496,10 @@ fn open_components(root: &File, parts: &[std::ffi::OsString], directory: bool) -
 }
 
 #[cfg(unix)]
-fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> Option<libc::mode_t> {
+fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<Option<libc::mode_t>> {
     use std::{mem::MaybeUninit, os::fd::AsRawFd as _, os::unix::ffi::OsStrExt as _};
-    let name = std::ffi::CString::new(name.as_bytes()).ok()?;
+    let name =
+        std::ffi::CString::new(name.as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let mut metadata = MaybeUninit::<libc::stat>::uninit();
     let status = unsafe {
         libc::fstatat(
@@ -478,16 +509,25 @@ fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> Option<libc::mode_t> 
             libc::AT_SYMLINK_NOFOLLOW,
         )
     };
-    (status == 0).then(|| unsafe { metadata.assume_init().st_mode })
+    if status == 0 {
+        return Ok(Some(unsafe { metadata.assume_init().st_mode }));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(None)
+    } else {
+        Err(error)
+    }
 }
 
 #[cfg(unix)]
-fn read_link(directory: &File, name: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+fn read_link(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<std::path::PathBuf> {
     use std::{
         os::fd::AsRawFd as _,
         os::unix::ffi::{OsStrExt as _, OsStringExt as _},
     };
-    let name = std::ffi::CString::new(name.as_bytes()).ok()?;
+    let name =
+        std::ffi::CString::new(name.as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let mut bytes = vec![0_u8; 4096];
     let count = unsafe {
         libc::readlinkat(
@@ -498,10 +538,14 @@ fn read_link(directory: &File, name: &std::ffi::OsStr) -> Option<std::path::Path
         )
     };
     if count < 0 || count as usize == bytes.len() {
-        return None;
+        return Err(if count < 0 {
+            std::io::Error::last_os_error()
+        } else {
+            std::io::Error::from_raw_os_error(libc::ENAMETOOLONG)
+        });
     }
     bytes.truncate(count as usize);
-    Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+    Ok(std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
 
 impl ProgramLayout {
@@ -654,8 +698,12 @@ mod tests {
         bytes
     }
 
-    fn dynamic_image(interpreter: &[u8]) -> Vec<u8> {
+    fn dynamic_image(interpreter: &[u8], isa: u32) -> Vec<u8> {
         let mut bytes = image();
+        if isa == 2 {
+            put16(&mut bytes, 18, 0x3e);
+            bytes[0x100..0x102].copy_from_slice(&[0xeb, 0xfe]);
+        }
         put16(&mut bytes, 56, 2);
         put32(&mut bytes, 120, 3);
         put64(&mut bytes, 128, 0x200);
@@ -665,15 +713,20 @@ mod tests {
         bytes
     }
 
-    fn exiting_interpreter() -> Vec<u8> {
+    fn exiting_interpreter(isa: u32) -> Vec<u8> {
         let mut bytes = image();
         put16(&mut bytes, 16, 3);
         put64(&mut bytes, 24, 0x100);
         put64(&mut bytes, 80, 0);
         put64(&mut bytes, 88, 0);
-        bytes[0x100..0x104].copy_from_slice(&0xd280_0000_u32.to_le_bytes());
-        bytes[0x104..0x108].copy_from_slice(&0xd280_0ba8_u32.to_le_bytes());
-        bytes[0x108..0x10c].copy_from_slice(&0xd400_0001_u32.to_le_bytes());
+        if isa == 1 {
+            bytes[0x100..0x104].copy_from_slice(&0xd280_0000_u32.to_le_bytes());
+            bytes[0x104..0x108].copy_from_slice(&0xd280_0ba8_u32.to_le_bytes());
+            bytes[0x108..0x10c].copy_from_slice(&0xd400_0001_u32.to_le_bytes());
+        } else {
+            put16(&mut bytes, 18, 0x3e);
+            bytes[0x100..0x109].copy_from_slice(&[0x31, 0xff, 0xb8, 0x3c, 0, 0, 0, 0x0f, 0x05]);
+        }
         bytes
     }
 
@@ -736,36 +789,41 @@ mod tests {
 
     #[test]
     fn interpreter_replacement_between_create_and_run_cannot_change_image() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("bin")).unwrap();
-        std::fs::create_dir_all(root.path().join("lib")).unwrap();
-        let main = root.path().join("bin/main");
-        let interpreter = root.path().join("lib/ld-test.so");
-        std::fs::write(&main, dynamic_image(b"/lib/ld-test.so")).unwrap();
-        std::fs::write(&interpreter, exiting_interpreter()).unwrap();
-        let main = CString::new(main.to_str().unwrap()).unwrap();
-        let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
-        let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
-        let config = EngineConfig {
-            isa: 1,
-            rootfs: Some(&root_path),
-            executable_host: Some(&main),
-            executable_fd: -1,
-            option_names: &[],
-            option_values: &[],
-            standard_fds: [standard.as_raw_fd(); 3],
-            provider_fd: -1,
-        };
-        // SAFETY: every borrowed string and descriptor remains live through create.
-        let engine = unsafe { Engine::create(config) }.unwrap();
-        std::fs::write(&interpreter, b"replacement is not an ELF image").unwrap();
-        let argument = CString::new("/bin/main").unwrap();
-        engine.run(&[argument.as_ptr()]).unwrap();
-        assert_eq!(engine.exit().status, 0);
+        for isa in [1, 2] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(root.path().join("bin")).unwrap();
+            std::fs::create_dir_all(root.path().join("lib")).unwrap();
+            let main = root.path().join("bin/main");
+            let interpreter = root.path().join("lib/ld-test.so");
+            std::fs::write(&main, dynamic_image(b"/lib/ld-test.so", isa)).unwrap();
+            std::fs::write(&interpreter, exiting_interpreter(isa)).unwrap();
+            let main = CString::new(main.to_str().unwrap()).unwrap();
+            let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
+            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+            let config = EngineConfig {
+                isa,
+                rootfs: Some(&root_path),
+                executable_host: Some(&main),
+                executable_fd: -1,
+                option_names: &[],
+                option_values: &[],
+                standard_fds: [standard.as_raw_fd(); 3],
+                provider_fd: -1,
+            };
+            // SAFETY: every borrowed string and descriptor remains live through create.
+            let engine = unsafe { Engine::create(config) }.unwrap();
+            std::fs::remove_file(root.path().join("bin/main")).unwrap();
+            std::fs::remove_dir(root.path().join("bin")).unwrap();
+            std::fs::remove_file(&interpreter).unwrap();
+            std::fs::remove_dir(root.path().join("lib")).unwrap();
+            let argument = CString::new("/bin/main").unwrap();
+            engine.run(&[argument.as_ptr()]).unwrap();
+            assert_eq!(engine.exit().status, 0);
+        }
     }
 
     fn resolved(mut roots: Vec<std::fs::File>, path: &str) -> Option<String> {
-        let mut file = resolve_layered_guest(std::path::Path::new(path), &roots)?;
+        let mut file = resolve_layered_guest(std::path::Path::new(path), &roots).ok()??;
         let mut value = String::new();
         file.read_to_string(&mut value).ok()?;
         roots.clear();
@@ -807,7 +865,26 @@ mod tests {
         std::fs::remove_file(upper.path().join("lib/real/.wh.loader")).unwrap();
         std::fs::write(upper.path().join("lib/real/.wh..wh..opq"), "").unwrap();
         assert!(resolved(roots(), "/lib/real/loader").is_none());
+        std::fs::create_dir_all(lower.path().join("lib/sub")).unwrap();
+        std::fs::write(lower.path().join("lib/sub/loader"), "hidden").unwrap();
+        std::fs::create_dir_all(upper.path().join("lib/sub")).unwrap();
+        std::fs::write(upper.path().join("lib/.wh..wh..opq"), "").unwrap();
+        assert!(resolved(roots(), "/lib/sub/loader").is_none());
+        assert!(resolved(roots(), "/lib/.wh..wh..opq").is_none());
+        assert!(resolved(roots(), "/lib/real/.wh.loader").is_none());
         assert!(resolved(roots(), "/../../proc/self/fd/0").is_none());
+    }
+
+    #[test]
+    fn upper_non_directory_ancestor_masks_lower_directory() {
+        let upper = tempfile::tempdir().unwrap();
+        let lower = tempfile::tempdir().unwrap();
+        std::fs::write(upper.path().join("lib"), "not a directory").unwrap();
+        std::fs::create_dir_all(lower.path().join("lib")).unwrap();
+        std::fs::write(lower.path().join("lib/loader"), "must stay hidden").unwrap();
+        let roots = vec![File::open(upper.path()).unwrap(), File::open(lower.path()).unwrap()];
+        let error = resolve_layered_guest(std::path::Path::new("/lib/loader"), &roots).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ENOTDIR));
     }
 
     #[test]
@@ -816,7 +893,9 @@ mod tests {
         std::fs::create_dir_all(root.path().join("lib/live")).unwrap();
         std::fs::write(root.path().join("lib/live/loader"), "original").unwrap();
         let roots = vec![File::open(root.path()).unwrap()];
-        let mut pinned = resolve_layered_guest(std::path::Path::new("/lib/live/loader"), &roots).unwrap();
+        let mut pinned = resolve_layered_guest(std::path::Path::new("/lib/live/loader"), &roots)
+            .unwrap()
+            .unwrap();
         std::fs::rename(root.path().join("lib/live"), root.path().join("lib/displaced")).unwrap();
         std::fs::create_dir_all(root.path().join("lib/live")).unwrap();
         std::fs::write(root.path().join("lib/live/loader"), "replacement").unwrap();

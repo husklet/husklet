@@ -127,7 +127,6 @@ static int elf_interp(const char *path, char *out, size_t n, const hl_linux_imag
         return -1;
     }
     uint8_t *f = image.bytes;
-    g_loaded_image_identity = g_pcache ? hl_digest_bytes(HL_DIGEST_SEED, image.bytes, image.size) : 0;
     int r = -1;
     uint64_t phoff = layout.program_offset;
     int phnum = layout.program_count, phent = layout.program_size;
@@ -181,6 +180,9 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
         fprintf(stderr, "hl-engine: %s: malformed x86-64 ELF image\n", path);
         exit(1);
     }
+    /* Cache identity belongs to the bytes mapped by this load, not to a
+     * preceding PT_INTERP metadata read. */
+    g_loaded_image_identity = g_pcache ? hl_digest_bytes(HL_DIGEST_SEED, image.bytes, image.size) : 0;
     if (rd16(f + 18) != 0x3E) fprintf(stderr, "[hl] warning: e_machine=%u (want 62=x86-64)\n", rd16(f + 18));
     uint64_t e_entry = rd64(f + 24), phoff = layout.program_offset;
     int phnum = layout.program_count, phentsize = layout.program_size;

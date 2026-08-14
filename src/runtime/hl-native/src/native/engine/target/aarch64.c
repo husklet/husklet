@@ -1177,9 +1177,9 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     exe_canon(prog, bootexe, sizeof bootexe);
     g_exe_path = bootexe;
     static char pb[4200];
-    const char *prog_host =
-        // resolve through the overlay (upper, then lowers) + follow the entry symlink (/bin/sh->busybox)
-        xresolve_overlay(prog, pb, sizeof pb);
+    const char *prog_host = g_initial_executable_image != NULL
+                                ? prog
+                                : xresolve_overlay(prog, pb, sizeof pb); // named fallback only
     // Authorize the launched image for the bare-mode execve gate (proc.c) and the by-path image reader.
     // This must be set even when no executable image was embedded (the macOS embedding/bridge path launches
     // the guest purely by path): otherwise a guest re-exec of /proc/self/exe fails the authorized-target
@@ -1216,7 +1216,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     if (has_interp) {
         static char ib[4200];
         // follow+confine ld.so symlink (through the overlay)
-        interp_host = xresolve_overlay(interp, ib, sizeof ib);
+        interp_host = g_initial_interpreter_image != NULL ? interp : xresolve_overlay(interp, ib, sizeof ib);
         g_initial_executable_image = g_initial_interpreter_image;
         g_initial_executable_size = g_initial_interpreter_size;
         if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
