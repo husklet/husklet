@@ -219,10 +219,10 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
         #[cfg(not(unix))]
         return Err(3);
     }
-    let path = config.executable_host.ok_or(1)?;
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
+        let path = config.executable_host.ok_or(1)?;
         File::open(std::ffi::OsStr::from_bytes(path.to_bytes())).map_err(|_| 1)
     }
     #[cfg(not(unix))]

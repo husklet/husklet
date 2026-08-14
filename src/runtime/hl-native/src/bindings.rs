@@ -70,13 +70,21 @@ unsafe extern "C" {
     #[cfg(test)]
     pub(super) fn hl_engine_version() -> *const c_char;
     pub(super) fn hl_c_backend_leak_check_nonvacuity() -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_broker_pair(parent: *mut c_int, child: *mut c_int) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_broker_accept(broker: c_int, timeout_ms: c_int, host_pid: *mut u64) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_trigger_create(descriptor: *mut c_int, mapping: *mut *mut c_void) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_trigger_bump(mapping: *mut c_void) -> c_uint;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_trigger_destroy(mapping: *mut c_void, descriptor: c_int);
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_adopt(isa: c_uint, broker: c_int, trigger: c_int) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_interrupt_signal(isa: c_uint) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_configure(backend: *mut Backend, broker: c_int, trigger: c_int) -> c_int;
     pub(super) fn hl_c_backend_create(
         isa: c_uint,

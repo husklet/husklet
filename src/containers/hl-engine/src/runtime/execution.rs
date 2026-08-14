@@ -1,8 +1,8 @@
 #![allow(unsafe_code)]
 
-use crate::composition::{
-    CheckpointSink, CheckpointSource, CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory,
-};
+#[cfg(unix)]
+use crate::composition::{CheckpointSink, CheckpointSource};
+use crate::composition::{CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory};
 use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
@@ -18,6 +18,7 @@ use super::terminal::NativeTerminalBridge;
 const REQUEST_INTERRUPT: u32 = 1;
 const REQUEST_FORCE_STOP: u32 = 2;
 const REQUEST_SIGNAL: u32 = 3;
+#[cfg(unix)]
 const REQUEST_CHECKPOINT: u32 = 4;
 
 pub(crate) struct ProductionMachine {
