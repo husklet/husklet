@@ -1,0 +1,20 @@
+cases:
+- id: terminal-unicode/readline-backspace
+  image: bash:5.2
+  resources: [pty]
+  environment: { LC_ALL: C.UTF-8 }
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      steps:
+      - write: { text: "stty -echo; printf '\\122\\104\\131\\n'\r" }
+      - await_output: { contains: RDY, timeout_ms: 5000 }
+      - write: { text: "printf '<%s>\\n' café\u007fe\r" }
+      - await_output: { contains: "<cafe>", timeout_ms: 5000 }
+      - reject_output: { text: "\u007f" }
+      - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/corrected.txt, golden/shell_ok.txt]
