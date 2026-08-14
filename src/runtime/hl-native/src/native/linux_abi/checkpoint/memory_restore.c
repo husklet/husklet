@@ -40,6 +40,11 @@ static int ckpt_read_meta_dir(const char *procdir, struct ckpt_meta *m) {
                 (unsigned long long)m->arch);
         return -1;
     }
+    hl_identity_digest expected_engine = pcache_translator_identity();
+    if (!hl_identity_digest_equal(&m->engine_identity, &expected_engine)) {
+        fprintf(stderr, "[restore] translator identity mismatch\n");
+        return -1;
+    }
     if (m->cpu_sz != sizeof(struct cpu)) {
         fprintf(stderr, "[restore] cpu-struct size mismatch (file %llu, expected %zu)\n", (unsigned long long)m->cpu_sz,
                 sizeof(struct cpu));

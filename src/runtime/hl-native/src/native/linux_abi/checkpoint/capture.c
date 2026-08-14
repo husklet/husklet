@@ -61,7 +61,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 4 // v4 preserves process and thread signal-64 pending state
+#define CKPT_VERSION 5 // v5 validates the full translator identity on restore
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -144,7 +144,8 @@ struct ckpt_manifest {
 };
 
 struct ckpt_meta {
-    uint64_t magic, version, arch, engine_id;
+    uint64_t magic, version, arch;
+    hl_identity_digest engine_identity;
     uint64_t cpu_sz, pagesz;
     uint64_t n_regions, n_threads, n_fds;
     uint64_t brk_lo, brk_cur, brk_hi;

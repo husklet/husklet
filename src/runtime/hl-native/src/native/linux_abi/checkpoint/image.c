@@ -758,7 +758,7 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     m.magic = CKPT_MAGIC;
     m.version = CKPT_VERSION;
     m.arch = G_CKPT_ARCH;
-    m.engine_id = pcache_engine_id();
+    m.engine_identity = pcache_translator_identity();
     m.cpu_sz = sizeof(struct cpu);
     m.pagesz = pagesz;
     m.n_threads = (uint64_t)g_ckpt_cpu_count;
