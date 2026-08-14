@@ -429,14 +429,6 @@ static uint64_t nonpie_place_at_link_address(uint64_t basepage, uint64_t span, h
     return basepage;
 }
 
-static void nonpie_report_forced_displacement(void) {
-    static const char message[] = "hl-test-displaced-et-exec: displaced\n";
-    const hl_host_services *host = effective_host_services();
-    if (host == NULL || (host->capabilities & HL_HOST_CAP_LOG) == 0 || host->log == NULL || host->log->emit == NULL)
-        return;
-    host->log->emit(host->context, 0, message, sizeof(message) - 1);
-}
-
 // ===================== non-PIE coordinates: the one rule ========================================
 #include "../../bridge/address_projection.h"
 // When the image IS folded (macOS, or a restored image captured folded) it is mapped HIGH at

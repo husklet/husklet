@@ -29,8 +29,7 @@ pub(super) fn sample(
     let started = Instant::now();
     let output = bounded_output(&mut command, Duration::from_secs(workload.timeout_seconds))?;
     let wall_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX).max(1);
-    let diagnostic = accepted_diagnostic(&output.stderr);
-    if !output.status.success() || (!output.stderr.is_empty() && diagnostic.is_none()) {
+    if !output.status.success() || !output.stderr.is_empty() {
         return Err(format!(
             "benchmark {}/{}/{} failed: status={} stderr={}",
             step.workload,
@@ -71,7 +70,7 @@ pub(super) fn sample(
         }
         let frame = canonical.join("\n");
         let identity = FramedIdentity::of(frame.as_bytes());
-        Ok((phases, identity, frame, diagnostic))
+        Ok((phases, identity, frame, None))
     })();
     parsed.map_err(|error| parse_failure(step, output.status.to_string(), &output.stdout, &output.stderr, error))
 }
@@ -95,10 +94,6 @@ fn parse_failure(step: &Step, status: String, stdout: &[u8], stderr: &[u8], erro
         evidence(stderr)
     )
     .into()
-}
-
-fn accepted_diagnostic(stderr: &[u8]) -> Option<String> {
-    (stderr == b"hl-test-displaced-et-exec: displaced\n").then(|| "hl-test-displaced-et-exec: displaced".to_owned())
 }
 
 fn require_line_framing(text: &str) -> Result<(), Error> {
@@ -439,8 +434,8 @@ fn box_lock_holder_count(_path: &Path) -> Result<u64, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Measurement, accepted_diagnostic, counter_metadata, metadata_line, parse_failure, phase_fields,
-        require_line_framing, require_metadata,
+        Measurement, counter_metadata, metadata_line, parse_failure, phase_fields, require_line_framing,
+        require_metadata,
     };
     use crate::benchmark::schedule::Step;
     use std::{
@@ -479,16 +474,6 @@ mod tests {
         assert!(error.contains("bytes=5000 sha256="));
         assert!(error.contains("incomplete phase set"));
         assert!(error.len() < 9000, "raw evidence was not bounded");
-    }
-
-    #[test]
-    fn only_the_exact_displaced_diagnostic_is_accepted() {
-        assert_eq!(
-            accepted_diagnostic(b"hl-test-displaced-et-exec: displaced\n").as_deref(),
-            Some("hl-test-displaced-et-exec: displaced")
-        );
-        assert!(accepted_diagnostic(b"hl-test-displaced-et-exec: displaced").is_none());
-        assert!(accepted_diagnostic(b"other\n").is_none());
     }
 
     #[test]

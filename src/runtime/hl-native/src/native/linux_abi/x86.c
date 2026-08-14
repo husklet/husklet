@@ -272,7 +272,6 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
         g_nonpie_hi = basepage + span;
         g_nonpie_bias = bias;
     }
-    if (force_displaced && bias != 0) nonpie_report_forced_displacement();
     for (int i = 0; i < phnum; i++) {
         uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
         if (rd32(ph) != 1) continue;
