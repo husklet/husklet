@@ -465,10 +465,11 @@ static int bound_fork_prepare(bound_fork_state *state) {
 
 static int bound_fork_complete(bound_fork_state *state, int child, int child_pid) {
     hl_status status;
+    int fdvis_status = 0;
     if (state->seq_prepared && child_pid < 0) seq_ref_fork_cancel();
     if (state->fdvis_prepared) {
         if (child_pid > 0)
-            proc_fdvis_after_fork(&state->fdvis_plan, child_pid, child);
+            fdvis_status = proc_fdvis_after_fork(&state->fdvis_plan, child_pid, child);
         else
             proc_fdvis_fork_cancel(&state->fdvis_plan);
         free(state->fdvis_plan.entries);
@@ -481,6 +482,7 @@ static int bound_fork_complete(bound_fork_state *state, int child, int child_pid
     if (state->watch_prepared && bound_mapping_fork_complete(&state->watch_plan, child) != 0 && status == HL_STATUS_OK)
         status = HL_STATUS_PLATFORM_FAILURE;
     if (private_status != 0 && status == HL_STATUS_OK) status = HL_STATUS_OUT_OF_MEMORY;
+    if (fdvis_status != 0 && status == HL_STATUS_OK) status = HL_STATUS_OUT_OF_MEMORY;
     free(state->plan.records);
     state->plan.records = NULL;
     free(state->watch_plan.records);

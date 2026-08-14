@@ -91,6 +91,10 @@ unsafe extern "C" {
         calls: *mut c_uint,
         bytes: *mut c_ulonglong,
     ) -> c_int;
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    fn hl_aarch64_fdvis_path_publication_test(scenario: c_uint) -> c_int;
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    fn hl_x86_64_fdvis_path_publication_test(scenario: c_uint) -> c_int;
     #[cfg(feature = "native-test-hooks")]
     fn hl_x86_64_store_preflight_test() -> c_int;
     pub(super) fn hl_engine_abi() -> c_uint;
@@ -179,6 +183,17 @@ pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32,
     }
 }
 
+#[cfg(all(test, feature = "native-test-hooks"))]
+pub(crate) fn fdvis_path_publication_test(isa: u32, scenario: u32) -> bool {
+    let hook = match isa {
+        1 => hl_aarch64_fdvis_path_publication_test,
+        2 => hl_x86_64_fdvis_path_publication_test,
+        _ => return false,
+    };
+    // SAFETY: the feature-gated hook owns and restores its isolated descriptor-path fixture.
+    unsafe { hook(scenario) == 1 }
+}
+
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn x86_store_preflight_test() -> bool {
     // SAFETY: the feature-gated hook owns its local emitter and CPU fixtures.
@@ -230,6 +245,15 @@ pub(super) fn engine_library_paths() -> Option<Vec<std::path::PathBuf>> {
 mod tests {
     use super::*;
     use std::ptr;
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn descriptor_path_publication_copies_and_clears_on_both_guest_isas() {
+        for scenario in [0, 1, 2, 3, 4, 5, 6, 7] {
+            assert!(fdvis_path_publication_test(1, scenario), "arm64 scenario {scenario}");
+            assert!(fdvis_path_publication_test(2, scenario), "x86 scenario {scenario}");
+        }
+    }
 
     #[test]
     fn exported_bridge_contract_is_callable() {

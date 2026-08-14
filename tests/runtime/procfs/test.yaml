@@ -143,9 +143,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/shared/peerns.out }
   - id: runtime/procfs/peer-fd
-    status: !broken
-      reason: "the previous reason was self-contradictory: it called set/private/same green and then described the peer view as the residual. Re-derived 2026-08-08, both ISAs: 'peerfd ok=0 set=1 private=1 same=0 reuse=1 close=1 fork=1 exec=1'. same=0 IS the residual, everything else is green. A bound-volume fd carries a /dev/null-ish native shadow at the guest number while the real object is a host_handle; the SELF view (/proc/self/fd) resolves via the engine's g_fdpath but the PEER view (parent inspecting /proc/<child>/fd) reads the child's real shadow fd. Making them agree and show the true path needs the bound shadow to back the real file, or the fd->path map to live in the shared fdvis arena. Deferred pending shared-path vfd identity."
-      evidence: "tests/runtime/procfs/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: peerfd.c, output: peerfd, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/peerfd }

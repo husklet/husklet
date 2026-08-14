@@ -430,9 +430,10 @@ static int ckpt_restore_file_fd(const struct ckpt_fd *record) {
     }
     if (record->offset > 0) lseek(record->gfd, (off_t)record->offset, SEEK_SET);
     if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
-    if (record->gfd >= 0 && record->gfd < 1024 &&
+    if (record->gfd >= 0 && record->gfd < HL_NFD &&
         path_copy(g_fdpath[record->gfd], sizeof g_fdpath[record->gfd], record->path) != 0)
         g_fdpath[record->gfd][0] = 0;
+    if (record->gfd >= 0 && record->gfd < HL_NFD) g_fdpath_guest[record->gfd] = 0;
     return proc_fdvis_publish_native_fd(record->gfd);
 }
 
