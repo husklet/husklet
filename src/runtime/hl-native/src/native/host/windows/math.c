@@ -26,6 +26,11 @@
 
 #include <math.h>
 
+/* Keep the compiler-generated C23 calls type-checked even though the Windows
+ * runtime's <math.h> does not declare or export these functions. */
+double roundeven(double x);
+float roundevenf(float x);
+
 double roundeven(double x) {
     double truncated;
     double fraction;
