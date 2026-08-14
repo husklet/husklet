@@ -161,11 +161,12 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     }
 
     std::fs::write(&release, []).unwrap();
+    let second_store = Arc::new(Store::default());
     let recapture = Engine::with_checkpoint(
         isa,
         plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
         StandardStreams::default(),
-        store.clone(),
+        second_store.clone(),
         store.clone(),
     )
     .unwrap();
@@ -190,12 +191,17 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
         isa,
         plan(executable, &release, &final_release, &["HL_RESTORE"]),
         StandardStreams::default(),
-        store.clone(),
-        store,
+        second_store.clone(),
+        second_store,
     )
     .unwrap();
     restore.start().unwrap();
-    assert_eq!(restore.wait().unwrap().guest_status, 0);
+    assert_eq!(
+        restore.wait().unwrap().guest_status,
+        0,
+        "{}",
+        std::fs::read_to_string(&output).unwrap_or_default()
+    );
     let output = std::fs::read_to_string(output).unwrap();
     assert!(output.contains("RESTORED 1"));
     assert!(output.contains("RESTORED 2"));

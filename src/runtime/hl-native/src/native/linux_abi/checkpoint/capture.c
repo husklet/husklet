@@ -873,13 +873,25 @@ static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capac
     struct ckpt_sink *sink = ckpt_sink_current();
     struct ckpt_sink_stream *output = NULL;
     if (ckpt_sink_begin(sink, NULL, record_path, CKPT_SINK_PUBLISH_ATOMIC, &output) != 0) return -1;
+    int input = fd;
+#if defined(__linux__)
+    int reader = -1;
+    int access_mode = fcntl(fd, F_GETFL);
+    if (access_mode >= 0 && (access_mode & O_ACCMODE) == O_WRONLY) {
+        char descriptor_path[64];
+        if (snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", fd) <
+            (int)sizeof descriptor_path)
+            reader = open(descriptor_path, O_RDONLY | O_CLOEXEC);
+        if (reader >= 0) input = reader;
+    }
+#endif
     unsigned char buffer[65536];
     off_t offset = 0;
     int failed = 0;
     while (offset < status.st_size) {
         size_t wanted =
             (uint64_t)(status.st_size - offset) < sizeof buffer ? (size_t)(status.st_size - offset) : sizeof buffer;
-        ssize_t count = pread(fd, buffer, wanted, offset);
+        ssize_t count = pread(input, buffer, wanted, offset);
         if (count > 0) {
             if (ckpt_sink_write(sink, output, buffer, (size_t)count) != 0) {
                 failed = 1;
@@ -894,9 +906,16 @@ static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capac
     }
     if (failed) {
         ckpt_sink_abort(sink, &output);
+#if defined(__linux__)
+        if (reader >= 0) close(reader);
+#endif
         return -1;
     }
-    return ckpt_sink_finish(sink, &output);
+    int result = ckpt_sink_finish(sink, &output);
+#if defined(__linux__)
+    if (reader >= 0) close(reader);
+#endif
+    return result;
 }
 
 // Called at the top of the dispatcher loop (a clean safepoint: all guest arch state is spilled into `c`).

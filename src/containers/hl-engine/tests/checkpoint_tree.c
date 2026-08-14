@@ -97,6 +97,7 @@ static int worker(const char *release, const char *final_release, int role) {
     pid_t original_pid = getpid();
     pid_t original_ppid = getppid();
     char file_path[1024];
+    char deleted_path[1024];
     char expected[32];
     char observed[32] = {0};
     int descriptors[2];
@@ -104,6 +105,7 @@ static int worker(const char *release, const char *final_release, int role) {
     int file;
     int independent_file;
     int duplicate_file;
+    int deleted_write_file;
     struct sigaction action = {0};
     sigset_t blocked, previous;
     ssize_t expected_size;
@@ -119,6 +121,8 @@ static int worker(const char *release, const char *final_release, int role) {
     if (chdir(directory) < 0 || getcwd(original_cwd, sizeof original_cwd) == NULL) return 30 + role;
 
     if (snprintf(file_path, sizeof file_path, "%s.file.%d", release, role) >= (int)sizeof file_path) return 10 + role;
+    if (snprintf(deleted_path, sizeof deleted_path, "%s.deleted.%d", release, role) >= (int)sizeof deleted_path)
+        return 10 + role;
     file = open(file_path, O_CREAT | O_TRUNC | O_RDWR, 0600);
     if (file < 0 || write(file, "offset", 6) != 6 || lseek(file, role, SEEK_SET) != role) return 10 + role;
     independent_file = open(file_path, O_RDONLY);
@@ -126,6 +130,10 @@ static int worker(const char *release, const char *final_release, int role) {
     if (independent_file < 0 || duplicate_file < 0 || lseek(independent_file, 0, SEEK_SET) != 0 ||
         fcntl(duplicate_file, F_SETFD, FD_CLOEXEC) != 0 ||
         fcntl(duplicate_file, F_SETFL, fcntl(duplicate_file, F_GETFL) | O_APPEND | O_NONBLOCK) != 0)
+        return 10 + role;
+    deleted_write_file = open(deleted_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (deleted_write_file < 0 || write(deleted_write_file, "secret", 6) != 6 ||
+        lseek(deleted_write_file, 1, SEEK_SET) != 1 || unlink(deleted_path) != 0)
         return 10 + role;
     if (pipe(descriptors) != 0) return 10 + role;
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) return 10 + role;
@@ -168,6 +176,14 @@ static int worker(const char *release, const char *final_release, int role) {
         (fcntl(file, F_GETFD) & FD_CLOEXEC) != 0 || (fcntl(duplicate_file, F_GETFD) & FD_CLOEXEC) == 0 ||
         (fcntl(independent_file, F_GETFD) & FD_CLOEXEC) != 0)
         return 69 + role;
+    struct stat deleted_status;
+    char byte;
+    errno = 0;
+    if ((fcntl(deleted_write_file, F_GETFL) & O_ACCMODE) != O_WRONLY ||
+        (fcntl(deleted_write_file, F_GETFD) & FD_CLOEXEC) == 0 || pread(deleted_write_file, &byte, 1, 0) != -1 ||
+        errno != EBADF || lseek(deleted_write_file, 0, SEEK_CUR) != 1 || write(deleted_write_file, "X", 1) != 1 ||
+        fstat(deleted_write_file, &deleted_status) != 0 || deleted_status.st_nlink != 0 || deleted_status.st_size != 6)
+        return 68 + role;
     memset(observed, 0, sizeof observed);
     if (read(descriptors[0], observed, sizeof observed) != expected_size ||
         memcmp(observed, expected, (size_t)expected_size))
@@ -200,6 +216,9 @@ static int worker(const char *release, const char *final_release, int role) {
     }
     if (read(file, observed, 1) != 1 || observed[0] != "offset"[role + 2]) return 120 + role;
     if (read(independent_file, observed, 1) != 1 || observed[0] != 'f') return 123 + role;
+    if (lseek(deleted_write_file, 0, SEEK_CUR) != 2 || write(deleted_write_file, "Y", 1) != 1 ||
+        fstat(deleted_write_file, &deleted_status) != 0 || deleted_status.st_nlink != 0 || deleted_status.st_size != 6)
+        return 126 + role;
     if (read(descriptors[0], observed, sizeof observed) != 0) return 130 + role;
     if (sigprocmask(SIG_SETMASK, &previous, NULL) != 0) return 140 + role;
     for (int attempt = 0; attempt < 1000 && delivered != 2; ++attempt)
@@ -212,6 +231,7 @@ static int worker(const char *release, const char *final_release, int role) {
     close(file);
     close(independent_file);
     close(duplicate_file);
+    close(deleted_write_file);
     close(descriptors[0]);
     close(sockets[0]);
     close(sockets[1]);
