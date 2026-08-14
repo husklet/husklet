@@ -1,16 +1,25 @@
 #define HL_VFS_CURSOR_LAYERS (HL_LINUX_VFS_LOWER_CAPACITY + 1)
+#include <stdatomic.h>
 #if defined(__GNUC__) || defined(__clang__)
 #define HL_VFS_CURSOR_UNUSED __attribute__((unused))
 #else
 #define HL_VFS_CURSOR_UNUSED
 #endif
 
+typedef struct hl_vfs_cursor_parent hl_vfs_cursor_parent;
+
 typedef struct hl_vfs_cursor {
     int descriptors[HL_VFS_CURSOR_LAYERS];
     size_t count;
     int opaque_cut;
     char guest[4200];
+    hl_vfs_cursor_parent *parent;
 } hl_vfs_cursor;
+
+struct hl_vfs_cursor_parent {
+    _Atomic unsigned references;
+    hl_vfs_cursor cursor;
+};
 
 typedef enum hl_vfs_cursor_kind {
     HL_VFS_CURSOR_ABSENT = 0,
@@ -27,10 +36,23 @@ typedef struct hl_vfs_cursor_entry {
     char symlink[4096];
 } hl_vfs_cursor_entry;
 
+static void hl_vfs_cursor_release(hl_vfs_cursor *cursor);
+
+static void hl_vfs_cursor_parent_retain(hl_vfs_cursor_parent *parent) {
+    if (parent != NULL) atomic_fetch_add_explicit(&parent->references, 1, memory_order_relaxed);
+}
+
+static void hl_vfs_cursor_parent_release(hl_vfs_cursor_parent *parent) {
+    if (parent == NULL || atomic_fetch_sub_explicit(&parent->references, 1, memory_order_acq_rel) != 1) return;
+    hl_vfs_cursor_release(&parent->cursor);
+    free(parent);
+}
+
 static void hl_vfs_cursor_release(hl_vfs_cursor *cursor) {
     if (cursor == NULL) return;
     for (size_t index = 0; index < cursor->count; index++)
         if (cursor->descriptors[index] >= 0) close(cursor->descriptors[index]);
+    hl_vfs_cursor_parent_release(cursor->parent);
     memset(cursor, 0, sizeof *cursor);
     for (size_t index = 0; index < HL_VFS_CURSOR_LAYERS; index++)
         cursor->descriptors[index] = -1;
@@ -42,6 +64,8 @@ static int hl_vfs_cursor_clone(const hl_vfs_cursor *source, hl_vfs_cursor *outpu
     for (size_t index = 0; index < HL_VFS_CURSOR_LAYERS; index++)
         output->descriptors[index] = -1;
     output->opaque_cut = source->opaque_cut;
+    output->parent = source->parent;
+    hl_vfs_cursor_parent_retain(output->parent);
     snprintf(output->guest, sizeof output->guest, "%s", source->guest);
     for (size_t index = 0; index < source->count; index++) {
         int descriptor = fcntl(source->descriptors[index], F_DUPFD_CLOEXEC, 0);
@@ -52,6 +76,19 @@ static int hl_vfs_cursor_clone(const hl_vfs_cursor *source, hl_vfs_cursor *outpu
         }
         output->descriptors[output->count++] = descriptor;
     }
+    return 0;
+}
+
+static int hl_vfs_cursor_parent_create(const hl_vfs_cursor *cursor, hl_vfs_cursor_parent **output) {
+    hl_vfs_cursor_parent *parent = calloc(1, sizeof *parent);
+    if (parent == NULL) return -ENOMEM;
+    atomic_init(&parent->references, 1);
+    int error = hl_vfs_cursor_clone(cursor, &parent->cursor);
+    if (error != 0) {
+        free(parent);
+        return error;
+    }
+    *output = parent;
     return 0;
 }
 
@@ -172,6 +209,11 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
         hl_vfs_cursor_entry_release(output);
         return -ENAMETOOLONG;
     }
+    int parent_error = hl_vfs_cursor_parent_create(cursor, &output->directory.parent);
+    if (parent_error != 0) {
+        hl_vfs_cursor_entry_release(output);
+        return parent_error;
+    }
     output->kind = HL_VFS_CURSOR_DIRECTORY;
     return 0;
 }
@@ -239,7 +281,15 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
             continue;
         }
         if (!strcmp(name, "..")) {
-            if (depth != 0) hl_vfs_cursor_release(&frames[depth--]);
+            if (depth != 0)
+                hl_vfs_cursor_release(&frames[depth--]);
+            else if (frames[0].parent != NULL) {
+                hl_vfs_cursor parent;
+                error = hl_vfs_cursor_clone(&frames[0].parent->cursor, &parent);
+                if (error != 0) goto done;
+                hl_vfs_cursor_release(&frames[0]);
+                frames[0] = parent;
+            }
             snprintf(rest, sizeof rest, "%s", tail);
             continue;
         }
