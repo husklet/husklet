@@ -515,6 +515,7 @@ static void pts_master_retain_input(int slave) {
 // close(fd) itself -- the caller owns the real fd's lifetime. Safe on a non-emulated fd (every branch is
 // guarded / idempotent). Mirrors case 57's teardown exactly so close(2) semantics are unchanged.
 static void fd_reset_emul(int fd) {
+    hl_vfs_fd_cursor_drop(fd);
     if (fd >= 0 && fd < HL_NFD) {
         /* Linux's kqueue compatibility owns private eventfd/timerfd wake descriptors keyed by the
          * kqueue's native identity. Tear those registrations down before the guest closes/reuses the fd. */

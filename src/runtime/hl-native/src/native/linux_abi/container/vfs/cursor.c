@@ -348,3 +348,39 @@ done:
     free(frames);
     return error;
 }
+
+// Directory-descriptor provenance is deliberately separate from g_fdpath: a pathname cannot identify the
+// directory object after rename/unlink. Dup aliases clone this authority; final close releases it.
+static hl_vfs_cursor *g_vfs_fd_cursor[HL_NFD];
+
+static void hl_vfs_fd_cursor_drop(int descriptor) {
+    if (descriptor < 0 || descriptor >= HL_NFD || g_vfs_fd_cursor[descriptor] == NULL) return;
+    hl_vfs_cursor_release(g_vfs_fd_cursor[descriptor]);
+    free(g_vfs_fd_cursor[descriptor]);
+    g_vfs_fd_cursor[descriptor] = NULL;
+}
+
+static int hl_vfs_fd_cursor_publish(int descriptor, const hl_vfs_cursor *cursor) {
+    if (descriptor < 0 || descriptor >= HL_NFD || cursor == NULL) return -EINVAL;
+    hl_vfs_cursor *copy = calloc(1, sizeof *copy);
+    if (copy == NULL) return -ENOMEM;
+    int error = hl_vfs_cursor_clone(cursor, copy);
+    if (error != 0) {
+        free(copy);
+        return error;
+    }
+    hl_vfs_fd_cursor_drop(descriptor);
+    g_vfs_fd_cursor[descriptor] = copy;
+    return 0;
+}
+
+static void hl_vfs_fd_cursor_duplicate(int source, int destination) {
+    if (destination < 0 || destination >= HL_NFD) return;
+    hl_vfs_fd_cursor_drop(destination);
+    if (source >= 0 && source < HL_NFD && g_vfs_fd_cursor[source] != NULL)
+        (void)hl_vfs_fd_cursor_publish(destination, g_vfs_fd_cursor[source]);
+}
+
+static const hl_vfs_cursor *HL_VFS_CURSOR_UNUSED hl_vfs_fd_cursor_get(int descriptor) {
+    return descriptor >= 0 && descriptor < HL_NFD ? g_vfs_fd_cursor[descriptor] : NULL;
+}

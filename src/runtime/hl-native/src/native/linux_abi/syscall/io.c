@@ -100,6 +100,7 @@ static int fd_virt_reserve_at(int oldfd, int newfd, struct fdvis_reservation *re
 
 static void fd_carry_virt(int newfd, int oldfd, struct fdvis_reservation *reservation) {
     if (newfd < 0 || newfd >= HL_NFD || oldfd < 0 || oldfd >= HL_NFD || newfd == oldfd) return;
+    hl_vfs_fd_cursor_duplicate(oldfd, newfd);
     // Tag both fds as the same open file description so a later close of one (while the other survives) can
     // find the surviving alias -- e.g. epoll readiness must persist while a dup keeps the watched OFD open.
     ofd_link_dup(newfd, oldfd);

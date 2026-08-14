@@ -43,6 +43,13 @@ static void add_lower(const char *dir) {
 
 #include "cursor.c"
 
+static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_namespace_root(hl_vfs_cursor *output) {
+    int lowers[HL_LINUX_VFS_LOWER_CAPACITY];
+    for (int index = 0; index < g_nlower; index++)
+        lowers[index] = g_lower[index].descriptor;
+    return hl_vfs_cursor_root(g_root_fd, lowers, (size_t)g_nlower, output);
+}
+
 static void wh_hostpath(const char *jcanon, size_t jclen, const char *guest, char *out,
                         // host path of the .wh.NAME marker
                         size_t n) {
