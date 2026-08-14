@@ -606,6 +606,76 @@ mod tests {
         assert_eq!(port.state.lock().unwrap().2, b"profile-record");
     }
 
+    #[derive(Default)]
+    struct BlockingTerminalPort {
+        state: Mutex<(bool, bool, Vec<u8>)>,
+        changed: Condvar,
+    }
+
+    impl TerminalPort for BlockingTerminalPort {
+        fn read(&self, _output: &mut [u8]) -> std::io::Result<usize> {
+            let mut state = self.state.lock().unwrap();
+            while !state.1 {
+                state = self.changed.wait(state).unwrap();
+            }
+            Ok(0)
+        }
+
+        fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+            let mut state = self.state.lock().unwrap();
+            state.0 = true;
+            self.changed.notify_all();
+            while !state.1 {
+                state = self.changed.wait(state).unwrap();
+            }
+            state.2.extend_from_slice(input);
+            Ok(input.len())
+        }
+
+        fn close(&self) {
+            let mut state = self.state.lock().unwrap();
+            state.1 = true;
+            self.changed.notify_all();
+        }
+    }
+
+    #[test]
+    fn terminal_flush_waits_for_bytes_accepted_by_the_output_port() {
+        let port = Arc::new(BlockingTerminalPort::default());
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal).unwrap();
+        let descriptor = bridge.standard_fds()[1];
+        // SAFETY: dup returns a fresh descriptor and the result is checked.
+        let copy = unsafe { libc::dup(descriptor) };
+        assert!(copy >= 0);
+        // SAFETY: successful dup transferred a uniquely owned descriptor.
+        let mut writer = unsafe { std::fs::File::from_raw_fd(copy) };
+        writer.write_all(b"terminal-tail").unwrap();
+
+        let mut state = port.state.lock().unwrap();
+        while !state.0 {
+            state = port.changed.wait(state).unwrap();
+        }
+        drop(state);
+
+        let (finished, completed) = mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                bridge.flush();
+                finished.send(()).unwrap();
+            });
+            assert!(completed.recv_timeout(Duration::from_millis(50)).is_err());
+            let mut state = port.state.lock().unwrap();
+            state.1 = true;
+            port.changed.notify_all();
+            drop(state);
+            completed
+                .recv_timeout(Duration::from_secs(1))
+                .expect("terminal flush returned before the port accepted its bytes");
+        });
+        assert_eq!(port.state.lock().unwrap().2, b"terminal-tail");
+    }
+
     #[test]
     fn owned_pty_binds_stdio_pumps_and_resize() {
         let port = Arc::new(Port::default());

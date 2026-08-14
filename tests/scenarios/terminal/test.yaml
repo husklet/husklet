@@ -103,7 +103,7 @@ cases:
   timeout: 60
   actions:
   - terminal:
-      argv: [/bin/sh, -c, "yes x | head -c 524288; printf '\\nPIPE-OK\\n'"]
+      argv: [/bin/sh, -c, "head -c 900000 /dev/zero | tr '\\000' x; printf '\\nPIPE-OK\\n'"]
       steps:
       - await_output: { contains: PIPE-OK, timeout_ms: 15000 }
       - close: {}
