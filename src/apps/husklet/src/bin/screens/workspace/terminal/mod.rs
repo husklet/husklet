@@ -323,6 +323,14 @@ impl Window {
 
 pub(crate) struct Terminal<'a>(pub(crate) &'a vte4::Terminal);
 
+const SAVED_HISTORY_LINES: usize = 5000;
+
+fn history_row_range(first: i64, last: i64, maximum: usize) -> (i64, i64) {
+    let last = last.max(first);
+    let maximum = i64::try_from(maximum).unwrap_or(i64::MAX);
+    (last.saturating_sub(maximum).max(first), last)
+}
+
 impl<'a> Terminal<'a> {
     pub(crate) fn new(terminal: &'a vte4::Terminal) -> Self {
         Self(terminal)
@@ -379,10 +387,23 @@ impl<'a> Terminal<'a> {
             Some(adj) => (adj.lower() as i64, adj.upper() as i64),
             None => (0, term.row_count()),
         };
+        let (first, last) = history_row_range(first, last, SAVED_HISTORY_LINES);
         let (text, _len) = term.text_range_format(vte4::Format::Text, first, 0, last, -1);
         let raw = text.map(|g| g.to_string()).unwrap_or_default();
         // Cap the persisted history so a huge scrollback doesn't bloat the session on disk.
-        session::History::new(&raw).clamp(5000)
+        session::History::new(&raw).clamp(SAVED_HISTORY_LINES)
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::history_row_range;
+
+    #[test]
+    fn persisted_history_extracts_only_the_bounded_scrollback_tail() {
+        assert_eq!(history_row_range(0, 1_000_000, 5000), (995_000, 1_000_000));
+        assert_eq!(history_row_range(40, 80, 5000), (40, 80));
+        assert_eq!(history_row_range(80, 40, 5000), (80, 80));
     }
 }
 
