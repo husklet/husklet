@@ -1,0 +1,23 @@
+[package]
+name = "extension"
+version = "0.1.0"
+edition = "2021"
+description = "Reference extension: renders a workspace's containers over the extension protocol."
+license = "MIT"
+
+[[bin]]
+name = "hl-extension-containers"
+path = "src/main.rs"
+
+[lib]
+name = "extension"
+path = "src/lib.rs"
+
+[dependencies]
+hl-gui = { path = "../../workspaces/hl-gui", features = ["wire"] }
+hl-ws-extension = { path = "../../workspaces/hl-ws-extension" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

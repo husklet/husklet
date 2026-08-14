@@ -591,6 +591,7 @@ version = "0.1.0"
 dependencies = [
  "hl-gui",
  "hl-ws-extension",
+ "serde",
  "serde_json",
 ]
 
@@ -2563,9 +2564,12 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 name = "storybook"
 version = "0.1.0"
 dependencies = [
+ "extension",
  "gtk4",
  "hl-gui",
  "hl-gui-gtk",
+ "hl-ws-extension",
+ "serde_json",
 ]
 
 [[package]]
