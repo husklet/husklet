@@ -37,7 +37,8 @@ static void *elf_host_map(void *context, void *address, size_t length, uint32_t 
 static int x86_image_read(const char *path, hl_linux_image *image) {
     if (g_initial_executable_image != NULL)
         return hl_linux_image_read_bytes(g_initial_executable_image, g_initial_executable_size, image);
-    if (g_authorized_executable_image != NULL && path != NULL && g_authorized_executable_path[0]) {
+    if (g_rootfs == NULL && g_authorized_executable_image != NULL && path != NULL &&
+        g_authorized_executable_path[0]) {
         char canonical[4200];
         if (realpath(path, canonical) != NULL && strcmp(canonical, g_authorized_executable_path) == 0)
             return hl_linux_image_read_bytes(g_authorized_executable_image, g_authorized_executable_size, image);
@@ -69,6 +70,11 @@ static int x86_image_read(const char *path, hl_linux_image *image) {
             request = guest;
         }
     }
+    /* Container authorization is a guest-image identity.  It deliberately
+     * survives unlink of the backing name for /proc/self/exe re-exec. */
+    if (g_authorized_executable_image != NULL && request != NULL && g_authorized_executable_path[0] &&
+        strcmp(request, g_authorized_executable_path) == 0)
+        return hl_linux_image_read_bytes(g_authorized_executable_image, g_authorized_executable_size, image);
     if (request != NULL && request[0] == '/' && (g_rootfs != NULL || jail_match(request) >= 0)) {
         if (g_nlower) {
             char backing[4200];

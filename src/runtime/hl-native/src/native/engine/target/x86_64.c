@@ -1209,7 +1209,9 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     // check with ENOENT. In the normal production path g_initial_executable_image is always set, so only the
     // embedded by-path case changes here.
     if (!g_authorized_executable_path[0]) {
-        if (realpath(prog_host, g_authorized_executable_path) == NULL)
+        if (g_rootfs != NULL)
+            snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", g_exe_path);
+        else if (realpath(prog_host, g_authorized_executable_path) == NULL)
             snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", prog_host);
     }
     // opt8: load the guest image + interp at FIXED VAs so the translated arena is byte-identical across

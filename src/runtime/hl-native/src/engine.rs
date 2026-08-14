@@ -95,6 +95,10 @@ impl Engine {
         let interpreter_image = Plan::interpreter(&config)?
             .map(|path| pin_guest_image(&config, &path))
             .transpose()?;
+        #[cfg(unix)]
+        if let Some(image) = interpreter_image.as_deref() {
+            validate_elf_image(&mut std::io::Cursor::new(image), image.len() as u64, config.isa)?;
+        }
         #[cfg(not(unix))]
         let interpreter_image: Option<Vec<u8>> = None;
         let mut output = std::ptr::null_mut();
@@ -170,48 +174,7 @@ impl Plan {
         let mut file = open_main_image(config)?;
         file.seek(SeekFrom::Start(0)).map_err(|_| 1)?;
         let image_length = file.metadata().map_err(|_| 1)?.len();
-        if image_length < 64 {
-            return Err(1);
-        }
-        let mut header = [0_u8; 64];
-        file.read_exact(&mut header).map_err(|_| 1)?;
-        if &header[..7] != b"\x7fELF\x02\x01\x01" || !matches!(header[7], 0 | 3) {
-            return Err(1);
-        }
-        let word16 = |offset| u16::from_le_bytes(header[offset..offset + 2].try_into().expect("fixed header"));
-        let word32 = |offset| u32::from_le_bytes(header[offset..offset + 4].try_into().expect("fixed header"));
-        let word64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().expect("fixed header"));
-        let kind = match word16(16) {
-            2 => 1,
-            3 => 2,
-            _ => return Err(1),
-        };
-        let machine = match config.isa {
-            1 => 0xb7,
-            2 => 0x3e,
-            _ => return Err(1),
-        };
-        if word16(18) != machine {
-            return Err(1);
-        }
-        if word32(20) != 1 || word16(52) != 64 {
-            return Err(1);
-        }
-        let entry = word64(24);
-        if config.isa == 1 && !entry.is_multiple_of(4) {
-            return Err(1);
-        }
-        let layout = ProgramLayout::inspect(
-            &mut file,
-            image_length,
-            entry,
-            word64(32),
-            u64::from(word16(54)),
-            word16(56),
-        )?;
-        if !layout.entry_is_executable {
-            return Err(1);
-        }
+        let (kind, layout) = validate_elf_image(&mut file, image_length, config.isa)?;
         let link_start = layout.load_start & !0xfff;
         let span = layout.load_end.checked_sub(link_start).ok_or(1)?;
         let link_end = link_start
@@ -243,20 +206,48 @@ impl Plan {
         let mut file = open_main_image(config)?;
         file.seek(SeekFrom::Start(0)).map_err(|_| 1)?;
         let image_length = file.metadata().map_err(|_| 1)?.len();
-        let mut header = [0_u8; 64];
-        file.read_exact(&mut header).map_err(|_| 1)?;
-        let word16 = |offset| u16::from_le_bytes(header[offset..offset + 2].try_into().expect("fixed header"));
-        let word64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().expect("fixed header"));
-        ProgramLayout::inspect(
-            &mut file,
-            image_length,
-            word64(24),
-            word64(32),
-            u64::from(word16(54)),
-            word16(56),
-        )
-        .map(|layout| layout.interpreter)
+        validate_elf_image(&mut file, image_length, config.isa).map(|(_, layout)| layout.interpreter)
     }
+}
+
+fn validate_elf_image(file: &mut (impl Read + Seek), image_length: u64, isa: u32) -> Result<(u32, ProgramLayout), i32> {
+    file.seek(SeekFrom::Start(0)).map_err(|_| 1)?;
+    if image_length < 64 {
+        return Err(1);
+    }
+    let mut header = [0_u8; 64];
+    file.read_exact(&mut header).map_err(|_| 1)?;
+    if &header[..7] != b"\x7fELF\x02\x01\x01" || !matches!(header[7], 0 | 3) {
+        return Err(1);
+    }
+    let word16 = |offset| u16::from_le_bytes(header[offset..offset + 2].try_into().expect("fixed header"));
+    let word32 = |offset| u32::from_le_bytes(header[offset..offset + 4].try_into().expect("fixed header"));
+    let word64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().expect("fixed header"));
+    let kind = match word16(16) {
+        2 => 1,
+        3 => 2,
+        _ => return Err(1),
+    };
+    let machine = match isa {
+        1 => 0xb7,
+        2 => 0x3e,
+        _ => return Err(1),
+    };
+    if word16(18) != machine {
+        return Err(1);
+    }
+    if word32(20) != 1 || word16(52) != 64 {
+        return Err(1);
+    }
+    let entry = word64(24);
+    if isa == 1 && !entry.is_multiple_of(4) {
+        return Err(1);
+    }
+    let layout = ProgramLayout::inspect(file, image_length, entry, word64(32), u64::from(word16(54)), word16(56))?;
+    if !layout.entry_is_executable {
+        return Err(1);
+    }
+    Ok((kind, layout))
 }
 
 fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
@@ -547,7 +538,7 @@ fn read_link(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<std::p
 
 impl ProgramLayout {
     fn inspect(
-        file: &mut File,
+        file: &mut (impl Read + Seek),
         image_length: u64,
         entry: u64,
         phoff: u64,
@@ -622,7 +613,7 @@ impl ProgramLayout {
     }
 }
 
-fn read_interpreter(file: &mut File, offset: u64, encoded_size: u64) -> Result<Vec<u8>, i32> {
+fn read_interpreter(file: &mut (impl Read + Seek), offset: u64, encoded_size: u64) -> Result<Vec<u8>, i32> {
     let size = usize::try_from(encoded_size).map_err(|_| 1)?;
     if size == 0 || size > 4096 {
         return Err(1);
@@ -816,6 +807,36 @@ mod tests {
             let argument = CString::new("/bin/main").unwrap();
             engine.run(&[argument.as_ptr()]).unwrap();
             assert_eq!(engine.exit().status, 0);
+        }
+    }
+
+    #[test]
+    fn malformed_pinned_interpreter_is_rejected_during_create() {
+        for isa in [1, 2] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(root.path().join("bin")).unwrap();
+            std::fs::create_dir_all(root.path().join("lib")).unwrap();
+            let main = root.path().join("bin/main");
+            let interpreter = root.path().join("lib/ld-test.so");
+            std::fs::write(&main, dynamic_image(b"/lib/ld-test.so", isa)).unwrap();
+            let mut malformed = exiting_interpreter(isa);
+            put64(&mut malformed, 32, u64::MAX - 32);
+            std::fs::write(&interpreter, malformed).unwrap();
+            let main = CString::new(main.to_str().unwrap()).unwrap();
+            let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
+            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+            let config = EngineConfig {
+                isa,
+                rootfs: Some(&root_path),
+                executable_host: Some(&main),
+                executable_fd: -1,
+                option_names: &[],
+                option_values: &[],
+                standard_fds: [standard.as_raw_fd(); 3],
+                provider_fd: -1,
+            };
+            // SAFETY: every borrowed string and descriptor remains live through create.
+            assert!(unsafe { Engine::create(config) }.is_err());
         }
     }
 

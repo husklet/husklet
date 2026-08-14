@@ -454,7 +454,8 @@ static char g_authorized_executable_path[4200];
 static int aarch64_image_read(const char *path, hl_linux_image *image) {
     if (g_initial_executable_image != NULL)
         return hl_linux_image_read_bytes(g_initial_executable_image, g_initial_executable_size, image);
-    if (g_authorized_executable_image != NULL && path != NULL && g_authorized_executable_path[0]) {
+    if (g_rootfs == NULL && g_authorized_executable_image != NULL && path != NULL &&
+        g_authorized_executable_path[0]) {
         char canonical[4200];
         if (realpath(path, canonical) != NULL && strcmp(canonical, g_authorized_executable_path) == 0)
             return hl_linux_image_read_bytes(g_authorized_executable_image, g_authorized_executable_size, image);
@@ -482,6 +483,13 @@ static int aarch64_image_read(const char *path, hl_linux_image *image) {
             request = guest;
         }
     }
+    /* In a container, authorize the canonical guest identity rather than a
+     * host pathname.  /proc/self/exe can remain executable after its backing
+     * directory entry has been unlinked, and the immutable launch snapshot is
+     * the authority for that identity. */
+    if (g_authorized_executable_image != NULL && request != NULL && g_authorized_executable_path[0] &&
+        strcmp(request, g_authorized_executable_path) == 0)
+        return hl_linux_image_read_bytes(g_authorized_executable_image, g_authorized_executable_size, image);
     if (request != NULL && request[0] == '/' && (g_rootfs != NULL || jail_match(request) >= 0)) {
         if (g_nlower) {
             char backing[4200];
@@ -1186,7 +1194,9 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     // check with ENOENT. In the normal production path g_initial_executable_image is always set, so only the
     // embedded by-path case changes here.
     if (!g_authorized_executable_path[0]) {
-        if (realpath(prog_host, g_authorized_executable_path) == NULL)
+        if (g_rootfs != NULL)
+            snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", g_exe_path);
+        else if (realpath(prog_host, g_authorized_executable_path) == NULL)
             snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", prog_host);
     }
     // Persistent translations and checkpoint images both record guest addresses.  Give both modes the
