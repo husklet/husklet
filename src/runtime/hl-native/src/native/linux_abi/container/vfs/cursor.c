@@ -10,8 +10,27 @@
 
 typedef struct hl_vfs_cursor_parent hl_vfs_cursor_parent;
 
+typedef enum hl_vfs_cursor_authority_kind {
+    HL_VFS_CURSOR_AUTHORITY_INVALID = 0,
+    HL_VFS_CURSOR_AUTHORITY_NATIVE = 1,
+    HL_VFS_CURSOR_AUTHORITY_HOST = 2,
+} hl_vfs_cursor_authority_kind;
+
+typedef struct hl_vfs_cursor_authority {
+    hl_vfs_cursor_authority_kind kind;
+
+    union {
+        int descriptor;
+
+        struct {
+            hl_host_handle handle;
+            const hl_host_services *services;
+        } host;
+    } value;
+} hl_vfs_cursor_authority;
+
 typedef struct hl_vfs_cursor {
-    int descriptors[HL_VFS_CURSOR_LAYERS];
+    hl_vfs_cursor_authority layers[HL_VFS_CURSOR_LAYERS];
     size_t count;
     int opaque_cut;
     uint32_t mount_flags;
@@ -42,6 +61,168 @@ typedef struct hl_vfs_cursor_entry {
 
 static void hl_vfs_cursor_release(hl_vfs_cursor *cursor);
 
+static int hl_vfs_cursor_host_error(hl_host_result result) {
+    if (result.status == HL_STATUS_OK) return 0;
+    switch (result.status) {
+    case HL_STATUS_INVALID_ARGUMENT: return -EINVAL;
+    case HL_STATUS_NOT_SUPPORTED: return -ENOSYS;
+    case HL_STATUS_OUT_OF_MEMORY: return -ENOMEM;
+    case HL_STATUS_RESOURCE_LIMIT: return -EMFILE;
+    case HL_STATUS_NOT_FOUND: return -ENOENT;
+    case HL_STATUS_ALREADY_EXISTS: return -EEXIST;
+    case HL_STATUS_PERMISSION_DENIED: return -EACCES;
+    case HL_STATUS_WOULD_BLOCK: return -EAGAIN;
+    case HL_STATUS_INTERRUPTED: return -EINTR;
+    case HL_STATUS_BUSY: return -EBUSY;
+    case HL_STATUS_NOT_DIRECTORY: return -ENOTDIR;
+    case HL_STATUS_IS_DIRECTORY: return -EISDIR;
+    case HL_STATUS_NAME_TOO_LONG: return -ENAMETOOLONG;
+    case HL_STATUS_SYMLINK_LOOP: return -ELOOP;
+    case HL_STATUS_READ_ONLY: return -EROFS;
+    case HL_STATUS_CROSS_DEVICE: return -EXDEV;
+    case HL_STATUS_NOT_EMPTY: return -ENOTEMPTY;
+    default: return -EIO;
+    }
+}
+
+static hl_vfs_cursor_authority hl_vfs_cursor_native(int descriptor) {
+    hl_vfs_cursor_authority authority = {0};
+    if (descriptor >= 0) {
+        authority.kind = HL_VFS_CURSOR_AUTHORITY_NATIVE;
+        authority.value.descriptor = descriptor;
+    }
+    return authority;
+}
+
+static int hl_vfs_cursor_authority_clone(const hl_vfs_cursor_authority *source, hl_vfs_cursor_authority *output) {
+    if (source == NULL || output == NULL || source->kind == HL_VFS_CURSOR_AUTHORITY_INVALID) return -EINVAL;
+    memset(output, 0, sizeof *output);
+    if (source->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+        int descriptor = fcntl(source->value.descriptor, F_DUPFD_CLOEXEC, 0);
+        if (descriptor < 0) return -errno;
+        *output = hl_vfs_cursor_native(descriptor);
+        return 0;
+    }
+    if (source->kind != HL_VFS_CURSOR_AUTHORITY_HOST || source->value.host.services == NULL ||
+        source->value.host.services->file == NULL || source->value.host.services->file->clone_for_fork == NULL)
+        return -ENOSYS;
+    hl_host_result cloned = source->value.host.services->file->clone_for_fork(source->value.host.services->context,
+                                                                              source->value.host.handle);
+    int error = hl_vfs_cursor_host_error(cloned);
+    if (error != 0) return error;
+    output->kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+    output->value.host.handle = cloned.value;
+    output->value.host.services = source->value.host.services;
+    return 0;
+}
+
+static void hl_vfs_cursor_authority_close(hl_vfs_cursor_authority *authority) {
+    if (authority == NULL) return;
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+        close(authority->value.descriptor);
+    } else if (authority->kind == HL_VFS_CURSOR_AUTHORITY_HOST && authority->value.host.services != NULL &&
+               authority->value.host.services->file != NULL && authority->value.host.services->file->close != NULL) {
+        (void)authority->value.host.services->file->close(authority->value.host.services->context,
+                                                          authority->value.host.handle);
+    }
+    memset(authority, 0, sizeof *authority);
+}
+
+static int hl_vfs_cursor_authority_metadata(const hl_vfs_cursor_authority *authority, const char *component,
+                                            struct stat *status) {
+    if (authority == NULL || component == NULL || status == NULL) return -EINVAL;
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE)
+        return fstatat(authority->value.descriptor, component, status, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : -errno;
+    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL ||
+        authority->value.host.services->file == NULL)
+        return -EINVAL;
+    const hl_host_file_services *file = authority->value.host.services->file;
+    if (file->open_relative == NULL || file->metadata == NULL || file->close == NULL) return -ENOSYS;
+    hl_host_result opened =
+        file->open_relative(authority->value.host.services->context, authority->value.host.handle, component,
+                            strlen(component), HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0);
+    int error = hl_vfs_cursor_host_error(opened);
+    if (error != 0) return error;
+    hl_host_file_metadata metadata;
+    hl_host_result described = file->metadata(authority->value.host.services->context, opened.value, &metadata);
+    (void)file->close(authority->value.host.services->context, opened.value);
+    error = hl_vfs_cursor_host_error(described);
+    if (error != 0) return error;
+    memset(status, 0, sizeof *status);
+    status->st_dev = (dev_t)metadata.stable_device;
+    status->st_ino = (ino_t)metadata.stable_object;
+    status->st_mode = (mode_t)(metadata.permissions & 07777u);
+    if (metadata.type == HL_HOST_FILE_TYPE_DIRECTORY)
+        status->st_mode |= S_IFDIR;
+    else if (metadata.type == HL_HOST_FILE_TYPE_SYMLINK)
+        status->st_mode |= S_IFLNK;
+    else if (metadata.type == HL_HOST_FILE_TYPE_REGULAR)
+        status->st_mode |= S_IFREG;
+    else if (metadata.type == HL_HOST_FILE_TYPE_CHARACTER)
+        status->st_mode |= S_IFCHR;
+    else if (metadata.type == HL_HOST_FILE_TYPE_BLOCK)
+        status->st_mode |= S_IFBLK;
+    else if (metadata.type == HL_HOST_FILE_TYPE_FIFO)
+        status->st_mode |= S_IFIFO;
+    else if (metadata.type == HL_HOST_FILE_TYPE_SOCKET)
+        status->st_mode |= S_IFSOCK;
+    return 0;
+}
+
+static int hl_vfs_cursor_authority_open_child(const hl_vfs_cursor_authority *authority, const char *component,
+                                              int directory, hl_vfs_cursor_authority *output) {
+    if (authority == NULL || component == NULL || output == NULL) return -EINVAL;
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+        int flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | (directory ? O_DIRECTORY : 0);
+        int descriptor = openat(authority->value.descriptor, component, flags);
+        if (descriptor < 0) return -errno;
+        *output = hl_vfs_cursor_native(descriptor);
+        return 0;
+    }
+    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL ||
+        authority->value.host.services->file == NULL || authority->value.host.services->file->open_relative == NULL)
+        return -ENOSYS;
+    uint32_t access = HL_HOST_FILE_READ | HL_HOST_FILE_NOFOLLOW | (directory ? HL_HOST_FILE_DIRECTORY : 0);
+    hl_host_result opened = authority->value.host.services->file->open_relative(authority->value.host.services->context,
+                                                                                authority->value.host.handle, component,
+                                                                                strlen(component), access, 0, 0);
+    int error = hl_vfs_cursor_host_error(opened);
+    if (error != 0) return error;
+    output->kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+    output->value.host.handle = opened.value;
+    output->value.host.services = authority->value.host.services;
+    return 0;
+}
+
+static int hl_vfs_cursor_authority_readlink(const hl_vfs_cursor_authority *authority, const char *component,
+                                            char *output, size_t capacity) {
+    if (authority == NULL || component == NULL || output == NULL || capacity == 0) return -EINVAL;
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+        ssize_t length = readlinkat(authority->value.descriptor, component, output, capacity - 1);
+        if (length < 0) return -errno;
+        output[length] = 0;
+        return 0;
+    }
+    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL ||
+        authority->value.host.services->file == NULL || authority->value.host.services->file->open_relative == NULL ||
+        authority->value.host.services->file->readlink == NULL || authority->value.host.services->file->close == NULL)
+        return -ENOSYS;
+    const hl_host_file_services *file = authority->value.host.services->file;
+    hl_host_result opened =
+        file->open_relative(authority->value.host.services->context, authority->value.host.handle, component,
+                            strlen(component), HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0);
+    int error = hl_vfs_cursor_host_error(opened);
+    if (error != 0) return error;
+    hl_host_result read =
+        file->readlink(authority->value.host.services->context, opened.value, (hl_host_bytes){output, capacity - 1});
+    (void)file->close(authority->value.host.services->context, opened.value);
+    error = hl_vfs_cursor_host_error(read);
+    if (error != 0) return error;
+    if (read.value >= capacity) return -ENAMETOOLONG;
+    output[read.value] = 0;
+    return 0;
+}
+
 static void hl_vfs_cursor_parent_retain(hl_vfs_cursor_parent *parent) {
     if (parent != NULL) atomic_fetch_add_explicit(&parent->references, 1, memory_order_relaxed);
 }
@@ -55,31 +236,26 @@ static void hl_vfs_cursor_parent_release(hl_vfs_cursor_parent *parent) {
 static void hl_vfs_cursor_release(hl_vfs_cursor *cursor) {
     if (cursor == NULL) return;
     for (size_t index = 0; index < cursor->count; index++)
-        if (cursor->descriptors[index] >= 0) close(cursor->descriptors[index]);
+        hl_vfs_cursor_authority_close(&cursor->layers[index]);
     hl_vfs_cursor_parent_release(cursor->parent);
     memset(cursor, 0, sizeof *cursor);
-    for (size_t index = 0; index < HL_VFS_CURSOR_LAYERS; index++)
-        cursor->descriptors[index] = -1;
 }
 
 static int hl_vfs_cursor_clone(const hl_vfs_cursor *source, hl_vfs_cursor *output) {
     if (source == NULL || output == NULL || source->count > HL_VFS_CURSOR_LAYERS) return -EINVAL;
     memset(output, 0, sizeof *output);
-    for (size_t index = 0; index < HL_VFS_CURSOR_LAYERS; index++)
-        output->descriptors[index] = -1;
     output->opaque_cut = source->opaque_cut;
     output->mount_flags = source->mount_flags;
     output->parent = source->parent;
     hl_vfs_cursor_parent_retain(output->parent);
     snprintf(output->guest, sizeof output->guest, "%s", source->guest);
     for (size_t index = 0; index < source->count; index++) {
-        int descriptor = fcntl(source->descriptors[index], F_DUPFD_CLOEXEC, 0);
-        if (descriptor < 0) {
-            int error = -errno;
+        int error = hl_vfs_cursor_authority_clone(&source->layers[index], &output->layers[output->count]);
+        if (error != 0) {
             hl_vfs_cursor_release(output);
             return error;
         }
-        output->descriptors[output->count++] = descriptor;
+        output->count++;
     }
     return 0;
 }
@@ -104,15 +280,36 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_root(int upper, const int *lowers,
         return -EINVAL;
     hl_vfs_cursor source;
     memset(&source, 0, sizeof source);
-    for (size_t index = 0; index < HL_VFS_CURSOR_LAYERS; index++)
-        source.descriptors[index] = -1;
-    source.descriptors[source.count++] = upper;
+    source.layers[source.count++] = hl_vfs_cursor_native(upper);
     for (size_t index = 0; index < lower_count; index++) {
         if (lowers[index] < 0) return -EINVAL;
-        source.descriptors[source.count++] = lowers[index];
+        source.layers[source.count++] = hl_vfs_cursor_native(lowers[index]);
     }
     snprintf(source.guest, sizeof source.guest, "/");
     return hl_vfs_cursor_clone(&source, output);
+}
+
+static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_root_authorities(const hl_vfs_cursor_authority *upper,
+                                                               const hl_vfs_cursor_authority *lowers,
+                                                               size_t lower_count, hl_vfs_cursor *output) {
+    if (upper == NULL || upper->kind == HL_VFS_CURSOR_AUTHORITY_INVALID || output == NULL ||
+        lower_count > HL_LINUX_VFS_LOWER_CAPACITY || (lower_count != 0 && lowers == NULL))
+        return -EINVAL;
+    hl_vfs_cursor source;
+    memset(&source, 0, sizeof source);
+    source.layers[source.count++] = *upper;
+    for (size_t index = 0; index < lower_count; index++) {
+        if (lowers[index].kind == HL_VFS_CURSOR_AUTHORITY_INVALID) return -EINVAL;
+        source.layers[source.count++] = lowers[index];
+    }
+    snprintf(source.guest, sizeof source.guest, "/");
+    return hl_vfs_cursor_clone(&source, output);
+}
+
+static int hl_vfs_cursor_native_descriptor(const hl_vfs_cursor *cursor) {
+    return cursor != NULL && cursor->count != 0 && cursor->layers[0].kind == HL_VFS_CURSOR_AUTHORITY_NATIVE
+               ? cursor->layers[0].value.descriptor
+               : -1;
 }
 
 static int hl_vfs_cursor_component_valid(const char *component) {
@@ -124,15 +321,15 @@ static int hl_vfs_cursor_component_hidden(const char *component) {
     return !strncmp(component, ".wh.", 4);
 }
 
-static int hl_vfs_cursor_marker(int directory, const char *component) {
+static int hl_vfs_cursor_marker(const hl_vfs_cursor_authority *directory, const char *component) {
     char marker[260];
     int length = snprintf(marker, sizeof marker, ".wh.%s", component);
     return length > 0 && (size_t)length < sizeof marker &&
-           fstatat(directory, marker, &(struct stat){0}, AT_SYMLINK_NOFOLLOW) == 0;
+           hl_vfs_cursor_authority_metadata(directory, marker, &(struct stat){0}) == 0;
 }
 
-static int hl_vfs_cursor_opaque(int directory) {
-    return fstatat(directory, ".wh..wh..opq", &(struct stat){0}, AT_SYMLINK_NOFOLLOW) == 0;
+static int hl_vfs_cursor_opaque(const hl_vfs_cursor_authority *directory) {
+    return hl_vfs_cursor_authority_metadata(directory, ".wh..wh..opq", &(struct stat){0}) == 0;
 }
 
 static uint32_t hl_vfs_mount_flags_for_guest(const char *guest, uint32_t inherited) {
@@ -159,20 +356,19 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
     if (hl_vfs_cursor_component_hidden(component)) return -ENOENT;
     memset(output, 0, sizeof *output);
     output->descriptor = -1;
-    for (size_t index = 0; index < HL_VFS_CURSOR_LAYERS; index++)
-        output->directory.descriptors[index] = -1;
 
     size_t selected = cursor->count;
     struct stat selected_status;
     for (size_t index = 0; index < cursor->count; index++) {
-        if (fstatat(cursor->descriptors[index], component, &selected_status, AT_SYMLINK_NOFOLLOW) == 0) {
+        int metadata_error = hl_vfs_cursor_authority_metadata(&cursor->layers[index], component, &selected_status);
+        if (metadata_error == 0) {
             selected = index;
             break;
         }
         // Only genuine absence permits consulting a lower layer. ENOTDIR means a higher-layer ancestor or
         // entry masks every descendant; EACCES/EIO/resource failures likewise cannot grant lower authority.
-        if (errno != ENOENT) return -errno;
-        if (hl_vfs_cursor_marker(cursor->descriptors[index], component)) return -ENOENT;
+        if (metadata_error != -ENOENT) return metadata_error;
+        if (hl_vfs_cursor_marker(&cursor->layers[index], component)) return -ENOENT;
     }
     if (selected == cursor->count) return -ENOENT;
     output->status = selected_status;
@@ -183,50 +379,56 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
     if (guest_length < 0 || (size_t)guest_length >= sizeof guest_entry) return -ENAMETOOLONG;
     output->mount_flags = hl_vfs_mount_flags_for_guest(guest_entry, cursor->mount_flags);
     if (S_ISLNK(selected_status.st_mode)) {
-        ssize_t length =
-            readlinkat(cursor->descriptors[selected], component, output->symlink, sizeof output->symlink - 1);
-        if (length < 0) return -errno;
-        output->symlink[length] = 0;
+        int error = hl_vfs_cursor_authority_readlink(&cursor->layers[selected], component, output->symlink,
+                                                     sizeof output->symlink);
+        if (error != 0) return error;
         output->kind = HL_VFS_CURSOR_SYMLINK;
         return 0;
     }
     if (!S_ISDIR(selected_status.st_mode)) {
-        output->descriptor = openat(cursor->descriptors[selected], component, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-        if (output->descriptor < 0) return -errno;
+        hl_vfs_cursor_authority opened;
+        int error = hl_vfs_cursor_authority_open_child(&cursor->layers[selected], component, 0, &opened);
+        if (error != 0) return error;
+        if (opened.kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+            output->descriptor = opened.value.descriptor;
+        } else {
+            /* File entries still feed the fd-shaped legacy execution path. Directory traversal is fully
+               authority-shaped; do not manufacture a pathname or borrow a provider handle as an fd. */
+            hl_vfs_cursor_authority_close(&opened);
+            return -ENOSYS;
+        }
         output->kind = HL_VFS_CURSOR_FILE;
         return 0;
     }
 
-    int selected_directory =
-        openat(cursor->descriptors[selected], component, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (selected_directory < 0) return -errno;
-    output->directory.descriptors[output->directory.count++] = selected_directory;
-    output->directory.opaque_cut = hl_vfs_cursor_opaque(selected_directory);
+    int error = hl_vfs_cursor_authority_open_child(&cursor->layers[selected], component, 1,
+                                                   &output->directory.layers[output->directory.count]);
+    if (error != 0) return error;
+    output->directory.count++;
+    output->directory.opaque_cut = hl_vfs_cursor_opaque(&output->directory.layers[0]);
     output->directory.mount_flags = output->mount_flags;
     if (!output->directory.opaque_cut)
         for (size_t index = selected + 1; index < cursor->count; index++) {
             struct stat status;
-            if (hl_vfs_cursor_marker(cursor->descriptors[index], component)) break;
-            if (fstatat(cursor->descriptors[index], component, &status, AT_SYMLINK_NOFOLLOW) != 0 ||
+            if (hl_vfs_cursor_marker(&cursor->layers[index], component)) break;
+            if (hl_vfs_cursor_authority_metadata(&cursor->layers[index], component, &status) != 0 ||
                 !S_ISDIR(status.st_mode))
                 continue;
-            int directory = openat(cursor->descriptors[index], component,
-                                   O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-            if (directory < 0) {
-                int error = -errno;
+            error = hl_vfs_cursor_authority_open_child(&cursor->layers[index], component, 1,
+                                                       &output->directory.layers[output->directory.count]);
+            if (error != 0) {
                 hl_vfs_cursor_entry_release(output);
                 return error;
             }
-            output->directory.descriptors[output->directory.count++] = directory;
-            if (hl_vfs_cursor_opaque(directory)) {
+            if (hl_vfs_cursor_opaque(&output->directory.layers[output->directory.count++])) {
                 output->directory.opaque_cut = 1;
                 break;
             }
         }
-    int length = !strcmp(cursor->guest, "/")
-                     ? snprintf(output->directory.guest, sizeof output->directory.guest, "/%s", component)
-                     : snprintf(output->directory.guest, sizeof output->directory.guest, "%s/%s", cursor->guest,
-                                component);
+    int length =
+        !strcmp(cursor->guest, "/")
+            ? snprintf(output->directory.guest, sizeof output->directory.guest, "/%s", component)
+            : snprintf(output->directory.guest, sizeof output->directory.guest, "%s/%s", cursor->guest, component);
     if (length < 0 || (size_t)length >= sizeof output->directory.guest) {
         hl_vfs_cursor_entry_release(output);
         return -ENAMETOOLONG;
@@ -247,14 +449,10 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
 // Every frame owns its contributing descriptors, so renaming/unlinking an ancestor cannot redirect a later
 // component. The returned entry owns its file descriptor or merged-directory cursor.
 static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, const hl_vfs_cursor *start,
-                                                   const char *path, int nofollow_final,
-                                                   hl_vfs_cursor_entry *output) {
+                                                   const char *path, int nofollow_final, hl_vfs_cursor_entry *output) {
     if (root == NULL || start == NULL || path == NULL || output == NULL || !path[0]) return -ENOENT;
     hl_vfs_cursor *frames = calloc(HL_VFS_CURSOR_DEPTH, sizeof *frames);
     if (frames == NULL) return -ENOMEM;
-    for (size_t frame = 0; frame < HL_VFS_CURSOR_DEPTH; frame++)
-        for (size_t layer = 0; layer < HL_VFS_CURSOR_LAYERS; layer++)
-            frames[frame].descriptors[layer] = -1;
     size_t depth = 0;
     int error = hl_vfs_cursor_clone(path[0] == '/' ? root : start, &frames[0]);
     if (error != 0) {

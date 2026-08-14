@@ -44,10 +44,16 @@ static void add_lower(const char *dir) {
 #include "cursor.c"
 
 static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_namespace_root(hl_vfs_cursor *output) {
-    int lowers[HL_LINUX_VFS_LOWER_CAPACITY];
+    hl_vfs_cursor_authority lowers[HL_LINUX_VFS_LOWER_CAPACITY];
     for (int index = 0; index < g_nlower; index++)
-        lowers[index] = g_lower[index].descriptor;
-    return hl_vfs_cursor_root(g_root_fd, lowers, (size_t)g_nlower, output);
+        lowers[index] = hl_vfs_cursor_native(g_lower[index].descriptor);
+    hl_vfs_cursor_authority upper = hl_vfs_cursor_native(g_root_fd);
+    if (g_root_handle != HL_HOST_HANDLE_INVALID && g_host_services != NULL) {
+        upper.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+        upper.value.host.handle = g_root_handle;
+        upper.value.host.services = g_host_services;
+    }
+    return hl_vfs_cursor_root_authorities(&upper, lowers, (size_t)g_nlower, output);
 }
 
 static hl_vfs_cursor *g_vfs_cwd_cursor;
