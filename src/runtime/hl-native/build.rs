@@ -333,7 +333,16 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
             // otherwise ordinary native build used by that independent gate.
             build.define("HL_LEAK_CHECK_PROBE", None);
         }
-        Ok(value) => panic!("unsupported HL_C_SANITIZER={value:?}; expected leak or memcheck"),
+        Ok("address") => {
+            build
+                .opt_level(1)
+                .flag("-fsanitize=address")
+                .flag("-fno-omit-frame-pointer")
+                .define("HL_ADDRESS_SANITIZER", None);
+        }
+        Ok(value) => {
+            panic!("unsupported HL_C_SANITIZER={value:?}; expected address, leak, or memcheck")
+        }
         Err(env::VarError::NotPresent) => {}
         Err(error) => panic!("invalid HL_C_SANITIZER: {error}"),
     }
@@ -443,8 +452,16 @@ fn link_shared_engine(
     if target_os == "windows" && target_env != "msvc" {
         command.arg("-latomic");
     }
-    if env::var("HL_C_SANITIZER").as_deref() == Ok("leak") && target_os == "linux" {
-        command.arg("-fsanitize=leak");
+    if target_os == "linux" {
+        match env::var("HL_C_SANITIZER").as_deref() {
+            Ok("leak") => {
+                command.arg("-fsanitize=leak");
+            }
+            Ok("address") => {
+                command.arg("-fsanitize=address");
+            }
+            _ => {}
+        }
     }
     let status = command
         .status()

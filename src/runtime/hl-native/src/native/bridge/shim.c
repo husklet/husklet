@@ -99,7 +99,13 @@ __attribute__((noinline)) static void hl_c_backend_scrub_probe_stack(void) {
 #endif
 
 HL_API int32_t hl_c_backend_leak_check_nonvacuity(void) {
-#if defined(HL_LEAK_CHECK_PROBE)
+#if defined(HL_ADDRESS_SANITIZER)
+    volatile unsigned char *allocation = malloc(4096);
+    if (allocation == NULL) return 1;
+    allocation[0] = 0x5a;
+    free((void *)allocation);
+    return allocation[0];
+#elif defined(HL_LEAK_CHECK_PROBE)
     hl_c_backend_make_deliberate_leak();
     hl_c_backend_scrub_probe_stack();
     return 0;

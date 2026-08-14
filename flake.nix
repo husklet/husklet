@@ -422,6 +422,48 @@
               cargo test --workspace --all-targets --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
               ${lib.optionalString pkgs.stdenv.isLinux ''
+                # AddressSanitizer covers native lifetime violations that leak
+                # accounting cannot observe. Run the bounded ownership tests,
+                # then prove that the instrumentation rejects a C heap UAF.
+                export HL_C_SANITIZER=address
+                cargo test -p hl-native --test executable_authority --locked --offline --no-run
+                authority_tests=(target/debug/deps/executable_authority-*)
+                authority_test=""
+                for candidate in "''${authority_tests[@]}"; do
+                  if [ -x "$candidate" ] && [ "''${candidate##*.}" != d ]; then
+                    if [ -n "$authority_test" ]; then
+                      printf 'multiple executable-authority test binaries found\n' >&2
+                      exit 1
+                    fi
+                    authority_test="$candidate"
+                  fi
+                done
+                if [ -z "$authority_test" ]; then
+                  printf 'executable-authority test binary is absent\n' >&2
+                  exit 1
+                fi
+                asan_runtime="$(${pkgs.stdenv.cc}/bin/cc -print-file-name=libasan.so)"
+                ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:exitcode=97:log_path=$TMPDIR/asan-clean" \
+                  LD_PRELOAD="$asan_runtime" "$authority_test"
+                if compgen -G "$TMPDIR/asan-clean*" >/dev/null; then
+                  printf 'AddressSanitizer reported an error in the clean lifecycle tests\n' >&2
+                  cat "$TMPDIR"/asan-clean* >&2
+                  exit 1
+                fi
+
+                set +e
+                ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:exitcode=97:log_path=$TMPDIR/asan-non-vacuity" \
+                  LD_PRELOAD="$asan_runtime" "$authority_test" \
+                  --ignored --exact deliberate_native_use_after_free_is_visible_to_address_sanitizer
+                asan_probe_status=$?
+                set -e
+                if [ "$asan_probe_status" -eq 0 ] ||
+                   ! grep -Eq 'AddressSanitizer: heap-use-after-free' "$TMPDIR"/asan-non-vacuity*; then
+                  printf 'AddressSanitizer did not reject the deliberate native UAF (exit=%s)\n' "$asan_probe_status" >&2
+                  cat "$TMPDIR"/asan-non-vacuity* >&2
+                  exit 1
+                fi
+
                 # Exercise bounded production-engine authority ownership under
                 # LeakSanitizer. Then prove the instrumentation is live with a
                 # deliberate 4,096-byte native leak.
