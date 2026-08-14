@@ -33,12 +33,19 @@ fn smc_page_index_is_exact_under_collisions_removal_and_publication() {
 static _Atomic uint64_t slots[8];
 static hl_smc_page_index index_ = {slots, 8};
 static _Atomic int start;
+static uint64_t concurrent_pages[2];
 
 static void *reader(void *unused) {
     (void)unused;
     while (!atomic_load_explicit(&start, memory_order_acquire)) {}
     while (!hl_smc_page_index_contains(&index_, UINT64_C(0xabc000))) {}
     return NULL;
+}
+
+static void *adder(void *opaque) {
+    unsigned which = *(unsigned *)opaque;
+    while (!atomic_load_explicit(&start, memory_order_acquire)) {}
+    return (void *)(uintptr_t)!hl_smc_page_index_add(&index_, concurrent_pages[which]);
 }
 
 int main(void) {
@@ -58,6 +65,20 @@ int main(void) {
     atomic_store_explicit(&start, 1, memory_order_release);
     if (!hl_smc_page_index_add(&index_, UINT64_C(0xabc000))) return 9;
     if (pthread_join(thread, NULL) != 0) return 10;
+    hl_smc_page_index_reset(&index_);
+    concurrent_pages[0] = first;
+    concurrent_pages[1] = collision;
+    unsigned which[] = {0, 1};
+    pthread_t adders[2];
+    atomic_store_explicit(&start, 0, memory_order_release);
+    if (pthread_create(&adders[0], NULL, adder, &which[0]) != 0 ||
+        pthread_create(&adders[1], NULL, adder, &which[1]) != 0) return 11;
+    atomic_store_explicit(&start, 1, memory_order_release);
+    void *left = NULL, *right = NULL;
+    if (pthread_join(adders[0], &left) != 0 || pthread_join(adders[1], &right) != 0 || left || right) return 12;
+    if (!hl_smc_page_index_contains(&index_, first) || !hl_smc_page_index_contains(&index_, collision)) return 13;
+    hl_smc_page_index_reset(&index_);
+    if (hl_smc_page_index_contains(&index_, first) || hl_smc_page_index_contains(&index_, collision)) return 14;
     return 0;
 }
 "#,

@@ -36,22 +36,24 @@ static inline int hl_smc_page_index_contains(const hl_smc_page_index *index, uin
 
 static inline int hl_smc_page_index_add(hl_smc_page_index *index, uint64_t page) {
     uint64_t live = page | HL_SMC_PAGE_INDEX_LIVE;
-    size_t slot = (size_t)(hl_smc_page_index_hash(page) & (index->count - 1));
-    size_t tomb = SIZE_MAX;
-    for (size_t probe = 0; probe < index->count; ++probe) {
-        uint64_t entry = atomic_load_explicit(&index->slots[slot], memory_order_acquire);
-        if (entry == live) return 1;
-        if ((entry & UINT64_C(0xfff)) == HL_SMC_PAGE_INDEX_TOMB && tomb == SIZE_MAX) tomb = slot;
-        if (entry == 0) {
-            size_t destination = tomb == SIZE_MAX ? slot : tomb;
-            atomic_store_explicit(&index->slots[destination], live, memory_order_release);
-            return 1;
+    for (size_t attempt = 0; attempt < index->count; ++attempt) {
+        size_t slot = (size_t)(hl_smc_page_index_hash(page) & (index->count - 1));
+        size_t tomb = SIZE_MAX;
+        for (size_t probe = 0; probe < index->count; ++probe) {
+            uint64_t entry = atomic_load_explicit(&index->slots[slot], memory_order_acquire);
+            if (entry == live) return 1;
+            if ((entry & UINT64_C(0xfff)) == HL_SMC_PAGE_INDEX_TOMB && tomb == SIZE_MAX) tomb = slot;
+            if (entry == 0) {
+                size_t destination = tomb == SIZE_MAX ? slot : tomb;
+                uint64_t expected = tomb == SIZE_MAX ? 0 : atomic_load_explicit(&index->slots[tomb], memory_order_acquire);
+                if ((tomb == SIZE_MAX || (expected & UINT64_C(0xfff)) == HL_SMC_PAGE_INDEX_TOMB) &&
+                    atomic_compare_exchange_strong_explicit(&index->slots[destination], &expected, live,
+                                                            memory_order_release, memory_order_acquire))
+                    return 1;
+                break;
+            }
+            slot = (slot + 1) & (index->count - 1);
         }
-        slot = (slot + 1) & (index->count - 1);
-    }
-    if (tomb != SIZE_MAX) {
-        atomic_store_explicit(&index->slots[tomb], live, memory_order_release);
-        return 1;
     }
     return 0;
 }
@@ -69,6 +71,11 @@ static inline int hl_smc_page_index_remove(hl_smc_page_index *index, uint64_t pa
         slot = (slot + 1) & (index->count - 1);
     }
     return 0;
+}
+
+static inline void hl_smc_page_index_reset(hl_smc_page_index *index) {
+    for (size_t slot = 0; slot < index->count; ++slot)
+        atomic_store_explicit(&index->slots[slot], 0, memory_order_release);
 }
 
 #endif
