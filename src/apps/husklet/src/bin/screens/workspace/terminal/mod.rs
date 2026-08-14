@@ -153,6 +153,10 @@ impl Shortcut {
     }
 }
 
+fn copy_mode_captures(active: bool, shortcut: Option<Shortcut>) -> bool {
+    active && shortcut.is_none()
+}
+
 impl SplitAction {
     pub(crate) fn focused(window: &Rc<TermWin>, vertical: bool) {
         let Some(terminal) = window.focused.borrow().clone() else {
@@ -281,14 +285,13 @@ impl Window {
         {
             let tw = tw.clone();
             keys.connect_key_pressed(move |_, key, _c, state| {
+                let shortcut = Shortcut::from_key(key, state);
                 // Copy/scroll mode intercepts plain (unmodified) keys for keyboard scrollback navigation.
-                if tw.copymode.is_active()
-                    && !state.contains(gdk::ModifierType::META_MASK)
-                    && tw.copymode.key(&tw, key, state)
+                if copy_mode_captures(tw.copymode.is_active(), shortcut) && tw.copymode.key(&tw, key, state)
                 {
                     return glib::Propagation::Stop;
                 }
-                match Shortcut::from_key(key, state) {
+                match shortcut {
                     Some(Shortcut::Tab) => {
                         Tabs::new(&tw).terminal();
                         glib::Propagation::Stop
@@ -545,6 +548,18 @@ mod shortcut_tests {
         assert_eq!(Shortcut::from_key(gdk::Key::plus, control), Some(Shortcut::ZoomIn));
         assert_eq!(Shortcut::from_key(gdk::Key::minus, control), Some(Shortcut::ZoomOut));
         assert_eq!(Shortcut::from_key(gdk::Key::_0, control), Some(Shortcut::ZoomReset));
+        assert!(!super::copy_mode_captures(
+            true,
+            Shortcut::from_key(gdk::Key::minus, control)
+        ));
+        assert!(!super::copy_mode_captures(
+            true,
+            Shortcut::from_key(gdk::Key::_0, control)
+        ));
+        assert!(super::copy_mode_captures(
+            true,
+            Shortcut::from_key(gdk::Key::c, control)
+        ));
     }
 
     #[test]
