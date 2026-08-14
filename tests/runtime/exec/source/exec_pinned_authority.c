@@ -16,6 +16,7 @@
 #define HL_EXEC_PIN_TEST_MAIN 1u
 #define HL_EXEC_PIN_TEST_FINAL 2u
 #define HL_EXEC_PIN_TEST_SHEBANG_HOP 4u
+#define HL_EXEC_PIN_TEST_ENV_POISON 5u
 
 struct replacement {
     unsigned stage;
@@ -184,6 +185,19 @@ static int reap(pid_t child) {
     return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : 255;
 }
 
+static int failed_exec_keeps_environment(const char *root) {
+    char malformed[256];
+    snprintf(malformed, sizeof malformed, "%s/failed-env", root);
+    int descriptor = open(malformed, O_CREAT | O_TRUNC | O_WRONLY, 0755);
+    int written = descriptor >= 0 && write(descriptor, "#!\n", 3) == 3;
+    if (descriptor >= 0) close(descriptor);
+    if (!written) return 0;
+    char *arguments[] = {malformed, NULL};
+    char *environment[] = {(char *)"HL_FAILED_EXEC_POISON=1", NULL};
+    execve(malformed, arguments, environment);
+    return errno == ENOEXEC && syscall(SYS_prctl, HL_EXEC_PIN_TEST_PRCTL, HL_EXEC_PIN_TEST_ENV_POISON, 0, 0, 0) == 0;
+}
+
 int main(int argc, char **argv) {
     if (has_argument(argc, argv, "main-child")) return 41;
     if (has_argument(argc, argv, "script-child")) return 42;
@@ -212,7 +226,10 @@ int main(int argc, char **argv) {
     pid_t pt_child = fork();
     if (pt_child == 0) _exit(run_pt_interp_case(pt_root) ? 0 : 93);
     int pt_result = pt_child > 0 ? reap(pt_child) : 255;
-    printf("main_pinned=%d final_shebang_pinned=%d shebang_hop_pinned=%d pt_interp_pinned=%d\n", main_result == 41,
-           script_result == 42, multihop_result == 43, pt_result == 0);
-    return main_result == 41 && script_result == 42 && multihop_result == 43 && pt_result == 0 ? 0 : 1;
+    int environment_atomic = failed_exec_keeps_environment(root);
+    printf("main_pinned=%d final_shebang_pinned=%d shebang_hop_pinned=%d pt_interp_pinned=%d failed_env_atomic=%d\n",
+           main_result == 41, script_result == 42, multihop_result == 43, pt_result == 0, environment_atomic);
+    return main_result == 41 && script_result == 42 && multihop_result == 43 && pt_result == 0 && environment_atomic
+               ? 0
+               : 1;
 }

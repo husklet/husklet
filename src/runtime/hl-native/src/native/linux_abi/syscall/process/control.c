@@ -409,6 +409,9 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             } else if (a1 == 3) {
                 atomic_store_explicit(&g_exec_pin_test_phase, 3, memory_order_release);
                 G_RET(c) = 0;
+            } else if (a1 == HL_EXEC_PIN_TEST_ENV_POISON) {
+                const char *environment = hl_process_guest_environment_get();
+                G_RET(c) = environment != NULL && strstr(environment, "HL_FAILED_EXEC_POISON=1") != NULL;
             } else {
                 G_RET(c) = (uint64_t)(int64_t)-EINVAL;
             }

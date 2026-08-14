@@ -29,16 +29,13 @@ enum { HL_EXEC_ARGUMENT_BYTES = 128 * 1024 };
 // sets HL_GUEST_ENV_EXACT); a guest execve that curates its env -- or clears it -- must match Linux, where
 // `execve(path, argv, NULL)` yields an empty environment and `execve(path,argv,["FOO=bar"])` yields exactly
 // one entry. Each pointer may be a low non-PIE address, so rebase the array base and every element with
-// nonpie_p(), exactly as the argv loop does. hl_option_set() copies the buffer, so it survives the teardown.
-static void exec_forward_env(uint64_t envp_guest) {
+// nonpie_p(), exactly as the argv loop does. Publication is deliberately separate from serialization so a
+// failed exec leaves the current process environment untouched.
+static char *exec_stage_env(uint64_t envp_guest) {
     if (!envp_guest) {
-        // Linux: NULL envp -> the new program runs with an EMPTY environment. Publish an empty, authoritative
-        // env (do not leak stale initial HL_GUEST_ENV data) and flag it exact so build_stack adds
-        // no defaults -> the guest sees envc==0, byte-exact with the native oracle.
-        hl_process_guest_environment_set("");
-        hl_option_set("HL_GUEST_ENV_ESC", "1", 1);
-        hl_option_set("HL_GUEST_ENV_EXACT", "1", 1);
-        return;
+        // Linux: NULL envp becomes an empty authoritative environment, but keep it private until every
+        // fallible exec check has succeeded so a failed exec cannot mutate the old process.
+        return strdup("");
     }
     // The dispatcher already rebases the envp array base for a displaced
     // ET_EXEC image. Rebase only its pointer elements here; applying the
@@ -46,7 +43,7 @@ static void exec_forward_env(uint64_t envp_guest) {
     uint64_t *ev = (uint64_t *)envp_guest;
     size_t cap = 4096, len = 0;
     char *buf = malloc(cap);
-    if (!buf) return;
+    if (!buf) return NULL;
     buf[0] = 0;
     for (int i = 0; ev[i]; i++) {
         const char *e = (const char *)nonpie_p(ev[i]);
@@ -59,7 +56,7 @@ static void exec_forward_env(uint64_t envp_guest) {
             char *nb = realloc(buf, cap);
             if (!nb) {
                 free(buf);
-                return;
+                return NULL;
             }
             buf = nb;
         }
@@ -78,10 +75,16 @@ static void exec_forward_env(uint64_t envp_guest) {
         buf[len++] = '\n'; // HL_GUEST_ENV record separator (build_stack splits on '\n')
         buf[len] = 0;
     }
-    hl_process_guest_environment_set(buf);
-    hl_option_set("HL_GUEST_ENV_ESC", "1", 1);   // tell build_stack the records are escape-encoded
-    hl_option_set("HL_GUEST_ENV_EXACT", "1", 1); // guest-initiated exec: this env is authoritative, inject no defaults
-    free(buf);
+    return buf;
+}
+
+static void exec_publish_env(char *serialized) {
+    // No fallible exec return follows this publication. The option layer copies each value, so the staged
+    // buffer can be released immediately after the new process environment becomes authoritative.
+    (void)hl_process_guest_environment_set(serialized);
+    (void)hl_option_set("HL_GUEST_ENV_ESC", "1", 1);
+    (void)hl_option_set("HL_GUEST_ENV_EXACT", "1", 1);
+    free(serialized);
 }
 
 // Fill a guest `struct rlimit { rlim_cur; rlim_max; }` for {get,set}rlimit/prlimit64 (cases 163/261).
@@ -511,6 +514,7 @@ static int g_mce_kill = 2; // PR_MCE_KILL/PR_MCE_KILL_GET machine-check policy: 
 #define HL_EXEC_PIN_TEST_PRCTL 0x48504e54u
 #define HL_EXEC_PIN_TEST_MAIN 1u
 #define HL_EXEC_PIN_TEST_FINAL 2u
+#define HL_EXEC_PIN_TEST_ENV_POISON 5u
 #define HL_EXEC_PIN_TEST_SHEBANG_HOP 4u
 static atomic_uint g_exec_pin_test_mode;
 static atomic_uint g_exec_pin_test_phase;

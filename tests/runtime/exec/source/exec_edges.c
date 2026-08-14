@@ -75,6 +75,15 @@ static int write_file(const char *path, const char *bytes, size_t length) {
     return ok && chmod(path, 0755) == 0;
 }
 
+static int corrupt_program_table(const char *path) {
+    if (!copy_self(path)) return 0;
+    int descriptor = open(path, O_WRONLY);
+    uint64_t invalid_offset = UINT64_MAX;
+    int ok = descriptor >= 0 && pwrite(descriptor, &invalid_offset, sizeof invalid_offset, 32) == sizeof invalid_offset;
+    if (descriptor >= 0) close(descriptor);
+    return ok;
+}
+
 static int failed_exec(const char *path, char *const arguments[]) {
     char *environment[] = {NULL};
     execve(path, arguments, environment);
@@ -187,17 +196,21 @@ int main(int argc, char **argv) {
         snprintf(self, sizeof self, "%s", argv[0]);
     else
         self[length] = 0;
-    char root[128], writable[160], malformed[160], scripts[6][160];
+    char root[128], writable[160], malformed[160], malformed_elf[160], scripts[6][160];
     snprintf(root, sizeof root, "/tmp/hl_exec_edges_%d", (int)getpid());
     mkdir(root, 0755);
     snprintf(writable, sizeof writable, "%s/writable", root);
     snprintf(malformed, sizeof malformed, "%s/malformed", root);
+    snprintf(malformed_elf, sizeof malformed_elf, "%s/malformed-elf", root);
     int copied = copy_self(writable);
     int lease = open(writable, O_WRONLY);
     char *plain[] = {writable, NULL};
     int etxtbsy = copied && lease >= 0 && failed_exec(writable, plain) == ETXTBSY;
     close(lease);
     int malformed_ok = write_file(malformed, "#!\n", 3) && failed_exec(malformed, plain) == ENOEXEC;
+    char *malformed_elf_arguments[] = {malformed_elf, NULL};
+    int malformed_elf_ok =
+        corrupt_program_table(malformed_elf) && failed_exec(malformed_elf, malformed_elf_arguments) == ENOEXEC;
     for (int index = 0; index < 6; ++index)
         snprintf(scripts[index], sizeof scripts[index], "%s/s%d", root, index);
     int chain = 1;
@@ -218,8 +231,8 @@ int main(int argc, char **argv) {
         e2big = failed_exec(self, large_arguments) == E2BIG;
     }
     free(huge);
-    printf("etxtbsy=%d malformed=%d recursion=%d efault=%d precedence=%d e2big=%d\n", etxtbsy, malformed_ok, recursion,
-           efault, precedence, e2big);
+    printf("etxtbsy=%d malformed=%d malformed_elf=%d recursion=%d efault=%d precedence=%d e2big=%d\n", etxtbsy,
+           malformed_ok, malformed_elf_ok, recursion, efault, precedence, e2big);
     fflush(stdout);
     struct shared_state *shared = shared_mapping();
     int state = shared != MAP_FAILED && image_state(shared);
@@ -228,7 +241,8 @@ int main(int argc, char **argv) {
     for (int index = 0; index < 6; ++index)
         unlink(scripts[index]);
     unlink(malformed);
+    unlink(malformed_elf);
     unlink(writable);
     rmdir(root);
-    return !(etxtbsy && malformed_ok && recursion && efault && precedence && e2big && state);
+    return !(etxtbsy && malformed_ok && malformed_elf_ok && recursion && efault && precedence && e2big && state);
 }
