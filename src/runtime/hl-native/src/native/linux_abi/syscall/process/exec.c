@@ -549,10 +549,6 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         argv[ac < HL_MAXARGV - 1 ? ac : HL_MAXARGV - 1] = NULL;
         struct loaded lm;
         hl_identity_digest interp_identity = {0};
-        char pc_ihost[4200];
-        const char *pc_interp_host = NULL;
-        (void)pc_ihost;
-        (void)pc_interp_host;
 #ifdef PCACHE_EXEC_HOOKS
         pcache_exec_force_main(); // map the new image at the fixed VA so its cached arena is reusable
 #endif
@@ -561,8 +557,6 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (has_program_interpreter) {
             const char *ih = program_interpreter.path;
 #ifdef PCACHE_EXEC_HOOKS
-            snprintf(pc_ihost, sizeof pc_ihost, "%s", ih); // outlive `ib` for the cache id below
-            pc_interp_host = pc_ihost;
             pcache_exec_force_interp();
 #endif
             struct loaded li;
