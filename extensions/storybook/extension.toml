@@ -1,0 +1,26 @@
+# What this extension is and what it asks to be allowed to do.
+#
+# The image label `husklet.extension.manifest` names this file's path inside
+# the image; the host reads it from there. Editing it is editing the
+# extension's contract, which is why it lives beside the source rather than
+# inside a build argument.
+
+name = "storybook"
+display_name = "Component playground"
+version = "0.1.0"
+protocol = 1
+
+# Draw, and nothing else. A playground renders components; it has no business
+# reading a container or a file.
+capabilities = ["interface"]
+
+activation = "tab"
+
+[interface]
+tab_title = "Components"
+icon = "view-grid-symbolic"
+
+[resources]
+memory_mb = 256
+cpus = 1
+process_count = 64

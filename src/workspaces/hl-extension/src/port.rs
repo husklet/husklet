@@ -4,7 +4,7 @@
 //! dispatcher should be able to reach exactly the service it was granted and
 //! nothing adjacent to it.
 
-use crate::path::RelativePath;
+use hl_rpc::RelativePath;
 
 /// Why a host operation failed. Distinguishes a refusal from a breakage, so a
 /// caller can tell "you may not" from "it did not work".

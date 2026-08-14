@@ -23,4 +23,6 @@ CMD ["node", "--input-type=module", "-e", "console.error('this image is a base; 
 # The manifest the host reads off the image. An extension replaces this label
 # with its own; the fields are those of hl_extension::manifest::Manifest.
 LABEL husklet.extension.protocol="1"
-LABEL husklet.extension.manifest="{\"name\":\"react-base\",\"display_name\":\"Husklet React base\",\"version\":\"0.1.0\",\"protocol\":1,\"capabilities\":[\"interface\"],\"activation\":\"manual\",\"interface\":{\"tab_title\":\"React\"}}"
+# A base image declares no manifest: it is not an extension, it is what
+# extensions are built from. Each of those copies its own extension.toml
+# and points this label at it.

@@ -471,7 +471,7 @@ mod tests {
             name: ExtensionName::new("sample").expect("name"),
             display_name: "Sample".to_owned(),
             version: "1.0.0".to_owned(),
-            protocol: crate::handshake::PROTOCOL,
+            protocol: hl_rpc::PROTOCOL,
             capabilities: Grant::new(capabilities.iter().copied()),
             entrypoint: None,
             activation: crate::manifest::Activation::default(),

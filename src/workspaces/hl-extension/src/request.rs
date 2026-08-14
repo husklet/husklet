@@ -4,8 +4,9 @@
 //! extension can reach is readable in a single place rather than inferred from
 //! scattered dispatch arms.
 
+use hl_rpc::{CapabilityKey, RelativePath};
+
 use crate::capability::Capability;
-use crate::path::RelativePath;
 use crate::port::{ContainerSummary, Division, Entry, HostError, ImageSummary, TabSummary};
 
 /// A call from an extension.
@@ -119,6 +120,14 @@ impl Topic {
     ];
 }
 
+impl hl_rpc::Topic for Topic {
+    fn requirement(&self) -> CapabilityKey {
+        use hl_rpc::Capability as _;
+
+        self.capability().key()
+    }
+}
+
 /// Describes the workspace itself. Deliberately carries no secret: an
 /// extension is told what the workspace is, never how to authenticate as it.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -169,10 +178,10 @@ impl From<HostError> for Failure {
     }
 }
 
-impl From<crate::authority::Denial> for Failure {
-    fn from(denial: crate::authority::Denial) -> Self {
+impl From<hl_rpc::Denial> for Failure {
+    fn from(denial: hl_rpc::Denial) -> Self {
         Self::Denied {
-            capability: denial.capability.as_str().into(),
+            capability: denial.capability.name().into(),
             detail: denial.to_string(),
         }
     }
@@ -182,7 +191,7 @@ impl From<crate::authority::Denial> for Failure {
 mod tests {
     use super::{Request, Topic};
     use crate::capability::Capability;
-    use crate::path::RelativePath;
+    use hl_rpc::RelativePath;
 
     #[test]
     fn reading_and_writing_calls_require_different_capabilities() {

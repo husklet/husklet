@@ -6,10 +6,15 @@ use hl_extension::{
     Malformed, Manifest, RelativePath, Resources, Welcome, PROTOCOL,
 };
 
-fn manifest_label(fields: &str) -> String {
+/// The document an extension image carries, with extra lines appended.
+fn manifest_document(extra: &str) -> String {
     format!(
-        "{{\"name\":\"containers\",\"display_name\":\"Containers\",\"version\":\"1.0.0\",\
-          \"protocol\":{PROTOCOL},\"capabilities\":[\"container-read\"]{fields}}}"
+        "name = \"containers\"\n\
+         display_name = \"Containers\"\n\
+         version = \"1.0.0\"\n\
+         protocol = {PROTOCOL}\n\
+         capabilities = [\"container-read\"]\n\
+         {extra}"
     )
 }
 
@@ -102,20 +107,20 @@ fn every_frame_kind_decodes_to_itself() {
 
 #[test]
 fn a_manifest_round_trips_through_its_label() {
-    let label = manifest_label(",\"activation\":\"workspace\"");
+    let label = manifest_document("activation = \"workspace\"\n");
     let manifest = Manifest::parse(&label, PROTOCOL).expect("valid manifest");
 
     assert_eq!(manifest.name.as_str(), "containers");
     assert_eq!(manifest.activation, Activation::Workspace);
     assert!(manifest.capabilities.holds(Capability::ContainerRead));
 
-    let again = Manifest::parse(&manifest.label().expect("serialized"), PROTOCOL).expect("valid");
+    let again = Manifest::parse(&manifest.document().expect("serialized"), PROTOCOL).expect("valid");
     assert_eq!(again, manifest);
 }
 
 #[test]
 fn an_unknown_manifest_field_is_refused_rather_than_ignored() {
-    let label = manifest_label(",\"sandbox\":\"strict\"");
+    let label = manifest_document("sandbox = \"strict\"\n");
     let refused = Manifest::parse(&label, PROTOCOL).expect_err("refused");
     assert!(
         matches!(refused, Invalid::Malformed(_)),
@@ -125,9 +130,9 @@ fn an_unknown_manifest_field_is_refused_rather_than_ignored() {
 
 #[test]
 fn a_manifest_for_another_protocol_names_both_versions() {
-    let label = manifest_label("").replace(
-        &format!("\"protocol\":{PROTOCOL}"),
-        &format!("\"protocol\":{}", PROTOCOL + 7),
+    let label = manifest_document("").replace(
+        &format!("protocol = {PROTOCOL}"),
+        &format!("protocol = {}", PROTOCOL + 7),
     );
     assert_eq!(
         Manifest::parse(&label, PROTOCOL),
@@ -140,13 +145,13 @@ fn a_manifest_for_another_protocol_names_both_versions() {
 
 #[test]
 fn a_manifest_cannot_use_a_capability_it_did_not_declare() {
-    let interface = manifest_label(",\"interface\":{\"tab_title\":\"Containers\"}");
+    let interface = manifest_document("[interface]\ntab_title = \"Containers\"\n");
     assert_eq!(
         Manifest::parse(&interface, PROTOCOL),
         Err(Invalid::Undeclared(Capability::Interface))
     );
 
-    let roots = manifest_label(",\"filesystem_roots\":[\"logs\"]");
+    let roots = manifest_document("filesystem_roots = [\"logs\"]\n");
     assert_eq!(
         Manifest::parse(&roots, PROTOCOL),
         Err(Invalid::Undeclared(Capability::FilesystemRead))
@@ -217,7 +222,7 @@ fn the_host_states_the_grant_before_the_extension_asks_for_anything() {
         protocol: PROTOCOL,
         host: "0.1.0".into(),
         workspace: "dev".into(),
-        extension: ExtensionName::new("containers").expect("name"),
+        peer: ExtensionName::new("containers").expect("name"),
         granted: Grant::new([Capability::ContainerRead]),
         limits: Limits::default(),
     };
@@ -266,4 +271,37 @@ fn a_wire_path_cannot_bypass_its_construction_rules() {
     let accepted: RelativePath = serde_json::from_str("\"logs/app.log\"").expect("valid");
     let root = RelativePath::new("logs").expect("root");
     assert!(accepted.within(&root));
+}
+
+#[test]
+fn every_manifest_this_repository_ships_is_one_a_host_accepts() {
+    // The documents are the real ones, read from where an image copies them.
+    // A manifest that stopped parsing would otherwise only be discovered by
+    // building an image and watching an extension refuse to start.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..");
+    let shipped = [
+        root.join("extensions/storybook/extension.toml"),
+        root.join("src/apps/extension/extension.toml"),
+    ];
+
+    for path in shipped {
+        let document =
+            std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let manifest = Manifest::parse(&document, PROTOCOL)
+            .unwrap_or_else(|error| panic!("{} is not a manifest a host accepts: {error}", path.display()));
+        assert!(
+            !manifest.capabilities.is_empty(),
+            "{} asks for nothing, so it could not do anything",
+            path.display()
+        );
+        assert_eq!(
+            Manifest::parse(&manifest.document().expect("written"), PROTOCOL).expect("re-read"),
+            manifest,
+            "{} does not survive being written back",
+            path.display()
+        );
+    }
 }

@@ -14,4 +14,6 @@ CMD ["node", "/app/src/main.js"]
 # The manifest the host reads off the image. The fields are those of
 # hl_extension::manifest::Manifest; unknown fields are refused, not ignored.
 LABEL husklet.extension.protocol="1"
-LABEL husklet.extension.manifest="{\"name\":\"storybook\",\"display_name\":\"Component playground\",\"version\":\"0.1.0\",\"protocol\":1,\"capabilities\":[\"interface\"],\"activation\":\"manual\",\"interface\":{\"tab_title\":\"Storybook\"}}"
+COPY extension.toml /etc/husklet/extension.toml
+# The label names where the manifest lives; the host reads the file.
+LABEL husklet.extension.manifest="/etc/husklet/extension.toml"

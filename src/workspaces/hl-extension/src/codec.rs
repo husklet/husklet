@@ -9,9 +9,12 @@
 //! language, and the schema is already declared by the serde attributes on the
 //! message types rather than restated here.
 
-use crate::frame::{ChannelId, Flags, Frame, Kind};
-use crate::handshake::{Hello, Welcome};
+use hl_rpc::{ChannelId, Flags, Frame, Hello, Kind};
+
+pub use hl_rpc::Coding;
+
 use crate::request::{Failure, Reply, Request};
+use crate::Welcome;
 
 /// The channel calls and their answers ride on.
 ///
@@ -135,13 +138,7 @@ pub fn is_failure(frame: &Frame) -> bool {
 }
 
 fn payload<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, Coding> {
-    let bytes = serde_json::to_vec(value).map_err(|error| Coding::Malformed(error.to_string()))?;
-    // Refused here rather than at `Frame::encode`, so the caller learns the
-    // size it overshot by instead of only that it did.
-    if bytes.len() > Frame::PAYLOAD_LIMIT {
-        return Err(Coding::Oversize(bytes.len()));
-    }
-    Ok(bytes)
+    hl_rpc::payload(value)
 }
 
 fn parse<T: serde::de::DeserializeOwned>(frame: &Frame) -> Result<T, Coding> {
@@ -164,25 +161,3 @@ fn expect(frame: &Frame, kind: Kind, channel: ChannelId) -> Result<(), Coding> {
     }
     Ok(())
 }
-
-/// Why a message and a frame payload could not be converted.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Coding {
-    Malformed(String),
-    Oversize(usize),
-}
-
-impl std::fmt::Display for Coding {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Malformed(detail) => write!(formatter, "the message is not what the frame says it is: {detail}"),
-            Self::Oversize(length) => write!(
-                formatter,
-                "the message encodes to {length} bytes, above the {} byte limit",
-                Frame::PAYLOAD_LIMIT
-            ),
-        }
-    }
-}
-
-impl std::error::Error for Coding {}

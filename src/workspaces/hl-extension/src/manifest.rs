@@ -1,52 +1,11 @@
 //! What an extension declares about itself, carried as an image label.
 
+use hl_rpc::{Rejection, RelativePath};
+
 use crate::capability::{Capability, Grant};
-use crate::path::RelativePath;
 
 /// Identity of an extension. Also the key its grant and state are stored under.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize)]
-#[serde(transparent)]
-pub struct ExtensionName(String);
-
-impl ExtensionName {
-    pub const LIMIT: usize = 64;
-
-    /// # Errors
-    /// Returns `Invalid` when the name is empty, over-long, or contains
-    /// anything outside the permitted alphabet, which keeps it usable as a
-    /// directory component and a container name without further escaping.
-    pub fn new(value: impl Into<String>) -> Result<Self, Invalid> {
-        let value = value.into();
-        if value.is_empty() || value.len() > Self::LIMIT {
-            return Err(Invalid::Name);
-        }
-        let permitted = value
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || "._-".contains(character));
-        if !permitted || value.starts_with(['.', '-']) {
-            return Err(Invalid::Name);
-        }
-        Ok(Self(value))
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for ExtensionName {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for ExtensionName {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(serde::de::Error::custom)
-    }
-}
+pub type ExtensionName = hl_rpc::PeerName;
 
 /// When the sidecar is started.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -155,22 +114,31 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// Image label carrying the serialized manifest.
+    /// Image label naming where the manifest lives inside the image.
+    ///
+    /// A path rather than the manifest itself: an extension author edits a
+    /// file that lives beside their source and is reviewed with it, instead of
+    /// a document folded into a build argument where nothing can read it.
     pub const LABEL: &'static str = "husklet.extension.manifest";
+    /// Where an extension puts its manifest unless its label says otherwise.
+    pub const DEFAULT_PATH: &'static str = "/etc/husklet/extension.toml";
     /// Image label carrying the protocol version alone, so an incompatible
     /// extension is refused without parsing the manifest at all.
     pub const PROTOCOL_LABEL: &'static str = "husklet.extension.protocol";
-    /// Largest serialized manifest accepted.
+    /// Largest manifest document accepted.
     pub const LIMIT: usize = 64 * 1024;
 
+    /// Reads a manifest from the document an image carries.
+    ///
     /// # Errors
-    /// Returns `Invalid` when the label is over-long, is not valid JSON, names
-    /// an unknown field, or declares a protocol this host does not speak.
-    pub fn parse(label: &str, protocol: u32) -> Result<Self, Invalid> {
-        if label.len() > Self::LIMIT {
-            return Err(Invalid::TooLong(label.len()));
+    /// Returns `Invalid` when the document is over-long, is not valid TOML,
+    /// names an unknown field, or declares a protocol this host does not
+    /// speak.
+    pub fn parse(document: &str, protocol: u32) -> Result<Self, Invalid> {
+        if document.len() > Self::LIMIT {
+            return Err(Invalid::TooLong(document.len()));
         }
-        let manifest: Self = serde_json::from_str(label).map_err(|error| Invalid::Malformed(error.to_string()))?;
+        let manifest: Self = toml::from_str(document).map_err(|error| Invalid::Malformed(error.to_string()))?;
         if manifest.protocol != protocol {
             return Err(Invalid::Protocol {
                 declared: manifest.protocol,
@@ -189,10 +157,18 @@ impl Manifest {
         Ok(manifest)
     }
 
+    /// Writes the manifest as the document an image should carry.
+    ///
     /// # Errors
     /// Returns `Invalid::Malformed` when the manifest cannot be serialized.
-    pub fn label(&self) -> Result<String, Invalid> {
-        serde_json::to_string(self).map_err(|error| Invalid::Malformed(error.to_string()))
+    pub fn document(&self) -> Result<String, Invalid> {
+        toml::to_string_pretty(self).map_err(|error| Invalid::Malformed(error.to_string()))
+    }
+}
+
+impl From<Rejection> for Invalid {
+    fn from(_rejected: Rejection) -> Self {
+        Self::Name
     }
 }
 

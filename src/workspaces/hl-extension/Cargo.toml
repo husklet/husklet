@@ -14,8 +14,10 @@ path = "src/lib.rs"
 # so the protocol is provable without a runtime.
 [dependencies]
 hl-gui = { path = "../hl-gui", features = ["wire"] }
+hl-rpc = { path = "../../packages/hl-rpc" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true

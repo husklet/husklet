@@ -14,10 +14,6 @@
 use std::cell::RefCell;
 use std::os::unix::net::UnixStream;
 
-use hl_gui::{
-    Align, Choice, Column as TableColumn, EventId, Length, NodeId, Patch, Prop, PropValue, RowWindow, Scale, SourceId,
-    Surface, Theme, Tone, Tree, Trigger, Variant,
-};
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
     TabSummary, TerminalSurface, WorkspaceFiles,
@@ -25,6 +21,10 @@ use hl_extension::port::{
 use hl_extension::{
     codec, Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, RelativePath, Reply, Request, Services,
     Session, Transit, Welcome, WorkspaceInfo, PROTOCOL,
+};
+use hl_gui::{
+    Align, Choice, Column as TableColumn, EventId, Length, NodeId, Patch, Prop, PropValue, RowWindow, Scale, SourceId,
+    Surface, Theme, Tone, Tree, Trigger, Variant,
 };
 
 // ---------------------------------------------------------------------------
@@ -499,7 +499,7 @@ fn extension(stream: UnixStream) -> Result<(), String> {
     wire.send(
         &codec::hello(&Hello {
             protocol: PROTOCOL,
-            name: welcome.extension.clone(),
+            name: welcome.peer.clone(),
             features: vec!["interface".into()],
         })
         .expect("the greeting encodes"),
@@ -661,7 +661,7 @@ fn a_whole_interface_is_rendered_from_a_socket() {
             protocol: PROTOCOL,
             host: "husklet".into(),
             workspace: "dev".into(),
-            extension: ExtensionName::new("containers").expect("name"),
+            peer: ExtensionName::new("containers").expect("name"),
             granted: Grant::new([Capability::Interface]),
             limits: hl_extension::Limits::default(),
         })

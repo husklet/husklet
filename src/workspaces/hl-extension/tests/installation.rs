@@ -14,12 +14,15 @@ fn manifest(capabilities: &[Capability]) -> Manifest {
         .iter()
         .map(|capability| format!("\"{}\"", capability.as_str()))
         .collect();
-    let label = format!(
-        "{{\"name\":\"containers\",\"display_name\":\"Containers\",\"version\":\"1.0.0\",\
-          \"protocol\":{PROTOCOL},\"capabilities\":[{}]}}",
+    let document = format!(
+        "name = \"containers\"\n\
+         display_name = \"Containers\"\n\
+         version = \"1.0.0\"\n\
+         protocol = {PROTOCOL}\n\
+         capabilities = [{}]\n",
         capabilities.join(",")
     );
-    Manifest::parse(&label, PROTOCOL).expect("manifest")
+    Manifest::parse(&document, PROTOCOL).expect("manifest")
 }
 
 fn installed(requested: &[Capability], consented: &[Capability]) -> Installation {
