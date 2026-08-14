@@ -5,6 +5,7 @@ use hl_gui::{
 mod collection;
 mod control;
 pub(crate) mod database;
+mod settings;
 mod display;
 mod layout;
 
@@ -78,6 +79,11 @@ impl Catalogue {
             title: "Data table",
             summary: "Windowed rows with typed cells",
             build: collection::table,
+        },
+        Story {
+            title: "Settings",
+            summary: "Composed from named parts, not primitives",
+            build: settings::screen,
         },
         Story {
             title: "Database workbench",

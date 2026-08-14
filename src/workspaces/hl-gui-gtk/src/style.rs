@@ -91,7 +91,11 @@ fn tones(css: &mut String, theme: &Theme) {
         // component needs the compound selector to win over its own default.
         let _ = writeln!(
             css,
-            ".tone-{name} {{ color: {color}; }}\n\
+            // A component rule and a tone rule carry equal weight, so whichever
+            // is written last would win by accident. Repeating the class raises
+            // the tone above every single-class component rule, which is what a
+            // producer means when it tones a component.
+            ".tone-{name}.tone-{name} {{ color: {color}; }}\n\
              .hl-badge.tone-{name} {{ color: {color}; border: 1px solid {color}; }}",
             name = tone.as_str(),
         );
