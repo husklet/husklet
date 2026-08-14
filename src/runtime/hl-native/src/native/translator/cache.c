@@ -1062,6 +1062,7 @@ static struct {
     struct cpu *cpu;
     _Atomic uint64_t dispatch_ack;
     _Atomic int in_translated;
+    _Atomic int departing;
 } g_stw_threads[STW_MAXTHREAD];
 
 static pthread_mutex_t g_stw_reg_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1224,10 +1225,11 @@ static void stw_park_handler(int sig, siginfo_t *si, void *ucv) {
             cpu->irq = 1;
             if (!atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_acquire) &&
                 !__atomic_load_n(&cpu->in_service, __ATOMIC_SEQ_CST)) {
-                uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
-                atomic_store_explicit(&g_stw_threads[slot].dispatch_ack, request, memory_order_release);
-                while (atomic_load_explicit(&g_dispatch_gate, memory_order_acquire))
+                while (atomic_load_explicit(&g_dispatch_gate, memory_order_acquire)) {
+                    uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
+                    atomic_store_explicit(&g_stw_threads[slot].dispatch_ack, request, memory_order_release);
                     jit_backoff_ns(UINT64_C(50000));
+                }
             }
         }
         return;
@@ -1269,6 +1271,7 @@ static void stw_register(struct cpu *cpu) {
                                   atomic_load_explicit(&g_dispatch_request, memory_order_relaxed),
                                   memory_order_relaxed);
             atomic_store_explicit(&g_stw_threads[i].in_translated, 0, memory_order_relaxed);
+            atomic_store_explicit(&g_stw_threads[i].departing, 0, memory_order_relaxed);
 #ifdef G_SOFT_TLB_REFRESH
             G_SOFT_TLB_REFRESH(cpu);
 #endif
@@ -1299,9 +1302,13 @@ static void stw_unregister(void) {
    no peer can enter an old, unguarded translation after the prepare returns. */
 static void stw_dispatch_safepoint(void) {
     if (g_my_stw_slot < 0) return;
-    uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
-    atomic_store_explicit(&g_stw_threads[g_my_stw_slot].dispatch_ack, request, memory_order_release);
-    while (atomic_load_explicit(&g_dispatch_gate, memory_order_acquire)) {
+    /* Read the gate before its request. Reading request first permits a
+       publisher to advance the epoch and raise the gate between the ack and
+       this load: the peer then parks with a stale ack forever. Q keeps the
+       active request stable until the gate is released. */
+    while (atomic_load_explicit(&g_dispatch_gate, memory_order_seq_cst)) {
+        uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
+        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].dispatch_ack, request, memory_order_release);
         jit_backoff_ns(UINT64_C(50000));
     }
 }
@@ -1386,6 +1393,11 @@ static void stw_wait_translated_acks(uint64_t request) {
     }
 }
 
+static int stw_checkpoint_member(int slot) {
+    return atomic_load_explicit(&g_stw_threads[slot].used, memory_order_acquire) &&
+           !atomic_load_explicit(&g_stw_threads[slot].departing, memory_order_seq_cst);
+}
+
 static int stw_force_dispatch_flush(void) {
     pthread_t me = pthread_self();
     /* Serialize activation ownership before publishing its epoch/gate.  If two
@@ -1400,7 +1412,7 @@ static int stw_force_dispatch_flush(void) {
     /* Preserve the global lock order used by ordinary STW: jit -> registry. */
     pthread_mutex_lock(&g_stw_reg_lock);
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         if (pthread_equal(g_stw_threads[i].th, me)) {
             atomic_store_explicit(&g_stw_threads[i].dispatch_ack, request, memory_order_release);
         } else if (atomic_load_explicit(&g_stw_threads[i].in_translated, memory_order_seq_cst)) {
@@ -1438,7 +1450,7 @@ static void stw_mapping_begin_locked(void) {
     atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
     pthread_mutex_lock(&g_stw_reg_lock);
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         if (pthread_equal(g_stw_threads[i].th, me))
             atomic_store_explicit(&g_stw_threads[i].dispatch_ack, request, memory_order_release);
         else if (atomic_load_explicit(&g_stw_threads[i].in_translated, memory_order_seq_cst) && g_stw_threads[i].cpu)
@@ -1484,10 +1496,12 @@ static uint64_t stw_checkpoint_arm(void) {
     jit_dispatch_lock();
     stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
-    atomic_store_explicit(&g_dispatch_gate, 1, memory_order_release);
+    /* seq_cst pairs with a thread's departing publication: either this scan
+       excludes it, or its final safepoint observes the gate and acknowledges. */
+    atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
     pthread_mutex_lock(&g_stw_reg_lock);
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         if (pthread_equal(g_stw_threads[i].th, caller))
             atomic_store_explicit(&g_stw_threads[i].dispatch_ack, request, memory_order_release);
         else if (g_stw_threads[i].cpu)
@@ -1504,7 +1518,7 @@ static int stw_checkpoint_wait(uint64_t request) {
     for (int attempt = 0; attempt < 100000; attempt++) {
         int pending = 0;
         for (int i = 0; i < STW_MAXTHREAD; i++) {
-            if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+            if (!stw_checkpoint_member(i)) continue;
             if (atomic_load_explicit(&g_stw_threads[i].dispatch_ack, memory_order_acquire) < request) {
                 pending = 1;
                 break;
@@ -1515,7 +1529,7 @@ static int stw_checkpoint_wait(uint64_t request) {
     }
 #if HL_ENABLE_LOGGING
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         uint64_t ack = atomic_load_explicit(&g_stw_threads[i].dispatch_ack, memory_order_acquire);
         if (ack >= request) continue;
         struct cpu *c = g_stw_threads[i].cpu;
@@ -1532,7 +1546,7 @@ static int stw_checkpoint_wait(uint64_t request) {
 static int stw_checkpoint_cpus(struct cpu **out, int capacity) {
     int count = 0;
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         /* A used slot with no cpu is not a guest thread and has no state to capture. stw_after_fork() leaves
            exactly that behind whenever a process forks BEFORE its own guest thread registers -- which is the
            shape of every restore refork (ckpt_fork_children runs ahead of run_guest), so the child's later
@@ -1700,7 +1714,7 @@ static int stw_flush(void) {
     atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
     pthread_mutex_lock(&g_stw_reg_lock);
     for (int i = 0; i < STW_MAXTHREAD; ++i) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         if (pthread_equal(g_stw_threads[i].th, me)) {
             atomic_store_explicit(&g_stw_threads[i].dispatch_ack, request, memory_order_release);
         } else if (atomic_load_explicit(&g_stw_threads[i].in_translated, memory_order_seq_cst) &&
@@ -1751,6 +1765,7 @@ static void stw_after_fork(void) {
     g_stw_threads[0].cpu = survivor;
     atomic_store_explicit(&g_stw_threads[0].exec_gen, g_cache_gen, memory_order_relaxed);
     atomic_store_explicit(&g_stw_threads[0].in_translated, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_stw_threads[0].departing, 0, memory_order_relaxed);
     atomic_store_explicit(&g_stw_threads[0].used, 1, memory_order_relaxed);
     g_my_exec_gen = &g_stw_threads[0].exec_gen;
     g_my_stw_slot = 0;

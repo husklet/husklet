@@ -419,6 +419,15 @@ static void run_guest(struct cpu *c) {
         // async signal -> guest handler (process-directed g_pending OR thread-directed cpu->tpending)
         if (g_pending || c->tpending) maybe_deliver_signal(c);
     }
+    /* A checkpoint may publish its request after the last loop-top safepoint
+       but before this thread removes its registry slot. Acknowledge once more
+       with architectural state spilled; otherwise checkpoint holds the
+       registry lock while waiting on an old ack and unregister waits on that
+       same lock forever. */
+    if (g_threaded && g_my_stw_slot >= 0) {
+        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].departing, 1, memory_order_seq_cst);
+        stw_dispatch_safepoint();
+    }
     // Leave the registries: this thread will never execute in the cache again, nor be a signal target.
     thread_unregister(c);
     stw_unregister();
