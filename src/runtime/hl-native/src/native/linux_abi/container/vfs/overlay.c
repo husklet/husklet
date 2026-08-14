@@ -41,6 +41,8 @@ static void add_lower(const char *dir) {
     g_nlower++;
 }
 
+#include "cursor.c"
+
 static void wh_hostpath(const char *jcanon, size_t jclen, const char *guest, char *out,
                         // host path of the .wh.NAME marker
                         size_t n) {
