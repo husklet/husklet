@@ -263,11 +263,11 @@ static int ckpt_restore_typed_inotify(const char *procdir, const struct ckpt_fd 
         char image_path[1400];
         snprintf(image_path, sizeof image_path, "%s/%s", procdir, record->path);
         int64_t stored = ckpt_source_object_size(image_path);
-        if (stored <= 0) {
+        size_t image_size;
+        if (ckpt_inotify_object_size(stored, &image_size) != 0) {
             fprintf(stderr, "[restore] inotify %d image %s is invalid: %s\n", record->gfd, image_path, strerror(errno));
             return -1;
         }
-        size_t image_size = (size_t)stored;
         void *image = malloc(image_size);
         if (image == NULL || ckpt_source_load(image_path, image, image_size) != 0) {
             fprintf(stderr, "[restore] inotify %d cannot load %s\n", record->gfd, image_path);

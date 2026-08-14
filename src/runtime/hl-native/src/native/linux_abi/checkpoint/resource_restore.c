@@ -100,8 +100,8 @@ static int ckpt_restore_right_inotify(const struct ckpt_fd *record) {
     char image_path[1400];
     snprintf(image_path, sizeof image_path, "%s", record->path);
     int64_t stored = ckpt_source_object_size(image_path);
-    if (g_linux_box == NULL || stored <= 0 || (uint64_t)stored > 64u * 1024u * 1024u) return -1;
-    size_t size = (size_t)stored;
+    size_t size;
+    if (g_linux_box == NULL || ckpt_inotify_object_size(stored, &size) != 0) return -1;
     void *image = malloc(size);
     int shadow = bound_shadow_reserve(0);
     if (image == NULL || shadow < 0 || ckpt_source_load(image_path, image, size) != 0) {

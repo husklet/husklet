@@ -1023,6 +1023,10 @@ int main(void) {
     if (ckpt_counted_object_size(48, 16, 3, 16, 2) == 0) return 7;
     if (ckpt_counted_object_size(SIZE_MAX, 16, UINT64_MAX, 16, UINT64_MAX) == 0) return 8;
     if (ckpt_counted_object_size(16, 16, 0, 0, 0) == 0) return 9;
+    if (ckpt_inotify_object_size(CKPT_INOTIFY_IMAGE_LIMIT, &size) != 0 ||
+        size != CKPT_INOTIFY_IMAGE_LIMIT) return 10;
+    if (ckpt_inotify_object_size((int64_t)CKPT_INOTIFY_IMAGE_LIMIT + 1, &size) == 0) return 11;
+    if (ckpt_inotify_object_size(0, &size) == 0) return 12;
     return 0;
 }
 "#,
