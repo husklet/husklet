@@ -17,6 +17,84 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
+fn elf64_parser_rejects_hostile_ranges_before_loader_access() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-elf64-parser-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create ELF parser probe directory");
+    let source = scratch.join("elf64_parser.c");
+    let executable = scratch.join("elf64_parser");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/image.h"
+#include <stdint.h>
+#include <string.h>
+
+static void put16(uint8_t *p, uint16_t v) { memcpy(p, &v, sizeof v); }
+static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, sizeof v); }
+static void put64(uint8_t *p, uint64_t v) { memcpy(p, &v, sizeof v); }
+
+static void valid(uint8_t *b, uint16_t machine) {
+    memset(b, 0, 256);
+    memcpy(b, "\177ELF\2\1\1", 7);
+    put16(b + 16, 2); put16(b + 18, machine); put32(b + 20, 1);
+    put64(b + 32, 64); put16(b + 52, 64); put16(b + 54, 56); put16(b + 56, 1);
+    put64(b + 24, 0x400000); put32(b + 64, 1); put32(b + 68, 5); put64(b + 72, 120); put64(b + 80, 0x400000);
+    put64(b + 96, 8); put64(b + 104, 4096); put64(b + 112, 8);
+}
+
+int main(void) {
+    uint8_t bytes[256]; hl_linux_elf64_layout layout;
+    hl_linux_image image = {bytes, sizeof bytes};
+    valid(bytes, 0xb7);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) != 0 || layout.load_end != 0x401000) return 1;
+    if (hl_linux_elf64_validate(&image, 0x3e, &layout) == 0) return 2;
+    image.size = 63;
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 3;
+    image.size = sizeof bytes; valid(bytes, 0xb7); put64(bytes + 32, UINT64_MAX - 8);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 4;
+    valid(bytes, 0xb7); put64(bytes + 72, UINT64_MAX - 3); put64(bytes + 96, 8);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 5;
+    valid(bytes, 0xb7); put64(bytes + 80, UINT64_MAX - 7); put64(bytes + 104, 16);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 6;
+    valid(bytes, 0xb7); put16(bytes + 56, 2); memcpy(bytes + 120, bytes + 64, 56);
+    put64(bytes + 120 + 16, UINT64_MAX - 7); put64(bytes + 120 + 40, 16);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 9;
+    valid(bytes, 0xb7); put16(bytes + 56, 2); memcpy(bytes + 120, bytes + 64, 56);
+    put64(bytes + 96, 0); put64(bytes + 104, 0); put64(bytes + 80, 0);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) != 0 || layout.load_start != 0x400000) return 10;
+    valid(bytes, 0xb7); put16(bytes + 56, 3); memcpy(bytes + 120, bytes + 64, 56);
+    memcpy(bytes + 176, bytes + 64, 56); put32(bytes + 120, 3); put32(bytes + 176, 3);
+    put64(bytes + 128, 240); put64(bytes + 152, 2); put64(bytes + 184, 240); put64(bytes + 208, 2);
+    bytes[240] = 'x'; bytes[241] = 0;
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 11;
+    valid(bytes, 0xb7); put32(bytes + 64, 3); put64(bytes + 72, 250); put64(bytes + 96, 8);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 7;
+    valid(bytes, 0x3e);
+    if (hl_linux_elf64_validate(&image, 0x3e, &layout) != 0) return 8;
+    return 0;
+}
+"#,
+    )
+    .expect("write ELF parser probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("linux_abi/image.c"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("ELF parser probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("ELF parser probe execution");
+    assert!(run.success(), "ELF parser probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove ELF parser probe directory");
+}
+
+#[test]
 fn virtual_dac_policy_uses_guest_identity_mode_groups_and_capabilities() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");
