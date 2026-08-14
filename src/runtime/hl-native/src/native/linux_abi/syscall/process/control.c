@@ -424,10 +424,6 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
                                    strcmp(exact, "sentinel-exact") == 0
                                ? 0
                                : 1;
-            } else if (a1 == HL_EXEC_AUTHORITY_TEST_CURRENT) {
-                G_RET(c) = g_exec_authority_test_generation;
-            } else if (a1 == HL_EXEC_AUTHORITY_TEST_PREPARED) {
-                G_RET(c) = g_exec_authority_test_prepared;
             } else {
                 G_RET(c) = (uint64_t)(int64_t)-EINVAL;
             }

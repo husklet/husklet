@@ -514,13 +514,8 @@ static int g_mce_kill = 2; // PR_MCE_KILL/PR_MCE_KILL_GET machine-check policy: 
 #define HL_EXEC_PIN_TEST_ENV_SEED 5u
 #define HL_EXEC_PIN_TEST_ENV_CHECK 6u
 #define HL_EXEC_PIN_TEST_SHEBANG_HOP 4u
-#define HL_EXEC_AUTHORITY_TEST_CURRENT 7u
-#define HL_EXEC_AUTHORITY_TEST_PREPARED 8u
 static atomic_uint g_exec_pin_test_mode;
 static atomic_uint g_exec_pin_test_phase;
-static uint64_t g_exec_authority_test_prepared;
-static uint64_t g_exec_authority_test_generation;
-
 
 static void exec_pin_test_wait(unsigned stage) {
     if (atomic_load_explicit(&g_exec_pin_test_mode, memory_order_acquire) != stage) return;

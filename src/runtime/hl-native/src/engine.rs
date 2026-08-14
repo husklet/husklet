@@ -954,42 +954,48 @@ int main(int argc, char **argv) {
     fn failed_prepared_exec_never_publishes_candidate_authority() {
         const SOURCE: &str = r#"
 #include <sys/syscall.h>
-#include <sys/prctl.h>
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stdint.h>
-#define HOOK 0x48504e54u
-#define CURRENT 7u
-#define PREPARED 8u
-static long authority(unsigned operation) { return syscall(SYS_prctl, HOOK, operation, 0, 0, 0); }
-static int reject(const char *path, int expected, uint64_t initial) {
-    char *arguments[] = { (char *)path, 0 };
-    syscall(SYS_execve, path, arguments, (char *[]){ 0 });
+#include <string.h>
+#define STRINGIFY_INNER(value) #value
+#define STRINGIFY(value) STRINGIFY_INNER(value)
+int main(int argc, char **argv) {
+#ifdef CANDIDATE
+    return 99;
+#else
+    if (argc == 2) return !strcmp(argv[1], "verify-a-" STRINGIFY(SCENARIO)) ? 0 : 98;
+#if SCENARIO == 1
+    int held = open("/candidate", O_WRONLY);
+    if (held < 0) return 91;
+    const char *path = "/candidate";
+    int expected = ETXTBSY;
+#elif SCENARIO == 2
+    const char *path = "/denied";
+    int expected = EACCES;
+#elif SCENARIO == 3
+    const char *path = "/malformed";
+    int expected = ENOEXEC;
+#elif SCENARIO == 4
+    const char *path = "/script";
+    int expected = ENOENT;
+#else
+    const char *path = "/dynamic";
+    int expected = ENOENT;
+#endif
+    char *candidate[] = { (char *)path, 0 };
+    syscall(SYS_execve, path, candidate, (char *[]){ 0 });
     if (errno != expected) return 20 + errno;
-    uint64_t prepared = (uint64_t)authority(PREPARED);
-    if (!prepared) return 70;
-    return (uint64_t)authority(CURRENT) == initial ? 0 : 72;
-}
-int main(void) {
-    uint64_t initial = (uint64_t)authority(CURRENT);
-    int busy = open("/busy", O_WRONLY);
-    if (busy < 0) return 81;
-    int result = reject("/busy", ETXTBSY, initial);
-    if (result) return 100 + result;
-    close(busy);
-    if (reject("/denied", EACCES, initial)) return 82;
-    if (reject("/malformed", ENOEXEC, initial)) return 83;
-    if (reject("/script", ENOENT, initial)) return 84;
-    if (reject("/dynamic", ENOENT, initial)) return 85;
-    return 0;
+    char *self[] = { (char *)"/proc/self/exe", (char *)"verify-a-" STRINGIFY(SCENARIO), 0 };
+    syscall(SYS_execve, self[0], self, (char *[]){ 0 });
+    return errno;
+#endif
 }
 "#;
         use std::os::unix::fs::PermissionsExt as _;
         for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
             let root = tempfile::tempdir().unwrap();
             let source = root.path().join("authority.c");
-            let main = root.path().join("main");
             std::fs::write(&source, SOURCE).unwrap();
             let compile = |arguments: &[&str], input: &std::path::Path, output: &std::path::Path| {
                 let result = std::process::Command::new(compiler)
@@ -1001,22 +1007,9 @@ int main(void) {
                     .unwrap();
                 assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
             };
-            compile(&["-static", "-no-pie", "-O2"], &source, &main);
-            std::fs::copy(&main, root.path().join("busy")).unwrap();
-            std::fs::copy(&main, root.path().join("denied")).unwrap();
-            use std::io::Write as _;
-            OpenOptions::new()
-                .append(true)
-                .open(root.path().join("busy"))
-                .unwrap()
-                .write_all(b"busy")
-                .unwrap();
-            OpenOptions::new()
-                .append(true)
-                .open(root.path().join("denied"))
-                .unwrap()
-                .write_all(b"denied")
-                .unwrap();
+            let candidate = root.path().join("candidate");
+            compile(&["-static", "-no-pie", "-O2", "-DCANDIDATE"], &source, &candidate);
+            std::fs::copy(&candidate, root.path().join("denied")).unwrap();
             let mut denied = std::fs::metadata(root.path().join("denied")).unwrap().permissions();
             denied.set_mode(0o644);
             std::fs::set_permissions(root.path().join("denied"), denied).unwrap();
@@ -1031,24 +1024,32 @@ int main(void) {
             let mut dynamic_permissions = std::fs::metadata(root.path().join("dynamic")).unwrap().permissions();
             dynamic_permissions.set_mode(0o755);
             std::fs::set_permissions(root.path().join("dynamic"), dynamic_permissions).unwrap();
-            let executable = CString::new(main.to_str().unwrap()).unwrap();
             let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
-            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
-            let config = EngineConfig {
-                isa,
-                rootfs: Some(&root_path),
-                executable_host: Some(&executable),
-                executable_fd: -1,
-                option_names: &[],
-                option_values: &[],
-                standard_fds: [standard.as_raw_fd(); 3],
-                provider_fd: -1,
-            };
-            // SAFETY: borrowed strings and descriptors remain live through creation.
-            let engine = unsafe { Engine::create(config) }.unwrap();
-            let argument = CString::new("/main").unwrap();
-            engine.run(&[argument.as_ptr()]).unwrap();
-            assert_eq!(engine.exit().status, 0, "ISA {isa} failed authority matrix");
+            for scenario in 1..=5 {
+                let main = root.path().join(format!("main-{scenario}"));
+                compile(
+                    &["-static", "-no-pie", "-O2", &format!("-DSCENARIO={scenario}")],
+                    &source,
+                    &main,
+                );
+                let executable = CString::new(main.to_str().unwrap()).unwrap();
+                let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+                let config = EngineConfig {
+                    isa,
+                    rootfs: Some(&root_path),
+                    executable_host: Some(&executable),
+                    executable_fd: -1,
+                    option_names: &[],
+                    option_values: &[],
+                    standard_fds: [standard.as_raw_fd(); 3],
+                    provider_fd: -1,
+                };
+                // SAFETY: borrowed strings and descriptors remain live through creation.
+                let engine = unsafe { Engine::create(config) }.unwrap();
+                let argument = CString::new(format!("/main-{scenario}")).unwrap();
+                engine.run(&[argument.as_ptr()]).unwrap();
+                assert_eq!(engine.exit().status, 0, "ISA {isa} scenario {scenario}");
+            }
         }
     }
 

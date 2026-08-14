@@ -76,10 +76,6 @@ typedef struct exec_image {
     char path[4200];
 } exec_image;
 
-#if defined(HL_NATIVE_TEST_HOOKS)
-static void exec_authority_test_prepared(exec_image *image);
-#endif
-
 static void exec_image_release(exec_image *image) {
     if (image == NULL) return;
     hl_linux_image_release(&image->bytes);
@@ -112,9 +108,6 @@ static int exec_image_adopt(int descriptor, const char *path, exec_image *image)
         exec_image_release(image);
         return error;
     }
-#if defined(HL_NATIVE_TEST_HOOKS)
-    exec_authority_test_prepared(image);
-#endif
     if (!S_ISREG(image->status.st_mode)) {
         exec_image_release(image);
         return -EACCES;
@@ -131,7 +124,7 @@ static int exec_image_adopt(int descriptor, const char *path, exec_image *image)
         exec_image_release(image);
         return -ETXTBSY;
     }
-    if (image->bytes.bytes == NULL && hl_linux_image_read_fd(descriptor, &image->bytes) != 0) {
+    if (hl_linux_image_read_fd(descriptor, &image->bytes) != 0) {
         exec_image_release(image);
         return -EACCES;
     }
@@ -193,9 +186,6 @@ static int exec_image_authorized(const char *path, exec_image *image) {
 
 static void exec_authority_seed_initial(const hl_host_services *host, hl_host_handle executable,
                                         const hl_executable_authority *serialized) {
-#if defined(HL_NATIVE_TEST_HOOKS)
-    g_exec_authority_test_generation++;
-#endif
     const hl_host_posix_attachment_services *attachments = host != NULL ? host->posix_attachment : NULL;
     free(g_authorized_executable_owned);
     g_authorized_executable_owned = NULL;
@@ -240,19 +230,7 @@ static void exec_authority_rotate(exec_image *image, const char *guest_path) {
     snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", guest_path);
     image->bytes.bytes = NULL;
     image->bytes.size = 0;
-#if defined(HL_NATIVE_TEST_HOOKS)
-    g_exec_authority_test_generation++;
-#endif
 }
-
-#if defined(HL_NATIVE_TEST_HOOKS)
-static void exec_authority_test_prepared(exec_image *image) {
-    if (image->bytes.bytes == NULL && image->descriptor >= 0)
-        (void)hl_linux_image_read_fd(image->descriptor, &image->bytes);
-    g_exec_authority_test_prepared = g_exec_authority_test_generation + 1;
-}
-
-#endif
 
 static int exec_image_parse_shebang(const exec_image *image, char *interpreter, size_t interpreter_size, char *argument,
                                     size_t argument_size) {
